@@ -80,6 +80,28 @@ minutes), extracts the ELF, splits it with splat and builds. It ends with
    the function does, say so in the description; that is how names get
    chosen.
 
+## Ghidra (optional)
+
+For big functions, Ghidra's decompiler and cross-references help.
+`tools/ghidra_mcp.sh` serves a headless Ghidra project over MCP
+([pyghidra-mcp](https://github.com/clearbluejar/pyghidra-mcp)), so an AI
+assistant such as Claude Code can decompile, disassemble and follow xrefs.
+You need Ghidra 12.x, JDK 21, and the
+[ghidra-emotionengine-reloaded](https://github.com/chaoticgd/ghidra-emotionengine-reloaded)
+release for your Ghidra version unzipped into `Ghidra/Extensions/`.
+
+```sh
+uv tool install --python 3.13 pyghidra-mcp
+export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.x_PUBLIC
+tools/ghidra_mcp.sh import          # imports build/kfiv.elf, ~1 minute
+claude mcp add ghidra -- "$PWD/tools/ghidra_mcp.sh"
+```
+
+The import uses `build/kfiv.elf`, so Ghidra has the same function names and
+sizes as splat. Run the import again after `./build.sh` to pick up new names
+(it discards anything renamed inside Ghidra). The project goes in
+`~/ghidra-projects/kfiv/` unless `KFIV_GHIDRA_PROJECT` names another `.gpr`.
+
 ## Notes on this compiler
 
 The game is built with ee-gcc 2.9-ee-991111-01, `-O2 -G 8`.
