@@ -1,0 +1,126 @@
+From 8ebf659dabfcf3b226e8bea76fe44bbb0bfe380c Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 23:13:02 -0400
+Subject: [PATCH] Match Verdite manual mouse capture controls
+
+---
+ ps2xRuntime/src/lib/ps2_pad.cpp | 52 ++++++++++++---------------------
+ 1 file changed, 19 insertions(+), 33 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
+index e947cf4..f00c2ce 100644
+--- a/ps2xRuntime/src/lib/ps2_pad.cpp
++++ b/ps2xRuntime/src/lib/ps2_pad.cpp
+@@ -54,8 +54,9 @@ namespace
+ 
+     // Only the window thread touches the following device and edge state.
+     bool gPreviousFocus = false, gPreviousGameplay = false;
+-    bool gResumeCapture = false, gCursorDisabled = false;
+-    std::array<bool, 3> gPreviousMouse{}, gSwallowedMouse{};
++    bool gPreviousEscape = false, gCursorDisabled = false;
++    bool gTracedGameplay = false;
++    std::array<bool, 3> gSwallowedMouse{};
+     std::array<double, 16> gTapUntil{};
+     uint16_t gPreviousPressed = 0;
+ 
+@@ -171,7 +172,7 @@ namespace ps2_host_input
+     {
+         std::lock_guard<std::mutex> lock(gMutex);
+         MouseCaptureIndicator result;
+-        result.captured = gState.verdite && gState.focused && gState.captured && gState.gameplay;
++        result.captured = gState.verdite && gState.focused && gState.captured;
+         if (!gState.verdite || !gState.indicatorShown) return result;
+         // Verdite2's announcement: 140 ms in, 1100 ms held, 420 ms out.
+         const double age = gState.inputTime - gState.indicatorTime;
+@@ -244,7 +245,7 @@ namespace ps2_host_input
+             bind(key(KEY_SPACE, "SPACE"), PAD_SQUARE);
+             bind(key(KEY_F, "F"), PAD_CROSS);
+             bind(key(KEY_Q, "Q"), PAD_TRIANGLE);
+-            bind(key(KEY_TAB, "TAB") || key(KEY_ESCAPE, "ESCAPE"), PAD_CIRCLE);
++            bind(key(KEY_TAB, "TAB"), PAD_CIRCLE);
+             bind(key(KEY_RIGHT_SHIFT, "RIGHTSHIFT"), PAD_SELECT);
+         }
+         else
+@@ -292,41 +293,25 @@ namespace ps2_host_input
+         for (int index = 0; index < 3; ++index)
+             mouse[index] = focused && (gScripted ? scriptedDown(mouseNames[index], vsyncTick) : IsMouseButtonDown(index));
+         const bool wasCaptured = captured;
++        const bool escape = key(KEY_ESCAPE, "ESCAPE");
+         bool discardMotion = focused != gPreviousFocus || gameplay != gPreviousGameplay;
+         if (!focused)
+         {
+             captured = false;
+-            gResumeCapture = false;
+             gTapUntil.fill(0.0);
+             gSwallowedMouse.fill(false);
+         }
+         else if (verdite)
+         {
+-            if (!gameplay)
+-            {
+-                if (captured) gResumeCapture = true;
+-                captured = false;
+-            }
+-            else
+-            {
+-                if (!gPreviousGameplay && gResumeCapture)
+-                {
+-                    captured = true;
+-                    gResumeCapture = false;
+-                    gSwallowedMouse = mouse;
+-                }
+-                if (!captured && mouse[0] && !gPreviousMouse[0])
+-                {
+-                    captured = true;
+-                    gSwallowedMouse = mouse;
+-                    discardMotion = true;
+-                }
+-                if ((pressed & PAD_CIRCLE) && !(gPreviousPressed & PAD_CIRCLE))
+-                {
+-                    if (captured) gResumeCapture = true;
+-                    captured = false;
+-                }
+-            }
++            // Match Verdite's manual capture key. The gameplay gate controls
++            // camera motion only: pickups, dialogue, menus and pause must not
++            // release the pointer. A held Escape (including on focus return)
++            // cannot toggle repeatedly, and clicks never acquire capture.
++            if (escape && !gPreviousEscape && gPreviousFocus) captured = !captured;
++            // Do not turn a held menu confirmation into an attack, or an attack
++            // into a confirmation, when the original game changes context.
++            if (captured != wasCaptured || gameplay != gPreviousGameplay)
++                gSwallowedMouse = mouse;
+             for (int index = 0; index < 3; ++index)
+                 if (!mouse[index]) gSwallowedMouse[index] = false;
+             if (gameplay)
+@@ -375,7 +360,7 @@ namespace ps2_host_input
+         }
+         {
+             std::lock_guard<std::mutex> lock(gMutex);
+-            if (traceEnabled() && (gState.pressed != pressed || gState.captured != captured))
++            if (traceEnabled() && (gState.pressed != pressed || gState.captured != captured || gTracedGameplay != gameplay))
+                 std::fprintf(stderr, "[host-input] tick=%llu pressed=%04x gameplay=%u captured=%u gamepad=%d\n",
+                     static_cast<unsigned long long>(vsyncTick), pressed, gameplay ? 1u : 0u,
+                     captured ? 1u : 0u, gamepad);
+@@ -384,7 +369,7 @@ namespace ps2_host_input
+             gState.captured = captured;
+             gState.focused = focused;
+             gState.inputTime = now;
+-            const bool indicatorCaptured = verdite && focused && captured && gState.gameplay;
++            const bool indicatorCaptured = verdite && focused && captured;
+             if (indicatorCaptured != gState.indicatorCaptured)
+             {
+                 gState.indicatorCaptured = indicatorCaptured;
+@@ -404,7 +389,8 @@ namespace ps2_host_input
+         }
+         gPreviousFocus = focused;
+         gPreviousGameplay = gameplay;
+-        gPreviousMouse = mouse;
++        gPreviousEscape = escape;
++        gTracedGameplay = gameplay;
+         gPreviousPressed = rawPressed;
+     }
+ }
+-- 
+2.55.0.windows.3
+

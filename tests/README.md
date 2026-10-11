@@ -96,7 +96,7 @@ sources; expected failure behaviour is itself asserted.
 
 | Package | Checks | Actual implementation and fixture boundary |
 |---|---:|---|
-| `input-tests` | 453 | Real pad mapper with simulated Raylib keyboard/mouse/gamepad devices; bindings, capture, menu transitions, glyph and snapshots. Physical GLFW delivery needs integration testing. |
+| `input-tests` | 496 | Real pad mapper with simulated Raylib devices; Verdite bindings, Escape-only capture, click non-capture, held-key/focus edges, pickup/menu transitions, glyph and snapshots. Passes native Windows and Ubuntu; physical GLFW delivery needs integration testing. |
 | `menu-tests` | 1,735 | Real KFIV binding, override registry and IOP allocator; controlled EE/SDK boundary supplies Free's SIF contract. Metadata/opcode guards and 300 allocation cycles; resource loading is not bypassed. |
 | `ioman-tests` | 79 | Actual IOMAN and IOP memory, using a real temporary file; read/seek/short read and async completion status 0, invalid descriptors and RAM bounds. |
 | `vblank-tests` | 22 CTests | Real scheduler/SDK wait handoff, long callbacks, invocation lifecycles and FIELD/CSR publication. Actual GS/BIOS mode selection adds 200,782 checks across 100,000 transitions; pinned upstream and narrowly disabled current-source controls reproduce timing defects. |

@@ -100,14 +100,16 @@ the accepted native catalog. Maintainer builds still synchronize optional
 
 The new series uses the Verdite bindings, verified on native Windows:
 W/S move forward/back, A/D strafe, arrows move/turn and select menu entries,
-Space attacks, F uses/confirms (hold to run), Q casts magic, Tab/Escape opens
+Space attacks, F uses/confirms (hold to run), Q casts magic, Tab opens
 the menu or goes back, Enter pauses, and Right Shift sends Select.
 
-Click in gameplay to engage mouse look; that first click is consumed.
+Escape only toggles mouse engagement; clicks never engage it.
 Left/right/middle mouse attack/cast/use. In menus, left mouse confirms the
 current selection, right mouse goes back, and the wheel selects entries.
-Escape/menu, pause and focus loss release capture; the small Verdite glyph
-shows its state. Menu/pause return restores capture if it was engaged.
+Pickups, dialogue, menus and pause preserve engagement. Mouse motion is
+discarded while the original game blocks looking, avoiding a camera jump
+when it resumes. Focus loss releases capture; press Escape after returning
+to engage again. The small Verdite glyph shows engagement changes only.
 
 ## Troubleshooting
 

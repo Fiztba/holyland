@@ -193,21 +193,25 @@ and the first-area fade can take additional time.
 | Input | Action |
 |---|---|
 | W/S, A/D | Forward/back, strafe |
-| Mouse | Look after clicking to capture in gameplay |
+| Mouse | Look while engaged with Escape |
 | Arrow keys | Turn/move; select in menus |
 | Space / left mouse | Attack |
 | F / middle mouse | Use, examine, talk, confirm; hold to run |
 | Q / right mouse | Magic |
-| Tab / Escape | Inventory/menu or back; release mouse |
+| Tab | Inventory/menu or back |
+| Escape | Toggle mouse engagement only |
 | Enter | Start/pause |
 | Right Shift | Select/accessory |
 | Menu arrows / wheel | Select item |
-| Menu F / left mouse; Tab / Escape / right mouse | Confirm; back |
+| Menu F / left mouse; Tab / right mouse | Confirm; back |
 
 Mouse sensitivity defaults to 0.15 degrees/pixel with normal vertical
-direction. The capture click is consumed. Closing a menu or pause restores
-the previous capture state. Focus loss releases capture; after focus returns,
-click again to capture. The brief top-right Verdite glyph is solid
+direction. Escape alone toggles engagement, matching the verified installed
+Verdite 2/3 controls; clicks never engage it. Pickups, dialogue, menus and
+pause preserve engagement, while camera motion is discarded whenever the
+game blocks looking. Held mouse buttons are suppressed across context
+changes until released. Focus loss releases capture; press Escape after
+returning to engage again. The brief top-right Verdite glyph is solid
 while captured and diagonally cut while released. Windows controller
 integration has not been checked.
 

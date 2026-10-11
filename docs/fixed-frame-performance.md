@@ -414,3 +414,36 @@ additions only enable the bounded native catalog and reject stale generated
 sources; this follow-up adds no Linux-specific runtime behavior. Its test
 package now supplies the required GCC SSE4.1 flag. The overall locked-30-Hz
 performance goal remains unfinished.
+
+## Manual mouse engagement (0065)
+
+The user's installed Verdite 2 and 3 sources use Escape for mouse capture
+and Tab for Menu/Back. Their remaining keyboard bindings already match
+Holyland: WASD, arrow keys, Space, F, Q, Enter and Right Shift. Patch 0065
+removes click-to-capture and the extra Escape menu binding. It separates
+pointer engagement from the gameplay camera gate: pickups, dialogue, menus
+and pause keep the chosen engagement state. Camera motion is still discarded
+while the game blocks looking, and held mouse buttons cannot change meaning
+across a context transition until released. Focus loss releases the pointer;
+a fresh Escape press engages it after returning.
+
+The actual pad mapper passes 496 checks under native Windows MSVC and Ubuntu
+GCC, covering every keyboard binding, Escape press/hold/release, clicks while
+disengaged, focus return with Escape already held, both gameplay transitions,
+blocked/stale camera displacement, mixed controllers, the indicator and
+concurrent snapshots. Device functions are simulated in this fixture.
+
+Both rebuilt retail runners completed isolated scripted host-input sequences
+through new-game, menu/back and pause/resume, exiting normally at tick 7400.
+Their traces contain exactly the five requested Escape capture changes and
+no pad command from Escape. Engagement survives menu and pause transitions;
+a gameplay click after disengaging does not recapture. Windows used Vulkan;
+Ubuntu WSL2 used the CPU renderer. These runs exercise the actual mapper and
+guest input paths with synthetic host events; they do not test physical OS
+cursor confinement. The item-pickup gate is covered by the source fixture;
+the prior cave/NPC/weapon route was not repeated for this input-only change.
+Linux hardware Vulkan remains limited by the previously recorded Dozen issue.
+
+All 65 exported patches pass tools/full/repeat application; the 87 managed
+files match the development checkout. Owner patches 0040/0041 are unchanged.
+This change has no Linux-specific behavior and claims no performance gain.

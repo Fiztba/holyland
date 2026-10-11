@@ -5,6 +5,15 @@ place as state changes; link session logs at the point they support.
 
 ## Current state (2026-10-10)
 
+- **Mouse engagement:** patch 0065 matches the user's installed Verdite 2/3
+  keyboard layouts and Escape capture key. Clicks never acquire capture;
+  Tab is Menu/Back. Pickups, dialogue, menus and pause preserve engagement.
+  The gameplay gate still discards camera motion while looking is blocked.
+  Focus loss releases capture and requires a fresh Escape press on return.
+  The actual pad mapper passes 496 checks on native Windows and Ubuntu,
+  including held keys/buttons, focus return, both transition directions,
+  blocked camera motion and a stable engagement indicator.
+
 - **Equipment/sky corruption:** patch 0064 honors preloaded source-chain
   DMA QWC/MADR before fetching TADR. The menu supplied scratchpad data under
   an active REFE; ignoring it parsed an old texture chain as GIF commands.

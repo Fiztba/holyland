@@ -133,18 +133,17 @@ namespace {
     }
     void capture() {
         menu();
-        // Each test starts a new capture gesture. Separate assertions below
-        // cover automatic restoration when closing an in-game menu.
+        // Focus loss clears capture; only a fresh Escape gesture engages it.
         fake::focused=false;
         fake::frame();
         fake::focused=true;
         fake::frame();
         ps2_host_input::setGameplayActive(true);
-        fake::frame({}, {MOUSE_BUTTON_LEFT});
-        check(ps2_host_input::takeMouseLook().captured,"click on gameplay did not capture");
-        check((held() & Square)==0,"capture click leaked as an attack");
-        fake::frame({}, {MOUSE_BUTTON_LEFT});
-        check((held() & Square)==0,"held capture click leaked before release");
+        fake::frame({KEY_ESCAPE}, {MOUSE_BUTTON_LEFT});
+        check(ps2_host_input::takeMouseLook().captured,"Escape did not capture gameplay");
+        check(held()==0,"capture gesture leaked a menu command or held mouse button");
+        fake::frame({KEY_ESCAPE}, {MOUSE_BUTTON_LEFT});
+        check((held() & Square)==0,"held mouse button leaked before release");
         fake::frame();
         ps2_host_input::discardMouseLook();
     }
@@ -155,7 +154,7 @@ namespace {
             {KEY_W,Up},{KEY_S,Down},{KEY_A,L1},{KEY_D,R1},
             {KEY_UP,Up},{KEY_DOWN,Down},{KEY_LEFT,Left},{KEY_RIGHT,Right},
             {KEY_SPACE,Square},{KEY_F,Cross},{KEY_Q,Triangle},
-            {KEY_TAB,Circle},{KEY_ESCAPE,Circle},{KEY_ENTER,Start},{KEY_RIGHT_SHIFT,Select}
+            {KEY_TAB,Circle},{KEY_ENTER,Start},{KEY_RIGHT_SHIFT,Select}
         };
         for (auto c : cases) {
             fake::frame({c.first});
@@ -224,11 +223,12 @@ namespace {
         check(released.yawRadians==0 && released.pitchRadians==0,"focus loss retained mouse motion");
         fake::focused=true;
         fake::frame();
-        check(!ps2_host_input::takeMouseLook().captured,"focus regain recaptured without a click");
+        check(!ps2_host_input::takeMouseLook().captured,"focus regain recaptured without Escape");
         capture();
         ps2_host_input::setGameplayActive(false);
         fake::frame();
-        check(!ps2_host_input::takeMouseLook().captured && !fake::cursorHidden,"menu transition did not release pointer");
+        check(!ps2_host_input::takeMouseLook().captured && fake::cursorHidden,
+              "menu transition must suspend look while preserving pointer capture");
     }
 
     void mouseWheel() {
@@ -250,25 +250,99 @@ namespace {
         check(held()==0,"captured gameplay wheel down injected a pad direction");
     }
 
-    void captureRestoration() {
-        capture();
+    void manualCapture() {
+        menu();
+        fake::focused=false;
+        fake::frame();
+        fake::focused=true;
+        fake::frame();
+        for (bool gameplay : {false, true}) {
+            ps2_host_input::setGameplayActive(gameplay);
+            expireButtons();
+            for (int button : {MOUSE_BUTTON_LEFT,MOUSE_BUTTON_RIGHT,MOUSE_BUTTON_MIDDLE}) {
+                fake::frame({}, {button});
+                check(!fake::cursorHidden && !ps2_host_input::mouseCaptureIndicator().captured,
+                      "mouse click acquired capture");
+                if (gameplay) check(held()==0,"uncaptured gameplay click injected an action");
+                expireButtons();
+            }
+        }
         ps2_host_input::setGameplayActive(false);
+        fake::frame({KEY_ESCAPE});
+        check(fake::cursorHidden && ps2_host_input::mouseCaptureIndicator().captured,
+              "Escape could not engage mouse inside a menu");
+        check(held()==0,"Escape sent Menu/Back");
+        for (int i=0; i<20; ++i) fake::frame({KEY_ESCAPE});
+        check(fake::cursorHidden && held()==0,"held Escape repeatedly toggled capture or sent a pad command");
+        fake::frame();
+        for (int key : {KEY_F,KEY_SPACE,KEY_Q,KEY_TAB,KEY_ENTER,KEY_RIGHT_SHIFT}) {
+            fake::frame({key});
+            check(fake::cursorHidden,"a game command released pointer capture");
+            expireButtons();
+        }
+        fake::gamepadAvailable=true;
+        fake::gamepadButtons[GAMEPAD_BUTTON_RIGHT_FACE_RIGHT]=true;
+        fake::frame();
+        check(held()==Circle && fake::cursorHidden,"controller Back changed mouse engagement");
+        fake::gamepadButtons.fill(false);
+        fake::gamepadAvailable=false;
+        expireButtons();
+        fake::frame({KEY_ESCAPE});
+        check(!fake::cursorHidden && held()==0,"second Escape did not release mouse independently of menu");
+        fake::frame();
+        ps2_host_input::setGameplayActive(true);
+        fake::frame();
+        check(!fake::cursorHidden,"leaving a menu recaptured a manually released pointer");
+        capture();
+        fake::focused=false;
+        fake::frame({KEY_ESCAPE});
+        fake::focused=true;
+        fake::frame({KEY_ESCAPE});
+        fake::frame({KEY_ESCAPE});
+        check(!fake::cursorHidden,"Escape already held on focus return recaptured pointer");
+        fake::frame({}, {MOUSE_BUTTON_LEFT});
+        check(!fake::cursorHidden,"focus-restoring click recaptured pointer");
+        fake::frame();
+        fake::frame({KEY_ESCAPE});
+        check(fake::cursorHidden,"fresh Escape after focus return did not capture");
+    }
+
+    void gameplayTransitions() {
+        capture();
+        fake::time += 0.2;
+        fake::frame({}, {}, {20,10});
+        ps2_host_input::setGameplayActive(false);
+        auto blocked=ps2_host_input::takeMouseLook();
+        check(!blocked.captured && blocked.yawRadians==0 && blocked.pitchRadians==0,
+              "a pickup/menu gate retained camera motion");
+        check(ps2_host_input::mouseCaptureIndicator().captured,
+              "gameplay gate changed capture indicator before the UI poll");
+        fake::frame({}, {}, {200,100});
+        check(fake::cursorHidden && close(ps2_host_input::mouseCaptureIndicator().alpha,1.0f),
+              "pickup/menu transition released capture or restarted the icon fade");
+        blocked=ps2_host_input::takeMouseLook();
+        check(blocked.yawRadians==0 && blocked.pitchRadians==0,"blocked camera accumulated mouse motion");
         expireButtons();
         fake::frame({}, {MOUSE_BUTTON_LEFT});
         check(held()==Cross,"menu confirmation did not register before gameplay restoration");
         ps2_host_input::setGameplayActive(true);
         fake::frame({}, {MOUSE_BUTTON_LEFT});
-        check(ps2_host_input::takeMouseLook().captured,"closing a gameplay menu did not restore capture");
-        check((held() & Square)==0,"held menu confirmation leaked as an attack after capture restored");
+        const auto resumed=ps2_host_input::takeMouseLook();
+        check(resumed.captured && resumed.yawRadians==0 && resumed.pitchRadians==0,
+              "return from pickup/menu lost engagement or applied blocked camera motion");
+        check((held() & Square)==0,"held menu confirmation leaked as an attack after gameplay resumed");
         fake::frame({}, {MOUSE_BUTTON_LEFT});
         check((held() & Square)==0,"held menu confirmation leaked before its release");
         expireButtons();
         fake::frame({}, {MOUSE_BUTTON_LEFT});
-        check((held() & Square)!=0,"fresh attack click was blocked after restored capture");
+        check((held() & Square)!=0,"fresh attack click was blocked after gameplay resumed");
+        ps2_host_input::setGameplayActive(false);
+        fake::frame({}, {MOUSE_BUTTON_LEFT});
+        check((held() & Cross)==0,"held attack became a menu confirmation");
         expireButtons();
         fake::frame({KEY_ESCAPE});
-        check((held() & Circle)!=0 && !ps2_host_input::takeMouseLook().captured,
-              "Escape did not emit back and release gameplay capture");
+        check(held()==0 && !fake::cursorHidden,
+              "Escape did not release pointer without a pad command");
     }
 
     void mouseDisplacement() {
@@ -347,11 +421,12 @@ namespace {
         check(!whiteAt(705,82) && whiteAt(711,64),"released diagonal removed the cable or left the off cut filled");
 
         ps2_host_input::setGameplayActive(false);
-        check(!ps2_host_input::mouseCaptureIndicator().captured,"menu/pause gate left the mouse indicator engaged");
+        check(!ps2_host_input::mouseCaptureIndicator().captured,"menu/pause gate changed manual release");
         fake::frame();
         ps2_host_input::setGameplayActive(true);
         fake::frame();
-        check(ps2_host_input::mouseCaptureIndicator().captured,"resuming gameplay did not restore the engaged indicator");
+        check(!ps2_host_input::mouseCaptureIndicator().captured,"resuming gameplay changed manual release");
+        capture();
         fake::focused=false;
         fake::frame();
         check(!ps2_host_input::mouseCaptureIndicator().captured,"focus loss left the mouse indicator engaged");
@@ -419,7 +494,8 @@ int main() {
         controllerMerge();
         mouseContexts();
         mouseWheel();
-        captureRestoration();
+        manualCapture();
+        gameplayTransitions();
         mouseDisplacement();
         mouseIndicator();
         snapshotAndThreads();

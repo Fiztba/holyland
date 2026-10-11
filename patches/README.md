@@ -73,6 +73,7 @@ commit); don't edit them by hand. Workflow:
 | `0062-Anchor-interpolation-to-actual-rendered-frames-…` | Capture each original endpoint and its VRAM, reject incomplete replays against the actual renderer, and prevent reconstructed graphics state from accumulating across frames. |
 | `0063-Preserve-full-PACKED-GS-depth-…` | Decode all 32 PACKED XYZ2/XYZ3 depth bits directly into double precision, preserving equal-depth draws. |
 | `0064-Consume-preloaded-source-chain-DMA-payloads-…` | Transfer active QWC/MADR payloads before fetching TADR, obey active-tag termination/CNT rules, and reject preloaded transfers in tag-only GIF fast paths. |
+| `0065-Match-Verdite-manual-mouse-capture-controls` | Escape alone toggles mouse engagement; clicks never capture. Preserve engagement through pickups, dialogue, menus and pause while keeping camera motion gated. Tab remains Menu/Back. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -84,7 +85,7 @@ function tables alone does not add the missing continuation entries.
 The 64-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
 0040–0041 (VU1 census and lift) are retained unchanged. Performance patches
-0042–0064 are exported as separate source commits on top of them. The
+0042–0065 are exported as separate source commits on top of them. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The new fixed-update/interpolation mode and its separate Windows/Ubuntu
