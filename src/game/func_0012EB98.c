@@ -1,7 +1,7 @@
 extern float D_00444EAC;
 extern float D_00444EB0;
 
-void func_00195388(float, void *, float);
+float func_00195388(float *, float, float);
 
 void func_0012EB98(char *arg0) {
     float f0;
@@ -25,7 +25,7 @@ void func_0012EB98(char *arg0) {
     if (f0 < f12 || (f0 = -f0, f12 < f0)) {
         f12 = f0;
     }
-    func_00195388(f12, s + 0x4C, 20.0f);
+    func_00195388((float *)(s + 0x4C), f12, 20.0f);
     obj = *(char **)arg0;
     n = *(unsigned short *)(obj + 0xF0);
     ent = *(char **)(obj + 0xF8);
