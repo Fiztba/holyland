@@ -93,6 +93,8 @@ typedef struct ModelInstance {
 /* the objects of a map, looked up by func_0011E1F0(map, id) */
 typedef struct {
     ModelInstance *model;           /* 0x00 */
+    char pad04[0x0C];
+    u32 unk10;                      /* 0x10 flags */
 } MapObject;
 
 /* the props of a map, looked up by func_00116160(map, id) */
