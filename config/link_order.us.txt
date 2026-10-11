@@ -14,6 +14,8 @@ asm/data/lit4.lit4.s
 asm/data/sdata.sdata.s
 asm/data/sbss.sbss.s
 asm/data/bss.bss.s
+src/game/func_00109A38.c
+asm/text_00109A50.s
 src/game/func_00120D78.c
 asm/text_00120D88.s
 src/sce/libgraph/graph001.c

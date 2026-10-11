@@ -737,3 +737,6 @@ _end = 0x01E57C70;
 
 // game
 func_00120D78 = 0x00120D78; // type:func
+
+// game (first batch)
+func_00109A38 = 0x00109A38; // type:func
