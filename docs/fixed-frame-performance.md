@@ -447,3 +447,77 @@ Linux hardware Vulkan remains limited by the previously recorded Dozen issue.
 All 65 exported patches pass tools/full/repeat application; the 87 managed
 files match the development checkout. Owner patches 0040/0041 are unchanged.
 This change has no Linux-specific behavior and claims no performance gain.
+
+## Native block compilation and stamina timing (0066)
+
+The slow stamina report reproduces beside the first NPC with the corrected
+game sources and patches through 0065. A read-only 30-second observation
+measured 11.800 original gameplay updates/s. One unarmed attack required
+77 updates to return to full power, taking 6.505 seconds instead of about
+2.57 seconds at the intended NTSC update rate. The observed animation frames
+and cooldown values were contiguous, with one step per observed retail loop.
+This establishes simulation slowdown in this case; it does not establish
+that every weapon or stamina condition is correct.
+
+Windows stack samples put most execution time in the compiled VU blocks.
+Patch 0066 forces their upper/lower instruction and instruction-pair templates
+inline, retaining the existing non-inline 16-pair group boundary. This removes
+repeated calls and lets the compiler retain constants and temporary state
+within each group. Strict arithmetic, operand normalization, pipeline commits,
+code-generation checks, callbacks and cooperative budgets are unchanged.
+Neither recovery constants nor original game code/assets change.
+
+Native Windows comparison, i9-13900KF / RTX 4090, Vulkan, fixed updates,
+interpolation enabled, 120 FPS requested, upstream static lift disabled:
+
+| Observation | Through 0065 | With 0066 |
+|---|---:|---:|
+| Original game updates/s | 11.800 | 14.433 |
+| Attack to full stamina | 6.505 s / 77 updates | 5.390 s / 77 updates |
+| Attack to hit-window entry | 1.290 s / 15 updates | 1.065 s / 15 updates |
+| Mean rendered frames/s during the measurement | 83.85 | 75.41 |
+
+These are single 30-second runs from new games in closely matched stationary
+NPC views, within five game-coordinate units and 0.008 radians of each other.
+No compiler, stack sampler or second game was active during either measurement.
+Read-only polling and ordinary host scheduling still introduce uncertainty.
+The roughly 22% gain is in **simulation throughput**, not graphics FPS:
+presentation throughput decreased about 10% in this comparison while remaining
+above the simulation rate. The heavy scene is still less than half real time;
+this is not a locked-30-Hz result or a complete stamina fix.
+
+Both Windows binaries use strict MSVC 19.44 and the same existing PGO profile.
+The new link reports 4969/5317 functions optimized from profile data, with no
+mismatched call sites. This is reuse of the earlier profile, not new training
+on this final generator. The measured executable SHA256 is
+`3fc53fef3b50235d8df83bda02f485aafe9406b77934184a1e84c751c8a3371c`.
+
+Native Windows and Ubuntu 26.04 / WSL2 each pass all seven authored-native
+tests and all seven cooperative-native tests. Their positive runs perform
+672585 and 1116253 differential checks respectively; negative controls verify
+that register, flag, cycle, memory and packet corruption is detected. These
+fixtures compile the actual generator output and compare against the frozen
+reference with substituted GS/VIF boundaries; they are not a full-game proof.
+
+The rebuilt Windows PGO game crossed both cave doors, retained floor contact
+and the seated NPC, completed the measured attack, displayed Equipment, and
+returned through the main menu to an intact sky. It exited normally after
+729.68 seconds. Eight explicitly requested captures are retained privately;
+the harness's automatic-final-image postcheck failed because control-file
+quit does not produce `final.png`. The game exit code was zero. This run did
+not repeat weapon pickup/equipping or a full playthrough.
+
+Ubuntu rebuilt the actual game with GCC 15.2. Three isolated CPU-renderer
+new-game runs with attack/menu inputs exited normally around tick 7400.
+The first captured the main menu; later runs returned to gameplay. The
+scripted Equipment sequence did not reach Equipment, including a repeat
+with longer button holds, so Linux menu coverage is partial. The input trace
+records Circle reaching the game and later inventory entry; the reason the
+earlier menu request did not open the menu remains unverified. Equipment,
+the NPC route and the performance/stamina comparison above are Windows-only.
+Linux hardware Vulkan remains unverified due to the previously documented
+Dozen failure. No new Linux-specific behavior is introduced, and the owner's
+merged patches 0040/0041 remain unchanged.
+
+All 66 exported patches pass fresh tools/full/repeat application; the 87
+managed source files match the persistent development checkout.

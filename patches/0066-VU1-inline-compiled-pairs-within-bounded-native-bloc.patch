@@ -1,0 +1,68 @@
+From 599152b08ed52584eff7dca710a39932cb6d2f17 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 23:50:30 -0400
+Subject: [PATCH] VU1: inline compiled pairs within bounded native blocks
+
+Keep the existing noinline 16-pair groups, but inline their instruction and pair templates so the compiler can keep constants and temporary state within each group. Preserve the original pair, pipeline, callback, generation and budget boundaries and strict floating-point operations.
+
+Native Windows: exact authored and cooperative native suites pass; the nearby-NPC 30-second trace improves from 11.80 to 14.43 updates/s. Ubuntu GCC passes both suites and the rebuilt CPU game reaches gameplay and menus. This remains below the 29.97 Hz target in the heavy scene.
+---
+ ps2xRuntime/tools/generate_vu_native.py | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/ps2xRuntime/tools/generate_vu_native.py b/ps2xRuntime/tools/generate_vu_native.py
+index ca1162e..b7afd2f 100644
+--- a/ps2xRuntime/tools/generate_vu_native.py
++++ b/ps2xRuntime/tools/generate_vu_native.py
+@@ -174,11 +174,20 @@ bool VU1Interpreter::matchesNativeCatalogCache() const
+             return false;
+     return true;
+ }
++''')
++    parts.append('''
++#if defined(_MSC_VER)
++#define VU_COMPILED_INLINE __forceinline
++#elif defined(__GNUC__) || defined(__clang__)
++#define VU_COMPILED_INLINE inline __attribute__((always_inline))
++#else
++#define VU_COMPILED_INLINE inline
++#endif
+ ''')
+     parts.append(NATIVE_OPERAND_DECLARATIONS)
+     upper_function = function(upper, 'void VU1Interpreter::execUpper(')
+     upper_function = replace_once(upper_function, 'void VU1Interpreter::execUpper(uint32_t instr)',
+-        'template<uint32_t instr>\nvoid VU1Interpreter::execUpperSpecialized()')
++        'template<uint32_t instr>\nVU_COMPILED_INLINE void VU1Interpreter::execUpperSpecialized()')
+     upper_function = replace_once(upper_function, ORIGINAL_OPERAND_SNAPSHOT,
+                                   NATIVE_OPERAND_SNAPSHOT)
+     if specialize_fmac:
+@@ -231,7 +240,7 @@ bool VU1Interpreter::matchesNativeCatalogCache() const
+     lower_function = function(lower, 'void VU1Interpreter::execLower(')
+     lower_function = replace_once(lower_function,
+         'void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint32_t upperInstr)',
+-        'template<uint32_t instr, uint32_t upperInstr>\nvoid VU1Interpreter::execLowerSpecialized(uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory)')
++        'template<uint32_t instr, uint32_t upperInstr>\nVU_COMPILED_INLINE void VU1Interpreter::execLowerSpecialized(uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory)')
+     parts.extend((upper_function, lower_function))
+     for name in ('addVfRead', 'addVfWrite', 'vfReadLanes', 'decodeUpperUsage', 'decodeLowerUsage'):
+         definition = function(core, ('uint8_t ' if name == 'vfReadLanes' else
+@@ -310,7 +319,7 @@ uint64_t vuNativeIssuedForTests() { return privateSpecializedIssued; }
+ ''')
+     parts.append('''
+ template<uint32_t lower, uint32_t upper>
+-int VU1Interpreter::issueSpecializedPair(uint8_t *vuData, uint32_t dataSize, GS &gs,
++VU_COMPILED_INLINE int VU1Interpreter::issueSpecializedPair(uint8_t *vuData, uint32_t dataSize, GS &gs,
+                                         PS2Memory *memory, uint32_t codeSize, uint64_t budgetEnd)
+ {
+     constexpr DecodedInstructionPair decoded = decodePairSpecialized(lower, upper);
+@@ -390,7 +399,7 @@ int VU1Interpreter::trySpecializedBlock(const DecodedInstructionPair &initialDec
+ ''')
+     for base in range(0, len(pairs), width):
+         parts.append(f'    case {base//width}u: return trySpecializedGroup<{base}u>(vuCode, codeSize, vuData, dataSize, gs, memory, budgetEnd, generation);\n')
+-    parts.append('    default: return 0;\n    }\n}\n#undef PRIVATE_VU_BLOCK_NOINLINE\n')
++    parts.append('    default: return 0;\n    }\n}\n#undef PRIVATE_VU_BLOCK_NOINLINE\n#undef VU_COMPILED_INLINE\n')
+     detail_body = detail[detail.index('// Instruction field extraction helpers'):detail.rindex('#endif')]
+     detail_body = detail_body.replace('static inline ', 'static constexpr ')
+     generated = detail_body + '\n' + '\n'.join(parts)
+-- 
+2.55.0.windows.3
+

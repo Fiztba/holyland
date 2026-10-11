@@ -41,7 +41,9 @@ code or disc assets. The build checks the boot ELF's hash.
   build measured 29.997 game updates/s and roughly 75–90 graphics frames/s
   in the opening area on native Windows, and passed the cave-door route. It uses
   isolated, conservative geometry interpolation; combat and physics remain
-  on the original update loop. See [fixed-frame performance](docs/fixed-frame-performance.md)
+  on the original update loop. The latest measured heavy NPC view improves
+  from 11.80 to 14.43 game updates/s; slow stamina recovery tracks that remaining
+  simulation slowdown. Sustained 30 Hz is still unfinished. See [fixed-frame performance](docs/fixed-frame-performance.md)
   for launchers, timing, visual latency and Linux limits, and
   [optional MSVC PGO](docs/windows-pgo.md).
 - Broader rendering accuracy remains unverified.
