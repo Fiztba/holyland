@@ -741,3 +741,12 @@ func_00120D78 = 0x00120D78; // type:func
 // game (first batch)
 func_00109A38 = 0x00109A38; // type:func
 func_00102218 = 0x00102218; // type:func
+func_001CFC48 = 0x001CFC48; // type:func
+func_001FBD80 = 0x001FBD80; // type:func
+func_001FBDC8 = 0x001FBDC8; // type:func
+func_002080A0 = 0x002080A0; // type:func
+func_001CFC58 = 0x001CFC58; // type:func
+func_001FBD70 = 0x001FBD70; // type:func
+func_001FBDD8 = 0x001FBDD8; // type:func
+func_00208158 = 0x00208158; // type:func
+func_001C0890 = 0x001C0890; // type:func
