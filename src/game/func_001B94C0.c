@@ -1,4 +1,4 @@
-void func_001BB308(int, int *);
+int func_001BB308(int);
 extern char D_00413F80[];
 extern unsigned long D_00414448[];
 extern int D_00446ED4;
@@ -34,7 +34,7 @@ void func_001B94C0(void) {
                 *(int *)(p + 0xCC) = var_a0 - 1;
             }
         } else {
-            func_001BB308(1, (int *)p);
+            func_001BB308(1);
         }
     }
 }

@@ -23,7 +23,7 @@ typedef struct {
 void func_001374E0(void *);
 void func_001375C0(void *);
 int func_00192EB0(void *, int, void *);
-int func_00194368(float, void *, long, void *);
+int func_00194368(float, void *);
 
 void func_00136D90(Actor *arg0) {
     unsigned int temp_a0;
@@ -36,7 +36,7 @@ void func_00136D90(Actor *arg0) {
     if (((int) ((long) (temp_a1 << 0x12) >> 0x20)) & 1) {
         temp_a0 = arg0->owner->mid->v88;
         if (temp_a0 != 0) {
-            arg0->b34 = func_00194368((arg0->flags_c6 & 2) ? *(float *)(temp_a2 + 0x40) : 1.0f / (float) temp_a0, arg0->owner, temp_a1, temp_a2);
+            arg0->b34 = func_00194368((arg0->flags_c6 & 2) ? *(float *)(temp_a2 + 0x40) : 1.0f / (float) temp_a0, arg0->owner);
         } else {
             m = ((int) (temp_a1 >> 11)) & 7;
             arg0->b34 = func_00192EB0(arg0, m, temp_a2);

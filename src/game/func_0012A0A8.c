@@ -29,7 +29,7 @@ typedef struct {
 } Actor;
 
 int func_00192EB0(void *, int);
-int func_00194368(float, void *, long);
+int func_00194368(float, void *);
 float func_001957B8(float, float);
 float func_00195388(float *, float, float);
 
@@ -47,7 +47,7 @@ void func_0012A0A8(Actor *arg0) {
     if (((int) ((long) (temp_a1 << 0x12) >> 0x20)) & 1) {
         temp_a0 = arg0->owner->mid->v88;
         if (temp_a0 != 0) {
-            arg0->b34 = func_00194368((arg0->flags_c6 & 2) ? *(float *)(temp_a2 + 0x40) : 1.0f / (float) temp_a0, arg0->owner, temp_a1);
+            arg0->b34 = func_00194368((arg0->flags_c6 & 2) ? *(float *)(temp_a2 + 0x40) : 1.0f / (float) temp_a0, arg0->owner);
         } else {
             m = ((int) (temp_a1 >> 11)) & 7;
             arg0->b34 = func_00192EB0(arg0, m);
