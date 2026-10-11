@@ -1,0 +1,61 @@
+# splat configuration: King's Field: The Ancient City, USA retail (SLUS-20318)
+#
+# Splits baserom/us/kfiv.rom (the boot ELF's PT_LOAD bytes; ROM offset 0 is
+# VMA 0x00100000) into assembly and data. To start, .text is one asm unit;
+# translation units get carved out of it as boundaries are found.
+
+name: kfiv
+sha1: 87615665d1a4a88e57942126a03ab7ad03cd42c6
+options:
+  basename: kfiv
+  target_path: baserom/us/kfiv.rom
+  elf_path: build/kfiv.elf
+  base_path: ..
+  platform: ps2
+  compiler: EEGCC
+
+  # _gp from the ELF's .reginfo (ri_gp_value).
+  gp_value: 0x0044CB70
+  ld_gp_expression: "0x0044CB70"
+
+  asm_path: asm
+  src_path: src
+  build_path: build
+  ld_script_path: build/kfiv.ld
+
+  symbol_addrs_path: config/symbol_addrs.txt
+  undefined_funcs_auto_path: config/undefined_funcs_auto.txt
+  undefined_syms_auto_path: config/undefined_syms_auto.txt
+
+  find_file_boundaries: False
+  disassemble_all: True
+  create_c_files: False
+  migrate_rodata_to_functions: False
+
+  use_gp_rel_macro_nonmatching: True
+  generate_asm_macros_files: False   # include/macro.inc is hand-written for ee-as 2.9
+  # The binary holds EUC-JP debug text; only plain ASCII is emitted as strings
+  # so the assembler sees the original bytes.
+  string_encoding: ASCII
+  data_string_encoding: ASCII
+  # ee-as 2.9 only knows numeric register names.
+  mips_abi_gpr: numeric
+  mips_abi_float_regs: numeric
+  section_order: [".text", ".vutext", ".data", ".vudata", ".rodata", ".lit4", ".sdata", ".sbss", ".bss"]
+
+segments:
+  - name: main
+    type: code
+    start: 0x000000
+    vram: 0x00100000
+    bss_size: 0x1A10E70   # .sbss 0x447000 .. .bss end 0x1E57C70
+    subsegments:
+      - [0x000000, asm, text]
+      - [0x149680, data, data]
+      - { start: 0x33B1D0, type: data, name: vudata, linker_section: .vudata }
+      - [0x33D980, rodata, rodata]
+      - [0x344B80, lit4, lit4]
+      - [0x346700, sdata, sdata]
+      - { start: 0x346FE4, type: sbss, vram: 0x00447000, name: sbss }
+      - { start: 0x346FE4, type: bss, vram: 0x00447480, name: bss }
+  - [0x346FE4]
