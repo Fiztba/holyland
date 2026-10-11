@@ -734,3 +734,6 @@ index = 0x00241FD8; // type:func
 
 // linker script
 _end = 0x01E57C70;
+
+// game
+func_00120D78 = 0x00120D78; // type:func

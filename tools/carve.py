@@ -300,8 +300,8 @@ RETAIL = {}
 def main():
     RETAIL.update(load_retail(str(ROOT / "baserom/us/SLUS_203.18")))
     check = "--check" in sys.argv
-    units = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "src/sce").rglob("*")
-                   if p.suffix in (".c", ".s"))
+    units = sorted(str(p.relative_to(ROOT)) for d in ("src/sce", "src/game")
+                   for p in (ROOT / d).rglob("*") if p.suffix in (".c", ".s"))
     compile_all(units)
     rows = layout(str(ROOT / OBJDIR))
 
