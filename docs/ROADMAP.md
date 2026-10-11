@@ -15,8 +15,9 @@
 - [x] objdiff progress reports: `ninja progress` → `build/report.json`
       (162 of 167 library C units at 100 % matched code)
 - [x] Progress page and README badges from the report (docs/progress/)
+- [x] First game functions matched in C; game flags settled: `-O2 -G 8`, no
+      `-g` (see step 4)
 - [ ] Split the game's `.text` into translation units
-- [ ] First game function matched in C (this also settles `-g` or not)
 - [ ] Whole-ELF match (section headers, `.DVP` overlays, no symtab)
 
 ## Memory map (retail ELF)
@@ -109,11 +110,21 @@ There is no link map (ICO's PAL disc shipped one; KFIV's does not). Signals:
 - Function naming from the Holyland recomp work (`~/Documents/KFIV-PC`,
   `SLUS_203.18.functions.csv`) and the `KF_*` debug strings.
 
-### 4. Match the first game functions
+### 4. Match the game functions (started)
 
-- Settle the game's flags with one small leaf function: `-O2 -G 8`, with or
-  without `-g` (`GAME_CFLAGS` in `tools/compile_c.sh`). ICO's game (same
-  toolchain and studio-era SDK) was built `-g -fno-common`, so try that first.
+- Flags: `-O2 -G 8`, the same optimisation as the SDK. Leaf functions match at
+  `-O1` and `-O2` alike and settle nothing; loops with calls
+  (`func_00102558`, `func_00123158`, `func_0019CCB0`) match only at `-O2`.
+  `-g` changed no code in any game function or in 167 of 168 library units
+  compiled both ways. In gcc 2.9 its line labels only stop ee-as from moving an
+  inline-asm instruction into a branch delay slot (libvu0's
+  `sceVu0RotTransPers`), and no game branch shows that pattern. It is left
+  off; `GAME_CFLAGS` overrides it.
+- A store whose register happens to be `$2` is not a return value:
+  `func_00120D78` is `void`. Small functions with two stores of one value come
+  out in the scheduler's order, so their C is a chained assignment.
+- Each matched function is its own unit in `src/game/` until step 3 gives
+  the real file boundaries.
 - Workflow per function: m2c for a first draft → decomp.me (preset "PS2
   ee-gcc 2.9-991111-01") or objdiff → drop into `src/`.
 - Start with leaf utility code (math, string, file wrappers such as

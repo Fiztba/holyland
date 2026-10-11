@@ -173,21 +173,19 @@ def write_if_changed(path: Path, text: str) -> None:
     path.write_text(text)
 
 
-def asm_category(src: str) -> str:
-    """splat's own units are game; the library stretches it left as asm are sce."""
-    return "sce" if re.match(r"(text|bss)_[0-9A-F]{8}\.", Path(src).name) else "game"
-
-
-def category(src: str) -> str:
-    if src.startswith("asm/"):
-        return asm_category(src)
-    return "sce" if src.startswith("src/sce/") else "game"
+def categories(srcs: list[str]) -> list[str]:
+    """The game's C and splat units sit between crt0 and the first library
+    unit; everything from there on (library C and the asm stretches between)
+    is sce. Names cannot tell them apart: game C units split the game's asm
+    into text_XXXXXXXX units just as library units do."""
+    lib = next(i for i, s in enumerate(srcs) if i and s.startswith("src/sce/"))
+    return ["sce" if i >= lib or s.startswith("src/sce/") else "game"
+            for i, s in enumerate(srcs)]
 
 
 def objdiff_config(srcs: list[str]) -> dict:
     units = []
-    for s in srcs:
-        cat = category(s)
+    for s, cat in zip(srcs, categories(srcs)):
         unit = {"name": s.split("/", 1)[1].rsplit(".", 1)[0],
                 "metadata": {"progress_categories": [cat]}}
         if s.startswith("asm/"):

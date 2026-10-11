@@ -9,10 +9,11 @@
 # came from (the same split ICO's build proves):
 #   src/sce/libc|libm|libgcc   compiler-install archives: -O2 -G 0 -fno-builtin, ee-as 2.9
 #   src/sce/*                  Sony SDK archives:         -O2 -G 0, SCE ee-as 2.10
-#   everything else (the game)                            -O1 -G 8, ee-as 2.9
-# Whether the game was built with -g (it changes scheduling in gcc 2.9) is
-# still to be settled by the first matched game function; GAME_CFLAGS
-# overrides the default.
+#   everything else (the game)                            -O2 -G 8, ee-as 2.9
+# The game is -O2 like the SDK: loops with calls (func_00102558, func_00123158,
+# func_0019CCB0) match only at -O2. -g changes no game bytes found so far (in
+# gcc 2.9 it only stops ee-as filling a branch delay slot after inline asm),
+# so it is left off; GAME_CFLAGS overrides the default.
 set -eu
 [ $# -eq 2 ] || { echo "usage: $0 <src.c> <out.o>" >&2; exit 2; }
 SRC="$1"; OUT="$2"
@@ -28,8 +29,7 @@ case "${SRC}" in
     src/sce/*)
         FLAGS="-G 0"; GNUM=0; AS="${AS_SDK}" ;;
     *)
-        # the game is -O1 (func_00120D78 matches only at -O1; the SDK is -O2)
-        OPT="-O1"; FLAGS="${GAME_CFLAGS:--G 8}"; GNUM=8; AS="${AS_OLD}" ;;
+        FLAGS="${GAME_CFLAGS:--G 8}"; GNUM=8; AS="${AS_OLD}" ;;
 esac
 
 INCS="-I${ROOT}/include"

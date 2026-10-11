@@ -16,10 +16,16 @@ asm/data/sbss.sbss.s
 asm/data/bss.bss.s
 src/game/func_00102218.c
 asm/text_00102228.s
+src/game/func_00102558.c
+asm/text_001025C0.s
 src/game/func_00109A38.c
 asm/text_00109A50.s
 src/game/func_00120D78.c
 asm/text_00120D88.s
+src/game/func_00123158.c
+asm/text_001231C0.s
+src/game/func_0019CCB0.c
+asm/text_0019CD10.s
 src/game/func_001C0890.c
 asm/text_001C08A0.s
 src/game/func_001CFC48.c
