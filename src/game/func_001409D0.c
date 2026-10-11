@@ -1,27 +1,24 @@
-extern void *D_004467E0;
+#include "kf_entity.h"
+
 float func_00194F80(int, int);
 
-typedef struct Ent {
-    int *p0; int pad4[2]; char *p0C; char pad10[0xC]; struct Ent *next; char pad20[0xB8];
-    long d;
-} Ent;
-
-void func_001409D0(Ent *arg0) {
-    Ent *s0 = D_004467E0;
-    while (s0 != 0) {
-        if (arg0->p0C == s0->p0C) {
-            if (*(int *)((char *)s0 + 0xD8) & 1) {
-                long x = s0->d;
-                if (((int)(x >> 1) & 1) && !((int)(x >> 2) & 3) && s0 != arg0) {
-                    char *t = (char *)s0 + 0xE0;
-                    if (t[0x7A] == 0 &&
-                        func_00194F80((int)arg0->p0 + 0xC0, (int)s0->p0 + 0xC0) <
-                            (float)*(short *)(arg0->p0C + 0x438)) {
-                        t[0x7A] = 1;
+void func_001409D0(Entity *entity) {
+    Entity *other_entity = D_004467E0;
+    while (other_entity != NULL) {
+        if (entity->unk0C == other_entity->unk0C) {
+            if (*(int *)&other_entity->flags & 1) {
+                long other_flags = other_entity->flags;
+                if (((int)(other_flags >> 1) & 1) && !((int)(other_flags >> 2) & 3) &&
+                    other_entity != entity) {
+                    EntityUnkE0 *other_unkE0 = &other_entity->unkE0;
+                    if (other_unkE0->unk7A == 0 &&
+                        func_00194F80((int)entity->model + 0xC0, (int)other_entity->model + 0xC0) <
+                            (float)*(short *)(entity->unk0C + 0x438)) {
+                        other_unkE0->unk7A = 1;
                     }
                 }
             }
         }
-        s0 = s0->next;
+        other_entity = other_entity->next;
     }
 }

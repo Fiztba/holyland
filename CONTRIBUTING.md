@@ -132,6 +132,29 @@ a range of functions may be one file. While a function's data stays in the
 assembly (the `extern D_...` style above), one function per file is fine.
 See step 3 of [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
+## Readable C
+
+Matching comes first, but keep the source readable:
+
+- `#include "common.h"` for `u8`, `s32`, `NULL` and friends. Delete the
+  typedef block decomp.me pastes in.
+- Use the shared structs in `src/game/*.h` (e.g. `Entity` in `kf_entity.h`)
+  instead of a local struct or raw casts like `*(int *)(p + 0x10)`. If you
+  find a new field, add it to the header (`unkXX` until you know what it is).
+- Use long, descriptive names for variables and fields
+  (`distance_to_player`, not `d` or `f64`). Name a function
+  (`KF_Entity_FreeAllInGroup`) once its purpose is clear; see Names below.
+- Naming convention: functions `KF_Module_Verb` (`KF_Vector_Subtract`),
+  variables and fields `snake_case`, types `PascalCase`, constants and
+  macros `UPPER_CASE`.
+- Write `NULL` for pointers, `TRUE`/`FALSE` for flags, and name magic
+  numbers (`ENTITY_DESPAWN_MARGIN`, `GS_REG_ZBUF_1` from `kf_gs.h`).
+  Macros like `ABS()` expand to the same code, so they still match.
+- Prototypes for a module's functions go in its header (`kf_entity.h`),
+  not repeated in every file.
+- Keep comments brief: one line on what a function or field is, plus a
+  short note when the code is odd only to match. No essays on trivial code.
+
 ## Names
 
 Keep `func_XXXXXXXX` and `D_XXXXXXXX` until you know what something is. A
