@@ -17,7 +17,9 @@
 - [x] Progress page and README badges from the report (docs/progress/)
 - [x] First game functions matched in C; game flags settled: `-O2 -G 8`, no
       `-g` (see step 4)
-- [ ] Split the game's `.text` into translation units
+- [x] Game translation-unit constraints: `tools/tu_scan.py` (the binary fixes
+      which functions share an object, not where objects end)
+- [ ] Group game functions into units as the code is understood
 - [ ] Whole-ELF match (section headers, `.DVP` overlays, no symtab)
 
 ## Memory map (retail ELF)
@@ -42,13 +44,18 @@ names from the library match.
 
 ### 1. Carve out the library translation units (done)
 
-`tools/carve.py` compiles every `.c`/`.s` under `src/sce/`, places each unit
-and each of its sections in the retail ELF (`tools/lib_layout.py`: masked
-byte search for `.text`, relocations for data, link order for what nothing
-references), and writes the splat subsegments, `config/link_order.us.txt` and
-`config/symbol_addrs.carve.txt`. Adding a library unit is: write the file,
-check `tools/lib_layout.py` places every section with matching bytes, run
-`tools/carve.py`, then `rm -rf asm && ./build.sh`.
+`tools/carve.py` compiles every `.c`/`.s` under `src/sce/` and `src/game/`,
+places each unit and each of its sections in the retail ELF
+(`tools/lib_layout.py`: masked byte search for `.text`, relocations for data,
+link order for what nothing references), and writes the splat subsegments
+(`build/kfiv.us.yaml`, from the template `config/kfiv.us.yaml`),
+`build/link_order.us.txt` and `build/symbol_addrs.carve.txt`. These are build
+products: `./build.sh` runs carve whenever `src/` or `config/` changed and
+splits again when its output changed, so adding a unit is adding its file,
+and pull requests never touch generated files. Code that occurs more than
+once is placed by the names in `config/symbol_addrs.txt` (a few library
+members are pinned there) or, for a game function still called
+`func_XXXXXXXX`, by the address in its name.
 
 Most units are ICO's sources. New for KFIV: libsdr (one unit for the whole
 archive), libdev's VU0/VIF0/VIF1 functions that compile from C (one unit per
@@ -96,19 +103,46 @@ so CI cannot produce the report: it is generated locally and the summary is
 committed with each batch of work. `ninja progress` also writes a local per-
 function page to `build/progress.html`.
 
-### 3. Find the game's translation-unit boundaries
+### 3. Find the game's translation-unit boundaries (constraints done)
 
-There is no link map (ICO's PAL disc shipped one; KFIV's does not). Signals:
+There is no link map (ICO's PAL disc shipped one; KFIV's does not), and the
+binary does not record where one game object ends. Checked and ruled out:
 
-- `.text` contributions of each object are 8-byte aligned. Runs of padding
-  `nop`s after a `jr $ra` mark likely boundaries.
-- `.rodata`, `.data` and `.lit4` follow the same object order as `.text`.
-  Where a function's rodata or float literals start a new aligned block, a
-  new object starts.
-- File-static data referenced only by one run of functions.
-- `__FILE__` strings and assert messages (`fslibmpg.c` survives).
-- Function naming from the Holyland recomp work (`~/Documents/KFIV-PC`,
-  `SLUS_203.18.functions.csv`) and the `KF_*` debug strings.
+- `.text` padding: ee-as pads every function to 8 bytes, the same alignment
+  as an object's `.text`, so an object end leaves no extra `nop`.
+- Data order: a file's statics are emitted at its end in declaration order,
+  which follows use order, so data addresses rise smoothly across a boundary.
+  Cuts that look clean in `.bss` order are contradicted by independent
+  evidence more often than random cuts are.
+- `.lit4`: one 4-byte-aligned entry per load, in code order, never shared.
+- gp-relative against absolute access: no small-data item is reached both
+  ways, so no file declares a variable differently from another.
+- Names: under ten strings name a function or file, and the Holyland CSV
+  has only Ghidra's generated names.
+- Calls: a cut no nearby call crosses is only slightly more likely to be
+  real (contradicted 24 % of the time against 33 % for any cut).
+
+What the binary does fix is which functions must share an object.
+`tools/tu_scan.py` (writes `build/tu_groups.txt`) finds them from the data an
+object keeps to itself:
+
+- String literals (once per object) and jump tables in `.rodata`/`.sdata`.
+- `.bss` and `.sbss`: the game has no COMMON block and its `.bss` precedes
+  the library's, so these hold only file-static variables. Every item is used
+  within at most 100 functions; `.data` items span up to 2,757.
+- An item placed after another but first used before the other's last use
+  ties every function in between to one object.
+
+Result: 39 runs of two or more functions (1,036 of 2,990, the largest 104)
+that each lie inside one object, and 2 strings with two copies, which put a
+boundary between their users. Any partition that keeps the runs whole and
+makes those 2 cuts links to the same bytes; the real files are some
+coarsening of it, to be chosen as the code is understood.
+
+`tools/tu_scan.py --check START END` reports whether a unit may cover
+`[START, END)`. A C unit that owns its strings, jump tables or statics must
+cover whole runs. The current one-function units in `src/game/` mostly sit
+inside runs, which is fine while their data stays in the asm data units.
 
 ### 4. Match the game functions (started)
 

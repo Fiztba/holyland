@@ -27,6 +27,7 @@ address or '-', how it was placed, and whether the bytes match. Then lists,
 per section, the placed units in address order with the gaps between them.
 """
 import os
+import re
 import struct
 import sys
 from collections import defaultdict
@@ -100,9 +101,9 @@ class Obj:
 
 def load_symbols(generated=True):
     """symbol_addrs.txt (and, with `generated`, tools/carve.py's
-    symbol_addrs.carve.txt) as (name -> addr, addr -> name)."""
+    build/symbol_addrs.carve.txt) as (name -> addr, addr -> name)."""
     n2a, a2n = {}, {}
-    files = ["config/symbol_addrs.txt"] + (["config/symbol_addrs.carve.txt"] if generated else [])
+    files = ["config/symbol_addrs.txt"] + (["build/symbol_addrs.carve.txt"] if generated else [])
     lines = []
     for fn in files:
         if os.path.exists(os.path.join(ROOT, fn)):
@@ -237,10 +238,12 @@ def layout(objdir):
         hits = [h for h in hits if calls_agree(o, tbase + h * 4, tdata, tbase, syms)]
         # identical code in two members (sceGsSetHalfOffset/2): the names in
         # symbol_addrs.txt say which copy is which
-        named = [(v, n) for v, n in o.funcs if n in syms[0]]
+        # (a game function still named func_XXXXXXXX says its own address)
+        named = [(v, n, syms[0].get(n) or int(n[5:], 16)) for v, n in o.funcs
+                 if n in syms[0] or re.fullmatch(r"func_[0-9A-F]{8}", n)]
         if len(hits) > 1 and named:
             hits = [h for h in hits
-                    if all(syms[0][n] == tbase + h * 4 + v for v, n in named)]
+                    if all(a == tbase + h * 4 + v for v, n, a in named)]
         if len(hits) == 1:
             place[(o.unit, ".text")] = (retail[".text"][0] + hits[0] * 4, "text-search")
         elif hits:

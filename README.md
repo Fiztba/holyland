@@ -65,11 +65,13 @@ libgraph, libdma, libpad, libipu, libmpeg and libsdr 2.2.0.
 ## Layout
 
 ```
-config/    splat yaml, symbol_addrs.txt, link_order.us.txt, linker-script
-           template, sha1sums.txt
+config/    splat yaml template, symbol_addrs.txt, linker-script template,
+           sha1sums.txt
 include/   macro.inc (splat asm macros for ee-as 2.9)
-src/       C sources as they are decompiled (src/sce/ for the libraries)
-tools/     setup, extraction, split, build generation and check scripts
+src/       C sources as they are decompiled (src/game/, and src/sce/ for
+           the libraries)
+tools/     setup, extraction, carve, split, build generation, matching and
+           check scripts
 docs/      roadmap and notes
 asm/  baserom/  build/  tools/cc/  .venv/    generated or local, gitignored
 ```
@@ -98,18 +100,26 @@ static page) and the table below; commit those with each batch of work.
 <!-- progress:start -->
 | | code | functions | units complete |
 | --- | ---: | ---: | ---: |
-| overall | 12.23% | 834 / 3838 | 14 / 223 |
-| game | 0.04% | 15 / 2990 | 0 / 35 |
+| overall | 12.23% | 835 / 3838 | 14 / 225 |
+| game | 0.04% | 16 / 2990 | 0 / 37 |
 | sce | 97.10% | 819 / 848 | 14 / 188 |
 <!-- progress:end -->
 
-## Adding library units
+## Contributing
 
-`tools/lib_layout.py <objdir>` places compiled objects in the retail ELF and
-says whether every section's bytes match. `tools/carve.py` does that for all
-of `src/sce/` and regenerates the library part of `config/kfiv.us.yaml`,
-`config/link_order.us.txt` and `config/symbol_addrs.carve.txt`. Then
-`rm -rf asm && ./build.sh`.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md): pick a function, write it in C,
+check it with `tools/match.py`, run `./build.sh`, open a pull request.
+
+## How units get into the build
+
+`tools/carve.py` compiles every unit under `src/sce/` and `src/game/`, places
+each in the retail ELF with `tools/lib_layout.py` (every section's bytes must
+match) and writes `build/kfiv.us.yaml` (the template `config/kfiv.us.yaml`
+plus a subsegment per unit), `build/link_order.us.txt` and
+`build/symbol_addrs.carve.txt`. `./build.sh` runs it whenever `src/` or
+`config/` changed, and splits again when the units changed. Adding a unit is
+adding its source file. `tools/tu_scan.py` reports which game functions must
+share a unit (see [`docs/ROADMAP.md`](docs/ROADMAP.md), step 3).
 
 ## Credits and licence
 

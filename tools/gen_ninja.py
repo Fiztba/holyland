@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write build.ninja from config/link_order.us.txt, and objdiff.json beside it.
+"""Write build.ninja from build/link_order.us.txt (tools/carve.py writes it), and objdiff.json beside it.
 
 Every path in the build is relative to the repository root (ninja runs
 there): the checkout may live under a directory with spaces in its name.
@@ -28,7 +28,7 @@ TARGET_HEAD = ('.include "macro.inc"\n\n.set noat\n.set noreorder\n\n'
 
 
 def link_order() -> list[str]:
-    lines = (ROOT / f"config/link_order.{VER}.txt").read_text().splitlines()
+    lines = (ROOT / f"build/link_order.{VER}.txt").read_text().splitlines()
     return [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
 
 
@@ -279,7 +279,7 @@ def main() -> None:
              "  command = .venv/bin/python tools/gen_ninja.py\n"
              "  generator = 1\n"
              "  description = REGEN build.ninja\n")
-    regen_in = ["tools/gen_ninja.py", f"config/link_order.{VER}.txt",
+    regen_in = ["tools/gen_ninja.py", f"build/link_order.{VER}.txt",
                 f"config/kfiv.{VER}.ld.in"]
     n.append(f"build build.ninja build/kfiv.ld objdiff.json: regen | {' '.join(regen_in)}")
     # objdiff's progress report over every object of the link

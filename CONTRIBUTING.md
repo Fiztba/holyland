@@ -1,0 +1,112 @@
+# Contributing
+
+The goal is C source that the original compiler turns back into the exact
+bytes of the retail game. Most of the work is taking one function at a time
+from assembly to matching C.
+
+## Rules
+
+- **Never commit anything from the disc**: no ISO, ELF, `asm/`, `build/` or
+  extracted files. `.gitignore` covers them; keep it that way.
+- A pull request must build: `./build.sh` ends with
+  `build/kfiv.rom: OK (matches retail)`.
+- Commit only the sources you wrote (`src/game/*.c`), plus
+  `config/symbol_addrs.txt` if you give something a real name. Everything
+  else the build regenerates; don't commit `docs/progress/` either, the
+  maintainers refresh it.
+
+## Setup
+
+You need your own copy of *King's Field: The Ancient City* (USA,
+SLUS-20318) as an ISO image, and 64-bit Linux (WSL2 should work, but is
+untested) with 32-bit glibc, a host gcc that can build `-m32`, flex, bison,
+curl, git and Python 3.
+On Fedora: `sudo dnf install glibc-devel.i686 libstdc++.i686 flex bison`.
+
+```sh
+git clone https://github.com/Voicedrew11/kfiv-decomp.git   # a path without spaces
+cd kfiv-decomp
+mkdir -p baserom
+ln -s "/path/to/King's Field The Ancient City.iso" baserom/kfiv_us.iso
+./build.sh
+```
+
+The first run fetches and builds the toolchain into `tools/cc/` (a few
+minutes), extracts the ELF, splits it with splat and builds. It ends with
+`OK (matches retail)`.
+
+## Matching a function
+
+1. **Pick one.** Take an open issue (comment on it so nobody doubles up), or
+   any function in `asm/`. Small ones are easiest; see the issues labelled
+   `good first issue`.
+
+2. **Get its assembly.**
+
+   ```sh
+   .venv/bin/python tools/match.py asm func_00102228
+   ```
+
+3. **Write a first draft.** [decomp.me](https://decomp.me) is the easiest
+   way: new scratch, platform PS2, compiler **EE GCC 2.9 build 991111-01**
+   (`ee-gcc2.9-991111-01`), flags `-O2 -G8`. Paste the assembly. Its m2c
+   decompiler gives a draft to start from.
+
+4. **Put it in the tree** as `src/game/func_XXXXXXXX.c`, named after the
+   function. Declare what it uses at the top of the file, using splat's names:
+
+   ```c
+   extern int D_00446710;
+
+   void func_00102228(void) {
+       D_00446710 = 0;
+   }
+   ```
+
+5. **Check it.**
+
+   ```sh
+   .venv/bin/python tools/match.py diff src/game/func_00102228.c
+   ```
+
+   compiles the file with the game's flags and compares it with the retail
+   bytes, one instruction per line (`*` marks a difference). Repeat until it
+   says `OK`.
+
+6. **Build.** `./build.sh` notices the new file, re-splits and links. It must
+   end with `OK (matches retail)`.
+
+7. **Open a pull request** with the new `.c` file(s). If you understood what
+   the function does, say so in the description; that is how names get
+   chosen.
+
+## Notes on this compiler
+
+The game is built with ee-gcc 2.9-ee-991111-01, `-O2 -G 8`.
+
+- A value in `$2` before `jr $31` is not always a return value. If the
+  caller never reads it, the function is `void` and `$2` was scratch.
+- At `-O2` the scheduler reorders independent stores. Two stores of one value
+  in retail order `a, b` often come from `a = b = x;`.
+- Variables of 8 bytes or less are reached through `$gp` (`-G 8`). Declare an
+  array with its real size (`extern int D_004467D8[2];`): an incomplete
+  `extern int x[];` makes gcc use `lui`/`addiu` instead.
+- A loop counting down to zero with `bnez` usually comes from an ordinary
+  `for (i = 0; i < n; i++)` loop with `n` in a local variable.
+
+## Several functions in one file
+
+The original game was many C files with several functions each. Functions
+that share a string, a `switch` jump table or a `static` variable must end up
+in the same file. `tools/tu_scan.py` lists those groups in
+`build/tu_groups.txt`, and `tools/tu_scan.py --check START END` says whether
+a range of functions may be one file. While a function's data stays in the
+assembly (the `extern D_...` style above), one function per file is fine.
+See step 3 of [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+## Names
+
+Keep `func_XXXXXXXX` and `D_XXXXXXXX` until you know what something is. A
+real name goes into `config/symbol_addrs.txt` (in the game section, in
+address order), e.g. `KF_File_Open = 0x00102278; // type:func`, and the C
+uses the new name.

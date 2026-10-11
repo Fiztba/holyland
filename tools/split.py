@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run splat on config/kfiv.us.yaml, then adapt its output for ee-as 2.9.
+"""Run splat on build/kfiv.us.yaml (tools/carve.py writes it), then adapt its output for ee-as 2.9.
 
     tools/split.py [config.yaml ...]
 
@@ -112,7 +112,7 @@ def fix_file(path: Path) -> bool:
 
 
 def main() -> None:
-    configs = [Path(a) for a in sys.argv[1:]] or [ROOT / "config" / "kfiv.us.yaml"]
+    configs = [Path(a) for a in sys.argv[1:]] or [ROOT / "build" / "kfiv.us.yaml"]
     split.main(configs, modes=["all"], verbose=False, use_cache=False)
     units = sorted((ROOT / "asm").rglob("*.s"))
     fixed = sum(fix_file(p) for p in units)
