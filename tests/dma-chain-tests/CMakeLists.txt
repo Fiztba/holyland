@@ -15,6 +15,7 @@ add_library(dma_chain_graphics STATIC
     "${GS_SOURCE_DIR}/gs_cpu_backend.cpp"
     "${GS_SOURCE_DIR}/ps2_gs_memory.cpp"
     "${GS_SOURCE_DIR}/gs_trace.cpp"
+    "${GS_SOURCE_DIR}/gs_interpolation.cpp"
     "${GS_SOURCE_DIR}/gs_record.cpp")
 target_compile_features(dma_chain_graphics PUBLIC cxx_std_20)
 target_include_directories(dma_chain_graphics PUBLIC
@@ -22,11 +23,17 @@ target_include_directories(dma_chain_graphics PUBLIC
 target_link_libraries(dma_chain_graphics PUBLIC Threads::Threads)
 
 function(add_dma_chain_test target memory_source)
-    add_executable(${target} dma_chain_tests.cpp "${memory_source}")
+    set(fixture dma_chain_tests.cpp)
+    if(ARGC GREATER 2)
+        set(fixture "${ARGV2}")
+    endif()
+    add_executable(${target} "${fixture}" "${memory_source}")
     target_link_libraries(${target} PRIVATE dma_chain_graphics)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /bigobj)
         target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+        target_compile_options(${target} PRIVATE -msse4.1)
     endif()
 endfunction()
 if(MSVC)
@@ -36,6 +43,11 @@ endif()
 
 set(MEMORY_SOURCE "${PS2RECOMP_DIR}/ps2xRuntime/src/lib/ps2_memory.cpp")
 add_dma_chain_test(kfiv_dma_chain_tests "${MEMORY_SOURCE}")
+add_dma_chain_test(kfiv_dma_preloaded_tests "${MEMORY_SOURCE}" preloaded_tests.cpp)
+set(DMA_PRELOAD_CONTROL_SOURCE "" CACHE FILEPATH "Optional prior PS2Memory for preloaded-payload negative control")
+if(DMA_PRELOAD_CONTROL_SOURCE)
+    add_dma_chain_test(kfiv_dma_preloaded_prior "${DMA_PRELOAD_CONTROL_SOURCE}" preloaded_tests.cpp)
+endif()
 
 # Restore only the old 4096-tag guard in build scratch. Keep the actual
 # memory/MMIO, VIF, arbiter, frontend and raster source otherwise identical.
@@ -67,6 +79,14 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ps2_memory_prior.cpp" "${CONTROL_TEXT}")
 add_dma_chain_test(kfiv_dma_chain_prior_control "${CMAKE_CURRENT_BINARY_DIR}/ps2_memory_prior.cpp")
 
 enable_testing()
+add_test(NAME kfiv_dma_preloaded_payload COMMAND kfiv_dma_preloaded_tests)
+set_tests_properties(kfiv_dma_preloaded_payload PROPERTIES TIMEOUT 30
+    ENVIRONMENT "PS2X_GS_THREADS=1;PS2X_GS_BACKEND=cpu;PS2X_GS_TRACE=;PS2X_GS_RECORD=")
+if(DMA_PRELOAD_CONTROL_SOURCE)
+    add_test(NAME kfiv_dma_preloaded_prior_control COMMAND kfiv_dma_preloaded_prior)
+    set_tests_properties(kfiv_dma_preloaded_prior_control PROPERTIES WILL_FAIL TRUE TIMEOUT 30
+        ENVIRONMENT "PS2X_GS_THREADS=1;PS2X_GS_BACKEND=cpu;PS2X_GS_TRACE=;PS2X_GS_RECORD=")
+endif()
 add_test(NAME kfiv_dma_finite_chain_regression COMMAND kfiv_dma_chain_tests)
 add_test(NAME kfiv_dma_prior_limit_control COMMAND kfiv_dma_chain_prior_control)
 set_tests_properties(kfiv_dma_finite_chain_regression kfiv_dma_prior_limit_control PROPERTIES

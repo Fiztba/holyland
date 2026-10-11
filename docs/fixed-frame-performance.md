@@ -44,16 +44,17 @@ remains available with `PS2X_GS_BACKEND=cpu`.
   arithmetic path. MSVC x64 saves/restores the full MXCSR environment directly;
   other platforms retain their portable floating-point environment path.
   Cooperative VIF service uses a bounded 2048-cycle quantum.
-- The original graphics backend still receives every game command. Two
-  independent presentation backends replay owned commands: one maintains the
-  original sequence; the other renders intermediate triangle positions. Their
-  video memory never feeds back into the game. Completed frames are handed to
-  the render thread without an extra GPU readback on the game thread.
+- The original graphics backend still receives every game command. Each
+  completed frame captures that backend's image and VRAM. One independent
+  presentation backend replays owned commands to render intermediate triangle
+  positions. Its video memory never feeds back into the game or subsequent
+  frames. Capturing the original endpoint requires a synchronous GPU readback;
+  the former continuously replayed reference renderer has been removed.
 - Only perspective-textured triangles with compatible material/UVs and an
   unambiguous nearby predecessor interpolate. HUD sprites, new/clipped geometry
   and rejected matches retain their original frame positions. Before using a
-  frame, its unmodified replay must exactly match the canonical presentation.
-  Mismatches use the canonical image. Command and frame queues are bounded;
+  frame, its unmodified replay must exactly match the actual game's presentation.
+  Mismatches use that original image. Command and frame queues are bounded;
   overflow disables interpolation for that session instead of growing forever.
   Non-game timer resets suspend capture immediately. If the original game
   enters another loop without that signal, a 100 ms missing-boundary timeout
@@ -347,3 +348,69 @@ remain unchanged. This fix is shared by Windows/Linux and adds no platform
 overrides. All 61 source-exported patches apply in tools/full phases and
 repeat verification on a fresh pinned checkout, with 87 managed files matching
 the development source. The overall locked-30-Hz goal remains unfinished.
+
+
+## Equipment and sky corruption follow-up (0062-0064)
+
+The blank Equipment contents and corrupted sky after closing menus were
+reproduced with Vulkan and the CPU renderer, with interpolation disabled and
+with original pacing. They were not caused solely by extra graphics frames.
+The retail menu routine starts GIF source-chain DMA with QWC/MADR already
+pointing at a scratchpad packet and CHCR.TAG=REFE. The runtime ignored that
+payload and fetched an unrelated old TADR, feeding texture/other data to the
+GIF command parser. A live trace caught a 524304-byte incorrect submission
+and repeated bogus PRIM writes while Equipment was blank.
+
+Patch 0064 consumes the active payload first, honors REFE/END and IRQ+TIE
+termination, advances CNT to the following tag, and makes the native GIF
+shortcuts decline transfers with active QWC. This follows PCSX2's
+[`dmaGIF`](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Gif.cpp) and
+[`hwDmacSrcTadrInc`](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Hw.cpp)
+behavior. No game code, inventory, assets or gameplay rules are changed.
+
+Two independently verified corrections are retained. Patch 0062 compares
+interpolation against the actual rendered endpoint and reseeds its private
+VRAM every frame, preventing replayed state from accumulating. A retained
+CLUT regression fails six assertions with the previous implementation; all
+four fixed-frame tests pass on Windows and Ubuntu. This requires an actual
+endpoint readback and is not presented as a measured performance win.
+Patch 0063 preserves 32-bit PACKED vertex depth without rounding through
+float. It passes 77 packet/raster assertions on each platform; the prior
+frontend fails 30. Neither change alone fixed the retail Equipment failure.
+
+The DMA package passes 245 existing chain checks and 267 new payload checks
+on native Windows and Ubuntu. The actual pre-0064 source fails 127 new
+assertions on each platform. Both GIF shortcuts are tested with valid
+fresh-chain positive controls as well as preloaded-payload rejection.
+
+
+Native Windows retail validation used the new PGO binary with fixed updates,
+120 FPS presentation requested, interpolation and full endpoint/VRAM checks.
+A fresh new game crossed both cave doors, reached the seated NPC, opened
+Equipment, returned to an intact cloudy sky, picked up the wooden club, and
+selected/equipped it through original inputs. The preview showed the club in
+hand, its E marker and 4.4 carried weight. Reopening the main menu while facing
+the sky worked. The isolated run exited normally after 1122.457 seconds; its
+last interpolation report had 6480 captured frames, 6472 exact endpoints and
+zero fallbacks. This was correctness testing, not a controlled benchmark.
+
+Ubuntu's rebuilt CPU-renderer binary completed new-game, turning, Journal,
+Equipment and menu return checks in the opening area and exited with status
+zero. Equipment's category/name labels and character silhouette rendered;
+closing it restored the scene. The initial route helper failed to discover
+RAM within its limited scan prefixes and never started its route. A separate
+read-only controller validated the ELF/archive and full mapping, then drove
+the actual menu checks. Thus the NPC route and weapon pickup/equipping are
+**Windows-only** results. No guest state or inventory was patched during the
+accepted tests. Linux hardware Vulkan presentation remains unverified because
+of the previously recorded Dozen driver failure. The portable fixtures and
+actual CPU game execution are separate evidence from Windows Vulkan.
+
+All 64 source-exported patches apply in tools/full phases and repeat
+verification on a fresh pinned checkout; all 87 managed source files match
+the persistent development checkout. Owner PR #11 is still the latest merged
+upstream PR, and patches 0040/0041 are unchanged. Existing Linux script
+additions only enable the bounded native catalog and reject stale generated
+sources; this follow-up adds no Linux-specific runtime behavior. Its test
+package now supplies the required GCC SSE4.1 flag. The overall locked-30-Hz
+performance goal remains unfinished.

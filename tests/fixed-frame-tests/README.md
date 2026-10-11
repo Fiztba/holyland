@@ -31,9 +31,16 @@ Linux links its own static libraries and pkg-config FFmpeg, never Windows object
   must discard old frames. Non-game suspension and a missing-boundary timeout
   must show live presentation; returning to gameplay must checkpoint fresh
   memory without matching geometry from before the menu/scene transition.
+  A palette loaded before capture is retained by the original GS even after
+  its VRAM source is overwritten. An incomplete replay must use the actual
+  original image, including after suspension, instead of accepting agreement
+  between two incorrect copies. This case fails six assertions on patch 0061.
+  The renderer runs twice: with ordinary image comparisons and with the
+  additional full-VRAM comparison enabled (four CTests in total).
 
 These are focused mechanism checks, not a retail playthrough or proof that
 all objects can be matched across frames. VU exactness uses the separate
-native/stepping packages. Retail renderer verification additionally compares
-every completed frame and all 4 MiB of VRAM with the actual game backend via
-`PS2X_INTERPOLATION_VERIFY=1`; that mode deliberately adds readback overhead.
+native/stepping packages. Endpoint image comparison with the actual game
+backend is always enabled. `PS2X_INTERPOLATION_VERIFY=1` additionally compares
+all 4 MiB of replayed VRAM; that mode adds another readback. Frames that cannot
+be reconstructed exactly use the captured original image.

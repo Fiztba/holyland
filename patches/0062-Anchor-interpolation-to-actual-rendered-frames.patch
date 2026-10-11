@@ -1,0 +1,145 @@
+From aeec671dc5616d45bfc0e3ebfbbd3ae1bb586507 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 21:15:16 -0400
+Subject: [PATCH] Anchor interpolation to actual rendered frames
+
+Capture each original image and VRAM at the completed game boundary instead of maintaining a second reconstructed reference. Palette RAM and partial transfers can outlive a VRAM checkpoint, so agreement between two replays does not establish correctness. Always compare the replay endpoint against the original image and fall back to that image on mismatch. Fresh original checkpoints prevent feedback errors from accumulating between frames; optional verification additionally compares full VRAM.
+---
+ ps2xRuntime/src/lib/gs/gs_interpolation.cpp | 63 +++++++--------------
+ 1 file changed, 22 insertions(+), 41 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gs_interpolation.cpp b/ps2xRuntime/src/lib/gs/gs_interpolation.cpp
+index 02c15fe..f51173a 100644
+--- a/ps2xRuntime/src/lib/gs/gs_interpolation.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_interpolation.cpp
+@@ -76,7 +76,6 @@ struct Frame
+     std::vector<uint8_t> startVram;
+     GSPresentationRequest request{};
+     PresentationFrame canonical;
+-    PresentationFrame verifiedCanonical;
+     std::vector<uint8_t> verifiedVram;
+     size_t bytes = 0;
+     Clock::time_point completed;
+@@ -175,13 +174,13 @@ GSPrimitiveBatch interpolate(const GSPrimitiveBatch &previous, const GSPrimitive
+ 
+ struct Controller
+ {
+-    std::unique_ptr<GSRasterBackend> actual, canonicalRenderer, shadow;
++    std::unique_ptr<GSRasterBackend> actual, shadow;
+     std::mutex captureMutex, renderMutex;
+     std::shared_ptr<Frame> current, previous;
+     std::deque<std::shared_ptr<Frame>> completed;
+     size_t queuedBytes = 0;
+     std::vector<uint8_t> canonicalVram;
+-    bool canonicalInitialized = false, stopped = false, verify = false, stats = false;
++    bool stopped = false, verify = false, stats = false;
+     std::vector<std::shared_ptr<Frame>> framePool;
+     std::vector<Command> pending;
+     bool valid = false;
+@@ -202,7 +201,6 @@ struct Controller
+ #endif
+             return std::make_unique<GSCpuBackend>();
+         };
+-        canonicalRenderer = makeRenderer();
+         shadow = makeRenderer();
+         const char *setting = std::getenv("PS2X_INTERPOLATION_VERIFY");
+         verify = setting && std::strcmp(setting, "1") == 0;
+@@ -264,19 +262,21 @@ struct Controller
+         frame->commands.swap(pending);
+         frame->request = request;
+         frame->bytes = pendingBytes;
+-        frame->verifiedCanonical = {};
+         frame->verifiedVram.clear();
+         frame->canonical = {};
+         frame->valid = true;
+-        // Optional validation pays for a synchronous readback. Ordinary play
+-        // only hands off owned commands, never waits for extra GPU frames.
++        // A VRAM checkpoint is not a full GS checkpoint: palettes and an
++        // in-progress transfer can survive between frames independently of
++        // VRAM. Two replay renderers can agree while both miss that state.
++        // Always retain the actual endpoint, and start the next replay from
++        // actual VRAM. Never feed reconstructed frames into future frames.
++        frame->startVram.swap(canonicalVram);
++        actual->Flush();
++        actual->Sync(GSSyncReason::Presentation);
++        frame->canonical = actual->Present(request);
++        actual->SnapshotVram(canonicalVram);
+         if (verify)
+-        {
+-            actual->Flush();
+-            actual->Sync(GSSyncReason::Presentation);
+-            frame->verifiedCanonical = actual->Present(request);
+-            actual->SnapshotVram(frame->verifiedVram);
+-        }
++            frame->verifiedVram = canonicalVram;
+         frame->completed = Clock::now();
+         frame->number = ++sequence;
+         completed.push_back(frame);
+@@ -402,13 +402,9 @@ struct Controller
+         }
+         try
+         {
+-            if (!canonicalInitialized)
+-            {
+-                canonicalRenderer->Initialize(canonicalVram.data(), uint32_t(canonicalVram.size()));
+-                canonicalInitialized = true;
+-            }
+-            // Drain a bounded queue. Every original draw/transfer is executed
+-            // in order, even if the display cannot show every completed frame.
++            // Drain a bounded queue of original endpoints. Each owns its
++            // starting VRAM, so presentation can skip frames without losing
++            // transfers or accumulating differences from an earlier replay.
+             for (unsigned n = 0; n < 6; ++n)
+             {
+                 std::shared_ptr<Frame> next;
+@@ -420,26 +416,6 @@ struct Controller
+                     completed.pop_front();
+                     queuedBytes -= next->bytes;
+                 }
+-                canonicalRenderer->SnapshotVram(next->startVram);
+-                submitCommands(*canonicalRenderer, *next, 1);
+-                next->canonical = canonicalRenderer->Present(next->request);
+-                if (verify)
+-                {
+-                    std::vector<uint8_t> after;
+-                    canonicalRenderer->SnapshotVram(after);
+-                    if (next->canonical.width != next->verifiedCanonical.width ||
+-                        next->canonical.height != next->verifiedCanonical.height ||
+-                        next->canonical.pixels != next->verifiedCanonical.pixels || after != next->verifiedVram)
+-                    {
+-                        std::fprintf(stderr,
+-                                     "[gs:interpolation] original renderer verification "
+-                                     "failed at frame %llu\n",
+-                                     static_cast<unsigned long long>(next->number));
+-                        std::lock_guard lock(captureMutex);
+-                        stopCapture();
+-                        return {};
+-                    }
+-                }
+                 previous = std::move(current);
+                 current = std::move(next);
+             }
+@@ -454,6 +430,12 @@ struct Controller
+                 endpointExact = lastEndpoint.width == frame.canonical.width &&
+                                 lastEndpoint.height == frame.canonical.height &&
+                                 lastEndpoint.pixels == frame.canonical.pixels;
++                if (endpointExact && verify)
++                {
++                    std::vector<uint8_t> after;
++                    shadow->SnapshotVram(after);
++                    endpointExact = after == frame.verifiedVram;
++                }
+                 checked = frame.number;
+                 if (endpointExact)
+                     ++exact;
+@@ -501,7 +483,6 @@ struct Controller
+         canonicalVram.clear();
+         valid = false;
+         pendingBytes = queuedBytes = 0;
+-        canonicalInitialized = false;
+         stopped = false;
+     }
+ };
+-- 
+2.55.0.windows.3
+

@@ -102,6 +102,46 @@ int main()
     check(bool(ps2_gs_interpolation::present(owner, 1)), "capture resumes after an unannounced scene transition");
     backend->Reset();
     check(!ps2_gs_interpolation::present(owner), "reset discards old presentation frames");
+
+    // GS palette RAM survives independently of VRAM. Both replay renderers
+    // used to agree on a blank image when capture started after a CLUT load.
+    // Overwrite its source too: reloading that address cannot recover it.
+    context.tex0.psm = GS_PSM_T8;
+    context.tex0.cbp = 0x3500;
+    context.tex0.cpsm = GS_PSM_CT32;
+    context.tex0.cld = 1;
+    for (unsigned y = 0; y < 8; ++y)
+        for (unsigned x = 0; x < 8; ++x)
+            backend->WriteVram(GS_PSM_T8, 0x3000, 1, x, y, 0);
+    for (unsigned y = 0; y < 16; ++y)
+        for (unsigned x = 0; x < 16; ++x)
+            backend->WriteVram(GS_PSM_CT32, 0x3500, 1, x, y, 0x80804020);
+    backend->LoadClut(context.tex0, triangle.state.texclut);
+    for (unsigned y = 0; y < 16; ++y)
+        for (unsigned x = 0; x < 16; ++x)
+            backend->WriteVram(GS_PSM_CT32, 0x3500, 1, x, y, 0x80402080);
+    ps2_gs_interpolation::sealFrame(owner, request);
+    for (unsigned frame = 0; frame < 3; ++frame)
+    {
+        backend->ClearFramebuffer(context, 0);
+        backend->Submit(triangle); // No palette reload in this frame.
+        ps2_gs_interpolation::sealFrame(owner, request);
+        const auto original = backend->Present(request);
+        check(backend->ReadVram(GS_PSM_CT32, 0, 10, 45, 15) == 0x80804020,
+              "control draw retains palette RAM after its VRAM source is overwritten");
+        backend->SnapshotVram(before);
+        check(ps2_gs_interpolation::present(owner, 1).pixels == original.pixels,
+              "endpoint uses the actual renderer, not agreement between two incomplete replays");
+        check(ps2_gs_interpolation::present(owner, 0.5f).pixels == original.pixels,
+              "incomplete replay falls back to the actual original frame");
+        backend->SnapshotVram(after);
+        check(before == after, "palette fallback leaves guest-visible VRAM unchanged");
+        if (frame == 1)
+        {
+            ps2_gs_interpolation::suspend(owner);
+            ps2_gs_interpolation::sealFrame(owner, request);
+        }
+    }
     std::printf("independent interpolation: %u failures\n", failures);
     return failures ? 1 : 0;
 }

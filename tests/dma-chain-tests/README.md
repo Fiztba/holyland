@@ -49,10 +49,31 @@ rendering, DMA timing, or PS2 hardware equivalence. Entirely empty non-TTE
 chains queue no payload; that case tests termination and tag state without
 claiming a change to their pre-existing completion semantics.
 
-Native Windows MSVC 19.44 x64 RelWithDebInfo validation passed all 245 fixed
-checks and both CTest entries. The prior-limit control produced 59 failed
-checks, including lost real GS FINISH at the 4097-tag boundary. Linux and
-other platforms have not been run.
+Native Windows MSVC 19.44 x64 and Ubuntu 26.04 / GCC 15.2 now pass the
+245 finite-chain checks and 267 preloaded-payload checks. The prior-limit
+control retains its expected failures. This package links the actual
+interpolation wrapper required by the current backend factory; interpolation
+is disabled for these packet tests. GCC x86-64 enables SSE4.1 for the actual
+memory implementation, matching the runtime's instruction requirement.
+
+## Preloaded source-chain payloads
+
+`kfiv_dma_preloaded_tests` starts DMA with QWC/MADR already populated and a
+stale TADR. It checks real GS FINISH delivery, exact packet lengths, register
+retirement and one completion cause. Cases include REFE/END termination,
+CNT/NEXT/REF/REFS/CALL/RET continuation, IRQ with/without TIE, zero-QWC fresh
+tag fetch, scratchpad payloads, and VIF0/VIF1 MARK with/without TTE. Continuing
+payload cases use main RAM; this does not claim complete scratchpad chain,
+DMA stall or asynchronous hardware equivalence. Both native GIF shortcuts
+must reject active QWC without side effects while accepting valid fresh
+PACKED/IMAGE chains.
+
+For the negative control, save `ps2_memory.cpp` from before patch 0064 outside
+the source checkout and configure `-DDMA_PRELOAD_CONTROL_SOURCE=/path/to/ps2_memory_prior.cpp`.
+CTest then includes a fourth test, marked `WILL_FAIL`. The actual pre-fix
+implementation fails **127 of 267** assertions on both Windows and Ubuntu;
+the corrected implementation passes all of them. No private game data is
+required or included.
 
 This package is GPL-3.0-only, matching the PS2Recomp source it compiles. See
 [the tests license](../LICENSE).

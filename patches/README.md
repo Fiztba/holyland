@@ -70,6 +70,9 @@ commit); don't edit them by hand. Workflow:
 | `0059-Reconstruct-stationary-interlaced-menus-…` | Reconstruct stationary complementary rows using the drawn field phase, with motion rejection, duplicate-frame handling and transfer-overlap invalidation. Guest VRAM is unchanged. |
 | `0060-Honor-synchronous-IOP-event-waits-…` | Let synchronous RPC event waits service DMA and worker threads; separate hardware DMA completion from interrupt delivery and report interrupt context correctly. |
 | `0061-Preserve-fading-interlaced-detail-…` | Preserve complementary rows during gentle fades, accumulate change to reject stale history, and interpolate moving rows at their actual field position. |
+| `0062-Anchor-interpolation-to-actual-rendered-frames-…` | Capture each original endpoint and its VRAM, reject incomplete replays against the actual renderer, and prevent reconstructed graphics state from accumulating across frames. |
+| `0063-Preserve-full-PACKED-GS-depth-…` | Decode all 32 PACKED XYZ2/XYZ3 depth bits directly into double precision, preserving equal-depth draws. |
+| `0064-Consume-preloaded-source-chain-DMA-payloads-…` | Transfer active QWC/MADR payloads before fetching TADR, obey active-tag termination/CNT rules, and reject preloaded transfers in tag-only GIF fast paths. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -78,10 +81,10 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 61-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+The 64-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
 0040–0041 (VU1 census and lift) are retained unchanged. Performance patches
-0042–0061 are exported as separate source commits on top of them. The
+0042–0064 are exported as separate source commits on top of them. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The new fixed-update/interpolation mode and its separate Windows/Ubuntu

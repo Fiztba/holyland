@@ -1,0 +1,77 @@
+From d8ad195f0b7854b12f42090d1a510da99beff6e3 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 22:21:10 -0400
+Subject: [PATCH] Consume preloaded source-chain DMA payloads before tags
+
+---
+ ps2xRuntime/src/lib/ps2_memory.cpp | 33 ++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index fe71375..c0950b9 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1461,6 +1461,27 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+                         channelBase == 0x10009000u || channelBase == 0x10008000u;
+                     const bool transferTagData = isVifChannel && (chcr & 0x40u) != 0u;
+ 
++                    // QWC may already describe an active tag's payload when
++                    // software starts source-chain DMA. Consume MADR first;
++                    // TADR is only a new tag address once that payload retires.
++                    // In particular CHCR.TAG=REFE with QWC>0 must not read a
++                    // stale TADR (used by scratchpad-generated menu packets).
++                    bool endAfterPreload = false;
++                    if (qwc != 0u)
++                    {
++                        const uint32_t payloadAddress = (madr & 0x80000000u) != 0u
++                            ? PS2_SCRATCHPAD_BASE | (madr & (PS2_SCRATCHPAD_SIZE - 1u))
++                            : madr;
++                        appendData(payloadAddress, qwc);
++                        const uint32_t retiredMadr = madr + qwc * 16u;
++                        m_ioRegisters[channelBase + 0x10u] = retiredMadr;
++                        const uint32_t activeId = (chcr >> 28u) & 7u;
++                        if (activeId == 1u) // CNT follows the inline payload.
++                            tagAddr = retiredMadr;
++                        endAfterPreload = activeId == 0u || activeId == 7u ||
++                            (tieEnabled && (chcr & 0x80000000u) != 0u);
++                    }
++
+                     // A finite source chain can contain more than 4096 tags.
+                     // Detect a repeated DMA traversal state instead of dropping
+                     // a valid tail (including GS FINISH). The return stack is
+@@ -1489,6 +1510,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+                                 cycleLength = 0u;
+                             }
+                         }
++                        if (endAfterPreload)
++                            break;
+                         const uint32_t currentTagAddr = tagAddr;
+                         const bool tagInSPR = isScratchpad(tagAddr);
+                         uint32_t physTag = 0;
+@@ -2264,6 +2287,12 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
+     if ((chcr & (1u << 7u)) != 0u || ((chcr >> 4u) & 0x3u) != 0u)
+         return false;
+ 
++    // These fast paths start by fetching TADR, so an active payload must
++    // use the general walker which consumes QWC from MADR first.
++    const auto qwcIt = m_ioRegisters.find(GIF_CHANNEL + 0x20u);
++    if (qwcIt != m_ioRegisters.end() && qwcIt->second != 0u)
++        return false;
++
+     const auto dctrlIt = m_ioRegisters.find(D_CTRL);
+     if (dctrlIt != m_ioRegisters.end() && ((dctrlIt->second & 0x1u) == 0u))
+         return false;
+@@ -2456,6 +2485,10 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
+     if ((chcr & (1u << 7u)) != 0u || ((chcr >> 4u) & 0x3u) != 0u)
+         return false;
+ 
++    const auto qwcIt = m_ioRegisters.find(GIF_CHANNEL + 0x20u);
++    if (qwcIt != m_ioRegisters.end() && qwcIt->second != 0u)
++        return false;
++
+     const auto dctrlIt = m_ioRegisters.find(D_CTRL);
+     if (dctrlIt != m_ioRegisters.end() && ((dctrlIt->second & 0x1u) == 0u))
+         return false;
+-- 
+2.55.0.windows.3
+

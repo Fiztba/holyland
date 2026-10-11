@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-only
+cmake_minimum_required(VERSION 3.21)
+project(kfiv_gs_packet_tests LANGUAGES CXX)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/PackagePaths.cmake")
+find_package(Threads REQUIRED)
+set(gs "${PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs")
+set(GS_PACKET_FRONTEND_SOURCE "${gs}/gs_frontend.cpp" CACHE FILEPATH "Frontend implementation under test")
+add_executable(gs_packet_tests packet_tests.cpp "${GS_PACKET_FRONTEND_SOURCE}"
+    "${gs}/gs_cpu_backend.cpp" "${gs}/ps2_gs_memory.cpp" "${gs}/gs_trace.cpp" "${gs}/ps2_gif_arbiter.cpp")
+target_compile_features(gs_packet_tests PRIVATE cxx_std_20)
+target_include_directories(gs_packet_tests PRIVATE "${PS2RECOMP_DIR}/ps2xRuntime/include" "${gs}")
+target_link_libraries(gs_packet_tests PRIVATE Threads::Threads)
+if(MSVC)
+    target_compile_options(gs_packet_tests PRIVATE /W4 /bigobj /permissive-)
+    target_compile_definitions(gs_packet_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+enable_testing()
+add_test(NAME gs_packet_depth COMMAND gs_packet_tests)
+set_tests_properties(gs_packet_depth PROPERTIES TIMEOUT 30
+    ENVIRONMENT "PS2X_GS_THREADS=1;PS2X_GS_BACKEND=cpu;PS2X_GS_TRACE=;PS2X_GS_RECORD=")

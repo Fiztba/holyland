@@ -8,7 +8,7 @@ and no compiler or game assets. It passed on Windows and Ubuntu; the existing
 
 The new [fixed-frame package](fixed-frame-tests/README.md) checks the rational
 game clock, actual scheduler integration and isolated graphics interpolation.
-Its three tests and the two seven-test native VU packages pass on native
+Its four tests and the two seven-test native VU packages pass on native
 Windows/MSVC and Ubuntu/GCC. Native VU fixtures now explicitly narrow random
 32-bit bit patterns on platforms with a 64-bit `uint_fast32_t`, and include
 the source directory needed by GCC's generated-catalog lookup. These fixes
@@ -351,3 +351,5 @@ explicit candidate, reference and dependency paths. GNU/Clang strict FP flags
 are supplied, but Linux execution and retail performance acceptance remain
 separate checks. No game assets, retail catalogs, recordings, profiles,
 binaries or private execution logs are distributed with these fixtures.
+
+The [preloaded DMA regression](dma-chain-tests/README.md) covers the actual GIF/VIF chain walker, active payloads and GIF fast-path guards. The [GS packet depth regression](gs-packet-tests/README.md) covers exact 32-bit depth decoding and equal-depth visibility. Both pass on native Windows and Ubuntu.

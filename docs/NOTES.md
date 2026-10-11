@@ -5,6 +5,17 @@ place as state changes; link session logs at the point they support.
 
 ## Current state (2026-10-10)
 
+- **Equipment/sky corruption:** patch 0064 honors preloaded source-chain
+  DMA QWC/MADR before fetching TADR. The menu supplied scratchpad data under
+  an active REFE; ignoring it parsed an old texture chain as GIF commands.
+  Both CPU and Vulkan, interpolation off, and original-pacing controls
+  reproduced the failure. Endpoint anchoring (0062) and exact PACKED depth
+  (0063) fix independent defects but did not resolve this retail bug alone.
+  The new Windows run renders Equipment, equips the wooden club, preserves
+  the sky after closing, and reopens the menu facing the sky. Ubuntu CPU
+  checks Equipment and menu return in the opening area; the NPC/equip route
+  is Windows-only. See [validation and limits](fixed-frame-performance.md).
+
 - **Cave-door progression:** corrected EE SQRT/RSQRT operands (patch 0029)
   prevent the initial floor fall. The next map was already loaded before
   the fall. Corrected movement then exposed a separate FINISH wait: the
