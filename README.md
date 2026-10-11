@@ -54,7 +54,8 @@ are **byte-identical** to code in KFIV.
 | tool | role |
 | --- | --- |
 | ee-gcc 2.9-ee-991111-01 (`-O2`) | compiles everything |
-| ee-as 2.9-991111 (bundled) | assembles the game, libc, libm and libgcc, and splat's asm |
+| ee-as 2.9-991111 (bundled) | assembles libc, libm and libgcc, and splat's asm |
+| ee-as 2.9-991111, delay-slot filling (one-byte patch built by `tools/compile_c.sh`) | assembles the game's C |
 | SCE ee-as 2.10-ee-001003-1 (from ee-gcc 2.96) | assembles Sony's SDK libraries |
 | GNU ld 2.10 + R5900/DVP patches | links |
 | dvp-as | the VU1 microprograms (not wired in yet) |
