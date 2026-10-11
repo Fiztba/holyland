@@ -51,7 +51,9 @@ def main() -> None:
              "  command = .venv/bin/python tools/check.py verify $in && touch $out\n"
              "  description = CHECK $in\n")
     for s, o in zip(srcs, objs):
-        rule = "cc" if s.endswith(".c") else "as"
+        # src/ holds C and hand-written asm (assembled per origin by
+        # compile_c.sh); asm/ is splat's output
+        rule = "cc" if s.startswith("src/") else "as"
         n.append(f"build {o}: {rule} {s}" + (" | include/macro.inc" if rule == "as" else ""))
     # splat's lists of addresses referenced but not defined yet, given to ld
     # as implicit linker scripts

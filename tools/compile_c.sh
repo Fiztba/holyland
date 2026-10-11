@@ -2,6 +2,8 @@
 # Compile one C source to an object with the period toolchain.
 #
 #   tools/compile_c.sh src/<path>.c build/src/<path>.c.o
+#   tools/compile_c.sh src/<path>.s build/src/<path>.s.o   (hand-written asm:
+#                                                          assembler step only)
 #
 # ee-gcc 2.9-ee-991111-01 -O2 for everything; the flags and the assembler
 # follow where the code came from (the same split ICO's build proves):
@@ -31,8 +33,11 @@ esac
 INCS="-I${ROOT}/include"
 for d in "${ROOT}"/src/sce/*/; do [ -d "$d" ] && INCS="${INCS} -I${d%/}"; done
 
-S="${OUT%.o}.s"
 mkdir -p "$(dirname "${OUT}")"
+case "${SRC}" in
+    *.s) exec "${ROOT}/tools/period_env.sh" "${AS}" -EL -mcpu=5900 -mabi=eabi -G "${GNUM}" -o "${OUT}" "${SRC}" ;;
+esac
+S="${OUT%.o}.s"
 # ee-gcc records the path it is given in __FILE__ strings, so compile from the
 # source's directory with its bare name.
 SRC_DIR="$(cd "$(dirname "${SRC}")" && pwd)"

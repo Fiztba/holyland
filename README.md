@@ -6,8 +6,9 @@ ELF, `SLUS_203.18` (SLUS-20318). The goal is C source that the original
 toolchain compiles back into the identical executable.
 
 **Status:** the build reproduces the retail ROM image (all bytes the console
-loads) **byte for byte**, from splat-disassembled assembly. No game code has
-been decompiled to C yet. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+loads) **byte for byte**. The SDK, libc, libm and libgcc code is in C (181
+units in `src/sce/`, about 12 % of `.text`); the game itself is still
+splat-disassembled assembly. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 > No disc data is in this repository. You supply your own disc image; the
 > build extracts the ELF from it and checks its SHA-1.
@@ -64,11 +65,19 @@ libgraph, libdma, libpad, libipu, libmpeg and libsdr 2.2.0.
 config/    splat yaml, symbol_addrs.txt, link_order.us.txt, linker-script
            template, sha1sums.txt
 include/   macro.inc (splat asm macros for ee-as 2.9)
-src/       C sources as they are decompiled (src/sce/ for SDK libraries)
+src/       C sources as they are decompiled (src/sce/ for the libraries)
 tools/     setup, extraction, split, build generation and check scripts
 docs/      roadmap and notes
 asm/  baserom/  build/  tools/cc/  .venv/    generated or local, gitignored
 ```
+
+## Adding library units
+
+`tools/lib_layout.py <objdir>` places compiled objects in the retail ELF and
+says whether every section's bytes match. `tools/carve.py` does that for all
+of `src/sce/` and regenerates the library part of `config/kfiv.us.yaml`,
+`config/link_order.us.txt` and `config/symbol_addrs.carve.txt`. Then
+`rm -rf asm && ./build.sh`.
 
 ## Credits and licence
 

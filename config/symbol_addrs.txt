@@ -6,20 +6,13 @@
 _start = 0x00100008; // type:func
 
 // libkernl
-
-// libvu0
-sceVu0CopyVector = 0x00216778; // type:func
-
-// libkernl
-kprintf = 0x00217F60; // type:func
+kprintf = 0x00224028; // type:func
 
 // libmpeg
-setD3_CHCR = 0x0021CD50; // type:func
+setD3_CHCR = 0x002377F8; // type:func
 
 // libipu
-setD4_CHCR = 0x0021CDB8; // type:func
-
-// libmpeg
+setD4_CHCR = 0x00237860; // type:func
 
 // libgraph
 sceGsResetGraph = 0x0021FEE0; // type:func
@@ -37,6 +30,7 @@ sceGsSetDefStoreImage = 0x00220EF8; // type:func
 sceGsExecLoadImage = 0x00221038; // type:func
 sceGsExecStoreImage = 0x002211B8; // type:func
 sceGsSetHalfOffset = 0x00221848; // type:func
+sceGsSetHalfOffset2 = 0x002218D0; // type:func
 sceGszbufaddr = 0x00221CA0; // type:func
 sceGsSetDefClear = 0x00221D68; // type:func
 
@@ -647,7 +641,6 @@ __negdf2 = 0x00241300; // type:func
 __make_dp = 0x00241338; // type:func
 dptofp = 0x00241368; // type:func
 __unpack_f = 0x002414D0; // type:func
-_fpadd_parts = 0x00241560; // type:func
 fpadd = 0x00241798; // type:func
 fpsub = 0x002417F0; // type:func
 fpmul = 0x00241858; // type:func
@@ -728,3 +721,14 @@ __sseek = 0x00249340; // type:func
 __sclose = 0x002493A8; // type:func
 _calloc_r = 0x00249428; // type:func
 _close_r = 0x002494E8; // type:func
+
+// libdev (names inferred from behaviour, not from SDK headers; the two
+// identical bodies need their names to be placed)
+sceDevVu0Continue = 0x0022ACE0; // type:func
+sceDevVu0Resume = 0x0022B190; // type:func
+
+// libc (tiny members that repeat elsewhere; the name places the unit)
+index = 0x00241FD8; // type:func
+
+// linker script
+_end = 0x01E57C70;

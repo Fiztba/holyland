@@ -6,6 +6,11 @@ ENTRY(_start)
 SECTIONS
 {
     _gp = 0x0044CB70;
+    /* crt0's _start hands _stack, _stack_size and _heap_size to SetupThread
+     * and SetupHeap; the values are the retail lui/addiu immediates. */
+    _stack = 0x01F00000;
+    _stack_size = 0x00100000;
+    _heap_size = -1;
 
     .text    0x00100000 : {
         @INPUTS:text@

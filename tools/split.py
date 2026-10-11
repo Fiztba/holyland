@@ -17,6 +17,16 @@ The build assembles splat's output with the period assembler, ee-as
         addiu $3, $28, %gp_rel(sym)   ->  la $3, sym
     and each file gets an `.extern` line per gp-relative symbol.
   * VU0 macro-mode special registers are bare words: `ACC`, `Q`, `I`, `R`.
+
+.vudata is VIF/DMA packet data: spimdisasm reads some of its words as
+pointers (into .bss, where C units now own the space), so its `.word sym`
+operands are written back as numbers.
+
+Every asm unit also gets an `.align` after its `.section` line: the largest
+power of two (up to 16) that divides its start address. The unit before it
+in the link may end short of that address (a C object's section is not
+padded to its successor), and ld reproduces the fill only from the next
+input section's alignment.
 """
 import re
 import sys
@@ -35,10 +45,33 @@ ROOT = Path(__file__).resolve().parent.parent
 GP_MEM = re.compile(r"^(\s*(?:/\*.*?\*/)?\s*)(\S+)(\s+)(\$\w+), %gp_rel\(([^)]+)\)\(\$28\)")
 GP_ADDIU = re.compile(r"^(\s*(?:/\*.*?\*/)?\s*)addiu(\s+)(\$\w+), \$28, %gp_rel\(([^)]+)\)")
 VU_SPECIAL = re.compile(r"\$(ACC|Q|I|R)\b")
+# first address comment: `/* 12AC50 0022AC50 ... */` (code/data) or `/* 00447480 */` (bss)
+FIRST_ADDR = re.compile(r"^\s*/\* (?:[0-9A-F]+ )?([0-9A-F]{8})\b", re.M)
+SECTION = re.compile(r"^\.section [^\n]*\n", re.M)
 
 
 def sym_base(expr: str) -> str:
     return re.split(r"[+-]", expr, maxsplit=1)[0].strip()
+
+
+WORD_SYM = re.compile(r"\.word (?:D_|func_)([0-9A-F]{8})(?: \+ (0x[0-9A-F]+))?$")
+
+
+def unsymbolize(path: Path) -> None:
+    def num(m):
+        return f".word 0x{int(m.group(1), 16) + int(m.group(2) or '0', 16):08X}"
+    lines = [WORD_SYM.sub(num, l) for l in path.read_text().splitlines()]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def align_unit(path: Path) -> None:
+    text = path.read_text()
+    m, s = FIRST_ADDR.search(text), SECTION.search(text)
+    if not m or not s:
+        return
+    vram = int(m.group(1), 16)
+    log2 = min(4, (vram & -vram).bit_length() - 1)
+    path.write_text(text[:s.end()] + f".align {log2}\n" + text[s.end():])
 
 
 def fix_file(path: Path) -> bool:
@@ -81,7 +114,11 @@ def fix_file(path: Path) -> bool:
 def main() -> None:
     configs = [Path(a) for a in sys.argv[1:]] or [ROOT / "config" / "kfiv.us.yaml"]
     split.main(configs, modes=["all"], verbose=False, use_cache=False)
-    fixed = sum(fix_file(p) for p in sorted((ROOT / "asm").rglob("*.s")))
+    units = sorted((ROOT / "asm").rglob("*.s"))
+    fixed = sum(fix_file(p) for p in units)
+    for p in units:
+        align_unit(p)
+    unsymbolize(ROOT / "asm/data/vudata.data.s")
     print(f"tools/split.py: adapted {fixed} asm files for ee-as 2.9")
 
 

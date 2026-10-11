@@ -9,7 +9,10 @@
 - [x] All-asm build with the period assembler and ld 2.10 → **ROM SHA-1 matches**
 - [x] `tools/compile_c.sh`, tested by compiling ICO's `libdma.c` to KFIV's
       libdma bytes (0x0022A1D8, 0xA74 bytes)
-- [ ] Split `.text` into translation units
+- [x] Library translation units carved: 181 SDK, libc, libm and libgcc units
+      in `src/sce/` (C, plus newlib's and the SDK's hand-written `.s`), 0x289DC
+      bytes of `.text` (about 12 %), with their data, still **SHA-1 matching**
+- [ ] Split the game's `.text` into translation units
 - [ ] First game function matched in C (this also settles `-g` or not)
 - [ ] Whole-ELF match (section headers, `.DVP` overlays, no symtab)
 
@@ -33,25 +36,47 @@ names from the library match.
 
 ## Next steps, in order
 
-### 1. Carve out the library translation units (largest early gain)
+### 1. Carve out the library translation units (done)
 
-The SDK, libc, libm and libgcc code (≈0x216778–0x249668, about 200 KB,
-roughly 15 % of `.text`) is already solved: ICO's `sce/` sources compile to
-the same bytes. For each ICO object:
+`tools/carve.py` compiles every `.c`/`.s` under `src/sce/`, places each unit
+and each of its sections in the retail ELF (`tools/lib_layout.py`: masked
+byte search for `.text`, relocations for data, link order for what nothing
+references), and writes the splat subsegments, `config/link_order.us.txt` and
+`config/symbol_addrs.carve.txt`. Adding a library unit is: write the file,
+check `tools/lib_layout.py` places every section with matching bytes, run
+`tools/carve.py`, then `rm -rf asm && ./build.sh`.
 
-1. Find its function run in KFIV (`symbol_addrs.txt` has the addresses;
-   `tools/find_lib_matches.py` rescans a directory of compiled objects).
-2. Add splat subsegments `[start, c, sce/libdma/libdma]` and so on, and copy
-   the source into `src/sce/...` (ICO is MIT; keep the attribution).
-3. Carve the object's `.data`/`.rodata`/`.sdata`/`.bss` contributions out of
-   the big data units as well, or the data is emitted twice. ICO's per-TU
-   data carving is the model to follow.
+Most units are ICO's sources. New for KFIV: libsdr (one unit for the whole
+archive), libdev's VU0/VIF0/VIF1 functions that compile from C (one unit per
+function, names inferred), the double-precision fdlibm members, mktime,
+strcasecmp and strchr, and a few libgraph, libcdvd, libkernl and libc
+members ICO did not link.
 
-Not covered by ICO: **libsdr** (KFIV uses it; ICO uses libsndn2) and the
-handful of functions that differ (FromSoftware may have used a different
-subset). These are new work.
+Still asm in the library range: the libdev functions that are mostly inline
+asm (`sceDevVu0GetVi/GetVf/PutMem/GetMem/ChkIdle/GetCnd/GetCtx/PutCtx` and
+the VIF0/VIF1 reset, pause, continue, status, register and FIFO functions).
+Their hand-copied `.s` would only rename splat's output, so they wait for C.
+Also asm: 0x24 bytes of unreferenced `.bss` at 0x01E548DC and the nop fill at
+the end of `.text`.
 
-### 2. Find the game's translation-unit boundaries
+### 2. Progress reporting with objdiff and decomp.dev
+
+objdiff compares each unit's *target* object (assembled from the original asm)
+with its *base* object (compiled from C), so this needs step 1's per-unit
+layout first.
+
+- `tools/gen_ninja.py` also writes `objdiff.json`: one unit per entry in the
+  link order, with target objects built from splat's asm for every unit
+  (including the C ones, via splat's `nonmatchings` output) and base objects
+  from `src/`.
+- A `progress` ninja target runs `objdiff-cli report generate` to write
+  `build/report.json` (matched code and data, by bytes and by function).
+- **Reports are generated locally and uploaded**, not built in CI: the build
+  needs the user's disc and no disc-derived data may reach the public repo.
+  Register the project on decomp.dev, upload `report.json` from a local build
+  after each batch of work, and put the decomp.dev badges in the README.
+
+### 3. Find the game's translation-unit boundaries
 
 There is no link map (ICO's PAL disc shipped one; KFIV's does not). Signals:
 
@@ -65,16 +90,17 @@ There is no link map (ICO's PAL disc shipped one; KFIV's does not). Signals:
 - Function naming from the Holyland recomp work (`~/Documents/KFIV-PC`,
   `SLUS_203.18.functions.csv`) and the `KF_*` debug strings.
 
-### 3. Match game functions
+### 4. Match the first game functions
 
 - Settle the game's flags with one small leaf function: `-O2 -G 8`, with or
-  without `-g` (`GAME_CFLAGS` in `tools/compile_c.sh`).
+  without `-g` (`GAME_CFLAGS` in `tools/compile_c.sh`). ICO's game (same
+  toolchain and studio-era SDK) was built `-g -fno-common`, so try that first.
 - Workflow per function: m2c for a first draft → decomp.me (preset "PS2
-  ee-gcc 2.9-991111-01") or a local asm-differ/objdiff → drop into `src/`.
+  ee-gcc 2.9-991111-01") or objdiff → drop into `src/`.
 - Start with leaf utility code (math, string, file wrappers such as
   `KF_File_Open`) and work outward.
 
-### 4. Whole-ELF match (later)
+### 5. Whole-ELF match (later)
 
 The ROM view matches already. A full `SLUS_203.18` SHA-1 match also needs the
 empty `.vutext` header, `.reginfo` placement, the eight `.DVP.overlay`
