@@ -14,7 +14,7 @@
       bytes of `.text` (about 12 %), with their data, still **SHA-1 matching**
 - [x] objdiff progress reports: `ninja progress` → `build/report.json`
       (162 of 167 library C units at 100 % matched code)
-- [ ] Register on decomp.dev and upload the reports
+- [x] Progress page and README badges from the report (docs/progress/)
 - [ ] Split the game's `.text` into translation units
 - [ ] First game function matched in C (this also settles `-g` or not)
 - [ ] Whole-ELF match (section headers, `.DVP` overlays, no symtab)
@@ -62,7 +62,7 @@ Their hand-copied `.s` would only rename splat's output, so they wait for C.
 Also asm: 0x24 bytes of unreferenced `.bss` at 0x01E548DC and the nop fill at
 the end of `.text`.
 
-### 2. Progress reporting with objdiff and decomp.dev (local part done)
+### 2. Progress reporting with objdiff (done)
 
 `tools/gen_ninja.py` writes `objdiff.json`, one unit per entry in the link
 order, in the categories `game` and `sce`:
@@ -88,11 +88,12 @@ follow) and `_copyRefImage` (`%hi/%lo(_maxval)` of a table inside the
 function). Matched data is low: splat writes unlabelled string literals as
 word runs, so a target `.rodata` cannot end on the C object's byte.
 
-Still to do: **reports are generated locally and uploaded**, not built in CI,
-because the build needs the user's disc and no disc-derived data may reach
-the public repo. Register the project on decomp.dev, upload `report.json`
-from a local build after each batch of work, and put the decomp.dev badges in
-the README.
+`tools/progress.py` summarises the report in the terminal and, with `--write`,
+refreshes `docs/progress/` (a summary without per-function data, shields
+badges and a static page) and the README table. The disc is needed to build,
+so CI cannot produce the report: it is generated locally and the summary is
+committed with each batch of work. `ninja progress` also writes a local per-
+function page to `build/progress.html`.
 
 ### 3. Find the game's translation-unit boundaries
 

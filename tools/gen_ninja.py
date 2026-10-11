@@ -290,7 +290,13 @@ def main() -> None:
              f"  command = {OBJDIFF} report generate -o $out\n"
              "  description = REPORT $out\n")
     n.append(f"build build/report.json: report {' '.join(all_objs)} | objdiff.json {OBJDIFF}")
-    n.append("build progress: phony build/report.json")
+    # `progress` writes no file, so ninja runs it on every call and the
+    # summary always prints (console pool: the output is not captured)
+    n.append("rule progress\n"
+             "  command = .venv/bin/python tools/progress.py --html build/progress.html\n"
+             "  description = PROGRESS\n"
+             "  pool = console\n")
+    n.append("build progress: progress build/report.json | tools/progress.py")
     n.append("default build/kfiv.ok")
     (ROOT / "build.ninja").write_text("\n".join(n) + "\n")
     print(f"build.ninja: {len(srcs)} units, {len(c_units)} target objects")

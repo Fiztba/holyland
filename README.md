@@ -5,6 +5,8 @@ FromSoftware, 2001) for the PlayStation 2. The target is the USA retail boot
 ELF, `SLUS_203.18` (SLUS-20318). The goal is C source that the original
 toolchain compiles back into the identical executable.
 
+[![code](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-code.json)](docs/progress/) [![functions](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-functions.json)](docs/progress/)
+
 **Status:** the build reproduces the retail ROM image (all bytes the console
 loads) **byte for byte**. The SDK, libc, libm and libgcc code is in C (181
 units in `src/sce/`, about 12 % of `.text`); the game itself is still
@@ -85,6 +87,21 @@ per entry in the link order. Each C unit is compared against a target object
 assembled from splat's per-function asm of the retail code, so the objdiff
 GUI also works on this checkout. A checkout set up before objdiff-cli was
 added needs `tools/setup.sh` run once more.
+
+`ninja progress` also prints the summary and writes `build/progress.html`, a
+local per-function page (not committed). `tools/progress.py --write` refreshes
+`docs/progress/` (a summary without per-function data, shields badges and a
+static page) and the table below; commit those with each batch of work.
+`docs/progress/index.html` can be served with GitHub Pages (Settings → Pages →
+`main`, `/docs`).
+
+<!-- progress:start -->
+| | code | functions | units complete |
+| --- | ---: | ---: | ---: |
+| overall | 12.20% | 819 / 3838 | 14 / 196 |
+| game | 0.00% | 0 / 2990 | 0 / 8 |
+| sce | 97.10% | 819 / 848 | 14 / 188 |
+<!-- progress:end -->
 
 ## Adding library units
 
