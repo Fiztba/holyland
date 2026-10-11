@@ -23,7 +23,7 @@ int func_0013ED58(void *, int);
 int func_0013EE40(void *, int);
 int func_0013EFB8(void *, int);
 void func_0013F0D8(void *, int);
-int func_00196870(void *, int, unsigned int);
+void func_00196870(void *, int);
 
 void func_0013EC40(void *arg0, int arg1) {
     Actor *a = arg0;
@@ -42,7 +42,7 @@ void func_0013EC40(void *arg0, int arg1) {
     }
     temp_hi = D_00446ED4 % 10U;
     if (temp_hi == a->byteD7 % 10U) {
-        func_00196870(arg0, 1, temp_hi);
+        func_00196870(arg0, 1);
     }
     if (a->flags == 0) {
         if (s->f78 == 0) {

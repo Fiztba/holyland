@@ -13,7 +13,7 @@ extern unsigned int D_00446ED4;
 int func_0014D170(void *, int);
 int func_00182DE0(void *, int);
 void func_0018E9C0(void *);
-int func_00196870(void *, int, unsigned char, unsigned int);
+void func_00196870(void *, int);
 int func_00196CC0(void *);
 
 void func_0014D090(void *arg0, int arg1) {
@@ -22,7 +22,7 @@ void func_0014D090(void *arg0, int arg1) {
 
     temp_hi = D_00446ED4 % 10U;
     if (temp_hi == a->byteD7 % 10U) {
-        func_00196870(arg0, 1, a->byteD7, temp_hi);
+        func_00196870(arg0, 1);
     }
     if (a->flags != 0) {
         return;

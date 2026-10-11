@@ -12,7 +12,7 @@ extern unsigned int D_00446ED4;
 
 int func_00182DE0(void *, int);
 int func_00185460(void *, int);
-int func_00196870(void *, int, long, int);
+void func_00196870(void *, int);
 void func_00196CC0(void *);
 
 void func_00185390(void *arg0, int arg1) {
@@ -21,7 +21,7 @@ void func_00185390(void *arg0, int arg1) {
 
     a->bits &= mask;
     if (D_00446ED4 % 10U == a->byteD7 % 10U) {
-        func_00196870(arg0, 1, mask, 10);
+        func_00196870(arg0, 1);
     }
     if (a->flags != 0) {
         return;

@@ -14,7 +14,7 @@ void func_00126C28(void *, int);
 void func_00126C70(void *, int);
 void func_00126E58(void *, int);
 void func_0018E9C0(void *);
-void func_00196870(void *, int, unsigned char, unsigned int);
+void func_00196870(void *, int);
 void func_00196CC0(void *);
 
 void func_00126B38(void *arg0, int arg1) {
@@ -26,7 +26,7 @@ void func_00126B38(void *arg0, int arg1) {
     temp_hi = D_00446ED4 % 10U;
     temp_a2 = a->d7;
     if (temp_hi == temp_a2 % 10U) {
-        func_00196870(arg0, 0, temp_a2, temp_hi);
+        func_00196870(arg0, 0);
     }
     if (a->c6 != 0) {
         return;
