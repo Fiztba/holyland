@@ -307,3 +307,43 @@ validation; 0059–0060 introduce no Linux-only overrides. Both follow-ups were
 exported from persistent runtime commits, and tools/full/repeat application
 of the **60-patch series** succeeded on a fresh pinned checkout, verifying
 **87 managed files**.
+
+## Fading title text follow-up (0061)
+
+The stationary-logo checks above missed a remaining defect in the fading
+"PUSH START BUTTON" prompt. Patch 0059 treated every RGB change as motion,
+so fading letters fell back to duplicated half-height rows. Their shape
+alternated with the field even while the logo stayed perfectly still.
+
+Patch 0061 keeps complementary rows when local RGB change is at most 16/255,
+then smoothly transitions to spatial interpolation by 32/255. Changes
+accumulate until the opposite field is refreshed; repeated small changes
+cannot indefinitely reuse stale pixels. Spatial interpolation uses the
+neighbours on the correct sides of each missing row for either field phase.
+The original field's known rows, fade brightness values, guest VRAM, draw
+commands and game timing are unchanged. This is bounded display filtering,
+not perfect motion estimation; low-contrast motion can blend briefly.
+
+Native Windows: all ten hardware Vulkan/reconstruction CTests pass. The
+expanded synthetic fixture covers both directions of a fade, cuts, both
+field phases, repeated presentations, accumulated change and reset. An
+isolated rebuilt-game run captured 346 title frames spanning multiple fade
+cycles, then exercised Start, Down and Up. The prompt retains its outline at
+dim, intermediate and bright levels. The static logo has zero changed pixels
+across that title interval and three settled menu intervals (44, 44 and 48
+captures). This check includes the fading prompt, unlike the prior logo-only
+comparison. Original assets and timing are retained; no full playthrough is
+claimed for this presentation-only change.
+
+Ubuntu 26.04 / WSL2: the same reconstruction fixture passes with GCC 15.2
+(`-O2 -Wall -Wextra -Werror`), the actual Linux runner rebuilds, and an isolated
+CPU-renderer run reaches the title and exits normally at tick 1200. CPU
+presentation does not execute the Vulkan reconstruction stage; its portable
+algorithm is covered by the fixture. Linux hardware visual verification is
+still blocked by the previously documented Dozen driver failure.
+
+The owner's merged PR #11 is still the latest upstream merge and its patches
+remain unchanged. This fix is shared by Windows/Linux and adds no platform
+overrides. All 61 source-exported patches apply in tools/full phases and
+repeat verification on a fresh pinned checkout, with 87 managed files matching
+the development source. The overall locked-30-Hz goal remains unfinished.

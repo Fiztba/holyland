@@ -103,8 +103,11 @@ field. This prevents earlier field images from doubling title/menu text.
 Patch 0059 adds a separate motion-aware reconstruction stage in the Vulkan
 backend after that scanout helper. It uses the drawn field offset, with
 same-phase pixel comparisons and explicit history invalidation. The
-`gs_field_reconstruction` CTest exercises stationary detail, moving pixels,
-repeated/skipped presentations and resets without a GPU. The helper-level
+`gs_field_reconstruction` CTest exercises stationary detail, full fade-in/out
+cycles, moving pixels, cuts, accumulated repeated-phase changes,
+repeated/skipped presentations and resets without a GPU. Patch 0061 replaces
+exact equality with bounded local change and phase-correct spatial interpolation;
+the known lines of the current field remain untouched. The helper-level
 bob tests above remain unchanged; they do not exercise this later backend
 stage. Actual title/menu integration is recorded in the
 [fixed-frame validation report](../../docs/fixed-frame-performance.md).

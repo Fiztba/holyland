@@ -44,16 +44,71 @@ int main()
         for (unsigned y = 2; y < 4; ++y) changed[(y * stride + 3) * 4] = 200;
         const auto source = changed;
         reconstruction.reconstruct(changed, width, height, stride, 0, 401, 0);
-        expect(changed[(3 * stride + 3) * 4] == 200, "changed pixels must not borrow old opposite rows");
+        expect(changed[(3 * stride + 3) * 4] == 140, "moving even fields interpolate the rows above and below");
         auto repeat = source;
         reconstruction.reconstruct(repeat, width, height, stride, 0, 401, 0);
         expect(repeat == changed, "duplicate presentation must not turn motion into stationary detail");
         repeat = source;
         reconstruction.reconstruct(repeat, width, height, stride, 0, 450, 0);
-        expect(repeat[(3 * stride + 3) * 4] == 200, "stale opposite pixels stay invalid until that field is refreshed");
+        expect(repeat[(3 * stride + 3) * 4] == 140, "stale opposite pixels stay invalid until that field is refreshed");
         expect(apply(0, 451, 16) == field(0), "changed viewport offset resets history");
         reconstruction.reset();
         expect(apply(1, 1) == field(1), "device reset clears old fields");
-        std::puts("field reconstruction: stationary detail, motion, repeated/skipped fields, and resets passed");
+
+        // Fading high-frequency detail: the missing lines must come from the
+        // complementary field, even though brightness is changing every time.
+        auto faded = [](unsigned phase, unsigned brightness) {
+            auto p = field(phase);
+            for (unsigned y = 0; y < height; ++y)
+                for (unsigned x = 0; x < width; ++x)
+                    for (unsigned c = 0; c < 3; ++c)
+                        p[(y * stride + x) * 4 + c] = uint8_t(brightness + (y / 2 * 2 + phase) * 2 + x);
+            return p;
+        };
+        reconstruction.reset();
+        std::vector<uint8_t> prior[2];
+        unsigned present = 0;
+        for (unsigned step = 0; step < 80; ++step) {
+            const unsigned phase = step & 1;
+            const unsigned brightness = 30 + (step < 40 ? step : 80 - step) * 2;
+            auto p = faded(phase, brightness);
+            const auto raw = p;
+            reconstruction.reconstruct(p, width, height, stride, phase, ++present, 0);
+            if (step >= 2) {
+                for (unsigned y = 0; y < height; ++y)
+                    for (unsigned x = 0; x < width; ++x)
+                        for (unsigned c = 0; c < 3; ++c) {
+                            const auto at = (y * stride + x) * 4 + c;
+                            const auto &expected = (y & 1) == phase ? raw : prior[phase ^ 1];
+                            expect(p[at] == expected[at], "fading detail must keep complementary scanlines in both directions");
+                        }
+            }
+            prior[phase] = raw;
+            auto duplicate = raw;
+            reconstruction.reconstruct(duplicate, width, height, stride, phase, present, 0);
+            expect(p == duplicate, "extra host presentations must not advance the fade history");
+        }
+
+        // Slow repeated-phase changes cannot indefinitely borrow a stale field.
+        for (unsigned step = 1; step <= 12; ++step) {
+            auto p = faded(1, 32 + step * 4);
+            reconstruction.reconstruct(p, width, height, stride, 1, ++present, 0);
+            if (step >= 8)
+                expect(p[(2 * stride + 3) * 4] == 32 + step * 4 + 4 + 3,
+                       "accumulated changes reject stale rows and interpolate odd fields in the correct direction");
+        }
+
+        // A cut must use only the new field, preserving captured rows, alpha,
+        // and padding. This also exercises both clamped image boundaries.
+        for (unsigned phase = 0; phase < 2; ++phase) {
+            auto p = field(phase);
+            for (unsigned y = 0; y < height; ++y)
+                for (unsigned x = 0; x < width; ++x)
+                    for (unsigned c = 0; c < 3; ++c) p[(y * stride + x) * 4 + c] = 240;
+            const auto raw = p;
+            reconstruction.reconstruct(p, width, height, stride, phase, ++present, 0);
+            expect(p == raw, "scene cuts must not retain old glyphs or touch padding");
+        }
+        std::puts("field reconstruction: detail, full fade cycles, motion, cuts, repeated/skipped fields, and resets passed");
     } catch (const std::exception &error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
 }

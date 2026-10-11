@@ -1,0 +1,101 @@
+From 3d0181db58a2e0dabbff45d0902dc2f7b0cc92ee Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 20:44:34 -0400
+Subject: [PATCH] Preserve fading interlaced detail with bounded temporal
+ reconstruction
+
+---
+ .../src/lib/gs/gs_field_reconstruction.h      | 52 ++++++++++++++-----
+ 1 file changed, 40 insertions(+), 12 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gs_field_reconstruction.h b/ps2xRuntime/src/lib/gs/gs_field_reconstruction.h
+index e7d6061..a7e977c 100644
+--- a/ps2xRuntime/src/lib/gs/gs_field_reconstruction.h
++++ b/ps2xRuntime/src/lib/gs/gs_field_reconstruction.h
+@@ -7,7 +7,7 @@
+ #include <cstring>
+ #include <vector>
+ 
+-// Reconstruct stationary detail from explicitly identified complementary
++// Reconstruct stationary and slowly fading detail from complementary
+ // fields. Presentation cadence is not a field identifier: a host may present
+ // one field several times, or skip fields altogether.
+ class GSFieldReconstruction
+@@ -40,27 +40,55 @@ public:
+             for (unsigned y = 0; y < rows; ++y)
+                 for (unsigned x = 0; x < width; ++x)
+                 {
+-                    // A changed pixel or its vertical neighbours must not
+-                    // borrow an older field (cursor movement, fades, cuts).
+-                    bool stationary = true;
++                    // An exact equality test mistakes fades for movement and
++                    // makes glyphs alternate between sharp and half-height.
++                    // Measure local RGB change instead (including isoluminant
++                    // colour changes). Keep a small tolerance for fading, then
++                    // smoothly fall back to spatial interpolation for motion.
++                    unsigned difference = 0;
+                     for (unsigned yy = y ? y - 1 : y; yy <= std::min(y + 1, rows - 1); ++yy)
+                     {
+                         const size_t at = size_t(2 * yy) * rowBytes + x * 4;
+-                        if (std::memcmp(current.data() + at, same.data() + at, 3) != 0)
+-                        { stationary = false; break; }
++                        for (unsigned c = 0; c < 3; ++c)
++                        {
++                            const unsigned a = current[at + c], b = same[at + c];
++                            difference = std::max(difference, a > b ? a - b : b - a);
++                        }
+                     }
+                     const size_t pixel = size_t(y) * width + x;
+-                    if (!stationary) m_reliable[phase ^ 1][pixel] = 0;
+-                    if (stationary && m_reliable[phase ^ 1][pixel])
++                    // Accumulate until the opposite field is refreshed. A run
++                    // of individually small changes, or a repeated phase after
++                    // motion, must never make stale history trustworthy again.
++                    auto &change = m_change[phase ^ 1][pixel];
++                    change = uint8_t(std::min(32u, unsigned(change) + difference));
++                    const size_t source = size_t(2 * y) * rowBytes + x * 4;
++                    const size_t dest = size_t(2 * y + (phase ^ 1)) * rowBytes + x * 4;
++                    if (change <= 16)
+                     {
+-                        const size_t source = size_t(2 * y) * rowBytes + x * 4;
+-                        const size_t dest = size_t(2 * y + (phase ^ 1)) * rowBytes + x * 4;
+                         std::memcpy(pixels.data() + dest, other.data() + source, 4);
+                     }
++                    else
++                    {
++                        // Missing odd rows lie between y and y+1 in phase 0;
++                        // missing even rows lie between y-1 and y in phase 1.
++                        // Nearest-row duplication gives the two phases a
++                        // different vertical centre and makes moving text bob.
++                        const unsigned neighbour = phase ? (y ? y - 1 : y) : std::min(y + 1, rows - 1);
++                        const size_t adjacent = size_t(2 * neighbour) * rowBytes + x * 4;
++                        const unsigned t = change - 16; // smoothstep in fixed point, denominator 4096
++                        const unsigned weight = t * t * (48 - 2 * t);
++                        for (unsigned c = 0; c < 3; ++c)
++                        {
++                            const unsigned spatial = (unsigned(current[source + c]) + current[adjacent + c] + 1) / 2;
++                            pixels[dest + c] = uint8_t((unsigned(other[source + c]) * (4096 - weight) +
++                                                       spatial * weight + 2048) / 4096);
++                        }
++                        pixels[dest + 3] = current[source + 3];
++                    }
+                 }
+         }
+         m_fields[phase] = current;
+-        m_reliable[phase].assign(size_t(width) * height / 2, 1);
++        m_change[phase].assign(size_t(width) * height / 2, 0);
+         m_result = pixels;
+         m_generation = generation;
+         m_phase = phase;
+@@ -68,7 +96,7 @@ public:
+ 
+ private:
+     std::array<std::vector<uint8_t>, 2> m_fields;
+-    std::array<std::vector<uint8_t>, 2> m_reliable;
++    std::array<std::vector<uint8_t>, 2> m_change;
+     std::vector<uint8_t> m_result;
+     unsigned m_width = 0, m_height = 0, m_stride = 0, m_offset = 0, m_phase = 0;
+     uint64_t m_generation = 0;
+-- 
+2.55.0.windows.3
+
