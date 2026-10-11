@@ -44,7 +44,7 @@ def load_retail(path):
         e = ELFFile(f)
         out = {}
         for s in e.iter_sections():
-            if s.name in SECS or s.name == ".lit4":
+            if s.name in SECS or s.name in (".lit4", ".vudata"):
                 data = s.data() if s["sh_type"] != "SHT_NOBITS" else b"\0" * s["sh_size"]
                 out[s.name] = (s["sh_addr"], data)
         return out
@@ -108,10 +108,17 @@ def load_symbols(generated=True):
         if os.path.exists(os.path.join(ROOT, fn)):
             lines += open(os.path.join(ROOT, fn)).readlines()
     for line in lines:
+        note = line.split("//", 1)[1] if "//" in line else ""
         line = line.split("//", 1)[0].strip().rstrip(";")
         if "=" in line:
             name, addr = (x.strip() for x in line.split("=", 1))
-            n2a[name] = int(addr, 0)
+            if "ignore:True" in note:
+                continue
+            # a repeated static name has no single address: it names no call.
+            # symbol_addrs.txt is read first; a static that shares its name
+            # does not take the name from it
+            if "allow_duplicated:True" not in note:
+                n2a.setdefault(name, int(addr, 0))
             a2n[int(addr, 0)] = name
     return n2a, a2n
 

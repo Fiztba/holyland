@@ -11,9 +11,10 @@
     .size \label, . - \label
 .endm
 
+# alabel marks a label inside a function (a jump target or an inline table),
+# not a function of its own
 .macro alabel label, visibility=global
     .\visibility \label
-    .type \label, @function
     \label:
 .endm
 

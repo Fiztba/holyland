@@ -12,6 +12,9 @@
 - [x] Library translation units carved: 181 SDK, libc, libm and libgcc units
       in `src/sce/` (C, plus newlib's and the SDK's hand-written `.s`), 0x289DC
       bytes of `.text` (about 12 %), with their data, still **SHA-1 matching**
+- [x] objdiff progress reports: `ninja progress` → `build/report.json`
+      (162 of 167 library C units at 100 % matched code)
+- [ ] Register on decomp.dev and upload the reports
 - [ ] Split the game's `.text` into translation units
 - [ ] First game function matched in C (this also settles `-g` or not)
 - [ ] Whole-ELF match (section headers, `.DVP` overlays, no symtab)
@@ -59,22 +62,37 @@ Their hand-copied `.s` would only rename splat's output, so they wait for C.
 Also asm: 0x24 bytes of unreferenced `.bss` at 0x01E548DC and the nop fill at
 the end of `.text`.
 
-### 2. Progress reporting with objdiff and decomp.dev
+### 2. Progress reporting with objdiff and decomp.dev (local part done)
 
-objdiff compares each unit's *target* object (assembled from the original asm)
-with its *base* object (compiled from C), so this needs step 1's per-unit
-layout first.
+`tools/gen_ninja.py` writes `objdiff.json`, one unit per entry in the link
+order, in the categories `game` and `sce`:
 
-- `tools/gen_ninja.py` also writes `objdiff.json`: one unit per entry in the
-  link order, with target objects built from splat's asm for every unit
-  (including the C ones, via splat's `nonmatchings` output) and base objects
-  from `src/`.
-- A `progress` ninja target runs `objdiff-cli report generate` to write
-  `build/report.json` (matched code and data, by bytes and by function).
-- **Reports are generated locally and uploaded**, not built in CI: the build
-  needs the user's disc and no disc-derived data may reach the public repo.
-  Register the project on decomp.dev, upload `report.json` from a local build
-  after each batch of work, and put the decomp.dev badges in the README.
+- C units: the base object is `build/src/<path>.c.o`; the target object,
+  `build/target/src/<path>.o`, is assembled from splat's per-function asm
+  (`asm/matchings/`) in address order plus the unit's data files, with
+  splat's fill before the next unit trimmed off.
+- Hand-written `.s` units are both target and base (matching by
+  construction, marked complete). splat's own `asm/` units are target only.
+
+`tools/cc/objdiff-cli` (pinned in `tools/setup.sh`) writes `build/report.json`
+from `ninja progress`. For splat to cut the target the way the C objects are
+cut, `tools/carve.py` names every static function and object of the library
+units (with sizes), and lists with `ignore:True` the constants the retail code
+builds with lui/lo16 pairs that splat would take for addresses.
+
+Five library functions still show a relocation-only difference (99.7 % or
+more fuzzy): `_sceFs_Rcv_Intr` (a `%hi` with no `%lo` partner, which splat
+cannot symbolize), `_sceCd_cd_read_intr`, `_sendDataToIPU` and
+`mceIntrReadFixAlign` (an address built through `or`, which splat does not
+follow) and `_copyRefImage` (`%hi/%lo(_maxval)` of a table inside the
+function). Matched data is low: splat writes unlabelled string literals as
+word runs, so a target `.rodata` cannot end on the C object's byte.
+
+Still to do: **reports are generated locally and uploaded**, not built in CI,
+because the build needs the user's disc and no disc-derived data may reach
+the public repo. Register the project on decomp.dev, upload `report.json`
+from a local build after each batch of work, and put the decomp.dev badges in
+the README.
 
 ### 3. Find the game's translation-unit boundaries
 

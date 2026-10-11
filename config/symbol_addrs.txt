@@ -294,7 +294,7 @@ _sceSifSendCmd = 0x00229E10; // type:func
 sceSifSendCmd = 0x00229F48; // type:func
 isceSifSendCmd = 0x00229F88; // type:func
 _sceSifCmdIntrHdlr = 0x00229FC8; // type:func
-sceSifWriteBackDCache = 0x0022A0F0; // type:func
+sceSifWriteBackDCache = 0x0022A0F0; // type:func size:0xB0
 
 // libvu0
 memclr = 0x0022A1A0; // type:func
@@ -370,11 +370,11 @@ sceVu0ITOF0Vector = 0x0022D388; // type:func
 sceVu0UnitMatrix = 0x0022D398; // type:func
 _sceVu0ecossin = 0x0022D3C0; // type:func
 sceVu0RotMatrixZ = 0x0022D438; // type:func
-_RotMatrixZ_02 = 0x0022D468; // type:func
+_RotMatrixZ_02 = 0x0022D468; // type:label
 sceVu0RotMatrixX = 0x0022D4E0; // type:func
-_RotMatrixX_02 = 0x0022D510; // type:func
+_RotMatrixX_02 = 0x0022D510; // type:label
 sceVu0RotMatrixY = 0x0022D588; // type:func
-_RotMatrixY_02 = 0x0022D5B8; // type:func
+_RotMatrixY_02 = 0x0022D5B8; // type:label
 sceVu0RotMatrix = 0x0022D630; // type:func
 sceVu0ClampVector = 0x0022D680; // type:func
 sceVu0CameraMatrix = 0x0022D6A8; // type:func
@@ -505,7 +505,9 @@ _rix_111 = 0x00233BC8; // type:func
 _ri0_111 = 0x00233CF0; // type:func
 _copyAddRefImage = 0x00233E08; // type:func
 _copyRefImage = 0x00233E68; // type:func
-_maxval = 0x00233EB0; // type:func
+_maxval = 0x00233EB0; // type:label
+// _maxval holds the mask 0x00FF00FF, not an address
+maxval_mask = 0x00FF00FF; // ignore:True
 _ipuSetMPEG1 = 0x00233EC8; // type:func
 _waitBdecOut = 0x00233EF0; // type:func
 _dmVector = 0x002340D8; // type:func

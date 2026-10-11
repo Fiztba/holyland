@@ -19,15 +19,22 @@ to the retail one. Then:
     splat units, then the library and gap units). Units in different orders
     in different sections are an error.
   * config/symbol_addrs.carve.txt names, for splat, every global the units
-    define and every symbol they reference that the asm defines (resolved
-    from the retail jal targets and %hi/%lo pairs). The asm and the C then
-    agree on names. A name config/symbol_addrs.txt puts at another address is
-    an error: one of the two is wrong.
+    define, every static function, object and data label they define (with
+    size, and allow_duplicated where a name repeats: statics may), and every
+    symbol they reference that the asm defines (resolved from the retail jal
+    targets and %hi/%lo pairs). The asm and the C then agree on names. Statics
+    a game data word points into are left unnamed: the game asm cannot link to
+    them. Constants the retail code builds with a lui and lo16 (0x00FFFFFF) are
+    listed with ignore:True, so splat writes the bare value and not a symbol.
+    A name config/symbol_addrs.txt puts at another address is an error: one of
+    the two is wrong.
 
 Run tools/split.py and the build afterwards (./build.sh does both when asm/ is
 gone). The game's own asm units keep their names: text, data, rodata, ...
 """
+import bisect
 import os
+import struct
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -68,8 +75,9 @@ GAME_UNITS = ["asm/text.s", "asm/data/data.data.s", "asm/data/vudata.data.s",
 # the asm units of the sections carve.py leaves whole
 FIXED_UNITS = ["asm/data/vudata.data.s", "asm/data/lit4.lit4.s", "asm/data/sdata.sdata.s",
                "asm/data/sbss.sbss.s"]
-# defined by config/kfiv.us.ld.in, not by any unit
-LINKER_SYMS = {"_gp", "_fbss", "_end", "_stack", "_stack_size", "_heap_size"}
+# defined by config/kfiv.us.ld.in, not by any unit (_gp is named for splat: the
+# units reference it through %hi/%lo)
+LINKER_SYMS = {"_fbss", "_end", "_stack", "_stack_size", "_heap_size"}
 BEGIN = "      # --- tools/carve.py: generated from here ---"
 END = "      # --- tools/carve.py: generated up to here ---"
 
@@ -115,11 +123,12 @@ def asm_path(sec, name):
 
 
 def unit_symbols(placed):
-    """name -> (addr, is_func) for globals the units define or reference."""
-    import struct
+    """name -> (addr, is_func, size) for globals the units define or reference,
+    and a list of (name, addr, is_func, size) for their static functions and
+    objects. Statics may repeat across units, so splat is told they may."""
     retail = load_retail(str(ROOT / "baserom/us/SLUS_203.18"))
     tbase, tdata = retail[".text"]
-    out, clash = {}, []
+    out, clash, statics = {}, [], []
 
     def add(name, addr, func, why, size=0):
         if name in LINKER_SYMS:
@@ -144,11 +153,23 @@ def unit_symbols(placed):
             for s in symlist:
                 shndx = s["st_shndx"]
                 sec = names.get(shndx) if isinstance(shndx, int) else None
-                if s["st_info"]["bind"] == "STB_GLOBAL" and sec in secs:
+                bind, typ = s["st_info"]["bind"], s["st_info"]["type"]
+                if sec not in secs or typ == "STT_SECTION" or not s.name:
+                    continue
+                # statics: functions and objects, and the data labels ee-gcc gives
+                # its static variables (NOTYPE, outside .text)
+                static = bind == "STB_LOCAL" and not s.name.startswith(".L") and (
+                    typ in ("STT_FUNC", "STT_OBJECT") or
+                    (typ == "STT_NOTYPE" and sec != ".text"))
+                if bind == "STB_GLOBAL" or static:
+                    # an unsized symbol runs to the next one in its section
                     size = s["st_size"] or min([v for v in starts[sec] if v > s["st_value"]]
                                                + [secs[sec][1]]) - s["st_value"]
-                    add(s.name, secs[sec][0] + s["st_value"],
-                        s["st_info"]["type"] == "STT_FUNC", f"defined by {unit}", size)
+                    func = typ == "STT_FUNC"
+                    if bind == "STB_GLOBAL":
+                        add(s.name, secs[sec][0] + s["st_value"], func, f"defined by {unit}", size)
+                    else:
+                        statics.append((s.name, secs[sec][0] + s["st_value"], func, size, unit))
         for sec in (".data", ".rodata"):
             if sec not in secs:
                 continue
@@ -179,7 +200,98 @@ def unit_symbols(placed):
                     addend = ((how & 0xFFFF) << 16) + sext16(ow)
                     add(sname, ((hrw & 0xFFFF) << 16) + sext16(rw) - addend, False,
                         f"referenced from {unit}")
-    return out, clash
+    return out, statics, clash
+
+
+# opcodes of the I-type instructions that take a lui's register as rs and
+# finish an address: ALU immediates, loads and stores
+LO_OPS = set(range(0x08, 0x0F)) | set(range(0x20, 0x40))
+ZERO_EXT = {0x0C, 0x0D, 0x0E}      # andi, ori, xori
+
+
+def constants(placed, real):
+    """Constants that retail code builds with a lui and the lo16 instructions after it.
+
+    Retail code builds these constants (0x00FFFFFF is lui 0x100, addiu -1), and
+    splat cannot tell them from addresses. The register is followed through the
+    instructions after the lui: each value it takes, and each address it forms,
+    with no relocation on the instruction, is a constant. Those not in `real`
+    (the addresses a symbol names) are returned: splat is told to ignore them,
+    and writes the bare value as the C object has it."""
+    out = set()
+    for unit, secs in placed.items():
+        if ".text" not in secs:
+            continue
+        o = Obj(str(ROOT / OBJDIR / (unit + ".o")), unit)
+        data = o.secs[".text"][3]
+        relocated = {off for off, *_ in o.relocs[".text"]}
+        words = struct.unpack("<%dI" % (len(data) // 4), data[:len(data) // 4 * 4])
+        for i, w in enumerate(words):
+            if w >> 26 != 0xF or 4 * i in relocated:
+                continue
+            r = (w >> 16) & 31
+            val = (w & 0xFFFF) << 16
+            for j in range(i + 1, len(words)):
+                x = words[j]
+                op, rs, rt = x >> 26, (x >> 21) & 31, (x >> 16) & 31
+                if 4 * j in relocated and r in (rs, rt):
+                    break       # a symbol's lo16: the address is named
+                if op == 0 and (x >> 11) & 31 == r or op == 0xF and rt == r:
+                    break       # the register is written from elsewhere
+                if rs != r or op not in LO_OPS:
+                    if rt == r:
+                        break   # a load, or another ALU op, into r
+                    continue
+                lo = x & 0xFFFF
+                ea = (val | lo) if op in ZERO_EXT else (val + sext16(lo)) & 0xFFFFFFFF
+                if ea and ea not in real:
+                    out.add(ea)
+                if rt == r and not 0x20 <= op < 0x40:   # an ALU result in r
+                    val = ea
+                elif rt == r:
+                    break       # a load into r
+        # an addiu or ori that adds to its own register and is not reached from a
+        # lui in the straight run above: splat takes the nearest lui of that register
+        for j, x in enumerate(words):
+            op, rs, rt = x >> 26, (x >> 21) & 31, (x >> 16) & 31
+            if op not in (0x09, 0x0D) or rs != rt or 4 * j in relocated:
+                continue
+            for i in range(j - 1, max(j - 400, -1), -1):
+                if words[i] >> 26 == 0xF and (words[i] >> 16) & 31 == rt:
+                    lo = x & 0xFFFF
+                    hi = (words[i] & 0xFFFF) << 16
+                    ea = (hi | lo) if op == 0x0D else (hi + sext16(lo)) & 0xFFFFFFFF
+                    if ea and ea not in real:
+                        out.add(ea)
+                    break
+    return out
+
+
+def game_pointers(placed, statics):
+    """The statics a word outside the placed units points into.
+
+    The game's own data holds pointers into some library statics (the vudata
+    tables point into sdrStack, fsSendBuf). A static's name lives in its C
+    object, which the link cannot reach from the game's asm, so such a static
+    is not named for splat. Returns the set of (name, address) pairs."""
+    spans = sorted((a, a + max(size, 1), (name, a)) for name, a, _, size, _ in statics)
+    starts = [a for a, _, _ in spans]
+    placed_spans = sorted((a, a + size) for secs in placed.values() for a, size, _ in secs.values())
+    placed_starts = [a for a, _ in placed_spans]
+    hit = set()
+    for sec, (vbase, data) in RETAIL.items():
+        if sec == ".bss":
+            continue
+        for off in range(0, len(data) - 3, 4):
+            v = struct.unpack_from("<I", data, off)[0]
+            i = bisect.bisect_right(starts, v) - 1
+            if i < 0 or v >= spans[i][1]:
+                continue
+            w = vbase + off
+            j = bisect.bisect_right(placed_starts, w) - 1
+            if j < 0 or w >= placed_spans[j][1]:
+                hit.add(spans[i][2])
+    return hit
 
 
 RETAIL = {}
@@ -303,11 +415,16 @@ def main():
     for sec, *_ in SECTIONS:
         total = sum(placed[u][sec][1] for u in order[sec])
         print(f"  {sec}: {len(order[sec])} units, {total:#x} bytes")
-    syms, clash = unit_symbols(placed)
+    syms, statics, clash = unit_symbols(placed)
     n2a, _ = load_symbols(generated=False)
     for name, (addr, *_) in syms.items():
         if name in n2a and n2a[name] != addr:
             clash.append(f"{name}: symbol_addrs.txt says {n2a[name]:#x}, the units say {addr:#x}")
+    real = {a for a, *_ in syms.values()} | set(n2a.values())
+    real |= {a for _, a, *_ in statics}
+    ignored = constants(placed, real)
+    pointed = game_pointers(placed, statics)
+    statics = [st for st in statics if (st[0], st[1]) not in pointed]
     if clash:
         print("symbol clashes:\n  " + "\n  ".join(clash), file=sys.stderr)
         sys.exit(1)
@@ -317,10 +434,22 @@ def main():
     lines = ["// Generated by tools/carve.py from the units under src/sce/; do not edit.",
              "// Globals the library units define, and the symbols they reference",
              "// (placed by the retail relocated words)."]
-    for name, (addr, func, size) in sorted(syms.items(), key=lambda kv: (kv[1][0], kv[0])):
-        if name not in n2a:
-            attrs = (["type:func"] if func else []) + ([f"size:0x{size:X}"] if size else [])
-            lines.append(f"{name} = 0x{addr:08X};" + (" // " + " ".join(attrs) if attrs else ""))
+    # splat checks repeated names within one file: a name that is static in one
+    # unit and defined again in another is listed with allow_duplicated
+    static_names = {n for n, *_ in statics}
+    entries = [(addr, name, func, size) for name, (addr, func, size) in syms.items()
+               if name not in n2a]
+    entries += [(addr, name, func, size) for name, addr, func, size, _ in statics
+                if n2a.get(name) != addr]
+    names = [name for _, name, *_ in entries]
+    dup = {n for n in names if n in static_names and names.count(n) > 1}
+    lines_out = [(addr, name, func, size, "allow_duplicated:True" if name in dup else "")
+                 for addr, name, func, size in entries]
+    lines_out += [(addr, f"ignored_{addr:08X}", False, 0, "ignore:True") for addr in ignored]
+    for addr, name, func, size, extra in sorted(lines_out, key=lambda e: (e[0], e[1])):
+        attrs = (["type:func"] if func else []) + ([f"size:0x{size:X}"] if size else [])
+        attrs += [extra] if extra else []
+        lines.append(f"{name} = 0x{addr:08X};" + (" // " + " ".join(attrs) if attrs else ""))
     CARVE_SYMS.write_text("\n".join(lines) + "\n")
 
     text = YAML.read_text()

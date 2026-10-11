@@ -8,6 +8,7 @@
 #                                 the game, libc, libm and libgcc
 #        ee-gcc 2.96-ee-001003-1  only its SCE ee-as 2.10, for the SDK archives
 #   3. GNU ld 2.10 (+ R5900/DVP patches) and dvp-as, built from public source.
+#   4. objdiff-cli (pinned release binary) for the objdiff progress reports.
 #
 # KFIV's SDK archives are the same releases ICO links (libkernl/libcdvd/libmc
 # 2.2.4, libgraph/libdma/libpad/libipu/libmpeg 2.2.0), and ICO's compiled
@@ -15,7 +16,7 @@
 # two binutils patches and the obstack shim come from the ico decompilation
 # (github.com/nathanialf/ico, MIT).
 #
-# Nothing downloaded here is game data.  SKIP_TOOLCHAIN=1 skips steps 2-3.
+# Nothing downloaded here is game data.  SKIP_TOOLCHAIN=1 skips steps 2-4.
 # =============================================================================
 set -euo pipefail
 
@@ -142,5 +143,42 @@ build_ld210 || exit 1
 if ! command -v mips-linux-gnu-objcopy >/dev/null && ! command -v mips64-linux-gnu-objcopy >/dev/null; then
     echo "==> warning: no mips(64)-linux-gnu-objcopy on PATH (Fedora: binutils-mips64-linux-gnu)" >&2
 fi
+
+# --- 4. objdiff-cli ----------------------------------------------------------
+# Pinned release binary; the SHA-256s are of the release assets as published.
+OBJDIFF_VERSION="3.8.2"
+OBJDIFF_URL="https://github.com/encounter/objdiff/releases/download/v$OBJDIFF_VERSION"
+OBJDIFF_BIN="$CC_DIR/objdiff-cli"
+case "$(uname -m)" in
+    x86_64)  OBJDIFF_ASSET="objdiff-cli-linux-x86_64"
+             OBJDIFF_SHA256="e5445089a6f707e30cb5e02992451b604619cedfd2660ee2373a86bfefd9e718" ;;
+    aarch64) OBJDIFF_ASSET="objdiff-cli-linux-aarch64"
+             OBJDIFF_SHA256="087516e73e1b3223b39974f00bc2810fea5c3dc2c93a8e1f06442ec68acaacb4" ;;
+    *)       OBJDIFF_ASSET="" ;;
+esac
+
+fetch_objdiff() {
+    if [[ -z "$OBJDIFF_ASSET" ]]; then
+        echo "==> warning: no pinned objdiff-cli for $(uname -m); skipping (progress reports unavailable)" >&2
+        return 0
+    fi
+    if [[ -x "$OBJDIFF_BIN" && "$("$OBJDIFF_BIN" --version 2>/dev/null)" == "objdiff-cli $OBJDIFF_VERSION" ]]; then
+        echo "==> objdiff-cli $OBJDIFF_VERSION already at $OBJDIFF_BIN"
+        return 0
+    fi
+    echo "==> fetching objdiff-cli $OBJDIFF_VERSION ($OBJDIFF_ASSET)"
+    mkdir -p "$CC_DIR"
+    local tmp="$OBJDIFF_BIN.part"
+    curl -fsSL -o "$tmp" "$OBJDIFF_URL/$OBJDIFF_ASSET" ||
+        { rm -f "$tmp"; echo "==> objdiff-cli fetch failed" >&2; return 1; }
+    if ! echo "$OBJDIFF_SHA256  $tmp" | sha256sum -c --status; then
+        rm -f "$tmp"
+        echo "==> objdiff-cli sha256 mismatch for $OBJDIFF_ASSET (expected $OBJDIFF_SHA256)" >&2
+        return 1
+    fi
+    chmod +x "$tmp"
+    mv -f "$tmp" "$OBJDIFF_BIN"
+}
+fetch_objdiff || exit 1
 
 echo "==> setup complete"

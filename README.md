@@ -23,8 +23,9 @@ ln -s "/path/to/King's Field The Ancient City.iso" baserom/kfiv_us.iso
 
 `build.sh` runs whatever is missing:
 
-1. `tools/setup.sh` creates `.venv`, fetches the period compilers into
-   `tools/cc/`, and builds GNU ld 2.10 and dvp-as from source.
+1. `tools/setup.sh` creates `.venv`, fetches the period compilers and a
+   pinned objdiff-cli into `tools/cc/`, and builds GNU ld 2.10 and dvp-as
+   from source.
 2. `tools/extract_elf.py` writes `baserom/us/SLUS_203.18` and
    `baserom/us/kfiv.rom` (the ELF's load segment) and checks both SHA-1s.
 3. `tools/split.py` runs splat and writes `asm/`.
@@ -70,6 +71,20 @@ tools/     setup, extraction, split, build generation and check scripts
 docs/      roadmap and notes
 asm/  baserom/  build/  tools/cc/  .venv/    generated or local, gitignored
 ```
+
+## Progress
+
+```sh
+.venv/bin/ninja progress
+```
+
+writes `build/report.json` with objdiff-cli: matched code and data, by bytes
+and by function, overall and for the `game` and `sce` (libraries)
+categories. `tools/gen_ninja.py` writes the `objdiff.json` it reads, one unit
+per entry in the link order. Each C unit is compared against a target object
+assembled from splat's per-function asm of the retail code, so the objdiff
+GUI also works on this checkout. A checkout set up before objdiff-cli was
+added needs `tools/setup.sh` run once more.
 
 ## Adding library units
 

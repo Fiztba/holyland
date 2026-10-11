@@ -20,6 +20,7 @@ build/
 *.a
 *.map
 build.ninja
+objdiff.json
 .ninja_log
 .ninja_deps
 
