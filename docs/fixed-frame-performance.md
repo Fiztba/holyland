@@ -513,7 +513,15 @@ The first captured the main menu; later runs returned to gameplay. The
 scripted Equipment sequence did not reach Equipment, including a repeat
 with longer button holds, so Linux menu coverage is partial. The input trace
 records Circle reaching the game and later inventory entry; the reason the
-earlier menu request did not open the menu remains unverified. Equipment,
+earlier menu request did not open the menu remains unverified. A control
+rebuilt through patch 0065 matched the previous Linux executable byte for byte
+(`e3333dc5e956fe5f8934015584cc86516eacb696239a76d3b4c4db1db5e8f117`)
+and also failed to reach Equipment with the same longer-input sequence.
+Thus that automated sequence's failure predates this optimization. The final
+0066 Linux binary was restored and compared byte for byte before the control
+run. Its SHA256 is
+`2916a5b9bd88b0d6139b791d11cd30dfc832d29ac5c3ae7d48648b4dfbfd6216`.
+Equipment,
 the NPC route and the performance/stamina comparison above are Windows-only.
 Linux hardware Vulkan remains unverified due to the previously documented
 Dozen failure. No new Linux-specific behavior is introduced, and the owner's
