@@ -11,12 +11,13 @@ the path under <objdir> names the unit). For each object:
              carry other names in symbol_addrs is rejected; of several hits,
              the one where the object's functions sit at their symbol_addrs
              addresses wins. A unique hit places it.
-  data       .data/.rodata/.sdata/.sbss/.bss are placed from the relocations
-             that point into them: a %hi/%lo pair or a .word in the located
-             .text/.data gives the absolute address, the object's in-place
-             addend gives the offset, and their difference is the section
-             base. All relocations must agree. Initialized sections are then
-             compared byte for byte (relocated words masked). Sections nothing
+  data       .data/.rodata/.lit4/.sdata/.sbss/.bss are placed from the
+             relocations that point into them: a %hi/%lo pair, a .word or a
+             gp-relative literal load (li.s) in the located .text/.data gives
+             the absolute address, the object's in-place addend gives the
+             offset, and their difference is the section base. All
+             relocations must agree. Initialized sections are then compared
+             byte for byte (relocated words masked). Sections nothing
              references fall back to a masked byte search: a unique hit (with
              named symbols at their addresses) places them, and failing that,
              the one hit between the same section of the objects before and
@@ -35,8 +36,8 @@ from collections import defaultdict
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 
-R_32, R_26, R_HI16, R_LO16 = 2, 4, 5, 6
-SECS = [".text", ".data", ".rodata", ".sdata", ".sbss", ".bss"]
+R_32, R_26, R_HI16, R_LO16, R_LITERAL = 2, 4, 5, 6, 8
+SECS = [".text", ".data", ".rodata", ".lit4", ".sdata", ".sbss", ".bss"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -45,10 +46,22 @@ def load_retail(path):
         e = ELFFile(f)
         out = {}
         for s in e.iter_sections():
-            if s.name in SECS or s.name in (".lit4", ".vudata"):
+            if s.name in SECS or s.name == ".vudata":
                 data = s.data() if s["sh_type"] != "SHT_NOBITS" else b"\0" * s["sh_size"]
                 out[s.name] = (s["sh_addr"], data)
         return out
+
+
+def gp_value(e):
+    """ri_gp_value, the last word of .reginfo: _gp in a linked ELF, and in an
+    object the gp0 its gp-relative offsets are taken from."""
+    s = e.get_section_by_name(".reginfo")
+    return struct.unpack_from("<I", s.data(), 20)[0] if s else 0
+
+
+def load_gp(path):
+    with open(path, "rb") as f:
+        return gp_value(ELFFile(f))
 
 
 class Obj:
@@ -56,6 +69,7 @@ class Obj:
         self.unit = unit
         with open(path, "rb") as f:
             e = ELFFile(f)
+            self.gp0 = gp_value(e)
             self.secs = {}      # name -> (index, size, align, bytes)
             idx = {}
             for i, s in enumerate(e.iter_sections()):
@@ -95,7 +109,7 @@ class Obj:
         for off, typ, *_ in self.relocs[sec]:
             if off // 4 < len(m):
                 m[off // 4] &= {R_26: 0xFC000000, R_HI16: 0xFFFF0000,
-                                R_LO16: 0xFFFF0000}.get(typ, 0)
+                                R_LO16: 0xFFFF0000, R_LITERAL: 0xFFFF0000}.get(typ, 0)
         return m
 
 
@@ -191,20 +205,24 @@ def sext16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def bases_from(obj, sec, sec_addr, retail):
+def bases_from(obj, sec, sec_addr, retail, gp):
     """Section bases implied by relocations in `sec` (placed at sec_addr)."""
     _, size, _, data = obj.secs[sec]
     rbase, rdata = retail[sec]
     out = defaultdict(set)    # target section -> {base}
     pending_hi = []
     for off, typ, tsec, sval, sname in sorted(obj.relocs[sec], key=lambda r: r[0]):
-        if typ not in (R_32, R_HI16, R_LO16):
+        if typ not in (R_32, R_HI16, R_LO16, R_LITERAL):
             continue
         ow = struct.unpack_from("<I", data, off)[0]
         roff = sec_addr - rbase + off
         rw = struct.unpack_from("<I", rdata, roff)[0]
         if typ == R_32 and tsec:
             out[tsec].add(rw - (ow + sval))
+        elif typ == R_LITERAL and tsec:
+            # li.s: both words hold an offset from their gp (the object's is
+            # gp0, set by the assembler)
+            out[tsec].add(gp + sext16(rw) - (obj.gp0 + sext16(ow) + sval))
         elif typ == R_HI16:
             pending_hi.append((off, tsec, sval))
         elif typ == R_LO16:
@@ -225,6 +243,7 @@ def bases_from(obj, sec, sec_addr, retail):
 def layout(objdir):
     """Rows of (unit, section, size, align, addr or None, how, bytes_match)."""
     retail = load_retail(os.path.join(ROOT, "baserom/us/SLUS_203.18"))
+    gp = load_gp(os.path.join(ROOT, "baserom/us/SLUS_203.18"))
     rwords = {s: words(d) for s, (a, d) in retail.items()}
     objs = []
     for root, _, files in os.walk(objdir):
@@ -261,7 +280,7 @@ def layout(objdir):
                 got = place.get((o.unit, sec))
                 if not got or got[0] is None or sec in (".sbss", ".bss"):
                     continue
-                for tsec, bases in bases_from(o, sec, got[0], retail).items():
+                for tsec, bases in bases_from(o, sec, got[0], retail, gp).items():
                     if tsec == ".text" or tsec not in o.secs:
                         continue
                     key = (o.unit, tsec)

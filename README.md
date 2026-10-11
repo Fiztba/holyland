@@ -117,8 +117,10 @@ each in the retail ELF with `tools/lib_layout.py` (every section's bytes must
 match) and writes `build/kfiv.us.yaml` (the template `config/kfiv.us.yaml`
 plus a subsegment per unit), `build/link_order.us.txt` and
 `build/symbol_addrs.carve.txt`. `./build.sh` runs it whenever `src/` or
-`config/` changed, and splits again when the units changed. Adding a unit is
-adding its source file. `tools/tu_scan.py` reports which game functions must
+`config/` changed, and splits again when the units changed. A unit owns its
+stretch of `.text`, `.data`, `.rodata`, the float literal pool `.lit4`,
+`.sdata` and `.bss`; the stretches between units stay assembly. Adding a unit is adding
+its source file. `tools/tu_scan.py` reports which game functions must
 share a unit (see [`docs/ROADMAP.md`](docs/ROADMAP.md), step 3).
 
 ## Credits and licence

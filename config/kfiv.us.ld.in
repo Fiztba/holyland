@@ -24,7 +24,9 @@ SECTIONS
     .rodata  0x0043D980 : {
         @INPUTS:rodata@
     }
-    .lit4    0x00444B80 : { *(.lit4) }
+    .lit4    0x00444B80 : {
+        @INPUTS:lit4@
+    }
     .sdata   0x00446700 : { *(.sdata) }
     _fbss = 0x00447000;
     .sbss    0x00447000 (NOLOAD) : { *(.sbss) *(.scommon) }

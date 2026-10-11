@@ -113,6 +113,12 @@ The game is built with ee-gcc 2.9-ee-991111-01, `-O2 -G 8`.
 - Variables of 8 bytes or less are reached through `$gp` (`-G 8`). Declare an
   array with its real size (`extern int D_004467D8[2];`): an incomplete
   `extern int x[];` makes gcc use `lui`/`addiu` instead.
+- A `lwc1` through `$gp` from a `D_...` in `.lit4` is a float literal: write
+  the literal, not an `extern float`. gcc emits it as `li.s`, which the
+  delay-slot filler leaves alone. The assembler builds a value whose low 16
+  bits are zero (`1.0f`) with `lui`; every other `li.s` gets its own `.lit4`
+  entry, in code order, with no sharing even of equal values. The
+  file then owns that stretch of the pool, and `tools/carve.py` places it.
 - A loop counting down to zero with `bnez` usually comes from an ordinary
   `for (i = 0; i < n; i++)` loop with `n` in a local variable.
 

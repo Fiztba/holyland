@@ -10,6 +10,7 @@ objdiff can compare it with the compiled base object.
 """
 import json
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -23,6 +24,8 @@ OBJDIFF = "tools/cc/objdiff-cli"
 OBJDIFF_SCHEMA = "https://raw.githubusercontent.com/encounter/objdiff/main/config.schema.json"
 # the instruction comment of splat's function files: /* ROMOFF VRAM BYTES */
 INSN = re.compile(r"/\* [0-9A-Fa-f]+ ([0-9A-Fa-f]{8}) ")
+# a load from the literal pool in a function file
+LIT4_LOAD = re.compile(r"\blwc1(\s+)(\$f\d+), (D_[0-9A-F]{8})$")
 TARGET_HEAD = ('.include "macro.inc"\n\n.set noat\n.set noreorder\n\n'
                '.section .text, "ax"\n.align 3\n\n')
 
@@ -45,7 +48,8 @@ def c_parts(src: str) -> tuple[list[Path], list[Path]]:
     name = src[len("src/"):-len(".c")]
     mdir = ROOT / "asm/matchings" / name
     funcs = sorted(mdir.glob("*.s")) if mdir.is_dir() else []
-    datas = [ROOT / f"asm/data/{name}.{sec}.s" for sec in ("data", "rodata", "sdata", "bss")]
+    datas = [ROOT / f"asm/data/{name}.{sec}.s"
+             for sec in ("data", "rodata", "lit4", "sdata", "bss")]
     return funcs, [d for d in datas if d.exists()]
 
 
@@ -155,11 +159,48 @@ def target_src(out: str) -> str:
     return "src/" + out[len("build/target/src/"):-len(".s")] + ".c"
 
 
+def lit4_values(path: Path) -> dict[str, str]:
+    """label -> the float a splat .lit4 file holds there, written for li.s."""
+    out, label = {}, None
+    for l in path.read_text().splitlines():
+        if l.startswith("dlabel "):
+            label = l.split()[1]
+        elif label and ".word" in l:
+            bits = int(l.split(".word", 1)[1].split()[0], 0)
+            out[label] = repr(struct.unpack("<f", struct.pack("<I", bits))[0])
+            label = None
+    return out
+
+
+def li_s(text: str, lit4: dict[str, str]) -> str:
+    """Each load of a pool entry back to the li.s gcc wrote.
+
+    ee-as cannot load a .lit4 symbol the same file defines, and from li.s it
+    builds the unit's pool as it does for the C object: one entry per load, in
+    order, with the same relocations."""
+    out = []
+    for l in text.splitlines(keepends=True):
+        if l.startswith(".extern ") and l.split()[1].rstrip(",") in lit4:
+            continue
+        m = LIT4_LOAD.search(l.rstrip("\n"))
+        if m and m.group(3) in lit4:
+            l = l[:m.start()] + f"li.s{m.group(1)}{m.group(2)}, {lit4[m.group(3)]}\n"
+        out.append(l)
+    return "".join(out)
+
+
 def target_text(src: str) -> str:
-    """One assembly file for a C unit: its functions in address order, then its data."""
+    """One assembly file for a C unit: its functions in address order, then its
+    data. Its .lit4 comes from li.s in the functions, not from the data file."""
     funcs, datas = c_parts(src)
-    text = TARGET_HEAD + "".join(trimmed(f) for f in sorted(funcs, key=vram_of))
+    text = "".join(trimmed(f) for f in sorted(funcs, key=vram_of))
+    lit4 = [d for d in datas if d.name.endswith(".lit4.s")]
+    if lit4:
+        text = li_s(text, lit4_values(lit4[0]))
+    text = TARGET_HEAD + text
     for d in datas:
+        if d in lit4:
+            continue
         body = trailing_fill(jtbl_fill(d.read_text())).splitlines(keepends=True)
         text += "".join(l for l in body if l.strip() != '.include "macro.inc"')
     return text if text.endswith("\n") else text + "\n"
