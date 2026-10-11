@@ -58,6 +58,8 @@ segments:
       # --- tools/carve.py: generated from here ---
       - [0x000000, hasm, sce/crt0]
       - [0x0000C8, asm, text]
+      - [0x002218, c, game/func_00102218]
+      - [0x002228, asm, text_00102228]
       - [0x009A38, c, game/func_00109A38]
       - [0x009A50, asm, text_00109A50]
       - [0x020D78, c, game/func_00120D78]
