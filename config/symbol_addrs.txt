@@ -744,3 +744,5 @@ __fdlib_version = 0x004441B8;
 
 // game: names for game functions and data, in address order. A function
 // still called func_XXXXXXXX needs no line here.
+func_001CFC68 = 0x001CFC68; // type:func
+func_001FC0C0 = 0x001FC0C0; // type:func
