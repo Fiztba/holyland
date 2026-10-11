@@ -42,7 +42,7 @@ code or disc assets. The build checks the boot ELF's hash.
   in the opening area on native Windows, and passed the cave-door route. It uses
   isolated, conservative geometry interpolation; combat and physics remain
   on the original update loop. The latest measured heavy NPC view improves
-  from 11.80 to 14.43 game updates/s; slow stamina recovery tracks that remaining
+  from the prior 14.43 to 21.73 game updates/s; slow stamina recovery tracks that remaining
   simulation slowdown. Sustained 30 Hz is still unfinished. See [fixed-frame performance](docs/fixed-frame-performance.md)
   for launchers, timing, visual latency and Linux limits, and
   [optional MSVC PGO](docs/windows-pgo.md).

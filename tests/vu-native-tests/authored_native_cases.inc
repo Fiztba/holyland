@@ -3,6 +3,7 @@
 // unnamed namespace; Pair and its encoding helpers remain visible in this TU.
 #ifdef VU_SPECIALIZATION_VERIFY_COUNTER
 uint64_t vuNativeIssuedForTests();
+uint64_t vuScheduledIssuedForTests();
 #endif
 #include "authored_catalog.inc"
 
@@ -204,8 +205,56 @@ void authoredOriginalNativeSynthetic()
 }
 
 namespace {
+void authoredScheduledSynthetic(bool requireScheduled)
+{
+    Pair p;
+    const uint64_t initial = vuScheduledIssuedForTests();
+    // Every issue ceiling around the dependency schedule, with and without
+    // a pending incoming VF write. Exact comparison includes subsequent resume.
+    for (uint32_t salt = 0; salt < 8u; ++salt)
+        for (uint32_t entry : {authoredVU::linear, authoredVU::linearLead})
+            for (uint32_t budget = 1; budget <= 48u; ++budget)
+            {
+                p.reset(); p.seed(0x571500u + salt); authoredLoad(p);
+                const uint64_t before = vuScheduledIssuedForTests();
+                p.run(false, budget, entry);
+                if (budget < 8u)
+                    p.check(vuScheduledIssuedForTests() == before, "scheduled-short-budget-fallback");
+                if (p.c->state().pc != authoredVU::linear + 80u) p.run(true, 64);
+            }
+    if (requireScheduled)
+        p.check(vuScheduledIssuedForTests() > initial, "scheduled-sequence-exercised");
+
+    // A live packet must retain the per-pair executor even when a full sequence
+    // fits. Its bytes can observe stores from the middle of the sequence.
+    p.reset(); p.seed(0x572020u); authoredLoad(p);
+    p.run(false, 1, authoredVU::packets);
+    p.c->state().pc = p.r->state().pc = authoredVU::linear;
+    const uint64_t packetBefore = vuScheduledIssuedForTests();
+    p.run(true, 64);
+    p.check(vuScheduledIssuedForTests() == packetBefore, "scheduled-active-packet-fallback");
+
+    // Public control state can redirect or stop the first pair. A sequence
+    // must never bypass that boundary just because its instructions are linear.
+    for (uint32_t kind = 0; kind < 3u; ++kind)
+    {
+        p.reset(); p.seed(0x573030u + kind); authoredLoad(p);
+        p.run(false, 1, authoredVU::linearLead);
+        auto &state = p.c->state();
+        state.pc = authoredVU::linear;
+        if (kind == 0u) {
+            state.branchPending = true; state.branchDelay = 0;
+            state.branchTarget = authoredVU::linear + 64u;
+        } else if (kind == 1u) state.ebit = true;
+        else state.haltAfterDelaySlot = true;
+        std::memcpy(&p.r->state(), &state, sizeof(VU1State));
+        p.run(true, 64);
+    }
+}
+
 void authoredNativeSynthetic()
 {
+    authoredScheduledSynthetic(true);
     authoredOriginalNativeSynthetic();
     Pair p;
     std::mt19937 bits(0x601dcafeu);

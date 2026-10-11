@@ -1,0 +1,301 @@
+From c812b0d105c271c3df499ca1060ecb7044a8290e Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 04:17:14 -0400
+Subject: [PATCH] VU1: schedule bounded native spans and keep exact FMAC
+ operands local
+
+---
+ ps2xRuntime/include/runtime/ps2_vu1.h   |   3 +
+ ps2xRuntime/tools/generate_vu_native.py | 222 +++++++++++++++++++++++-
+ 2 files changed, 223 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
+index add2f9b..6788072 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1.h
+@@ -348,6 +348,9 @@ private:
+     int trySpecializedGroup(uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData,
+                             uint32_t dataSize, GS &gs, PS2Memory *memory,
+                             uint64_t budgetEnd, uint64_t generation);
++    template<uint32_t begin, uint32_t end>
++    bool tryScheduledSequence(uint8_t *vuData, uint32_t dataSize, GS &gs,
++                              PS2Memory *memory, uint64_t budgetEnd);
+     int trySpecializedBlock(const DecodedInstructionPair &decoded, uint8_t *vuCode,
+                             uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
+                             GS &gs, PS2Memory *memory, uint64_t budgetEnd, uint64_t generation);
+diff --git a/ps2xRuntime/tools/generate_vu_native.py b/ps2xRuntime/tools/generate_vu_native.py
+index b7afd2f..2f36f9b 100644
+--- a/ps2xRuntime/tools/generate_vu_native.py
++++ b/ps2xRuntime/tools/generate_vu_native.py
+@@ -135,6 +135,9 @@ DECLARATIONS = '''
+     int trySpecializedGroup(uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData,
+                             uint32_t dataSize, GS &gs, PS2Memory *memory,
+                             uint64_t budgetEnd, uint64_t generation);
++    template<uint32_t begin, uint32_t end>
++    bool tryScheduledSequence(uint8_t *vuData, uint32_t dataSize, GS &gs,
++                              PS2Memory *memory, uint64_t budgetEnd);
+     int trySpecializedBlock(const DecodedInstructionPair &decoded, uint8_t *vuCode,
+                             uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
+                             GS &gs, PS2Memory *memory, uint64_t budgetEnd, uint64_t generation);
+@@ -142,6 +145,141 @@ DECLARATIONS = '''
+ '''
+ 
+ 
++def linear_candidate(lower, upper):
++    """Conservative partition only; the canonical decoder validates each span."""
++    if upper & 0x58000000:  # E/D/T termination and delay slots
++        return False
++    if upper & 0x80000000:
++        return True
++    opcode = lower >> 25
++    if opcode in (0, 1, 4, 5, 8, 9, 0x10, 0x12, 0x13, 0x14,
++                  0x16, 0x17, 0x18, 0x1a, 0x1b, 0x1c):
++        return True
++    if opcode != 0x40:
++        return False
++    direct = lower & 0x3f
++    if direct in (0x30, 0x31, 0x32, 0x34, 0x35):
++        return True
++    special = (lower & 3) | ((lower >> 4) & 0x7c)
++    return special in (0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
++                       0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43,
++                       0x64, 0x68, 0x69)
++
++
++def linear_spans(pairs, begin, end):
++    spans = {}
++    at = begin
++    while at < end:
++        if not linear_candidate(*pairs[at]):
++            at += 1
++            continue
++        stop = at + 1
++        while stop < min(end, at + 8) and linear_candidate(*pairs[stop]):
++            stop += 1
++        if stop - at >= 4 and any(lo != 0 or hi not in (0, 0x2ff)
++                                 for lo, hi in pairs[at:stop]):
++            spans[at] = stop
++        at = stop
++    return spans
++
++
++def emit_linear_span(pairs, begin, end, issue):
++    """Statically schedule an uninterrupted span; preserve every cycle commit.
++
++    The entry guard proves all incoming operands are ready by their first read,
++    the entire span fits in this quantum, and no callback or control transfer
++    can occur. Every instruction still publishes writes, flags, stores, PC and
++    cycle boundaries, including an early reserved/queue fault. Other entries
++    and all failed guards use the original pair executor.
++    """
++    count = end - begin
++    descriptors = ',\n'.join(
++        f'                decodePairSpecialized(0x{lo:08x}u, 0x{hi:08x}u)'
++        for lo, hi in pairs[begin:end])
++    result = [f'''
++template<>
++PRIVATE_VU_BLOCK_NOINLINE bool VU1Interpreter::tryScheduledSequence<{begin}u, {end}u>(
++    uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint64_t budgetEnd)
++{{
++        constexpr auto plan = [] {{
++            struct Plan {{
++                std::array<uint32_t, {count}u> issue{{}};
++                std::array<uint32_t, kReadySlotCount> incoming{{}};
++                uint32_t end = 0;
++                bool valid = true;
++            }} plan;
++            plan.incoming.fill(UINT32_MAX);
++            std::array<uint32_t, kReadySlotCount> written{{}};
++            std::array<bool, kReadySlotCount> hasWrite{{}};
++            constexpr DecodedInstructionPair instructions[] = {{
++{descriptors}
++            }};
++            for (uint32_t index = 0; index < {count}u; ++index) {{
++                const auto &decoded = instructions[index];
++                if (decoded.has(DecodedUpperReserved) || decoded.has(DecodedLowerReserved) ||
++                    decoded.has(DecodedEBit) || decoded.has(DecodedDBit) || decoded.has(DecodedTBit) ||
++                    decoded.has(DecodedWaitQ) || decoded.has(DecodedWaitP) ||
++                    decoded.lowerPipeline == PipelineBranch || decoded.lowerPipeline == PipelineXgkick ||
++                    decoded.lowerPipeline == PipelineFdiv || decoded.lowerPipeline == PipelineEfu)
++                    plan.valid = false;
++                uint32_t cycle = plan.end;
++                for (uint32_t read = 0; read < decoded.readSlotCount; ++read)
++                    cycle = std::max(cycle, written[decoded.readSlots[read]]);
++                plan.issue[index] = cycle;
++                for (uint32_t read = 0; read < decoded.readSlotCount; ++read) {{
++                    const uint32_t slot = decoded.readSlots[read];
++                    if (!hasWrite[slot]) plan.incoming[slot] = std::min(plan.incoming[slot], cycle);
++                }}
++                for (uint32_t write = 0; write < decoded.writeSlotCount; ++write) {{
++                    const uint32_t slot = decoded.writeSlots[write];
++                    written[slot] = cycle + decoded.writeLatencies[write];
++                    hasWrite[slot] = true;
++                }}
++                plan.end = cycle + 1u;
++            }}
++            return plan;
++        }}();
++        static_assert(kReadySlotCount == 148u, "Update emitted incoming-dependency guards");
++        if constexpr (plan.valid) {{
++            bool admitted = !m_xgkick.active && !m_state.branchPending && !m_state.ebit &&
++                !m_state.haltAfterDelaySlot && !m_stopRequested &&
++                (!m_jobStepping || m_jobActive) && m_cycle < budgetEnd &&
++                budgetEnd - m_cycle >= plan.end;
++            const uint64_t startCycle = m_cycle;
++''']
++    # No dynamic descriptor/slot loop remains in the entry guard.
++    for slot in range(148):
++        result.append(f'''            if constexpr (plan.incoming[{slot}u] != UINT32_MAX)
++                admitted = admitted && m_ready[{slot}u] <= startCycle + plan.incoming[{slot}u];
++''')
++    result.append('            if (admitted) {\n')
++    body_start = issue.index('        m_jobPendingPairValid = false;')
++    body_end = issue.index('        uint32_t nextPc = m_state.pc + 8u;')
++    linear_issue = issue[body_start:body_end]
++    for index in range(begin, end):
++        lo, hi = pairs[index]
++        local = index - begin
++        previous = '0u' if local == 0 else f'plan.issue[{local-1}u] + 1u'
++        result.append(f'''                {{
++                    constexpr uint32_t lower = 0x{lo:08x}u, upper = 0x{hi:08x}u;
++                    constexpr auto decoded = decodePairSpecialized(lower, upper);
++                    if constexpr (plan.issue[{local}u] > {previous})
++                        advanceTo(startCycle + plan.issue[{local}u]);
++{linear_issue}
++                    m_state.pc = {(index + 1) % len(pairs) * 8}u;
++                    advanceOneCycle();
++#ifdef VU_SPECIALIZATION_VERIFY_COUNTER
++                    ++privateSpecializedIssued;
++                    ++privateScheduledIssued;
++#endif
++                    if (m_stopRequested) return true;
++                }}
++''')
++    result.append('                return true;\n')
++    result.append('            }\n        }\n    return false;\n}\n')
++    return ''.join(result)
++
++
+ def generate_catalog(runtime, code):
+     if len(code) != 16384:
+         raise ValueError('Catalog requires an exact 16 KiB VU1 image')
+@@ -236,7 +374,72 @@ bool VU1Interpreter::matchesNativeCatalogCache() const
+     };
+ """
+     brace = upper_function.index('{') + 1
+-    upper_function = upper_function[:brace] + native_fast + upper_function[brace:]
++
++    normalization = function(upper, '    void normalizeOperands(')
++    first = normalization.index('        const __m128i bits', normalization.index('#elif'))
++    last = normalization.index('        _mm_storeu_si128', first)
++    vector_normalization = normalization[first:last] + '        return _mm_castsi128_ps(normalized);\n'
++    parts.append('''
++#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && FLT_EVAL_METHOD == 0
++namespace {
++VU_COMPILED_INLINE __m128 nativeNormalizedValues(const float *in)
++{
++''' + vector_normalization + '\n}\n}\n#endif\n')
++    commit = function(core, 'VU_NATIVE_INLINE bool VU1Interpreter::tryApplyProductSumFmacDest(')
++    first = commit.index('        __m128i productBits')
++    last = commit.index('\n    }\n#endif', first)
++    product_commit = commit[first:last].replace('return false;', 'break;').replace('return true;', 'return;')
++    early = '''
++#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && FLT_EVAL_METHOD == 0
++    if constexpr (nativeNormalOp || nativeProductSum)
++    {
++        constexpr uint8_t dest = DEST(instr);
++        float *dst = normalOpcode >= 0x3cu ? m_state.acc : m_state.vf[FD(instr)];
++        const __m128 a = nativeNormalizedValues(m_state.vf[FS(instr)]);
++        __m128 b;
++        if constexpr (nativeFmac.source == FmacSource::Broadcast)
++            b = _mm_set1_ps(normalizeOperand(m_state.vf[FT(instr)][nativeFmac.broadcast]));
++        else if constexpr (nativeFmac.source == FmacSource::Q)
++            b = _mm_set1_ps(normalizeOperand(m_state.q));
++        else if constexpr (nativeFmac.source == FmacSource::I)
++            b = _mm_set1_ps(normalizeOperand(m_state.i));
++        else
++            b = nativeNormalizedValues(m_state.vf[FT(instr)]);
++        __m128 value;
++        if constexpr (nativeFmac.op == FmacOp::Add) value = _mm_add_ps(a, b);
++        else if constexpr (nativeFmac.op == FmacOp::Sub) value = _mm_sub_ps(a, b);
++        else if constexpr (nativeFmac.op == FmacOp::Mul) value = _mm_mul_ps(a, b);
++        else
++        {
++            const __m128 acc = nativeNormalizedValues(m_state.acc);
++            const __m128 product = _mm_mul_ps(a, b);
++            if constexpr (nativeFmac.op == FmacOp::MAdd) value = _mm_add_ps(acc, product);
++            else value = _mm_sub_ps(acc, product);
++        }
++        float result[4];
++        _mm_storeu_ps(result, value);
++        if constexpr (nativeNormalOp)
++        {
++            if (tryApplyNormalFmacDest(dst, result, dest)) return;
++        }
++        else
++        {
++            do {
++''' + product_commit + '''
++            } while (false);
++        }
++        // Rejected edges republish the canonical full operand context before
++        // running the original exact normalizer. Accepted results never expose
++        // pointers to local arrays, so the compiler can keep them in registers.
++        execUpper(instr);
++        return;
++    }
++    else
++#endif
++    {
++'''
++    upper_function = upper_function[:brace] + native_fast + early + upper_function[brace:-2] + '\n    }\n}\n'
++
+     lower_function = function(lower, 'void VU1Interpreter::execLower(')
+     lower_function = replace_once(lower_function,
+         'void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint32_t upperInstr)',
+@@ -274,11 +477,14 @@ bool VU1Interpreter::matchesNativeCatalogCache() const
+ #ifdef VU_SPECIALIZATION_VERIFY_COUNTER
+ namespace {
+ uint64_t privateSpecializedIssued = 0;
++uint64_t privateScheduledIssued = 0;
+ struct SpecializationReport { ~SpecializationReport() {
+     std::printf("PRIVATE-SPECIALIZATION issued=%llu\\n", static_cast<unsigned long long>(privateSpecializedIssued));
++    std::printf("PRIVATE-SCHEDULED issued=%llu\\n", static_cast<unsigned long long>(privateScheduledIssued));
+ } } privateSpecializationReport;
+ }
+ uint64_t vuNativeIssuedForTests() { return privateSpecializedIssued; }
++uint64_t vuScheduledIssuedForTests() { return privateScheduledIssued; }
+ #endif
+ ''')
+     run_function = function(core, 'void VU1Interpreter::run(')
+@@ -349,6 +555,9 @@ VU_COMPILED_INLINE int VU1Interpreter::issueSpecializedPair(uint8_t *vuData, uin
+ ''')
+     for base in range(0, len(pairs), width):
+         stop = min(base + width, len(pairs))
++        spans = linear_spans(pairs, base, stop)
++        for begin, end in spans.items():
++            parts.append(emit_linear_span(pairs, begin, end, issue))
+         body = [f'''
+ template<>
+ PRIVATE_VU_BLOCK_NOINLINE int VU1Interpreter::trySpecializedGroup<{base}u>(
+@@ -364,7 +573,16 @@ PRIVATE_VU_BLOCK_NOINLINE int VU1Interpreter::trySpecializedGroup<{base}u>(
+         for index in range(base, stop):
+             lo, hi = pairs[index]
+             next_index = (index + 1) % len(pairs)
+-            body.append(f'''pair_{index}:
++            body.append(f'pair_{index}:\n')
++            if index in spans:
++                end = spans[index]
++                body.append(f'''    if (!m_xgkick.active && tryScheduledSequence<{index}u, {end}u>(vuData, dataSize, gs, memory, budgetEnd)) {{
++        if (m_stopRequested) return 1;
++        issuedAny = true;
++''')
++                body.append('        return 1;\n' if end == stop else f'        goto pair_{end};\n')
++                body.append('    }\n')
++            body.append(f'''
+     {{
+         constexpr auto baked = decodePairSpecialized(0x{lo:08x}u, 0x{hi:08x}u);
+         if constexpr (baked.has(DecodedUpperReserved) || baked.has(DecodedLowerReserved))
+-- 
+2.55.0.windows.3
+

@@ -15,10 +15,29 @@ the source directory needed by GCC's generated-catalog lookup. These fixes
 apply to the bounded catalog, not the owner's separate static-lift experiment.
 See [current measurements and Linux execution limits](../docs/fixed-frame-performance.md).
 
+The [bounded-loop package](vu-bounded-tests/README.md) adds five tests for
+generated loop discovery, exact execution, cooperative memory visibility,
+pending-P corruption detection and architecture fallback. Native Windows and
+Ubuntu each pass 30,977 authored comparisons and 10,812 cooperative checks;
+the latter include 3,384 memory mutations between 1,188 host returns. A
+forced unsupported-target branch makes zero bounded calls and passes 1,682
+comparisons. This tests fallback on x86, not execution on another architecture.
+The two existing native packages also compile the generated companion and
+exercise scheduled-span admission; Windows and Ubuntu each pass all 14 CTests
+with 679,851 ordinary and 1,276,041 cooperative positive checks.
+
+The [bulk VIF UNPACK package](vif-unpack-tests/README.md) passes six CTests
+on native Windows and Ubuntu. The actual parser, its forced scalar helper and
+the previous parser each pass 2,142,890 expected-state checks. Three corruption
+controls detect bad sign extension, mask admission and skip/wrap addressing.
+The fixture covers every 16-bit value, byte-split payloads, aliases and exact
+source-buffer ends using protected pages. It substitutes graphics/VU execution
+and makes no whole-game or performance claim.
+
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-30 runtime/generator fixture packages plus the separate audio-loopback diagnostic.
+source-only runtime/generator fixture packages plus a separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.

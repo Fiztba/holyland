@@ -529,3 +529,95 @@ merged patches 0040/0041 remain unchanged.
 
 All 66 exported patches pass fresh tools/full/repeat application; the 87
 managed source files match the persistent development checkout.
+
+## Scheduled VU loops and bulk uploads (0067–0069)
+
+The next retained Windows build reaches 21.73 original gameplay updates/s
+beside the first NPC, up from 14.43 in the delivered 0066 build. It still
+does not sustain the intended 30000/1001 Hz cadence. Slow stamina recovery
+improves with simulation throughput; its original 77-update recovery is
+unchanged. Rendering is slower in this comparison and remains a separate
+optimization target.
+
+Patch 0067 compiles admitted instruction spans from decoded hazards and
+retains exact FMAC operands locally. Patch 0068 bulk-decodes complete V4-32
+and signed/unsigned V4-16 uploads only when masking, ROW-changing modes,
+fill cycles and source aliases cannot change the result. Partial payloads
+continue through the existing parser. Destination wrapping and skip cycles
+remain exact, including an odd final V4-16 vector with only eight readable
+source bytes.
+
+Patch 0069 derives whole-loop kernels from the user's hash-pinned microcode.
+Registers stay local during an admitted iteration; the adapter publishes
+canonical register, pipeline, flag, memory and cycle state at the original
+observable boundary. Repeated iterations require a stable translated
+schedule and enough remaining cooperative budget. Pending Q/P and flag
+deadlines are retained; unsupported control, scheduling or memory ownership
+falls back to ordinary execution. In particular, upper writes to VF0 are
+declined because the canonical interpreter exposes a temporary value to a
+paired store. The generated implementation uses a separate translation unit
+with strict arithmetic. Its SSE2/direct-float guard emits an empty region
+table on other targets; this preserves fallback without claiming full-project
+support or testing on another architecture. No retail PCs, generated game
+code or gameplay-specific replacement loops are committed.
+
+Native Windows, i9-13900KF / RTX 4090, Vulkan, fixed updates and interpolation,
+120 FPS requested, original static lift disabled:
+
+| Observation | Delivered 0066 | Through 0069 |
+|---|---:|---:|
+| Original game updates/s | 14.433 | 21.733 |
+| Attack to full stamina | 5.390 s / 77 updates | 3.515 s / 77 updates |
+| Mean rendered frames/s | 75.41 | 59.63 |
+
+Each observation is one 30-second new-game run in a closely matched stationary
+NPC view, within five game-coordinate units and 0.01 radians. No compiler,
+stack sampler or other game was active during measurement. The latest build
+has fresh MSVC FASTGENPROFILE training with all 7,175 profiled functions
+optimized and no invalid/new call sites; 0066 reused an older profile.
+These are comparisons of finished builds, so the roughly 51% simulation
+throughput gain cannot be attributed exclusively to one code change. Graphics
+throughput fell about 21%. Read-only sampling and normal host scheduling add
+uncertainty; neither result establishes a universal speedup or a 30 Hz lock.
+
+The Windows game crossed both cave doors, retained floor contact and the
+seated NPC, performed the measured attack, opened Equipment and returned to
+gameplay. It exited normally after 537.976 seconds. This run did not repeat
+weapon pickup/equipping or a full playthrough. The measured executable SHA256
+is `c75e4e5ea7562cbd2bb3d868d70f52b3dfd757a6c1250c21f1810b9dea2054a1`.
+Final VF0 hardening leaves this owned catalog's compiled inputs byte-identical;
+the later portable guard leaves its active x86 preprocessor output identical
+on both MSVC and GCC. The final source fixtures include those guards.
+
+Native Windows and Ubuntu each pass the five new bounded-loop CTests and
+six bulk-UNPACK CTests. The loop fixture compares 720 authored cases
+(30,977 checks), and 1,188 cooperative returns with 3,384 intervening memory
+mutations (10,812 checks). It detects an intentionally wrong P deadline and
+verifies zero bounded calls under forced architecture fallback. VIF tests
+compare 2,142,890 checks each for the candidate, scalar source branch and
+previous parser, including protected-page buffer tails and three precise
+corruption controls. These use substituted GS/VIF boundaries where documented
+and do not establish full hardware equivalence. The existing native fixtures
+also rebuild against the generated companion; Windows and Ubuntu 7+7 tests pass
+679,851 ordinary and 1,276,041 cooperative positive comparisons.
+
+Ubuntu WSL2 also builds and executes the actual combined game with its CPU
+renderer. Ten normal-input checks cover new-game, movement/turning, main menu,
+Equipment, Back, reopening the menu and attack recovery from 5000 to zero and
+back to 5000. Equipment labels and character silhouette render, and returning
+to gameplay retains the cloudy sky. The isolated run exited normally with
+code zero; neither state nor inventory was patched. Its SHA256 is
+`10a4289ca6ba631e8d83fb1426a3bdb4d4a55ac8e0308bafb54504b799c5db90`.
+The same generated catalog/kernel also passes 4,000 private replay cases and
+39,999 comparisons, executing 76,254 bounded iterations. The cave/NPC route,
+performance measurement and hardware Vulkan validation remain Windows-only.
+The recorded WSL Dozen limitation remains; no Linux GPU performance gain is
+claimed.
+
+All 69 source-exported patches pass tools, tools-repeat, full-after-tools,
+full-repeat and tools-after-full on a fresh pinned checkout. All 93 managed
+files match the committed runtime and persistent development checkout after
+Git line-ending normalization. Owner patches 0040/0041 remain unchanged.
+At this update, owner PR #13 is open and unmerged: its faster Linux linking
+and newest-runner selection do not duplicate these runtime changes. No new
+Linux-specific game behavior is introduced.

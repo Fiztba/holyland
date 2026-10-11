@@ -75,6 +75,9 @@ commit); don't edit them by hand. Workflow:
 | `0064-Consume-preloaded-source-chain-DMA-payloads-…` | Transfer active QWC/MADR payloads before fetching TADR, obey active-tag termination/CNT rules, and reject preloaded transfers in tag-only GIF fast paths. |
 | `0065-Match-Verdite-manual-mouse-capture-controls` | Escape alone toggles mouse engagement; clicks never capture. Preserve engagement through pickups, dialogue, menus and pause while keeping camera motion gated. Tab remains Menu/Back. |
 | `0066-VU1-inline-compiled-pairs-within-bounded-native-bloc` | Inline instruction and pair bodies inside the existing bounded native blocks. Preserve arithmetic and execution boundaries; improves the measured heavy-scene update rate, which remains below 30 Hz. |
+| `0067-VU1-schedule-bounded-native-spans-and-keep-exact-FMA` | Schedule admitted straight spans from decoded hazards and keep exact FMAC operands local, retaining canonical fallbacks and observable pipeline boundaries. |
+| `0068-VIF1-bulk-decode-complete-unmasked-V4-16-and-V4-32-u` | Bulk-copy V4-32 and expand signed/unsigned V4-16 uploads when complete unmasked, mode-zero, non-filling, non-aliased input permits it; preserve wrapping, skip cycles and partial transfers. |
+| `0069-VU1-compile-exact-whole-loop-kernels-with-bounded-re` | Derive whole-loop kernels from the supplied microcode with exact arithmetic and scheduled state commits. Repeat only within cooperative budgets and stable schedules; retain canonical execution for unsupported control, hazards and targets. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -83,10 +86,10 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 64-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+The 69-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
 0040–0041 (VU1 census and lift) are retained unchanged. Performance patches
-0042–0066 are exported as separate source commits on top of them. The
+0042–0069 are exported as separate source commits on top of them. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The new fixed-update/interpolation mode and its separate Windows/Ubuntu

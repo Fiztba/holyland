@@ -77,6 +77,14 @@ set_property(SOURCE "${generated}/candidate/src/lib/vu/ps2_vu1_core.cpp" APPEND 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${VU_NATIVE_CATALOG}" "${VU_AUTHORED_CATALOG_DIR}/authored_catalog.inc")
 target_compile_definitions(kfiv_vu_performance_verify PRIVATE VU_SPECIALIZATION_VERIFY_COUNTER=1)
+if(VU_NATIVE_BOUNDED_CPP)
+    target_sources(kfiv_vu_performance_verify PRIVATE "${VU_NATIVE_BOUNDED_CPP}")
+    set_property(SOURCE "${VU_NATIVE_BOUNDED_CPP}" PROPERTY SKIP_UNITY_BUILD_INCLUSION TRUE)
+    # The target's existing strict FP flags also apply to this math unit.
+    # Candidate-only inlining/LTCG options are assigned with candidate_sources.
+    list(APPEND candidate_sources "${VU_NATIVE_BOUNDED_CPP}")
+endif()
+
 target_include_directories(kfiv_vu_performance_verify PRIVATE "${VU_AUTHORED_CATALOG_DIR}")
 ''')
     if cmake.count('enable_testing()') != 1:

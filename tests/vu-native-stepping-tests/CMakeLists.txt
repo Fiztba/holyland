@@ -28,6 +28,14 @@ set(configure_inputs "${CMAKE_CURRENT_SOURCE_DIR}/prepare_fixture.py"
     "${VU_NATIVE_GENERATOR}")
 get_filename_component(generator_directory "${VU_NATIVE_GENERATOR}" DIRECTORY)
 list(APPEND configure_inputs "${generator_directory}/vu_native_input.py")
+# These files are optional for older candidate generators. CONFIGURE_DEPENDS
+# notices when bounded compiler support is added or removed from a checkout.
+file(GLOB native_bounded_inputs CONFIGURE_DEPENDS
+    "${generator_directory}/vu_bounded_*.py"
+    "${generator_directory}/vu_bounded_*.inc"
+    "${generator_directory}/vu_bounded_*.h.in")
+list(APPEND configure_inputs ${native_bounded_inputs})
+
 foreach(file IN ITEMS CMakeLists.txt prepare_sources.py reference39-hashes.json verifier.cpp
         metadata_cases.inc pipeline_cases.inc stepping_cases.inc unrelated_stubs.cpp)
     list(APPEND configure_inputs "${base_fixture}/${file}")
@@ -63,6 +71,21 @@ if(NOT generation_status EQUAL 0)
     message(FATAL_ERROR "${generation_error}")
 endif()
 message(STATUS "${generation_output}")
+# Trust the current generation's manifest, not stale files from a previous
+# candidate. Older generators omit bounded_outputs and retain their old path.
+set(VU_NATIVE_BOUNDED_CPP "")
+file(READ "${native_manifest}" generated_manifest)
+string(JSON bounded_output_type ERROR_VARIABLE bounded_output_error
+    TYPE "${generated_manifest}" bounded_outputs)
+if(NOT bounded_output_error AND bounded_output_type STREQUAL "OBJECT")
+    set(VU_NATIVE_BOUNDED_CPP "${CMAKE_CURRENT_BINARY_DIR}/native-catalog/catalog.bounded.cpp")
+    foreach(companion IN ITEMS catalog.bounded.cpp catalog.bounded.h catalog.bounded-validation.inc)
+        if(NOT EXISTS "${CMAKE_CURRENT_BINARY_DIR}/native-catalog/${companion}")
+            message(FATAL_ERROR "Native generator advertised a missing companion: ${companion}")
+        endif()
+    endforeach()
+endif()
+
 
 enable_testing()
 add_test(NAME vu_native_input_parser

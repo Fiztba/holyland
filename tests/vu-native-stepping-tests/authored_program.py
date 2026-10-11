@@ -66,6 +66,24 @@ def original_program():
         (fsset(0x980), upper(0x28, 15, 3, 12, 12)),
         (0, NOP | END), (0, NOP),
     ])
+    # An aligned eight-pair straight-line region. Its lead-in leaves VF2
+    # pending, so resuming at the region tests incoming-dependency rejection.
+    # Within it, VF/ACC dependencies, aliased lower reads, stores, integer
+    # conversions and loads exercise the statically scheduled issue cycles.
+    linear_lead = 0x178
+    linear = 0x180
+    emit(linear_lead, [(0, upper(0x28, 15, 3, 5, 2))])
+    emit(linear, [
+        ((0x08 << 25) | (3 << 16) | (1 << 11) | 1, upper(0x2a, 15, 3, 2, 4)),
+        ((1 << 25) | (15 << 21) | (1 << 16) | (4 << 11), upper(0x28, 15, 3, 4, 5)),
+        ((0 << 25) | (15 << 21) | (7 << 16) | (1 << 11), upper(0x29, 15, 3, 5, 6)),
+        ((4 << 25) | (8 << 21) | (5 << 16) | (3 << 11), special(0x18, 15, 3, 6)),
+        ((1 << 25) | (15 << 21) | (1 << 16) | (7 << 11), upper(0x29, 15, 3, 6, 7)),
+        (lower_special(0x30, 7, 9, 15), special(0x14, 15, 8, 7)),
+        ((0x08 << 25) | (3 << 16) | (3 << 11) | 1, upper(0x28, 15, 3, 8, 9)),
+        (0, upper(0x29, 15, 3, 2, 10)),
+        (0, NOP | END), (0, NOP),
+    ])
     pipelines = 0x270
     emit(pipelines, [
         (lower_special(0x38, 2, 3), NOP),
@@ -110,7 +128,8 @@ def original_program():
     wrap = 0x3fe8
     emit(wrap, [(0, upper(0x28)), (0, upper(0x2a)), (0, NOP)])
     emit(0, [(0, NOP | END), (0, NOP)])
-    return pairs, {'arithmetic': arithmetic, 'pipelines': pipelines,
+    return pairs, {'arithmetic': arithmetic, 'linear': linear, 'linearLead': linear_lead,
+                   'pipelines': pipelines,
                    'branches': branches, 'stores': stores, 'packets': packets,
                    'wrap': wrap, 'unused': 0x3500}
 

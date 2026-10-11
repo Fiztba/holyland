@@ -1,0 +1,110 @@
+From b9a2e0ac85d60ddddc947ca9ab32b3225bc633c8 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 04:17:42 -0400
+Subject: [PATCH] VIF1: bulk decode complete unmasked V4-16 and V4-32 uploads
+
+---
+ ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp | 73 ++++++++++++++++++++
+ 1 file changed, 73 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index 56c3811..de78257 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -1,6 +1,9 @@
+ // Based on Blackline Interactive implementation
+ #include "runtime/ps2_memory.h"
+ #include <cstring>
++#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
++#include <emmintrin.h>
++#endif
+ 
+ enum VIFCmd : uint8_t
+ {
+@@ -28,6 +31,40 @@ enum VIFCmd : uint8_t
+ 
+ namespace
+ {
++    // Expand complete V4-16 vectors only. Pair loads consume exactly 16
++    // source bytes; the odd tail consumes exactly 8, including at page ends.
++    template<bool ZeroExtend>
++    void unpackV4_16Span(uint8_t *destination, const uint8_t *source, uint32_t count)
++    {
++#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
++        while (count >= 2u)
++        {
++            const __m128i packed = _mm_loadu_si128(reinterpret_cast<const __m128i *>(source));
++            const __m128i high = ZeroExtend ? _mm_setzero_si128() : _mm_srai_epi16(packed, 15);
++            _mm_storeu_si128(reinterpret_cast<__m128i *>(destination), _mm_unpacklo_epi16(packed, high));
++            _mm_storeu_si128(reinterpret_cast<__m128i *>(destination + 16u), _mm_unpackhi_epi16(packed, high));
++            source += 16u;
++            destination += 32u;
++            count -= 2u;
++        }
++        if (count != 0u)
++        {
++            const __m128i packed = _mm_loadl_epi64(reinterpret_cast<const __m128i *>(source));
++            const __m128i high = ZeroExtend ? _mm_setzero_si128() : _mm_srai_epi16(packed, 15);
++            _mm_storeu_si128(reinterpret_cast<__m128i *>(destination), _mm_unpacklo_epi16(packed, high));
++        }
++#else
++        for (uint32_t vector = 0; vector != count; ++vector)
++        for (unsigned lane = 0; lane != 4u; ++lane)
++        {
++            uint16_t raw;
++            std::memcpy(&raw, source + vector * 8u + lane * 2u, sizeof(raw));
++            const uint32_t value = ZeroExtend ? uint32_t(raw) : (uint32_t(raw) ^ 0x8000u) - 0x8000u;
++            std::memcpy(destination + vector * 16u + lane * 4u, &value, sizeof(value));
++        }
++#endif
++    }
++
+     constexpr uint8_t kGifFmtImage = 2u;
+ 
+     uint32_t pendingGifImageQwc(const uint8_t *data, uint32_t sizeBytes)
+@@ -641,6 +678,42 @@ uint32_t PS2Memory::processVIF1Commands(const uint8_t *data, uint32_t sizeBytes)
+             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+             {
+                 const uint8_t *srcBase = data + pos;
++                // Complete unmasked V4-32/V4-16 in normal mode can copy or
++                // widen contiguous write cycles, splitting at VU memory wrap.
++                // Keep fill cycles, masks, ROW updates, and all other formats
++                // on the general path.
++                const uintptr_t sourceAddress = reinterpret_cast<uintptr_t>(srcBase);
++                const uintptr_t vuAddress = reinterpret_cast<uintptr_t>(m_vu1Data);
++                const bool sourceOverlapsVu = sourceAddress >= vuAddress
++                    ? sourceAddress - vuAddress < PS2_VU1_DATA_SIZE
++                    : vuAddress - sourceAddress < totalBytes;
++                if (vn == 3u && vl <= 1u && !maskEnable && vif1_regs.mode == 0u &&
++                    cl >= wl && !sourceOverlapsVu)
++                {
++                    uint32_t remaining = writeVectorCount;
++                    uint32_t dest = vuAddr;
++                    const uint8_t *source = srcBase;
++                    while (remaining != 0u)
++                    {
++                        // Equal read/write cycles are one continuous span.
++                        const uint32_t run = cl == wl ? remaining : std::min(remaining, wl);
++                        const uint32_t beforeWrap = std::min(run, 0x400u - dest);
++                        const auto writeSpan = [&](uint8_t *target, const uint8_t *input, uint32_t count)
++                        {
++                            if (vl == 0u) std::memcpy(target, input, count * 16u);
++                            else if (zeroExtend) unpackV4_16Span<true>(target, input, count);
++                            else unpackV4_16Span<false>(target, input, count);
++                        };
++                        writeSpan(m_vu1Data + dest * 16u, source, beforeWrap);
++                        if (beforeWrap != run)
++                            writeSpan(m_vu1Data, source + beforeWrap * bytesPerVector, run - beforeWrap);
++                        source += run * bytesPerVector;
++                        remaining -= run;
++                        dest = (dest + cl) & 0x3FFu;
++                    }
++                    pos += totalBytes;
++                    continue;
++                }
+                 uint32_t srcIndex = 0u;
+                 for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+                 {
+-- 
+2.55.0.windows.3
+
