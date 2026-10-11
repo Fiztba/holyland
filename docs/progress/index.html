@@ -69,8 +69,8 @@ footer { margin: 24px 0 8px; }
 <main>
 <h1>KFIV decompilation progress</h1>
 <p class="muted">Generated 2026-10-11 from objdiff-cli's report against the retail ELF.</p>
-<div class="cards"><div class="card"><span>Code matched</span><b>34.62%</b><span>0x716DC of 0x147A28 bytes</span></div><div class="card"><span>Functions matched</span><b>51.11%</b><span>1962 of 3839</span></div><div class="card"><span>Data matched</span><b>0.10%</b><span>0x7069 of 0x1C0E4C0 bytes</span></div><div class="card"><span>Units complete</span><b>14 of 1851</b><span>0.76% of units</span></div></div>
-<section class="cat"><h2>Game <span class="muted">(game)</span></h2><div class="bar" role="img" aria-label="25.64 percent of code matched"><i style="width:25.64%"></i></div><p class="muted">code 25.64% (0x49768 of 0x11E794 bytes), functions 1143/2991, data 0.01%, units 0/1663 complete</p></section><section class="cat"><h2>SDK and runtime libraries <span class="muted">(sce)</span></h2><div class="bar" role="img" aria-label="97.10 percent of code matched"><i style="width:97.10%"></i></div><p class="muted">code 97.10% (0x27F74 of 0x29294 bytes), functions 819/848, data 48.79%, units 14/188 complete</p></section>
+<div class="cards"><div class="card"><span>Code matched</span><b>34.62%</b><span>464,604 of 1,341,992 bytes</span></div><div class="card"><span>Functions matched</span><b>51.11%</b><span>1962 of 3839</span></div><div class="card"><span>Data matched</span><b>0.10%</b><span>28,777 of 29,418,688 bytes</span></div><div class="card"><span>Units complete</span><b>14 of 1851</b><span>0.76% of units</span></div></div>
+<section class="cat"><h2>Game <span class="muted">(game)</span></h2><div class="bar" role="img" aria-label="25.64 percent of code matched"><i style="width:25.64%"></i></div><p class="muted">code 25.64% (300,904 of 1,173,396 bytes), functions 1143/2991, data 0.01%, units 0/1663 complete</p></section><section class="cat"><h2>SDK and runtime libraries <span class="muted">(sce)</span></h2><div class="bar" role="img" aria-label="97.10 percent of code matched"><i style="width:97.10%"></i></div><p class="muted">code 97.10% (163,700 of 168,596 bytes), functions 819/848, data 48.79%, units 14/188 complete</p></section>
 <h2>Map</h2>
 <p class="muted">One cell per unit, sized by its code. Hover for details, click to find it
 in the table. The filters below apply to the map too.</p>
@@ -107,7 +107,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
 
   function pct(a, b) { return b ? 100 * a / b : null; }
   function txt(p) { return p === null ? "-" : p.toFixed(2) + "%"; }
-  function hex(n) { return "0x" + n.toString(16).toUpperCase(); }
+  function num(n) { return n.toLocaleString("en-US"); }
   function cell(tag, cls, text) {
     var td = document.createElement(tag);
     if (cls) td.className = cls;
@@ -138,7 +138,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
     u.functions.forEach(function (f) {
       var r = document.createElement("tr");
       r.appendChild(cell("td", "mono", f.name));
-      r.appendChild(cell("td", "n", hex(f.size)));
+      r.appendChild(cell("td", "n", num(f.size)));
       r.appendChild(cell("td", "n", f.fuzzy.toFixed(2) + "%"));
       t.appendChild(r);
     });
@@ -182,7 +182,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
       }
       tr.appendChild(name);
       tr.appendChild(cell("td", "", u.category));
-      tr.appendChild(cell("td", "n", u.code_total ? hex(u.code_total) : "-"));
+      tr.appendChild(cell("td", "n", u.code_total ? num(u.code_total) : "-"));
       tr.appendChild(cell("td", "n", txt(u.cp)));
       tr.appendChild(cell("td", "n", u.functions_total ?
         u.functions_matched + " / " + u.functions_total : "-"));
@@ -295,7 +295,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
     tip.textContent = "";
     tip.appendChild(cell("b", "", u.name));
     tip.appendChild(document.createTextNode(
-      hex(u.code_total) + " bytes of code, " +
+      num(u.code_total) + " bytes of code, " +
       (u.functions_total ? u.functions_matched + "/" + u.functions_total + " functions, " : "") +
       u.fuzzy.toFixed(2) + "% fuzzy"));
     tip.hidden = false;

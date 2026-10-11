@@ -3,8 +3,8 @@
 
     tools/progress.py [report.json] [--write] [--html PATH]
 
-Prints the overall totals and one row per category: matched code (bytes,
-hex), functions, data and complete units. Percentages come from the byte and
+Prints the overall totals and one row per category: matched code bytes,
+functions, data and complete units. Percentages come from the byte and
 function counts.
 
 --write refreshes docs/progress/, which is committed: summary.json (no
@@ -39,8 +39,8 @@ def pct(part, whole) -> float:
     return 100.0 * part / whole if whole else 0.0
 
 
-def hexn(n) -> str:
-    return f"0x{n:X}"
+def num(n) -> str:
+    return f"{n:,}"
 
 
 def code_pct(m: dict) -> float:
@@ -96,7 +96,7 @@ def terminal(data) -> str:
         mf, tf = x.get("matched_functions", 0), x.get("total_functions", 0)
         dp = pct(x.get("matched_data", 0), x.get("total_data", 0))
         cu, tu = x.get("complete_units", 0), x.get("total_units", 0)
-        out.append(f"{label:8} {code_pct(x):6.2f}%  {hexn(mc) + ' / ' + hexn(tc):>23}  "
+        out.append(f"{label:8} {code_pct(x):6.2f}%  {num(mc) + ' / ' + num(tc):>23}  "
                    f"{f'{mf}/{tf}':>11}  {dp:6.2f}%  {f'{cu}/{tu}':>9}")
     return "\n".join(out)
 
@@ -136,9 +136,9 @@ def cards_and_bars(data) -> tuple:
     md, td = m.get("matched_data", 0), m.get("total_data", 0)
     cu, tu = m.get("complete_units", 0), m.get("total_units", 0)
     cards = [
-        ("Code matched", f"{code_pct(m):.2f}%", f"{hexn(mc)} of {hexn(tc)} bytes"),
+        ("Code matched", f"{code_pct(m):.2f}%", f"{num(mc)} of {num(tc)} bytes"),
         ("Functions matched", f"{pct(mf, tf):.2f}%", f"{mf} of {tf}"),
-        ("Data matched", f"{pct(md, td):.2f}%", f"{hexn(md)} of {hexn(td)} bytes"),
+        ("Data matched", f"{pct(md, td):.2f}%", f"{num(md)} of {num(td)} bytes"),
         ("Units complete", f"{cu} of {tu}", f"{pct(cu, tu):.2f}% of units"),
     ]
     html_cards = "".join(
@@ -156,8 +156,8 @@ def cards_and_bars(data) -> tuple:
             f'<span class="muted">({escape(c["id"])})</span></h2>'
             f'<div class="bar" role="img" aria-label="{p:.2f} percent of code matched">'
             f'<i style="width:{min(max(p, 0.0), 100.0):.2f}%"></i></div>'
-            f'<p class="muted">code {p:.2f}% ({hexn(x.get("matched_code", 0))} of '
-            f'{hexn(x.get("total_code", 0))} bytes), functions {mf}/{tf}, data {dp:.2f}%, '
+            f'<p class="muted">code {p:.2f}% ({num(x.get("matched_code", 0))} of '
+            f'{num(x.get("total_code", 0))} bytes), functions {mf}/{tf}, data {dp:.2f}%, '
             f'units {cu}/{tu} complete</p></section>')
     return html_cards, "".join(bars)
 
@@ -271,7 +271,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
 
   function pct(a, b) { return b ? 100 * a / b : null; }
   function txt(p) { return p === null ? "-" : p.toFixed(2) + "%"; }
-  function hex(n) { return "0x" + n.toString(16).toUpperCase(); }
+  function num(n) { return n.toLocaleString("en-US"); }
   function cell(tag, cls, text) {
     var td = document.createElement(tag);
     if (cls) td.className = cls;
@@ -302,7 +302,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
     u.functions.forEach(function (f) {
       var r = document.createElement("tr");
       r.appendChild(cell("td", "mono", f.name));
-      r.appendChild(cell("td", "n", hex(f.size)));
+      r.appendChild(cell("td", "n", num(f.size)));
       r.appendChild(cell("td", "n", f.fuzzy.toFixed(2) + "%"));
       t.appendChild(r);
     });
@@ -346,7 +346,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
       }
       tr.appendChild(name);
       tr.appendChild(cell("td", "", u.category));
-      tr.appendChild(cell("td", "n", u.code_total ? hex(u.code_total) : "-"));
+      tr.appendChild(cell("td", "n", u.code_total ? num(u.code_total) : "-"));
       tr.appendChild(cell("td", "n", txt(u.cp)));
       tr.appendChild(cell("td", "n", u.functions_total ?
         u.functions_matched + " / " + u.functions_total : "-"));
@@ -459,7 +459,7 @@ bytes. Click a column header to sort. Units are in link order by default.</foote
     tip.textContent = "";
     tip.appendChild(cell("b", "", u.name));
     tip.appendChild(document.createTextNode(
-      hex(u.code_total) + " bytes of code, " +
+      num(u.code_total) + " bytes of code, " +
       (u.functions_total ? u.functions_matched + "/" + u.functions_total + " functions, " : "") +
       u.fuzzy.toFixed(2) + "% fuzzy"));
     tip.hidden = false;
