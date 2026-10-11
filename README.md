@@ -123,6 +123,9 @@ share a unit (see [`docs/ROADMAP.md`](docs/ROADMAP.md), step 3).
 
 ## Credits and licence
 
+This repository is MIT-licensed ([`LICENSE`](LICENSE)). It holds no game
+data; the game itself belongs to its rights holders.
+
 The binutils patches, the obstack shim (`tools/period_obstack.c`) and the
 toolchain recipe come from the ico decompilation (MIT, © the ico
 decompilation contributors; notice in [`tools/LICENSE.ico`](tools/LICENSE.ico)). This project has no affiliation with
