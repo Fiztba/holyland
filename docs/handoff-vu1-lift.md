@@ -45,7 +45,7 @@ readable, not as generated soup.
 
 ## Progress (2026-10-12)
 
-XGKICK stalls are lifted, and so is every segment of the image (0x0000,
+XGKICK stalls are lifted, and so is every entry the census found (0x0000,
 0x08f8, 0x1400, 0x2550, 0x3800, 0x2d00, 0x13b0). Verified with 0
 mismatches over 3.72M runs. The 3D area runs x2.25 faster with
 `PS2X_VU1_LIFT=1` on the Vulkan GS. See `docs/NOTES.md`, "Performance",
