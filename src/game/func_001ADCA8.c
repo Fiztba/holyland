@@ -1,13 +1,11 @@
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
 void func_001C1430(float, void *, void *);
 void func_00216778(void *, void *);
 float func_001B0178(void *, void *);
 
 /* Drops the effect's model by a probe vector and picks the landing frame from the fall distance. */
-void func_001ADCA8(EffectActor *actor, int frame) {
+void func_001ADCA8(EffectActor *actor, EffectSlot *spawn_slot) {
     Vector4 probe;
     LandingFrameMotion *motion;
     f32 distance;
@@ -15,8 +13,8 @@ void func_001ADCA8(EffectActor *actor, int frame) {
     f32 fallen;
     int i;
 
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
+    func_001AF928(actor, spawn_slot);
+    func_001AF640(actor, spawn_slot);
     motion = (LandingFrameMotion *)&actor->motion;
     probe.x = 0.0f;
     probe.y = 3000.0f;
@@ -29,7 +27,7 @@ void func_001ADCA8(EffectActor *actor, int frame) {
         distance = func_001B0178(&actor->motion, &actor->model->position);
         velocity = 0.0f;
         fallen = 0.0f;
-        for (i = 0; i < actor->def->restart_frame; i++) {
+        for (i = 0; i < actor->def->keyframe_end; i++) {
             velocity += actor->def->gravity;
             fallen += velocity;
             if (distance < fallen) {

@@ -1,13 +1,12 @@
+#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
+/* Starts an effect that waits for its state flag to be set. */
+void func_001ACF70(EffectActor *effect, EffectSlot *spawn_slot) {
+    StateFlagMotion *motion;
 
-void func_001ACF70(EffectActor *actor, int frame) {
-    SnappedMotion *motion;
-
-    motion = (SnappedMotion *)&actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    motion->unk04 = 0;
+    func_001AF928(effect, spawn_slot);
+    motion = (StateFlagMotion *)&effect->motion;
+    func_001AF640(effect, spawn_slot);
+    motion->state = 0;
 }

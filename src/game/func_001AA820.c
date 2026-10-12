@@ -1,11 +1,12 @@
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
 void func_00216778(void *, void *);
 
-void func_001AA820(EffectActor *actor, int frame) {
-    EffectMotion *motion = &actor->motion;
+/* Follower effect that copies its target's position into its own motion. */
+void func_001AA820(EffectActor *effect, EffectSlot *spawn_slot) {
+    EffectMotion *motion;
 
-    func_001AF928(actor, frame);
-    func_00216778(motion, &actor->target->model->position);
+    motion = &effect->motion;
+    func_001AF928(effect, spawn_slot);
+    func_00216778(motion, &effect->target->model->position);
 }

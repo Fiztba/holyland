@@ -1,15 +1,13 @@
+#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
+/* Per-frame update: clears the motion's 0x24 flag and sets pool flag bit 43. */
+void func_001A8408(EffectActor *effect, EffectSlot *spawn_slot) {
+    TurningMotion *motion;
 
-/* Re-seeds the motion from the model and definition, then clears the byte at 0x24. */
-void func_001A8408(EffectActor *actor, int frame) {
-    EffectMotion *motion;
-
-    motion = &actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    ((TurningMotion *)motion)->unk24 = 0;
-    actor->flags |= (s64)0x8000 << 0x2B;
+    motion = (TurningMotion *)&effect->motion;
+    func_001AF928(effect, spawn_slot);
+    func_001AF640(effect, spawn_slot);
+    motion->unk24 = 0;
+    effect->flags |= EFFECT_FLAG_HAS_TARGETERS;
 }

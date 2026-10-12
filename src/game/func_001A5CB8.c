@@ -1,7 +1,6 @@
 #include "kf_effect.h"
 
 extern EffectActor D_003F3550[];
-void func_001A2A18(EffectActor *actor);
 
 /* Holds the effect for 6 frames and while any active slot has a type-0xE owner, then ends it. */
 void func_001A5CB8(EffectActor *actor) {

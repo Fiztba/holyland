@@ -1,40 +1,40 @@
-#include "common.h"
 #include "kf_effect.h"
 
 extern int D_004468E0;
-extern f32 D_004460D0;
-extern f32 D_004460D4[2];
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
-void func_001AF538(float *, float *, float);
 void func_001AF5B0(void *, void *);
 void func_00216778(void *, void *);
 
-/* Turns the model's heading by a step per spawn, then records the spawn index and phase. */
-void func_001A9790(EffectActor *actor, int frame) {
-    Vector4 rotation;
-    RippleMotion *motion;
-    f32 heading;
+/* Per-frame update: turns the model's heading by the global counter and wraps it into (-pi, pi]. */
+void func_001A9790(EffectActor *effect, EffectSlot *spawn_slot) {
+    PhaseMotion *motion;
+    Vector4 heading;
+    EffectDef *def;
+    f32 angle;
+    f32 new_y;
+    int quotient;
 
-    motion = (RippleMotion *)&actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    func_00216778(&rotation, &actor->model->rotation);
-    rotation.y += D_004468E0 * actor->def->unkDC;
-    heading = rotation.y;
-    heading -= (int)(heading / D_004460D0) * D_004460D0;
-    if (D_004460D4[0] < heading) {
-        heading -= D_004460D0;
-    } else if (heading < D_004460D4[1]) {
-        heading += D_004460D0;
+    func_001AF928(effect, spawn_slot);
+    func_001AF640(effect, spawn_slot);
+    motion = (PhaseMotion *)&effect->motion;
+    func_00216778(&heading, &effect->model->rotation);
+    def = effect->def;
+    heading.y = heading.y + (float)D_004468E0 * def->unkDC;
+    angle = heading.y;
+    quotient = (int)(angle / 6.28318548f);
+    angle = angle - (float)quotient * 6.28318548f;
+    if (3.14159274f < angle) {
+        angle -= 6.28318548f;
+    } else if (angle < -3.14159274f) {
+        angle += 6.28318548f;
     }
-    rotation.y = heading;
-    func_001AF538(&motion->velocity.x, &rotation.x, actor->def->speed);
-    func_001AF5B0(&actor->model->rotation, motion);
-    motion->velocity.y -= actor->def->radius_half;
-    motion->flag = 0;
-    motion->spawn_index = D_004468E0;
-    motion->phase = D_004468E0 % actor->def->interval;
-    D_004468E0++;
+    heading.y = angle;
+    func_001AF538(def->speed, &motion->velocity, &heading);
+    func_001AF5B0(&effect->model->rotation, motion);
+    new_y = motion->velocity.y - (float)effect->def->radius_half;
+    motion->unk18 = 0;
+    motion->frame_stamp = D_004468E0;
+    motion->velocity.y = new_y;
+    motion->phase = D_004468E0 % effect->def->interval;
+    D_004468E0 += 1;
 }

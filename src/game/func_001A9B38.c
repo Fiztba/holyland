@@ -1,33 +1,35 @@
-#include "common.h"
 #include "kf_effect.h"
 
-extern f32 D_00431AF0[16];
-int rand(void);
-void func_001AF640(void *, int);
+typedef float Mat[4][4] __attribute__((aligned(16)));
+
+extern Mat D_00431AF0;
+extern int rand(void);
+void sceVu0RotMatrixX(Mat, Mat, float);
+void sceVu0RotMatrixY(Mat, Mat, float);
+void sceVu0ApplyMatrix(void *, Mat, void *);
 void func_00216C48(void *, void *, void *);
 void func_00216D20(void *, void *);
-void KF_Vector_Scale(float *, float *, float);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, float *, float *);
+void KF_Vector_Scale(void *, void *, float);
 
-/* Points the model in a random direction, steps it out by the radius and sets the motion back along it. */
-void func_001A9B38(EffectActor *actor, int frame) {
-    f32 matrix[16];
-    Vector4 direction;
+/* Spawns an effect: a random rotation of the model, then a velocity along the rotated radius. */
+void func_001A9B38(EffectActor *effect, EffectSlot *spawn_slot) {
+    Mat rotation_matrix;
+    Vector4 offset;
     EffectMotion *motion;
+    f32 random_angle_y;
 
-    motion = &actor->motion;
-    func_001AF640(actor, frame);
-    direction.x = direction.y = direction.w = 0.0f;
-    direction.z = actor->def->radius_half;
-    actor->model->rotation.x = ((rand() & 0xFFFF) * 0.000030517578f - 1.0f) * 3.1415f;
-    actor->model->rotation.y = ((rand() & 0xFFFF) * 0.000030517578f - 1.0f) * 3.1415f;
-    actor->model->rotation.w = actor->model->rotation.z = 0.0f;
-    sceVu0RotMatrixX(matrix, D_00431AF0, actor->model->rotation.x);
-    sceVu0RotMatrixY(matrix, matrix, actor->model->rotation.y);
-    sceVu0ApplyMatrix(&direction.x, matrix, &direction.x);
-    func_00216C48(&actor->model->position, &actor->model->position, &direction);
-    func_00216D20(&direction, &direction);
-    KF_Vector_Scale(&motion->velocity.x, &direction.x, -actor->def->speed);
+    func_001AF640(effect, spawn_slot);
+    motion = &effect->motion;
+    offset.x = offset.y = offset.w = 0.0f;
+    offset.z = (float)effect->def->radius_half;
+    effect->model->rotation.x = ((float)(rand() & 0xFFFF) * 3.0517578125e-05f - 1.0f) * 3.1415f;
+    random_angle_y = ((float)(rand() & 0xFFFF) * 3.0517578125e-05f - 1.0f) * 3.1415f;
+    effect->model->rotation.w = effect->model->rotation.z = 0.0f;
+    effect->model->rotation.y = random_angle_y;
+    sceVu0RotMatrixX(rotation_matrix, D_00431AF0, effect->model->rotation.x);
+    sceVu0RotMatrixY(rotation_matrix, rotation_matrix, effect->model->rotation.y);
+    sceVu0ApplyMatrix(&offset, rotation_matrix, &offset);
+    func_00216C48(&effect->model->position, &effect->model->position, &offset);
+    func_00216D20(&offset, &offset);
+    KF_Vector_Scale(motion, &offset, -effect->def->speed);
 }

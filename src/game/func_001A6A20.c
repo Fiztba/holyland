@@ -1,18 +1,14 @@
 #include "common.h"
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
-void func_001AF538(float *, float *, float);
+/* Starts an effect that turns at the speed in its definition and clears its flag. */
+void func_001A6A20(EffectActor *effect, EffectSlot *spawn_slot) {
+    SpeedFlagMotion *motion;
 
-/* Re-seeds the motion from the model and definition, then sets the float at 0x10 from the definition. */
-void func_001A6A20(EffectActor *actor, int frame) {
-    ReseedMotion *motion;
-
-    motion = (ReseedMotion *)&actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    func_001AF538(&motion->velocity.x, &actor->model->rotation.x, actor->def->speed);
-    motion->unk10 = actor->def->unkDC;
-    motion->unk14 = 0;
+    motion = (SpeedFlagMotion *)&effect->motion;
+    func_001AF928(effect, spawn_slot);
+    func_001AF640(effect, spawn_slot);
+    func_001AF538(effect->def->speed, &motion->velocity, &effect->model->rotation);
+    motion->speed = effect->def->unkDC;
+    motion->flag14 = 0;
 }

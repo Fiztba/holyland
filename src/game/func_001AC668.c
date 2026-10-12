@@ -1,22 +1,20 @@
 #include "kf_effect.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 void func_001AF298(void *, void *);
 void sceVu0AddVector(void *, void *, void *);
 
-/* Steps a falling effect: gravity into its velocity, the model moved by the velocity, then the frame counter. */
-void func_001AC668(EffectActor *actor) {
+/* Falls under the definition's gravity, moving the model along the velocity. */
+void func_001AC668(EffectActor *effect) {
     EffectMotion *motion;
-    u8 flag = FALSE;
+    u8 hit_flag;
 
-    motion = &actor->motion;
-    func_001AEC48(actor);
-    func_001AED58(actor);
-    func_001AF0B0(actor);
-    motion->velocity.y += actor->def->gravity;
-    sceVu0AddVector(&actor->model->position, &actor->model->position, motion);
-    func_001AF298(actor, &flag);
-    actor->frame++;
+    hit_flag = 0;
+    func_001AEC48(effect);
+    motion = &effect->motion;
+    func_001AED58(effect);
+    func_001AF0B0(effect);
+    motion->velocity.y += effect->def->gravity;
+    sceVu0AddVector(&effect->model->position, &effect->model->position, motion);
+    func_001AF298(effect, &hit_flag);
+    effect->frame += 1;
 }

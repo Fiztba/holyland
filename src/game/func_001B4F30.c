@@ -3,8 +3,6 @@
 
 extern FxTableEntry D_00402DA8[];
 
-int func_001A1E28(int, int, int, int, u16, int);
-
 int func_001B4F30(u16 effect_id, void *shot, void *from, void *angles, void *entity) {
     FxTableEntry *entry;
 
@@ -15,5 +13,5 @@ int func_001B4F30(u16 effect_id, void *shot, void *from, void *angles, void *ent
     if (entry->unk102 != 0) {
         return 0;
     }
-    return func_001A1E28(entry->unk100, (int)from, (int)angles, (int)entity, effect_id, (int)shot);
+    return func_001A1E28(entry->unk100, from, angles, entity, effect_id, shot);
 }

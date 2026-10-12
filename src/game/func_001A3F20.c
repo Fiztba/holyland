@@ -1,42 +1,40 @@
+#include "common.h"
 #include "kf_effect.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 void func_001AF298(void *, void *);
-void func_001AF538(float *, float *, float);
 void func_00216778(void *, void *);
-void KF_Vector_Scale(float *, float *, float);
 void sceVu0AddVector(void *, void *, void *);
+void KF_Vector_Scale(void *, void *, float);
 
-/* Moves the effect along a velocity made from its model's heading, optionally accelerating and scaling it. */
-void func_001A3F20(EffectActor *actor) {
-    ScaledMotion *motion;
+void func_001A3F20(EffectActor *effect) {
+    ScaledFallMotion *motion;
+    ModelInstance *model;
     Vector4 step;
 
-    motion = (ScaledMotion *)&actor->motion;
-    func_001AEC48(actor);
-    func_001AED58(actor);
-    func_001AF0B0(actor);
-    if (actor->frame < actor->def->max_frames || actor->def->max_frames == 0) {
-        if (EFFECT_DEF_FLAGS(actor->def)->flags & EFFECT_DEF_FOLLOWS_HEADING) {
-            func_001AF538(&step.x, &actor->model->rotation.x, actor->def->speed);
-            motion->scale += actor->def->unk11C;
-            KF_Vector_Scale(&step.x, &step.x, motion->scale);
+    func_001AEC48(effect);
+    func_001AED58(effect);
+    func_001AF0B0(effect);
+    motion = (ScaledFallMotion *)&effect->motion;
+    if (effect->frame < effect->def->max_frames || effect->def->max_frames == 0) {
+        if (EFFECT_DEF_FLAGS(effect->def) & 0x80000) {
+            func_001AF538(effect->def->speed, &step, &effect->model->rotation);
+            motion->scale += effect->def->scale_per_frame;
+            KF_Vector_Scale(&step, &step, motion->scale);
         } else {
-            if (actor->def->gravity != 0.0f) {
-                motion->fall_speed += actor->def->gravity;
+            if (effect->def->gravity != 0.0f) {
+                motion->fall_speed += effect->def->gravity;
                 motion->velocity.y += motion->fall_speed;
             }
             func_00216778(&step, motion);
-            if (actor->def->unk11C != 0.0f) {
-                motion->scale += actor->def->unk11C;
+            if (effect->def->scale_per_frame != 0.0f) {
+                motion->scale += effect->def->scale_per_frame;
                 step.x *= motion->scale;
                 step.z *= motion->scale;
             }
         }
-        sceVu0AddVector(&actor->model->position, &actor->model->position, &step);
+        model = effect->model;
+        sceVu0AddVector(&model->position, &model->position, &step);
     }
-    func_001AF298(actor, motion->unk1C);
-    actor->frame++;
+    func_001AF298(effect, motion->unk1C);
+    effect->frame += 1;
 }

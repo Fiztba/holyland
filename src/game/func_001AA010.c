@@ -1,11 +1,9 @@
-#include "common.h"
+#include "kf_effect.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 
-void func_001AA010(void *actor) {
-    func_001AEC48(actor);
-    func_001AED58(actor);
-    func_001AF0B0(actor);
+/* Per-frame update for an effect that only runs the common helpers. */
+void func_001AA010(EffectActor *effect) {
+    func_001AEC48(effect);
+    func_001AED58(effect);
+    func_001AF0B0(effect);
 }

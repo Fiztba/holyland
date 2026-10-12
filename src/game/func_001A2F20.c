@@ -17,7 +17,7 @@ void func_001A2F20(void *offset) {
     if (D_004468CC > 0) {
         for (i = 0; i < 0x60; i++, slot++) {
             if (slot->flags & (0x8000L << 17)) {
-                if (!(OBJECT_SLOT_DEF(slot)->flags & 0x600000)) {
+                if (!(EFFECT_DEF_FLAGS(OBJECT_SLOT_DEF(slot)) & 0x600000)) {
                     func_00216C48(slot, slot, offset);
                 }
             }
@@ -26,9 +26,9 @@ void func_001A2F20(void *offset) {
     if (D_004468D0 > 0) {
         for (i = 0; i < 0x180; i++, effect++) {
             if (effect->flags & (0x8000L << 41)) {
-                if (!(EFFECT_DEF_FLAGS(effect->def)->flags & 0x600000)) {
+                if (!(EFFECT_DEF_FLAGS(effect->def) & 0x600000)) {
                     func_00216C48(&effect->model->position, &effect->model->position, offset);
-                    func_00216C48(&effect->vector, &effect->vector, offset);
+                    func_00216C48(&effect->unk70, &effect->unk70, offset);
                 }
             }
         }

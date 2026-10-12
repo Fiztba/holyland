@@ -1,24 +1,22 @@
-#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF640(void *, int);
 void func_00216778(void *, void *);
-void func_001AF538(float *, float *, float);
 int rand(void);
 
-/* Picks a random start point and aim point inside the definition's two boxes and sets its velocity. */
-void func_001AABA0(EffectActor *actor, int frame) {
-    ScatterMotion *motion = (ScatterMotion *)&actor->motion;
+/* Starts a spray effect with random velocity and spin around the definition's ranges. */
+void func_001AABA0(EffectActor *effect, EffectSlot *spawn_slot) {
+    SprayMotion *motion;
 
-    func_001AF640(actor, frame);
-    func_00216778(&actor->model->rotation, actor->start_rotation);
-    motion->start.x = actor->def->origin_x + ((rand() & 0xFFFF) * (1.0f / 32768) - 1.0f) * actor->def->spread_x;
-    motion->start.y = actor->def->origin_y + ((rand() & 0xFFFF) * (1.0f / 32768) - 1.0f) * actor->def->spread_y;
-    motion->start.z = actor->def->origin_z + ((rand() & 0xFFFF) * (1.0f / 32768) - 1.0f) * actor->def->spread_z;
-    motion->start.w = 0;
-    motion->aim.x = actor->def->start_x + ((rand() & 0xFFFF) * (1.0f / 32768) - 1.0f) * actor->def->start_spread_x;
-    motion->aim.y = actor->def->start_y + ((rand() & 0xFFFF) * (1.0f / 32768) - 1.0f) * actor->def->start_spread_y;
-    motion->aim.z = actor->def->start_z + ((rand() & 0xFFFF) * (1.0f / 32768) - 1.0f) * actor->def->start_spread_z;
-    motion->aim.w = 0;
-    func_001AF538(&motion->velocity.x, &actor->model->rotation.x, actor->def->speed);
+    motion = (SprayMotion *)&effect->motion;
+    func_001AF640(effect, spawn_slot);
+    func_00216778(&effect->model->rotation, effect->start_rotation);
+    motion->velocity.x = effect->def->offset_base[0] + ((rand() & 0xFFFF) / 32768.0f - 1.0f) * effect->def->offset_spread[0];
+    motion->velocity.y = effect->def->offset_base[1] + ((rand() & 0xFFFF) / 32768.0f - 1.0f) * effect->def->offset_spread[1];
+    motion->velocity.z = effect->def->offset_base[2] + ((rand() & 0xFFFF) / 32768.0f - 1.0f) * effect->def->offset_spread[2];
+    motion->velocity.w = 0.0f;
+    motion->spin.x = effect->def->rotation_base[0] + ((rand() & 0xFFFF) / 32768.0f - 1.0f) * effect->def->rotation_spread[0];
+    motion->spin.y = effect->def->rotation_base[1] + ((rand() & 0xFFFF) / 32768.0f - 1.0f) * effect->def->rotation_spread[1];
+    motion->spin.z = effect->def->rotation_base[2] + ((rand() & 0xFFFF) / 32768.0f - 1.0f) * effect->def->rotation_spread[2];
+    motion->spin.w = 0.0f;
+    func_001AF538(effect->def->speed, &motion->accel, &effect->model->rotation);
 }

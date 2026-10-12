@@ -1,11 +1,13 @@
-#include "kf_load.h"
+#include "common.h"
+#include "kf_menu.h"
 
-extern ChunkPoolNode *D_004472B0;
+extern MenuFreeNode *D_004472B0;
 
-/* Gives the upload's pool node back to the free list. */
-void func_001D45B8(ChunkUpload *upload) {
-    ChunkPoolNode *pool_node = upload->pool_node;
+/* Pushes the request's node back onto the menu free list. */
+void func_001D45B8(MenuFreeRequest *request) {
+    MenuFreeNode *node = request->node;
+    MenuFreeNode *old_head = D_004472B0;
 
-    pool_node->next = D_004472B0;
-    D_004472B0 = pool_node;
+    D_004472B0 = node;
+    node->next = old_head;
 }

@@ -1,28 +1,26 @@
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
 void sceVu0RotMatrixY(void *, void *, float);
 void sceVu0ApplyMatrix(void *, void *, void *);
 int rand(void);
 extern f32 D_00431AF0[];
 
 /* Launches the effect along its model's heading turned by the caller's step count, with random offsets. */
-void func_001A7880(EffectActor *actor, TurningMotion *caller) {
-    SprayMotion *motion;
+void func_001A7880(EffectActor *actor, EffectSlot *spawn_slot) {
+    OffsetSprayMotion *motion;
     f32 rotation[4][4];
     f32 angle;
     f32 *identity;
     EffectDef *def;
 
-    func_001AF928(actor, (int)caller);
-    motion = (SprayMotion *)&actor->motion;
-    func_001AF640(actor, (int)caller);
+    func_001AF928(actor, spawn_slot);
+    motion = (OffsetSprayMotion *)&actor->motion;
+    func_001AF640(actor, spawn_slot);
     def = actor->def;
     identity = D_00431AF0;
     actor->motion.velocity.x = motion->velocity.y = motion->velocity.w = 0.0f;
     motion->velocity.z = def->speed;
-    angle = actor->model->rotation.y + (def->unkA6 - caller->unk25) * def->unkDC;
+    angle = actor->model->rotation.y + (def->max_level - EFFECT_SLOT_FLAG_PARTS(spawn_slot)->level) * def->unkDC;
     angle -= (int)(angle / 6.2831855f) * 6.2831855f;
     if (angle > 3.1415927f) {
         angle -= 6.2831855f;

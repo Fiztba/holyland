@@ -1,31 +1,30 @@
-#include "kf_entity.h"
+#include "common.h"
 #include "kf_effect.h"
+#include "kf_entity.h"
 
-extern Entity *D_004467E0;
-
-int func_001B0040(Entity *);
+int func_001B0040(void *);
 float func_001B0178(void *, void *);
 
-/* Finds the entity nearest to the effect's target position that is within the effect's check range. */
-Entity *func_001AFF78(EffectActor *effect, void *position) {
-    float reserved[8] __attribute__((aligned(16))); /* unused, but retail reserves the 0x20 bytes */
-    Entity *nearest;
+/* The nearest entity within the effect's range of position, or NULL. */
+Entity *func_001AFF78(EffectActor *effect, Vector4 *position) {
     Entity *entity;
-    float distance;
-    float best_distance;
+    Entity *nearest = NULL;
+    f32 nearest_distance = 65535.0f;
+    f32 distance;
+    f32 stack_reserve[8]; // match: unused, keeps the retail stack frame size
 
-    nearest = NULL;
-    entity = D_004467E0;
-    best_distance = 65535.0f;
-    while (entity != NULL) {
-        if (func_001B0040(entity) == 0) {
-            distance = func_001B0178(&ENTITY_MODEL(entity)->position, position);
-            if (!((float)effect->def->interval < distance) && distance < best_distance) {
-                best_distance = distance;
-                nearest = entity;
-            }
+    for (entity = D_004467E0; entity != NULL; entity = entity->next) {
+        if (func_001B0040(entity) != 0) {
+            continue;
         }
-        entity = entity->next;
+        distance = func_001B0178(&ENTITY_MODEL(entity)->position, position);
+        if ((f32)effect->def->interval < distance) {
+            continue;
+        }
+        if (distance < nearest_distance) {
+            nearest_distance = distance;
+            nearest = entity;
+        }
     }
     return nearest;
 }

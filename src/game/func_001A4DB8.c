@@ -1,18 +1,16 @@
+#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
-void func_001AF538(float *, float *, float);
+// Lowers the model by 220 units and clears the motion's state.
+void func_001A4DB8(EffectActor *effect, EffectSlot *spawn_slot) {
+    DropMotion *motion = (DropMotion *)&effect->motion;
+    ModelInstance *model;
 
-/* Re-seeds the motion from the model and definition, lowers the model by 220 and clears the motion's state. */
-void func_001A4DB8(EffectActor *actor, int frame) {
-    ReseedMotion *motion;
-
-    motion = (ReseedMotion *)&actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    actor->model->position.y -= 220.0f;
-    func_001AF538(&motion->velocity.x, &actor->model->rotation.x, actor->def->speed);
+    func_001AF928(effect, spawn_slot);
+    func_001AF640(effect, spawn_slot);
+    model = effect->model;
+    model->position.y -= 220.0f;
+    func_001AF538(effect->def->speed, &motion->velocity, &model->rotation);
     motion->unk14 = 0;
-    motion->unk10 = 0.0f;
+    motion->unk10 = 0;
 }

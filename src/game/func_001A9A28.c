@@ -1,23 +1,18 @@
 #include "common.h"
 #include "kf_effect.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
-
-void func_001A9A28(EffectActor *actor) {
-    SnappedMotion *motion;
+/* Per-frame update: moves the model's E4 value toward the definition's DC value by the step count. */
+void func_001A9A28(EffectActor *effect) {
+    ProgressMotion *motion;
     EffectDef *def;
     ModelInstance *model;
-    f32 ratio;
 
-    func_001AEC48(actor);
-    func_001AED58(actor);
-    func_001AF0B0(actor);
-    motion = (SnappedMotion *) &actor->motion;
-    def = actor->def;
-    model = actor->model;
-    ratio = (f32) motion->radius_half / (f32) def->unkA6;
-    actor->frame += 1;
-    model->unkE4 = def->unkDC + model->unkE4 * ratio;
+    motion = (ProgressMotion *)&effect->motion;
+    func_001AEC48(effect);
+    func_001AED58(effect);
+    func_001AF0B0(effect);
+    def = effect->def;
+    model = effect->model;
+    model->unkE4 = def->unkDC + model->unkE4 * ((float)motion->progress / (float)def->max_level);
+    effect->frame += 1;
 }

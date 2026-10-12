@@ -1,14 +1,15 @@
 #include "common.h"
-#include "kf_load.h"
+#include "kf_sound.h"
+
+extern int D_00446864;
 
 int func_001CBD20(void);
 int func_001CD6B8(int);
 int func_001CD7E0(int);
 int FlushCache(int);
-extern int D_00446864;
 
-/* Finish an IOP load job once its result is in: flush the cache and count the step; -1 if not ready. */
-int func_001A0B70(IopLoadJob *job) {
+/* Stops the voice of a job and counts the stop; -1 if the hardware is not ready. */
+int func_001A0B70(SoundJob *job) {
     if (func_001CBD20() == 0) {
         return -1;
     }

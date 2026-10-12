@@ -1,18 +1,16 @@
-#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF298(void *, void *);
+void func_001AF298(char *, char *);
 
-/* Runs func_001AF298 while the effect's frame is inside the window its motion
-   block starts with: [start_frame, end_frame) as two u16s. */
-void func_001AA2D0(EffectActor *actor) {
-    u8 state;
-    FrameWindowMotion *window;
+/* Pulse effect step: while the frame is in [radius_half, interval) it runs func_001AF298 on the actor. */
+void func_001AA2D0(EffectActor *effect) {
+    PulseMotion *motion;
+    u8 hit;
 
-    state = 0;
-    window = (FrameWindowMotion *)&actor->motion;
-    if (actor->frame >= window->start_frame && actor->frame < window->end_frame) {
-        func_001AF298(actor, &state);
+    hit = 0;
+    motion = (PulseMotion *)&effect->motion;
+    if (effect->frame >= motion->radius_half && effect->frame < motion->interval) {
+        func_001AF298((char *)effect, (char *)&hit);
     }
-    actor->frame += 1;
+    effect->frame += 1;
 }

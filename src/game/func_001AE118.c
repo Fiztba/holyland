@@ -1,34 +1,32 @@
-#include "common.h"
 #include "kf_effect.h"
 
-extern f32 D_00431AF0[16];
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 void func_00216C48(void *, void *, void *);
+void func_00216778(void *, void *);
 void sceVu0RotMatrixX(float *, float *, float);
 void sceVu0RotMatrixY(float *, float *, float);
 void sceVu0RotMatrixZ(float *, float *, float);
 void sceVu0ApplyMatrix(float *, float *, float *);
+extern float D_00431AF0[16];
 
-/* Advances a tilt and a turn angle, and swings the end position around the model by them. */
-void func_001AE118(EffectActor *actor) {
-    Vector4 offset;
-    f32 matrix[16];
-    DriftMotion *motion;
-    f32 angle;
-
-    motion = (DriftMotion *)&actor->motion;
-    func_001AEC48(actor);
-    func_001AED58(actor);
-    func_001AF0B0(actor);
-    motion->unk24 += actor->def->unkE0;
-    offset.y = 0;
-    offset.z = 0;
-    offset.w = 0;
-    offset.x = motion->unk24;
-    angle = motion->unk20 + actor->def->unkDC;
-    angle = angle - (f32)(s32)(angle / 6.2831855f) * 6.2831855f;
+/* Per-frame update of a spinning effect: turns its model by the spin angle. */
+void func_001AE118(EffectActor *effect) {
+    SpinAngleMotion *motion = (SpinAngleMotion *)&effect->motion;
+    EffectDef *def;
+    float spin_vector[4];
+    float matrix[16];
+    float angle;
+    float spin_speed;
+    func_001AEC48(effect);
+    func_001AED58(effect);
+    func_001AF0B0(effect);
+    def = effect->def;
+    spin_speed = motion->unk24 + def->unkE0;
+    spin_vector[1] = 0.0f;
+    spin_vector[2] = 0.0f;
+    spin_vector[3] = 0.0f;
+    spin_vector[0] = motion->unk24 = spin_speed;
+    angle = motion->unk20 + def->unkDC;
+    angle -= (int)(angle / 6.2831855f) * 6.2831855f;
     if (3.1415927f < angle) {
         angle -= 6.2831855f;
     } else if (angle < -3.1415927f) {
@@ -36,10 +34,10 @@ void func_001AE118(EffectActor *actor) {
     }
     motion->unk20 = angle;
     sceVu0RotMatrixZ(matrix, D_00431AF0, angle);
-    sceVu0RotMatrixX(matrix, matrix, actor->model->rotation.x);
-    sceVu0RotMatrixY(matrix, matrix, actor->model->rotation.y);
-    sceVu0ApplyMatrix(&offset.x, matrix, &offset.x);
-    func_00216C48(&motion->end_position, &motion->end_position, motion);
-    func_00216C48(&actor->model->position, &motion->end_position, &offset);
-    actor->frame += 1;
+    sceVu0RotMatrixX(matrix, matrix, effect->model->rotation.x);
+    sceVu0RotMatrixY(matrix, matrix, effect->model->rotation.y);
+    sceVu0ApplyMatrix(spin_vector, matrix, spin_vector);
+    func_00216C48(&motion->unk10, &motion->unk10, motion);
+    func_00216C48(&effect->model->position, &motion->unk10, spin_vector);
+    effect->frame += 1;
 }

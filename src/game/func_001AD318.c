@@ -3,13 +3,8 @@
 
 #define SCRATCH_FLAG (*(s32 *)0x70000010)
 
-void func_001A2A18(void *);
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 void func_001AF298(void *, void *);
 void func_001AF5B0(void *, void *);
-void func_001AFC88(float, float, void *, void *);
 float func_001B0178(void *, void *);
 void func_001C1430(float, void *, void *);
 void KF_Vector_Subtract(void *, void *, void *);
@@ -36,7 +31,7 @@ void func_001AD318(EffectActor *actor) {
         if (actor->unk6C != 0) {
             KF_Vector_Subtract(&delta, ((Entity *)actor->unk6C)->model->position, &actor->model->position);
             delta.y -= ((Entity *)actor->unk6C)->height * 0.5f;
-            func_001AFC88(motion->speed, actor->def->unkDC, motion, &delta);
+            func_001AFC88(&motion->velocity, &delta, motion->speed, actor->def->unkDC);
         }
         if (actor->def->radius_half < actor->frame) {
             motion->velocity.y += actor->def->gravity;

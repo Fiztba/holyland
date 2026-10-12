@@ -1,23 +1,23 @@
+#include "common.h"
 #include "kf_effect.h"
 
-int func_001A2928(int effect_id, EffectActor *actor, Vector4 *position);
+extern f32 D_00431AF0[16];
+void sceVu0RotMatrixY(float *, float *, float);
+void sceVu0ApplyMatrix(float *, float *, float *);
 void func_00216C48(void *, void *, void *);
-void sceVu0RotMatrixY(void *d, void *s, float a);
-void sceVu0ApplyMatrix(void *dst, void *m, void *v);
-extern f32 D_00431AF0[];
 
-/* Spawns effect_id at the point distance ahead of the actor's model, along its heading. */
-void func_001A6498(EffectActor *actor, int effect_id, f32 distance) {
+/* Spawns an effect at a point offset from the model by the heading rotated by angle. */
+void func_001A6498(EffectActor *effect, int effect_id, float angle) {
     Vector4 offset;
-    Vector4 position;
-    f32 rotation[4][4];
+    Vector4 spawn_position;
+    float rotation_matrix[16];
 
-    offset.x = 0.0f;
-    offset.y = 0.0f;
-    offset.z = distance;
-    offset.w = 0.0f;
-    sceVu0RotMatrixY(rotation, D_00431AF0, actor->model->rotation.y);
-    sceVu0ApplyMatrix(&position, rotation, &offset);
-    func_00216C48(&position, &position, &actor->model->position);
-    func_001A2928(effect_id, actor, &position);
+    offset.z = angle;
+    offset.x = 0;
+    offset.y = 0;
+    offset.w = 0;
+    sceVu0RotMatrixY(rotation_matrix, D_00431AF0, effect->model->rotation.y);
+    sceVu0ApplyMatrix(&spawn_position.x, rotation_matrix, &offset.x);
+    func_00216C48(&spawn_position, &spawn_position, &effect->model->position);
+    func_001A2928(effect_id, effect, &spawn_position);
 }

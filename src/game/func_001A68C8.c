@@ -1,12 +1,7 @@
 #include "kf_effect.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 void func_001AF5B0(void *, void *);
 int func_001B4F90(void *);
-void func_001A2A18(void *);
-int func_001A1E28(int, int, int, int, u16, int);
 void sceVu0AddVector(void *, void *, void *);
 
 /* Falls under gravity while inside max_frames; after frame 20 it ends on a hit, spawning one or two effects. */
@@ -30,11 +25,11 @@ void func_001A68C8(EffectActor *actor) {
         } else if (func_001B4F90(actor) != 0) {
             if (*(int *)0x70000018 == 3 || *(int *)0x70000018 == 5) {
                 end_effect = actor->def->unkF0;
-                func_001A1E28(0x122, (int)&actor->model->position, (int)&actor->model->rotation, actor->effect_arg, actor->effect_param, (int)actor->owner);
+                func_001A1E28(0x122, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
             } else {
                 end_effect = actor->def->end_effect;
             }
-            func_001A1E28(end_effect, (int)&actor->model->position, (int)&actor->model->rotation, actor->effect_arg, actor->effect_param, (int)actor->owner);
+            func_001A1E28(end_effect, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
             motion->unk10 = 1;
         }
     }

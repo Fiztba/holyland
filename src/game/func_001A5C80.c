@@ -1,10 +1,8 @@
+#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF640(void *, int);
-void func_001AF928(void *, int);
-
-/* Runs the effect's frame update for one frame, then re-seeds its motion. */
-void func_001A5C80(EffectActor *actor, int frame) {
-    func_001AF640(actor, frame);
-    func_001AF928(actor, frame);
+/* Starts an effect of this kind: the shared setup, then the second setup step. */
+void func_001A5C80(EffectActor *effect, EffectSlot *spawn_slot) {
+    func_001AF640(effect, spawn_slot);
+    func_001AF928(effect, spawn_slot);
 }

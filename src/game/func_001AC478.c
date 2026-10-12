@@ -4,13 +4,7 @@
 
 extern PlayerData D_00413F80;
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 int func_001B4F90(void *);
-void func_001A2A18(void *);
-int func_001A1E28(int, int, int, int, u16, int);
-void func_001AFC88(float, float, void *, void *);
 void KF_Vector_Subtract(void *, void *, void *);
 void sceVu0AddVector(void *, void *, void *);
 
@@ -26,12 +20,12 @@ void func_001AC478(EffectActor *actor) {
     if (actor->frame < actor->def->interval) {
         KF_Vector_Subtract(&to_player, &D_00413F80, &actor->model->position);
         to_player.y -= 110.0f;
-        func_001AFC88(actor->def->speed, actor->def->unkDC, velocity, &to_player);
+        func_001AFC88(velocity, &to_player, actor->def->speed, actor->def->unkDC);
     }
     sceVu0AddVector(&actor->model->position, &actor->model->position, velocity);
     if (func_001B4F90(actor) != 0 && actor->def->end_effect != 0xFFFF) {
         if (*(int *)0x70000018 != 5) {
-            func_001A1E28(actor->def->end_effect, (int)&actor->model->position, (int)&actor->model->rotation, actor->effect_arg, actor->effect_param, (int)actor->owner);
+            func_001A1E28(actor->def->end_effect, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
         }
         func_001A2A18(actor);
     }

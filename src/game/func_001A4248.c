@@ -3,13 +3,11 @@
 
 extern char D_00413F80[];
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
 int func_001AFD08(void *, void *, void *);
 int func_001C0E40(float, void *);
 
 /* Starts an effect like func_001A4128, then settles the model onto the ground half a height up. */
-void func_001A4248(EffectActor *actor, int frame) {
+void func_001A4248(EffectActor *actor, EffectSlot *spawn_slot) {
     SnappedMotion *motion;
     Entity *source;
     ModelInstance *source_model;
@@ -19,8 +17,8 @@ void func_001A4248(EffectActor *actor, int frame) {
     actor->unk6C = (int)source;
     motion->unk04 = 1;
     if (actor->unk6C == 0) {
-        func_001AF640(actor, frame);
-        func_001AF928(actor, frame);
+        func_001AF640(actor, spawn_slot);
+        func_001AF928(actor, spawn_slot);
         motion->unk04 = 0;
     } else {
         source_model = ENTITY_MODEL((Entity *)actor->unk6C);
@@ -34,7 +32,7 @@ void func_001A4248(EffectActor *actor, int frame) {
     actor->model->position.y -= actor->def->unkE0 * 0.5f;
     if (func_001C0E40(actor->def->unkE0, &actor->model->position) == 0) {
         motion->unk04 = 1;
-        actor->frame = actor->def->restart_frame;
+        actor->frame = actor->def->keyframe_end;
         actor->model->position.y += actor->def->unkE0 * 0.5f;
     } else {
         motion->unk04 = 0;

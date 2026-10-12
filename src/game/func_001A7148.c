@@ -5,28 +5,26 @@
 #define SCRATCH_MATRIX ((int *)0x70000010)
 
 void func_001A7110(void *, void *, void *);
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
 float func_001B0178(void *, void *);
 void func_001C1430(float, void *, void *);
 void func_00216778(void *, void *);
 int rand(void);
 
 /* Starts an effect that aims at the entity its caller's slot picked, or at a random point around it. */
-void func_001A7148(EffectActor *actor, TurningMotion *caller) {
+void func_001A7148(EffectActor *actor, EffectSlot *spawn_slot) {
     ScalingEndMotion *motion = (ScalingEndMotion *)&actor->motion;
     PickedMotion *picked = (PickedMotion *)&actor->target->motion;
     Entity *chosen;
     f32 offset[4];
 
-    func_001AF928(actor, (int)caller);
-    func_001AF640(actor, (int)caller);
+    func_001AF928(actor, spawn_slot);
+    func_001AF640(actor, spawn_slot);
     motion->ended = 0;
     motion->scale_per_mille = 0;
-    chosen = picked->entity[caller->unk25 - 1];
+    chosen = picked->entity[EFFECT_SLOT_FLAG_PARTS(spawn_slot)->level - 1];
     if (chosen != NULL) {
         actor->unk6C = (int)chosen;
-        motion->scale_per_mille = picked->distance[caller->unk25 - 1];
+        motion->scale_per_mille = picked->distance[EFFECT_SLOT_FLAG_PARTS(spawn_slot)->level - 1];
         func_00216778(&motion->end_position, chosen->model->position);
         func_001A7110(&actor->model->rotation, ((Entity *)actor->unk6C)->model->position, &actor->model->position);
         return;

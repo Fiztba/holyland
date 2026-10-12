@@ -1,18 +1,14 @@
-#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
-
-/* Re-seeds the actor's velocity x and y from its definition. */
-void func_001AAA60(EffectActor *actor, int frame) {
-    EffectMotion *motion;
+/* Starts an effect with the definition's initial velocity.x and velocity.y. */
+void func_001AAA60(EffectActor *effect, EffectSlot *spawn_slot) {
+    Vector4 *velocity;
     EffectDef *def;
 
-    motion = &actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    def = actor->def;
-    motion->velocity.x = def->unkDC;
-    motion->velocity.y = def->unkE0;
+    velocity = &effect->motion.velocity;
+    func_001AF928(effect, spawn_slot);
+    func_001AF640(effect, spawn_slot);
+    def = effect->def;
+    velocity->x = def->unkDC;
+    velocity->y = def->unkE0;
 }

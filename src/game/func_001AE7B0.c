@@ -2,40 +2,37 @@
 #include "kf_effect.h"
 
 extern f32 D_00431AF0[16];
+
 int rand(void);
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
+void sceVu0RotMatrixX(void *, void *, float);
+void sceVu0RotMatrixY(void *, void *, float);
+void sceVu0ApplyMatrix(void *, void *, void *);
 void func_00216C48(void *, void *, void *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, float *, float *);
 
-/* Wobbles its two tilt angles within limits and rotates the velocity by them. */
-void func_001AE7B0(EffectActor *actor) {
-    f32 matrix[16];
-    DriftMotion *motion;
+void func_001AE7B0(EffectActor *effect) {
+    YawPitchMotion *motion;
+    f32 rotation_matrix[16];
 
-    func_001AEC48(actor);
-    motion = (DriftMotion *)&actor->motion;
-    func_001AED58(actor);
-    func_001AF0B0(actor);
-    motion->unk20 += ((rand() & 0xFFFF) * 0.000030517578f - 1.0f) * actor->def->unkDC;
-    motion->unk24 += ((rand() & 0xFFFF) * 0.000030517578f - 1.0f) * actor->def->unkDC;
-    if (motion->unk20 > 0.15f) {
-        motion->unk20 = 0.15f;
+    motion = (YawPitchMotion *)&effect->motion;
+    func_001AEC48(effect);
+    func_001AED58(effect);
+    func_001AF0B0(effect);
+    motion->yaw = motion->yaw + ((float)(rand() & 0xFFFF) * 0.000030517578125f - 1.0f) * effect->def->unkDC;
+    motion->pitch = motion->pitch + ((float)(rand() & 0xFFFF) * 0.000030517578125f - 1.0f) * effect->def->unkDC;
+    if (motion->yaw > 0.15f) {
+        motion->yaw = 0.15f;
     }
-    if (motion->unk24 > 0.15f) {
-        motion->unk24 = 0.15f;
+    if (motion->pitch > 0.15f) {
+        motion->pitch = 0.15f;
     }
-    if (motion->unk20 < -0.15f) {
-        motion->unk20 = -0.15f;
+    if (motion->yaw < -0.15f) {
+        motion->yaw = -0.15f;
     }
-    if (motion->unk24 < -0.15f) {
-        motion->unk24 = -0.15f;
+    if (motion->pitch < -0.15f) {
+        motion->pitch = -0.15f;
     }
-    sceVu0RotMatrixX(matrix, D_00431AF0, motion->unk20);
-    sceVu0RotMatrixY(matrix, matrix, motion->unk24);
-    sceVu0ApplyMatrix(&motion->velocity.x, matrix, &motion->velocity.x);
-    func_00216C48(&actor->model->position, &motion->end_position, &motion->velocity);
+    sceVu0RotMatrixX(rotation_matrix, D_00431AF0, motion->yaw);
+    sceVu0RotMatrixY(rotation_matrix, rotation_matrix, motion->pitch);
+    sceVu0ApplyMatrix(motion, rotation_matrix, motion);
+    func_00216C48(&effect->model->position, motion->unk10, motion);
 }

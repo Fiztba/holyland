@@ -1,42 +1,36 @@
 #include "common.h"
 #include "kf_effect.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 int func_001B4F90(void *);
-void func_001A2A18(void *);
-int func_001A1E28(int, int, int, int, u16, int);
-void func_001AF5B0(void *, void *);
 void sceVu0AddVector(void *, void *, void *);
+void func_001AF5B0(void *, void *);
 
-/* Moves by its velocity (and gravity) until it hits, then spawns two effects and ends. */
-void func_001A4E38(EffectActor *actor) {
-    EndedMotion *motion = (EndedMotion *)&actor->motion;
-    u16 effect_id;
+#define SCRATCHPAD_WORD_18 (*(int *)0x70000018)
 
-    if (motion->ended != 0) {
-        func_001A2A18(actor);
+// Falls under gravity and spawns its landing effects on the first hit.
+void func_001A4E38(EffectActor *effect) {
+    LandedFlagMotion *motion = (LandedFlagMotion *)&effect->motion;
+    int spawn_id;
+
+    if (motion->landed) {
+        func_001A2A18(effect);
         return;
     }
-    func_001AEC48(actor);
-    func_001AED58(actor);
-    func_001AF0B0(actor);
-    if (actor->frame < actor->def->max_frames || actor->def->max_frames == 0) {
-        if (actor->def->gravity != 0.0f) {
-            motion->velocity.y += actor->def->gravity;
+    func_001AEC48(effect);
+    func_001AED58(effect);
+    func_001AF0B0(effect);
+    if (effect->frame < effect->def->max_frames || effect->def->max_frames == 0) {
+        if (effect->def->gravity != 0.0f) {
+            motion->velocity.y += effect->def->gravity;
         }
-        sceVu0AddVector(&actor->model->position, &actor->model->position, motion);
-        func_001AF5B0(&actor->model->rotation, motion);
+        sceVu0AddVector(&effect->model->position, &effect->model->position, motion);
+        func_001AF5B0(&effect->model->rotation, motion);
     }
-    if (func_001B4F90(actor) != 0) {
-        effect_id = 0x16;
-        if (*(int *)0x70000018 != 5) {
-            effect_id = actor->def->end_effect;
-        }
-        func_001A1E28(effect_id, (int)&actor->model->position, (int)&actor->model->rotation, actor->effect_arg, actor->effect_param, (int)actor->owner);
-        func_001A1E28(0x122, (int)&actor->model->position, (int)&actor->model->rotation, actor->effect_arg, actor->effect_param, (int)actor->owner);
-        motion->ended = 1;
+    if (func_001B4F90(effect)) {
+        spawn_id = SCRATCHPAD_WORD_18 == 5 ? 0x16 : effect->def->end_effect;
+        func_001A1E28(spawn_id, &effect->model->position, &effect->model->rotation, effect->owner_entity, effect->effect_param, effect->owner);
+        func_001A1E28(0x122, &effect->model->position, &effect->model->rotation, effect->owner_entity, effect->effect_param, effect->owner);
+        motion->landed = 1;
     }
-    actor->frame++;
+    effect->frame += 1;
 }

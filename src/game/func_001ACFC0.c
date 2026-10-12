@@ -7,11 +7,6 @@ extern u16 D_00413DA8[];
 extern u16 D_0044693C;
 extern PlayerState D_00413F80;
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
-void func_001A2A18(void *);
-s32 func_001A2838(u16, void *);
 void func_00216778(void *, void *);
 
 /* Holds the model still for a few frames after a hit, then ends; otherwise copies its start pose and reacts to the player. */

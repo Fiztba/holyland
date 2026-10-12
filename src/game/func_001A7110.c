@@ -1,11 +1,13 @@
 #include "common.h"
+#include "kf_effect.h"
 
-void KF_Vector_Subtract(float *, float *, float *);
+void KF_Vector_Subtract(void *, void *, void *);
 void func_001AF5B0(void *, void *);
 
-void func_001A7110(void *angles, float *target, float *origin) {
-    float delta[4];
+/* Turns the vector from one position to another into angles at angles_out. */
+void func_001A7110(void *angles_out, void *from, void *target) {
+    Vector4 difference;
 
-    KF_Vector_Subtract(delta, target, origin);
-    func_001AF5B0(angles, delta);
+    KF_Vector_Subtract(&difference, from, target);
+    func_001AF5B0(angles_out, &difference);
 }

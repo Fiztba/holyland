@@ -2,23 +2,19 @@
 
 extern EffectActor D_003F3550[];
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
-void func_001AF538(float *, float *, float);
 s16 func_001B0208(float, void *, void *, void *);
-int func_001A1E28(int, int, int, int, u16, int);
 
 /* Starts a falling effect and, if no same-kind effect is already live inside its interval, spawns its follow-up. */
-void func_001A9578(EffectActor *actor, int frame) {
+void func_001A9578(EffectActor *actor, EffectSlot *spawn_slot) {
     FallingMotion *motion;
     EffectActor *slot;
     int i;
     char scratch[0x10];
 
     motion = (FallingMotion *)&actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    func_001AF538(&motion->velocity.x, &actor->model->rotation.x, actor->def->speed);
+    func_001AF928(actor, spawn_slot);
+    func_001AF640(actor, spawn_slot);
+    func_001AF538(actor->def->speed, &motion->velocity, &actor->model->rotation);
     motion->end_frame = func_001B0208((float)actor->def->radius_half, actor, motion, scratch);
     if (motion->end_frame != 0xFFFF) {
         motion->mode = *(int *)0x70000018;
@@ -35,6 +31,6 @@ void func_001A9578(EffectActor *actor, int frame) {
             }
         }
     }
-    func_001A1E28(actor->def->unkF0, (int)&actor->model->position, (int)&actor->model->rotation, actor->effect_arg, actor->effect_param, (int)actor->owner);
+    func_001A1E28(actor->def->unkF0, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
     motion->spawned = 1;
 }

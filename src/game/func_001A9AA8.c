@@ -1,9 +1,7 @@
-#include "common.h"
+#include "kf_effect.h"
 
-void func_001AF640(void *, int);
-void func_001AF928(void *, int);
-
-void func_001A9AA8(void *actor, int frame) {
-    func_001AF640(actor, frame);
-    func_001AF928(actor, frame);
+/* Starts an effect that has no per-kind state: runs the common start helpers. */
+void func_001A9AA8(EffectActor *actor, EffectSlot *spawn_slot) {
+    func_001AF640(actor, spawn_slot);
+    func_001AF928(actor, spawn_slot);
 }

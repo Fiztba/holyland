@@ -10,7 +10,7 @@ int func_001A2928(int effect_id, EffectActor *actor, Vector4 *position) {
     int slot_index;
     ObjectSlot *slot;
 
-    slot_index = func_001A1C58(effect_id, position, (char *)actor->model + 0xD0, (void *)actor->effect_arg);
+    slot_index = func_001A1C58(effect_id, position, (char *)actor->model + 0xD0, (void *)actor->owner_entity);
     if (slot_index != -1) {
         slot = &D_003F1750[slot_index];
         slot->object_id = actor->effect_param;
@@ -18,7 +18,7 @@ int func_001A2928(int effect_id, EffectActor *actor, Vector4 *position) {
         slot->actor = actor;
         OBJECT_SLOT_FLAG_BITS(slot)->bit33 = EFFECT_FLAG_BITS(actor)->bit59;
         if (D_00502260[effect_id].track) {
-            EFFECT_FLAG_BITS(actor)->bit57 = TRUE;
+            EFFECT_FLAG_BITS(actor)->has_slots = TRUE;
         }
     }
     return slot_index;

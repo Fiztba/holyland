@@ -1,18 +1,15 @@
+#include "common.h"
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
-void func_001AF538(float *, float *, float);
+/* Starts an effect that moves at its definition's speed. */
+void func_001A3E30(EffectActor *effect, EffectSlot *spawn_slot) {
+    TimedMotion *motion;
 
-/* Re-seeds a falling effect's motion from its model and definition. */
-void func_001A3E30(EffectActor *actor, int frame) {
-    ScaledMotion *motion;
-
-    motion = (ScaledMotion *)&actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    func_001AF538(&motion->velocity.x, &actor->model->rotation.x, actor->def->speed);
-    motion->unk1C[0] = 0;
-    motion->fall_speed = 0.0f;
-    motion->scale = 1.0f;
+    func_001AF928(effect, spawn_slot);
+    func_001AF640(effect, spawn_slot);
+    motion = (TimedMotion *)&effect->motion;
+    func_001AF538(effect->def->speed, &motion->velocity, &effect->model->rotation);
+    motion->unk10 = 0;
+    motion->unk14 = 1.0f;
+    motion->unk1C = 0;
 }

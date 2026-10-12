@@ -1,34 +1,27 @@
 #include "kf_effect.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 void func_001AF298(void *, void *);
 void func_00216778(void *, void *);
 void sceVu0AddVector(void *, void *, void *);
 
-/* Steps the effect: moves the model by its velocity (scaled by a growing factor), then counts a frame. */
-void func_001ABE20(EffectActor *actor) {
+/* Moves the model by its velocity scaled up each frame, then advances the frame counter. */
+void func_001ABE20(EffectActor *effect) {
+    GrowingMotion *motion;
     Vector4 offset;
-    ReseedMotion *motion;
-    EffectDef *def;
-    f32 scale;
 
-    func_001AEC48(actor);
-    motion = (ReseedMotion *)&actor->motion;
-    func_001AED58(actor);
-    func_001AF0B0(actor);
-    if (actor->frame < actor->def->max_frames || actor->def->max_frames == 0) {
+    motion = (GrowingMotion *)&effect->motion;
+    func_001AEC48(effect);
+    func_001AED58(effect);
+    func_001AF0B0(effect);
+    if (effect->frame < effect->def->max_frames || effect->def->max_frames == 0) {
         func_00216778(&offset, motion);
-        def = actor->def;
-        if (def->unk11C != 0.0f) {
-            scale = motion->unk10 + def->unk11C;
-            motion->unk10 = scale;
-            offset.x *= scale;
-            offset.z *= scale;
+        if (effect->def->scale_per_frame != 0.0f) {
+            motion->scale += effect->def->scale_per_frame;
+            offset.x *= motion->scale;
+            offset.z *= motion->scale;
         }
-        sceVu0AddVector(&actor->model->position, &actor->model->position, &offset);
+        sceVu0AddVector(&effect->model->position, &effect->model->position, &offset);
     }
-    func_001AF298(actor, &motion->unk14);
-    actor->frame += 1;
+    func_001AF298(effect, motion->unk14);
+    effect->frame += 1;
 }

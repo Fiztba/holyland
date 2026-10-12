@@ -1,16 +1,13 @@
 #include "kf_effect.h"
 
-void func_001AF928(void *, int);
-void func_001AF640(void *, int);
+/* Copies the target's unk20 into this actor's motion, after the common update. */
+void func_001AC198(EffectActor *effect, EffectSlot *spawn_slot) {
+    LinkedMotion *motion;
+    LinkedMotion *target_motion;
 
-/* Runs the effect setup, then copies the target's scale_per_mille view into the actor's. */
-void func_001AC198(EffectActor *actor, int frame) {
-    EffectMotion *source;
-    EffectMotion *dest;
-
-    source = &actor->target->motion;
-    dest = &actor->motion;
-    func_001AF928(actor, frame);
-    func_001AF640(actor, frame);
-    ((ScalerMotion *)dest)->scale_per_mille = ((ScalerMotion *)source)->scale_per_mille;
+    target_motion = (LinkedMotion *)&effect->target->motion;
+    motion = (LinkedMotion *)&effect->motion;
+    func_001AF928(effect, spawn_slot);
+    func_001AF640(effect, spawn_slot);
+    motion->unk20 = target_motion->unk20;
 }

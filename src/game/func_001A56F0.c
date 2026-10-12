@@ -1,13 +1,9 @@
 #include "kf_effect.h"
 #include "kf_entity.h"
 
-int func_001AEC48(void *);
-void func_001AED58(void *);
-int func_001AF0B0(void *);
 void func_001AF298(void *, void *);
 void func_001AF468(void *, void *);
 void func_001AF5B0(void *, void *);
-void func_001AFC88(float, float, void *, void *);
 float func_001B0970(void *, void *);
 void KF_Vector_Subtract(void *, void *, void *);
 void sceVu0AddVector(void *, void *, void *);
@@ -30,9 +26,9 @@ void func_001A56F0(EffectActor *actor) {
                 motion->speed += actor->def->unkE0;
                 delta[1] -= ((Entity *)actor->unk6C)->height * 0.5f;
             } else {
-                actor->frame = actor->def->restart_frame;
+                actor->frame = actor->def->keyframe_end;
             }
-            func_001AFC88(actor->def->speed, motion->speed, motion, delta);
+            func_001AFC88(&motion->velocity, (Vector4 *)delta, actor->def->speed, motion->speed);
             func_001AF5B0(&actor->model->rotation, motion);
             motion->velocity.w = 0;
         } else {
@@ -44,7 +40,7 @@ void func_001A56F0(EffectActor *actor) {
     }
     func_001AF298(actor, &motion->unk14);
     actor->frame++;
-    if (actor->frame >= actor->def->restart_frame) {
+    if (actor->frame >= actor->def->keyframe_end) {
         func_001AF468(actor, &motion->unk14);
     }
 }
