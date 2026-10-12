@@ -7,13 +7,22 @@ place as state changes; link session logs at the point they support.
 
 - **Function map from kfiv-decomp (2026-10-12):** `decomp-map.py` takes the
   3,839 exact functions and 112 switch tables from the matching decomp
-  (main plus its open PRs #37 and #40; boundaries do not depend on them).
+  (build of kfiv-decomp `33da170`; splat fixes the boundaries, so later
+  C matching cannot move them).
   With patch 0043 the generator reports 3,572 recompiled, 267 stubs and
   0 fallback functions (Ghidra map: 28,161 / 268 / 1,352 with 119,442
   fallback entries); output is 78 MB instead of 219 MB and the runner 36 MB
   instead of 65 MB. Native Windows, Vulkan GS, hidden run to tick 9000
   through the movie skip and 3,800 ticks of walking: all 18 dumped frames
   pixel-identical to the Ghidra-map build, 3D at 23.4 vsync/s both ways.
+  A second pair ran the movie to its natural end, then paused, resumed,
+  opened and closed the inventory and idled to tick 16000: 60 of 64 frames
+  identical, the same screens throughout, no missing functions, and one
+  `pause-entry` each, for the scripted START. The four differing frames
+  (11500-12250) are transition timing: every inter-function transfer is a
+  scheduler safe point charged `kGuestDispatchCycles`, so real function
+  boundaries move where guest time is charged. Each map is deterministic
+  (two Ghidra-map runs matched); frames from 12500 on match again.
   Exact boundaries needed one config change: see the `InitThread` note in
   [maintainers.md](maintainers.md). EE code generation was never the limit.
 - **Profile (2026-10-12, i9-13900KF, Vulkan GS):** in the first 3D area the
@@ -32,7 +41,9 @@ place as state changes; link session logs at the point they support.
   pad state or mode changes, sticks and pressure bytes cannot reach it, and
   the pad HLE never produces the edge itself. A late scripted START or a
   real Enter/gamepad press is the likely source; `PS2X_INPUT_TRACE=1`
-  shows which in its `pause-entry` line.
+  shows which in its `pause-entry` line. With no input from the end of the
+  movie to tick 16000 (except the scripted pause test), neither map paused
+  by itself.
 
 - **Cave-door progression:** corrected EE SQRT/RSQRT operands (patch 0029)
   prevent the initial floor fall. The next map was already loaded before
