@@ -45,11 +45,12 @@ typedef struct {
     s8 retries;                     /* 0x15 */
     s8 phase;                       /* 0x16 */
     s8 count;                       /* 0x17 */
-    u8 unk18;                       /* 0x18 */
+    s8 unk18;                       /* 0x18 */
     char pad19[0x01];
     s8 file;                        /* 0x1A */
     s8 unk1B;                       /* 0x1B */
-    char pad1C[0x04];
+    s8 unk1C;                       /* 0x1C */
+    char pad1D[0x03];
 } ModeState;
 
 /* D_00428B80: the 0x28-byte entries of the slot table, indexed by the mode slot */
