@@ -32,8 +32,11 @@ code or disc assets. The build checks the boot ELF's hash.
   sound driver and SPU2 implementation. The opening movie now displays its
   pictures and ends naturally in gameplay. Enter optionally skips the
   opening through the game's original Start input.
-- Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
-  stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
+- The function map comes from the matching
+  [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp): 3,839 exact
+  functions and 112 switch tables. Generation recompiles 3,572 and stubs 267,
+  with **zero fallback warnings and zero errors**. Gameplay frames are
+  pixel-identical to the earlier Ghidra map, from a third of its source.
 - Broader rendering accuracy remains unverified and performance is below full speed.
   Vulkan field presentation uses GPU bob to avoid temporal text combing.
   Audio hardware behaviour is
@@ -76,10 +79,10 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 39 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; twenty-five additions cover Windows input, audio, movie,
-gameplay rendering, EE conversion/square-root translation and complete DMA chains,
-with opt-in diagnostics.
+of 42 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; later additions cover Windows input, audio, movie,
+gameplay rendering, EE conversion/square-root translation, complete DMA chains,
+VU1 census and lift, and indirect-jump code generation, with opt-in diagnostics.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
 [agent instructions](AGENTS.md). All game-derived output stays private.

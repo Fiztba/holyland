@@ -121,7 +121,9 @@ stubs = [
   "sceSifIsAliveIop@0x002292C0",
   "sceSifSyncIop@0x002292E8",
   "sceSifRebootIop@0x00229330",
-  "InitThread@0x002295F0",
+  # Not InitThread@0x002295F0: the game's own InitThread creates libkernel's
+  # topThread and lowers main to priority 1, which the movie player's
+  # RotateThreadReadyQueue yields rely on; the runtime handler does neither.
   "iWakeupThread@0x002296C8",
   "iRotateThreadReadyQueue@0x00229760",
   "sceDeci2Open@0x00229878",
@@ -2008,3 +2010,2915 @@ critical = [
   "_multiply", # Uses SIMD instructions
 ]
 
+# BEGIN jump tables (scripts/maintainer/decomp-map.py)
+# One table per switch: the JR it serves, its function and every case target.
+
+[[jump_tables.table]]
+# JR at 0x00112EE0 in FUN_00112bd0
+address = "0x0043E580"
+entries = [
+  { index = 0, target = "0x00112F14" },
+  { index = 1, target = "0x00112EE8" },
+  { index = 2, target = "0x00112F14" },
+  { index = 3, target = "0x00112EE8" },
+  { index = 4, target = "0x00112F14" },
+  { index = 5, target = "0x00112EE8" },
+  { index = 6, target = "0x00112EE8" },
+  { index = 7, target = "0x00112EE8" },
+  { index = 8, target = "0x00112EE8" },
+  { index = 9, target = "0x00112EE8" },
+  { index = 10, target = "0x00112EE8" },
+  { index = 11, target = "0x00112EE8" },
+  { index = 12, target = "0x00112EE8" },
+  { index = 13, target = "0x00112F14" },
+  { index = 14, target = "0x00112EE8" },
+  { index = 15, target = "0x00112EE8" },
+  { index = 16, target = "0x00112EE8" },
+  { index = 17, target = "0x00112EE8" },
+  { index = 18, target = "0x00112EE8" },
+  { index = 19, target = "0x00112EE8" },
+  { index = 20, target = "0x00112EE8" },
+  { index = 21, target = "0x00112F14" },
+  { index = 22, target = "0x00112EE8" },
+  { index = 23, target = "0x00112EE8" },
+  { index = 24, target = "0x00112EE8" },
+  { index = 25, target = "0x00112EE8" },
+  { index = 26, target = "0x00112EE8" },
+  { index = 27, target = "0x00112F14" },
+  { index = 28, target = "0x00112EE8" },
+  { index = 29, target = "0x00112EE8" },
+  { index = 30, target = "0x00112F14" },
+  { index = 31, target = "0x00112EE8" },
+  { index = 32, target = "0x00112EE8" },
+  { index = 33, target = "0x00112EE8" },
+  { index = 34, target = "0x00112EE8" },
+  { index = 35, target = "0x00112EE8" },
+  { index = 36, target = "0x00112EE8" },
+  { index = 37, target = "0x00112EE8" },
+  { index = 38, target = "0x00112EE8" },
+  { index = 39, target = "0x00112EE8" },
+  { index = 40, target = "0x00112EE8" },
+  { index = 41, target = "0x00112EE8" },
+  { index = 42, target = "0x00112F14" },
+  { index = 43, target = "0x00112EE8" },
+  { index = 44, target = "0x00112EE8" },
+  { index = 45, target = "0x00112EE8" },
+  { index = 46, target = "0x00112EE8" },
+  { index = 47, target = "0x00112EE8" },
+  { index = 48, target = "0x00112EE8" },
+  { index = 49, target = "0x00112EE8" },
+  { index = 50, target = "0x00112EE8" },
+  { index = 51, target = "0x00112EE8" },
+  { index = 52, target = "0x00112EE8" },
+  { index = 53, target = "0x00112EE8" },
+  { index = 54, target = "0x00112EE8" },
+  { index = 55, target = "0x00112EE8" },
+  { index = 56, target = "0x00112EE8" },
+  { index = 57, target = "0x00112EE8" },
+  { index = 58, target = "0x00112EE8" },
+  { index = 59, target = "0x00112EE8" },
+  { index = 60, target = "0x00112EE8" },
+  { index = 61, target = "0x00112EE8" },
+  { index = 62, target = "0x00112EE8" },
+  { index = 63, target = "0x00112EE8" },
+  { index = 64, target = "0x00112EE8" },
+  { index = 65, target = "0x00112EE8" },
+  { index = 66, target = "0x00112EE8" },
+  { index = 67, target = "0x00112EE8" },
+  { index = 68, target = "0x00112EE8" },
+  { index = 69, target = "0x00112EE8" },
+  { index = 70, target = "0x00112EE8" },
+  { index = 71, target = "0x00112EE8" },
+  { index = 72, target = "0x00112EE8" },
+  { index = 73, target = "0x00112EE8" },
+  { index = 74, target = "0x00112EE8" },
+  { index = 75, target = "0x00112EE8" },
+  { index = 76, target = "0x00112EE8" },
+  { index = 77, target = "0x00112EE8" },
+  { index = 78, target = "0x00112EE8" },
+  { index = 79, target = "0x00112EE8" },
+  { index = 80, target = "0x00112EE8" },
+  { index = 81, target = "0x00112EE8" },
+  { index = 82, target = "0x00112EE8" },
+  { index = 83, target = "0x00112EE8" },
+  { index = 84, target = "0x00112EE8" },
+  { index = 85, target = "0x00112EE8" },
+  { index = 86, target = "0x00112EE8" },
+  { index = 87, target = "0x00112EE8" },
+  { index = 88, target = "0x00112EE8" },
+  { index = 89, target = "0x00112EE8" },
+  { index = 90, target = "0x00112EE8" },
+  { index = 91, target = "0x00112EE8" },
+  { index = 92, target = "0x00112EE8" },
+  { index = 93, target = "0x00112EE8" },
+  { index = 94, target = "0x00112EE8" },
+  { index = 95, target = "0x00112EE8" },
+  { index = 96, target = "0x00112EE8" },
+  { index = 97, target = "0x00112EE8" },
+  { index = 98, target = "0x00112F14" },
+  { index = 99, target = "0x00112F14" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001236D8 in FUN_00123690
+address = "0x0043E7A0"
+entries = [
+  { index = 0, target = "0x0012383C" },
+  { index = 1, target = "0x001236E0" },
+  { index = 2, target = "0x001236E8" },
+  { index = 3, target = "0x001237F8" },
+  { index = 4, target = "0x00123820" },
+  { index = 5, target = "0x0012383C" },
+  { index = 6, target = "0x0012382C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0012FE00 in FUN_0012fdb8
+address = "0x0043E7D0"
+entries = [
+  { index = 0, target = "0x0012FE08" },
+  { index = 1, target = "0x0012FE8C" },
+  { index = 2, target = "0x0012FF1C" },
+  { index = 3, target = "0x0012FF50" },
+  { index = 4, target = "0x0013001C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00131B00 in FUN_001319f0
+address = "0x0043E7F0"
+entries = [
+  { index = 0, target = "0x00131B08" },
+  { index = 1, target = "0x00131B10" },
+  { index = 2, target = "0x00131B18" },
+  { index = 3, target = "0x00131B20" },
+  { index = 4, target = "0x00131B28" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00132628 in FUN_001325b8
+address = "0x0043E810"
+entries = [
+  { index = 0, target = "0x00132630" },
+  { index = 1, target = "0x001326CC" },
+  { index = 2, target = "0x00132700" },
+  { index = 3, target = "0x00132760" },
+  { index = 4, target = "0x00132804" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001341AC in FUN_00134160
+address = "0x0043E830"
+entries = [
+  { index = 0, target = "0x001341B4" },
+  { index = 1, target = "0x0013425C" },
+  { index = 2, target = "0x00134270" },
+  { index = 3, target = "0x0013429C" },
+  { index = 4, target = "0x00134324" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001357D8 in FUN_00135798
+address = "0x0043E850"
+entries = [
+  { index = 0, target = "0x001357E0" },
+  { index = 1, target = "0x00135878" },
+  { index = 2, target = "0x00135894" },
+  { index = 3, target = "0x00135948" },
+  { index = 4, target = "0x001359D4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0013B25C in FUN_0013b150
+address = "0x0043E870"
+entries = [
+  { index = 0, target = "0x0013B264" },
+  { index = 1, target = "0x0013B28C" },
+  { index = 2, target = "0x0013B2DC" },
+  { index = 3, target = "0x0013B2F8" },
+  { index = 4, target = "0x0013B33C" },
+  { index = 5, target = "0x0013B3CC" },
+  { index = 6, target = "0x0013B3F0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0014ED2C in FUN_0014ece8
+address = "0x0043E8D0"
+entries = [
+  { index = 0, target = "0x0014ED34" },
+  { index = 1, target = "0x0014EE68" },
+  { index = 2, target = "0x0014EDAC" },
+  { index = 3, target = "0x0014EE68" },
+  { index = 4, target = "0x0014EE80" },
+  { index = 5, target = "0x0014EF40" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00156ED8 in FUN_00156e88
+address = "0x0043E910"
+entries = [
+  { index = 0, target = "0x00156EE0" },
+  { index = 1, target = "0x001571F4" },
+  { index = 2, target = "0x00157218" },
+  { index = 3, target = "0x00157328" },
+  { index = 4, target = "0x00157360" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0016040C in FUN_001601b0
+address = "0x0043E940"
+entries = [
+  { index = 0, target = "0x00160414" },
+  { index = 1, target = "0x0016047C" },
+  { index = 2, target = "0x001604E4" },
+  { index = 3, target = "0x00160568" },
+  { index = 4, target = "0x001605EC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00160904 in FUN_00160630
+address = "0x0043E960"
+entries = [
+  { index = 0, target = "0x0016090C" },
+  { index = 1, target = "0x00160974" },
+  { index = 2, target = "0x001609DC" },
+  { index = 3, target = "0x00160A60" },
+  { index = 4, target = "0x00160AE4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00160E98 in FUN_00160b30
+address = "0x0043E980"
+entries = [
+  { index = 0, target = "0x00160EA0" },
+  { index = 1, target = "0x00160F08" },
+  { index = 2, target = "0x00160F70" },
+  { index = 3, target = "0x00160FF4" },
+  { index = 4, target = "0x00161078" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00163B98 in FUN_00163b28
+address = "0x0043E9A0"
+entries = [
+  { index = 0, target = "0x00163BA0" },
+  { index = 1, target = "0x00163D34" },
+  { index = 2, target = "0x00163D64" },
+  { index = 3, target = "0x00163DD0" },
+  { index = 4, target = "0x00163E54" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001661A0 in FUN_00166158
+address = "0x0043E9C0"
+entries = [
+  { index = 0, target = "0x001661A8" },
+  { index = 1, target = "0x00166208" },
+  { index = 2, target = "0x00166270" },
+  { index = 3, target = "0x001665CC" },
+  { index = 4, target = "0x00166320" },
+  { index = 5, target = "0x00166438" },
+  { index = 6, target = "0x00166568" },
+  { index = 7, target = "0x00166674" },
+  { index = 8, target = "0x00166760" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00166848 in FUN_00166800
+address = "0x0043E9F0"
+entries = [
+  { index = 0, target = "0x00166850" },
+  { index = 1, target = "0x001668F4" },
+  { index = 2, target = "0x00166950" },
+  { index = 3, target = "0x001669D8" },
+  { index = 4, target = "0x00166A38" },
+  { index = 5, target = "0x00166AB4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0016784C in FUN_00167808
+address = "0x0043EA10"
+entries = [
+  { index = 0, target = "0x00167854" },
+  { index = 1, target = "0x0016789C" },
+  { index = 2, target = "0x001678B8" },
+  { index = 3, target = "0x001678FC" },
+  { index = 4, target = "0x00167938" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00168F94 in FUN_00168f48
+address = "0x0043EA30"
+entries = [
+  { index = 0, target = "0x00168F9C" },
+  { index = 1, target = "0x00168FE4" },
+  { index = 2, target = "0x00169008" },
+  { index = 3, target = "0x00169140" },
+  { index = 4, target = "0x00169160" },
+  { index = 5, target = "0x001691B4" },
+  { index = 6, target = "0x00169350" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0016BCA4 in FUN_0016bc28
+address = "0x0043EA50"
+entries = [
+  { index = 0, target = "0x0016BCAC" },
+  { index = 1, target = "0x0016BCDC" },
+  { index = 2, target = "0x0016BCF8" },
+  { index = 3, target = "0x0016BD48" },
+  { index = 4, target = "0x0016BDF8" },
+  { index = 5, target = "0x0016BE90" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0016C600 in FUN_0016c3a0
+address = "0x0043EA70"
+entries = [
+  { index = 0, target = "0x0016C608" },
+  { index = 1, target = "0x0016C670" },
+  { index = 2, target = "0x0016C6D8" },
+  { index = 3, target = "0x0016C740" },
+  { index = 4, target = "0x0016C7A8" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001707B8 in FUN_001704a8
+address = "0x0043EAA0"
+entries = [
+  { index = 0, target = "0x001707C0" },
+  { index = 1, target = "0x00170828" },
+  { index = 2, target = "0x00170890" },
+  { index = 3, target = "0x00170928" },
+  { index = 4, target = "0x001709C0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00177E00 in FUN_00177d90
+address = "0x0043EAC0"
+entries = [
+  { index = 0, target = "0x00177E08" },
+  { index = 1, target = "0x00177EA8" },
+  { index = 2, target = "0x00177EC8" },
+  { index = 3, target = "0x00177F48" },
+  { index = 4, target = "0x00178008" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0017EB9C in FUN_0017eb58
+address = "0x0043EAF0"
+entries = [
+  { index = 0, target = "0x0017EBA4" },
+  { index = 1, target = "0x0017EC48" },
+  { index = 2, target = "0x0017ECB4" },
+  { index = 3, target = "0x0017ED44" },
+  { index = 4, target = "0x0017ED84" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00180818 in FUN_001807d0
+address = "0x0043EB10"
+entries = [
+  { index = 0, target = "0x00180820" },
+  { index = 1, target = "0x0018086C" },
+  { index = 2, target = "0x00180888" },
+  { index = 3, target = "0x001809E8" },
+  { index = 4, target = "0x00180A08" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00183ED4 in FUN_00183e98
+address = "0x0043EB30"
+entries = [
+  { index = 0, target = "0x00183F84" },
+  { index = 1, target = "0x00183F84" },
+  { index = 2, target = "0x00183F84" },
+  { index = 3, target = "0x00183F84" },
+  { index = 4, target = "0x00183EDC" },
+  { index = 5, target = "0x00183F10" },
+  { index = 6, target = "0x00183F50" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00186334 in FUN_001862f0
+address = "0x0043EB50"
+entries = [
+  { index = 0, target = "0x0018633C" },
+  { index = 1, target = "0x00186348" },
+  { index = 2, target = "0x00186388" },
+  { index = 3, target = "0x00186394" },
+  { index = 4, target = "0x0018641C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0019D50C in FUN_0019d490
+address = "0x0043EDC0"
+entries = [
+  { index = 0, target = "0x0019D514" },
+  { index = 1, target = "0x0019D54C" },
+  { index = 2, target = "0x0019D5D8" },
+  { index = 3, target = "0x0019D630" },
+  { index = 4, target = "0x0019D630" },
+  { index = 5, target = "0x0019D630" },
+  { index = 6, target = "0x0019D514" },
+  { index = 7, target = "0x0019D54C" },
+  { index = 8, target = "0x0019D5D8" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0019DCFC in FUN_0019dc00
+address = "0x0043EDF0"
+entries = [
+  { index = 0, target = "0x0019DD04" },
+  { index = 1, target = "0x0019DD38" },
+  { index = 2, target = "0x0019DDC4" },
+  { index = 3, target = "0x0019DE1C" },
+  { index = 4, target = "0x0019DE1C" },
+  { index = 5, target = "0x0019DE1C" },
+  { index = 6, target = "0x0019DD04" },
+  { index = 7, target = "0x0019DD38" },
+  { index = 8, target = "0x0019DDC4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001B6528 in FUN_001b5a48
+address = "0x0043F280"
+entries = [
+  { index = 0, target = "0x001B6578" },
+  { index = 1, target = "0x001B6530" },
+  { index = 2, target = "0x001B6540" },
+  { index = 3, target = "0x001B6550" },
+  { index = 4, target = "0x001B6588" },
+  { index = 5, target = "0x001B6568" },
+  { index = 6, target = "0x001B6578" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001B90E4 in FUN_001b9078
+address = "0x0043F2A0"
+entries = [
+  { index = 0, target = "0x001B90EC" },
+  { index = 1, target = "0x001B9188" },
+  { index = 2, target = "0x001B9224" },
+  { index = 3, target = "0x001B9248" },
+  { index = 4, target = "0x001B9258" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001BB090 in FUN_001bb020
+address = "0x0043F2C0"
+entries = [
+  { index = 0, target = "0x001BB19C" },
+  { index = 1, target = "0x001BB098" },
+  { index = 2, target = "0x001BB0A8" },
+  { index = 3, target = "0x001BB0B8" },
+  { index = 4, target = "0x001BB0D8" },
+  { index = 5, target = "0x001BB0F8" },
+  { index = 6, target = "0x001BB118" },
+  { index = 7, target = "0x001BB138" },
+  { index = 8, target = "0x001BB14C" },
+  { index = 9, target = "0x001BB160" },
+  { index = 10, target = "0x001BB180" },
+  { index = 11, target = "0x001BB19C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001BC46C in FUN_001bc2d0
+address = "0x0043F2F0"
+entries = [
+  { index = 0, target = "0x001BC474" },
+  { index = 1, target = "0x001BC53C" },
+  { index = 2, target = "0x001BC590" },
+  { index = 3, target = "0x001BC6C4" },
+  { index = 4, target = "0x001BC53C" },
+  { index = 5, target = "0x001BC53C" },
+  { index = 6, target = "0x001BC5F8" },
+  { index = 7, target = "0x001BC640" },
+  { index = 8, target = "0x001BC608" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001BC720 in FUN_001bc6e8
+address = "0x0043F320"
+entries = [
+  { index = 0, target = "0x001BC728" },
+  { index = 1, target = "0x001BC738" },
+  { index = 2, target = "0x001BC950" },
+  { index = 3, target = "0x001BC950" },
+  { index = 4, target = "0x001BC950" },
+  { index = 5, target = "0x001BC950" },
+  { index = 6, target = "0x001BC748" },
+  { index = 7, target = "0x001BC7B4" },
+  { index = 8, target = "0x001BC950" },
+  { index = 9, target = "0x001BC950" },
+  { index = 10, target = "0x001BC950" },
+  { index = 11, target = "0x001BC950" },
+  { index = 12, target = "0x001BC950" },
+  { index = 13, target = "0x001BC950" },
+  { index = 14, target = "0x001BC950" },
+  { index = 15, target = "0x001BC950" },
+  { index = 16, target = "0x001BC950" },
+  { index = 17, target = "0x001BC950" },
+  { index = 18, target = "0x001BC950" },
+  { index = 19, target = "0x001BC950" },
+  { index = 20, target = "0x001BC950" },
+  { index = 21, target = "0x001BC950" },
+  { index = 22, target = "0x001BC950" },
+  { index = 23, target = "0x001BC950" },
+  { index = 24, target = "0x001BC950" },
+  { index = 25, target = "0x001BC950" },
+  { index = 26, target = "0x001BC950" },
+  { index = 27, target = "0x001BC950" },
+  { index = 28, target = "0x001BC950" },
+  { index = 29, target = "0x001BC950" },
+  { index = 30, target = "0x001BC950" },
+  { index = 31, target = "0x001BC950" },
+  { index = 32, target = "0x001BC950" },
+  { index = 33, target = "0x001BC950" },
+  { index = 34, target = "0x001BC950" },
+  { index = 35, target = "0x001BC950" },
+  { index = 36, target = "0x001BC950" },
+  { index = 37, target = "0x001BC950" },
+  { index = 38, target = "0x001BC950" },
+  { index = 39, target = "0x001BC950" },
+  { index = 40, target = "0x001BC950" },
+  { index = 41, target = "0x001BC950" },
+  { index = 42, target = "0x001BC950" },
+  { index = 43, target = "0x001BC950" },
+  { index = 44, target = "0x001BC950" },
+  { index = 45, target = "0x001BC950" },
+  { index = 46, target = "0x001BC950" },
+  { index = 47, target = "0x001BC950" },
+  { index = 48, target = "0x001BC950" },
+  { index = 49, target = "0x001BC82C" },
+  { index = 50, target = "0x001BC878" },
+  { index = 51, target = "0x001BC878" },
+  { index = 52, target = "0x001BC878" },
+  { index = 53, target = "0x001BC878" },
+  { index = 54, target = "0x001BC878" },
+  { index = 55, target = "0x001BC878" },
+  { index = 56, target = "0x001BC8E4" },
+  { index = 57, target = "0x001BC8E4" },
+  { index = 58, target = "0x001BC8E4" },
+  { index = 59, target = "0x001BC8E4" },
+  { index = 60, target = "0x001BC8E4" },
+  { index = 61, target = "0x001BC8E4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001BD0C4 in FUN_001bc9e0
+address = "0x0043F420"
+entries = [
+  { index = 0, target = "0x001BD0CC" },
+  { index = 1, target = "0x001BD154" },
+  { index = 2, target = "0x001BD154" },
+  { index = 3, target = "0x001BD154" },
+  { index = 4, target = "0x001BD154" },
+  { index = 5, target = "0x001BD154" },
+  { index = 6, target = "0x001BD154" },
+  { index = 7, target = "0x001BD154" },
+  { index = 8, target = "0x001BD154" },
+  { index = 9, target = "0x001BD154" },
+  { index = 10, target = "0x001BD154" },
+  { index = 11, target = "0x001BD154" },
+  { index = 12, target = "0x001BD154" },
+  { index = 13, target = "0x001BD154" },
+  { index = 14, target = "0x001BD154" },
+  { index = 15, target = "0x001BD0DC" },
+  { index = 16, target = "0x001BD0DC" },
+  { index = 17, target = "0x001BD0DC" },
+  { index = 18, target = "0x001BD154" },
+  { index = 19, target = "0x001BD154" },
+  { index = 20, target = "0x001BD154" },
+  { index = 21, target = "0x001BD154" },
+  { index = 22, target = "0x001BD154" },
+  { index = 23, target = "0x001BD154" },
+  { index = 24, target = "0x001BD154" },
+  { index = 25, target = "0x001BD154" },
+  { index = 26, target = "0x001BD154" },
+  { index = 27, target = "0x001BD154" },
+  { index = 28, target = "0x001BD154" },
+  { index = 29, target = "0x001BD154" },
+  { index = 30, target = "0x001BD0EC" },
+  { index = 31, target = "0x001BD0EC" },
+  { index = 32, target = "0x001BD0EC" },
+  { index = 33, target = "0x001BD154" },
+  { index = 34, target = "0x001BD154" },
+  { index = 35, target = "0x001BD154" },
+  { index = 36, target = "0x001BD120" },
+  { index = 37, target = "0x001BD130" },
+  { index = 38, target = "0x001BD140" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001BD19C in FUN_001bc9e0
+address = "0x0043F4C0"
+entries = [
+  { index = 0, target = "0x001BD1A4" },
+  { index = 1, target = "0x001BD1A4" },
+  { index = 2, target = "0x001BD1A4" },
+  { index = 3, target = "0x001BD1DC" },
+  { index = 4, target = "0x001BD1DC" },
+  { index = 5, target = "0x001BD1DC" },
+  { index = 6, target = "0x001BD1DC" },
+  { index = 7, target = "0x001BD1DC" },
+  { index = 8, target = "0x001BD1DC" },
+  { index = 9, target = "0x001BD1DC" },
+  { index = 10, target = "0x001BD1DC" },
+  { index = 11, target = "0x001BD1DC" },
+  { index = 12, target = "0x001BD1DC" },
+  { index = 13, target = "0x001BD1DC" },
+  { index = 14, target = "0x001BD1DC" },
+  { index = 15, target = "0x001BD1DC" },
+  { index = 16, target = "0x001BD1DC" },
+  { index = 17, target = "0x001BD1DC" },
+  { index = 18, target = "0x001BD1DC" },
+  { index = 19, target = "0x001BD1DC" },
+  { index = 20, target = "0x001BD1DC" },
+  { index = 21, target = "0x001BD1DC" },
+  { index = 22, target = "0x001BD1DC" },
+  { index = 23, target = "0x001BD1DC" },
+  { index = 24, target = "0x001BD1DC" },
+  { index = 25, target = "0x001BD1DC" },
+  { index = 26, target = "0x001BD1DC" },
+  { index = 27, target = "0x001BD1DC" },
+  { index = 28, target = "0x001BD1DC" },
+  { index = 29, target = "0x001BD1DC" },
+  { index = 30, target = "0x001BD1BC" },
+  { index = 31, target = "0x001BD1BC" },
+  { index = 32, target = "0x001BD1BC" },
+  { index = 33, target = "0x001BD1DC" },
+  { index = 34, target = "0x001BD1DC" },
+  { index = 35, target = "0x001BD1DC" },
+  { index = 36, target = "0x001BD1DC" },
+  { index = 37, target = "0x001BD1DC" },
+  { index = 38, target = "0x001BD1DC" },
+  { index = 39, target = "0x001BD1DC" },
+  { index = 40, target = "0x001BD1A4" },
+  { index = 41, target = "0x001BD1A4" },
+  { index = 42, target = "0x001BD1A4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001BF518 in FUN_001bf350
+address = "0x0043F570"
+entries = [
+  { index = 0, target = "0x001BF520" },
+  { index = 1, target = "0x001BF538" },
+  { index = 2, target = "0x001BF550" },
+  { index = 3, target = "0x001BF568" },
+  { index = 4, target = "0x001BF580" },
+  { index = 5, target = "0x001BF598" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001D79C8 in FUN_001d7840
+address = "0x0043FCF0"
+entries = [
+  { index = 0, target = "0x001D79D0" },
+  { index = 1, target = "0x001D79E0" },
+  { index = 2, target = "0x001D79F0" },
+  { index = 3, target = "0x001D7A00" },
+  { index = 4, target = "0x001D7A18" },
+  { index = 5, target = "0x001D7A28" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001D819C in FUN_001d7c90
+address = "0x0043FD10"
+entries = [
+  { index = 0, target = "0x001D81A4" },
+  { index = 1, target = "0x001D81B4" },
+  { index = 2, target = "0x001D81C4" },
+  { index = 3, target = "0x001D8228" },
+  { index = 4, target = "0x001D81D4" },
+  { index = 5, target = "0x001D81FC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001DA138 in FUN_001d94f8
+address = "0x0043FDE0"
+entries = [
+  { index = 0, target = "0x001DA140" },
+  { index = 1, target = "0x001DA4DC" },
+  { index = 2, target = "0x001DA970" },
+  { index = 3, target = "0x001DA970" },
+  { index = 4, target = "0x001DA970" },
+  { index = 5, target = "0x001DA970" },
+  { index = 6, target = "0x001DA970" },
+  { index = 7, target = "0x001DAC88" },
+  { index = 8, target = "0x001DAC88" },
+  { index = 9, target = "0x001DAC88" },
+  { index = 10, target = "0x001DAF88" },
+  { index = 11, target = "0x001DA824" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001DC180 in FUN_001dc120
+address = "0x0043FE10"
+entries = [
+  { index = 0, target = "0x001DC1B4" },
+  { index = 1, target = "0x001DC19C" },
+  { index = 2, target = "0x001DC188" },
+  { index = 3, target = "0x001DC1E4" },
+  { index = 4, target = "0x001DC25C" },
+  { index = 5, target = "0x001DC1CC" },
+  { index = 6, target = "0x001DC28C" },
+  { index = 7, target = "0x001DC2A0" },
+  { index = 8, target = "0x001DC244" },
+  { index = 9, target = "0x001DC22C" },
+  { index = 10, target = "0x001DC214" },
+  { index = 11, target = "0x001DC1FC" },
+  { index = 12, target = "0x001DC274" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001DE3C8 in FUN_001ddb10
+address = "0x0043FF50"
+entries = [
+  { index = 0, target = "0x001DE944" },
+  { index = 1, target = "0x001DECA8" },
+  { index = 2, target = "0x001DE3E0" },
+  { index = 3, target = "0x001DE3E0" },
+  { index = 4, target = "0x001DE3E0" },
+  { index = 5, target = "0x001DE3E0" },
+  { index = 6, target = "0x001DE3E0" },
+  { index = 7, target = "0x001DE69C" },
+  { index = 8, target = "0x001DE69C" },
+  { index = 9, target = "0x001DE69C" },
+  { index = 10, target = "0x001DECA8" },
+  { index = 11, target = "0x001DE3D0" },
+  { index = 12, target = "0x001DE3D0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001DF918 in FUN_001df308
+address = "0x0043FF90"
+entries = [
+  { index = 0, target = "0x001DF920" },
+  { index = 1, target = "0x001DFC3C" },
+  { index = 2, target = "0x001DFA48" },
+  { index = 3, target = "0x001DFA48" },
+  { index = 4, target = "0x001DFC3C" },
+  { index = 5, target = "0x001DFA48" },
+  { index = 6, target = "0x001DFA48" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E03B8 in FUN_001e02f8
+address = "0x0043FFB0"
+entries = [
+  { index = 0, target = "0x001E03C0" },
+  { index = 1, target = "0x001E043C" },
+  { index = 2, target = "0x001E0750" },
+  { index = 3, target = "0x001E0750" },
+  { index = 4, target = "0x001E0750" },
+  { index = 5, target = "0x001E0750" },
+  { index = 6, target = "0x001E0750" },
+  { index = 7, target = "0x001E0750" },
+  { index = 8, target = "0x001E0750" },
+  { index = 9, target = "0x001E0750" },
+  { index = 10, target = "0x001E0750" },
+  { index = 11, target = "0x001E0750" },
+  { index = 12, target = "0x001E0750" },
+  { index = 13, target = "0x001E0750" },
+  { index = 14, target = "0x001E0750" },
+  { index = 15, target = "0x001E0750" },
+  { index = 16, target = "0x001E0750" },
+  { index = 17, target = "0x001E0750" },
+  { index = 18, target = "0x001E0750" },
+  { index = 19, target = "0x001E0750" },
+  { index = 20, target = "0x001E0750" },
+  { index = 21, target = "0x001E0750" },
+  { index = 22, target = "0x001E0750" },
+  { index = 23, target = "0x001E0750" },
+  { index = 24, target = "0x001E0518" },
+  { index = 25, target = "0x001E05AC" },
+  { index = 26, target = "0x001E0698" },
+  { index = 27, target = "0x001E03EC" },
+  { index = 28, target = "0x001E0750" },
+  { index = 29, target = "0x001E049C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E12B0 in FUN_001e0d98
+address = "0x00440030"
+entries = [
+  { index = 0, target = "0x001E12D0" },
+  { index = 1, target = "0x001E13A8" },
+  { index = 2, target = "0x001E12E8" },
+  { index = 3, target = "0x001E13A8" },
+  { index = 4, target = "0x001E13A8" },
+  { index = 5, target = "0x001E13A8" },
+  { index = 6, target = "0x001E13A8" },
+  { index = 7, target = "0x001E12B8" },
+  { index = 8, target = "0x001E13A8" },
+  { index = 9, target = "0x001E1300" },
+  { index = 10, target = "0x001E13A8" },
+  { index = 11, target = "0x001E13A8" },
+  { index = 12, target = "0x001E13A8" },
+  { index = 13, target = "0x001E13A8" },
+  { index = 14, target = "0x001E13A8" },
+  { index = 15, target = "0x001E13A8" },
+  { index = 16, target = "0x001E13A8" },
+  { index = 17, target = "0x001E13A8" },
+  { index = 18, target = "0x001E13A8" },
+  { index = 19, target = "0x001E13A8" },
+  { index = 20, target = "0x001E13A8" },
+  { index = 21, target = "0x001E13A8" },
+  { index = 22, target = "0x001E1318" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E1368 in FUN_001e0d98
+address = "0x00440090"
+entries = [
+  { index = 0, target = "0x001E1370" },
+  { index = 1, target = "0x001E13A8" },
+  { index = 2, target = "0x001E1370" },
+  { index = 3, target = "0x001E13A8" },
+  { index = 4, target = "0x001E13A8" },
+  { index = 5, target = "0x001E13A8" },
+  { index = 6, target = "0x001E13A8" },
+  { index = 7, target = "0x001E1370" },
+  { index = 8, target = "0x001E13A8" },
+  { index = 9, target = "0x001E1370" },
+  { index = 10, target = "0x001E13A8" },
+  { index = 11, target = "0x001E13A8" },
+  { index = 12, target = "0x001E13A8" },
+  { index = 13, target = "0x001E13A8" },
+  { index = 14, target = "0x001E13A8" },
+  { index = 15, target = "0x001E13A8" },
+  { index = 16, target = "0x001E13A8" },
+  { index = 17, target = "0x001E13A8" },
+  { index = 18, target = "0x001E13A8" },
+  { index = 19, target = "0x001E13A8" },
+  { index = 20, target = "0x001E13A8" },
+  { index = 21, target = "0x001E13A8" },
+  { index = 22, target = "0x001E1370" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E16F0 in FUN_001e0d98
+address = "0x004400F0"
+entries = [
+  { index = 0, target = "0x001E16F8" },
+  { index = 1, target = "0x001E1A7C" },
+  { index = 2, target = "0x001E1A7C" },
+  { index = 3, target = "0x001E1A7C" },
+  { index = 4, target = "0x001E1780" },
+  { index = 5, target = "0x001E1A7C" },
+  { index = 6, target = "0x001E1A7C" },
+  { index = 7, target = "0x001E1A7C" },
+  { index = 8, target = "0x001E1A7C" },
+  { index = 9, target = "0x001E1710" },
+  { index = 10, target = "0x001E1A7C" },
+  { index = 11, target = "0x001E1790" },
+  { index = 12, target = "0x001E1A7C" },
+  { index = 13, target = "0x001E1A7C" },
+  { index = 14, target = "0x001E1A7C" },
+  { index = 15, target = "0x001E1A7C" },
+  { index = 16, target = "0x001E1A7C" },
+  { index = 17, target = "0x001E1A7C" },
+  { index = 18, target = "0x001E1A7C" },
+  { index = 19, target = "0x001E1A7C" },
+  { index = 20, target = "0x001E1A7C" },
+  { index = 21, target = "0x001E1A7C" },
+  { index = 22, target = "0x001E1A7C" },
+  { index = 23, target = "0x001E1A7C" },
+  { index = 24, target = "0x001E17C8" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E184C in FUN_001e0d98
+address = "0x00440160"
+entries = [
+  { index = 0, target = "0x001E18A8" },
+  { index = 1, target = "0x001E1A7C" },
+  { index = 2, target = "0x001E1A7C" },
+  { index = 3, target = "0x001E1A7C" },
+  { index = 4, target = "0x001E18C0" },
+  { index = 5, target = "0x001E1A7C" },
+  { index = 6, target = "0x001E1A7C" },
+  { index = 7, target = "0x001E1A7C" },
+  { index = 8, target = "0x001E1A7C" },
+  { index = 9, target = "0x001E18D0" },
+  { index = 10, target = "0x001E1A7C" },
+  { index = 11, target = "0x001E1854" },
+  { index = 12, target = "0x001E1A7C" },
+  { index = 13, target = "0x001E1A7C" },
+  { index = 14, target = "0x001E1A7C" },
+  { index = 15, target = "0x001E1A7C" },
+  { index = 16, target = "0x001E1A7C" },
+  { index = 17, target = "0x001E1A7C" },
+  { index = 18, target = "0x001E1A7C" },
+  { index = 19, target = "0x001E1A7C" },
+  { index = 20, target = "0x001E1A7C" },
+  { index = 21, target = "0x001E1A7C" },
+  { index = 22, target = "0x001E1A7C" },
+  { index = 23, target = "0x001E1A7C" },
+  { index = 24, target = "0x001E18D0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E1E20 in FUN_001e1d70
+address = "0x004401D0"
+entries = [
+  { index = 0, target = "0x001E1E28" },
+  { index = 1, target = "0x001E1EF0" },
+  { index = 2, target = "0x001E1F78" },
+  { index = 3, target = "0x001E1FDC" },
+  { index = 4, target = "0x001E2044" },
+  { index = 5, target = "0x001E20AC" },
+  { index = 6, target = "0x001E2110" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E5000 in FUN_001e4fe0
+address = "0x00440250"
+entries = [
+  { index = 0, target = "0x001E5008" },
+  { index = 1, target = "0x001E5008" },
+  { index = 2, target = "0x001E5008" },
+  { index = 3, target = "0x001E5010" },
+  { index = 4, target = "0x001E501C" },
+  { index = 5, target = "0x001E5028" },
+  { index = 6, target = "0x001E5034" },
+  { index = 7, target = "0x001E5040" },
+  { index = 8, target = "0x001E504C" },
+  { index = 9, target = "0x001E5058" },
+  { index = 10, target = "0x001E5064" },
+  { index = 11, target = "0x001E5008" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E54CC in FUN_001e54a8
+address = "0x00440280"
+entries = [
+  { index = 0, target = "0x001E54D4" },
+  { index = 1, target = "0x001E54F4" },
+  { index = 2, target = "0x001E5514" },
+  { index = 3, target = "0x001E5534" },
+  { index = 4, target = "0x001E5558" },
+  { index = 5, target = "0x001E557C" },
+  { index = 6, target = "0x001E55A0" },
+  { index = 7, target = "0x001E55C4" },
+  { index = 8, target = "0x001E55E8" },
+  { index = 9, target = "0x001E560C" },
+  { index = 10, target = "0x001E5654" },
+  { index = 11, target = "0x001E5630" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E567C in FUN_001e5660
+address = "0x004402B0"
+entries = [
+  { index = 0, target = "0x001E5684" },
+  { index = 1, target = "0x001E56A0" },
+  { index = 2, target = "0x001E56B8" },
+  { index = 3, target = "0x001E56C8" },
+  { index = 4, target = "0x001E56D8" },
+  { index = 5, target = "0x001E56E8" },
+  { index = 6, target = "0x001E56F8" },
+  { index = 7, target = "0x001E5708" },
+  { index = 8, target = "0x001E5718" },
+  { index = 9, target = "0x001E5728" },
+  { index = 10, target = "0x001E5738" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E72A0 in FUN_001e7010
+address = "0x00440390"
+entries = [
+  { index = 0, target = "0x001E72A8" },
+  { index = 1, target = "0x001E73F8" },
+  { index = 2, target = "0x001E72D0" },
+  { index = 3, target = "0x001E7304" },
+  { index = 4, target = "0x001E7340" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E7928 in FUN_001e7010
+address = "0x004403B0"
+entries = [
+  { index = 0, target = "0x001E7EC0" },
+  { index = 1, target = "0x001E8238" },
+  { index = 2, target = "0x001E793C" },
+  { index = 3, target = "0x001E793C" },
+  { index = 4, target = "0x001E793C" },
+  { index = 5, target = "0x001E793C" },
+  { index = 6, target = "0x001E793C" },
+  { index = 7, target = "0x001E7C08" },
+  { index = 8, target = "0x001E7C08" },
+  { index = 9, target = "0x001E7C08" },
+  { index = 10, target = "0x001E8238" },
+  { index = 11, target = "0x001E7930" },
+  { index = 12, target = "0x001E7930" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001E8F74 in FUN_001e88a0
+address = "0x004403F0"
+entries = [
+  { index = 0, target = "0x001E9508" },
+  { index = 1, target = "0x001E9880" },
+  { index = 2, target = "0x001E8F88" },
+  { index = 3, target = "0x001E8F88" },
+  { index = 4, target = "0x001E8F88" },
+  { index = 5, target = "0x001E8F88" },
+  { index = 6, target = "0x001E8F88" },
+  { index = 7, target = "0x001E9250" },
+  { index = 8, target = "0x001E9250" },
+  { index = 9, target = "0x001E9250" },
+  { index = 10, target = "0x001E9880" },
+  { index = 11, target = "0x001E8F7C" },
+  { index = 12, target = "0x001E8F7C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001EAC88 in FUN_001ea568
+address = "0x00440430"
+entries = [
+  { index = 0, target = "0x001EB220" },
+  { index = 1, target = "0x001EB598" },
+  { index = 2, target = "0x001EAC9C" },
+  { index = 3, target = "0x001EAC9C" },
+  { index = 4, target = "0x001EAC9C" },
+  { index = 5, target = "0x001EAC9C" },
+  { index = 6, target = "0x001EAC9C" },
+  { index = 7, target = "0x001EAF68" },
+  { index = 8, target = "0x001EAF68" },
+  { index = 9, target = "0x001EAF68" },
+  { index = 10, target = "0x001EB598" },
+  { index = 11, target = "0x001EAC90" },
+  { index = 12, target = "0x001EAC90" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001EC108 in FUN_001ebb98
+address = "0x00440470"
+entries = [
+  { index = 0, target = "0x001EC6A0" },
+  { index = 1, target = "0x001ECA18" },
+  { index = 2, target = "0x001EC11C" },
+  { index = 3, target = "0x001EC11C" },
+  { index = 4, target = "0x001EC11C" },
+  { index = 5, target = "0x001EC11C" },
+  { index = 6, target = "0x001EC11C" },
+  { index = 7, target = "0x001EC3E8" },
+  { index = 8, target = "0x001EC3E8" },
+  { index = 9, target = "0x001EC3E8" },
+  { index = 10, target = "0x001ECA18" },
+  { index = 11, target = "0x001EC110" },
+  { index = 12, target = "0x001EC110" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001EFE0C in FUN_001ef840
+address = "0x004404F0"
+entries = [
+  { index = 0, target = "0x001F03B8" },
+  { index = 1, target = "0x001F0730" },
+  { index = 2, target = "0x001EFE20" },
+  { index = 3, target = "0x001EFE20" },
+  { index = 4, target = "0x001EFE20" },
+  { index = 5, target = "0x001EFE20" },
+  { index = 6, target = "0x001EFE20" },
+  { index = 7, target = "0x001F00F8" },
+  { index = 8, target = "0x001F00F8" },
+  { index = 9, target = "0x001F00F8" },
+  { index = 10, target = "0x001F0730" },
+  { index = 11, target = "0x001EFE14" },
+  { index = 12, target = "0x001EFE14" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F117C in FUN_001f0d90
+address = "0x00440530"
+entries = [
+  { index = 0, target = "0x001F1718" },
+  { index = 1, target = "0x001F1A90" },
+  { index = 2, target = "0x001F1190" },
+  { index = 3, target = "0x001F1190" },
+  { index = 4, target = "0x001F1190" },
+  { index = 5, target = "0x001F1190" },
+  { index = 6, target = "0x001F1190" },
+  { index = 7, target = "0x001F1458" },
+  { index = 8, target = "0x001F1458" },
+  { index = 9, target = "0x001F1458" },
+  { index = 10, target = "0x001F1A90" },
+  { index = 11, target = "0x001F1184" },
+  { index = 12, target = "0x001F1184" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F2B94 in FUN_001f2558
+address = "0x00440570"
+entries = [
+  { index = 0, target = "0x001F3140" },
+  { index = 1, target = "0x001F34B8" },
+  { index = 2, target = "0x001F2BA8" },
+  { index = 3, target = "0x001F2BA8" },
+  { index = 4, target = "0x001F2BA8" },
+  { index = 5, target = "0x001F2BA8" },
+  { index = 6, target = "0x001F2BA8" },
+  { index = 7, target = "0x001F2E80" },
+  { index = 8, target = "0x001F2E80" },
+  { index = 9, target = "0x001F2E80" },
+  { index = 10, target = "0x001F34B8" },
+  { index = 11, target = "0x001F2B9C" },
+  { index = 12, target = "0x001F2B9C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F4598 in FUN_001f4098
+address = "0x004405B0"
+entries = [
+  { index = 0, target = "0x001F4A14" },
+  { index = 1, target = "0x001F4CF8" },
+  { index = 2, target = "0x001F45AC" },
+  { index = 3, target = "0x001F45AC" },
+  { index = 4, target = "0x001F45AC" },
+  { index = 5, target = "0x001F45AC" },
+  { index = 6, target = "0x001F45AC" },
+  { index = 7, target = "0x001F47E4" },
+  { index = 8, target = "0x001F47E4" },
+  { index = 9, target = "0x001F47E4" },
+  { index = 10, target = "0x001F4CF8" },
+  { index = 11, target = "0x001F45A0" },
+  { index = 12, target = "0x001F45A0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F5874 in FUN_001f52a8
+address = "0x004405F0"
+entries = [
+  { index = 0, target = "0x001F5E20" },
+  { index = 1, target = "0x001F6198" },
+  { index = 2, target = "0x001F5888" },
+  { index = 3, target = "0x001F5888" },
+  { index = 4, target = "0x001F5888" },
+  { index = 5, target = "0x001F5888" },
+  { index = 6, target = "0x001F5888" },
+  { index = 7, target = "0x001F5B60" },
+  { index = 8, target = "0x001F5B60" },
+  { index = 9, target = "0x001F5B60" },
+  { index = 10, target = "0x001F6198" },
+  { index = 11, target = "0x001F587C" },
+  { index = 12, target = "0x001F587C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F72B8 in FUN_001f71d8
+address = "0x00440640"
+entries = [
+  { index = 0, target = "0x001F72C0" },
+  { index = 1, target = "0x001F73B8" },
+  { index = 2, target = "0x001F7684" },
+  { index = 3, target = "0x001F7684" },
+  { index = 4, target = "0x001F7684" },
+  { index = 5, target = "0x001F7684" },
+  { index = 6, target = "0x001F7684" },
+  { index = 7, target = "0x001F7684" },
+  { index = 8, target = "0x001F7684" },
+  { index = 9, target = "0x001F7684" },
+  { index = 10, target = "0x001F7684" },
+  { index = 11, target = "0x001F7684" },
+  { index = 12, target = "0x001F7684" },
+  { index = 13, target = "0x001F7684" },
+  { index = 14, target = "0x001F7684" },
+  { index = 15, target = "0x001F7684" },
+  { index = 16, target = "0x001F7684" },
+  { index = 17, target = "0x001F7684" },
+  { index = 18, target = "0x001F7684" },
+  { index = 19, target = "0x001F7684" },
+  { index = 20, target = "0x001F7684" },
+  { index = 21, target = "0x001F7684" },
+  { index = 22, target = "0x001F7684" },
+  { index = 23, target = "0x001F7684" },
+  { index = 24, target = "0x001F741C" },
+  { index = 25, target = "0x001F74A4" },
+  { index = 26, target = "0x001F7568" },
+  { index = 27, target = "0x001F72EC" },
+  { index = 28, target = "0x001F7684" },
+  { index = 29, target = "0x001F733C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F73E8 in FUN_001f71d8
+address = "0x004406C0"
+entries = [
+  { index = 0, target = "0x001F73F0" },
+  { index = 1, target = "0x001F73F0" },
+  { index = 2, target = "0x001F76BC" },
+  { index = 3, target = "0x001F76BC" },
+  { index = 4, target = "0x001F76BC" },
+  { index = 5, target = "0x001F76BC" },
+  { index = 6, target = "0x001F73F0" },
+  { index = 7, target = "0x001F76BC" },
+  { index = 8, target = "0x001F73F0" },
+  { index = 9, target = "0x001F73F0" },
+  { index = 10, target = "0x001F73F0" },
+  { index = 11, target = "0x001F73F0" },
+  { index = 12, target = "0x001F76BC" },
+  { index = 13, target = "0x001F76BC" },
+  { index = 14, target = "0x001F76BC" },
+  { index = 15, target = "0x001F76BC" },
+  { index = 16, target = "0x001F76BC" },
+  { index = 17, target = "0x001F73F0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F7598 in FUN_001f71d8
+address = "0x00440710"
+entries = [
+  { index = 0, target = "0x001F75A0" },
+  { index = 1, target = "0x001F75B8" },
+  { index = 2, target = "0x001F76BC" },
+  { index = 3, target = "0x001F76BC" },
+  { index = 4, target = "0x001F76BC" },
+  { index = 5, target = "0x001F76BC" },
+  { index = 6, target = "0x001F7648" },
+  { index = 7, target = "0x001F76BC" },
+  { index = 8, target = "0x001F75D0" },
+  { index = 9, target = "0x001F75E8" },
+  { index = 10, target = "0x001F7600" },
+  { index = 11, target = "0x001F7618" },
+  { index = 12, target = "0x001F76BC" },
+  { index = 13, target = "0x001F76BC" },
+  { index = 14, target = "0x001F76BC" },
+  { index = 15, target = "0x001F76BC" },
+  { index = 16, target = "0x001F76BC" },
+  { index = 17, target = "0x001F7630" },
+  { index = 18, target = "0x001F7660" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F869C in FUN_001f8058
+address = "0x00440760"
+entries = [
+  { index = 0, target = "0x001F86D4" },
+  { index = 1, target = "0x001F87B8" },
+  { index = 2, target = "0x001F86EC" },
+  { index = 3, target = "0x001F87B8" },
+  { index = 4, target = "0x001F87B8" },
+  { index = 5, target = "0x001F87B8" },
+  { index = 6, target = "0x001F86A4" },
+  { index = 7, target = "0x001F86BC" },
+  { index = 8, target = "0x001F87B8" },
+  { index = 9, target = "0x001F87B8" },
+  { index = 10, target = "0x001F871C" },
+  { index = 11, target = "0x001F8734" },
+  { index = 12, target = "0x001F87B8" },
+  { index = 13, target = "0x001F87B8" },
+  { index = 14, target = "0x001F87B8" },
+  { index = 15, target = "0x001F87B8" },
+  { index = 16, target = "0x001F87B8" },
+  { index = 17, target = "0x001F87B8" },
+  { index = 18, target = "0x001F87B8" },
+  { index = 19, target = "0x001F87B8" },
+  { index = 20, target = "0x001F8704" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F8778 in FUN_001f8058
+address = "0x004407C0"
+entries = [
+  { index = 0, target = "0x001F8780" },
+  { index = 1, target = "0x001F87B8" },
+  { index = 2, target = "0x001F8780" },
+  { index = 3, target = "0x001F87B8" },
+  { index = 4, target = "0x001F87B8" },
+  { index = 5, target = "0x001F87B8" },
+  { index = 6, target = "0x001F8780" },
+  { index = 7, target = "0x001F8780" },
+  { index = 8, target = "0x001F87B8" },
+  { index = 9, target = "0x001F87B8" },
+  { index = 10, target = "0x001F8780" },
+  { index = 11, target = "0x001F8780" },
+  { index = 12, target = "0x001F87B8" },
+  { index = 13, target = "0x001F87B8" },
+  { index = 14, target = "0x001F87B8" },
+  { index = 15, target = "0x001F87B8" },
+  { index = 16, target = "0x001F87B8" },
+  { index = 17, target = "0x001F87B8" },
+  { index = 18, target = "0x001F87B8" },
+  { index = 19, target = "0x001F87B8" },
+  { index = 20, target = "0x001F8780" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F8C0C in FUN_001f8058
+address = "0x00440820"
+entries = [
+  { index = 0, target = "0x001F8C14" },
+  { index = 1, target = "0x001F8F50" },
+  { index = 2, target = "0x001F8F50" },
+  { index = 3, target = "0x001F8D30" },
+  { index = 4, target = "0x001F8F50" },
+  { index = 5, target = "0x001F8F50" },
+  { index = 6, target = "0x001F8F50" },
+  { index = 7, target = "0x001F8CB8" },
+  { index = 8, target = "0x001F8CB8" },
+  { index = 9, target = "0x001F8F50" },
+  { index = 10, target = "0x001F8F50" },
+  { index = 11, target = "0x001F8D40" },
+  { index = 12, target = "0x001F8D40" },
+  { index = 13, target = "0x001F8F50" },
+  { index = 14, target = "0x001F8F50" },
+  { index = 15, target = "0x001F8F50" },
+  { index = 16, target = "0x001F8F50" },
+  { index = 17, target = "0x001F8F50" },
+  { index = 18, target = "0x001F8F50" },
+  { index = 19, target = "0x001F8F50" },
+  { index = 20, target = "0x001F8F50" },
+  { index = 21, target = "0x001F8D30" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F8DC4 in FUN_001f8058
+address = "0x00440880"
+entries = [
+  { index = 0, target = "0x001F8DCC" },
+  { index = 1, target = "0x001F8F50" },
+  { index = 2, target = "0x001F8F50" },
+  { index = 3, target = "0x001F8DF8" },
+  { index = 4, target = "0x001F8F50" },
+  { index = 5, target = "0x001F8F50" },
+  { index = 6, target = "0x001F8F50" },
+  { index = 7, target = "0x001F8DEC" },
+  { index = 8, target = "0x001F8DEC" },
+  { index = 9, target = "0x001F8F50" },
+  { index = 10, target = "0x001F8F50" },
+  { index = 11, target = "0x001F8DD4" },
+  { index = 12, target = "0x001F8DD4" },
+  { index = 13, target = "0x001F8F50" },
+  { index = 14, target = "0x001F8F50" },
+  { index = 15, target = "0x001F8F50" },
+  { index = 16, target = "0x001F8F50" },
+  { index = 17, target = "0x001F8F50" },
+  { index = 18, target = "0x001F8F50" },
+  { index = 19, target = "0x001F8F50" },
+  { index = 20, target = "0x001F8F50" },
+  { index = 21, target = "0x001F8DF8" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F9854 in FUN_001f97e0
+address = "0x00440910"
+entries = [
+  { index = 0, target = "0x001F985C" },
+  { index = 1, target = "0x001F98BC" },
+  { index = 2, target = "0x001F9A3C" },
+  { index = 3, target = "0x001F9AA4" },
+  { index = 4, target = "0x001F9B0C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001F9C98 in FUN_001f9c38
+address = "0x00440990"
+entries = [
+  { index = 0, target = "0x001F9CA0" },
+  { index = 1, target = "0x001F9CE0" },
+  { index = 2, target = "0x001F9D10" },
+  { index = 3, target = "0x001F9D60" },
+  { index = 4, target = "0x001F9DBC" },
+  { index = 5, target = "0x001F9EF4" },
+  { index = 6, target = "0x001F9F54" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001FA08C in FUN_001fa028
+address = "0x004409D0"
+entries = [
+  { index = 0, target = "0x001FA094" },
+  { index = 1, target = "0x001FA0C0" },
+  { index = 2, target = "0x001FA178" },
+  { index = 3, target = "0x001FA19C" },
+  { index = 4, target = "0x001FA1E0" },
+  { index = 5, target = "0x001FA21C" },
+  { index = 6, target = "0x001FA248" },
+  { index = 7, target = "0x001FA280" },
+  { index = 8, target = "0x001FA2C4" },
+  { index = 9, target = "0x001FA2F4" },
+  { index = 10, target = "0x001FA354" },
+  { index = 11, target = "0x001FA39C" },
+  { index = 12, target = "0x001FA3B8" },
+  { index = 13, target = "0x001FA428" },
+  { index = 14, target = "0x001FA488" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001FA5CC in FUN_001fa568
+address = "0x00440A10"
+entries = [
+  { index = 0, target = "0x001FA5D4" },
+  { index = 1, target = "0x001FA618" },
+  { index = 2, target = "0x001FA648" },
+  { index = 3, target = "0x001FA69C" },
+  { index = 4, target = "0x001FA6F4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001FAA30 in FUN_001fa9b8
+address = "0x00440A30"
+entries = [
+  { index = 0, target = "0x001FAA38" },
+  { index = 1, target = "0x001FAA8C" },
+  { index = 2, target = "0x001FABB4" },
+  { index = 3, target = "0x001FAC08" },
+  { index = 4, target = "0x001FAC64" },
+  { index = 5, target = "0x001FACB8" },
+  { index = 6, target = "0x001FAD3C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001FB150 in FUN_001fb0e8
+address = "0x00440A50"
+entries = [
+  { index = 0, target = "0x001FB158" },
+  { index = 1, target = "0x001FB194" },
+  { index = 2, target = "0x001FB1E4" },
+  { index = 3, target = "0x001FB230" },
+  { index = 4, target = "0x001FB280" },
+]
+
+[[jump_tables.table]]
+# JR at 0x001FC83C in FUN_001fc820
+address = "0x00440C40"
+entries = [
+  { index = 0, target = "0x001FC844" },
+  { index = 1, target = "0x001FC84C" },
+  { index = 2, target = "0x001FC858" },
+  { index = 3, target = "0x001FC864" },
+  { index = 4, target = "0x001FC870" },
+  { index = 5, target = "0x001FC87C" },
+  { index = 6, target = "0x001FC888" },
+  { index = 7, target = "0x001FC894" },
+  { index = 8, target = "0x001FC8A0" },
+  { index = 9, target = "0x001FC8AC" },
+  { index = 10, target = "0x001FC8B8" },
+  { index = 11, target = "0x001FC8C4" },
+  { index = 12, target = "0x001FC8D0" },
+  { index = 13, target = "0x001FC8DC" },
+  { index = 14, target = "0x001FC8E8" },
+  { index = 15, target = "0x001FC8E8" },
+  { index = 16, target = "0x001FC8E8" },
+  { index = 17, target = "0x001FC8F4" },
+  { index = 18, target = "0x001FC900" },
+  { index = 19, target = "0x001FC90C" },
+  { index = 20, target = "0x001FC918" },
+  { index = 21, target = "0x001FC924" },
+  { index = 22, target = "0x001FC930" },
+  { index = 23, target = "0x001FC93C" },
+  { index = 24, target = "0x001FC948" },
+  { index = 25, target = "0x001FC954" },
+  { index = 26, target = "0x001FC954" },
+  { index = 27, target = "0x001FC954" },
+  { index = 28, target = "0x001FC960" },
+  { index = 29, target = "0x001FC96C" },
+  { index = 30, target = "0x001FC978" },
+  { index = 31, target = "0x001FC984" },
+  { index = 32, target = "0x001FC990" },
+  { index = 33, target = "0x001FC99C" },
+  { index = 34, target = "0x001FC9A8" },
+  { index = 35, target = "0x001FC9B4" },
+  { index = 36, target = "0x001FC9C0" },
+  { index = 37, target = "0x001FC9CC" },
+  { index = 38, target = "0x001FC9D8" },
+  { index = 39, target = "0x001FC9E4" },
+  { index = 40, target = "0x001FC9F0" },
+  { index = 41, target = "0x001FC9FC" },
+  { index = 42, target = "0x001FCA08" },
+  { index = 43, target = "0x001FCA14" },
+  { index = 44, target = "0x001FCA20" },
+  { index = 45, target = "0x001FCA28" },
+  { index = 46, target = "0x001FCA30" },
+  { index = 47, target = "0x001FCA38" },
+  { index = 48, target = "0x001FCA40" },
+  { index = 49, target = "0x001FCA48" },
+  { index = 50, target = "0x001FCA50" },
+  { index = 51, target = "0x001FCA58" },
+  { index = 52, target = "0x001FCA60" },
+  { index = 53, target = "0x001FCA68" },
+  { index = 54, target = "0x001FCA70" },
+  { index = 55, target = "0x001FCA78" },
+  { index = 56, target = "0x001FCA84" },
+  { index = 57, target = "0x001FCA90" },
+  { index = 58, target = "0x001FCA9C" },
+  { index = 59, target = "0x001FCAA8" },
+  { index = 60, target = "0x001FCAB4" },
+  { index = 61, target = "0x001FCAC0" },
+  { index = 62, target = "0x001FCACC" },
+  { index = 63, target = "0x001FCAD8" },
+  { index = 64, target = "0x001FC844" },
+  { index = 65, target = "0x001FC844" },
+  { index = 66, target = "0x001FCAE4" },
+  { index = 67, target = "0x001FCAF0" },
+  { index = 68, target = "0x001FCBC4" },
+  { index = 69, target = "0x001FCBC4" },
+  { index = 70, target = "0x001FCAFC" },
+  { index = 71, target = "0x001FCB04" },
+  { index = 72, target = "0x001FCB0C" },
+  { index = 73, target = "0x001FCB14" },
+  { index = 74, target = "0x001FCB1C" },
+  { index = 75, target = "0x001FCB24" },
+  { index = 76, target = "0x001FCB2C" },
+  { index = 77, target = "0x001FCB34" },
+  { index = 78, target = "0x001FCB3C" },
+  { index = 79, target = "0x001FCB44" },
+  { index = 80, target = "0x001FCB4C" },
+  { index = 81, target = "0x001FCB54" },
+  { index = 82, target = "0x001FCB5C" },
+  { index = 83, target = "0x001FCB64" },
+  { index = 84, target = "0x001FCB6C" },
+  { index = 85, target = "0x001FCB74" },
+  { index = 86, target = "0x001FCB7C" },
+  { index = 87, target = "0x001FCB84" },
+  { index = 88, target = "0x001FCB8C" },
+  { index = 89, target = "0x001FCB94" },
+  { index = 90, target = "0x001FCB9C" },
+  { index = 91, target = "0x001FCBA4" },
+  { index = 92, target = "0x001FCBAC" },
+  { index = 93, target = "0x001FCBB4" },
+  { index = 94, target = "0x001FCBBC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00204988 in FUN_002048d8
+address = "0x00440E80"
+entries = [
+  { index = 0, target = "0x00204990" },
+  { index = 1, target = "0x002049A0" },
+  { index = 2, target = "0x002049B0" },
+  { index = 3, target = "0x002049D0" },
+  { index = 4, target = "0x002049D0" },
+  { index = 5, target = "0x002049D0" },
+  { index = 6, target = "0x002049D0" },
+  { index = 7, target = "0x002049D0" },
+  { index = 8, target = "0x002049D0" },
+  { index = 9, target = "0x002049D0" },
+  { index = 10, target = "0x002049B0" },
+  { index = 11, target = "0x002049D0" },
+  { index = 12, target = "0x002049D0" },
+  { index = 13, target = "0x002049D0" },
+  { index = 14, target = "0x002049D0" },
+  { index = 15, target = "0x002049D0" },
+  { index = 16, target = "0x002049D0" },
+  { index = 17, target = "0x002049D0" },
+  { index = 18, target = "0x002049D0" },
+  { index = 19, target = "0x002049C0" },
+  { index = 20, target = "0x002049D0" },
+  { index = 21, target = "0x002049D0" },
+  { index = 22, target = "0x002049D0" },
+  { index = 23, target = "0x002049D0" },
+  { index = 24, target = "0x002049D0" },
+  { index = 25, target = "0x002049D0" },
+  { index = 26, target = "0x002049D0" },
+  { index = 27, target = "0x002049C0" },
+  { index = 28, target = "0x002049D0" },
+  { index = 29, target = "0x002049D0" },
+  { index = 30, target = "0x002049D0" },
+  { index = 31, target = "0x002049D0" },
+  { index = 32, target = "0x002049D0" },
+  { index = 33, target = "0x002049D0" },
+  { index = 34, target = "0x002049D0" },
+  { index = 35, target = "0x002049D0" },
+  { index = 36, target = "0x002049D0" },
+  { index = 37, target = "0x002049D0" },
+  { index = 38, target = "0x002049D0" },
+  { index = 39, target = "0x002049D0" },
+  { index = 40, target = "0x002049D0" },
+  { index = 41, target = "0x002049D0" },
+  { index = 42, target = "0x002049D0" },
+  { index = 43, target = "0x002049D0" },
+  { index = 44, target = "0x002049D0" },
+  { index = 45, target = "0x002049D0" },
+  { index = 46, target = "0x002049D0" },
+  { index = 47, target = "0x002049D0" },
+  { index = 48, target = "0x00204990" },
+  { index = 49, target = "0x002049A0" },
+  { index = 50, target = "0x002049B0" },
+  { index = 51, target = "0x002049D0" },
+  { index = 52, target = "0x002049D0" },
+  { index = 53, target = "0x002049D0" },
+  { index = 54, target = "0x002049D0" },
+  { index = 55, target = "0x002049D0" },
+  { index = 56, target = "0x002049D0" },
+  { index = 57, target = "0x002049D0" },
+  { index = 58, target = "0x002049B0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00205400 in FUN_00205378
+address = "0x00440F70"
+entries = [
+  { index = 0, target = "0x00205408" },
+  { index = 1, target = "0x00205474" },
+  { index = 2, target = "0x002054D0" },
+  { index = 3, target = "0x00205540" },
+  { index = 4, target = "0x00205594" },
+  { index = 5, target = "0x002055E8" },
+  { index = 6, target = "0x0020563C" },
+  { index = 7, target = "0x00205690" },
+  { index = 8, target = "0x002056E4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00205838 in FUN_002057a8
+address = "0x00440FA0"
+entries = [
+  { index = 0, target = "0x00205840" },
+  { index = 1, target = "0x00205894" },
+  { index = 2, target = "0x002058D4" },
+  { index = 3, target = "0x0020592C" },
+  { index = 4, target = "0x00205964" },
+  { index = 5, target = "0x0020599C" },
+  { index = 6, target = "0x002059D4" },
+  { index = 7, target = "0x00205A0C" },
+  { index = 8, target = "0x00205A44" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00205B78 in FUN_00205af0
+address = "0x00440FD0"
+entries = [
+  { index = 0, target = "0x00205B80" },
+  { index = 1, target = "0x00205BA4" },
+  { index = 2, target = "0x00205BC8" },
+  { index = 3, target = "0x00205BEC" },
+  { index = 4, target = "0x00205C10" },
+  { index = 5, target = "0x00205C34" },
+  { index = 6, target = "0x00205C58" },
+  { index = 7, target = "0x00205C7C" },
+  { index = 8, target = "0x00205CA0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00205DEC in FUN_00205d80
+address = "0x00441000"
+entries = [
+  { index = 0, target = "0x00205DF4" },
+  { index = 1, target = "0x00205DF4" },
+  { index = 2, target = "0x00205E14" },
+  { index = 3, target = "0x00205E14" },
+  { index = 4, target = "0x00205E38" },
+  { index = 5, target = "0x00205E38" },
+  { index = 6, target = "0x00205E50" },
+  { index = 7, target = "0x00205E50" },
+  { index = 8, target = "0x00205E68" },
+  { index = 9, target = "0x00205E68" },
+  { index = 10, target = "0x00205E68" },
+]
+
+[[jump_tables.table]]
+# JR at 0x002064D8 in FUN_00206450
+address = "0x00441050"
+entries = [
+  { index = 0, target = "0x002064E0" },
+  { index = 1, target = "0x0020654C" },
+  { index = 2, target = "0x002065A8" },
+  { index = 3, target = "0x00206618" },
+  { index = 4, target = "0x0020666C" },
+  { index = 5, target = "0x002066C0" },
+  { index = 6, target = "0x00206714" },
+  { index = 7, target = "0x00206768" },
+  { index = 8, target = "0x002067BC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00206910 in FUN_00206880
+address = "0x00441080"
+entries = [
+  { index = 0, target = "0x00206918" },
+  { index = 1, target = "0x0020696C" },
+  { index = 2, target = "0x002069AC" },
+  { index = 3, target = "0x00206A04" },
+  { index = 4, target = "0x00206A3C" },
+  { index = 5, target = "0x00206A74" },
+  { index = 6, target = "0x00206AAC" },
+  { index = 7, target = "0x00206AE4" },
+  { index = 8, target = "0x00206B1C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0020D518 in FUN_0020d478
+address = "0x00441570"
+entries = [
+  { index = 0, target = "0x0020D520" },
+  { index = 1, target = "0x0020D528" },
+  { index = 2, target = "0x0020D530" },
+  { index = 3, target = "0x0020D978" },
+  { index = 4, target = "0x0020D978" },
+  { index = 5, target = "0x0020D978" },
+  { index = 6, target = "0x0020D978" },
+  { index = 7, target = "0x0020D978" },
+  { index = 8, target = "0x0020D978" },
+  { index = 9, target = "0x0020D978" },
+  { index = 10, target = "0x0020D530" },
+  { index = 11, target = "0x0020D978" },
+  { index = 12, target = "0x0020D978" },
+  { index = 13, target = "0x0020D978" },
+  { index = 14, target = "0x0020D978" },
+  { index = 15, target = "0x0020D978" },
+  { index = 16, target = "0x0020D978" },
+  { index = 17, target = "0x0020D978" },
+  { index = 18, target = "0x0020D978" },
+  { index = 19, target = "0x0020D538" },
+  { index = 20, target = "0x0020D540" },
+  { index = 21, target = "0x0020D978" },
+  { index = 22, target = "0x0020D978" },
+  { index = 23, target = "0x0020D978" },
+  { index = 24, target = "0x0020D978" },
+  { index = 25, target = "0x0020D978" },
+  { index = 26, target = "0x0020D978" },
+  { index = 27, target = "0x0020D538" },
+  { index = 28, target = "0x0020D978" },
+  { index = 29, target = "0x0020D978" },
+  { index = 30, target = "0x0020D978" },
+  { index = 31, target = "0x0020D978" },
+  { index = 32, target = "0x0020D978" },
+  { index = 33, target = "0x0020D978" },
+  { index = 34, target = "0x0020D978" },
+  { index = 35, target = "0x0020D978" },
+  { index = 36, target = "0x0020D540" },
+  { index = 37, target = "0x0020D978" },
+  { index = 38, target = "0x0020D978" },
+  { index = 39, target = "0x0020D978" },
+  { index = 40, target = "0x0020D978" },
+  { index = 41, target = "0x0020D978" },
+  { index = 42, target = "0x0020D978" },
+  { index = 43, target = "0x0020D978" },
+  { index = 44, target = "0x0020D540" },
+  { index = 45, target = "0x0020D978" },
+  { index = 46, target = "0x0020D978" },
+  { index = 47, target = "0x0020D978" },
+  { index = 48, target = "0x0020D520" },
+  { index = 49, target = "0x0020D528" },
+  { index = 50, target = "0x0020D530" },
+  { index = 51, target = "0x0020D978" },
+  { index = 52, target = "0x0020D978" },
+  { index = 53, target = "0x0020D978" },
+  { index = 54, target = "0x0020D978" },
+  { index = 55, target = "0x0020D978" },
+  { index = 56, target = "0x0020D978" },
+  { index = 57, target = "0x0020D978" },
+  { index = 58, target = "0x0020D530" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00210D04 in FUN_00210cd0
+address = "0x00441660"
+entries = [
+  { index = 0, target = "0x00210D3C" },
+  { index = 1, target = "0x00210D3C" },
+  { index = 2, target = "0x00210D0C" },
+  { index = 3, target = "0x00210D34" },
+  { index = 4, target = "0x00210D3C" },
+  { index = 5, target = "0x00210D3C" },
+  { index = 6, target = "0x00210D20" },
+  { index = 7, target = "0x00210D3C" },
+  { index = 8, target = "0x00210D34" },
+  { index = 9, target = "0x00210D34" },
+  { index = 10, target = "0x00210D34" },
+  { index = 11, target = "0x00210D34" },
+  { index = 12, target = "0x00210D34" },
+  { index = 13, target = "0x00210D28" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211100 in FUN_002110a0
+address = "0x004416A0"
+entries = [
+  { index = 0, target = "0x00211118" },
+  { index = 1, target = "0x00211108" },
+  { index = 2, target = "0x0021112C" },
+  { index = 3, target = "0x002111A8" },
+  { index = 4, target = "0x00211114" },
+  { index = 5, target = "0x00211120" },
+  { index = 6, target = "0x00211160" },
+  { index = 7, target = "0x0021114C" },
+  { index = 8, target = "0x002111A8" },
+  { index = 9, target = "0x002111A8" },
+  { index = 10, target = "0x002111A8" },
+  { index = 11, target = "0x002111A8" },
+  { index = 12, target = "0x002111A8" },
+  { index = 13, target = "0x00211174" },
+]
+
+[[jump_tables.table]]
+# JR at 0x002112B8 in FUN_002111f0
+address = "0x004416E0"
+entries = [
+  { index = 0, target = "0x002112C0" },
+  { index = 1, target = "0x002112CC" },
+  { index = 2, target = "0x002112E8" },
+  { index = 3, target = "0x002112F4" },
+  { index = 4, target = "0x00211300" },
+  { index = 5, target = "0x0021130C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211344 in FUN_002111f0
+address = "0x00441700"
+entries = [
+  { index = 0, target = "0x0021134C" },
+  { index = 1, target = "0x0021136C" },
+  { index = 2, target = "0x0021138C" },
+  { index = 3, target = "0x002113A4" },
+  { index = 4, target = "0x002113C0" },
+  { index = 5, target = "0x002113E0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211854 in FUN_00211810
+address = "0x00441720"
+entries = [
+  { index = 0, target = "0x002118A4" },
+  { index = 1, target = "0x0021185C" },
+  { index = 2, target = "0x00211874" },
+  { index = 3, target = "0x0021188C" },
+  { index = 4, target = "0x002118BC" },
+  { index = 5, target = "0x002118BC" },
+  { index = 6, target = "0x002118BC" },
+  { index = 7, target = "0x002118BC" },
+  { index = 8, target = "0x002118BC" },
+  { index = 9, target = "0x002118BC" },
+  { index = 10, target = "0x002118BC" },
+  { index = 11, target = "0x002118BC" },
+  { index = 12, target = "0x002118BC" },
+  { index = 13, target = "0x002118BC" },
+  { index = 14, target = "0x002118BC" },
+  { index = 15, target = "0x002118BC" },
+  { index = 16, target = "0x002118BC" },
+  { index = 17, target = "0x002118B0" },
+  { index = 18, target = "0x002118B0" },
+  { index = 19, target = "0x002118B0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0021191C in FUN_002118d8
+address = "0x00441770"
+entries = [
+  { index = 0, target = "0x00211924" },
+  { index = 1, target = "0x0021192C" },
+  { index = 2, target = "0x00211934" },
+  { index = 3, target = "0x0021193C" },
+  { index = 4, target = "0x00211944" },
+  { index = 5, target = "0x00211944" },
+  { index = 6, target = "0x00211944" },
+]
+
+[[jump_tables.table]]
+# JR at 0x002119A0 in FUN_00211958
+address = "0x00441790"
+entries = [
+  { index = 0, target = "0x002119A8" },
+  { index = 1, target = "0x002119B0" },
+  { index = 2, target = "0x002119B8" },
+  { index = 3, target = "0x002119C0" },
+  { index = 4, target = "0x002119C8" },
+  { index = 5, target = "0x002119C8" },
+  { index = 6, target = "0x002119C8" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211A1C in FUN_002119d8
+address = "0x004417B0"
+entries = [
+  { index = 0, target = "0x00211A24" },
+  { index = 1, target = "0x00211A2C" },
+  { index = 2, target = "0x00211A34" },
+  { index = 3, target = "0x00211A3C" },
+  { index = 4, target = "0x00211A44" },
+  { index = 5, target = "0x00211A44" },
+  { index = 6, target = "0x00211A44" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211A9C in FUN_00211a58
+address = "0x004417D0"
+entries = [
+  { index = 0, target = "0x00211AA4" },
+  { index = 1, target = "0x00211AA4" },
+  { index = 2, target = "0x00211AB0" },
+  { index = 3, target = "0x00211AB0" },
+  { index = 4, target = "0x00211ABC" },
+  { index = 5, target = "0x00211ABC" },
+  { index = 6, target = "0x00211ABC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211B18 in FUN_00211ad0
+address = "0x004417F0"
+entries = [
+  { index = 0, target = "0x00211B20" },
+  { index = 1, target = "0x00211B20" },
+  { index = 2, target = "0x00211B2C" },
+  { index = 3, target = "0x00211B2C" },
+  { index = 4, target = "0x00211B38" },
+  { index = 5, target = "0x00211B38" },
+  { index = 6, target = "0x00211B38" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211B90 in FUN_00211b48
+address = "0x00441810"
+entries = [
+  { index = 0, target = "0x00211B98" },
+  { index = 1, target = "0x00211B98" },
+  { index = 2, target = "0x00211BA4" },
+  { index = 3, target = "0x00211BA4" },
+  { index = 4, target = "0x00211BB0" },
+  { index = 5, target = "0x00211BB0" },
+  { index = 6, target = "0x00211BB0" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00211C04 in FUN_00211bc0
+address = "0x00441830"
+entries = [
+  { index = 0, target = "0x00211C0C" },
+  { index = 1, target = "0x00211C0C" },
+  { index = 2, target = "0x00211C18" },
+  { index = 3, target = "0x00211C18" },
+  { index = 4, target = "0x00211C24" },
+  { index = 5, target = "0x00211C24" },
+  { index = 6, target = "0x00211C24" },
+]
+
+[[jump_tables.table]]
+# JR at 0x002181C4 in FUN_00218188
+address = "0x00441850"
+entries = [
+  { index = 0, target = "0x002181CC" },
+  { index = 1, target = "0x002181F0" },
+  { index = 2, target = "0x002181CC" },
+  { index = 3, target = "0x002181F0" },
+  { index = 4, target = "0x002181CC" },
+  { index = 5, target = "0x00218218" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00218738 in FUN_002186e0
+address = "0x00441870"
+entries = [
+  { index = 0, target = "0x00218740" },
+  { index = 1, target = "0x00218770" },
+  { index = 2, target = "0x002187CC" },
+  { index = 3, target = "0x0021881C" },
+  { index = 4, target = "0x00218864" },
+  { index = 5, target = "0x002188E8" },
+  { index = 6, target = "0x00218F38" },
+  { index = 7, target = "0x00218F38" },
+  { index = 8, target = "0x00218F38" },
+  { index = 9, target = "0x002189C4" },
+  { index = 10, target = "0x002189D8" },
+  { index = 11, target = "0x00218A3C" },
+  { index = 12, target = "0x00218ACC" },
+  { index = 13, target = "0x00218B0C" },
+  { index = 14, target = "0x00218B48" },
+  { index = 15, target = "0x00218B74" },
+  { index = 16, target = "0x00218B94" },
+  { index = 17, target = "0x00218BE4" },
+  { index = 18, target = "0x00218B0C" },
+  { index = 19, target = "0x00218BF8" },
+  { index = 20, target = "0x00218D78" },
+  { index = 21, target = "0x00218D9C" },
+  { index = 22, target = "0x00218DCC" },
+  { index = 23, target = "0x00218E0C" },
+  { index = 24, target = "0x00218F38" },
+  { index = 25, target = "0x00218F38" },
+  { index = 26, target = "0x00218F38" },
+  { index = 27, target = "0x00218F38" },
+  { index = 28, target = "0x00218F38" },
+  { index = 29, target = "0x00218F38" },
+  { index = 30, target = "0x00218F38" },
+  { index = 31, target = "0x00218F38" },
+  { index = 32, target = "0x00218F38" },
+  { index = 33, target = "0x00218F38" },
+  { index = 34, target = "0x00218F38" },
+  { index = 35, target = "0x00218F38" },
+  { index = 36, target = "0x00218F38" },
+  { index = 37, target = "0x00218F38" },
+  { index = 38, target = "0x00218F38" },
+  { index = 39, target = "0x00218F38" },
+  { index = 40, target = "0x00218F38" },
+  { index = 41, target = "0x00218F38" },
+  { index = 42, target = "0x00218F38" },
+  { index = 43, target = "0x00218F38" },
+  { index = 44, target = "0x00218F38" },
+  { index = 45, target = "0x00218F38" },
+  { index = 46, target = "0x00218F38" },
+  { index = 47, target = "0x00218F38" },
+  { index = 48, target = "0x00218F38" },
+  { index = 49, target = "0x00218F38" },
+  { index = 50, target = "0x00218F38" },
+  { index = 51, target = "0x00218F38" },
+  { index = 52, target = "0x00218F38" },
+  { index = 53, target = "0x00218F38" },
+  { index = 54, target = "0x00218F38" },
+  { index = 55, target = "0x00218F38" },
+  { index = 56, target = "0x00218F38" },
+  { index = 57, target = "0x00218F38" },
+  { index = 58, target = "0x00218F38" },
+  { index = 59, target = "0x00218F38" },
+  { index = 60, target = "0x00218F38" },
+  { index = 61, target = "0x00218F38" },
+  { index = 62, target = "0x00218F38" },
+  { index = 63, target = "0x00218F38" },
+  { index = 64, target = "0x00218F38" },
+  { index = 65, target = "0x00218F38" },
+  { index = 66, target = "0x00218F38" },
+  { index = 67, target = "0x00218F38" },
+  { index = 68, target = "0x00218F38" },
+  { index = 69, target = "0x00218F38" },
+  { index = 70, target = "0x00218F38" },
+  { index = 71, target = "0x00218F38" },
+  { index = 72, target = "0x00218F38" },
+  { index = 73, target = "0x00218F38" },
+  { index = 74, target = "0x00218F38" },
+  { index = 75, target = "0x00218F38" },
+  { index = 76, target = "0x00218F38" },
+  { index = 77, target = "0x00218F38" },
+  { index = 78, target = "0x00218F38" },
+  { index = 79, target = "0x00218F38" },
+  { index = 80, target = "0x00218F38" },
+  { index = 81, target = "0x00218F38" },
+  { index = 82, target = "0x00218F38" },
+  { index = 83, target = "0x00218F38" },
+  { index = 84, target = "0x00218F38" },
+  { index = 85, target = "0x00218F38" },
+  { index = 86, target = "0x00218F38" },
+  { index = 87, target = "0x00218F38" },
+  { index = 88, target = "0x00218F38" },
+  { index = 89, target = "0x00218F38" },
+  { index = 90, target = "0x00218F38" },
+  { index = 91, target = "0x00218F38" },
+  { index = 92, target = "0x00218F38" },
+  { index = 93, target = "0x00218F38" },
+  { index = 94, target = "0x00218F38" },
+  { index = 95, target = "0x00218F38" },
+  { index = 96, target = "0x00218F38" },
+  { index = 97, target = "0x00218F38" },
+  { index = 98, target = "0x00218F38" },
+  { index = 99, target = "0x00218F38" },
+  { index = 100, target = "0x00218E74" },
+  { index = 101, target = "0x00218EA4" },
+  { index = 102, target = "0x00218EF8" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00218FB4 in FUN_00218f68
+address = "0x00441A10"
+entries = [
+  { index = 0, target = "0x00218FBC" },
+  { index = 1, target = "0x00218FE4" },
+  { index = 2, target = "0x00219080" },
+  { index = 3, target = "0x002190D8" },
+  { index = 4, target = "0x00219168" },
+  { index = 5, target = "0x002191A4" },
+  { index = 6, target = "0x002191E0" },
+  { index = 7, target = "0x00219258" },
+  { index = 8, target = "0x0021927C" },
+  { index = 9, target = "0x002192A8" },
+  { index = 10, target = "0x002192C0" },
+  { index = 11, target = "0x00219324" },
+  { index = 12, target = "0x00219340" },
+  { index = 13, target = "0x00219388" },
+  { index = 14, target = "0x002193DC" },
+  { index = 15, target = "0x0021957C" },
+  { index = 16, target = "0x0021958C" },
+  { index = 17, target = "0x002195CC" },
+  { index = 18, target = "0x002196D8" },
+  { index = 19, target = "0x002196D8" },
+  { index = 20, target = "0x002196D8" },
+  { index = 21, target = "0x002196D8" },
+  { index = 22, target = "0x002196D8" },
+  { index = 23, target = "0x002196D8" },
+  { index = 24, target = "0x002196D8" },
+  { index = 25, target = "0x002196D8" },
+  { index = 26, target = "0x002196D8" },
+  { index = 27, target = "0x002196D8" },
+  { index = 28, target = "0x002196D8" },
+  { index = 29, target = "0x002196D8" },
+  { index = 30, target = "0x002196D8" },
+  { index = 31, target = "0x002196D8" },
+  { index = 32, target = "0x002196D8" },
+  { index = 33, target = "0x002196D8" },
+  { index = 34, target = "0x002196D8" },
+  { index = 35, target = "0x002196D8" },
+  { index = 36, target = "0x002196D8" },
+  { index = 37, target = "0x002196D8" },
+  { index = 38, target = "0x002196D8" },
+  { index = 39, target = "0x002196D8" },
+  { index = 40, target = "0x002196D8" },
+  { index = 41, target = "0x002196D8" },
+  { index = 42, target = "0x002196D8" },
+  { index = 43, target = "0x002196D8" },
+  { index = 44, target = "0x002196D8" },
+  { index = 45, target = "0x002196D8" },
+  { index = 46, target = "0x002196D8" },
+  { index = 47, target = "0x002196D8" },
+  { index = 48, target = "0x002196D8" },
+  { index = 49, target = "0x002196D8" },
+  { index = 50, target = "0x002196D8" },
+  { index = 51, target = "0x002196D8" },
+  { index = 52, target = "0x002196D8" },
+  { index = 53, target = "0x002196D8" },
+  { index = 54, target = "0x002196D8" },
+  { index = 55, target = "0x002196D8" },
+  { index = 56, target = "0x002196D8" },
+  { index = 57, target = "0x002196D8" },
+  { index = 58, target = "0x002196D8" },
+  { index = 59, target = "0x002196D8" },
+  { index = 60, target = "0x002196D8" },
+  { index = 61, target = "0x002196D8" },
+  { index = 62, target = "0x002196D8" },
+  { index = 63, target = "0x002196D8" },
+  { index = 64, target = "0x002196D8" },
+  { index = 65, target = "0x002196D8" },
+  { index = 66, target = "0x002196D8" },
+  { index = 67, target = "0x002196D8" },
+  { index = 68, target = "0x002196D8" },
+  { index = 69, target = "0x002196D8" },
+  { index = 70, target = "0x002196D8" },
+  { index = 71, target = "0x002196D8" },
+  { index = 72, target = "0x002196D8" },
+  { index = 73, target = "0x002196D8" },
+  { index = 74, target = "0x002196D8" },
+  { index = 75, target = "0x002196D8" },
+  { index = 76, target = "0x002196D8" },
+  { index = 77, target = "0x002196D8" },
+  { index = 78, target = "0x002196D8" },
+  { index = 79, target = "0x002196D8" },
+  { index = 80, target = "0x002196D8" },
+  { index = 81, target = "0x002196D8" },
+  { index = 82, target = "0x002196D8" },
+  { index = 83, target = "0x002196D8" },
+  { index = 84, target = "0x002196D8" },
+  { index = 85, target = "0x002196D8" },
+  { index = 86, target = "0x002196D8" },
+  { index = 87, target = "0x002196D8" },
+  { index = 88, target = "0x002196D8" },
+  { index = 89, target = "0x002196D8" },
+  { index = 90, target = "0x002196D8" },
+  { index = 91, target = "0x002196D8" },
+  { index = 92, target = "0x002196D8" },
+  { index = 93, target = "0x002196D8" },
+  { index = 94, target = "0x002196D8" },
+  { index = 95, target = "0x002196D8" },
+  { index = 96, target = "0x002196D8" },
+  { index = 97, target = "0x002196D8" },
+  { index = 98, target = "0x002196D8" },
+  { index = 99, target = "0x002196D8" },
+  { index = 100, target = "0x0021963C" },
+  { index = 101, target = "0x00219664" },
+  { index = 102, target = "0x002196B4" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0021973C in FUN_00219700
+address = "0x00441BB0"
+entries = [
+  { index = 0, target = "0x00219744" },
+  { index = 1, target = "0x00219768" },
+  { index = 2, target = "0x002197DC" },
+  { index = 3, target = "0x0021981C" },
+  { index = 4, target = "0x00219864" },
+  { index = 5, target = "0x002198E0" },
+  { index = 6, target = "0x00219CC4" },
+  { index = 7, target = "0x00219CC4" },
+  { index = 8, target = "0x00219980" },
+  { index = 9, target = "0x002199CC" },
+  { index = 10, target = "0x00219A5C" },
+  { index = 11, target = "0x00219A94" },
+  { index = 12, target = "0x00219AFC" },
+  { index = 13, target = "0x00219B7C" },
+  { index = 14, target = "0x00219BBC" },
+  { index = 15, target = "0x00219CC4" },
+  { index = 16, target = "0x00219CC4" },
+  { index = 17, target = "0x00219CC4" },
+  { index = 18, target = "0x00219CC4" },
+  { index = 19, target = "0x00219CC4" },
+  { index = 20, target = "0x00219CC4" },
+  { index = 21, target = "0x00219CC4" },
+  { index = 22, target = "0x00219CC4" },
+  { index = 23, target = "0x00219CC4" },
+  { index = 24, target = "0x00219CC4" },
+  { index = 25, target = "0x00219CC4" },
+  { index = 26, target = "0x00219CC4" },
+  { index = 27, target = "0x00219CC4" },
+  { index = 28, target = "0x00219CC4" },
+  { index = 29, target = "0x00219CC4" },
+  { index = 30, target = "0x00219CC4" },
+  { index = 31, target = "0x00219CC4" },
+  { index = 32, target = "0x00219CC4" },
+  { index = 33, target = "0x00219CC4" },
+  { index = 34, target = "0x00219CC4" },
+  { index = 35, target = "0x00219CC4" },
+  { index = 36, target = "0x00219CC4" },
+  { index = 37, target = "0x00219CC4" },
+  { index = 38, target = "0x00219CC4" },
+  { index = 39, target = "0x00219CC4" },
+  { index = 40, target = "0x00219CC4" },
+  { index = 41, target = "0x00219CC4" },
+  { index = 42, target = "0x00219CC4" },
+  { index = 43, target = "0x00219CC4" },
+  { index = 44, target = "0x00219CC4" },
+  { index = 45, target = "0x00219CC4" },
+  { index = 46, target = "0x00219CC4" },
+  { index = 47, target = "0x00219CC4" },
+  { index = 48, target = "0x00219CC4" },
+  { index = 49, target = "0x00219CC4" },
+  { index = 50, target = "0x00219CC4" },
+  { index = 51, target = "0x00219CC4" },
+  { index = 52, target = "0x00219CC4" },
+  { index = 53, target = "0x00219CC4" },
+  { index = 54, target = "0x00219CC4" },
+  { index = 55, target = "0x00219CC4" },
+  { index = 56, target = "0x00219CC4" },
+  { index = 57, target = "0x00219CC4" },
+  { index = 58, target = "0x00219CC4" },
+  { index = 59, target = "0x00219CC4" },
+  { index = 60, target = "0x00219CC4" },
+  { index = 61, target = "0x00219CC4" },
+  { index = 62, target = "0x00219CC4" },
+  { index = 63, target = "0x00219CC4" },
+  { index = 64, target = "0x00219CC4" },
+  { index = 65, target = "0x00219CC4" },
+  { index = 66, target = "0x00219CC4" },
+  { index = 67, target = "0x00219CC4" },
+  { index = 68, target = "0x00219CC4" },
+  { index = 69, target = "0x00219CC4" },
+  { index = 70, target = "0x00219CC4" },
+  { index = 71, target = "0x00219CC4" },
+  { index = 72, target = "0x00219CC4" },
+  { index = 73, target = "0x00219CC4" },
+  { index = 74, target = "0x00219CC4" },
+  { index = 75, target = "0x00219CC4" },
+  { index = 76, target = "0x00219CC4" },
+  { index = 77, target = "0x00219CC4" },
+  { index = 78, target = "0x00219CC4" },
+  { index = 79, target = "0x00219CC4" },
+  { index = 80, target = "0x00219CC4" },
+  { index = 81, target = "0x00219CC4" },
+  { index = 82, target = "0x00219CC4" },
+  { index = 83, target = "0x00219CC4" },
+  { index = 84, target = "0x00219CC4" },
+  { index = 85, target = "0x00219CC4" },
+  { index = 86, target = "0x00219CC4" },
+  { index = 87, target = "0x00219CC4" },
+  { index = 88, target = "0x00219CC4" },
+  { index = 89, target = "0x00219CC4" },
+  { index = 90, target = "0x00219CC4" },
+  { index = 91, target = "0x00219CC4" },
+  { index = 92, target = "0x00219CC4" },
+  { index = 93, target = "0x00219CC4" },
+  { index = 94, target = "0x00219CC4" },
+  { index = 95, target = "0x00219CC4" },
+  { index = 96, target = "0x00219CC4" },
+  { index = 97, target = "0x00219CC4" },
+  { index = 98, target = "0x00219CC4" },
+  { index = 99, target = "0x00219CC4" },
+  { index = 100, target = "0x00219C24" },
+  { index = 101, target = "0x00219C40" },
+  { index = 102, target = "0x00219C94" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00219D24 in FUN_00219cd8
+address = "0x00441D50"
+entries = [
+  { index = 0, target = "0x00219D2C" },
+  { index = 1, target = "0x00219D54" },
+  { index = 2, target = "0x00219DB0" },
+  { index = 3, target = "0x00219DE4" },
+  { index = 4, target = "0x00219E2C" },
+  { index = 5, target = "0x00219EA8" },
+  { index = 6, target = "0x0021A344" },
+  { index = 7, target = "0x0021A344" },
+  { index = 8, target = "0x00219FC8" },
+  { index = 9, target = "0x0021A02C" },
+  { index = 10, target = "0x0021A0BC" },
+  { index = 11, target = "0x0021A100" },
+  { index = 12, target = "0x0021A13C" },
+  { index = 13, target = "0x0021A1CC" },
+  { index = 14, target = "0x0021A1E0" },
+  { index = 15, target = "0x0021A220" },
+  { index = 16, target = "0x0021A344" },
+  { index = 17, target = "0x0021A344" },
+  { index = 18, target = "0x0021A344" },
+  { index = 19, target = "0x0021A344" },
+  { index = 20, target = "0x0021A344" },
+  { index = 21, target = "0x0021A344" },
+  { index = 22, target = "0x0021A344" },
+  { index = 23, target = "0x0021A344" },
+  { index = 24, target = "0x0021A344" },
+  { index = 25, target = "0x0021A344" },
+  { index = 26, target = "0x0021A344" },
+  { index = 27, target = "0x0021A344" },
+  { index = 28, target = "0x0021A344" },
+  { index = 29, target = "0x0021A344" },
+  { index = 30, target = "0x0021A344" },
+  { index = 31, target = "0x0021A344" },
+  { index = 32, target = "0x0021A344" },
+  { index = 33, target = "0x0021A344" },
+  { index = 34, target = "0x0021A344" },
+  { index = 35, target = "0x0021A344" },
+  { index = 36, target = "0x0021A344" },
+  { index = 37, target = "0x0021A344" },
+  { index = 38, target = "0x0021A344" },
+  { index = 39, target = "0x0021A344" },
+  { index = 40, target = "0x0021A344" },
+  { index = 41, target = "0x0021A344" },
+  { index = 42, target = "0x0021A344" },
+  { index = 43, target = "0x0021A344" },
+  { index = 44, target = "0x0021A344" },
+  { index = 45, target = "0x0021A344" },
+  { index = 46, target = "0x0021A344" },
+  { index = 47, target = "0x0021A344" },
+  { index = 48, target = "0x0021A344" },
+  { index = 49, target = "0x0021A344" },
+  { index = 50, target = "0x0021A344" },
+  { index = 51, target = "0x0021A344" },
+  { index = 52, target = "0x0021A344" },
+  { index = 53, target = "0x0021A344" },
+  { index = 54, target = "0x0021A344" },
+  { index = 55, target = "0x0021A344" },
+  { index = 56, target = "0x0021A344" },
+  { index = 57, target = "0x0021A344" },
+  { index = 58, target = "0x0021A344" },
+  { index = 59, target = "0x0021A344" },
+  { index = 60, target = "0x0021A344" },
+  { index = 61, target = "0x0021A344" },
+  { index = 62, target = "0x0021A344" },
+  { index = 63, target = "0x0021A344" },
+  { index = 64, target = "0x0021A344" },
+  { index = 65, target = "0x0021A344" },
+  { index = 66, target = "0x0021A344" },
+  { index = 67, target = "0x0021A344" },
+  { index = 68, target = "0x0021A344" },
+  { index = 69, target = "0x0021A344" },
+  { index = 70, target = "0x0021A344" },
+  { index = 71, target = "0x0021A344" },
+  { index = 72, target = "0x0021A344" },
+  { index = 73, target = "0x0021A344" },
+  { index = 74, target = "0x0021A344" },
+  { index = 75, target = "0x0021A344" },
+  { index = 76, target = "0x0021A344" },
+  { index = 77, target = "0x0021A344" },
+  { index = 78, target = "0x0021A344" },
+  { index = 79, target = "0x0021A344" },
+  { index = 80, target = "0x0021A344" },
+  { index = 81, target = "0x0021A344" },
+  { index = 82, target = "0x0021A344" },
+  { index = 83, target = "0x0021A344" },
+  { index = 84, target = "0x0021A344" },
+  { index = 85, target = "0x0021A344" },
+  { index = 86, target = "0x0021A344" },
+  { index = 87, target = "0x0021A344" },
+  { index = 88, target = "0x0021A344" },
+  { index = 89, target = "0x0021A344" },
+  { index = 90, target = "0x0021A344" },
+  { index = 91, target = "0x0021A344" },
+  { index = 92, target = "0x0021A344" },
+  { index = 93, target = "0x0021A344" },
+  { index = 94, target = "0x0021A344" },
+  { index = 95, target = "0x0021A344" },
+  { index = 96, target = "0x0021A344" },
+  { index = 97, target = "0x0021A344" },
+  { index = 98, target = "0x0021A344" },
+  { index = 99, target = "0x0021A344" },
+  { index = 100, target = "0x0021A290" },
+  { index = 101, target = "0x0021A2C0" },
+  { index = 102, target = "0x0021A314" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0021A3AC in FUN_0021a368
+address = "0x00441EF0"
+entries = [
+  { index = 0, target = "0x0021A3B4" },
+  { index = 1, target = "0x0021A3D8" },
+  { index = 2, target = "0x0021A468" },
+  { index = 3, target = "0x0021A4B8" },
+  { index = 4, target = "0x0021A550" },
+  { index = 5, target = "0x0021A574" },
+  { index = 6, target = "0x0021A5B0" },
+  { index = 7, target = "0x0021A674" },
+  { index = 8, target = "0x0021A684" },
+  { index = 9, target = "0x0021A6C4" },
+  { index = 10, target = "0x0021A7D8" },
+  { index = 11, target = "0x0021A7D8" },
+  { index = 12, target = "0x0021A7D8" },
+  { index = 13, target = "0x0021A7D8" },
+  { index = 14, target = "0x0021A7D8" },
+  { index = 15, target = "0x0021A7D8" },
+  { index = 16, target = "0x0021A7D8" },
+  { index = 17, target = "0x0021A7D8" },
+  { index = 18, target = "0x0021A7D8" },
+  { index = 19, target = "0x0021A7D8" },
+  { index = 20, target = "0x0021A7D8" },
+  { index = 21, target = "0x0021A7D8" },
+  { index = 22, target = "0x0021A7D8" },
+  { index = 23, target = "0x0021A7D8" },
+  { index = 24, target = "0x0021A7D8" },
+  { index = 25, target = "0x0021A7D8" },
+  { index = 26, target = "0x0021A7D8" },
+  { index = 27, target = "0x0021A7D8" },
+  { index = 28, target = "0x0021A7D8" },
+  { index = 29, target = "0x0021A7D8" },
+  { index = 30, target = "0x0021A7D8" },
+  { index = 31, target = "0x0021A7D8" },
+  { index = 32, target = "0x0021A7D8" },
+  { index = 33, target = "0x0021A7D8" },
+  { index = 34, target = "0x0021A7D8" },
+  { index = 35, target = "0x0021A7D8" },
+  { index = 36, target = "0x0021A7D8" },
+  { index = 37, target = "0x0021A7D8" },
+  { index = 38, target = "0x0021A7D8" },
+  { index = 39, target = "0x0021A7D8" },
+  { index = 40, target = "0x0021A7D8" },
+  { index = 41, target = "0x0021A7D8" },
+  { index = 42, target = "0x0021A7D8" },
+  { index = 43, target = "0x0021A7D8" },
+  { index = 44, target = "0x0021A7D8" },
+  { index = 45, target = "0x0021A7D8" },
+  { index = 46, target = "0x0021A7D8" },
+  { index = 47, target = "0x0021A7D8" },
+  { index = 48, target = "0x0021A7D8" },
+  { index = 49, target = "0x0021A7D8" },
+  { index = 50, target = "0x0021A7D8" },
+  { index = 51, target = "0x0021A7D8" },
+  { index = 52, target = "0x0021A7D8" },
+  { index = 53, target = "0x0021A7D8" },
+  { index = 54, target = "0x0021A7D8" },
+  { index = 55, target = "0x0021A7D8" },
+  { index = 56, target = "0x0021A7D8" },
+  { index = 57, target = "0x0021A7D8" },
+  { index = 58, target = "0x0021A7D8" },
+  { index = 59, target = "0x0021A7D8" },
+  { index = 60, target = "0x0021A7D8" },
+  { index = 61, target = "0x0021A7D8" },
+  { index = 62, target = "0x0021A7D8" },
+  { index = 63, target = "0x0021A7D8" },
+  { index = 64, target = "0x0021A7D8" },
+  { index = 65, target = "0x0021A7D8" },
+  { index = 66, target = "0x0021A7D8" },
+  { index = 67, target = "0x0021A7D8" },
+  { index = 68, target = "0x0021A7D8" },
+  { index = 69, target = "0x0021A7D8" },
+  { index = 70, target = "0x0021A7D8" },
+  { index = 71, target = "0x0021A7D8" },
+  { index = 72, target = "0x0021A7D8" },
+  { index = 73, target = "0x0021A7D8" },
+  { index = 74, target = "0x0021A7D8" },
+  { index = 75, target = "0x0021A7D8" },
+  { index = 76, target = "0x0021A7D8" },
+  { index = 77, target = "0x0021A7D8" },
+  { index = 78, target = "0x0021A7D8" },
+  { index = 79, target = "0x0021A7D8" },
+  { index = 80, target = "0x0021A7D8" },
+  { index = 81, target = "0x0021A7D8" },
+  { index = 82, target = "0x0021A7D8" },
+  { index = 83, target = "0x0021A7D8" },
+  { index = 84, target = "0x0021A7D8" },
+  { index = 85, target = "0x0021A7D8" },
+  { index = 86, target = "0x0021A7D8" },
+  { index = 87, target = "0x0021A7D8" },
+  { index = 88, target = "0x0021A7D8" },
+  { index = 89, target = "0x0021A7D8" },
+  { index = 90, target = "0x0021A7D8" },
+  { index = 91, target = "0x0021A7D8" },
+  { index = 92, target = "0x0021A7D8" },
+  { index = 93, target = "0x0021A7D8" },
+  { index = 94, target = "0x0021A7D8" },
+  { index = 95, target = "0x0021A7D8" },
+  { index = 96, target = "0x0021A7D8" },
+  { index = 97, target = "0x0021A7D8" },
+  { index = 98, target = "0x0021A7D8" },
+  { index = 99, target = "0x0021A7D8" },
+  { index = 100, target = "0x0021A72C" },
+  { index = 101, target = "0x0021A75C" },
+  { index = 102, target = "0x0021A7AC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0021B0F4 in FUN_0021b0c0
+address = "0x00442090"
+entries = [
+  { index = 0, target = "0x0021B1AC" },
+  { index = 1, target = "0x0021B1B4" },
+  { index = 2, target = "0x0021B1B4" },
+  { index = 3, target = "0x0021B0FC" },
+  { index = 4, target = "0x0021B10C" },
+  { index = 5, target = "0x0021B11C" },
+  { index = 6, target = "0x0021B12C" },
+  { index = 7, target = "0x0021B13C" },
+  { index = 8, target = "0x0021B14C" },
+  { index = 9, target = "0x0021B15C" },
+  { index = 10, target = "0x0021B16C" },
+  { index = 11, target = "0x0021B17C" },
+  { index = 12, target = "0x0021B18C" },
+  { index = 13, target = "0x0021B19C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00220D74 in FUN_00220d10
+address = "0x00442570"
+entries = [
+  { index = 0, target = "0x00220D7C" },
+  { index = 1, target = "0x00220D88" },
+  { index = 2, target = "0x00220D9C" },
+  { index = 3, target = "0x00220DBC" },
+  { index = 4, target = "0x00220DBC" },
+  { index = 5, target = "0x00220DBC" },
+  { index = 6, target = "0x00220DBC" },
+  { index = 7, target = "0x00220DBC" },
+  { index = 8, target = "0x00220DBC" },
+  { index = 9, target = "0x00220DBC" },
+  { index = 10, target = "0x00220D9C" },
+  { index = 11, target = "0x00220DBC" },
+  { index = 12, target = "0x00220DBC" },
+  { index = 13, target = "0x00220DBC" },
+  { index = 14, target = "0x00220DBC" },
+  { index = 15, target = "0x00220DBC" },
+  { index = 16, target = "0x00220DBC" },
+  { index = 17, target = "0x00220DBC" },
+  { index = 18, target = "0x00220DBC" },
+  { index = 19, target = "0x00220DA8" },
+  { index = 20, target = "0x00220DB4" },
+  { index = 21, target = "0x00220DBC" },
+  { index = 22, target = "0x00220DBC" },
+  { index = 23, target = "0x00220DBC" },
+  { index = 24, target = "0x00220DBC" },
+  { index = 25, target = "0x00220DBC" },
+  { index = 26, target = "0x00220DBC" },
+  { index = 27, target = "0x00220DA8" },
+  { index = 28, target = "0x00220DBC" },
+  { index = 29, target = "0x00220DBC" },
+  { index = 30, target = "0x00220DBC" },
+  { index = 31, target = "0x00220DBC" },
+  { index = 32, target = "0x00220DBC" },
+  { index = 33, target = "0x00220DBC" },
+  { index = 34, target = "0x00220DBC" },
+  { index = 35, target = "0x00220DBC" },
+  { index = 36, target = "0x00220DB4" },
+  { index = 37, target = "0x00220DBC" },
+  { index = 38, target = "0x00220DBC" },
+  { index = 39, target = "0x00220DBC" },
+  { index = 40, target = "0x00220DBC" },
+  { index = 41, target = "0x00220DBC" },
+  { index = 42, target = "0x00220DBC" },
+  { index = 43, target = "0x00220DBC" },
+  { index = 44, target = "0x00220DB4" },
+  { index = 45, target = "0x00220DBC" },
+  { index = 46, target = "0x00220DBC" },
+  { index = 47, target = "0x00220DBC" },
+  { index = 48, target = "0x00220D7C" },
+  { index = 49, target = "0x00220D88" },
+  { index = 50, target = "0x00220D9C" },
+  { index = 51, target = "0x00220DBC" },
+  { index = 52, target = "0x00220DBC" },
+  { index = 53, target = "0x00220DBC" },
+  { index = 54, target = "0x00220DBC" },
+  { index = 55, target = "0x00220DBC" },
+  { index = 56, target = "0x00220DBC" },
+  { index = 57, target = "0x00220DBC" },
+  { index = 58, target = "0x00220D9C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0022124C in FUN_002211b8
+address = "0x00442780"
+entries = [
+  { index = 0, target = "0x00221254" },
+  { index = 1, target = "0x0022128C" },
+  { index = 2, target = "0x002212DC" },
+  { index = 3, target = "0x00221394" },
+  { index = 4, target = "0x00221394" },
+  { index = 5, target = "0x00221394" },
+  { index = 6, target = "0x00221394" },
+  { index = 7, target = "0x00221394" },
+  { index = 8, target = "0x00221394" },
+  { index = 9, target = "0x00221394" },
+  { index = 10, target = "0x002212DC" },
+  { index = 11, target = "0x00221394" },
+  { index = 12, target = "0x00221394" },
+  { index = 13, target = "0x00221394" },
+  { index = 14, target = "0x00221394" },
+  { index = 15, target = "0x00221394" },
+  { index = 16, target = "0x00221394" },
+  { index = 17, target = "0x00221394" },
+  { index = 18, target = "0x00221394" },
+  { index = 19, target = "0x00221314" },
+  { index = 20, target = "0x00221348" },
+  { index = 21, target = "0x00221394" },
+  { index = 22, target = "0x00221394" },
+  { index = 23, target = "0x00221394" },
+  { index = 24, target = "0x00221394" },
+  { index = 25, target = "0x00221394" },
+  { index = 26, target = "0x00221394" },
+  { index = 27, target = "0x00221314" },
+  { index = 28, target = "0x00221394" },
+  { index = 29, target = "0x00221394" },
+  { index = 30, target = "0x00221394" },
+  { index = 31, target = "0x00221394" },
+  { index = 32, target = "0x00221394" },
+  { index = 33, target = "0x00221394" },
+  { index = 34, target = "0x00221394" },
+  { index = 35, target = "0x00221394" },
+  { index = 36, target = "0x00221348" },
+  { index = 37, target = "0x00221394" },
+  { index = 38, target = "0x00221394" },
+  { index = 39, target = "0x00221394" },
+  { index = 40, target = "0x00221394" },
+  { index = 41, target = "0x00221394" },
+  { index = 42, target = "0x00221394" },
+  { index = 43, target = "0x00221394" },
+  { index = 44, target = "0x00221348" },
+  { index = 45, target = "0x00221394" },
+  { index = 46, target = "0x00221394" },
+  { index = 47, target = "0x00221394" },
+  { index = 48, target = "0x00221254" },
+  { index = 49, target = "0x0022128C" },
+  { index = 50, target = "0x002212DC" },
+  { index = 51, target = "0x00221394" },
+  { index = 52, target = "0x00221394" },
+  { index = 53, target = "0x00221394" },
+  { index = 54, target = "0x00221394" },
+  { index = 55, target = "0x00221394" },
+  { index = 56, target = "0x00221394" },
+  { index = 57, target = "0x00221394" },
+  { index = 58, target = "0x002212DC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00223ADC in FUN_00223a60
+address = "0x00442910"
+entries = [
+  { index = 0, target = "0x00223AE4" },
+  { index = 1, target = "0x00223FF0" },
+  { index = 2, target = "0x00223FF0" },
+  { index = 3, target = "0x00223FF0" },
+  { index = 4, target = "0x00223FF0" },
+  { index = 5, target = "0x00223FF0" },
+  { index = 6, target = "0x00223FF0" },
+  { index = 7, target = "0x00223FF0" },
+  { index = 8, target = "0x00223FF0" },
+  { index = 9, target = "0x00223FF0" },
+  { index = 10, target = "0x00223FF0" },
+  { index = 11, target = "0x00223FF0" },
+  { index = 12, target = "0x00223FF0" },
+  { index = 13, target = "0x00223FF0" },
+  { index = 14, target = "0x00223FF0" },
+  { index = 15, target = "0x00223FF0" },
+  { index = 16, target = "0x00223FF0" },
+  { index = 17, target = "0x00223FF0" },
+  { index = 18, target = "0x00223FF0" },
+  { index = 19, target = "0x00223FF0" },
+  { index = 20, target = "0x00223FF0" },
+  { index = 21, target = "0x00223FF0" },
+  { index = 22, target = "0x00223FF0" },
+  { index = 23, target = "0x00223FF0" },
+  { index = 24, target = "0x00223FF0" },
+  { index = 25, target = "0x00223FF0" },
+  { index = 26, target = "0x00223FF0" },
+  { index = 27, target = "0x00223FF0" },
+  { index = 28, target = "0x00223FF0" },
+  { index = 29, target = "0x00223FF0" },
+  { index = 30, target = "0x00223FF0" },
+  { index = 31, target = "0x00223FF0" },
+  { index = 32, target = "0x00223FF0" },
+  { index = 33, target = "0x00223FF0" },
+  { index = 34, target = "0x00223FF0" },
+  { index = 35, target = "0x00223FF0" },
+  { index = 36, target = "0x00223FF0" },
+  { index = 37, target = "0x00223FF0" },
+  { index = 38, target = "0x00223FF0" },
+  { index = 39, target = "0x00223FF0" },
+  { index = 40, target = "0x00223FF0" },
+  { index = 41, target = "0x00223FF0" },
+  { index = 42, target = "0x00223FF0" },
+  { index = 43, target = "0x00223FF0" },
+  { index = 44, target = "0x00223FF0" },
+  { index = 45, target = "0x00223FF0" },
+  { index = 46, target = "0x00223FF0" },
+  { index = 47, target = "0x00223FF0" },
+  { index = 48, target = "0x00223FF0" },
+  { index = 49, target = "0x00223FF0" },
+  { index = 50, target = "0x00223FF0" },
+  { index = 51, target = "0x00223FA8" },
+  { index = 52, target = "0x00223CF8" },
+  { index = 53, target = "0x00223EB8" },
+  { index = 54, target = "0x00223EB8" },
+  { index = 55, target = "0x00223FF0" },
+  { index = 56, target = "0x00223B74" },
+  { index = 57, target = "0x00223FF0" },
+  { index = 58, target = "0x00223FF0" },
+  { index = 59, target = "0x00223FF0" },
+  { index = 60, target = "0x00223B68" },
+  { index = 61, target = "0x00223FF0" },
+  { index = 62, target = "0x00223FF0" },
+  { index = 63, target = "0x00223B7C" },
+  { index = 64, target = "0x00223FF0" },
+  { index = 65, target = "0x00223FF0" },
+  { index = 66, target = "0x00223FF0" },
+  { index = 67, target = "0x00223F04" },
+  { index = 68, target = "0x00223FF0" },
+  { index = 69, target = "0x00223DE8" },
+  { index = 70, target = "0x00223FF0" },
+  { index = 71, target = "0x00223FF0" },
+  { index = 72, target = "0x00223C38" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00225228 in FUN_00225178
+address = "0x00442A40"
+entries = [
+  { index = 0, target = "0x00225230" },
+  { index = 1, target = "0x002254B8" },
+  { index = 2, target = "0x002254B8" },
+  { index = 3, target = "0x002254B8" },
+  { index = 4, target = "0x002254B8" },
+  { index = 5, target = "0x002254B8" },
+  { index = 6, target = "0x002254B8" },
+  { index = 7, target = "0x002254B8" },
+  { index = 8, target = "0x002254B8" },
+  { index = 9, target = "0x002252C8" },
+  { index = 10, target = "0x002253A8" },
+  { index = 11, target = "0x002254B8" },
+  { index = 12, target = "0x002254B8" },
+  { index = 13, target = "0x002254B8" },
+  { index = 14, target = "0x002254B8" },
+  { index = 15, target = "0x002254B8" },
+  { index = 16, target = "0x002254B8" },
+  { index = 17, target = "0x002254B8" },
+  { index = 18, target = "0x002254B8" },
+  { index = 19, target = "0x002254B8" },
+  { index = 20, target = "0x002254B8" },
+  { index = 21, target = "0x00225458" },
+  { index = 22, target = "0x002254B8" },
+  { index = 23, target = "0x00225458" },
+  { index = 24, target = "0x00225458" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0022ACB4 in FUN_0022ac80
+address = "0x00442B30"
+entries = [
+  { index = 0, target = "0x0022ACC8" },
+  { index = 1, target = "0x0022ACCC" },
+  { index = 2, target = "0x0022ACCC" },
+  { index = 3, target = "0x0022ACC8" },
+  { index = 4, target = "0x0022ACBC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0022B164 in FUN_0022b130
+address = "0x00442B50"
+entries = [
+  { index = 0, target = "0x0022B178" },
+  { index = 1, target = "0x0022B17C" },
+  { index = 2, target = "0x0022B17C" },
+  { index = 3, target = "0x0022B178" },
+  { index = 4, target = "0x0022B16C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x0023115C in FUN_002310a0
+address = "0x004430E0"
+entries = [
+  { index = 0, target = "0x00231164" },
+  { index = 1, target = "0x00231178" },
+  { index = 2, target = "0x002311A8" },
+  { index = 3, target = "0x002311CC" },
+  { index = 4, target = "0x002311CC" },
+]
+
+[[jump_tables.table]]
+# JR at 0x002382BC in FUN_00238290
+address = "0x00443530"
+entries = [
+  { index = 0, target = "0x002382C4" },
+  { index = 1, target = "0x002382D0" },
+  { index = 2, target = "0x002382DC" },
+  { index = 3, target = "0x00238360" },
+  { index = 4, target = "0x00238360" },
+  { index = 5, target = "0x00238360" },
+  { index = 6, target = "0x00238360" },
+  { index = 7, target = "0x00238360" },
+  { index = 8, target = "0x00238360" },
+  { index = 9, target = "0x00238360" },
+  { index = 10, target = "0x002382FC" },
+  { index = 11, target = "0x00238320" },
+  { index = 12, target = "0x00238344" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00243B70 in FUN_00243978
+address = "0x00444720"
+entries = [
+  { index = 0, target = "0x00243B78" },
+  { index = 1, target = "0x00244234" },
+  { index = 2, target = "0x00244234" },
+  { index = 3, target = "0x00243B90" },
+  { index = 4, target = "0x00244234" },
+  { index = 5, target = "0x00244234" },
+  { index = 6, target = "0x00244234" },
+  { index = 7, target = "0x00244234" },
+  { index = 8, target = "0x00244234" },
+  { index = 9, target = "0x00244234" },
+  { index = 10, target = "0x00243BA0" },
+  { index = 11, target = "0x00243BC4" },
+  { index = 12, target = "0x00244234" },
+  { index = 13, target = "0x00243BB8" },
+  { index = 14, target = "0x00243BD8" },
+  { index = 15, target = "0x00244234" },
+  { index = 16, target = "0x00243C64" },
+  { index = 17, target = "0x00243C70" },
+  { index = 18, target = "0x00243C70" },
+  { index = 19, target = "0x00243C70" },
+  { index = 20, target = "0x00243C70" },
+  { index = 21, target = "0x00243C70" },
+  { index = 22, target = "0x00243C70" },
+  { index = 23, target = "0x00243C70" },
+  { index = 24, target = "0x00243C70" },
+  { index = 25, target = "0x00243C70" },
+  { index = 26, target = "0x00244234" },
+  { index = 27, target = "0x00244234" },
+  { index = 28, target = "0x00244234" },
+  { index = 29, target = "0x00244234" },
+  { index = 30, target = "0x00244234" },
+  { index = 31, target = "0x00244234" },
+  { index = 32, target = "0x00244234" },
+  { index = 33, target = "0x00244234" },
+  { index = 34, target = "0x00244234" },
+  { index = 35, target = "0x00244234" },
+  { index = 36, target = "0x00243D2C" },
+  { index = 37, target = "0x00243D74" },
+  { index = 38, target = "0x00244234" },
+  { index = 39, target = "0x00243D74" },
+  { index = 40, target = "0x00244234" },
+  { index = 41, target = "0x00244234" },
+  { index = 42, target = "0x00244234" },
+  { index = 43, target = "0x00244234" },
+  { index = 44, target = "0x00243CA8" },
+  { index = 45, target = "0x00244234" },
+  { index = 46, target = "0x00244234" },
+  { index = 47, target = "0x00243F88" },
+  { index = 48, target = "0x00244234" },
+  { index = 49, target = "0x00244234" },
+  { index = 50, target = "0x00244234" },
+  { index = 51, target = "0x00244234" },
+  { index = 52, target = "0x00244234" },
+  { index = 53, target = "0x00244038" },
+  { index = 54, target = "0x00244234" },
+  { index = 55, target = "0x00244234" },
+  { index = 56, target = "0x00244070" },
+  { index = 57, target = "0x00244234" },
+  { index = 58, target = "0x00244234" },
+  { index = 59, target = "0x00244234" },
+  { index = 60, target = "0x00244234" },
+  { index = 61, target = "0x00244234" },
+  { index = 62, target = "0x00244234" },
+  { index = 63, target = "0x00244234" },
+  { index = 64, target = "0x00244234" },
+  { index = 65, target = "0x00244234" },
+  { index = 66, target = "0x00244234" },
+  { index = 67, target = "0x00243D0C" },
+  { index = 68, target = "0x00243D30" },
+  { index = 69, target = "0x00243D74" },
+  { index = 70, target = "0x00243D74" },
+  { index = 71, target = "0x00243D74" },
+  { index = 72, target = "0x00243CB8" },
+  { index = 73, target = "0x00243D30" },
+  { index = 74, target = "0x00244234" },
+  { index = 75, target = "0x00244234" },
+  { index = 76, target = "0x00243CC8" },
+  { index = 77, target = "0x00244234" },
+  { index = 78, target = "0x00243F3C" },
+  { index = 79, target = "0x00243F8C" },
+  { index = 80, target = "0x00243FC0" },
+  { index = 81, target = "0x00243CFC" },
+  { index = 82, target = "0x00244234" },
+  { index = 83, target = "0x00243FE4" },
+  { index = 84, target = "0x00244234" },
+  { index = 85, target = "0x0024403C" },
+  { index = 86, target = "0x00244234" },
+  { index = 87, target = "0x00244234" },
+  { index = 88, target = "0x0024407C" },
+]
+
+[[jump_tables.table]]
+# JR at 0x00245908 in FUN_00245520
+address = "0x004449D0"
+entries = [
+  { index = 0, target = "0x00245910" },
+  { index = 1, target = "0x00245910" },
+  { index = 2, target = "0x0024592C" },
+  { index = 3, target = "0x00245950" },
+  { index = 4, target = "0x00245930" },
+  { index = 5, target = "0x00245954" },
+]
+# END jump tables

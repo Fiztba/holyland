@@ -5,6 +5,35 @@ place as state changes; link session logs at the point they support.
 
 ## Current state (2026-10-10)
 
+- **Function map from kfiv-decomp (2026-10-12):** `decomp-map.py` takes the
+  3,839 exact functions and 112 switch tables from the matching decomp
+  (main plus its open PRs #37 and #40; boundaries do not depend on them).
+  With patch 0043 the generator reports 3,572 recompiled, 267 stubs and
+  0 fallback functions (Ghidra map: 28,161 / 268 / 1,352 with 119,442
+  fallback entries); output is 78 MB instead of 219 MB and the runner 36 MB
+  instead of 65 MB. Native Windows, Vulkan GS, hidden run to tick 9000
+  through the movie skip and 3,800 ticks of walking: all 18 dumped frames
+  pixel-identical to the Ghidra-map build, 3D at 23.4 vsync/s both ways.
+  Exact boundaries needed one config change: see the `InitThread` note in
+  [maintainers.md](maintainers.md). EE code generation was never the limit.
+- **Profile (2026-10-12, i9-13900KF, Vulkan GS):** in the first 3D area the
+  guest thread runs at ~87% of a core and nothing else is busy. Sampled
+  stacks put ~75% of it inside `VU1Interpreter::run`. With the lift (0041)
+  enabled, 68% of VU1 run starts execute lifted code (segments 0x08f8,
+  0x2d00, 0x13b0), but speed is unchanged and frames stay identical: the
+  time is in the segments `vu1lift.py` still refuses (0x0000, 0x1400 and its
+  resume 0x2550, 0x3800 — all "timing after an XGKICK that may stall").
+  With the Vulkan GS the lift no longer slows the game down (the
+  2026-10-10 slowdown was the CPU rasterizer). Next: lift through
+  XGKICK stalls.
+- **Self-pause (issue #4), read from the decomp:** `func_00101F90`, called
+  once per frame by the main loop, pauses only on a released-to-pressed
+  START edge (mask `0x0008`, set at boot by `func_001B53E8`). Disconnects,
+  pad state or mode changes, sticks and pressure bytes cannot reach it, and
+  the pad HLE never produces the edge itself. A late scripted START or a
+  real Enter/gamepad press is the likely source; `PS2X_INPUT_TRACE=1`
+  shows which in its `pause-entry` line.
+
 - **Cave-door progression:** corrected EE SQRT/RSQRT operands (patch 0029)
   prevent the initial floor fall. The next map was already loaded before
   the fall. Corrected movement then exposed a separate FINISH wait: the

@@ -71,9 +71,10 @@ python "$holyland\scripts\windows\Prepare-KFIVSources.py" config --game-dir $gam
 
 The configuration helper verifies the boot ELF's SHA256 and changes only
 the three path settings from `kfiv/config.toml`. Check the generator summary:
-the verified US disc processed 28,429 functions, recompiled 28,161 and used
-268 stubs, with **1,352 warnings / 0 errors**. The warnings are JR/JALR
-fallback promotions. Rebuild the patched recompiler and regenerate all
+the verified US disc processed 3,839 functions, recompiled 3,572 and used
+267 stubs, with **0 warnings / 0 errors**. Any warning is a JR/JALR
+fallback promotion, which the decomp-derived map and patch `0043`
+eliminate. Rebuild the patched recompiler and regenerate all
 sources after generator changes; an older `register_functions.cpp` does
 not adopt patch `0022`.
 

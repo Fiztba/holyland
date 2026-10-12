@@ -7,10 +7,43 @@ users never need this: they use the committed function map
 
 `kfiv/` holds:
 
-- `config.toml`: recompiler config with the merged SDK stub list;
-- `SLUS_203.18.functions.csv`: function map exported from Ghidra (28,008
-  records);
+- `config.toml`: recompiler config with the merged SDK stub list and, at the
+  end, the jump tables written by `decomp-map.py`;
+- `SLUS_203.18.functions.csv`: the function map, 3,839 functions from
+  kfiv-decomp (below);
 - `SLUS_203.18.sha256`: hash of the exact boot ELF these were made from.
+
+## Function map from kfiv-decomp
+
+[kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp) links a ROM
+identical to the retail ELF, so its symbol table holds every function's
+exact start and size. splat fixes those boundaries, not how much of the game
+is matched in C. Build it once (its README), then:
+
+```sh
+python3 scripts/maintainer/decomp-map.py <kfiv-decomp>/build/kfiv.elf <game-dir>/SLUS_203.18
+```
+
+The script checks the boot ELF's hash and that the decomp's `.text` is
+byte-identical to it, writes `SLUS_203.18.functions.csv` and replaces the
+jump-table block at the end of `config.toml`. It stops on code outside every
+function, on a register JR it cannot trace to a table, or on overlapping
+tables. Names stay neutral (`FUN_<address>`): the generator binds runtime
+HLE handlers by name, and the decomp's names would turn 109 recompiled
+library functions into stubs.
+
+When changing the map, look for stubs that the old boundaries bypassed by
+accident. The Ghidra map merged `_InitSys`, `topThread` and `InitThread`
+into one function, so `_InitSys`'s tail jump ran the game's own
+`InitThread` as a local branch. With exact boundaries it reaches the
+`InitThread` handler, which creates no `topThread` and leaves main at
+priority 0. The movie player's `RotateThreadReadyQueue` yields then
+starve its decoder, and the opening movie stops on its first frame with
+nothing logged. `InitThread` is therefore no longer stubbed.
+
+The Ghidra workflow below produced the earlier 28,429-record map (24,018
+`entry_` fragments and 814 `caseD_` cases, 219 MB of generated source).
+Keep it for games without a decompilation.
 
 ## Prerequisites
 

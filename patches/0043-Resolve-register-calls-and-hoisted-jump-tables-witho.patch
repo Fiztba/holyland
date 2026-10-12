@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 06:53:36 -0400
+Subject: [PATCH] Resolve register calls and hoisted jump tables without
+ fallback entries
+
+An unresolved JALR promoted every instruction of its function to an
+indirect fallback entry, although a register call returns to its link
+address like JAL. The resume entry it already queues is all the caller
+needs; the callee is found through the function table at run time.
+
+A switch whose table LUI the compiler hoisted into a saved register,
+with the low half formed into another register by ADDIU rt, rs, %lo,
+never matched the table search. That shape is now accepted when it
+names a table listed under [jump_tables], so unconfigured code behaves
+as before.
+
+KFIV with the kfiv-decomp function boundaries and jump tables: 634
+fallback functions (103,858 entries) -> 0. With the Ghidra map:
+1,352 (119,442) -> 150 (6,046).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRecomp/src/lib/control_flow_analyzer.cpp | 43 ++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/ps2xRecomp/src/lib/control_flow_analyzer.cpp b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+index ed7578d..e8dc8a0 100644
+--- a/ps2xRecomp/src/lib/control_flow_analyzer.cpp
++++ b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+@@ -194,7 +194,11 @@ namespace ps2recomp
+             {
+                 if (jrInst->function == SPECIAL_JALR)
+                 {
++                    // A register call returns to its link address like JAL does. The
++                    // resume entry is all the caller needs, so an unknown call target
++                    // never promotes the caller's instructions to fallback entries.
+                     queueResumeEntryTarget(jrInst->address + 8u);
++                    continue;
+                 }
+ 
+                 bool foundTable = false;
+@@ -276,6 +280,45 @@ namespace ps2recomp
+                             }
+                         }
+ 
++                        if (!foundTableAddress && adduIndex != -1 && !m_configJumpTableTargetsByAddress.empty())
++                        {
++                            // The compiler may hoist the table's LUI into a saved register
++                            // far above the switch and form the low half into another
++                            // register (ADDIU rt, rs, %lo). Accept that shape only when it
++                            // names a configured table, so unconfigured code is unaffected.
++                            for (uint32_t reg : {tableBaseReg, indexReg})
++                            {
++                                for (int i = adduIndex - 1; i >= 0 && i >= adduIndex - 8; --i)
++                                {
++                                    const auto &lowInst = instructions[i];
++                                    if (lowInst.opcode != OPCODE_ADDIU || lowInst.rt != reg || lowInst.rs == reg)
++                                    {
++                                        continue;
++                                    }
++                                    for (int j = i - 1; j >= 0; --j)
++                                    {
++                                        const auto &highInst = instructions[j];
++                                        if (highInst.opcode == OPCODE_LUI && highInst.rt == lowInst.rs)
++                                        {
++                                            const uint32_t candidate = (highInst.immediate << 16) +
++                                                                       static_cast<uint32_t>(lowInst.simmediate);
++                                            if (m_configJumpTableTargetsByAddress.contains(candidate + lwOffset))
++                                            {
++                                                tableAddress = candidate;
++                                                foundTableAddress = true;
++                                            }
++                                            break;
++                                        }
++                                    }
++                                    break;
++                                }
++                                if (foundTableAddress)
++                                {
++                                    break;
++                                }
++                            }
++                        }
++
+                         if (foundTableAddress)
+                         {
+                             tableAddress += lwOffset;
