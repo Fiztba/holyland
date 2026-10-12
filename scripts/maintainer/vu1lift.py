@@ -18,10 +18,14 @@ block instance has constant issue cycles. What the lifted code computes must
 match the interpreter bit for bit, including cycle counts; check it with the
 VU1 verifier (docs/NOTES.md, "Dev loop").
 
+An XGKICK issued while the previous PATH1 transfer may still run stalls for
+a number of cycles that depends on the packet, so the generator branches on
+the stall length at run time (Emitter.kick_stall). Build the output with
+VU1LIFT_KICKSTATS defined to count which stall lengths a run exercised.
+
 Not supported yet (the generator stops with an error): reads of MAC/status
 flags (FMAND, FMEQ, FMOR, FSAND, FSEQ, FSOR), FSSET, OPMULA/OPMSUB, JR/JALR,
-BAL, D/T bits, RNEXT/RGET/RINIT/RXOR, and an XGKICK that may stall when
-later pairs still depend on timing.
+BAL, D/T bits, RNEXT/RGET/RINIT/RXOR, and a stalling XGKICK in a delay slot.
 
 Ported from PS2Recomp sources (GPL-3.0), so, like patches/, it is
 distributed under the same license.
@@ -466,14 +470,13 @@ class TState:
         self.wbh = 0             # m_writebackHorizon
         self.bk_reg = 0          # VI whose pre-write value a following branch reads
         self.kick = False        # an XGKICK may still be transferring
-        self.dyn = False         # past an XGKICK stall of unknown length
 
     def copy(self):
         s = TState()
         s.ready = dict(self.ready)
         s.fdiv, s.efu, s.efu_res = self.fdiv, list(self.efu), self.efu_res
         s.clip, s.pend_max, s.wbh = list(self.clip), self.pend_max, self.wbh
-        s.bk_reg, s.kick, s.dyn = self.bk_reg, self.kick, self.dyn
+        s.bk_reg, s.kick = self.bk_reg, self.kick
         return s
 
     def key(self, now):
@@ -483,7 +486,7 @@ class TState:
                 rel(self.fdiv) if self.fdiv is not None else None,
                 tuple(rel(c) for c in self.efu), rel(self.efu_res),
                 tuple(rel(c) for c in self.clip), rel(self.pend_max), rel(self.wbh),
-                self.bk_reg, self.kick, self.dyn)
+                self.bk_reg, self.kick)
 
     def rebased(self, now):
         s = TState()
@@ -494,7 +497,7 @@ class TState:
         s.clip = [c - now for c in self.clip]
         s.pend_max = max(0, self.pend_max - now)
         s.wbh = max(0, self.wbh - now)
-        s.bk_reg, s.kick, s.dyn = self.bk_reg, self.kick, self.dyn
+        s.bk_reg, s.kick = self.bk_reg, self.kick
         return s
 
 
@@ -564,9 +567,6 @@ class Emitter:
         e_pending = False
         while True:
             p = self.pair(pc)
-            if st.dyn and (p.read_slots or p.lu.pipeline in ("fdiv", "efu", "xgkick", "lsu")
-                        or p.lu.reads_clip or p.is_branch()):
-                raise LiftError(f"0x{pc:04x}: depends on timing after an XGKICK that may stall")
             # Readiness (calculatePairReadyCycle). The XGKICK interlock is dynamic.
             t = now
             for s in p.read_slots:
@@ -583,17 +583,10 @@ class Emitter:
             out.append(f"    // {p.dis.line()}")
             # Commits due at the issue cycle (commitDuePipelines, issue order).
             out += self.commits(st, t)
-            kick_wait = p.lower_kind() == "xgkick" and st.kick
-            if kick_wait:
-                if st.dyn:
-                    raise LiftError(f"0x{pc:04x}: second XGKICK stall")
-                # Everything pending lands at a fixed cycle; record it, then
-                # continue on the post-stall time base (later pairs read
-                # nothing, checked above).
-                out.append(f"    H = std::max(H, T + {max(st.pend_max, st.wbh, t)});")
-                out.append(f"    T = vl::kickWait(c, T + {t}) - {t};")
-                st.dyn = True
-                st.ready, st.pend_max, st.wbh = {}, 0, 0
+            if p.lower_kind() == "xgkick" and st.kick:
+                if in_delay or e_pending:
+                    raise LiftError(f"0x{pc:04x}: XGKICK stall in a delay slot")
+                return out + self.kick_stall(pc, st, t)
             out.append(f"    VL_TRACE(c, 0x{pc:04x}, T + {t});")
             out += self.semantics(p, st, t)
             # markPairWrites
@@ -625,6 +618,34 @@ class Emitter:
                 out.append(f"    goto {nxt};")
                 return out
 
+    def kick_stall(self, pc, st, t):
+        """XGKICK while the previous transfer may still run: the pair issues
+        at the first cycle >= t with PATH1 idle, t + d. The stall length d
+        is dynamic, but only d < h matters for the schedule, where h is when
+        the last pending write lands: from t + h on everything is committed,
+        so all longer stalls share one quiescent state. Continue in one
+        instance of this pair per d < h and one for d >= h, each with the
+        transfer drained."""
+        h = max([0, st.pend_max - t, st.wbh - t, st.efu_res - t] +
+                [v - t for v in st.ready.values()] +
+                [c - t for c in st.efu + st.clip] +
+                ([st.fdiv - t] if st.fdiv is not None else []))
+        if h > 15:
+            raise LiftError(f"0x{pc:04x}: XGKICK stall horizon {h} > 15")
+        st = st.copy()
+        st.kick = False
+        out = [f"    {{ const uint64_t k0 = T + {t};",
+               "      T = vl::kickWait(c, k0);",
+               f"      VL_KICK_STAT(0x{pc:04x}, T - k0, {h});"]
+        if h == 0:
+            return out + [f"      goto {self.instance(pc, st, t)}; }}"]
+        out.append("      switch (T - k0) {")
+        for d in range(h):
+            out.append(f"      case {d}: goto {self.instance(pc, st, t + d)};")
+        out.append(f"      default: goto {self.instance(pc, st, t + h)};")
+        out.append("      } }")
+        return out
+
     def commits(self, st, t):
         out = []
         if st.fdiv is not None and st.fdiv <= t:
@@ -647,13 +668,15 @@ class Emitter:
         kind = bp.lower_kind()
         tgt = bp.branch_target()
         nxt_fall = bp.pc + 16
+        # A taken branch leaves its target in branchTarget and branchDelay 0
+        # (architecturally dead, but part of the state the verifier compares).
         if kind == "b":
             name = self.instance(tgt, st, now)
-            return [f"    T += {now};", f"    goto {name};"]
+            return [f"    T += {now};", f"    brTarget = 0x{tgt:04x}u; brDelay = 0u;", f"    goto {name};"]
         tname = self.instance(tgt, st, now)
         fname = self.instance(nxt_fall, st, now)
         out.append(f"    T += {now};")
-        out.append(f"    if (taken_{bp.pc:04x}) goto {tname};")
+        out.append(f"    if (taken_{bp.pc:04x}) {{ brTarget = 0x{tgt:04x}u; brDelay = 0u; goto {tname}; }}")
         out.append(f"    goto {fname};")
         return out
 
@@ -969,6 +992,7 @@ class Emitter:
         L.append("    int32_t viBk = 0;")
         L.append("    uint64_t T = c.cycle, H = c.cycle, efuReady = c.efuReady;")
         L.append("    uint32_t endPc = 0u;")
+        L.append("    uint32_t brTarget = s.branchTarget, brDelay = s.branchDelay;")
         L.append("    (void)top; (void)itop; (void)viBk; (void)pPend0; (void)pPend1; (void)qPend; (void)diPend;")
         L.append("    (void)clipW; (void)clipPend0; (void)clipPend1; (void)clipPend2; (void)clipPend3; (void)clipPend4;")
         L.append(f"    goto {self.entry};")
@@ -988,6 +1012,7 @@ class Emitter:
         L.append("    s.mac = fl.mac;")
         L.append("    s.status = fl.sticky | statusDi | fl.cur;")
         L.append("    s.pc = endPc;")
+        L.append("    s.branchTarget = brTarget; s.branchDelay = brDelay;")
         L.append("    c.endCycle = H;")
         L.append("    c.efuReady = efuReady;")
         L.append("}")
@@ -1019,6 +1044,34 @@ def main():
          "// never commit this file.",
          f"// Image {h:016x}, segments {', '.join(f'0x{s:04x}' for s in segments)}.",
          "#include \"runtime/ps2_vu1_lift.h\"",
+         "",
+         "// VU1LIFT_KICKSTATS: count XGKICK stall lengths per kick site (d >= h",
+         "// shares one bucket), to see which stall cases a test run exercised.",
+         "#ifdef VU1LIFT_KICKSTATS",
+         "#include <atomic>",
+         "#include <cstdio>",
+         "namespace",
+         "{",
+         "    std::atomic<uint64_t> g_kickStat[0x800][16];",
+         "    std::atomic<uint64_t> g_kickStatCalls;",
+         "    std::atomic<uint32_t> g_kickH[0x800];",
+         "    void kickStat(uint32_t pc, uint64_t d, uint64_t h)",
+         "    {",
+         "        g_kickH[pc >> 3] = static_cast<uint32_t>(h);",
+         "        ++g_kickStat[pc >> 3][d < h ? d : h];",
+         "        if ((++g_kickStatCalls & 0xFFFFFu) != 0u)",
+         "            return;",
+         "        for (uint32_t i = 0; i < 0x800u; ++i)",
+         "            for (uint32_t k = 0; k < 16u; ++k)",
+         "                if (const uint64_t n = g_kickStat[i][k].load())",
+         "                    std::fprintf(stderr, \"[vu1lift] kick %04x d=%u%s: %llu\\n\", i << 3, k,",
+         "                                 k == g_kickH[i] ? \"+\" : \"\", static_cast<unsigned long long>(n));",
+         "    }",
+         "}",
+         "#define VL_KICK_STAT(pc, d, h) kickStat(pc, d, h)",
+         "#else",
+         "#define VL_KICK_STAT(pc, d, h) ((void)0)",
+         "#endif",
          "",
          "namespace",
          "{"]
