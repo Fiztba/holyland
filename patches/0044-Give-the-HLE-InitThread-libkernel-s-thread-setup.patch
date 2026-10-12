@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 08:56:02 -0400
+Subject: [PATCH] Give the HLE InitThread libkernel's thread setup
+
+libkernel's InitThread, which _InitSys runs before main, creates a
+semaphore and a priority-zero topThread that waits on it, then lowers
+its caller to priority one. The runtime handler did neither and
+returned the main thread's id. A game whose InitThread is bound to it
+keeps its bootstrap thread at priority zero, so RotateThreadReadyQueue
+yields to its priority-one workers never let them run: King's Field IV's
+opening movie stalls with its decoder thread starved.
+
+topThread only replays requests the libkernel i* wrappers post to it.
+The runtime binds those wrappers (iWakeupThread, iRotateThreadReadyQueue)
+to handlers that act on the scheduler directly, so its stand-in never
+has to run. It still takes the semaphore and thread ids the real one
+holds and waits on its semaphore, so later ids, and the status and
+priorities ReferThreadStatus reports, match the hardware. The handler lowers the caller to priority one,
+returns the new thread's id, and returns -1 if called again.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ee_scheduler.h    |  2 +
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 46 ++++++++++++
+ .../src/lib/Kernel/Syscalls/Thread.cpp        |  6 +-
+ ps2xTest/src/ps2_runtime_kernel_tests.cpp     | 73 +++++++++++++++++++
+ 4 files changed, 125 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index b2f4c02..fd74705 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -288,6 +288,7 @@ public:
+     // Kernel object API. All calls except postEvent/requestStop execute on the
+     // EE executor and therefore need no host synchronization.
+     void setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_t gp);
++    int initThread();
+     int createThread(const EeThreadCreateParams &params);
+     int deleteThread(int id, uint32_t &ownedStack);
+     int startThread(int id, uint32_t arg, const R5900Context &caller, bool interruptSafe);
+@@ -412,6 +413,7 @@ private:
+     std::unordered_map<int, EeIrqHandler> m_dmacHandlers;
+     int m_nextThreadId = kFirstThreadId;
+     int m_nextInvocationThreadId = -1;
++    int m_kernelEventThreadId = 0;
+     int m_nextSemaphoreId = 1;
+     int m_nextEventFlagId = 1;
+     int m_nextAlarmId = 1;
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 41607b9..c27b921 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -97,6 +97,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     m_dmacHandlers.clear();
+     m_nextThreadId = kFirstThreadId;
+     m_nextInvocationThreadId = -1;
++    m_kernelEventThreadId = 0;
+     m_nextSemaphoreId = 1;
+     m_nextEventFlagId = 1;
+     m_nextAlarmId = 1;
+@@ -436,6 +437,51 @@ void EeScheduler::setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_
+     publishSnapshot();
+ }
+ 
++int EeScheduler::initThread()
++{
++    assertExecutor();
++    // libkernel's InitThread creates a semaphore and a priority-zero topThread
++    // that waits on it, then lowers its caller to priority one. topThread only
++    // replays requests the libkernel i* wrappers post to it; the runtime's
++    // handlers for those wrappers act on the scheduler directly, so its stand-in
++    // never runs. It still takes the semaphore and thread ids and the waiting
++    // state the real one holds, so later ids and the status and priorities
++    // ReferThreadStatus reports match, and the caller still has to drop
++    // below it: a bootstrap left at priority zero never yields to the
++    // priority-one threads it rotates.
++    if (m_kernelEventThreadId > 0)
++    {
++        return KE_ERROR;
++    }
++
++    const int semaphoreId = createSemaphore(0, 0xFF, 0u, 0u);
++    if (semaphoreId < 0)
++    {
++        return KE_ERROR;
++    }
++    const int id = allocateThreadId();
++    if (id == 0)
++    {
++        deleteSemaphore(semaphoreId, false);
++        return KE_ERROR;
++    }
++
++    GuestThread top{};
++    top.id = id;
++    top.initialPriority = 0;
++    top.currentPriority = 0;
++    top.status = EeThreadStatus::Waiting;
++    top.wait = EeWaitState{EeWaitReason::Semaphore, EeSemaphoreWait{semaphoreId}};
++    m_threads.emplace(id, std::move(top));
++    semaphore(semaphoreId)->waiters.push_back(id);
++    m_kernelEventThreadId = id;
++
++    int oldPriority = 0;
++    changePriority(currentThreadId(), 1, false, oldPriority);
++    publishSnapshot();
++    return id;
++}
++
+ int EeScheduler::createThread(const EeThreadCreateParams &params)
+ {
+     assertExecutor();
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
+index 5faf4b2..4a77dae 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
+@@ -181,9 +181,11 @@ namespace ps2_syscalls
+         setReturnS32(ctx, KE_OK);
+     }
+ 
+-    void InitThread(uint8_t *, R5900Context *ctx, PS2Runtime *)
++    void InitThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        setReturnS32(ctx, EeScheduler::kMainThreadId);
++        EeScheduler &ee = scheduler(rdram, ctx, runtime);
++        setReturnS32(ctx, ee.initThread());
++        ee.transferIfRequested(false);
+     }
+ 
+     void CreateThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+index 63b12d9..94a6ff3 100644
+--- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
++++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+@@ -377,6 +377,48 @@ namespace
+         runtime->requestStop();
+     }
+ 
++    constexpr uint32_t K_INIT_MAIN = 0x301100u;
++    constexpr uint32_t K_INIT_MAIN_RESUME = 0x301104u;
++    constexpr uint32_t K_INIT_MAIN_ROTATED = 0x301108u;
++    constexpr uint32_t K_INIT_WORKER = 0x301110u;
++    int gInitThreadResult = 0;
++    int gInitThreadSecondResult = 0;
++    int gInitThreadWorker = 0;
++
++    void initThreadMain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        gSchedulerTrace->push_back(1);
++        ctx->pc = K_INIT_MAIN_RESUME;
++        InitThread(rdram, ctx, runtime);
++    }
++
++    void initThreadMainResume(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        gInitThreadResult = getRegS32(*ctx, 2);
++        InitThread(rdram, ctx, runtime);
++        gInitThreadSecondResult = getRegS32(*ctx, 2);
++        gSchedulerTrace->push_back(2);
++        EeScheduler &ee = runtime->eeScheduler();
++        gInitThreadWorker = ee.createThread(EeThreadCreateParams{0, K_INIT_WORKER, 0x20000u, 0x800u, 0, 1, 0});
++        ee.startThread(gInitThreadWorker, 0, *ctx, false);
++        ctx->pc = K_INIT_MAIN_ROTATED;
++        setRegU32(*ctx, 4, 1u);
++        RotateThreadReadyQueue(rdram, ctx, runtime);
++    }
++
++    void initThreadMainRotated(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        gSchedulerTrace->push_back(3);
++        ctx->pc = 0u;
++        runtime->requestStop();
++    }
++
++    void initThreadWorker(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        gSchedulerTrace->push_back(20);
++        ExitThread(rdram, ctx, runtime);
++    }
++
+     void schedulerPreemptLow(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         gSchedulerTrace->push_back(30);
+@@ -833,6 +875,37 @@ void register_ps2_runtime_kernel_tests()
+             t.IsTrue(trace == expected, "explicit rotation should move the current head behind its FIFO peer");
+         });
+ 
++        tc.Run("InitThread leaves libkernel's topThread waiting and its caller at priority one", [](TestCase &t)
++        {
++            TestEnv env;
++            std::vector<int> trace;
++            gSchedulerTrace = &trace;
++            env.runtime.registerFunction(K_INIT_MAIN, initThreadMain);
++            env.runtime.registerFunction(K_INIT_MAIN_RESUME, initThreadMainResume);
++            env.runtime.registerFunction(K_INIT_MAIN_ROTATED, initThreadMainRotated);
++            env.runtime.registerFunction(K_INIT_WORKER, initThreadWorker);
++            env.ctx.pc = K_INIT_MAIN;
++
++            EeScheduler &ee = env.runtime.eeScheduler();
++            ee.reset(env.rdram.data(), env.ctx);
++            ee.run();
++
++            t.Equals(gInitThreadResult, EeScheduler::kFirstThreadId,
++                     "InitThread should return topThread's id, the first one handed out");
++            t.Equals(gInitThreadSecondResult, -1, "a second InitThread should fail");
++            const GuestThread *top = ee.thread(gInitThreadResult);
++            t.IsTrue(top && top->status == EeThreadStatus::Waiting &&
++                         top->wait.reason == EeWaitReason::Semaphore && top->currentPriority == 0,
++                     "topThread should wait on its semaphore at priority zero");
++            t.Equals(ee.thread(EeScheduler::kMainThreadId)->currentPriority, 1,
++                     "InitThread should lower its caller to priority one");
++            t.Equals(gInitThreadWorker, EeScheduler::kFirstThreadId + 1,
++                     "game threads should get the ids after topThread's");
++            const std::vector<int> expected{1, 2, 20, 3};
++            t.IsTrue(trace == expected,
++                     "RotateThreadReadyQueue(1) after InitThread should yield to a priority-one worker");
++        });
++
+         tc.Run("starting a strictly higher-priority thread preempts immediately", [](TestCase &t)
+         {
+             TestEnv env;

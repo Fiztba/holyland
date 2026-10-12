@@ -51,6 +51,7 @@ commit); don't edit them by hand. Workflow:
 | `0040-vu1-opt-in-microcode-census-…` | `PS2X_VU1_CENSUS=1` records which VU1 microprograms run, from which entry, and their cycle share. Off by default; does not change behaviour. |
 | `0041-vu1-run-lifted-microprogram-segments-…` | `PS2X_VU1_LIFT=1` runs VU1 microprogram segments that were lifted to C++ (`scripts/maintainer/vu1lift.py`), bit-exact with the interpreter including cycles, flags and XGKICK output. Off by default; with no lifted sources built in it does nothing. |
 | `0043-Resolve-register-calls-and-hoisted-jump-tables-witho…` | Generator: an unresolved JALR is a call returning to its link address, so it no longer promotes every instruction of its function to a fallback entry. A switch whose table LUI was hoisted into a saved register resolves when `[jump_tables]` names that table. With the kfiv-decomp map: 634 fallback functions (103,858 entries) to 0. Rebuild tools and regenerate the game. |
+| `0044-Give-the-HLE-InitThread-libkernel-s-thread-setup` | The runtime `InitThread` handler does what libkernel's does: a semaphore and a waiting priority-0 `topThread` stand-in take the first ids, the caller drops to priority 1, a repeat call returns -1. It used to return the main thread's id only, so with `InitThread` stubbed the movie player's `RotateThreadReadyQueue(1)` yields starved its decoder. Lets the kfiv-decomp map stub `InitThread` again. |
 
 The recompiler hunks in patches 0022, 0029 and 0043 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -59,11 +60,11 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 41-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+The 43-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
-0040–0041 (VU1 census and lift) are exported on top of 0039, and 0043
-(indirect jumps in the generator) on top of 0041; 0042 is left free for
-the open link-speed patch. The
+0040–0041 (VU1 census and lift) are exported on top of 0039, 0043
+(indirect jumps in the generator) on top of 0041, and 0044 (`InitThread`)
+on top of 0043; 0042 is left free for the open link-speed patch. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in

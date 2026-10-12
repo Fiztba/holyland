@@ -3,7 +3,7 @@
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-24 standalone fixture packages plus the separate audio-loopback diagnostic.
+25 standalone fixture packages plus the separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.
@@ -90,6 +90,7 @@ sources; expected failure behaviour is itself asserted.
 | `mpeg-tests` | 1,133 | Actual MPEG source, real EE scheduler/runtime and FFmpeg. Synthetic PES/rings, decoded-picture hook for lifecycle cases, and genuine three-frame decode for video/cancellation/audio/input service and recreation. Windows protected pages check bounded retry reads. Four optional scratch controls reproduce the specific service and callback-lifetime defects. |
 | `recompiler-cvt-tests` | 199,956 fixed | Actual decoder and COP1 translator emit and execute synthetic conversions against production macros. Every FPR alias, ignored Ft, all four host rounding modes, sign saturation, FCR31/source preservation and angle range reduction. Old rounding control produces 920 failures; no retail pose input. |
 | `ee-priority-tests` | 63 | Actual kernel thread syscalls and scheduler, synthetic guest bootstrap and empty function table; original priority-zero rejection is the control. |
+| `ee-initthread-tests` | 23 fixed / 11 control | Actual `InitThread` handler, thread syscalls and scheduler, synthetic guest bootstrap; topThread stand-in, semaphore and thread ids, caller priority, repeat call, and priority-one workers reached by `RotateThreadReadyQueue(1)`. The original one-line handler, restored in build scratch, is the starvation control. |
 | `ee-callback-tests` | 244 | Actual scheduler/guest heap and synthetic guest callbacks; stale-entry cancellation, started continuations and tuple lifetime. Predicate-disabled scheduler is the control. |
 | `ee-clock-tests` | 150 | Actual scheduler/timers and synthetic busy-poll guest threads; host-deadline field credit while ready threads run. Credit-disabled control reproduces starvation. |
 | `recompiler-resume-tests` | 341 | Real ELF/config/decoder/emitter pipeline with synthetic MIPS ELF; synthesized entry aliases, explicit handler precedence and deterministic ownership. Precise old generator behaviour is restored in the control. |

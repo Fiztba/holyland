@@ -121,9 +121,7 @@ stubs = [
   "sceSifIsAliveIop@0x002292C0",
   "sceSifSyncIop@0x002292E8",
   "sceSifRebootIop@0x00229330",
-  # Not InitThread@0x002295F0: the game's own InitThread creates libkernel's
-  # topThread and lowers main to priority 1, which the movie player's
-  # RotateThreadReadyQueue yields rely on; the runtime handler does neither.
+  "InitThread@0x002295F0",
   "iWakeupThread@0x002296C8",
   "iRotateThreadReadyQueue@0x00229760",
   "sceDeci2Open@0x00229878",

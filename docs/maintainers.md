@@ -36,10 +36,16 @@ When changing the map, look for stubs that the old boundaries bypassed by
 accident. The Ghidra map merged `_InitSys`, `topThread` and `InitThread`
 into one function, so `_InitSys`'s tail jump ran the game's own
 `InitThread` as a local branch. With exact boundaries it reaches the
-`InitThread` handler, which creates no `topThread` and leaves main at
+`InitThread` handler, which created no `topThread` and left main at
 priority 0. The movie player's `RotateThreadReadyQueue` yields then
-starve its decoder, and the opening movie stops on its first frame with
-nothing logged. `InitThread` is therefore no longer stubbed.
+starved its decoder, and the opening movie stopped on its first frame with
+nothing logged. Patch 0044 gives the handler libkernel's setup (a waiting
+priority-0 `topThread` stand-in, caller lowered to priority 1), so
+`InitThread` is stubbed again. Stub it together with libkernel's
+`iWakeupThread` and `iRotateThreadReadyQueue`, never alone: with the
+handler, the game's own `topThread` never exists, so a recompiled wrapper
+that posts to it fails. KFIV never calls `iSuspendThread`, the one such
+wrapper left recompiled.
 
 The Ghidra workflow below produced the earlier 28,429-record map (24,018
 `entry_` fragments and 814 `caseD_` cases, 219 MB of generated source).

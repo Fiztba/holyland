@@ -23,7 +23,8 @@ place as state changes; link session logs at the point they support.
   scheduler safe point charged `kGuestDispatchCycles`, so real function
   boundaries move where guest time is charged. Each map is deterministic
   (two Ghidra-map runs matched); frames from 12500 on match again.
-  Exact boundaries needed one config change: see the `InitThread` note in
+  Exact boundaries exposed the runtime `InitThread` handler, which patch
+  0044 completes: see the `InitThread` note in
   [maintainers.md](maintainers.md). EE code generation was never the limit.
 - **Profile (2026-10-12, i9-13900KF, Vulkan GS):** in the first 3D area the
   guest thread runs at ~87% of a core and nothing else is busy. Sampled
