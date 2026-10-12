@@ -65,6 +65,18 @@ typedef struct {
     u32 flags;                      /* 0x10 */
 } GameEvent;
 
+/* an 8-byte wall-clock time passed by value (func_001D2390, func_001D23F0, func_001D24A8) */
+typedef struct {
+    char unk0;                      /* 0x00 */
+    u8 sec;                         /* 0x01 */
+    u8 min;                         /* 0x02 */
+    u8 hour;                        /* 0x03 */
+    char unk4;                      /* 0x04 */
+    u8 mday;                        /* 0x05 */
+    u8 mon;                         /* 0x06 */
+    u8 year;                        /* 0x07 years since 2000 */
+} ClockTime;
+
 /* D_00431CE8: func_0020CD00 advances its counter once a frame */
 typedef struct {
     char pad00[0x08];
@@ -96,5 +108,13 @@ typedef struct {
     char pad2C[0x14C];
     int tail[2];                    /* 0x178 */
 } ScratchSlot;
+
+/* D_0042A8F0[32]: a pool of 0x70-byte slots chained into a free list through `next`;
+   D_00446DF0 holds the head */
+typedef struct PoolSlot {
+    char pad00[0x50];
+    struct PoolSlot *next;          /* 0x50 */
+    char pad54[0x1C];
+} PoolSlot;
 
 #endif

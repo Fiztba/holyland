@@ -10,7 +10,7 @@ typedef struct Obj {
     char *p54;
 } Obj;
 
-void func_001AEC48(void *);
+int func_001AEC48(void *);
 void func_001AED58(void *);
 int func_001AF0B0(void *);
 extern u8 D_0034AFD6[];

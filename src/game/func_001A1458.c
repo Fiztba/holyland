@@ -13,7 +13,7 @@ int FlushCache(int);
 int func_001A1360(char *, char *, int, int, int);
 int func_001A1438();
 int func_001CD6B8(int);
-void func_001CD7E0(int);
+int func_001CD7E0(int);
 
 void func_001A1458(Func1A1458Ctx *arg0) {
     while (func_001A1438() == 0);

@@ -25,7 +25,7 @@ typedef struct {
     int i5C;
 } Actor;
 
-void func_001AEC48(void *);
+int func_001AEC48(void *);
 void func_001AED58(void *);
 int func_001AF0B0(void *);
 void func_001A1E28(u16, void *, void *, int, u16, void *);

@@ -114,7 +114,7 @@ typedef struct ModelInstance {
     Vector4 position;               /* 0xC0 */
     Vector4 rotation;               /* 0xD0 x, y (heading), z in radians */
     f32 unkE0;                      /* 0xE0 its sign picks the turn direction */
-    char padE4[0x04];
+    f32 unkE4;                      /* 0xE4 */
     f32 unkE8;                      /* 0xE8 */
     char padEC[0x04];
     u16 part_count;                 /* 0xF0 */
@@ -128,7 +128,12 @@ typedef struct ModelInstance {
     char pad114[0x0C];
     BoneAnchor *bone_anchors;       /* 0x120 32 of them */
     Vector4 *bone_positions;        /* 0x124 32 of them, written from bone_anchors */
-    char pad128[0x20];
+    char pad128[0x14];
+    f32 radius;                     /* 0x13C how far the model reaches around its position */
+    u8 hit_handles[4];              /* 0x140 handles of the linked points that touch it */
+    u8 hit_count;                   /* 0x144 */
+    char pad145;
+    s16 unk146;                     /* 0x146 */
     s32 unk148;                     /* 0x148 */
     void *unk14C;                   /* 0x14C */
     char pad150[0x0C];
@@ -203,7 +208,10 @@ typedef struct {
 /* what D_004469D8 points at: one of the nodes at D_0057E240. D_004469D4 heads
    the list of the ones in use. */
 typedef struct ModelNode {
-    char pad00[0x18];
+    s32 unk00;                      /* 0x00 */
+    s32 unk04;                      /* 0x04 cleared when the node is unlinked */
+    s32 unk08;                      /* 0x08 cleared when the node is unlinked */
+    char pad0C[0x0C];
     ModelInstance *model;           /* 0x18 non-null while the node is in use */
     char pad1C[0x04];
     struct ModelNode *prev;         /* 0x20 */

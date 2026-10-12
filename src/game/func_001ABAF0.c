@@ -2,7 +2,7 @@
 
 extern int D_004468E8;
 
-void func_001AEC48(char *);
+int func_001AEC48(char *);
 void func_001AED58(char *);
 int func_001AF0B0(char *);
 void func_001AF298(char *, char *);

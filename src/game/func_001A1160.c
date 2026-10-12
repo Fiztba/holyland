@@ -10,7 +10,7 @@ int FlushCache(int);
 int func_001A1360(char *, char *, int, int, int);
 int func_001A1438();
 int func_001CD6B8(int);
-void func_001CD7E0(int);
+int func_001CD7E0(int);
 
 void func_001A1160(int arg0) {
     char sp[128];

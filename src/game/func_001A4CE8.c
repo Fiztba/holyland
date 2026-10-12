@@ -1,7 +1,7 @@
 #include "common.h"
 #include "kf_effect.h"
 
-void func_001AEC48(void *);
+int func_001AEC48(void *);
 void func_001AED58(void *);
 int func_001AF0B0(void *);
 int func_001B4F90(void *);
