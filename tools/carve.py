@@ -32,7 +32,8 @@ to the retail one. Then:
     targets and %hi/%lo pairs). The asm and the C then agree on names. Statics
     a game data word points into are left unnamed: the game asm cannot link to
     them. Constants the retail code builds with a lui and lo16 (0x00FFFFFF) are
-    listed with ignore:True, so splat writes the bare value and not a symbol.
+    listed with ignore:True, so splat writes the bare value and not a symbol;
+    so are data words that point inside a unit where it defines no symbol.
     A name config/symbol_addrs.txt puts at another address is an error: one of
     the two is wrong.
 
@@ -311,6 +312,30 @@ def game_pointers(placed, statics):
     return hit
 
 
+def interior_pointers(placed, real):
+    """Words outside the placed units that point inside one, where no symbol is.
+
+    Most are constants that look like addresses (0x00800020 lies inside a 22 MB
+    game .bss array). splat would make a label for each, but the label would
+    sit inside the unit's C object, where the game's asm cannot link to it.
+    They are listed with ignore:True, so splat writes the bare value."""
+    placed_spans = sorted((a, a + size) for secs in placed.values() for a, size, _ in secs.values())
+    placed_starts = [a for a, _ in placed_spans]
+
+    def inside(v):
+        j = bisect.bisect_right(placed_starts, v) - 1
+        return j >= 0 and v < placed_spans[j][1]
+    out = set()
+    for sec, (vbase, data) in RETAIL.items():
+        if sec in (".sbss", ".bss"):
+            continue
+        for off in range(0, len(data) - 3, 4):
+            v = struct.unpack_from("<I", data, off)[0]
+            if v and v not in real and inside(v) and not inside(vbase + off):
+                out.add(v)
+    return out
+
+
 RETAIL = {}
 
 
@@ -446,7 +471,7 @@ def main():
             clash.append(f"{name}: symbol_addrs.txt says {n2a[name]:#x}, the units say {addr:#x}")
     real = {a for a, *_ in syms.values()} | set(n2a.values())
     real |= {a for _, a, *_ in statics}
-    ignored = constants(placed, real)
+    ignored = constants(placed, real) | interior_pointers(placed, real)
     pointed = game_pointers(placed, statics)
     statics = [st for st in statics if (st[0], st[1]) not in pointed]
     if clash:
