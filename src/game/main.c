@@ -1,5 +1,6 @@
 #include "kf_game.h"
 #include "kf_player.h"
+#include "kf_hud.h"
 
 extern GameStatus D_0038CC50;
 extern PlayerState D_00413F80;
@@ -32,7 +33,6 @@ void func_0019C300(void);
 s32 func_001F9438(void);
 void func_00109410(void);
 void func_00111D00(void);
-void func_001D1450(void);
 void func_00106318(void);
 int func_001D62C8(s8);
 int func_0020D088(void);
@@ -72,7 +72,7 @@ int main(void) {
     func_001F9438();
     func_00109410();
     func_00111D00();
-    func_001D1450();
+    KF_Hud_Load();
     func_00106318();
     func_001D62C8(4);
     sceGsSyncV(0);

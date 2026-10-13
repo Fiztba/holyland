@@ -1,4 +1,5 @@
 #include "kf_game.h"
+#include "kf_hud.h"
 #include "kf_map.h"
 #include "kf_player.h"
 #include "kf_sound.h"
@@ -45,7 +46,6 @@ void func_001BC2D0(void);
 void func_001B7DF8(void);
 void func_001A1E88(void);
 void func_0019B0B8(void);
-int func_001D19D0(void);    // match: the flag test after the call uses $3 only if the call leaves a value in $2
 void func_00101618(void);
 void func_0019C540(void);
 void func_001061E8(void);
@@ -133,7 +133,7 @@ void func_001001C0(int arg) {
         func_001B7DF8();
         func_001A1E88();
         func_0019B0B8();
-        func_001D19D0();
+        KF_Hud_Update();
         if (!(D_0038CC50.bit12 && D_0038CC50.bit13)) {
             func_00101618();
             func_0019C540();

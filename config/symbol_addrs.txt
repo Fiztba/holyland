@@ -745,13 +745,23 @@ __fdlib_version = 0x004441B8;
 // game: names for game functions and data, in address order. A function
 // still called func_XXXXXXXX needs no line here.
 KF_File_Open = 0x00102278; // type:func
+KF_ScrollTexture_Init = 0x0011EAC0; // type:func
+KF_ScrollTexture_DrawAll = 0x0011ED18; // type:func
 KF_Entity_ResetAllLists = 0x00123030; // type:func
 KF_Entity_FreeAllInGroup = 0x001231C0; // type:func
 KF_Entity_DespawnOutOfRange = 0x00123580; // type:func
+KF_Debug_EditInt = 0x001B0390; // type:func
+KF_Debug_EditU16 = 0x001B04F0; // type:func
+KF_Debug_EditU8 = 0x001B0658; // type:func
+KF_Debug_EditFloat = 0x001B07C0; // type:func
 KF_Shot_ClearAll = 0x001B1340; // type:func
 KF_Shot_Alloc = 0x001B1390; // type:func
 KF_Shot_AllocSecondRing = 0x001B1400; // type:func
 func_001CFC68 = 0x001CFC68; // type:func
+KF_Hud_Load = 0x001D1450; // type:func
+KF_Hud_Update = 0x001D19D0; // type:func
+KF_Hud_Draw = 0x001D19D8; // type:func
+KF_Hud_DrawPaused = 0x001D2020; // type:func
 func_001FC0C0 = 0x001FC0C0; // type:func
 KF_Ini_SetText = 0x002080A0; // type:func
 KF_Ini_ReadLine = 0x002080B0; // type:func

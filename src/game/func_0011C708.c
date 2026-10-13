@@ -1,5 +1,6 @@
 #include "kf_map.h"
 #include "kf_collision.h"
+#include "kf_scroll_texture.h"
 
 extern s32 D_004467B8[2];
 extern MapObject D_003A1A30[][0x200];
@@ -15,8 +16,6 @@ void func_0011E8F0(ModelInstance *);
 void func_0011E9D0(void *);
 void func_0011EA70(void);
 char *func_0011EA78(char *);
-void func_0011EAC0(void);
-void func_0011ED18(void);
 void func_00216778(void *, void *);
 void func_0020C300(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 void func_0020B8B0(ModelInstance *, ModelPart *, ModelPart *);
@@ -91,8 +90,8 @@ void func_0011C708(int map) {
             object->model->draw = (void (*)(ModelInstance *))func_0011E9D0;
         }
         if (object->unk08->unk30 == 0x91) {
-            object->model->unk1BC = (void (*)(ModelInstance *))func_0011ED18;
-            func_0011EAC0();
+            object->model->unk1BC = (void (*)(ModelInstance *))KF_ScrollTexture_DrawAll;
+            KF_ScrollTexture_Init();
         }
         MAP_OBJECT_BITS(object)->bit1 = FALSE;
         MAP_OBJECT_BITS(object)->bit2 = FALSE;

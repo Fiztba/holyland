@@ -67,7 +67,7 @@ typedef struct {
     s32 unkC0;                      /* 0xC0 cleared when unk264 is set */
     s32 unkC4;                      /* 0xC4 frames unkBC waits before it fills again */
     s32 unkC8;                      /* 0xC8 frames unkC0 waits before it fills again */
-    s32 unkCC;                      /* 0xCC how much of a HUD bar is filled (func_001D19D8), out of unkD0 */
+    s32 unkCC;                      /* 0xCC how much of a HUD bar is filled (KF_Hud_Draw), out of unkD0 */
     s32 unkD0;                      /* 0xD0 0: the bar is not drawn */
     s32 unkD4;                      /* 0xD4 saved */
     s32 unkD8;                      /* 0xD8 saved */

@@ -1,4 +1,5 @@
 #include "kf_game.h"
+#include "kf_hud.h"
 #include "kf_map.h"
 #include "kf_player.h"
 
@@ -49,12 +50,10 @@ void func_001C0268(void);
 void func_001B6800(void);
 void func_0010A4E8(int, int, int, int, int);
 void func_00107E70(int, int, int);
-void func_001D19D8(void);
 void func_00106208(void);
 void func_00208540(void);
 int func_001CF980(void);
 void func_001CF4D0(void);
-void func_001D2020(void);
 void func_00107CD8(int);
 void func_001095D8(void);
 
@@ -235,7 +234,7 @@ int func_001005E8(int arg) {
             func_00107E70(0x5E, 0x87, 0x92);
         }
     }
-    func_001D19D8();
+    KF_Hud_Draw();
     if (D_0038A1B0.unk78 > 0) {
         // match: the last argument is passed as the 64-bit word
         ((void (*)(int, int, int, int, s64))func_0010A4E8)(D_0038A1B0.unk6C, D_0038A1B0.unk70, D_0038A1B0.unk74,
@@ -262,7 +261,7 @@ int func_001005E8(int arg) {
     func_001CF4D0();
     if (D_0038CC50.paused) {
         func_0010A4E8(0, 0, 0, 0x40, 0x44);
-        func_001D2020();
+        KF_Hud_DrawPaused();
     }
     func_00107CD8(D_00349680[10]);
     func_001095D8();

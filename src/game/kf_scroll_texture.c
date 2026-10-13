@@ -1,15 +1,23 @@
+#include "kf_scroll_texture.h"
+#include "kf_gs.h"
 #include "kf_texture.h"
 
-extern ScrollTexture D_00474AC0[4];
-extern ScrollOffset D_00474B60[4];
-
 void *memset(void *, int, u32);
+void func_0010A880(void *, void *);
+void func_0010A008(void);
+void func_00109E88(void);
+void func_00109A50(void);
+void func_00109A80(int, s64);
+void func_00109AD0(void);
+
+static ScrollTexture scroll_textures[4]; /* 0x474AC0 */
+static ScrollOffset scroll_offsets[4];   /* 0x474B60 */
 
 /* Sets up the four scrolling textures (the water and the like) and rewinds them. */
-void func_0011EAC0(void) {
-    ScrollTexture *texture = D_00474AC0;
+void KF_ScrollTexture_Init(void) {
+    ScrollTexture *texture = scroll_textures;
 
-    memset(D_00474B60, 0, sizeof(D_00474B60));
+    memset(scroll_offsets, 0, sizeof(scroll_offsets));
     texture->width = 0x80;
     texture->height = 0x80;
     texture->psm = 0x13;
@@ -109,4 +117,21 @@ void func_0011EAC0(void) {
     texture->period = 1;
     texture->step_x = 2;
     texture->step_y = 2;
+}
+
+/* Scrolls and redraws the four textures, then restores the GS state (a map object's draw hook). */
+void KF_ScrollTexture_DrawAll(void) {
+    ScrollTexture *texture = scroll_textures;
+    ScrollOffset *offset = scroll_offsets;
+
+    func_0010A880(texture++, offset++);
+    func_0010A880(texture++, offset++);
+    func_0010A880(texture++, offset++);
+    func_0010A880(texture++, offset++);
+    func_00109E88();
+    func_0010A008();
+    func_00109A50();
+    func_00109A80(GS_REG_ALPHA_1, 0x44);
+    func_00109A80(GS_REG_TEST_1, 0x5000D);
+    func_00109AD0();
 }

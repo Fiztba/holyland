@@ -65,7 +65,7 @@ typedef struct {
     int unk0C;                      /* 0x0C func_0020D348 clears it */
 } TextureTableHeader;
 
-/* a texture func_0010A880 redraws into another one every frame, scrolled (D_00474AC0[4]) */
+/* a texture func_0010A880 redraws into another one every frame, scrolled (scroll_textures in kf_scroll_texture.c) */
 typedef struct {
     u16 width;                      /* 0x00 of the source texture, a power of two */
     u16 height;                     /* 0x02 */
@@ -91,7 +91,7 @@ typedef struct {
     s16 step_y;                     /* 0x26 */
 } ScrollTexture;
 
-/* where a ScrollTexture has scrolled to (D_00474B60[4]) */
+/* where a ScrollTexture has scrolled to (scroll_offsets) */
 typedef struct {
     s16 x;                          /* 0x00 */
     s16 y;                          /* 0x02 */
