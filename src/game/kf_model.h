@@ -386,7 +386,7 @@ typedef struct ModelInstance {
     BoneAnchor *bone_anchors;       /* 0x120 32 of them */
     Vector4 *bone_positions;        /* 0x124 32 of them, written from bone_anchors */
     struct ModelInstance *draw_next[2]; /* 0x128 next model in the same depth bucket, per draw list */
-    ModelPart *unk130;              /* 0x130 the part whose placement func_00126120 leaves out (the root?) */
+    ModelPart *unk130;              /* 0x130 the part whose placement KF_Entity_RebuildModelMatrices leaves out (the root?) */
     char pad134[0x08];
     f32 radius;                     /* 0x13C how far the model reaches around its position (a map object's MapObject.unk14) */
     u8 hit_handles[4];              /* 0x140 handles of the linked points (D_003E7500) that touch it; the drawing code lights it by them */

@@ -1,7 +1,7 @@
 #include "kf_script.h"
+#include "kf_entity_world.h"
 #include "kf_entity.h"
 
-Entity *func_001267B0(int);
 int func_00211CF8(ScriptArg *, int);
 
 /* Script command: gather sixteen of the entity's flags into one word for the script (the bits
@@ -10,7 +10,7 @@ void func_00216408(ScriptLookupCommand *command) {
     Entity *entity;
     int result;
 
-    entity = func_001267B0(command->input.value);
+    entity = KF_Entity_GetBySpawnId(command->input.value);
     if (entity != NULL) {
         result = ENTITY_FLAG_BITS(entity)->bit1;
         if (ENTITY_FLAG_BITS(entity)->bits2 >= 2) {

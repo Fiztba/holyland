@@ -1,5 +1,6 @@
 #include "kf_game.h"
 #include "kf_screen.h"
+#include "kf_splash.h"
 
 extern GameStatus D_0038CC50;
 extern void (*D_0038D650[])(void);
@@ -14,7 +15,6 @@ void func_00109800(void);
 void func_0010B000(void);
 void func_00118A50(void);
 void func_001B5460(void);
-void func_00208288(void);
 void func_0020B780(int);
 
 /* Runs a pending map change to the end, drawing its own frames meanwhile. */
@@ -22,7 +22,7 @@ void func_00118958(void) {
     if (D_0038D680.step != 0) {
         func_00118A50();
         func_001020F8();
-        func_00208288();
+        KF_Splash_Abort();
         do {
             func_001B5460();
             func_0020B780(0);

@@ -1,4 +1,5 @@
 #include "common.h"
+#include "kf_entity_world.h"
 #include "kf_entity.h"
 #include "kf_map.h"
 
@@ -56,7 +57,6 @@ static void func_00169990(Entity *);
 void func_0019A290(Entity *, s32);
 void func_0018D600(char **, int, u32, int);
 int func_00195ED0(Entity *, EntityParamsUnk3D8 *, s32, s32);
-void *func_001267B0(int);
 float func_00194F80(void *, void *);
 void func_0018DC40(char *);
 
@@ -741,7 +741,7 @@ static void func_00169F58(Entity *entity) {
             }
             for (point_index = 0; point_index < count; point_index++) {
                 for (; minion_index < 8; minion_index++) {
-                    minion = func_001267B0(minion_index + 10);
+                    minion = KF_Entity_GetBySpawnId(minion_index + 10);
                     if (minion != NULL && (minion->flags & 3) == 1 &&
                         (((s32)(minion->flags >> 2) & 3) == 0 || ((s32)(minion->flags >> 2) & 3) == 3)) {
                         point = &D_004FF390[point_index];

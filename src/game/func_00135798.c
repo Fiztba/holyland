@@ -1,11 +1,11 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 extern float D_00413F80[];
 
 int func_00192C98(void *, int, int, u32, int);
 char *func_0010CAB8(char *, u32);
 int func_001A1C58(int, void *, void *, void *);
-void *func_001267E8(int, int);
 void func_0018DCD8(Entity *);
 
 void func_00135798(Entity *entity) {
@@ -52,7 +52,7 @@ void func_00135798(Entity *entity) {
         }
         break;
     case 3:
-        other = func_001267E8(entity->group_id, entity->spawn_info->unk40);
+        other = KF_Entity_GetBySpawnIdForMap(entity->group_id, entity->spawn_info->unk40);
         if (other != NULL && ((s32)other->flags & 1) && other->unkE0.unk7A != 0) {
             ENTITY_FLAG_BITS(entity)->bits2 = 2;
             ENTITY_FLAG_BITS(entity)->bit4 = TRUE;

@@ -1,8 +1,8 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 int func_00192C98(void *, int, int, u32, int);
 void func_001958B8(char *, void (*)(void), int);
-void *func_001267B0(int);
 char *func_0010CAB8(char *, u32);
 void func_0016F930(Entity *);
 void func_0016FE10(Entity *);
@@ -35,7 +35,7 @@ void func_0016F7B8(Entity *entity) {
             func_001958B8((char *)entity, (void (*)(void))func_0016FE10, 1);
             return;
         }
-        other = func_001267B0(entity->spawn_info->variant);
+        other = KF_Entity_GetBySpawnId(entity->spawn_info->variant);
         if (other != NULL && (other->flags & 3) == 3) {
             point = (f32 *)func_0010CAB8((char *)other->model, 8);
             if (point != NULL) {

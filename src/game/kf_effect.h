@@ -1066,7 +1066,7 @@ typedef struct {
 
 #define EFFECT_SLOT_VIEW(slot) ((EffectSlotView *)(slot))
 
-/* FxTableEntry+0xAC: what casting the magic does to the player (func_001BC9E0) */
+/* FxTableEntry+0xAC: what casting the magic does to the player (KF_Player_CastMagic) */
 typedef struct {
     u16 unk00[6];                   /* 0x00 nonzero: PlayerState.timed_flags[i] is cleared */
     u16 unk0C[6];                   /* 0x0C goes to PlayerState.unk110 */
@@ -1098,7 +1098,7 @@ typedef struct {
     char pad00[0x34];
     FxTableHitCheck hit_checks[3];  /* 0x34 */
     FxTableStats unkAC;             /* 0xAC */
-    u16 unkFC;                      /* 0xFC taken from PlayerState.unkB8 to cast it (func_001BC9E0) */
+    u16 unkFC;                      /* 0xFC taken from PlayerState.unkB8 to cast it (KF_Player_CastMagic) */
     u16 unkFE;                      /* 0xFE divides how fast PlayerState.unkC0 fills (func_001B96C8) */
     u16 unk100;                     /* 0x100 */
     s8 unk102;                      /* 0x102 nonzero: the effect cannot be started */

@@ -16,7 +16,8 @@ typedef struct {
     char pad0C[0x04];
     f32 unk10;                      /* 0x10 start of the rotation it spawns with (unk14 is its y) */
     f32 unk14;                      /* 0x14 an angle (the facing it spawns with?) */
-    char pad18[0x08];
+    f32 unk18;                      /* 0x18 third rotation component (func_00215E78) */
+    char pad1C[0x04];
     f32 unk20[4];                   /* 0x20 the scale it spawns with */
     u16 type_id;                    /* 0x30 which pool block holds its data */
     char pad32[0x02];
@@ -34,8 +35,8 @@ typedef struct {
     char pad4A[0x02];
     u16 unk4C;                      /* 0x4C */
     u16 unk4E;                      /* 0x4E asked of func_00210C48 before unk58 is used, 0: nothing */
-    u16 unk50;                      /* 0x50 0: func_00124F00 makes it 1800 */
-    u8 unk52;                       /* 0x52 0: func_00124F00 makes it 100 */
+    u16 unk50;                      /* 0x50 0: KF_Entity_InitFromMapSpawns makes it 1800 */
+    u8 unk52;                       /* 0x52 0: KF_Entity_InitFromMapSpawns makes it 100 */
     char pad53;
     u16 unk54;                      /* 0x54 */
     u16 unk56;                      /* 0x56 */
@@ -48,7 +49,7 @@ typedef struct {
 typedef union {
     u64 word;
     u32 halves[2];
-    u8 bytes[8];                    /* [4]: the entity's id in D_004FEB90; [6]: 0 becomes 80 (func_00124F00) */
+    u8 bytes[8];                    /* [4]: spawn id for entity_by_spawn_id; [6]: 0 becomes 80 (KF_Entity_InitFromMapSpawns) */
 } EntitySpawnFlags;
 
 #define ENTITY_SPAWN_FLAGS(entity) (((EntitySpawnFlags *)&(entity)->spawn_info->unk38)->word)
@@ -333,7 +334,7 @@ typedef struct {
     u16 unk06;                      /* 0x06 Entity.unk30 before scaling */
     u16 unk08;                      /* 0x08 Entity.unk34 before scaling */
     u16 unk0A;                      /* 0x0A what Entity.unk2C is measured against */
-    u16 unk0C;                      /* 0x0C 0: func_00124F00 makes it 70 */
+    u16 unk0C;                      /* 0x0C 0: KF_Entity_InitFromMapSpawns makes it 70 */
     u16 unk0E;                      /* 0x0E passed to func_001BBB60 when the entity dies */
     u16 flags;                      /* 0x10 */
     char pad12[0x02];
@@ -349,7 +350,7 @@ typedef struct {
     u8 unk60[0x20];                 /* 0x60 byte table */
     u16 unk80[0x22];                /* 0x80 indexed by Entity.unkD1 */
     u8 unkC4;                       /* 0xC4 */
-    char padC5;
+    u8 unkC5;                       /* 0xC5 bone index for func_0010CAB8 (func_0018DC40) */
     u16 unkC6;                      /* 0xC6 */
     u8 unkC8;                       /* 0xC8 */
     u8 unkC9;                       /* 0xC9 */
@@ -381,7 +382,7 @@ typedef struct {
     u8 unk110[0x20];                /* 0x110 how many records unk1B0[n] leads to */
     s32 unk130[0x20];               /* 0x130 offsets from D_004467C0 to EntityParamsUnk130 records, by animation */
     s32 unk1B0[0x20];               /* 0x1B0 offsets from D_004467C0 to EntityParamsUnk1B0 records, by animation */
-    u16 gold;                       /* 0x230 how much gold it drops (func_001CB2C8): half of it for sure, the rest by chance */
+    u16 gold;                       /* 0x230 how much gold it drops (KF_Gold_DropFromEntity): half of it for sure, the rest by chance */
     u16 drop_item;                  /* 0x232 the item it may drop (func_001C8CB0), 0xFFFF: none */
     u16 second_drop_item;           /* 0x234 the item it may drop when the first one's roll fails, 0xFFFF: none */
     s8 drop_chance;                 /* 0x236 percent */
@@ -728,11 +729,11 @@ typedef struct Entity {
     u16 unk20;                      /* 0x20 a timer, set to 1800 by func_001862F0 */
     char pad22[0x02];
     u16 unk24;                      /* 0x24 not 0: attacks reach half as far (func_0018F648) */
-    u16 unk26;                      /* 0x26 1-4: which of the timers unk20, unk24, unk28, unk2A tints the model (func_00125BD8) */
+    u16 unk26;                      /* 0x26 1-4: which of the timers unk20, unk24, unk28, unk2A tints the model (KF_Entity_DrawAll) */
     u16 unk28;                      /* 0x28 */
     u16 unk2A;                      /* 0x2A */
     u16 unk2C;                      /* 0x2C */
-    u16 unk2E;                      /* 0x2E capped at EntityParams.unk0A; Entity.unk4C is set from it (func_001256C0) */
+    u16 unk2E;                      /* 0x2E capped at EntityParams.unk0A; Entity.unk4C is set from it (KF_Entity_UpdateAll) */
     f32 unk30;                      /* 0x30 */
     f32 unk34;                      /* 0x34 */
     f32 radius;                     /* 0x38 */
@@ -748,7 +749,7 @@ typedef struct Entity {
     f32 unk60;                      /* 0x60 */
     f32 distance_to_player;         /* 0x64 */
     f32 unk68;                      /* 0x68 */
-    f32 unk6C;                      /* 0x6C the heading Entity.unk4C pushes it along (func_001256C0) */
+    f32 unk6C;                      /* 0x6C the heading Entity.unk4C pushes it along (KF_Entity_UpdateAll) */
     f32 unk70[4];                   /* 0x70 the model's position before this frame's move */
     u16 unk80;                      /* 0x80 */
     u16 unk82;                      /* 0x82 */
@@ -999,7 +1000,7 @@ typedef struct {
    the retail code has that second ld. */
 typedef union {
     u64 all;
-    u32 halves[2];                  /* func_001251E0 clears bits 32-63 in one store */
+    u32 halves[2];                  /* KF_Entity_ResetToSpawn clears bits 32-63 in one store */
 } EntityFlags;
 #define ENTITY_FLAGS(entity) (((EntityFlags *)&(entity)->flags)->all)
 
@@ -1146,22 +1147,22 @@ typedef struct {
 
 #define OBJECT_SLOT_FLAG_BITS(slot) ((ObjectSlotFlagBits *)&(slot)->flags)
 
-/* what D_0044712C refers to: a record with a kind id at 0x30 (func_001BDD38) */
+/* what ladder_object refers to: a record with a kind id at 0x30 (KF_Ladder_PlayStepSound) */
 typedef struct {
     char pad00[0x30];
     u16 unk30;                      /* 0x30 */
     char pad32[0x1E];
-    s16 unk50;                      /* 0x50 how many steps there are between the two end points (func_001BD420) */
+    s16 unk50;                      /* 0x50 how many steps there are between the two end points (KF_Ladder_Start) */
     s16 unk52;                      /* 0x52 frames one step takes */
 } ReferencedObject;
 
-/* D_0044712C: points at the ReferencedObject */
+/* ladder_object: the map object the player is climbing */
 typedef struct {
-    ModelInstance *model;           /* 0x00 its get_point gives the two end points (func_001BD420) */
+    ModelInstance *model;           /* 0x00 its get_point gives the two end points (KF_Ladder_Start) */
     char pad04[0x04];
     ReferencedObject *unk08;        /* 0x08 */
     char pad0C[0x04];
-    s32 unk10;                      /* 0x10 flags; 0x10000 is tested by func_001BD808 */
+    s32 unk10;                      /* 0x10 flags; 0x10000 is tested by KF_Ladder_WaitOnRung */
 } ObjectReference;
 
 void KF_Entity_ResetAllLists(void);

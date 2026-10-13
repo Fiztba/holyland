@@ -36,7 +36,7 @@ typedef struct {
     int unk30;                      /* 0x30 */
     int unk34;                      /* 0x34 set with bit5 by func_001226E0 */
     char pad38[0x08];
-    void *unk40;                    /* 0x40 the model of the item effect that asked for unk30 = 0xC5F (func_00209408) */
+    void *unk40;                    /* 0x40 the model of the item effect that asked for unk30 = 0xC5F (KF_ItemEffect_StepRequestGameStatus) */
     int unk44;                      /* 0x44 counts down to 0; 1 when an item was just used (func_001BC2D0) */
 } GameStatus;
 

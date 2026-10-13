@@ -1,9 +1,8 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 int func_00192C98(void *, int, int, u32, int);
 void func_0018DCD8(Entity *);
-void *func_001267B0(int);
-
 void func_001679B8(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
 
@@ -17,7 +16,7 @@ void func_001679B8(Entity *entity) {
         ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~0xC) | 4;
         ENTITY_FLAGS(entity) &= ~0x200;
         if (unkE0->unk7C != 0) {
-            Entity *other = func_001267B0(unkE0->unk7B);
+            Entity *other = KF_Entity_GetBySpawnId(unkE0->unk7B);
 
             if (other != NULL) {
                 other->unkE0.unk7A = -1;

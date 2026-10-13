@@ -499,7 +499,7 @@ typedef struct {
     u16 unk08;                      /* 0x08 */
 } ObjectMark;
 
-/* a map's 16 marks, as func_001CA920 copies them whole */
+/* a map's 16 marks, as KF_Gold_InitMap copies them whole */
 typedef struct {
     ObjectMark marks[16];
 } ObjectMarkRow;

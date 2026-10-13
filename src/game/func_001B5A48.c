@@ -4,6 +4,7 @@
 #include "kf_effect.h"
 #include "kf_sound.h"
 #include "kf_shot.h"
+#include "kf_magic_ladder.h"
 
 extern PlayerState D_00413F80;
 extern PlayerState D_00414280;      /* the player as of the frame before */
@@ -58,8 +59,6 @@ void func_001BA310(void);
 void func_001BB2E8(int);
 void func_001BB908(void);
 void func_001BB978(void);
-int func_001BC9E0(int);
-int func_001BD710(u16, u16);
 
 #define STRIDE_LENGTH 0x1400
 
@@ -164,7 +163,7 @@ void func_001B5A48(void) {
                 break;
             case 2:
                 if (D_00413F80.unkC0 >= 5000 && D_00413F80.unkB8 >= D_00402DA8[D_00413F80.unk46].unkFC) {
-                    func_001BC9E0(D_00413F80.unk46);
+                    KF_Player_CastMagic(D_00413F80.unk46);
                 }
                 break;
             }
@@ -230,7 +229,7 @@ void func_001B5A48(void) {
     if (D_0038CC50.unk00 != 0 && !(D_0038CC50.unk30 & 1)) {
         func_001B7EE0(held, pressed);
         func_001B9078();
-        func_001BD710(held, pressed);
+        KF_Ladder_DispatchPad(held, pressed);
         func_001B94C0();
         func_001B9588();
         func_001B9610();

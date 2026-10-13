@@ -1,26 +1,15 @@
-#include "common.h"
+#include "kf_entity.h"
+#include "kf_entity_world.h"
 
-void *func_001267B0(int);
+/* When the dying entity's partner is in state 2, restart it and reload its wait timer. */
+void func_00143C28(Entity *entity) {
+    Entity *partner;
 
-typedef struct {
-    char pad0[0xC];
-    char *ctrl;
-    char pad1[0xCC - 0x10];
-    u8 state;
-    char pad2[0xD8 - 0xCD];
-    u64 flags;
-    char pad3[0x148 - 0xE0];
-    u16 f148;
-} Actor;
-
-void func_00143C28(char *arg0) {
-    Actor *temp_v0;
-
-    temp_v0 = func_001267B0(*(u8 *)(*(char **)(arg0 + 0x10) + 0x41));
-    if (temp_v0 != 0) {
-        if ((temp_v0->flags & 0xE) == 2) {
-            temp_v0->state = 2;
-            temp_v0->f148 = *(u16 *)(temp_v0->ctrl + 0x43A);
+    partner = KF_Entity_GetBySpawnId(entity->spawn_info->variant);
+    if (partner != NULL) {
+        if ((partner->flags & 0xE) == 2) {
+            partner->state = 2;
+            partner->unkE0.unk68 = partner->params->unk43A;
         }
     }
 }

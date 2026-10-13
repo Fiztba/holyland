@@ -1,5 +1,8 @@
+#include "kf_gold.h"
+#include "kf_item_effect.h"
 #include "kf_player.h"
 #include "kf_shot.h"
+#include "kf_splash.h"
 
 extern PlayerState D_00413F80;
 extern int D_00446734;          /* nonzero: a saved game was loaded */
@@ -20,9 +23,6 @@ void func_0011C6E8(void);
 void func_001C8238(void);
 void func_001A1610(void);
 void func_001B4EE0(void);
-void func_001CA818(void);
-void func_00208158(void);
-int func_00208FF8(void);
 int func_001060C0(void);
 void func_00104EC8(void);
 void func_001B5A10(void);
@@ -49,9 +49,9 @@ void func_001000C8(int arg) {
     func_001C8238();
     func_001A1610();
     func_001B4EE0();
-    func_001CA818();
-    func_00208158();
-    func_00208FF8();
+    KF_Gold_Init();
+    KF_Splash_Reset();
+    KF_ItemEffect_Reset();
     if (D_00446734 != 0) {
         func_001060C0();
         func_00104EC8();

@@ -1,17 +1,21 @@
-void *func_001267B0(int);
+#include "kf_script.h"
+#include "kf_entity_world.h"
+#include "kf_entity.h"
+
 float func_0019B838(float);
 
-void func_002165D0(char *arg0) {
-    char *temp_v0;
+/* Script command: copy x, y and z into the entity's model unkD0, each passed through func_0019B838. */
+void func_002165D0(ScriptEntityVectorCommand *command) {
+    Entity *entity;
 
-    temp_v0 = func_001267B0(*(int *)(arg0 + 0x8));
-    if (temp_v0 != 0) {
-        *(float *)(*(char **)temp_v0 + 0xD0) = *(float *)(arg0 + 0x10);
-        *(float *)(*(char **)temp_v0 + 0xD4) = *(float *)(arg0 + 0x18);
-        *(float *)(*(char **)temp_v0 + 0xD8) = *(float *)(arg0 + 0x20);
-        *(float *)(*(char **)temp_v0 + 0xD0) = func_0019B838(*(float *)(*(char **)temp_v0 + 0xD0));
-        *(float *)(*(char **)temp_v0 + 0xD4) = func_0019B838(*(float *)(*(char **)temp_v0 + 0xD4));
-        *(float *)(*(char **)temp_v0 + 0xD8) = func_0019B838(*(float *)(*(char **)temp_v0 + 0xD8));
+    entity = KF_Entity_GetBySpawnId(command->target_id.value);
+    if (entity != NULL) {
+        entity->model->unkD0[0] = command->x.value;
+        entity->model->unkD0[1] = command->y.value;
+        entity->model->unkD0[2] = command->z.value;
+        entity->model->unkD0[0] = func_0019B838(entity->model->unkD0[0]);
+        entity->model->unkD0[1] = func_0019B838(entity->model->unkD0[1]);
+        entity->model->unkD0[2] = func_0019B838(entity->model->unkD0[2]);
     }
-    *(int *)arg0 = 0;
+    command->active = 0;
 }

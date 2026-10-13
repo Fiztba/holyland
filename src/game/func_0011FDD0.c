@@ -1,3 +1,4 @@
+#include "kf_gold.h"
 #include "kf_model.h"
 
 extern Qword D_0043E780;
@@ -10,7 +11,6 @@ void func_001CFA70(int, int, int, int, int, int, ...);
 void func_00123000(int);
 void func_0019D490(s32, s32, f32 *, f32);
 ItemNode *func_001C9340(int, int, void *, void *, void *, void *);
-int func_001CB0D0(Vector4 *, Vector4 *, int, int, int, int, int);
 
 /* Update handler of a chest-like kind: used by the player, it opens (when it
    needs a key the player must hold it, else a message is shown) and hands out
@@ -71,7 +71,7 @@ void func_0011FDD0(void *arg, int unused) {
             position.y = object->model->position.y - 25.0f;
             position.z = object->model->position.z;
             turn.y = object->model->rotation.y;
-            func_001CB0D0(&position, &turn, MAP_OBJECT_BYTES(object)->unk00 & 1, ((MapObjectUnk08Words *)source)->unk48, source->unk38.bytes[2], 0, 1);
+            KF_Gold_Drop(&position, &turn, MAP_OBJECT_BYTES(object)->unk00 & 1, ((MapObjectUnk08Words *)source)->unk48, source->unk38.bytes[2], 0, 1);
             MAP_OBJECT_BITS(object)->bit18 = FALSE;
         }
     }

@@ -1,7 +1,7 @@
 #include "kf_script.h"
+#include "kf_entity_world.h"
 #include "kf_entity.h"
 
-Entity *func_001267B0(int);
 int func_00192EB0(void *, int);
 float func_0019B838(float);
 float atan2f(float, float);
@@ -11,7 +11,7 @@ void func_00215920(ScriptMoveCommand *command) {
     Entity *target;
     f32 heading;
 
-    target = func_001267B0(command->target_id.value);
+    target = KF_Entity_GetBySpawnId(command->target_id.value);
     if (target == NULL || (target->flags & 0xF) != 3 || target->unk2C == 0) {
         command->active = 0;
         return;

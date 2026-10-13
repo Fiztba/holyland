@@ -1,4 +1,5 @@
 #include "kf_game.h"
+#include "kf_magic_ladder.h"
 #include "kf_player.h"
 
 extern PlayerState D_00413F80;
@@ -8,8 +9,6 @@ extern void (*D_00413F50[])(u16, u16);
 extern u16 D_0044693E;
 
 void func_001A3918(int);
-int func_001BC9E0(int);
-void func_001BD208(int);
 
 /* The player's actions for this frame: runs the handler of the item in hand, then the magic button. */
 void func_001B6FA0(u16 held, u16 pressed) {
@@ -28,10 +27,10 @@ void func_001B6FA0(u16 held, u16 pressed) {
     D_00413F50[def->unk63](held, pressed);
     if (D_00413F80.unk258 == 0 || (D_00413F80.unk25A == 0 && D_00413F80.unk25B == 0)) {
         if (D_0044693E & pressed) {
-            func_001BC9E0(D_00413F80.unk3D);
+            KF_Player_CastMagic(D_00413F80.unk3D);
         }
         if (D_0044693E & held) {
-            func_001BD208(D_00413F80.unk3D);
+            KF_Player_HoldMagic(D_00413F80.unk3D);
         }
     }
     if (D_00413F80.unk258 != 0) {

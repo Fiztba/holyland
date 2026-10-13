@@ -1,6 +1,5 @@
 #include "kf_entity.h"
-
-void *func_001267B0(int);
+#include "kf_entity_world.h"
 
 /* Counts the first six objects whose flags low nibble is 3, then stores (count + 2) / 3. */
 void func_00162B48(Entity *entity) {
@@ -14,7 +13,7 @@ void func_00162B48(Entity *entity) {
     count = 0;
     i = 0;
     do {
-        object = func_001267B0(i + 0x65);
+        object = KF_Entity_GetBySpawnId(i + 0x65);
         if (object != NULL) {
             next = count + 1;
             count = ((object->flags & 0xF) ^ 3) ? count : next;

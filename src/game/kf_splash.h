@@ -13,7 +13,7 @@ typedef struct {
     u64 unk18;                      /* 0x18 */
 } SplashImage;
 
-/* the 0x40-byte GS sprite packet for the splash image, D_005F9B00 */
+/* the 0x40-byte GS sprite packet for the splash image */
 typedef struct {
     u64 tex0;                       /* 0x00 GS TEX0 */
     u64 unk08;                      /* 0x08 */
@@ -36,7 +36,6 @@ typedef struct {
 } SplashSprite;
 
 extern SplashImage D_00249680;
-extern SplashSprite D_005F9B00;
 
 /* how one sprite of the boot screens (language choice, title logos) changes over time: four keys */
 typedef struct {
@@ -135,7 +134,13 @@ typedef struct {
     int unk0C;                      /* 0x0C an effect number for func_001A1C58 */
 } ItemUseEffectDef;
 
-int func_00208198(int splash_id, int hold_frames, int skippable, int fade_in_frames, int fade_out_frames);
-void func_00208670(void);
+void KF_Splash_Reset(void);
+int KF_Splash_GetState(void);
+int KF_Splash_Start(int splash_id);
+int KF_Splash_Begin(int splash_id, int hold_frames, int skippable, int fade_in_frames, int fade_out_frames);
+void KF_Splash_Abort(void);
+void KF_Splash_Update(void);
+void KF_Splash_Draw(void);
+void KF_Splash_BuildSprite(void);
 
 #endif

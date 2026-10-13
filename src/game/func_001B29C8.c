@@ -1,5 +1,6 @@
 #include "kf_entity.h"
 #include "kf_game.h"
+#include "kf_magic_ladder.h"
 #include "kf_player.h"
 
 extern PlayerState D_00413F80;
@@ -13,7 +14,6 @@ void func_001B4BC8(int, Unk1B1470Request *);
 void func_001BB260(int);
 void func_001BB390(void *, int);
 void func_001BB4D0(int);
-void func_001BD6E0(void);
 
 /* A hit lands on the player: marks the attacking entity, works out the damage from the
    attack's nine strengths against the player's nine defences, takes it off the player's
@@ -80,5 +80,5 @@ void func_001B29C8(Unk1B1470Request *request, Unk1B1470Extra *extra) {
     }
     func_001BB4D0(damage);
     func_001B4BC8(damage, request);
-    func_001BD6E0();
+    KF_Ladder_CancelApproach();
 }

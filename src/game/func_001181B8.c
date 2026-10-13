@@ -1,10 +1,10 @@
 #include "kf_entity.h"
+#include "kf_gold.h"
+#include "kf_entity_world.h"
 
 void func_00115878(int);
 void func_001A3040(int);
 void func_0011CE80(int);
-void func_00125560(int);
-void func_001CACA0(int);
 void func_001C8938(int);
 void func_0019AAA0(int);
 void func_001A15F8(void);
@@ -26,8 +26,8 @@ void func_001181B8(void) {
             func_001A3040(other_slot);
             func_0011CE80(other_slot);
             KF_Entity_FreeAllInGroup(other_slot);
-            func_00125560(other_slot);
-            func_001CACA0(other_slot);
+            KF_Entity_ClearMapSlot(other_slot);
+            KF_Gold_UnlinkMap(other_slot);
             func_001C8938(other_slot);
             func_0019AAA0(other_slot);
             func_001A15F8();

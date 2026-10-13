@@ -1,23 +1,22 @@
-void *func_001267B0(int);
-int func_00211D90(void *, double);
+#include "kf_script.h"
+#include "kf_entity_world.h"
+#include "kf_entity.h"
 
-typedef struct {
-    char pad[0x10];
-    float *f;
-} Tmp;
+int func_00211D90(void *, double); // match: retail converts the float argument to double at the call site (fptodp)
 
-void func_00215DA0(char *arg0) {
-    Tmp *temp_v0;
+/* Script command: store the entity's spawn position in x, y and z. */
+void func_00215DA0(ScriptEntityVectorCommand *command) {
+    Entity *entity;
 
-    temp_v0 = func_001267B0(*(int *)(arg0 + 0x8));
-    if (temp_v0 != 0) {
-        func_00211D90(arg0 + 0xC, temp_v0->f[0]);
-        func_00211D90(arg0 + 0x14, temp_v0->f[1]);
-        func_00211D90(arg0 + 0x1C, temp_v0->f[2]);
+    entity = KF_Entity_GetBySpawnId(command->target_id.value);
+    if (entity != NULL) {
+        func_00211D90(&command->x, entity->spawn_info->spawn_x);
+        func_00211D90(&command->y, entity->spawn_info->spawn_y);
+        func_00211D90(&command->z, entity->spawn_info->spawn_z);
     } else {
-        func_00211D90(arg0 + 0xC, 0);
-        func_00211D90(arg0 + 0x14, 0);
-        func_00211D90(arg0 + 0x1C, 0);
+        func_00211D90(&command->x, 0);
+        func_00211D90(&command->y, 0);
+        func_00211D90(&command->z, 0);
     }
-    *(int *)arg0 = 0;
+    command->active = 0;
 }

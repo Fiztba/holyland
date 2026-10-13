@@ -1,3 +1,4 @@
+#include "kf_gold.h"
 #include "kf_map.h"
 
 extern MapSlot D_0038CD20[];
@@ -16,8 +17,6 @@ void func_0011D0D0(int, int);
 void func_001A15F0(void);
 void func_001C82C0(int);
 void func_001C8990(int, f32 *);
-void func_001CA920(int);
-void func_001CACF8(int, f32 *);
 
 /* Map load step: sets up the loaded map in the other slot, shifted so that it joins the current one. */
 void func_00118540(void) {
@@ -43,7 +42,7 @@ void func_00118540(void) {
     func_0011D0D0(other_slot, (int)offset);
     func_001C82C0(other_slot);
     func_001C8990(other_slot, offset);
-    func_001CA920(other_slot);
-    func_001CACF8(other_slot, offset);
+    KF_Gold_InitMap(other_slot);
+    KF_Gold_MoveMap(other_slot, offset);
     D_0038D610.step++;
 }

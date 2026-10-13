@@ -1,8 +1,12 @@
 #include "kf_game.h"
+#include "kf_gold.h"
+#include "kf_entity_world.h"
 #include "kf_hud.h"
+#include "kf_item_effect.h"
 #include "kf_map.h"
 #include "kf_player.h"
 #include "kf_sound.h"
+#include "kf_splash.h"
 
 extern u8 D_00349680[0x10];
 extern PlayTime D_0036A138[];   /* the play time in the loaded save (D_0036A130 + 8) */
@@ -39,9 +43,7 @@ void func_001BFCC8(void);
 void func_00112BD0(void);
 void func_0011D180(void);
 void func_00123288(void);
-void func_001256C0(void);
 void func_001C95B0(void);
-void func_001CAD80(void);
 void func_001BC2D0(void);
 void func_001B7DF8(void);
 void func_001A1E88(void);
@@ -49,8 +51,6 @@ void func_0019B0B8(void);
 void func_00101618(void);
 void func_0019C540(void);
 void func_001061E8(void);
-void func_002082A8(void);
-void func_00209218(void);
 void func_00100FC8(void);
 void func_001012D8(int, int);
 void func_0010A7E0(void *);
@@ -126,9 +126,9 @@ void func_001001C0(int arg) {
         func_00112BD0();
         func_0011D180();
         func_00123288();
-        func_001256C0();
+        KF_Entity_UpdateAll();
         func_001C95B0();
-        func_001CAD80();
+        KF_Gold_Update();
         func_001BC2D0();
         func_001B7DF8();
         func_001A1E88();
@@ -139,8 +139,8 @@ void func_001001C0(int arg) {
             func_0019C540();
         }
         func_001061E8();
-        func_002082A8();
-        func_00209218();
+        KF_Splash_Update();
+        KF_ItemEffect_Update();
         func_00100FC8();
         func_001012D8(0, 0);
         func_0010A7E0(D_004323E0);

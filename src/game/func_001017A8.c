@@ -1,6 +1,7 @@
 #include "kf_game.h"
 #include "kf_map.h"
 #include "kf_player.h"
+#include "kf_magic_ladder.h"
 #include "kf_sound.h"
 
 extern u8 D_00349680[0x10];
@@ -27,7 +28,6 @@ void func_001EE730(void);
 void func_001F6A38(void);
 void func_001095E0(void);
 int func_001D62C8(s8);
-int func_001BC9E0(int);
 void func_0011A438(int);
 void func_00101D48(int);
 void func_00101C88(void);
@@ -131,7 +131,7 @@ void func_001017A8(void) {
     if (menu_ran) {
         func_001BF898();
         if (D_0038CC50.unk28 != 0) {
-            func_001BC9E0(D_0038CC50.unk28);
+            KF_Player_CastMagic(D_0038CC50.unk28);
             D_0038CC50.unk28 = 0;
         }
         if (D_00413F80.unk3C != D_00414280.unk3C) {

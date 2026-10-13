@@ -1,7 +1,11 @@
 #include "kf_game.h"
+#include "kf_entity_world.h"
 #include "kf_hud.h"
+#include "kf_item_effect.h"
 #include "kf_map.h"
 #include "kf_player.h"
+#include "kf_gold.h"
+#include "kf_splash.h"
 
 extern u8 D_00349680[0x10];
 extern u8 D_00349F56[];
@@ -21,9 +25,7 @@ void func_0010A7E0(void *);
 void func_0010AE58(void);
 void func_00114198(int);
 void func_0011D6B0(int, int, int);
-void func_00125BD8(int);
 void func_001C9650(int);
-void func_001CB008(int);
 void func_00114528(int);
 void func_001A2168(int);
 void func_0010B140(u32, u32);
@@ -32,7 +34,6 @@ void func_001C97E8(int);
 void func_00116AA0(void);
 void func_0010A698(void);
 void func_0019A608(void);
-void func_002095A0(void);
 void func_00116970(void);
 void func_0010A5D8(void);
 void func_00109E88(void);
@@ -51,7 +52,6 @@ void func_001B6800(void);
 void func_0010A4E8(int, int, int, int, int);
 void func_00107E70(int, int, int);
 void func_00106208(void);
-void func_00208540(void);
 int func_001CF980(void);
 void func_001CF4D0(void);
 void func_00107CD8(int);
@@ -77,10 +77,10 @@ int func_001005E8(int arg) {
         func_00114198(0);
         func_0011D6B0(0, 0, 0);
         func_0019A608();
-        func_00125BD8(0);
+        KF_Entity_DrawAll(0);
         func_001C9650(0);
-        func_002095A0();
-        func_001CB008(0);
+        KF_ItemEffect_Draw();
+        KF_Gold_Draw(0);
         func_0010AE58();
         func_00114528(0);
         func_001A2168(0);
@@ -100,9 +100,9 @@ int func_001005E8(int arg) {
         func_0010AE58();
         func_00114198(1);
         func_0011D6B0(1, 0, 0);
-        func_00125BD8(1);
+        KF_Entity_DrawAll(1);
         func_001C9650(1);
-        func_001CB008(1);
+        KF_Gold_Draw(1);
         func_00114528(1);
         func_0010AE58();
         func_001A2168(1);
@@ -119,10 +119,10 @@ int func_001005E8(int arg) {
         func_00114198(0);
         func_0011D6B0(0, 0, 0);
         func_0019A608();
-        func_00125BD8(0);
+        KF_Entity_DrawAll(0);
         func_001C9650(0);
-        func_002095A0();
-        func_001CB008(0);
+        KF_ItemEffect_Draw();
+        KF_Gold_Draw(0);
         func_0010AE58();
         func_00114528(0);
         func_001A2168(0);
@@ -144,10 +144,10 @@ int func_001005E8(int arg) {
         func_0010AE58();
         func_00114198(2);
         func_0011D6B0(1, 0, 0);
-        func_00125BD8(1);
+        KF_Entity_DrawAll(1);
         func_001C9650(1);
-        func_002095A0();
-        func_001CB008(1);
+        KF_ItemEffect_Draw();
+        KF_Gold_Draw(1);
         func_0010AE58();
         func_00114528(2);
         func_001A2168(1);
@@ -165,9 +165,9 @@ int func_001005E8(int arg) {
         func_00114198(0);
         func_0011D6B0(0, 0, 0);
         func_0019A608();
-        func_00125BD8(0);
+        KF_Entity_DrawAll(0);
         func_001C9650(0);
-        func_001CB008(0);
+        KF_Gold_Draw(0);
         func_0010AE58();
         func_00114528(0);
         func_001A2168(0);
@@ -241,7 +241,7 @@ int func_001005E8(int arg) {
                                                              D_0038A1B0.unk78, D_0038A1B0.unk80);
     }
     func_00106208();
-    func_00208540();
+    KF_Splash_Draw();
     if (func_001CF980() != 0) {
         if (D_00446708 < 0x40) {
             D_00446708 += 0x10;

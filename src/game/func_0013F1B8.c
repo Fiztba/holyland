@@ -1,4 +1,5 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 extern PlayerData D_00413F80;
 extern char D_0043E8C0[];
@@ -13,7 +14,6 @@ int func_0018CA50(int *);
 s32 func_0018F9C0(Entity *);
 s32 func_0018F648(Entity *);
 void func_00216778(void *, void *);
-void *func_001267B0(int);
 void func_00196D48(Entity *);
 float func_001957B8(float, float);
 s16 func_00190BE0(Entity *);
@@ -69,9 +69,9 @@ void func_0013F1B8(Entity *entity, s32 unknown) {
             post[2] = 2550.0f;
         } else {
             post[2] = 3050.0f;
-            other = func_001267B0(0x28);
+            other = KF_Entity_GetBySpawnId(0x28);
             if (ENTITY_FLAG_BITS(other)->bits2 == 0) {
-                other = func_001267B0(0x28);
+                other = KF_Entity_GetBySpawnId(0x28);
                 if (ENTITY_FLAG_BITS(other)->bit1) {
                     margin = entity->radius + entity->radius;
                 }

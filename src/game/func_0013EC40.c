@@ -1,4 +1,5 @@
 #include "common.h"
+#include "kf_entity_world.h"
 
 typedef struct {
     char pad0[0xC];
@@ -20,7 +21,6 @@ typedef struct {
 
 extern u32 D_00446ED4;
 
-void *func_001267E8(char, int);
 int func_0013ED58(void *, int);
 int func_0013EE40(void *, int);
 int func_0013EFB8(void *, int);
@@ -33,7 +33,7 @@ void func_0013EC40(void *arg0, int arg1) {
     Sub *s = (Sub *) ((char *) arg0 + 0xE0);
     u32 temp_hi;
 
-    t = func_001267E8(a->byteD5, 0x29);
+    t = KF_Entity_GetBySpawnIdForMap(a->byteD5, 0x29);
     if (t != 0 && (int) t->bits & 1) {
         if ((t->bits & 0xE) != 2) {
             void (*fp)(void *, int) = func_0013F0D8;

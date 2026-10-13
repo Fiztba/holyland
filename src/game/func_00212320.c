@@ -1,34 +1,14 @@
-int func_00208168();
-int func_00208198(int, int, int, int, int);
+#include "kf_script.h"
+#include "kf_splash.h"
 
-typedef struct
-{
-  int a00;
-  int pad04;
-  int a08;
-  int pad0c;
-  int a10;
-  int pad14;
-  int a18;
-  int pad1c;
-  int a20;
-  int pad24;
-  int a28;
-  char pad2c[0x58];
-  int a84;
-} Obj;
-
-void func_00212320(Obj *arg0)
-{
-  if (arg0->a84 == 0)
-  {
-    if (func_00208198(arg0->a08, arg0->a10, arg0->a18, arg0->a20, arg0->a28) != 0)
-    {
-      arg0->a84 = 1;
+/* Each frame, start or wait on a splash screen with the given timing, then clear the command. */
+void func_00212320(ScriptSplashCommand *command) {
+    if (command->started == 0) {
+        if (KF_Splash_Begin(command->splash_id.value, command->hold_frames.value, command->skippable.value,
+                            command->fade_in_frames.value, command->fade_out_frames.value) != 0) {
+            command->started = 1;
+        }
+    } else if (KF_Splash_GetState() == 0) {
+        command->active = 0;
     }
-  }
-  else if (func_00208168() == 0)
-  {
-    arg0->a00 = 0;
-  }
 }

@@ -1,29 +1,22 @@
-void *func_001267B0(int);
-int func_00211D90(void *, double);
+#include "kf_script.h"
+#include "kf_entity_world.h"
+#include "kf_entity.h"
 
-typedef struct {
-    char pad[0xD0];
-    float x;
-    float y;
-    float z;
-} Vec3;
+int func_00211D90(void *, double); // match: retail converts the float argument to double at the call site (fptodp)
 
-typedef struct {
-    Vec3 *v;
-} Node;
+/* Script command: store the entity's model unkD0 vector in x, y and z. */
+void func_00215CC8(ScriptEntityVectorCommand *command) {
+    Entity *entity;
 
-void func_00215CC8(char *arg0) {
-    Node *temp_v0;
-
-    temp_v0 = func_001267B0(*(int *)(arg0 + 0x8));
-    if (temp_v0 != 0) {
-        func_00211D90(arg0 + 0xC, temp_v0->v->x);
-        func_00211D90(arg0 + 0x14, temp_v0->v->y);
-        func_00211D90(arg0 + 0x1C, temp_v0->v->z);
+    entity = KF_Entity_GetBySpawnId(command->target_id.value);
+    if (entity != NULL) {
+        func_00211D90(&command->x, entity->model->unkD0[0]);
+        func_00211D90(&command->y, entity->model->unkD0[1]);
+        func_00211D90(&command->z, entity->model->unkD0[2]);
     } else {
-        func_00211D90(arg0 + 0xC, 0);
-        func_00211D90(arg0 + 0x14, 0);
-        func_00211D90(arg0 + 0x1C, 0);
+        func_00211D90(&command->x, 0);
+        func_00211D90(&command->y, 0);
+        func_00211D90(&command->z, 0);
     }
-    *(int *)arg0 = 0;
+    command->active = 0;
 }

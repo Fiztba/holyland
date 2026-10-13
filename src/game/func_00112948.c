@@ -1,4 +1,6 @@
+#include "kf_gold.h"
 #include "kf_map.h"
+#include "kf_entity_world.h"
 #include "kf_file.h"
 #include "kf_sound.h"
 #include "kf_memory.h"
@@ -24,12 +26,9 @@ void func_00116F20(int);
 void func_001A15F0(void);
 void func_0011C708(int);
 void func_001C82C0(int);
-void func_001CA920(int);
 void func_0011CC50(int);
-void func_00124F00(int);
 void func_00123158(int);
 void func_001C87D8(int);
-void func_00125188(int);
 void func_00119360(int);
 void func_001034F8(int);
 void func_00210930(int);
@@ -64,7 +63,7 @@ void func_00112948(int map) {
     func_001A15F0();
     func_0011C708(0);
     func_001C82C0(0);
-    func_001CA920(0);
+    KF_Gold_InitMap(0);
     D_0038CD20[0].unk00 = 1;
     D_00446770 = 0;
     D_0038A1B0.unkA0 = *slot->unk0C;
@@ -75,10 +74,10 @@ void func_00112948(int map) {
     D_0038A1B0.unk9B = 0;
     D_0038A1B0.unk9C = 0;
     func_0011CC50(0);
-    func_00124F00(0);
+    KF_Entity_InitFromMapSpawns(0);
     func_00123158(0);
     func_001C87D8(0);
-    func_00125188(0);
+    KF_Entity_ClearFlag10InSlot(0);
     func_00119360(0);
     func_001034F8(D_0038CD20[0].tag);
     func_00210930(D_0038CD20[0].unk5C);

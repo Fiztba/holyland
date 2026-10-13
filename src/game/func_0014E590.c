@@ -1,4 +1,5 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 void func_001958A8(char *, s32);
 void func_001958B8(char *, void (*)(void), int);
@@ -6,7 +7,6 @@ void func_00191478(EntityModel *);
 void func_001914B0(EntityModel *, s32, s32, s32);
 void func_00193378(EntityModel *, s32, s32);
 void func_00216778(void *, void *);
-void *func_001267B0(int);
 void func_0014EA70(Entity *, s32);
 void func_0014E7F8(Entity *);
 // match: the definition takes an Actor, a struct local to func_0014EC80.c
@@ -58,7 +58,7 @@ void func_0014E590(Entity *entity) {
     ((EntityUnkE0Kind151D30 *)unkE0)->unk88.bit6 = 1;
     func_00193378(entity->model, 0, 0);
     for (i = 0; i < 6; i++) {
-        other = func_001267B0(i + 10);
+        other = KF_Entity_GetBySpawnId(i + 10);
         if (other != NULL) {
             other->flags &= ~2;
             other->flags &= ~0x80;

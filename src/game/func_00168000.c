@@ -1,7 +1,7 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 int rand(void);
-void *func_001267B0(int);
 void func_0018DC40(char *);
 
 void func_00168000(Entity *entity) {
@@ -14,7 +14,7 @@ void func_00168000(Entity *entity) {
         if (!((unkE0->unk6A >> i) & 1)) {
             if (rand() % 100 < remaining * 100 / slots_left) {
                 s32 other_id = i + 10;
-                Entity *other = func_001267B0(other_id);
+                Entity *other = KF_Entity_GetBySpawnId(other_id);
                 if (other != NULL && ((s32)other->flags & 1)) {
                     func_0018DC40((char *)other);
                     unkE0->unk7B = other_id;

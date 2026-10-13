@@ -1,8 +1,7 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 extern EntityIdTable D_0043E890;
-
-void *func_001267B0(int);
 
 s32 func_0013C018(Entity *entity, f32 limit) {
     EntityIdTable table = D_0043E890;
@@ -11,7 +10,7 @@ s32 func_0013C018(Entity *entity, f32 limit) {
     EntityUnkE0 *other_unkE0;
 
     for (i = 0; i < 5; i++) {
-        other = func_001267B0(table.ids[i]);
+        other = KF_Entity_GetBySpawnId(table.ids[i]);
         if (other != NULL && (other->flags & 0xD) == 1 && other != entity) {
             other_unkE0 = &other->unkE0;
             if (other_unkE0->unk7A == 5 && other_unkE0->unk54 < limit) {

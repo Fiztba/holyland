@@ -1,4 +1,5 @@
 #include "kf_effect.h"
+#include "kf_magic_ladder.h"
 #include "kf_player.h"
 
 extern PlayerState D_00413F80;
@@ -18,7 +19,6 @@ void func_00108AC8(void *);
 void func_0019CE00(int mode);
 void func_001A3918(int);
 s32 func_001B1470(Unk1B1470Request *, Unk1B1470Extra *);
-int func_001BC9E0(int);
 void func_001C06E8(void);
 void func_00216778(void *, void *);
 
@@ -135,14 +135,14 @@ void func_001B70F8(u16 held, u16 pressed) {
         }
         if (D_00413F80.unk25F == 1 && MODEL_CHANNEL(D_00446978)->param >= def->unk44) {
             D_00413F80.unk25F = 2;
-            if (func_001BC9E0(def->unk42)) {
+            if (KF_Player_CastMagic(def->unk42)) {
                 D_00447118 = def->unk42;
                 D_00447114 = def->unk4E;
             }
         }
         if (D_00413F80.unk25E == 1 && MODEL_CHANNEL(D_00446978)->param >= def->unk54) {
             D_00413F80.unk25E = 2;
-            if (func_001BC9E0(def->unk52)) {
+            if (KF_Player_CastMagic(def->unk52)) {
                 D_00447118 = def->unk52;
                 D_00447114 = def->unk5E;
             }

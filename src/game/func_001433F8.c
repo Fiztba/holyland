@@ -1,6 +1,6 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
-void *func_001267B0(int);
 void func_0018DC40(char *);
 int func_00192C98(void *, int, int, u32, int);
 void func_001958B8(char *, void (*)(void), int);
@@ -12,7 +12,7 @@ void func_001433F8(Entity *entity, s32 unknown) {
     Entity *other;
 
     if (entity->spawn_info->unk40 == 2) {
-        leader = func_001267B0(entity->spawn_info->variant);
+        leader = KF_Entity_GetBySpawnId(entity->spawn_info->variant);
         if (leader != NULL) {
             if (ENTITY_FLAG_BITS(leader)->bits2 >= 2) {
                 // match: called as returning int; only then are the flags kept in $3 afterwards

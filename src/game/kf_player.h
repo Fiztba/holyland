@@ -54,7 +54,7 @@ typedef struct {
     s32 unk5C;                      /* 0x5C the most unkB8 can be */
     PlayerShotStats unk60;          /* 0x60 unk60 to unkA3 and unkDC are worked out by func_001BA310 */
     PlayerItemRates unk72;          /* 0x72 at most 100 each */
-    PlayerShotStats unk7E;          /* 0x7E copied into the shot a cast magic launches (func_001BC9E0) */
+    PlayerShotStats unk7E;          /* 0x7E copied into the shot a cast magic launches (KF_Player_CastMagic) */
     PlayerShotStats unk90;          /* 0x90 */
     char padA2[0x02];
     s32 unkA4;                      /* 0xA4 */
@@ -143,7 +143,7 @@ typedef struct {
     u16 map_index;                  /* 0x252 picks the MapSlot record */
     u32 unk254;                     /* 0x254 */
     u8 unk258;                      /* 0x258 a step counter: func_001B7C90 advances it, func_001B7CC8 clears it */
-    u8 unk259;                      /* 0x259 set when a cast magic launches a shot (func_001BC9E0) */
+    u8 unk259;                      /* 0x259 set when a cast magic launches a shot (KF_Player_CastMagic) */
     u8 unk25A;                      /* 0x25A */
     u8 unk25B;                      /* 0x25B cleared every frame before the item's handler runs (func_001B6FA0) */
     u8 unk25C;                      /* 0x25C frames left in which the first magic of the weapon may be asked for (func_001B70F8) */
@@ -220,9 +220,9 @@ typedef struct {
 typedef struct {
     u64 pad0 : 33;
     u64 bit33 : 1;
-    u64 bit34 : 1;                  /* set: func_001BD420 does nothing */
+    u64 bit34 : 1;                  /* set: KF_Ladder_Start does nothing */
     u64 bit35 : 1;                  /* running: the run button is held while moving (func_001B5A48) */
-    u64 bit36 : 1;                  /* on an object set up by func_001BD420 (a ladder, it seems) */
+    u64 bit36 : 1;                  /* on an object set up by KF_Ladder_Start (a ladder, it seems) */
     u64 pad37 : 1;
     u64 bit38 : 1;                  /* cleared at the start of every played frame, with bit39 */
     u64 bit39 : 1;

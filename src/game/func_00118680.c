@@ -1,4 +1,5 @@
 #include "kf_map.h"
+#include "kf_entity_world.h"
 
 extern MapSlot D_0038CD20[];
 extern MapLoadState D_0038D610;
@@ -10,9 +11,6 @@ void func_001187B0(void);
 void func_00119360(int);
 void func_0011CC50(int);
 void func_00123158(int);
-void func_00124F00(int);
-void func_00125188(int);
-void func_00125620(int, f32 *);
 void func_001C87D8(int);
 
 /* Map load step: brings the other slot to life and ends the load. */
@@ -31,11 +29,11 @@ void func_00118680(void) {
     offset[3] = 0.0f;
     slot->unk00 = 1;
     func_0011CC50(other_slot);
-    func_00124F00(other_slot);
-    func_00125620(other_slot, offset);
+    KF_Entity_InitFromMapSpawns(other_slot);
+    KF_Entity_OffsetAllInSlot(other_slot, offset);
     func_00123158(other_slot);
     func_001C87D8(other_slot);
-    func_00125188(other_slot);
+    KF_Entity_ClearFlag10InSlot(other_slot);
     func_00117AA8(D_00446770, other_slot);
     func_00119360(other_slot);
     func_001034F8(slot->tag);

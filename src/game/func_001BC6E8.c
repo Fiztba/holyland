@@ -1,3 +1,4 @@
+#include "kf_item_effect.h"
 #include "kf_player.h"
 
 extern PlayerState D_00413F80;
@@ -6,7 +7,6 @@ void func_001CFA70(int, int, int, int, int, int, ...);
 void func_001BA310(void);
 void func_001BB5E8(void);
 int func_001BC990(int);
-void func_00209018(int, int);
 
 /* What using item `kind` does to the player: starts a timer, raises one of unk24/unk28/unk2C (999 at most),
    or marks a slot of spell_levels. */
@@ -42,7 +42,7 @@ void func_001BC6E8(int kind) {
             D_00413F80.unk24 = 999;
         }
         func_001BA310();
-        func_00209018(kind, 0);
+        KF_ItemEffect_Start(kind, 0);
         break;
     case 0x47:
     case 0x48:
@@ -59,7 +59,7 @@ void func_001BC6E8(int kind) {
         if (D_00413F80.unk264 == 0) {
             func_001BB5E8();
         }
-        func_00209018(kind, marked);
+        KF_ItemEffect_Start(kind, marked);
         break;
     case 0x4D:
     case 0x4E:
@@ -76,7 +76,7 @@ void func_001BC6E8(int kind) {
         if (D_00413F80.unk264 == 0) {
             func_001BB5E8();
         }
-        func_00209018(kind, marked);
+        KF_ItemEffect_Start(kind, marked);
         break;
     }
 }

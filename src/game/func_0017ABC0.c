@@ -1,9 +1,9 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
 
 int func_00192C98(void *, int, int, u32, int);
 void func_0018DCD8(Entity *);
 void func_0018DC40(char *);
-void *func_001267B0(int);
 void func_00216778(void *, void *);
 
 void func_0017ABC0(Entity *entity) {
@@ -39,7 +39,7 @@ void func_0017ABC0(Entity *entity) {
             entity->unkA0 = 20;
             func_0018DCD8(entity);
             if (entity->spawn_info->unk40 != 0) {
-                other = func_001267B0(entity->spawn_info->unk40);
+                other = KF_Entity_GetBySpawnId(entity->spawn_info->unk40);
                 if (other != NULL && ENTITY_FLAG_BITS(other)->bit0) {
                     func_0018DC40((char *)other);
                     func_00216778(other->model->position, entity->model->position);

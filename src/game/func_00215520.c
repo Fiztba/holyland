@@ -1,7 +1,7 @@
 #include "kf_script.h"
+#include "kf_entity_world.h"
 #include "kf_entity.h"
 
-Entity *func_001267B0(int);
 f32 func_00194F48(f32 *, f32 *);
 float func_001954A8(float *, float *);
 float func_001957B8(float, float);
@@ -14,7 +14,7 @@ void func_00215520(ScriptWalkToCommand *command) {
     f32 turn;
     f32 rise;
 
-    entity = func_001267B0(command->target_id.value);
+    entity = KF_Entity_GetBySpawnId(command->target_id.value);
     if (entity != NULL) {
         point[0] = command->x.value;
         point[1] = command->y.value;

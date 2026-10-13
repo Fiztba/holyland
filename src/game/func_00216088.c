@@ -1,13 +1,12 @@
 #include "kf_script.h"
+#include "kf_entity_world.h"
 #include "kf_entity.h"
-
-Entity *func_001267B0(int);
 
 /* Script command: for each bit set in `mask`, copy that bit of `value` into one of the entity's flags. */
 void func_00216088(ScriptSetFlagsCommand *command) {
     Entity *entity;
 
-    entity = func_001267B0(command->target_id.value);
+    entity = KF_Entity_GetBySpawnId(command->target_id.value);
     if (entity == NULL) {
         command->active = 0;
         return;

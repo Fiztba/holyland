@@ -1,7 +1,7 @@
 #include "kf_script.h"
+#include "kf_entity_world.h"
 #include "kf_entity.h"
 
-Entity *func_001267B0(int);
 float func_0019B838(float);
 int func_00211CF8(ScriptArg *, int);
 
@@ -10,7 +10,7 @@ void func_00215AF8(ScriptFacingCommand *command) {
     Entity *entity;
     f32 angle;
 
-    entity = func_001267B0(command->target_id.value);
+    entity = KF_Entity_GetBySpawnId(command->target_id.value);
     if (entity != NULL) {
         angle = func_0019B838(entity->unk68 - entity->model->unkD0[1]);
         angle = ABS(angle);

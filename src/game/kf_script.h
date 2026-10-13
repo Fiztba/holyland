@@ -51,6 +51,25 @@ typedef struct {
     ScriptArg motion;               /* 0x14 value at 0x18 */
 } ScriptMotionCommand;
 
+/* eases the target entity's pose toward its motion by `weight` (func_00215298) */
+typedef struct {
+    int active;                     /* 0x00 */
+    ScriptArg target_id;            /* 0x04 value at 0x08 */
+    ScriptFloatArg weight;          /* 0x0C value at 0x10 */
+} ScriptMotionBlendCommand;
+
+/* shows a splash image with timing args until it finishes (func_00212320) */
+typedef struct {
+    int active;                     /* 0x00 */
+    ScriptArg splash_id;            /* 0x04 value at 0x08 */
+    ScriptArg hold_frames;          /* 0x0C value at 0x10 */
+    ScriptArg skippable;            /* 0x14 value at 0x18 */
+    ScriptArg fade_in_frames;       /* 0x1C value at 0x20 */
+    ScriptArg fade_out_frames;      /* 0x24 value at 0x28 */
+    char pad2C[0x58];
+    int started;                    /* 0x84 */
+} ScriptSplashCommand;
+
 /* calls a map object routine with two integer arguments (func_00212CB8, func_00213320) */
 typedef struct {
     int active;                     /* 0x00 */
@@ -339,5 +358,15 @@ typedef struct {
     char pad04[0x38];
     ScriptArg result;               /* 0x3C */
 } ScriptLateResultCommand;
+
+/* reads or writes three floats tied to an entity id (func_00215BF0, func_00215CC8,
+   func_00215DA0, func_00215E78, func_002165D0) */
+typedef struct {
+    int active;                     /* 0x00 */
+    ScriptArg target_id;            /* 0x04 value at 0x08 */
+    ScriptFloatArg x;               /* 0x0C value at 0x10 */
+    ScriptFloatArg y;               /* 0x14 value at 0x18 */
+    ScriptFloatArg z;               /* 0x1C value at 0x20 */
+} ScriptEntityVectorCommand;
 
 #endif

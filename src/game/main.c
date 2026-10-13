@@ -1,6 +1,7 @@
 #include "kf_game.h"
-#include "kf_player.h"
 #include "kf_hud.h"
+#include "kf_item_effect.h"
+#include "kf_player.h"
 
 extern GameStatus D_0038CC50;
 extern PlayerState D_00413F80;
@@ -26,7 +27,6 @@ void func_00112648(void);
 void func_001029A8(void);
 void func_001B5808(void);
 void func_00124EF8(void);
-void func_00208BC0(void);
 void func_001CF378(void);
 void func_001D5A20(void);
 void func_0019C300(void);
@@ -65,7 +65,7 @@ int main(void) {
     func_001029A8();
     func_001B5808();
     func_00124EF8();
-    func_00208BC0();
+    KF_ItemEffect_Load();
     func_001CF378();
     func_001D5A20();
     func_0019C300();

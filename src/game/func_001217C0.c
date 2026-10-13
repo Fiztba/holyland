@@ -1,3 +1,4 @@
+#include "kf_magic_ladder.h"
 #include "kf_player.h"
 
 extern u32 D_0038CC74[];
@@ -6,11 +7,9 @@ extern PlayerState D_00413F80;
 void KF_Vector_Subtract(void *, void *, void *);
 float atan2f(float, float);
 float func_0019B838(float);
-void func_001BD420(MapObject *, int);
-
 /* Update handler: when the player (using it, status bit 36 clear) is within
    75 in height, within the radius and inside the angle of one of its two
-   points, func_001BD420 is called for that point. */
+   points, KF_Ladder_Start is called for that point. */
 void func_001217C0(MapObject *object) {
     Vector4 delta;
     int i;
@@ -43,7 +42,7 @@ void func_001217C0(MapObject *object) {
         if (half_angle < turn) {
             continue;
         }
-        func_001BD420(object, i);
+        KF_Ladder_Start((ObjectReference *)object, i);
         return;
     }
 }

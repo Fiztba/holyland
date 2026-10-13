@@ -1,4 +1,5 @@
 #include "common.h"
+#include "kf_entity_world.h"
 #include "kf_entity.h"
 #include "kf_gs.h"
 #include "kf_model.h"
@@ -40,7 +41,6 @@ void func_0010B758(ModelInstance *, int *, int *);
 s64 *func_0010CE08(ModelInstance *, s64 *);
 MotionData *func_00108940(MotionFile *, ModelChannel **, ModelInstance *, int);
 u32 *func_00116BD0(int, int);
-void func_001251E0(Entity *);
 void func_0010D018(ModelInstance *, char **, char **);
 void func_0010E8A0(ModelInstance *, s32);
 void func_0010E6A8(ModelInstance *, s64, s64);
@@ -54,7 +54,6 @@ void func_0010AC80(int, int, int, int);
 void func_0010CAE8(void *, s64, s64, s64, s64);
 void func_0010CB98(void *);
 void func_0010CF10(void *);
-void func_00125600(Entity *);
 void func_001A32A8(Entity *);
 
 /* file-local functions, in order of definition */
@@ -460,7 +459,7 @@ static int func_00123918(Entity *entity) {
     ENTITY_MODEL(entity)->unk1A0 = (int)func_00116BD0(entity->group_id, 5);
     entity->unkD2 = slot->unk7;
     func_00124370(entity->unkD3);
-    ((void (*)(Entity *))func_001251E0)(entity); // match: declared without its argument elsewhere
+    ((void (*)(Entity *))KF_Entity_ResetToSpawn)(entity); // match: declared without its argument elsewhere
     return TRUE;
 }
 
@@ -1155,7 +1154,7 @@ static Entity *func_00124D48(Entity *entity) {
     if (entity->next != NULL) {
         entity->next->prev = entity->prev;
     }
-    func_00125600(entity);
+    KF_Entity_SetSpawnedFlags(entity);
     entity->flags &= ~1;
     D_004470C0--;
     return next;

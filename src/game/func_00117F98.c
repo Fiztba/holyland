@@ -1,4 +1,6 @@
 #include "kf_entity.h"
+#include "kf_entity_world.h"
+#include "kf_gold.h"
 #include "kf_map.h"
 #include "kf_player.h"
 
@@ -18,12 +20,10 @@ void func_0010B000(void);
 void func_001152B8(int);
 void func_00115878(int);
 void func_0011CE80(int);
-void func_00125560(int);
 void func_0019AAA0(int);
 void func_001A15F8(void);
 void func_001A3040(int);
 void func_001C8938(int);
-void func_001CACA0(int);
 void func_0020B780(int);
 
 /* Finishes the running map load at once, makes the loaded map current, puts the player at its start
@@ -58,8 +58,8 @@ void func_00117F98(void) {
     func_001A3040(D_00446770 == 0);
     func_0011CE80(D_00446770 == 0);
     KF_Entity_FreeAllInGroup(D_00446770 == 0);
-    func_00125560(D_00446770 == 0);
-    func_001CACA0(D_00446770 == 0);
+    KF_Entity_ClearMapSlot(D_00446770 == 0);
+    KF_Gold_UnlinkMap(D_00446770 == 0);
     func_001C8938(D_00446770 == 0);
     func_0019AAA0(D_00446770 == 0);
     func_001A15F8();
