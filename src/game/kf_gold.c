@@ -1,9 +1,11 @@
 #include "kf_gold.h"
 #include "kf_collision.h"
 #include "kf_game.h"
+#include "kf_map_object.h"
 #include "kf_model.h"
 #include "kf_player.h"
 #include "kf_screen.h"
+#include "kf_message.h"
 
 void *memset(void *, int, u32);
 int func_00102238(char *, int, int);
@@ -19,10 +21,8 @@ void func_0010AEB8(void *);
 void func_0010BA30(ModelInstance *);
 void func_0010B018(ModelInstance *, s32, s32);
 int func_001C0E40(f32, void *);
-void func_0011E678(int, int);
 void func_00216778(void *, void *);
 void func_00216C48(void *, void *, void *);
-void func_001CFA70(int, int, int, int, int, int, ...);
 int rand(void);
 float cosf(float);
 float sinf(float);
@@ -197,7 +197,7 @@ void KF_Gold_Update(void) {
                 actor->body->unk146 = (actor->fade_timer << 7) / 15;
             } else {
                 if (MAP_ACTOR_WORDS(actor)->object_id != 0) {
-                    func_0011E678(MAP_ACTOR_BITS(actor)->map, MAP_ACTOR_WORDS(actor)->object_id);
+                    KF_MapObject_MarkEmptiedById(MAP_ACTOR_BITS(actor)->map, MAP_ACTOR_WORDS(actor)->object_id);
                 }
                 KF_Gold_ClearMark(actor);
                 actor = KF_Gold_UnlinkFromList(actor);
@@ -225,7 +225,7 @@ void KF_Gold_Update(void) {
         if (D_00413F80.unk4C >= GOLD_MAX) {
             D_00413F80.unk4C = GOLD_MAX;
         }
-        func_001CFA70(0, 0, 0, 0, 0x2D, 0x14, amount);
+        KF_Message_ShowNotice(0, 0, 0, 0, 0x2D, 0x14, amount);
     }
 }
 

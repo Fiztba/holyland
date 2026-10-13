@@ -2,6 +2,8 @@
 #include "kf_hud.h"
 #include "kf_item_effect.h"
 #include "kf_player.h"
+#include "kf_message.h"
+#include "kf_title.h"
 
 extern GameStatus D_0038CC50;
 extern PlayerState D_00413F80;
@@ -27,7 +29,6 @@ void func_00112648(void);
 void func_001029A8(void);
 void func_001B5808(void);
 void func_00124EF8(void);
-void func_001CF378(void);
 void func_001D5A20(void);
 void func_0019C300(void);
 s32 func_001F9438(void);
@@ -41,7 +42,6 @@ int func_001F91F8(void);
 void func_0020AD78(void);
 void func_001000C8(int);
 void func_001001C0(int);
-int func_0020A6D8(void);
 void func_0020AE68(void);
 
 /* Sets everything up, then loops for ever: the intro, the title screen, one game. */
@@ -66,7 +66,7 @@ int main(void) {
     func_001B5808();
     func_00124EF8();
     KF_ItemEffect_Load();
-    func_001CF378();
+    KF_Message_Init();
     func_001D5A20();
     func_0019C300();
     func_001F9438();
@@ -100,7 +100,7 @@ int main(void) {
             func_0019BDA0(0, 0x4000);
             do {
                 // match: retail passes a zero the function does not take
-                if (((int (*)(int))func_0020A6D8)(0) != 1) {
+                if (((int (*)(int))KF_Title_RunGameOver)(0) != 1) {
                     break;
                 }
             } while (func_001D62C8(1) == 0);

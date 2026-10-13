@@ -88,39 +88,6 @@ typedef struct {
     s32 unk7C;                      /* 0x7C */
 } CameraState;
 
-/* one of the 0x24-byte slots at D_005C5940, linked in a ring. D_004471E4 is the
-   one being shown and D_004471E8 the next free one. */
-typedef struct MessageSlot {
-    char *text;                     /* 0x00 */
-    int unk04;                      /* 0x04 */
-    int unk08;                      /* 0x08 */
-    int length;                     /* 0x0C */
-    struct MessageSlot *next;       /* 0x10 */
-    int unk14;                      /* 0x14 */
-    int unk18;                      /* 0x18 */
-    int unk1C;                      /* 0x1C */
-    int unk20;                      /* 0x20 */
-} MessageSlot;
-
-/* D_00420C10[3]: how the glyphs of one kind (0 full width, 1 half width, 2 the debug font) lie on their texture */
-typedef struct {
-    f32 step_s;                     /* 0x00 from one column to the next */
-    f32 step_t;                     /* 0x04 from one row to the next */
-    f32 size_s;                     /* 0x08 of one glyph */
-    f32 size_t;                     /* 0x0C */
-    f32 base_s;                     /* 0x10 of the first glyph */
-    f32 base_t;                     /* 0x14 */
-    s32 columns;                    /* 0x18 glyphs in a row */
-} GlyphSheet;
-
-/* D_00420C68[font][kind]: the screen box of a glyph, relative to its position */
-typedef struct {
-    s32 left;                       /* 0x00 */
-    s32 top;                        /* 0x04 */
-    s32 right;                      /* 0x08 */
-    s32 bottom;                     /* 0x0C */
-} GlyphBox;
-
 /* D_00420D00: the event runner */
 typedef struct {
     f32 unk00[4];                   /* 0x00 a position the camera is put in front of (func_00100FC8) */
@@ -197,47 +164,6 @@ typedef struct {
     char pad215[0x73];
     int flags;                      /* 0x288 0x200: tick every fourth frame */
 } ClockControl;
-
-/* auto-repeat timing of one button of a PadSlot (set by func_002177F8, stepped by func_00216EA0) */
-typedef struct {
-    u8 delay;                       /* 0x00 frames before the first repeat */
-    u8 interval;                    /* 0x01 frames between repeats */
-    u8 countdown;                   /* 0x02 */
-    u8 fired;                       /* 0x03 0 none, 1 first press, 2 repeat */
-} PadRepeatKey;
-
-/* one controller of D_01E0DB00 (0x1C0 bytes), kept up to date by func_00217008 */
-typedef struct {
-    u8 dma_buffer[0x100];           /* 0x000 work area handed to scePadPortOpen */
-    u8 report_status;               /* 0x100 the 0x24 bytes scePadRead gave (func_00216DD0) */
-    u8 report_id;                   /* 0x101 */
-    u16 buttons;                    /* 0x102 held buttons, a set bit is a pressed button */
-    u8 report_analog[0x1C];         /* 0x104 sticks and button pressures */
-    u16 pressed;                    /* 0x120 buttons that went down this frame */
-    u16 repeated;                   /* 0x122 buttons that fired through auto-repeat */
-    PadRepeatKey repeat_keys[16];   /* 0x124 */
-    u16 repeat_mask;                /* 0x164 buttons that auto-repeat */
-    char pad166[0x02];
-    int state;                      /* 0x168 scePadGetState */
-    int request_state;              /* 0x16C scePadGetReqState */
-    int actuator_count;             /* 0x170 scePadInfoAct(-1) */
-    u8 actuators[6];                /* 0x174 [0] small motor on/off, [1] big motor power */
-    u8 phase;                       /* 0x17A step of the set-up state machine in func_00217008 */
-    u8 next_phase;                  /* 0x17B phase to go to after the actuators are aligned */
-    u8 pad_type;                    /* 0x17C report_id >> 4 */
-    u8 features;                    /* 0x17D 1: mode can be switched, 2: has actuators, 4: pressure sensitive */
-    u8 mode;                        /* 0x17E 0xFF unknown, 0 digital, 1 analog, 2 analog with pressure */
-    u8 mode_request;                /* 0x17F mode asked for, 0xFF: none */
-    u8 mode_lock;                   /* 0x180 passed to scePadSetMainMode */
-    u8 actuators_aligned;           /* 0x181 */
-    char pad182[0x3E];
-} PadSlot;
-
-/* D_01E0DB00: two ports with four multitap slots each */
-typedef struct {
-    PadSlot slots[8];               /* 0x000 index is port * 4 + slot */
-    u8 open_slots[2];               /* 0xE00 per port, bit n: slot n was opened */
-} PadSystem;
 
 /* one corner of a character's sprite as KF_TextLog_PutChar queues it: UV, RGBAQ and XYZ2 for the GS */
 typedef struct {
@@ -367,31 +293,6 @@ typedef struct ListNode {
     struct ListNode *prev;          /* 0x20 */
     struct ListNode *next;          /* 0x24 */
 } ListNode;
-
-/* what D_004471E4 and D_004471E8 point at; func_001CFC80 clears unk04 */
-typedef struct {
-    char pad00[0x04];
-    int unk04;                      /* 0x04 */
-} PendingSlot;
-
-/* D_005C58E8: the message box (func_001CF988 opens it, func_001CF4D0 runs it, func_001CF708 draws it) */
-typedef struct {
-    s16 *start;                     /* 0x00 first glyph of the page on screen */
-    s16 *cursor;                    /* 0x04 glyph being typed */
-    s16 *end;                       /* 0x08 end of the page (func_001D0658) */
-    int delay;                      /* 0x0C frames per glyph */
-    int timer;                      /* 0x10 frames since the last glyph */
-    int unk14;                      /* 0x14 */
-    int waiting;                    /* 0x18 1 = page typed out, waiting for a button */
-    int typed;                      /* 0x1C glyphs typed on this page (control codes not counted) */
-    int closing;                    /* 0x20 1 = closing */
-    int close_timer;                /* 0x24 frames left of the closing */
-    int left;                       /* 0x28 */
-    int top;                        /* 0x2C */
-    int font;                       /* 0x30 */
-    int unk34;                      /* 0x34 */
-    int line_offsets[4];            /* 0x38 left edge of each line (func_001D0658) */
-} MessageBox;
 
 /* D_0042A8F0[32]: a pool of 0x70-byte slots chained into a free list through `next`;
    D_00446DF0 holds the head */
@@ -656,43 +557,12 @@ typedef struct {
 typedef struct {
     u16 held;                       /* 0x00 buttons held, the stick directions among them */
     u16 pressed;                    /* 0x02 buttons that went down this frame */
-    s32 type;                       /* 0x04 what func_002179F8 says: 1 has sticks, 0xFF is no controller */
+    s32 type;                       /* 0x04 what KF_Pad_GetMode says: 1 has sticks, 0xFF is no controller */
     u16 look_buttons;               /* 0x08 the right stick's up and down as the buttons 0x200 and 0x100 */
     u16 prev_look_buttons;          /* 0x0A */
     u16 move_buttons;               /* 0x0C the left stick as the direction buttons (0x80, 0x20, 0x10, 0x40) */
     u16 prev_move_buttons;          /* 0x0E */
 } PadState;
-
-/* what func_00217760 returns: the controller's own report */
-typedef struct {
-    char pad00[0x02];
-    u16 held;                       /* 0x02 */
-    u8 right_stick_x;               /* 0x04 the four axes, 0x80 at rest */
-    u8 right_stick_y;               /* 0x05 */
-    u8 left_stick_x;                /* 0x06 */
-    u8 left_stick_y;                /* 0x07 */
-    char pad08[0x18];
-    u16 pressed;                    /* 0x20 */
-} PadReport;
-
-/* PadReport's axis bytes two at a time: zero when the controller sends none */
-typedef struct {
-    char pad00[0x04];
-    u16 right_stick;                /* 0x04 */
-    u16 left_stick;                 /* 0x06 */
-} PadReportAxes;
-
-/* PadReport.pressed inside a union: a read through it may alias any store, so it stays behind one
-   (the boot screens func_0020A490 and func_0020A8C8 only match this way) */
-typedef union {
-    u16 buttons;
-    u8 bytes[2];
-} PadButtonsUnion;
-
-typedef struct {
-    char pad00[0x20];
-    PadButtonsUnion pressed;        /* 0x20 */
-} PadReportUnion;
 
 /* the texts of the debug start menu (func_001B0A78), local arrays it copies whole from
    read-only data: blank lines above the text, the PUSH START line, the four menu lines */

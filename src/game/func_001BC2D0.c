@@ -1,7 +1,9 @@
 #include "kf_game.h"
 #include "kf_map.h"
 #include "kf_entity.h"
+#include "kf_map_object.h"
 #include "kf_player.h"
+#include "kf_message.h"
 
 extern GameStatus D_0038CC50;
 extern TriggerTypeDef D_0041A6F8[];
@@ -15,11 +17,8 @@ int func_00210C48(int);
 int func_002109C8(int, int);
 void func_001BC6E8(int);
 void func_001BC968(int);
-int func_0011D600(void *, int);
 int func_001188E0(int);
 void func_0011A438(int);
-void func_001CFA70(int, int, int, int, int, int, ...);
-
 /* Uses the item GameStatus.unk20 names once GameStatus.bit6 asks for it: an entity or a map object in front of
    the player may take it for a script of its own; otherwise it does what its type says and one is used up. */
 void func_001BC2D0(void) {
@@ -93,15 +92,15 @@ void func_001BC2D0(void) {
             case 1:
             case 4:
             case 5:
-                if (D_00420D00.current == NULL || !func_0011D600(D_00420D00.current, item)) {
-                    func_001CFA70(0, 0, 0, 1, 0x2D, 0xA);
+                if (D_00420D00.current == NULL || !KF_MapObject_UseItem(D_00420D00.current, item)) {
+                    KF_Message_ShowNotice(0, 0, 0, 1, 0x2D, 0xA);
                     return;
                 }
                 break;
             case 2:
                 stood_on = D_00414188[0];
                 if (stood_on == NULL || stood_on->unk04->kind != 12 || !func_001188E0(item)) {
-                    func_001CFA70(0, 0, 0, 1, 0x2D, 0xA);
+                    KF_Message_ShowNotice(0, 0, 0, 1, 0x2D, 0xA);
                     return;
                 }
                 break;
@@ -113,7 +112,7 @@ void func_001BC2D0(void) {
             case 7:
                 break;
             case 8:
-                func_001CFA70(0, 0, 0, 1, 0x2D, 0xA);
+                KF_Message_ShowNotice(0, 0, 0, 1, 0x2D, 0xA);
                 return;
             default:
                 return;

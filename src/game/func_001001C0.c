@@ -5,11 +5,14 @@
 #include "kf_hud.h"
 #include "kf_item_effect.h"
 #include "kf_map.h"
+#include "kf_map_object.h"
 #include "kf_player.h"
 #include "kf_player_update.h"
 #include "kf_sound.h"
 #include "kf_linked_point.h"
 #include "kf_splash.h"
+#include "kf_message.h"
+#include "kf_effect.h"
 
 extern u8 D_00349680[0x10];
 extern PlayTime D_0036A138[];   /* the play time in the loaded save (D_0036A130 + 8) */
@@ -42,11 +45,9 @@ void func_00100D10(void);
 void func_001D0970(void);
 void func_00117CC8(void);
 void func_00112BD0(void);
-void func_0011D180(void);
 void func_00123288(void);
 void func_001C95B0(void);
 void func_001BC2D0(void);
-void func_001A1E88(void);
 void func_00101618(void);
 void func_0019C540(void);
 void func_001061E8(void);
@@ -61,8 +62,6 @@ void func_001017A8(void);
 void func_00118958(void);
 void func_00101F90(void);
 void func_001B5778(void);
-void func_001CFC98(void);
-void func_001CFC80(void);
 void func_0019C7F0(int);
 void func_0019C820(int);
 int sceGsSyncV(int);
@@ -122,14 +121,14 @@ void func_001001C0(int arg) {
         func_00117CC8();
         KF_Player_UpdateArmModels();
         func_00112BD0();
-        func_0011D180();
+        KF_MapObject_UpdateAll();
         func_00123288();
         KF_Entity_UpdateAll();
         func_001C95B0();
         KF_Gold_Update();
         func_001BC2D0();
         KF_Player_UpdateWeaponAim();
-        func_001A1E88();
+        KF_Effect_UpdateAll();
         KF_LinkedPoint_UpdateFollows();
         KF_Hud_Update();
         if (!(D_0038CC50.bit12 && D_0038CC50.bit13)) {
@@ -158,8 +157,8 @@ void func_001001C0(int arg) {
     D_00433050[0] = 0xC000L << 17;
     D_00433050[30] = 0xC000L << 17;
     func_001B5778();
-    func_001CFC98();
-    func_001CFC80();
+    KF_Message_CloseBox();
+    KF_Message_ClearNotices();
     saved = D_00349680[1];
     D_00349680[1] = 0;
     func_0019C7F0(0);

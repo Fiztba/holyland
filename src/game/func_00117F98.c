@@ -4,7 +4,9 @@
 #include "kf_linked_point.h"
 #include "kf_linked_point.h"
 #include "kf_map.h"
+#include "kf_map_object.h"
 #include "kf_player.h"
+#include "kf_effect.h"
 
 extern MapSlot D_0038CD20[];
 extern void (*D_0038D5E0[])(void);
@@ -21,10 +23,8 @@ void func_00109800(void);
 void func_0010B000(void);
 void func_001152B8(int);
 void func_00115878(int);
-void func_0011CE80(int);
 
 void func_001A15F8(void);
-void func_001A3040(int);
 void func_001C8938(int);
 void func_0020B780(int);
 
@@ -57,8 +57,8 @@ void func_00117F98(void) {
     PLAYER_STATUS_BITS(&D_00413F80)->bit34 = FALSE;
     D_0038CD20[D_00446770 == 0].unk00 = 0;
     func_00115878(D_00446770 == 0);
-    func_001A3040(D_00446770 == 0);
-    func_0011CE80(D_00446770 == 0);
+    KF_Effect_FreeForMap(D_00446770 == 0);
+    KF_MapObject_UnloadMap(D_00446770 == 0);
     KF_Entity_FreeAllInGroup(D_00446770 == 0);
     KF_Entity_ClearMapSlot(D_00446770 == 0);
     KF_Gold_UnlinkMap(D_00446770 == 0);
