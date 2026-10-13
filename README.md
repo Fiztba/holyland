@@ -101,8 +101,8 @@ static page) and the table below; commit those with each batch of work.
 <!-- progress:start -->
 | | code | functions | named | units complete |
 | --- | ---: | ---: | ---: | ---: |
-| overall | 99.44% | 3825 / 3839 | 847 / 3839 | 14 / 3052 |
-| game | 99.51% | 2985 / 2991 | 21 / 2991 | 0 / 2846 |
+| overall | 99.44% | 3825 / 3839 | 857 / 3839 | 14 / 3049 |
+| game | 99.51% | 2985 / 2991 | 31 / 2991 | 0 / 2843 |
 | sce | 98.98% | 840 / 848 | 826 / 848 | 14 / 206 |
 <!-- progress:end -->
 
