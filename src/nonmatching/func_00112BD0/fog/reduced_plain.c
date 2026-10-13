@@ -3815,7 +3815,7 @@ float cosf(float);
 float sinf(float);
 void func_00116F90(void);
 void func_001175F0(void);
-void func_0020B320(s32 *, s32 *, u32);
+void KF_Memory_CopyWords(s32 *, s32 *, u32);
 int func_00116C08(int, int, int, int);
 void func_00112018(ModelInstance *);
 void func_00216778(void *, void *);

@@ -1,6 +1,6 @@
 #include "common.h"
+#include "kf_shot.h"
 
-void *func_001B1390();
 char *func_0010CAB8(char *, u32);
 void func_001B4F30(u8, void *, void *, void *, void *);
 typedef struct { s64 v; } __attribute__((packed)) U64P;
@@ -33,7 +33,7 @@ int func_00173D38(A *arg0, u8 *arg1, int arg2, int arg3, void *arg4) {
     }
     q = arg1;
     for (i = 0; i < 3; i++) {
-        p = func_001B1390();
+        p = KF_Shot_Alloc();
         p->a = 1;
         p->x20 = 0;
         p->x22 = 0;

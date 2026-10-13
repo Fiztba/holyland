@@ -1,4 +1,5 @@
 #include "kf_player.h"
+#include "kf_shot.h"
 
 extern PlayerState D_00413F80;
 extern int D_00446734;          /* nonzero: a saved game was loaded */
@@ -9,7 +10,6 @@ void func_002077F0(int);
 void func_001030B8(void);
 void func_001BA310(void);
 void func_001127F8(void);
-void func_001B1340(void);
 void func_0019A848(void);
 void func_001128E0(void);
 void func_00117C60(void);
@@ -38,7 +38,7 @@ void func_001000C8(int arg) {
     func_001030B8();
     func_001BA310();
     func_001127F8();
-    func_001B1340();
+    KF_Shot_ClearAll();
     func_0019A848();
     func_001128E0();
     func_00117C60();

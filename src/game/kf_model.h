@@ -43,9 +43,6 @@ typedef struct __attribute__((packed)) {
 /* four ints as a 16-byte aligned VU0 quadword (screen coordinates from the VU0) */
 typedef s32 VuIntVector[4] __attribute__((aligned(16)));
 
-/* a 128-bit integer, stored with one sq */
-typedef u32 Uint128 __attribute__((mode(TI)));
-
 /* one vertex of a strip */
 typedef struct {
     void *unk00;                    /* 0x00 */

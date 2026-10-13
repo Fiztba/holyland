@@ -1,5 +1,6 @@
 #include "kf_player.h"
 #include "kf_effect.h"
+#include "kf_shot.h"
 
 extern PlayerState D_00413F80;
 extern PlayerState D_00414280;
@@ -13,7 +14,6 @@ extern s32 D_0044715C;
 extern PlayerShot *D_00447160;
 
 void *memset(void *, s32, u32);
-void *func_001B1390(void);
 void func_00216778(void *, void *);
 int func_001B4F30(u16, void *, void *, void *, void *);
 void func_001A34D0(int);
@@ -64,7 +64,7 @@ int func_001BC9E0(int magic_id) {
         return FALSE;
     }
     if (entry->unk102 == 0) {
-        shot = func_001B1390();
+        shot = KF_Shot_Alloc();
         shot->unk00 = 1;
         shot->unk20 = D_00413F80.unkAC;
         shot->unk22 = D_00413F80.unkB0;

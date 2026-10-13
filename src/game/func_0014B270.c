@@ -1,4 +1,5 @@
 #include "common.h"
+#include "kf_shot.h"
 
 typedef struct {
     char pad[0x88];
@@ -38,7 +39,6 @@ typedef struct {
 int func_00192EB0(void *, int);
 int func_00194368(float, void *);
 void func_0014B178(void *);
-void *func_001B1390();
 char *func_0010CAB8(char *, u32);
 void func_001B4F30(u8, void *, void *, void *, void *);
 void func_0018D600(char **, int, u32, int);
@@ -71,7 +71,7 @@ void func_0014B270(Actor *arg0) {
             *(int *)(temp_a2 + 0x50) = 0;
         }
         if (D_00446ED4 % 10U == 0) {
-            p = func_001B1390();
+            p = KF_Shot_Alloc();
             p->a = 1;
             p->x20 = 0;
             p->x22 = 0;

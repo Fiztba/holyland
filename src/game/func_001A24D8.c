@@ -2,6 +2,7 @@
 #include "kf_effect.h"
 #include "kf_player.h"
 #include "kf_screen.h"
+#include "kf_memory.h"
 
 extern EffectActor D_003F3550[0x180];
 extern ModelInstance D_0054A260[0x180];
@@ -11,7 +12,6 @@ extern PlayerState D_00413F80;
 extern int D_004468C8;
 extern int D_004468D0;
 
-void func_0020B2E8(void *, u32);
 void func_001A2C68(int);
 char func_0019C8D0(int index, int first, int second, int third, int fourth);
 AreaNode *func_00115950(f32 *point, f32 margin);
@@ -55,7 +55,7 @@ void func_001A24D8(EffectSlot *slot) {
             break;
         }
         D_004468D0++;
-        func_0020B2E8(effect, 0x28);
+        KF_Memory_ClearWords(effect, 0x28);
         EFFECT_FLAG_BITS(effect)->live = TRUE;
         effect->frame = 0;
         effect->start_position = slot->unk30;

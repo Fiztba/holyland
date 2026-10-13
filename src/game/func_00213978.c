@@ -1,11 +1,11 @@
 #include "kf_script.h"
 #include "kf_map.h"
 #include "kf_player.h"
+#include "kf_shot.h"
 
 extern MapSlot D_0038CD20[];
 extern int D_00446770;
 
-void *func_001B1390(void);
 int func_001B4F30(u16, void *, void *, void *, void *);
 
 /* Launch shot `object_id` from a point in a direction. */
@@ -14,7 +14,7 @@ void func_00213978(ScriptPointCommand *command) {
     VuVector4 angles = (VuVector4){ command->to_x.value, command->to_y.value, command->to_z.value, 1.0f };
     PlayerShot *shot;
 
-    shot = func_001B1390();
+    shot = KF_Shot_Alloc();
     shot->unk00 = 1;
     shot->unk20 = 0;
     shot->unk22 = 0;

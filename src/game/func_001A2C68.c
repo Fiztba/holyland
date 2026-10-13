@@ -1,6 +1,7 @@
 #include "common.h"
 #include "kf_effect.h"
 #include "kf_map.h"
+#include "kf_memory.h"
 
 extern EffectActor D_003F3550[0x180];
 extern MapSlot D_0038CD20[2];
@@ -12,7 +13,6 @@ extern int D_00446770;
 extern char *D_00447100;
 extern char **D_00447104;
 
-void func_0020B2E8(void *, u32);
 void func_0010D018(ModelInstance *, char **, char **);
 int func_00111C78(ModelInstance *model, int first, int last);
 u32 *func_00116BD0(int, int);
@@ -26,7 +26,7 @@ void func_001A2C68(int index) {
     EffectDef *def;
     int map;
 
-    func_0020B2E8(model, 0x70);
+    KF_Memory_ClearWords(model, 0x70);
     def = effect->def;
     if (EFFECT_DEF_FLAGS(def) & 0x20000) {
         if ((EFFECT_DEF_FLAGS(def) & 0x600000) == 0 || (EFFECT_DEF_FLAGS(def) & 0x600000) == 0x600000) {

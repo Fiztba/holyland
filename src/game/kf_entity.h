@@ -246,7 +246,7 @@ typedef struct {
     s64 value;
 } __attribute__((packed)) EntityUnaligned64;
 
-/* what func_001B1390 returns: something an entity launches */
+/* what KF_Shot_Alloc returns: something an entity launches */
 typedef struct {
     char unk00;                     /* 0x00 */
     char pad01[0x1F];

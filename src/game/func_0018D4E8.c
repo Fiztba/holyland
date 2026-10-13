@@ -1,6 +1,6 @@
 #include "kf_entity.h"
+#include "kf_shot.h"
 
-void *func_001B1390();
 char *func_0010CAB8(char *, u32);
 void func_001B4F30(u8, void *, void *, void *, void *);
 
@@ -16,7 +16,7 @@ int func_0018D4E8(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from, s3
     }
     for (i = 0; i < 3; i++) {
         if (record->unk10[i].unk02 != 0 && frame_from < record->unk10[i].unk02 && record->unk10[i].unk02 <= frame_to) {
-            shot = func_001B1390();
+            shot = KF_Shot_Alloc();
             shot->unk00 = 1;
             shot->unk20 = 0;
             shot->unk22 = 0;

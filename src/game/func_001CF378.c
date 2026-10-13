@@ -1,6 +1,7 @@
 #include "kf_game.h"
 #include "kf_file.h"
 #include "kf_gs.h"
+#include "kf_memory.h"
 
 extern char D_0043F698[];
 extern char D_0043F6A8[];
@@ -19,7 +20,6 @@ extern MessageSlot D_005C5940[6];
 
 s32 func_001CFC48(s32);
 s32 func_001CFC58(s32);
-void func_0020B2E8(void *, u32);
 
 /* Loads the two text files, empties the message ring and the debug log, and sets up the two GS
    register writes (TEX0 value, register number) the two fonts are drawn with. */
@@ -47,7 +47,7 @@ void func_001CF378(void) {
     D_005C5940[5].text = D_005C0CC8;
     D_005C5940[5].next = D_005C5940;
     // match: the callee returns a value here; $2 is then taken when the table address is formed
-    ((int (*)(void *, u32))func_0020B2E8)(D_005C50C8, 0x200);
+    ((int (*)(void *, u32))KF_Memory_ClearWords)(D_005C50C8, 0x200);
     D_005C58C8[0] = 0x4007FC0665423B40L;
     D_005C58C8[1] = GS_REG_TEX0_1;
     D_005C58C8[2] = 0x4007FC2665423B40L;

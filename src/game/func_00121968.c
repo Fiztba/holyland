@@ -1,4 +1,5 @@
 #include "kf_entity.h"
+#include "kf_shot.h"
 
 extern u32 D_00446ED4;
 extern float D_00413F80[];
@@ -6,7 +7,6 @@ extern float D_00413F80[];
 void KF_Vector_Subtract(void *, void *, void *);
 float sqrtf(float);
 float func_0019B838(float);
-void *func_001B1390();
 int func_001B4F30(u16, void *, void *, void *, void *);
 
 /* Update handler of the shooting kind: every so many frames (or all the time
@@ -36,7 +36,7 @@ void func_00121968(MapObject *object) {
     aim.y = func_0019B838(object->model->rotation.y + MAP_OBJECT_WORDS(object)->unk4C * 0.017453292f + 3.1415927f);
     aim.z = object->model->rotation.z;
     aim.w = 0.0f;
-    shot = func_001B1390();
+    shot = KF_Shot_Alloc();
     shot->unk20 = 0;
     shot->unk00 = 1;
     shot->unk22 = 0;

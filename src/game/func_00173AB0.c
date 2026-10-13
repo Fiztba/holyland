@@ -1,9 +1,9 @@
 #include "kf_entity.h"
+#include "kf_shot.h"
 
 float sqrtf(float);
 float atan2f(float, float);
 double atan2(double, double);
-void *func_001B1390();
 char *func_0010CAB8(char *, u32);
 float func_00194FB8(float);
 float func_00194F80(void *, void *);
@@ -30,7 +30,7 @@ s32 func_00173AB0(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from, s3
         return 0;
     }
     for (i = 0; i < 2; i++) {
-        shot = func_001B1390();
+        shot = KF_Shot_Alloc();
         shot->unk22 = shot->unk20 = 0;
         shot->unk00 = 1;
         shot->unk28 = entity->params->unk238;

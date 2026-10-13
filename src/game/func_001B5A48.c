@@ -3,6 +3,7 @@
 #include "kf_map.h"
 #include "kf_effect.h"
 #include "kf_sound.h"
+#include "kf_shot.h"
 
 extern PlayerState D_00413F80;
 extern PlayerState D_00414280;      /* the player as of the frame before */
@@ -43,7 +44,6 @@ float sinf(float);
 int rand(void);
 int func_0019D020(int);
 int func_0019D0F0(int);
-void *func_001B1390(void);
 int func_001B4F30(u16, void *, void *, void *, void *);
 void func_001B69D0(void);
 void func_001B6FA0(u16, u16);
@@ -350,7 +350,7 @@ void func_001B5A48(void) {
         } else if (!(((s32)(D_00413F80.unk1C8 >> 38) & 1) &&
                      D_00413F80.unk1DC < D_00413F80.position.y - D_00402DA8[0x7C].unk108) &&
                    (s32)((f32)rand() * 451.0f * 0.0000000004656613f) == 0) {
-            shot = func_001B1390();
+            shot = KF_Shot_Alloc();
             shot->unk00 = 1;
             shot->unk20 = 0;
             shot->unk22 = 0;

@@ -12,6 +12,7 @@ typedef long s64;               /* long is 64-bit on the EE */
 typedef unsigned long u64;
 typedef float f32;
 typedef double f64;
+typedef u32 Uint128 __attribute__((mode(TI))); /* a 128-bit integer, moved with one lq/sq */
 
 #ifndef NULL
 #define NULL ((void *)0)

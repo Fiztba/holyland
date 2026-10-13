@@ -15,7 +15,7 @@ typedef struct {
     s16 values[9];                  /* 0x00 */
 } PlayerShotStats;
 
-/* the 0x30-byte slot func_001B1390 returns, as the player's magic fills it */
+/* the 0x30-byte slot KF_Shot_Alloc returns, as the player's magic fills it */
 typedef struct {
     u8 unk00;                       /* 0x00 */
     char pad01[0x01];

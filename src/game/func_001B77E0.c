@@ -1,4 +1,5 @@
 #include "kf_player.h"
+#include "kf_shot.h"
 
 extern PlayerState D_00413F80;
 extern PlayerItemDef D_0041B9B8[];
@@ -11,7 +12,6 @@ extern u16 D_0044693C;
 
 void func_00108A08(ModelInstance *, int);
 void func_00108AC8(void *);
-void *func_001B1390(void);
 int func_001B4F30(u16, void *, void *, void *, void *);
 
 /* Handler of an item that shoots: on the button, starts the motion and launches the item's shot. */
@@ -28,7 +28,7 @@ void func_001B77E0(u16 held, u16 pressed) {
         D_00413F80.unk298 = 0;
         D_00413F80.unk258++;
         D_00413F80.unk263 = 0;
-        D_0044711C = func_001B1390();
+        D_0044711C = KF_Shot_Alloc();
         D_0044711C->unk00 = 0;
         D_0044711C->unk26 = def->unk52;
         D_0044711C->unk20 = D_00413F80.unkAC;
