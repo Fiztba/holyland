@@ -1,5 +1,7 @@
 #include "kf_map.h"
+#include "kf_linked_point.h"
 #include "kf_gs.h"
+#include "kf_map_scroll.h"
 
 extern MapSlot D_0038CD20[];
 extern MapDrawState D_0038A1B0;
@@ -19,10 +21,8 @@ void func_00111368(ModelInstance *, int, int, int, int);
 void func_00116970(void);
 void func_00116AD8(int, int);
 int func_00116CB0(MapDrawRecord *, ModelInstance *);
-void func_00116F98(int, int);
-void func_001175F8(int, int);
 void func_0011D6B0(int, int, int);
-void func_0019AEF8(MapDrawRecord *, ModelInstance *);
+
 
 #define FOG_COLOR() \
     ((u64)D_0038A1B0.unk280.red | ((u64)D_0038A1B0.unk280.green << 8) | ((u64)D_0038A1B0.unk280.blue << 16) | \
@@ -59,8 +59,8 @@ void func_00114198(int mode) {
             func_00116AD8(map, 1);
             func_00116AD8(map, 5);
             func_00109E88();
-            func_001175F8(map, 0);
-            func_00116F98(map, 0);
+            KF_MapScroll_UpdateDraw(map, 0);
+            KF_MapScroll_UpdateCopy(map, 0);
             if (mode < 2) {
                 func_0010A008();
             } else {
@@ -92,7 +92,7 @@ void func_00114198(int mode) {
                     record->model->unk148 = (s32)&D_0038A1B0.unkA90[map][record->unk35];
                     record->model->unk14C = &D_0038A1B0.unk290[map][record->unk34];
                 }
-                func_0019AEF8(record, record->model);
+                KF_LinkedPoint_FindHitsForMapDraw(record, record->model);
                 if (record->flags & 0x200) {
                     header = slot->header;
                     func_00111368(record->model, header->unk78, header->unk79, header->unk7A, header->unk7B);

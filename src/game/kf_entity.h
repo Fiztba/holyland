@@ -957,7 +957,7 @@ typedef struct {
 /* one of the 0x80-byte records MapSlot.records (kf_map.h) points at */
 typedef struct {
     char pad00[0x1C];
-    f32 unk1C;                      /* 0x1C the heading its floor pushes the player along (func_001B7EE0) */
+    f32 unk1C;                      /* 0x1C the heading its floor pushes the player along (KF_Player_Move) */
     char pad20[0x0C];
     u16 unk2C;                      /* 0x2C the most speed the push gives, 0: no push */
     u16 unk2E;                      /* 0x2E how much speed the push adds per frame, 0: no push */
@@ -1088,7 +1088,7 @@ typedef struct {
 
 /* a node of the D_003E7500 pool (0x200 of them, chained through prev/next): a point
    that eases toward a target over a duration or follows another vector. The two
-   active lists are at D_004470C8, the free list head at D_004470D0. */
+   active lists and free list are owned by kf_linked_point.c. */
 typedef struct LinkedPoint {
     Vector4 position;               /* 0x00 w is kept when following; w is 1 / duration while easing */
     Vector4 target;                 /* 0x10 w is 1.0 */

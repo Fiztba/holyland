@@ -1,11 +1,14 @@
 #include "kf_game.h"
 #include "kf_gold.h"
+#include "kf_held_weapon.h"
 #include "kf_entity_world.h"
 #include "kf_hud.h"
 #include "kf_item_effect.h"
 #include "kf_map.h"
 #include "kf_player.h"
+#include "kf_player_update.h"
 #include "kf_sound.h"
+#include "kf_linked_point.h"
 #include "kf_splash.h"
 
 extern u8 D_00349680[0x10];
@@ -35,26 +38,21 @@ void func_0010B000(void);
 void func_00111D58(void);
 void func_001B5460(void);
 int func_00210D48(void);
-void func_001B5A48(void);
 void func_00100D10(void);
 void func_001D0970(void);
 void func_00117CC8(void);
-void func_001BFCC8(void);
 void func_00112BD0(void);
 void func_0011D180(void);
 void func_00123288(void);
 void func_001C95B0(void);
 void func_001BC2D0(void);
-void func_001B7DF8(void);
 void func_001A1E88(void);
-void func_0019B0B8(void);
 void func_00101618(void);
 void func_0019C540(void);
 void func_001061E8(void);
 void func_00100FC8(void);
 void func_001012D8(int, int);
 void func_0010A7E0(void *);
-void func_001C00D8(void);
 int func_001005E8(int);
 void func_00109800(void);
 void func_001C9C00(void);
@@ -118,11 +116,11 @@ void func_001001C0(int arg) {
         if (!(D_0038CC50.unk30 & 0x40) && D_00413F80.unk1A8 == 0) {
             func_00210D48();
         }
-        func_001B5A48();
+        KF_Player_Update();
         func_00100D10();
         func_001D0970();
         func_00117CC8();
-        func_001BFCC8();
+        KF_Player_UpdateArmModels();
         func_00112BD0();
         func_0011D180();
         func_00123288();
@@ -130,9 +128,9 @@ void func_001001C0(int arg) {
         func_001C95B0();
         KF_Gold_Update();
         func_001BC2D0();
-        func_001B7DF8();
+        KF_Player_UpdateWeaponAim();
         func_001A1E88();
-        func_0019B0B8();
+        KF_LinkedPoint_UpdateFollows();
         KF_Hud_Update();
         if (!(D_0038CC50.bit12 && D_0038CC50.bit13)) {
             func_00101618();
@@ -144,7 +142,7 @@ void func_001001C0(int arg) {
         func_00100FC8();
         func_001012D8(0, 0);
         func_0010A7E0(D_004323E0);
-        func_001C00D8();
+        KF_WeaponTrail_Update();
         if (!(D_0038CC50.bit12 && D_0038CC50.bit13)) {
             func_001005E8(1);
             func_00109800();

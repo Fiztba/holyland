@@ -13,7 +13,7 @@ typedef struct {
     s8 unk03;                       /* 0x03 */
     u8 unk04;                       /* 0x04 0 or 1 */
     s8 unk05;                       /* 0x05 nonzero: the camera moves to CameraState.unk30 */
-    char unk06;                     /* 0x06 nonzero: the player cannot run (func_001B5A48) */
+    char unk06;                     /* 0x06 nonzero: the player cannot run (KF_Player_Update) */
     char unk07;                     /* 0x07 */
     char pad08[0x18];
     int unk20;                      /* 0x20 index into D_0041A6F8 (TriggerTypeDef), used with bit6 */
@@ -239,7 +239,7 @@ typedef struct {
     u8 open_slots[2];               /* 0xE00 per port, bit n: slot n was opened */
 } PadSystem;
 
-/* one corner of a character's sprite as func_00217CB8 queues it: UV, RGBAQ and XYZ2 for the GS */
+/* one corner of a character's sprite as KF_TextLog_PutChar queues it: UV, RGBAQ and XYZ2 for the GS */
 typedef struct {
     int tex_u;                      /* 0x00 in 1/16 texel */
     int tex_v;                      /* 0x04 */
@@ -259,17 +259,17 @@ typedef struct {
     TextLogVertex corners[2];       /* 0x00 top left, bottom right */
 } TextLogGlyph;
 
-/* D_01E0F210: the GIF packet func_00217F98 sends, a tag and room for 37 characters */
+/* text_log_packet: the GIF packet KF_TextLog_Flush sends, a tag and room for 37 characters */
 typedef struct {
     int tag[4];                     /* 0x00 */
     TextLogGlyph glyphs[37];        /* 0x10 */
 } TextLogPacket;
 
-/* D_01E0E9C0: the 0x800-byte text buffer func_00217EE0 appends to, and the window func_00217F98 prints it in */
+/* text_log: the 0x800-byte text buffer KF_TextLog_AppendV appends to, and the window KF_TextLog_Flush prints it in */
 typedef struct {
-    TextLogGlyph *packet;           /* 0x00 where the next character goes in D_01E0F210 */
+    TextLogGlyph *packet;           /* 0x00 where the next character goes in text_log_packet */
     char pad04[0x0C];
-    int left;                       /* 0x10 the window, in GS coordinates (func_00217C20) */
+    int left;                       /* 0x10 the window, in GS coordinates (KF_TextLog_SetWindow) */
     int top;                        /* 0x14 */
     int width;                      /* 0x18 */
     int height;                     /* 0x1C */
@@ -279,7 +279,7 @@ typedef struct {
     int green;                      /* 0x34 */
     int blue;                       /* 0x38 */
     char pad3C[0x04];
-    int font_base;                  /* 0x40 GS page of the font texture (func_00217A20) */
+    int font_base;                  /* 0x40 GS page of the font texture (KF_TextLog_LoadFont) */
     int palette_base;               /* 0x44 GS page of its palette */
     int font_buffer_width;          /* 0x48 in units of 64 pixels */
     int used;                       /* 0x4C bytes of text */
@@ -300,7 +300,7 @@ typedef struct {
    (150, then 70, then 160 of them: see func_001029A8) */
 typedef struct {
     char pad00[0x30];
-    u16 unk30;                      /* 0x30 the number in the name of its item_arm file (func_001BF898) */
+    u16 unk30;                      /* 0x30 the number in the name of its item_arm file (KF_Player_LoadArmModels) */
     char pad32[0x01];
     u8 unk33;                       /* 0x33 */
     char pad34[0x08];
