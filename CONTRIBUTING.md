@@ -159,6 +159,9 @@ programmer would have, not the way m2c printed it:
   `ABS()` expand to the same code, so they still match.
 - EE registers come from `eeregs.h` (`*D1_CHCR`, `*GIF_STAT`), not a local
   `#define HW_10009000`.
+- No raw addresses in code. Game data is always a symbol (`D_00446710`), and
+  fixed addresses such as the scratchpad (`0x70000000`) get one named
+  `#define` in a shared header, not `*(int *)0x70000010` in each file.
 - Idiomatic C: `x += y` not `x = x + y`, `if (a && b)` not nested ifs. gcc
   2.9 almost always emits the same code.
 - A function is declared the same way everywhere, matching its definition:
@@ -181,6 +184,13 @@ on the line, or on its own line just above, silences a finding the match
 forces. The lint is a regex scan, so if it is plainly wrong, say so in the
 PR. Rebuild after fixing anything. Run it with no arguments for a summary of
 the whole tree.
+
+`tools/lint_symbols.py --changed` must pass too (CI runs it). It checks the
+whole tree: `config/symbol_addrs.txt` in address order with no duplicates,
+no `func_`/`D_` name left where the
+address has a real name, every `KF_` function in `symbol_addrs.txt`,
+functions in address order within a file, and no generated or disc-derived
+file in the change.
 
 ## Names
 

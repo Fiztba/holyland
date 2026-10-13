@@ -5,7 +5,7 @@
 
 extern LevelRecord D_003679A0[70];
 extern LevelRecord D_003682F0[160];
-extern u8 D_00367980[6][5];
+extern u8 spell_levels[6][5];
 extern u8 D_00369830[380];
 extern FxTableEntry D_00402DA8[];
 extern PlayerState D_00413F80;
@@ -104,8 +104,8 @@ extern MenuItem *D_005CE8A0[4];
     last->prev = first;                                                                                  \
     (list).item = (start_list).item = &(nodes)[(worn) - (record_base)];
 
-/* Whether the spell is the one its slot of D_00367980 holds (three spells to a slot, numbered from 1). */
-#define SPELL_IS_SET(spell) (D_00367980[((spell) - 1) / 15][(((spell) - 1) / 3) % 5] == ((spell) - 1) % 3 + 1)
+/* Whether the spell is the one its slot of spell_levels holds (three spells to a slot, numbered from 1). */
+#define SPELL_IS_SET(spell) (spell_levels[((spell) - 1) / 15][(((spell) - 1) / 3) % 5] == ((spell) - 1) % 3 + 1)
 
 /* Builds every ring the menus walk from what the player owns: the items, everything, the usable items and spells,
    one ring per equipment group, the spells known and the spells that can be cast. */

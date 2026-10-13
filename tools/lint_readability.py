@@ -23,6 +23,10 @@ Rules:
   proto-conflict  a function declared differently from its definition, or from
                   the most common declaration when it is still asm
   pasted-types    decomp.me's typedef block or #define NULL
+  inline-address  a raw address in code: (int *)0x70000010, (u32 *)0x1000B000, or a bare
+                  scratchpad 0x7000xxxx; name it once with a #define in a shared header
+  data-conflict   a global declared as a different scalar type, or as a pointer, scalar
+                  or aggregate, than its definition or most of its declarations say
 
 A "// match:" comment saying why the code has to look that way suppresses the
 findings on its line, or on the next line when it stands on a line of its own.
@@ -71,6 +75,11 @@ DEFINITION = re.compile(r"^\w[\w \*]*\b\w+\s*\(([^;{)]*)\)\s*\{", re.M)
 PARAMETER = re.compile(r"(\w+)\s*(?:\[[^\]]*\])?\s*$")
 PROTOTYPE = re.compile(r"^(?:extern\s+|static\s+|inline\s+)*([A-Za-z_][\w \t*]*?)\b(\w+)\s*"
                        r"\(([^;{}()]*(?:\([^()]*\)[^;{}()]*)*)\)\s*([;{])", re.M)
+INLINE_ADDRESS = re.compile(r"\(\s*(?:const\s+|volatile\s+)*[\w ]+?\s*\*+\s*\)\s*(0x[0-9A-Fa-f]{7,8})\b"
+                            r"|\b(0x7000[0-9A-Fa-f]{4})\b")
+SCALAR_SPELLING = {"s32": "int", "signed int": "int", "unsigned int": "u32", "unsigned": "u32", "float": "f32",
+                   "char": "s8", "signed char": "s8", "unsigned char": "u8", "short": "s16",
+                   "unsigned short": "u16", "double": "f64"}
 INCLUDE = re.compile(r'^#include\s+"([\w.]+)"', re.M)
 MATCH_NOTE = re.compile(r"(?://|/\*)\s*match:")
 COMMENTS_AND_STRINGS = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.S)
@@ -167,6 +176,84 @@ def signature_index():
     return _signature_index
 
 
+def global_variables(code):
+    """Yield (offset, storage, name, shape) for each file-scope variable declaration or definition."""
+    code = re.sub(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", blank_out, code, flags=re.M)
+    depth, start, text = 0, 0, []
+    for index, char in enumerate(code):
+        if char == "{":
+            depth += 1
+            if depth == 1:
+                text.append("{")
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                text.append("}")
+                if re.search(r"\)\s*\{\}$", "".join(text)):  # a function body: nothing to declare
+                    text, start = [], index + 1
+        elif depth == 0 and char == ";":
+            yield from _variables(start, "".join(text))
+            text, start = [], index + 1
+        elif depth == 0:
+            text.append(char)
+
+
+def _variables(start, statement):
+    offset = start + len(statement) - len(statement.lstrip())
+    statement = statement.strip()
+    if not statement or re.match(r"typedef\b", statement):
+        return
+    declarators = [re.sub(r"=.*", "", part, flags=re.S).strip() for part in statement.split(",")]
+    if "(" in declarators[0]:
+        return  # a prototype (or a function pointer, which no rule here covers)
+    if "{}" in declarators[0]:
+        declarators[0] = declarators[0].rsplit("}", 1)[1]
+    first = re.fullmatch(r"((?:extern|static)\s+)?(.*?)\s*(\**)\s*(\w+)\s*((?:\[[^\]]*\]\s*)*)", declarators[0], re.S)
+    if not first or not first.group(2) or first.group(2) in ("struct", "union", "enum"):
+        return  # a forward declaration names a type, not a variable
+    storage = (first.group(1) or "").strip()
+    base = re.sub(r"\s+", " ", re.sub(r"\b(?:const|volatile)\b", "", first.group(2))).strip()
+    yield offset, storage, first.group(4), data_shape(base, first.group(3), first.group(5))
+    for declarator in declarators[1:]:
+        match = re.fullmatch(r"(\**)\s*(\w+)\s*((?:\[[^\]]*\]\s*)*)", declarator)
+        if match:
+            yield offset, storage, match.group(2), data_shape(base, match.group(1), match.group(3))
+
+
+def data_shape(base, stars, dimensions):
+    """What data declarations are compared on: a pointer, an aggregate (array, struct), or the scalar type."""
+    if stars:
+        return "pointer"
+    if dimensions.strip() or re.match(r"(?:struct|union)\b|[A-Z]|sce", base):
+        return "aggregate"
+    return SCALAR_SPELLING.get(base, base)
+
+
+_data_index = None
+
+
+def data_index():
+    """name -> (shape, where it comes from) for each global the game declares in more than one way."""
+    global _data_index
+    if _data_index is None:
+        definitions, declarations = defaultdict(Counter), defaultdict(Counter)
+        for file_name in os.listdir(GAME):
+            if file_name.endswith((".c", ".h")):
+                for _, storage, name, form in global_variables(read_code(os.path.join(GAME, file_name))[1]):
+                    if storage == "extern":
+                        declarations[name][form] += 1
+                    elif not storage:
+                        definitions[name][form] += 1
+        _data_index = {}
+        for name, counts in declarations.items():
+            if name in definitions:
+                _data_index[name] = (definitions[name].most_common(1)[0][0], "its definition")
+            elif len(counts) > 1:
+                form, count = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0]
+                _data_index[name] = (form, f"{count} of {sum(counts.values())} declarations")
+    return _data_index
+
+
 def common_headers():
     """Game headers that include common.h, so including them is as good."""
     headers = {"common.h"}
@@ -218,6 +305,19 @@ def _findings(path, text, code, line_of):
     for line, name, signature, form, is_definition in prototypes(code):
         if not is_definition and name in index and index[name][0] != form:
             yield line, "proto-conflict", f"{name}: {signature}, but {index[name][2]} says {index[name][1]}"
+    header = path.endswith(".h")
+    for match in INLINE_ADDRESS.finditer(code):
+        line_start = code.rfind("\n", 0, match.start()) + 1
+        line_text = code[line_start:code.find("\n", match.start())]
+        if header and line_text.lstrip().startswith("#define"):
+            continue  # the one named definition
+        if RULES["hw-define"].match(line_text):
+            continue  # reported as hw-define
+        yield line_of(match.start()), "inline-address", match.group(1) or match.group(2)
+    index = data_index()
+    for offset, storage, name, form in global_variables(code):
+        if storage != "static" and name in index and index[name][0] != form:
+            yield line_of(offset), "data-conflict", f"{name}: {form}, but {index[name][1]} says {index[name][0]}"
 
 
 def git(*args):
@@ -266,7 +366,8 @@ def summary():
             clean_lines += lines
     print(f"{len(paths)} game files, {clean_files} clean ({100 * clean_files / len(paths):.1f}%), "
           f"{100 * clean_lines / total_lines:.1f}% of lines")
-    for rule in sorted({*RULES, "short-name", "generic-type", "missing-common", "proto-conflict"}):
+    for rule in sorted({*RULES, "short-name", "generic-type", "missing-common", "proto-conflict",
+                        "inline-address", "data-conflict"}):
         count = files_per_rule[rule]
         print(f"  {rule:15} {count:5} files ({100 * count / len(paths):4.1f}%)")
 
