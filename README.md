@@ -99,11 +99,11 @@ static page) and the table below; commit those with each batch of work.
 `main`, `/docs`).
 
 <!-- progress:start -->
-| | code | functions | named | units complete |
-| --- | ---: | ---: | ---: | ---: |
-| overall | 99.44% | 3825 / 3839 | 1443 / 3839 | 14 / 1953 |
-| game | 99.51% | 2985 / 2991 | 617 / 2991 | 0 / 1747 |
-| sce | 98.98% | 840 / 848 | 826 / 848 | 14 / 206 |
+| | code | linked | functions | named | units linked |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| overall | 99.44% | 99.56% | 3825 / 3839 | 1443 / 3839 | 1885 / 1953 |
+| game | 99.51% | 99.51% | 2985 / 2991 | 617 / 2991 | 1683 / 1747 |
+| sce | 98.98% | 99.91% | 840 / 848 | 826 / 848 | 202 / 206 |
 <!-- progress:end -->
 
 ## Contributing
