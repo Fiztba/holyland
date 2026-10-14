@@ -4675,7 +4675,7 @@
    "functions_named": 9,
    "functions_total": 9,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type1"
+   "name": "game/kf_enemy_slime"
   },
   {
    "category": "game",
@@ -4689,7 +4689,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type16"
+   "name": "game/kf_enemy_scorpion"
   },
   {
    "category": "game",
@@ -4703,7 +4703,7 @@
    "functions_named": 9,
    "functions_total": 11,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type3"
+   "name": "game/kf_enemy_spider"
   },
   {
    "category": "game",
@@ -4717,7 +4717,7 @@
    "functions_named": 10,
    "functions_total": 10,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type4"
+   "name": "game/kf_enemy_giant_spider"
   },
   {
    "category": "game",
@@ -4731,7 +4731,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type18"
+   "name": "game/kf_enemy_acid_crawler"
   },
   {
    "category": "game",
@@ -4745,7 +4745,7 @@
    "functions_named": 9,
    "functions_total": 9,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type17"
+   "name": "game/kf_enemy_dragon_fly"
   },
   {
    "category": "game",
@@ -4759,7 +4759,7 @@
    "functions_named": 8,
    "functions_total": 8,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type10"
+   "name": "game/kf_enemy_blood_bat"
   },
   {
    "category": "game",
@@ -4773,7 +4773,7 @@
    "functions_named": 8,
    "functions_total": 8,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type5"
+   "name": "game/kf_enemy_beetle"
   },
   {
    "category": "game",
@@ -4787,7 +4787,7 @@
    "functions_named": 5,
    "functions_total": 5,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type25"
+   "name": "game/kf_enemy_critter"
   },
   {
    "category": "game",
@@ -4801,7 +4801,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type21"
+   "name": "game/kf_enemy_snake"
   },
   {
    "category": "game",
@@ -4815,7 +4815,7 @@
    "functions_named": 7,
    "functions_total": 7,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type34"
+   "name": "game/kf_enemy_lava_lizard"
   },
   {
    "category": "game",
@@ -4829,7 +4829,7 @@
    "functions_named": 15,
    "functions_total": 17,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type24"
+   "name": "game/kf_enemy_fire_lord"
   },
   {
    "category": "game",
@@ -4843,7 +4843,7 @@
    "functions_named": 13,
    "functions_total": 14,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type22"
+   "name": "game/kf_enemy_salamander"
   },
   {
    "category": "game",
@@ -4857,7 +4857,7 @@
    "functions_named": 9,
    "functions_total": 9,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type30"
+   "name": "game/kf_enemy_widdacona"
   },
   {
    "category": "game",
@@ -4871,7 +4871,7 @@
    "functions_named": 5,
    "functions_total": 5,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type14"
+   "name": "game/kf_enemy_phagos"
   },
   {
    "category": "game",
@@ -4885,7 +4885,7 @@
    "functions_named": 10,
    "functions_total": 11,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type76"
+   "name": "game/kf_enemy_giant_beetle"
   },
   {
    "category": "game",
@@ -4899,7 +4899,7 @@
    "functions_named": 2,
    "functions_total": 2,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type82"
+   "name": "game/kf_enemy_living_statue"
   },
   {
    "category": "game",
@@ -4913,7 +4913,7 @@
    "functions_named": 34,
    "functions_total": 34,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type23"
+   "name": "game/kf_enemy_stone_guardian"
   },
   {
    "category": "game",
@@ -4941,7 +4941,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type33"
+   "name": "game/kf_enemy_sentinel"
   },
   {
    "category": "game",
@@ -4955,7 +4955,7 @@
    "functions_named": 10,
    "functions_total": 11,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type36"
+   "name": "game/kf_enemy_living_armor"
   },
   {
    "category": "game",
@@ -4969,7 +4969,7 @@
    "functions_named": 11,
    "functions_total": 11,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type29"
+   "name": "game/kf_enemy_golden_statue"
   },
   {
    "category": "game",
@@ -4983,7 +4983,7 @@
    "functions_named": 2,
    "functions_total": 2,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type32"
+   "name": "game/kf_enemy_lava_face"
   },
   {
    "category": "game",
@@ -4997,7 +4997,7 @@
    "functions_named": 4,
    "functions_total": 4,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type73"
+   "name": "game/kf_enemy_watcher"
   },
   {
    "category": "game",
@@ -5011,7 +5011,7 @@
    "functions_named": 4,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type26"
+   "name": "game/kf_enemy_slasher"
   },
   {
    "category": "game",
@@ -5025,7 +5025,7 @@
    "functions_named": 4,
    "functions_total": 4,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type35"
+   "name": "game/kf_enemy_giant"
   },
   {
    "category": "game",
@@ -5039,7 +5039,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type41"
+   "name": "game/kf_enemy_malformed_giant"
   },
   {
    "category": "game",
@@ -5053,7 +5053,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type45"
+   "name": "game/kf_enemy_earth_king"
   },
   {
    "category": "game",
@@ -5067,7 +5067,7 @@
    "functions_named": 2,
    "functions_total": 2,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type80"
+   "name": "game/kf_enemy_fadin"
   },
   {
    "category": "game",
@@ -5081,7 +5081,7 @@
    "functions_named": 5,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type79"
+   "name": "game/kf_enemy_master_fadin"
   },
   {
    "category": "game",
@@ -5095,7 +5095,7 @@
    "functions_named": 5,
    "functions_total": 5,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type78"
+   "name": "game/kf_enemy_makara"
   },
   {
    "category": "game",
@@ -5109,7 +5109,7 @@
    "functions_named": 4,
    "functions_total": 4,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type57"
+   "name": "game/kf_enemy_aqualizard"
   },
   {
    "category": "game",
@@ -5123,7 +5123,7 @@
    "functions_named": 10,
    "functions_total": 10,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type28"
+   "name": "game/kf_enemy_seafang"
   },
   {
    "category": "game",
@@ -5137,7 +5137,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type19"
+   "name": "game/kf_enemy_widda"
   },
   {
    "category": "game",
@@ -5151,7 +5151,7 @@
    "functions_named": 13,
    "functions_total": 13,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type46"
+   "name": "game/kf_enemy_widda_queen"
   },
   {
    "category": "game",
@@ -5165,7 +5165,7 @@
    "functions_named": 9,
    "functions_total": 10,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type20"
+   "name": "game/kf_enemy_widda_archer"
   },
   {
    "category": "game",
@@ -5179,7 +5179,7 @@
    "functions_named": 9,
    "functions_total": 9,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type65"
+   "name": "game/kf_enemy_skull"
   },
   {
    "category": "game",
@@ -5193,7 +5193,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type71"
+   "name": "game/kf_enemy_dark_flower"
   },
   {
    "category": "game",
@@ -5207,7 +5207,7 @@
    "functions_named": 8,
    "functions_total": 8,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type6"
+   "name": "game/kf_enemy_skeleton_soldier"
   },
   {
    "category": "game",
@@ -5221,7 +5221,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type9"
+   "name": "game/kf_enemy_skeleton_archer"
   },
   {
    "category": "game",
@@ -5235,7 +5235,7 @@
    "functions_named": 4,
    "functions_total": 4,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type40"
+   "name": "game/kf_enemy_zombie"
   },
   {
    "category": "game",
@@ -5277,7 +5277,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type11"
+   "name": "game/kf_enemy_living_dead"
   },
   {
    "category": "game",
@@ -5291,7 +5291,7 @@
    "functions_named": 5,
    "functions_total": 5,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type62"
+   "name": "game/kf_enemy_high_skeleton"
   },
   {
    "category": "game",
@@ -5305,7 +5305,7 @@
    "functions_named": 14,
    "functions_total": 15,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type60"
+   "name": "game/kf_enemy_minion"
   },
   {
    "category": "game",
@@ -5333,7 +5333,7 @@
    "functions_named": 4,
    "functions_total": 5,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type39"
+   "name": "game/kf_enemy_mummy"
   },
   {
    "category": "game",
@@ -5347,7 +5347,7 @@
    "functions_named": 5,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type42"
+   "name": "game/kf_enemy_ancient_mummy"
   },
   {
    "category": "game",
@@ -5361,7 +5361,7 @@
    "functions_named": 8,
    "functions_total": 8,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type63"
+   "name": "game/kf_enemy_giant_leader"
   },
   {
    "category": "game",
@@ -5389,7 +5389,7 @@
    "functions_named": 12,
    "functions_total": 12,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type58"
+   "name": "game/kf_enemy_malice"
   },
   {
    "category": "game",
@@ -5403,7 +5403,7 @@
    "functions_named": 14,
    "functions_total": 16,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type48"
+   "name": "game/kf_enemy_fire_elemental"
   },
   {
    "category": "game",
@@ -5417,7 +5417,7 @@
    "functions_named": 9,
    "functions_total": 12,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type49"
+   "name": "game/kf_enemy_earth_elemental"
   },
   {
    "category": "game",
@@ -5431,7 +5431,7 @@
    "functions_named": 9,
    "functions_total": 10,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type50"
+   "name": "game/kf_enemy_wind_elemental"
   },
   {
    "category": "game",
@@ -5445,7 +5445,7 @@
    "functions_named": 8,
    "functions_total": 9,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type51"
+   "name": "game/kf_enemy_water_elemental"
   },
   {
    "category": "game",
@@ -5459,7 +5459,7 @@
    "functions_named": 19,
    "functions_total": 21,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type54"
+   "name": "game/kf_enemy_dark_succubus"
   },
   {
    "category": "game",
@@ -5473,7 +5473,7 @@
    "functions_named": 10,
    "functions_total": 14,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type64"
+   "name": "game/kf_enemy_dark_knight"
   },
   {
    "category": "game",
@@ -5487,7 +5487,7 @@
    "functions_named": 10,
    "functions_total": 10,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type44"
+   "name": "game/kf_enemy_dark_soldier"
   },
   {
    "category": "game",
@@ -5501,7 +5501,7 @@
    "functions_named": 15,
    "functions_total": 15,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type66"
+   "name": "game/kf_enemy_fire_genie"
   },
   {
    "category": "game",
@@ -5515,7 +5515,7 @@
    "functions_named": 15,
    "functions_total": 15,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type56"
+   "name": "game/kf_enemy_greater_demon"
   },
   {
    "category": "game",
@@ -5529,7 +5529,7 @@
    "functions_named": 11,
    "functions_total": 12,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type55"
+   "name": "game/kf_enemy_dark_archer"
   },
   {
    "category": "game",
@@ -5543,7 +5543,7 @@
    "functions_named": 16,
    "functions_total": 16,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type53"
+   "name": "game/kf_enemy_dark_sorcerer"
   },
   {
    "category": "game",
@@ -5571,7 +5571,7 @@
    "functions_named": 5,
    "functions_total": 5,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type47"
+   "name": "game/kf_enemy_ice_golem"
   },
   {
    "category": "game",
@@ -5585,7 +5585,7 @@
    "functions_named": 7,
    "functions_total": 7,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type67"
+   "name": "game/kf_enemy_larva"
   },
   {
    "category": "game",
@@ -5599,7 +5599,7 @@
    "functions_named": 10,
    "functions_total": 10,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type52"
+   "name": "game/kf_enemy_dark_puppet"
   },
   {
    "category": "game",
@@ -5613,7 +5613,7 @@
    "functions_named": 17,
    "functions_total": 18,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type59"
+   "name": "game/kf_enemy_dark_bird"
   },
   {
    "category": "game",
@@ -5627,7 +5627,7 @@
    "functions_named": 5,
    "functions_total": 5,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type43"
+   "name": "game/kf_enemy_para_stool"
   },
   {
    "category": "game",
@@ -5641,7 +5641,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type2"
+   "name": "game/kf_enemy_reaper"
   },
   {
    "category": "game",
@@ -5655,7 +5655,7 @@
    "functions_named": 8,
    "functions_total": 8,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type12"
+   "name": "game/kf_enemy_crow"
   },
   {
    "category": "game",
@@ -5669,7 +5669,7 @@
    "functions_named": 3,
    "functions_total": 3,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type8"
+   "name": "game/kf_enemy_stool"
   },
   {
    "category": "game",
@@ -5711,7 +5711,7 @@
    "functions_named": 8,
    "functions_total": 8,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type13"
+   "name": "game/kf_enemy_expedition_archer"
   },
   {
    "category": "game",
@@ -5739,7 +5739,7 @@
    "functions_named": 9,
    "functions_total": 10,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type7"
+   "name": "game/kf_enemy_expedition_soldier"
   },
   {
    "category": "game",
@@ -5767,7 +5767,7 @@
    "functions_named": 12,
    "functions_total": 14,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type77"
+   "name": "game/kf_enemy_forest_golem"
   },
   {
    "category": "game",
@@ -5795,7 +5795,7 @@
    "functions_named": 7,
    "functions_total": 7,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type70"
+   "name": "game/kf_enemy_mutant_wall"
   },
   {
    "category": "game",
@@ -5809,7 +5809,7 @@
    "functions_named": 6,
    "functions_total": 6,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type69"
+   "name": "game/kf_enemy_mutant_ceiling"
   },
   {
    "category": "game",
@@ -5823,7 +5823,7 @@
    "functions_named": 15,
    "functions_total": 16,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type68"
+   "name": "game/kf_enemy_lava_bird"
   },
   {
    "category": "game",
@@ -5837,7 +5837,7 @@
    "functions_named": 7,
    "functions_total": 7,
    "fuzzy": 100.0,
-   "name": "game/kf_entity_type74"
+   "name": "game/kf_enemy_onyx"
   },
   {
    "category": "game",
