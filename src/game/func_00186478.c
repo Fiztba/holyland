@@ -9,15 +9,15 @@ u32 func_00112618(u32, u32, int);
 u32 func_001124E0(int, u32, u32);
 void func_001862F0(Entity *, s32, s32, s32);
 void func_001C0A88(void *, void *, void *, void *);
-void func_0020E1F8(f32 *, f32 *, f32 *, f32 *, f32, f32);
-void func_00216C48(void *, void *, void *);
+void Collision_CapsuleTriangle(f32 *, f32 *, f32 *, f32 *, f32, f32);
+void Vector_Add(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 void sceVu0Normalize(float *, float *);
 
 /* tests the entity's upright capsule against the triangle at `point` and pushes `position`
    sideways out of it */
 #define PUSH_OUT_OF_WALL()                                                                         \
-    func_0020E1F8((int)point[0].position, (int)point[1].position, (int)point[2].position,          \
+    Collision_CapsuleTriangle((int)point[0].position, (int)point[1].position, (int)point[2].position,          \
                   (int)position, entity->unk30, entity->unk34);                                    \
     if (COLLISION_RESULT->hit != 0) {                                                              \
         ENTITY_FLAG_BITS(entity)->bit45 = TRUE;                                                    \
@@ -25,7 +25,7 @@ void sceVu0Normalize(float *, float *);
         offset[1] = 0.0f;                                                                          \
         offset[2] = position[2] - COLLISION_RESULT->point[2];                                      \
         sceVu0Normalize(offset, offset);                                                           \
-        func_00216C48(normal_sum, normal_sum, offset);                                             \
+        Vector_Add(normal_sum, normal_sum, offset);                                             \
         Vector_Scale(offset, offset, entity->unk30);                                            \
         position[0] = COLLISION_RESULT->point[0] + offset[0];                                      \
         position[2] = COLLISION_RESULT->point[2] + offset[2];                                      \

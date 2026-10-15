@@ -2,10 +2,10 @@
 
 extern f32 D_00431AF0[16];
 
-void func_0020C300(ModelInstance *, Vector4 *, Vector4 *, f32 *);
-void func_0020B8B0(ModelInstance *, ModelPart *, ModelPart *);
+void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void func_0010B5D0(ModelPart *);
-void func_00216B48(void *, void *, void *);
+void Matrix_Multiply(void *, void *, void *);
 void sceVu0CopyMatrix(void *, void *);
 void sceVu0RotMatrixX(float *, float *, float);
 void sceVu0RotMatrixY(float *, float *, float);
@@ -31,11 +31,11 @@ void func_001229D0(MapTrigger *trigger) {
     ModelPart *joint;
     f32 half_turn;
 
-    func_0020C300(trigger->model, &trigger->model->position, &trigger->model->rotation, &trigger->model->unkE0);
+    ModelMatrix_Build(trigger->model, &trigger->model->position, &trigger->model->rotation, &trigger->model->unkE0);
     part_count = trigger->model->part_count;
     part = trigger->model->parts;
     for (i = 0; i < part_count; i++) {
-        func_0020B8B0(trigger->model, part, part);
+        ModelMatrix_BuildPartLocal(trigger->model, part, part);
         part++;
     }
     part = trigger->model->parts;
@@ -60,6 +60,6 @@ void func_001229D0(MapTrigger *trigger) {
     sceVu0RotMatrixZ(matrix, matrix, func_001229D0_wrap_angle(joint->unk58, half_turn));
     sceVu0RotMatrixY(matrix, matrix, func_001229D0_wrap_angle(joint->unk54, half_turn));
     sceVu0TransMatrix(matrix, matrix, pivot);
-    func_00216B48(trigger->model->unk80, trigger->model->unk40, matrix);
+    Matrix_Multiply(trigger->model->unk80, trigger->model->unk40, matrix);
     trigger->model->unk1B4(trigger->model);
 }

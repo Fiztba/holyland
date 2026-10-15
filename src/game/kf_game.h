@@ -40,7 +40,7 @@ typedef struct {
     int unk44;                      /* 0x44 counts down to 0; 1 when an item was just used (Player_UseItem) */
 } GameStatus;
 
-/* GameStatus with bits 10 and 11 of the flag word (GameStatus.bits10) apart, as func_00214A20
+/* GameStatus with bits 10 and 11 of the flag word (GameStatus.bits10) apart, as ScriptCmd_ExitMainLoop
    sets them */
 typedef struct {
     char pad00[0x24];
@@ -50,6 +50,16 @@ typedef struct {
     u32 bit11 : 1;
     u32 bits12 : 20;
 } GameStatusSplitBits;
+
+#define GAME_STATUS_SPLIT_BITS(status) ((GameStatusSplitBits *)(status))
+
+/* the flag word of GameStatus (0x24) whole, where retail changes two of its bits at once */
+typedef struct {
+    char pad00[0x24];
+    s32 flags;                      /* 0x24 */
+} GameStatusFlagWord;
+
+#define GAME_STATUS_FLAG_WORD(status) (((GameStatusFlagWord *)(status))->flags)
 
 /* D_00446A28: the play time as func_001D22B8 splits it (byte 1 seconds, 2 minutes, 3 and 5 hours), passed by value */
 typedef struct {
@@ -134,19 +144,19 @@ typedef struct {
     u8 year;                        /* 0x07 years since 2000 */
 } ClockTime;
 
-/* D_00431CE8: func_0020CD00 advances its counter once a frame */
+/* D_00431CE8: the game clock (kf_game_clock.c) */
 typedef struct {
     char pad00[0x08];
     int ticks;                      /* 0x08 */
 } GameClock;
 
-/* D_00432820: what decides whether func_0020CD00 advances GameClock.ticks */
+/* D_00432820: what decides whether GameClock_Tick advances GameClock.ticks */
 typedef struct {
     char pad00[0x208];
-    char unk208;                    /* 0x208 func_0020B6A0 clears it */
-    char unk209;                    /* 0x209 func_0020B6A0 clears it */
-    char unk20A;                    /* 0x20A func_0020B6A0 clears it */
-    char unk20B;                    /* 0x20B func_0020B6A0 sets it to 2 */
+    char unk208;                    /* 0x208 System_InitMemory clears it */
+    char unk209;                    /* 0x209 System_InitMemory clears it */
+    char unk20A;                    /* 0x20A System_InitMemory clears it */
+    char unk20B;                    /* 0x20B System_InitMemory sets it to 2 */
     char pad20C[0x7];
     char unk213;                    /* 0x213 nonzero: the clock stops */
     char unk214;                    /* 0x214 nonzero: the clock stops */

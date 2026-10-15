@@ -11,7 +11,7 @@ void func_001958A8(char *, s32);
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void func_00191478(EntityModel *);
 int func_00193378(EntityModel *, s32, s32); // match: an int result keeps $2 busy after the call
-void func_00216778(void *, void *);
+void Vector_Copy(void *, void *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
 extern s32 D_003E6E40[][2];
@@ -20,7 +20,7 @@ extern MapSlot D_0038CD20[];
 extern int D_00446770;
 extern EntityFrameTable D_0043EAD8;
 int func_00192C98(void *, int, int, u32, int);
-int func_002109C8(int, int);
+int Script_Start(int, int);
 void func_001B57A0(u8, u8, u8);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
@@ -106,7 +106,7 @@ void ForestGolem_Init(Entity *entity) {
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
     if (unk138 != NULL) {
-        func_00216778(unkE0->unk20, unk138 + 0x50);
+        Vector_Copy(unkE0->unk20, unk138 + 0x50);
     }
     unkE0->unk40 = 0.5f;
     entity->unkD6 = (entity->params->flags & 0x4000) ? 0x40 : 0x80;
@@ -174,7 +174,7 @@ static void ForestGolem_Think(Entity *entity, s32 unknown) {
 
 /* An action (busy bit 0x2000) that ForestGolem_Think starts: plays animation 17 to its end. Past
    frame EntityParams.unk434, on the map D_00446770, it starts script EntityParams.unk436
-   (func_002109C8); after that, on the four frames of D_0043EAD8 and on frame 440, it asks for a
+   (Script_Start); after that, on the four frames of D_0043EAD8 and on frame 440, it asks for a
    controller rumble (func_001B57A0) with a strength that falls off with the player's distance up to
    3000. At the end it keeps the model's position in work floats unk48 to unk50, puts
    ForestGolem_ThinkStayInPlace in the think slot and calls it. */
@@ -198,7 +198,7 @@ static void ForestGolem_StartScriptAndRumble(Entity *entity) {
         if ((s16)entity->params->unk434 < entity->model->unkFC->unk82) { // match: read signed here
             if (entity->group_id == D_00446770) {
                 // match: an int result keeps $2 busy after the call
-                ((int (*)(s32, s32))func_002109C8)(entity->params->unk436, 0);
+                ((int (*)(s32, s32))Script_Start)(entity->params->unk436, 0);
                 entity->action_step++;
             }
         }
@@ -274,7 +274,7 @@ static void func_0017A540(Entity *entity) {
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
     if (unk138 != NULL) {
-        func_00216778(unkE0->unk20, unk138 + 0x50);
+        Vector_Copy(unkE0->unk20, unk138 + 0x50);
     }
     unkE0->unk40 = 0.5f;
     entity->unkD6 = (entity->params->flags & 0x4000) ? 0x40 : 0x80;
@@ -443,7 +443,7 @@ static void ForestGolem_Death(Entity *entity) {
                 other = Entity_GetBySpawnId(entity->spawn_info->unk40);
                 if (other != NULL && ENTITY_FLAG_BITS(other)->bit0) {
                     func_0018DC40((char *)other);
-                    func_00216778(other->model->position, entity->model->position);
+                    Vector_Copy(other->model->position, entity->model->position);
                 }
             }
             entity->action_step++;
@@ -597,7 +597,7 @@ static void ForestGolem_WalkToMapObjectPosX(Entity *entity, s32 unknown) {
         }
         if (func_00194F80(entity->model->position, near_point) < range) {
             ENTITY_FLAG_BITS(entity)->bits11 = 0;
-            func_00216778(unkE0->unk30, far_point);
+            Vector_Copy(unkE0->unk30, far_point);
             entity->target = unkE0->unk30;
             entity->unkC8 = func_00190BE0(entity);
             if (entity->unkC8 == 0) {
@@ -605,7 +605,7 @@ static void ForestGolem_WalkToMapObjectPosX(Entity *entity, s32 unknown) {
                 return;
             }
         } else {
-            func_00216778(unkE0->unk30, near_point);
+            Vector_Copy(unkE0->unk30, near_point);
             entity->target = unkE0->unk30;
             entity->unkC8 = func_00190F90(entity, 0, range * 0.5f);
         }
@@ -705,7 +705,7 @@ static void ForestGolem_WalkToMapObjectNegX(Entity *entity, s32 unknown) {
         }
         if (func_00194F80(entity->model->position, near_point) < range) {
             ENTITY_FLAG_BITS(entity)->bits11 = 0;
-            func_00216778(unkE0->unk30, far_point);
+            Vector_Copy(unkE0->unk30, far_point);
             entity->target = unkE0->unk30;
             entity->unkC8 = func_00190BE0(entity);
             if (entity->unkC8 == 0) {
@@ -713,7 +713,7 @@ static void ForestGolem_WalkToMapObjectNegX(Entity *entity, s32 unknown) {
                 return;
             }
         } else {
-            func_00216778(unkE0->unk30, near_point);
+            Vector_Copy(unkE0->unk30, near_point);
             entity->target = unkE0->unk30;
             entity->unkC8 = func_00190F90(entity, 0, range * 0.5f);
         }

@@ -33,10 +33,10 @@ void func_0010B510(char *, int, int);
 void func_0010B5D0(ModelPart *);
 void func_0010D018(ModelInstance *, char **, char **);
 void func_0010E6A8(ModelInstance *, s64, s64);
-void func_0020B8B0(ModelInstance *, ModelPart *, ModelPart *);
-void func_0020C300(ModelInstance *, Vector4 *, Vector4 *, f32 *);
-void func_00216778(void *, void *);
-void func_0020B780(int);
+void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+void Vector_Copy(void *, void *);
+void Display_SwapBuffers(int);
 void func_001096E8(void);
 void func_001095E0(void);
 void func_0010B000(void);
@@ -66,8 +66,8 @@ void func_0010A7E0(void *);
 static void func_0011C160(void);
 void func_0011AAE8(void);
 float func_0019B838(float);
-void func_00216C48(void *, void *, void *);
-void func_00216D20(void *, void *);
+void Vector_Add(void *, void *, void *);
+void Vector_Normalize(void *, void *);
 void func_00106C58(void);
 void func_00107E70(int, int, int);
 void func_0010D308(ModelInstance *);
@@ -212,7 +212,7 @@ static int func_0011A600(void) {
     buffer = align16(buffer);
     func_0010D018(&pointer_model, &model_data, &buffer);
     func_0010E6A8(&pointer_model, 0x260, 0x240);
-    func_00216778(&pointer_model.position, &D_00413F80);
+    Vector_Copy(&pointer_model.position, &D_00413F80);
     pointer_model.position.y -= 100.0f;
     pointer_model.rotation.x = 0.0f;
     pointer_model.rotation.y = D_00413F80.rotation.y;
@@ -220,10 +220,10 @@ static int func_0011A600(void) {
     pointer_model.unkE0 = pointer_model.unkE4 = pointer_model.unkE8 = pointer_model.rotation.w = 4.0f;
     pointer_model.unkEC = 1.0f;
     // match: it returns a value
-    ((int (*)(ModelInstance *, Vector4 *, Vector4 *, f32 *))func_0020C300)(&pointer_model, &pointer_model.position, &pointer_model.rotation, &pointer_model.unkE0);
+    ((int (*)(ModelInstance *, Vector4 *, Vector4 *, f32 *))ModelMatrix_Build)(&pointer_model, &pointer_model.position, &pointer_model.rotation, &pointer_model.unkE0);
     for (i = 0; i < pointer_model.part_count; i++) {
         // match: the callee returns a value here, which keeps $2 busy
-        ((int (*)(ModelInstance *, ModelPart *, ModelPart *))func_0020B8B0)(&pointer_model, &pointer_model.parts[i], &pointer_model.parts[i]);
+        ((int (*)(ModelInstance *, ModelPart *, ModelPart *))ModelMatrix_BuildPartLocal)(&pointer_model, &pointer_model.parts[i], &pointer_model.parts[i]);
     }
     for (i = 0; i < pointer_model.part_count; i++) {
         func_0010B5D0(&pointer_model.parts[i]);
@@ -265,7 +265,7 @@ void func_0011AA08(void) {
 
     viewer = &D_0038D6B0[picked_viewer];
     do {
-        func_0020B780(0);
+        Display_SwapBuffers(0);
         func_001096E8();
         func_001095E0();
         func_0010B000();
@@ -638,7 +638,7 @@ void func_0011BCD0(void) {
         do {
             VuVector4 move;
 
-            func_0020B780(0);
+            Display_SwapBuffers(0);
             func_001096E8();
             func_001095E0();
             func_0010B000();
@@ -693,9 +693,9 @@ void func_0011BCD0(void) {
                 reset_held = FALSE;
             }
             if (move.x != 0.0f || move.y != 0.0f || move.z != 0.0f) {
-                func_00216D20(&move, &move);
+                Vector_Normalize(&move, &move);
                 Vector_Scale(&move.x, &move.x, 100.0f);
-                func_00216C48(&position, &position, &move);
+                Vector_Add(&position, &position, &move);
                 if (position.x < D_00413F80.position.x + -48000.0f) {
                     position.x = D_00413F80.position.x + -48000.0f;
                 }

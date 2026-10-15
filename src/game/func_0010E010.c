@@ -10,10 +10,10 @@ void func_00109650(u32 *, u32 *);
 void func_00109A50(void);
 void func_00109A80(int, s64);
 void func_00109AD0(void);
-int func_0020CBC0(ModelInstance *, s32, s32, void *, void *); // match: an int return keeps $2 busy after the call
-void func_00216B48(void *, void *, void *);
+int ModelMatrix_BuildDrawMatrices(ModelInstance *, s32, s32, void *, void *); // match: an int return keeps $2 busy after the call
+void Matrix_Multiply(void *, void *, void *);
 
-/* the scratchpad as this function uses it: two matrices func_0020CBC0 makes for the model */
+/* the scratchpad as this function uses it: two matrices ModelMatrix_BuildDrawMatrices makes for the model */
 #define SCRATCH_MATRIX_A ((void *)0x70000000)
 #define SCRATCH_MATRIX_B ((void *)0x70000040)
 
@@ -47,7 +47,7 @@ void func_0010E010(ModelInstance *model) {
     u32 word;
 
     if (model->parts != NULL && model->part_count != 0) {
-        func_0020CBC0(model, model->unk148, model->unk148 + 0x40, matrix_a, matrix_b);
+        ModelMatrix_BuildDrawMatrices(model, model->unk148, model->unk148 + 0x40, matrix_a, matrix_b);
         /* the packet below is 0x1C quadwords either way: with the flag set the last 5 are never written */
         if (model->unk100 & 0x800) {
             packet_start = packet = func_00109990(0x21); // match: two calls, the compiler merges them
@@ -131,7 +131,7 @@ void func_0010E010(ModelInstance *model) {
             *packet = 0x10000005;
             packet += 7;
             *packet++ = 0x6C040004;
-            func_00216B48((int)packet, (int *)model->unk40, (int)part);
+            Matrix_Multiply(packet, model->unk40, part);
             packet += 0x10;
             data = (ModelPartData *)(u32)part->data_addr;
             for (j = 0; j < part->data_count; j++) {

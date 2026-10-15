@@ -11,7 +11,7 @@ void func_001958A8(char *, s32);
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void func_00191478(EntityModel *);
 int func_00193378(EntityModel *, s32, s32);
-void func_00216778(void *, void *);
+void Vector_Copy(void *, void *);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
@@ -54,7 +54,7 @@ void func_0019A290(Entity *, s32);
 extern u8 D_00349690[];
 float func_00194F80(void *, void *);
 s32 func_00190F90(Entity *, s32, f32);
-int func_002109C8(int, int);
+int Script_Start(int, int);
 extern int D_00446770;
 
 static void WiddaArcher_Animate(Entity *entity);
@@ -101,7 +101,7 @@ void WiddaArcher_Init(Entity *entity) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
     }
     if (unk138 != NULL) {
-        func_00216778(unkE0->unk20, unk138 + 0x50);
+        Vector_Copy(unkE0->unk20, unk138 + 0x50);
     }
     unkE0->unk40 = 0.5f;
     entity->unkD6 = (entity->params->flags & 0x4000) ? 0x40 : 0x80;
@@ -360,7 +360,7 @@ static void WiddaArcher_RangedAttack(Entity *entity) {
             unkE0->unk1C = 0.0f;
         }
         elapsed = (entity->model->unkFC->unk84 - entity->params->unk80[entity->unkD1]) >> 8;
-        func_00216778(target, D_00413F80.position);
+        Vector_Copy(target, D_00413F80.position);
         target[1] -= 190.0f;
         func_0018CF30(entity, unk3D8, elapsed, entity->model->unkFC->unk82, target, 0.17453294f, 0.17453294f);
         if (entity->model->unkFC->unk82 > 0 && unk3D8->unk03 >= entity->model->unkFC->unk82) {
@@ -450,7 +450,7 @@ static void WiddaArcher_WalkToMapObject(Entity *entity, s32 unknown) {
     reach = 100.0f;
     if (func_00194F80(entity->model->position, stand_point) < reach) {
         ENTITY_FLAG_BITS(entity)->bits11 = 0;
-        func_00216778(unkE0->unk30, face_point);
+        Vector_Copy(unkE0->unk30, face_point);
         entity->target = unkE0->unk30;
         entity->unkC8 = func_00190BE0(entity);
         if (entity->unkC8 == 0) {
@@ -458,7 +458,7 @@ static void WiddaArcher_WalkToMapObject(Entity *entity, s32 unknown) {
             return;
         }
     } else {
-        func_00216778(unkE0->unk30, stand_point);
+        Vector_Copy(unkE0->unk30, stand_point);
         entity->target = unkE0->unk30;
         entity->unkC8 = func_00190F90(entity, 0, reach * 0.5f);
     }
@@ -466,7 +466,7 @@ static void WiddaArcher_WalkToMapObject(Entity *entity, s32 unknown) {
 }
 
 /* An action (busy bit 0x1000) that WiddaArcher_WalkToMapObject starts: plays animation 17 to its
-   end; on frame EntitySpawnInfo.unk44 it starts the script (func_002109C8) of the map object
+   end; on frame EntitySpawnInfo.unk44 it starts the script (Script_Start) of the map object
    EntitySpawnInfo.unk43 names, when the object has one and the entity is on map D_00446770. */
 static void WiddaArcher_StartMapObjectScript(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
@@ -489,7 +489,7 @@ static void WiddaArcher_StartMapObjectScript(Entity *entity) {
         if (entity->model->unkFC->unk82 == entity->spawn_info->unk44) {
             map_object = MapObject_GetById(entity->group_id, entity->spawn_info->unk43);
             if (map_object != NULL && map_object->unk08->unk40 != 0 && entity->group_id == D_00446770) {
-                func_002109C8(map_object->unk08->unk40, 0);
+                Script_Start(map_object->unk08->unk40, 0);
             }
         }
         if (ENTITY_FLAG_BITS(entity)->bit34) {
