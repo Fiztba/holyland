@@ -63,7 +63,7 @@ typedef struct {
     s32 magic_base;                 /* 0x2C ini "magic"; raised by "Magic Power UP" */
     s16 timed_flags[6];             /* 0x30 held at 0 while the matching timer runs */
     u8 weapon;                      /* 0x3C ini "equip_weapon": the weapon in hand, its item number less ITEM_WEAPON_FIRST (its row of weapon_defs) */
-    u8 equipped_magic;              /* 0x3D ini "equip_magic": the magic in hand; passed to func_001A1260 at start-up */
+    u8 equipped_magic;              /* 0x3D ini "equip_magic": the magic in hand; passed to Sound_LoadMgBank at start-up */
     u8 equipment[8];                /* 0x3E what is worn, by EQUIP_ slot: the item number less ITEM_WORN_FIRST */
     u16 shortcut;                   /* 0x46 ini "equip_shortcut": the item or magic of the shortcut */
     u8 shortcut_type;               /* 0x48 ini "equip_shortcut_type": 0 none, 1 an item, 2 a magic */
@@ -199,7 +199,7 @@ typedef struct {
     u32 unk2D8;                     /* 0x2D8 */
     s32 unk2DC;                     /* 0x2DC above 0: func_001BB2E8(3) runs every 90 frames, not every 30 */
     s32 unk2E0;                     /* 0x2E0 frames magic 0x3D to 0x3F last */
-    s32 unk2E4;                     /* 0x2E4 above 0: unk2E8 counts (func_0018F648) */
+    s32 unk2E4;                     /* 0x2E4 above 0: unk2E8 counts (EntityAi_PickMeleeAttack) */
     f32 unk2E8;                     /* 0x2E8 enemies whose unk60 is below it attack from half as far */
     s32 unk2EC;                     /* 0x2EC frames magic 0x52 to 0x54 last */
     s32 unk2F0;                     /* 0x2F0 10, 20 or 30 for magic 0x52, 0x53, 0x54 */

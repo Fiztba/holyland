@@ -1,5 +1,6 @@
 #include "kf_effect.h"
 #include "kf_file.h"
+#include "kf_gs.h"
 #include "kf_game.h"
 #include "kf_linked_point.h"
 #include "kf_map.h"
@@ -17,7 +18,11 @@ char *Texture_UploadTable(char *base, int upload);
 void Texture_SendTexFlush(void);
 void Vector_Copy(void *dst, void *src);
 void Vector_Add(void *, void *, void *);
+void func_00109A50(void);
+void func_00109A80(int reg, s64 value);
+void func_00109AD0(void);
 void func_00109E18(void);
+void func_0010AEB8(void *model_arg);
 u32 *func_00109990(int);
 void func_00109650(u32 *, u32 *);
 void func_00109E88(void);
@@ -26,8 +31,8 @@ AreaNode *func_00115950(f32 *point, f32 margin);
 void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void func_0010B018(ModelInstance *, s32, s32);
-char func_0019C8D0(int index, int first, int second, int third, int fourth);
-void func_0019CD70(s8 handle);
+char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
+void Sound_StopTracked(s8 handle);
 void func_0010D018(ModelInstance *, char **, char **);
 int func_00111C78(ModelInstance *model, int first, int last);
 u32 *func_00116BD0(int, int);
@@ -553,9 +558,9 @@ static void Effect_RunSpawner(EffectSlot *slot) {
         D_00402550[effect->def->unk100][0](effect, slot);
         EFFECT_FLAG_BITS(effect)->bit59 = effect->def->unk11A != 0;
         if (D_00402DA8[effect->effect_param].unk102 != 0) {
-            EFFECT_FLAG_PARTS(effect)->unk46 = func_0019C8D0(EFFECT_FLAG_BITS(effect)->bit59, effect->def->unk11A, 0, (int)&D_00413F80, EFFECT_FLAG_PARTS(effect)->unk46);
+            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->unk11A, 0, (int)&D_00413F80, EFFECT_FLAG_PARTS(effect)->unk46);
         } else if (EFFECT_FLAG_BITS(effect)->bit59 || effect->effect_param == D_00413F80.equipped_magic) {
-            EFFECT_FLAG_PARTS(effect)->unk46 = func_0019C8D0(EFFECT_FLAG_BITS(effect)->bit59, effect->def->unk11A, 0, (int)&effect->model->position, EFFECT_FLAG_PARTS(effect)->unk46);
+            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->unk11A, 0, (int)&effect->model->position, EFFECT_FLAG_PARTS(effect)->unk46);
         }
         if (EFFECT_FLAG_PARTS(effect)->unk46 > 0) {
             D_004468C8++;
@@ -617,7 +622,7 @@ void Effect_Free(EffectActor *effect) {
     if (EFFECT_FLAG_PARTS(effect)->unk46 > 0) {
         D_004468C8--;
     }
-    func_0019CD70(EFFECT_FLAG_PARTS(effect)->unk46);
+    Sound_StopTracked(EFFECT_FLAG_PARTS(effect)->unk46);
     EFFECT_FLAG_PARTS(effect)->unk46 = -1;
     if (EFFECT_FLAG_PARTS(effect)->unk44 != -1) {
         LinkedPoint_ReleaseIndex(EFFECT_FLAG_PARTS(effect)->unk44);
@@ -985,4 +990,100 @@ int Effect_IsDefRangeInUse(int first_def, int last_def) {
         }
     }
     return 0;
+}
+
+/* GS values for the model draw hooks below (D_003F1710, picked by Effect_SetupModel) */
+#define EFFECT_ZBUF_NO_WRITE 0x10A000118L       /* ZBUF_1: the depth buffer, masked: no depth writes */
+#define EFFECT_ZBUF_WRITE 0xA000118L            /* ZBUF_1: the depth buffer, written */
+#define EFFECT_ALPHA_ADD 0x48                   /* ALPHA_1: Cs * As + Cd */
+#define EFFECT_ALPHA_SUBTRACT 0x42              /* ALPHA_1: Cd - Cs * As */
+#define EFFECT_ALPHA_BLEND 0x44                 /* ALPHA_1: (Cs - Cd) * As + Cd */
+#define EFFECT_ALPHA_OPAQUE 0x80000000A8L       /* ALPHA_1: Cs (FIX 0x80) */
+#define EFFECT_TEST_COLOUR_DEPTH 0x53001        /* TEST_1: colour only (alpha test NEVER, AFAIL RGB_ONLY), depth test GEQUAL */
+#define EFFECT_TEST_COLOUR_ON_TOP 0x33001       /* TEST_1: colour only, depth test ALWAYS */
+#define EFFECT_TEST_CUTOUT_DEPTH 0x5000D        /* TEST_1: pixels with alpha above 0, depth test GEQUAL */
+#define EFFECT_TEST_CUTOUT_ON_TOP 0x3000D       /* TEST_1: pixels with alpha above 0, depth test ALWAYS */
+
+/* Draw hook: additive blending behind the scenery's depth, no depth writes; flushes with
+   func_00109E18, then sends the model's textures. */
+void Effect_PrepareAdditiveDraw(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_NO_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_ADD);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_COLOUR_DEPTH);
+    func_00109AD0();
+    func_00109E18();
+    func_0010AEB8(model);
+}
+
+/* Draw hook: subtractive blending, depth-tested, no depth writes; then sends the model's textures. */
+void Effect_PrepareSubtractiveDraw(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_NO_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_SUBTRACT);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_COLOUR_DEPTH);
+    func_00109AD0();
+    func_0010AEB8(model);
+}
+
+/* Draw hook: alpha blending, depth-tested, no depth writes; then sends the model's textures. */
+void Effect_PrepareBlendedDraw(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_NO_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_BLEND);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_COLOUR_DEPTH);
+    func_00109AD0();
+    func_0010AEB8(model);
+}
+
+/* Draw hook: no blending, pixels with alpha above 0 only, depth-tested and written; then sends
+   the model's textures. */
+void Effect_PrepareCutoutDraw(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_OPAQUE);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_CUTOUT_DEPTH);
+    func_00109AD0();
+    func_0010AEB8(model);
+}
+
+/* Effect_PrepareAdditiveDraw drawn over everything (no depth test). */
+void Effect_PrepareAdditiveDrawOnTop(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_NO_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_ADD);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_COLOUR_ON_TOP);
+    func_00109AD0();
+    func_00109E18();
+    func_0010AEB8(model);
+}
+
+/* Effect_PrepareSubtractiveDraw drawn over everything (no depth test). */
+void Effect_PrepareSubtractiveDrawOnTop(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_NO_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_SUBTRACT);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_COLOUR_ON_TOP);
+    func_00109AD0();
+    func_0010AEB8(model);
+}
+
+/* Effect_PrepareBlendedDraw drawn over everything (no depth test). */
+void Effect_PrepareBlendedDrawOnTop(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_NO_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_BLEND);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_COLOUR_ON_TOP);
+    func_00109AD0();
+    func_0010AEB8(model);
+}
+
+/* Effect_PrepareCutoutDraw without the depth test; it still writes depth. */
+void Effect_PrepareCutoutDrawOnTop(ModelInstance *model) {
+    func_00109A50();
+    func_00109A80(GS_REG_ZBUF_1, EFFECT_ZBUF_WRITE);
+    func_00109A80(GS_REG_ALPHA_1, EFFECT_ALPHA_OPAQUE);
+    func_00109A80(GS_REG_TEST_1, EFFECT_TEST_CUTOUT_ON_TOP);
+    func_00109AD0();
+    func_0010AEB8(model);
 }

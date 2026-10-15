@@ -5,10 +5,10 @@
 #include "kf_entity.h"
 #include "common.h"
 
-void func_001958A8(char *, s32);
+void EntityAi_SetUpdate(char *, s32);
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
-void func_00191478(EntityModel *);
-int func_00193378(EntityModel *, s32, s32);
+void Motion_ClearPartSlots(EntityModel *);
+int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
@@ -18,34 +18,34 @@ void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
 extern s32 D_003E6E40[][2];
 extern u32 D_00446ED4;
-void func_00196870(void *, int);
-void func_00196CC0(char *);
-void func_0018E9C0(void *);
+void EntityAi_SensePlayer(void *, int);
+void EntityAi_CheckFarFromSpawn(char *);
+void EntityAi_StepState(void *);
 int EntityAi_ThinkReturn(void *, int);
 int EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 extern float D_00413F80[];
 int rand(void);
-s32 func_0018ED98(Entity *, f32, f32);
-s32 func_0018EEE0(Entity *, f32, f32);
-s32 func_0018FD50(Entity *, s32);
-void func_00190B88(Entity *, s32);
-int func_0018F030(char *);
+s32 EntityAi_ShouldGuard(Entity *, f32, f32);
+s32 EntityAi_ShouldDodge(Entity *, f32, f32);
+s32 EntityAi_PickCombatChoice(Entity *, s32);
+void EntityAi_LowerChoiceWeight(Entity *, s32);
+int EntityAi_PickAttack(char *);
 void func_00196D48(Entity *);
-float func_001957B8(float, float);
-int func_00190BE0(Entity *);
-int func_0018EAC0(void *, void *);
-s32 func_00190F90(Entity *, s32, f32);
+float EntityMath_AngleDifference(float, float);
+int EntityAi_TurnCommand(Entity *);
+int EntityAi_TurnFromPush(void *, void *);
+s32 EntityAi_MoveCommand(Entity *, s32, f32);
 void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
 void EntityAi_MeleeAttack(Entity *);
-s32 func_001984B0(Entity *, s32);
+s32 EntityAi_CanUseMelee(Entity *, s32);
 int EntityAi_StartAttack(Entity *, void (*)(Entity *entity), int, int, int);
-int func_00192C98(void *, int, int, u32, int);
-s32 func_00199EB8(Entity *, f32 *, f32);
-int func_00195ED0(Entity *, EntityParamsUnk3D8 *, s32, s32);
-void func_0019A290(Entity *, s32);
-s32 func_001992F0(Entity *, s32);
+int Motion_Start(void *, int, int, u32, int);
+s32 EntityAi_TurnToHeading(Entity *, f32 *, f32);
+int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
+void EntityAi_SetAttackDelay(Entity *, s32);
+s32 EntityAi_CanUseRanged(Entity *, s32);
 
 static void LavaLizard_Think(Entity *entity, s32 unknown);
 static void LavaLizard_ThinkCombat(Entity *entity, s32 unknown);
@@ -63,7 +63,7 @@ void LavaLizard_Init(Entity *entity) {
     for (i = ENTITY_WORK_AREA_SIZE - 1; i != -1; i--) {
         ENTITY_WORK_BYTES(entity)[i] = 0;
     }
-    func_001958A8((char *)entity, D_003E6E40[entity->params->unk02][1]);
+    EntityAi_SetUpdate((char *)entity, D_003E6E40[entity->params->unk02][1]);
     if (entity->spawn_info->unk40 != 0) {
         unkE0->think = LavaLizard_ThinkNoStates;
     } else {
@@ -93,8 +93,8 @@ void LavaLizard_Init(Entity *entity) {
     unkE0->unk40 = 0.5f;
     entity->unkD6 = (entity->params->flags & 0x4000) ? 0x40 : 0x80;
     entity->model->unk15C = entity->unkD6;
-    func_00191478(entity->model);
-    func_00193378(entity->model, 0, 0);
+    Motion_ClearPartSlots(entity->model);
+    Motion_StepModel(entity->model, 0, 0);
 }
 
 /* The think handler: as EntityAi_Think, with LavaLizard_ThinkCombat for state 2. Counts down work
@@ -107,11 +107,11 @@ static void LavaLizard_Think(Entity *entity, s32 unknown) {
         unkE0->unk7A = entity->params->unk438;
     }
     if (D_00446ED4 % 10U == entity->unkD7 % 10U) {
-        func_00196870(entity, 1);
+        EntityAi_SensePlayer(entity, 1);
     }
     if (entity->unkC6 == 0) {
-        func_00196CC0((char *)entity);
-        func_0018E9C0(entity);
+        EntityAi_CheckFarFromSpawn((char *)entity);
+        EntityAi_StepState(entity);
         if (ENTITY_FLAG_BITS(entity)->bit53) {
             EntityAi_ThinkReturn(entity, unknown);
         } else {
@@ -147,15 +147,15 @@ static void LavaLizard_ThinkCombat(Entity *entity, s32 unknown) {
     s32 turn;
 
     ENTITY_FLAG_BITS(entity)->bits11 = 1;
-    if (func_0018ED98(entity, 300.0f, 0.5235988f)) {
+    if (EntityAi_ShouldGuard(entity, 300.0f, 0.5235988f)) {
         EntityAi_StartAction(entity, EntityAi_Guard, 1);
         return;
     }
-    if (func_0018EEE0(entity, 300.0f, 0.5235988f)) {
+    if (EntityAi_ShouldDodge(entity, 300.0f, 0.5235988f)) {
         EntityAi_StartAction(entity, EntityAi_Dodge, 1);
         return;
     }
-    side = func_0018FD50(entity, 0);
+    side = EntityAi_PickCombatChoice(entity, 0);
     ENTITY_FLAG_BITS(entity)->bit9 = 1;
     if (entity->unkA0 == 0 || side == 0) {
         entity->unkCF = entity->unkCD;
@@ -163,17 +163,17 @@ static void LavaLizard_ThinkCombat(Entity *entity, s32 unknown) {
         if (entity->unkCD != entity->unkCF) {
             entity->unk9E = D_00446ED4;
         }
-        func_00190B88(entity, side);
+        EntityAi_LowerChoiceWeight(entity, side);
         switch (entity->unkCD) {
         case 0:
-            if (func_0018F030((char *)entity)) {
+            if (EntityAi_PickAttack((char *)entity)) {
                 EntityAi_StartAction(entity, LavaLizard_RangedAttack0, unknown);
             } else {
                 EntityAi_StartAction(entity, EntityAi_MeleeAttack, unknown);
             }
             return;
         case 1:
-            angle = func_001957B8(entity->model->unkD0[1], entity->unk68);
+            angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk7A == 0 && ABS(angle) < 1.0471976f &&
                 (f32)ENTITY_CONTROLLER(entity)->unk434 < entity->distance_to_player) {
                 EntityAi_StartAction(entity, LavaLizard_RunAtPlayer, unknown);
@@ -195,25 +195,25 @@ static void LavaLizard_ThinkCombat(Entity *entity, s32 unknown) {
     if (unkE0->unk78 == 0) {
         func_00196D48(entity);
         if (ENTITY_FLAG_BITS(entity)->bit31) {
-            angle = func_001957B8(entity->model->unkD0[1], entity->unk68);
+            angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {
                 unkE0->unk79 = ABS(angle) > 0.5235988f;
                 if (unkE0->unk79 == 0) {
                     goto done;
                 }
             }
-            entity->unkC8 = func_00190BE0(entity);
+            entity->unkC8 = EntityAi_TurnCommand(entity);
             if (entity->unkC8 == 0) {
                 unkE0->unk79 = 0;
             }
         } else {
-            turn = func_0018EAC0(entity, direction);
+            turn = EntityAi_TurnFromPush(entity, direction);
             if (turn > 0) {
                 entity->unkC8 = 0x201;
             } else if (turn < 0) {
                 entity->unkC8 = 0x101;
             } else {
-                entity->unkC8 = func_00190F90(entity, 0, entity->radius + 100.0f + 30.0f);
+                entity->unkC8 = EntityAi_MoveCommand(entity, 0, entity->radius + 100.0f + 30.0f);
             }
         }
     }
@@ -229,22 +229,22 @@ static void LavaLizard_RunAtPlayer(Entity *entity) {
     f32 direction[4];
 
     entity->unkC6 |= 0x1000;
-    if (func_001984B0(entity, 0)) {
+    if (EntityAi_CanUseMelee(entity, 0)) {
         EntityAi_StartAttack(entity, EntityAi_MeleeAttack, 1, 0, 0);
         return;
     }
     switch (entity->action_step) {
     case 0:
-        func_00192C98(entity, 4, 0, entity->params->unkC4 >> 1, 1);
+        Motion_Start(entity, 4, 0, entity->params->unkC4 >> 1, 1);
         ENTITY_FLAG_BITS(entity)->bits11 = 1;
         ENTITY_FLAG_BITS(entity)->bit9 = FALSE;
         entity->unkA0 = entity->params->unk436;
         entity->action_step++;
         break;
     case 1:
-        func_00199EB8(entity, &unkE0->unk1C, entity->unk68);
+        EntityAi_TurnToHeading(entity, &unkE0->unk1C, entity->unk68);
         entity->unk94 += entity->unk94;
-        if (entity->unkA0 == 0 || func_0018EAC0(entity, direction) != 0) {
+        if (entity->unkA0 == 0 || EntityAi_TurnFromPush(entity, direction) != 0) {
             entity->unkC6 = 0;
             entity->unkC8 = 0;
             entity->unkA0 = 0;
@@ -267,7 +267,7 @@ static void LavaLizard_RangedAttack0(Entity *entity) {
     entity->unkC6 |= 1;
     switch (entity->action_step) {
     case 0:
-        func_00192C98(entity, 0x17, 0, entity->params->unkC4 >> 1, 1);
+        Motion_Start(entity, 0x17, 0, entity->params->unkC4 >> 1, 1);
         ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~0x3800) | 0x800;
         ENTITY_FLAGS(entity) &= ~0x200;
         entity->action_step++;
@@ -276,17 +276,17 @@ static void LavaLizard_RangedAttack0(Entity *entity) {
             entity->action_step++;
         }
         if (unk3D8->unk01 != 0) {
-            func_00199EB8(entity, &unkE0->unk1C, entity->unk68);
+            EntityAi_TurnToHeading(entity, &unkE0->unk1C, entity->unk68);
         }
         break;
     case 2:
         if (unk3D8->unk01 >= entity->model->unkFC->unk82) {
-            func_00199EB8(entity, &unkE0->unk1C, entity->unk68);
+            EntityAi_TurnToHeading(entity, &unkE0->unk1C, entity->unk68);
         } else {
             unkE0->unk1C = 0.0f;
         }
         if (entity->model->unkFC->unk82 >= 50 && entity->model->unkFC->unk82 <= 150 && (D_00446ED4 & 1)) {
-            func_00195ED0(entity, unk3D8, 50, 150);
+            EntityAi_LaunchShots(entity, unk3D8, 50, 150);
         }
         if (entity->model->unkFC->unk82 > 0 && unk3D8->unk03 >= entity->model->unkFC->unk82) {
             ENTITY_FLAGS(entity) |= 0x80000;
@@ -297,7 +297,7 @@ static void LavaLizard_RangedAttack0(Entity *entity) {
             entity->unkC6 = 0;
             entity->unkC8 = 0;
             entity->unkA0 = 0;
-            func_0019A290(entity, unk3D8->unk02);
+            EntityAi_SetAttackDelay(entity, unk3D8->unk02);
             if ((s32)(ENTITY_FLAGS(entity) >> 5) & 1) {
                 unkE0->think(entity, 1);
             } else {
@@ -314,7 +314,7 @@ static void LavaLizard_ThinkNoStates(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
 
     if (D_00446ED4 % 10U == entity->unkD7 % 10U) {
-        func_00196870(entity, 1);
+        EntityAi_SensePlayer(entity, 1);
     }
     if (entity->unkC6 == 0) {
         LavaLizard_ThinkDecideShootOrTurn(entity, unknown);
@@ -325,24 +325,24 @@ static void LavaLizard_ThinkNoStates(Entity *entity, s32 unknown) {
 }
 
 /* Decides for LavaLizard_ThinkNoStates: guards the player's swing, starts LavaLizard_RangedAttack0
-   when func_001992F0 finds the player in reach, else turns on the spot towards the player from time
+   when EntityAi_CanUseRanged finds the player in reach, else turns on the spot towards the player from time
    to time. */
 static void LavaLizard_ThinkDecideShootOrTurn(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 angle;
 
     ENTITY_FLAG_BITS(entity)->bits11 = 0;
-    if (func_0018ED98(entity, 300.0f, 0.5235988f)) {
+    if (EntityAi_ShouldGuard(entity, 300.0f, 0.5235988f)) {
         EntityAi_StartAction(entity, EntityAi_Guard, 1);
         return;
     }
     ENTITY_FLAG_BITS(entity)->bit9 = 1;
-    if (entity->unkA2 == 0 && func_001992F0(entity, 1)) {
+    if (entity->unkA2 == 0 && EntityAi_CanUseRanged(entity, 1)) {
         EntityAi_StartAttack(entity, LavaLizard_RangedAttack0, unknown, 1, 0);
         return;
     }
     if (entity->unkA0 == 0) {
-        angle = func_001957B8(entity->model->unkD0[1], entity->unk68);
+        angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
         if (ABS(angle) > 0.5235988f) {
             entity->target = D_00413F80;
             entity->unkA0 = rand() % 60 + 120;
@@ -353,7 +353,7 @@ static void LavaLizard_ThinkDecideShootOrTurn(Entity *entity, s32 unknown) {
         }
     }
     if (unkE0->unk78 == 0) {
-        entity->unkC8 = func_00190BE0(entity);
+        entity->unkC8 = EntityAi_TurnCommand(entity);
     }
     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, unknown);
 }

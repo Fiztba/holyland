@@ -6,49 +6,49 @@
 #include "common.h"
 
 #define ENTITY_WORK_AREA_SIZE 0xA0
-void func_001958A8(char *, s32);
+void EntityAi_SetUpdate(char *, s32);
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
-void func_00191478(EntityModel *);
-int func_00193378(EntityModel *, s32, s32);
+void Motion_ClearPartSlots(EntityModel *);
+int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
 void EntityAi_Dormant(Entity *);
 extern s32 D_003E6E40[][2];
-void func_00190A30(char *);
+void EntityAi_LowerWeightsAfterHit(char *);
 int EntityAi_SetReaction(char *, void (*)(void), int); // match: an int result keeps $2 busy after the call
-void func_00195898(char *, u8);
+void EntityAi_SetState(char *, u8);
 void EntityAi_ReactionRewind(Entity *);
 void EntityAi_ReactionLight(Entity *);
 void EntityAi_ReactionHeavy(Entity *);
 extern u32 D_00446ED4;
 // match: the size is unknown; a complete small type would be read through $gp
 extern f32 D_00446834[];
-void func_00196870(void *, int);
-void func_00196CC0(void *);
-void func_0018E9C0(void *);
+void EntityAi_SensePlayer(void *, int);
+void EntityAi_CheckFarFromSpawn(void *);
+void EntityAi_StepState(void *);
 int EntityAi_ThinkReturn(void *, int);
 int EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
-f32 func_0018A9F0(void *, void *);
+f32 EntityCollision_DistanceToPropFloor(void *, void *);
 extern PlayerData D_00413F80;
 int rand(void);
-s32 func_0018ED98(Entity *, f32, f32);
-s32 func_0018EEE0(Entity *, f32, f32);
-s32 func_0018FD50(Entity *, s32);
-void func_00190B88(Entity *, s32);
-int func_0018F030(char *);
-float func_00194FB8(float);
-float func_00195478(float *, char *);
-float func_001957B8(float, float);
-s32 func_0018EC78(Entity *, f32);
-int func_00190BE0(Entity *entity);
-int func_0018EAC0(void *, void *);
-s16 func_00190F90(float, void *, int); // match: this file only matches with this type; func_00190F90.c defines it differently
+s32 EntityAi_ShouldGuard(Entity *, f32, f32);
+s32 EntityAi_ShouldDodge(Entity *, f32, f32);
+s32 EntityAi_PickCombatChoice(Entity *, s32);
+void EntityAi_LowerChoiceWeight(Entity *, s32);
+int EntityAi_PickAttack(char *);
+float EntityMath_WrapAngle(float);
+float EntityMath_AngleXZ(float *, char *);
+float EntityMath_AngleDifference(float, float);
+s32 EntityAi_IsPushedFromFront(Entity *, f32);
+int EntityAi_TurnCommand(Entity *entity);
+int EntityAi_TurnFromPush(void *, void *);
+s16 EntityAi_MoveCommand(float, void *, int); // match: this file only matches with this type; EntityAi_MoveCommand.c defines it differently
 void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
 void func_00196D48(Entity *);
-int func_00192C98(void *, int, int, u32, int);
+int Motion_Start(void *, int, int, u32, int);
 extern int D_00414184[];
 extern f32 D_00431AF0[16];
 void sceVu0RotMatrixX(float *, float *, float);
@@ -56,13 +56,13 @@ void sceVu0RotMatrixY(float *, float *, float);
 void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
-int func_00195AC0(Entity *, void *, s32, s32, s32);
-void func_0019A290(Entity *, s32);
+int EntityAi_CheckMeleeHit(Entity *, void *, s32, s32, s32);
+void EntityAi_SetAttackDelay(Entity *, s32);
 char *func_0010CAB8(char *, u32);
-int func_00195E48(void *, int, void *, void *);
-int func_00195ED0(Entity *, EntityParamsUnk3D8 *, s32, s32);
+int EntityAi_LaunchShot(void *, int, void *, void *);
+int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
 int func_0019A3F0(void *, int);
-void func_0018DCD8(Entity *);
+void EntityEvent_OnDeath(Entity *);
 
 static void DarkPuppet_OnHit(Entity *entity);
 static void DarkPuppet_Think(Entity *entity, s32 unknown);
@@ -89,7 +89,7 @@ void DarkPuppet_Init(Entity *entity) {
 
         work_area[i] = 0;
     }
-    func_001958A8((char *)entity, D_003E6E40[entity->params->unk02][1]);
+    EntityAi_SetUpdate((char *)entity, D_003E6E40[entity->params->unk02][1]);
     unkE0->think = DarkPuppet_Think;
     unkE0->animate = EntityAi_Animate;
     unkE0->on_hit = (void (*)(void))DarkPuppet_OnHit;
@@ -115,13 +115,13 @@ void DarkPuppet_Init(Entity *entity) {
     unkE0->unk40 = 0.5f;
     entity->unkD6 = (entity->params->flags & 0x4000) ? 0x40 : 0x80;
     entity->model->unk15C = entity->unkD6;
-    func_00191478(entity->model);
-    func_00193378(entity->model, 0, 0);
+    Motion_ClearPartSlots(entity->model);
+    Motion_StepModel(entity->model, 0, 0);
 }
 
 /* The on_hit handler: as EntityAi_OnHit, but it leaves the target and flag bit 10 as they are. */
 static void DarkPuppet_OnHit(Entity *entity) {
-    func_00190A30((char *)entity);
+    EntityAi_LowerWeightsAfterHit((char *)entity);
     entity->flags &= ~0x200;
     if (((s32)(entity->flags >> 36) & 3) == 1) {
         if ((s32)(entity->flags >> 19) & 1) {
@@ -132,12 +132,12 @@ static void DarkPuppet_OnHit(Entity *entity) {
     } else if (((s32)(entity->flags >> 36) & 3) == 2) {
         EntityAi_SetReaction((char *)entity, (void (*)(void))EntityAi_ReactionHeavy, 0);
     }
-    func_00195898((char *)entity, 2);
+    EntityAi_SetState((char *)entity, 2);
 }
 
 /* The think handler: as EntityAi_Think, with DarkPuppet_ThinkCombat for state 2. After that it
    keeps flag bit 28 set except during a hit reaction or the death (busy bits 2, 4, 0x40); while the
-   bit is set it adds command bit 0x20 or 0x10 by the height func_0018A9F0 reads (work byte unk7A:
+   bit is set it adds command bit 0x20 or 0x10 by the height EntityCollision_DistanceToPropFloor reads (work byte unk7A:
    set above EntityParams.unk43C, cleared below unk43E); and it calls DarkPuppet_ApplyMoveCommand while the entity
    is not busy or is in a hit reaction. */
 static void DarkPuppet_Think(Entity *entity, s32 unknown) {
@@ -145,11 +145,11 @@ static void DarkPuppet_Think(Entity *entity, s32 unknown) {
     f32 height;
 
     if (D_00446ED4 % 10U == entity->unkD7 % 10U) {
-        func_00196870(entity, 1);
+        EntityAi_SensePlayer(entity, 1);
     }
     if (entity->unkC6 == 0) {
-        func_00196CC0(entity);
-        func_0018E9C0(entity);
+        EntityAi_CheckFarFromSpawn(entity);
+        EntityAi_StepState(entity);
         if (ENTITY_FLAG_BITS(entity)->bit53) {
             EntityAi_ThinkReturn(entity, unknown);
         } else {
@@ -175,7 +175,7 @@ static void DarkPuppet_Think(Entity *entity, s32 unknown) {
         entity->flags |= 0x10000000;
     }
     if ((s32)(entity->flags >> 28) & 1) {
-        height = func_0018A9F0(entity->unk14, entity->model->position);
+        height = EntityCollision_DistanceToPropFloor(entity->unk14, entity->model->position);
         if (height != D_00446834[0]) {
             if ((f32)entity->params->unk43C < height) {
                 unkE0->unk7A = 1;
@@ -199,7 +199,7 @@ static void DarkPuppet_Think(Entity *entity, s32 unknown) {
    DarkPuppet_RangedAttack for the others). Closing in lasts EntityParams.unk43A frames and has
    four ways, kept in work byte unk78: 0 forward (the player farther than unk438), 1 backwards
    (nearer than unk436), 2 and 3 sideways (command bits 4 and 8) while keeping between the two
-   distances; func_0018EC78 makes it change the way. Waiting (4) it turns to the player. */
+   distances; EntityAi_IsPushedFromFront makes it change the way. Waiting (4) it turns to the player. */
 static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 direction[4];
@@ -208,15 +208,15 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
     s32 turn;
 
     ENTITY_FLAG_BITS(entity)->bits11 = 0;
-    if (func_0018ED98(entity, 300.0f, 0.5235988f)) {
+    if (EntityAi_ShouldGuard(entity, 300.0f, 0.5235988f)) {
         EntityAi_StartAction(entity, EntityAi_Guard, 1);
         return;
     }
-    if (func_0018EEE0(entity, 300.0f, 0.5235988f)) {
+    if (EntityAi_ShouldDodge(entity, 300.0f, 0.5235988f)) {
         EntityAi_StartAction(entity, EntityAi_Dodge, 1);
         return;
     }
-    side = func_0018FD50(entity, 0);
+    side = EntityAi_PickCombatChoice(entity, 0);
     ENTITY_FLAG_BITS(entity)->bit9 = 1;
     if (entity->unkA0 == 0 || side == 0) {
         entity->unkCF = entity->unkCD;
@@ -224,10 +224,10 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
         if (entity->unkCD != entity->unkCF) {
             entity->unk9E = D_00446ED4;
         }
-        func_00190B88(entity, side);
+        EntityAi_LowerChoiceWeight(entity, side);
         switch (entity->unkCD) {
         case 0:
-            if (func_0018F030((char *)entity)) {
+            if (EntityAi_PickAttack((char *)entity)) {
                 if (ENTITY_FLAG_BITS(entity)->bits58 == 0) {
                     EntityAi_StartAction(entity, DarkPuppet_RangedAttack0, unknown);
                 } else {
@@ -243,8 +243,8 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
                 unkE0->unk78 = 0;
             } else if (entity->distance_to_player < (f32)entity->params->unk436) {
                 unkE0->unk78 = 1;
-            } else if (func_001957B8(D_00413F80.unk14,
-                                     func_00195478(D_00413F80.position, (char *)entity->model->position)) > 0.0f) {
+            } else if (EntityMath_AngleDifference(D_00413F80.unk14,
+                                     EntityMath_AngleXZ(D_00413F80.position, (char *)entity->model->position)) > 0.0f) {
                 unkE0->unk78 = 2;
             } else {
                 unkE0->unk78 = 3;
@@ -264,42 +264,42 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
     if (entity->unkCD == 1) {
         func_00196D48(entity);
         if (ENTITY_FLAG_BITS(entity)->bit31) {
-            angle = func_001957B8(entity->model->unkD0[1], entity->unk68);
+            angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {
                 unkE0->unk79 = ABS(angle) > 0.5235988f;
                 if (unkE0->unk79 == 0) {
                     goto done;
                 }
             }
-            entity->unkC8 = func_00190BE0(entity);
+            entity->unkC8 = EntityAi_TurnCommand(entity);
             if (entity->unkC8 == 0) {
                 unkE0->unk79 = 0;
             }
         } else {
             switch (unkE0->unk78) {
             case 0:
-                turn = func_0018EAC0(entity, direction);
+                turn = EntityAi_TurnFromPush(entity, direction);
                 if (turn > 0) {
                     entity->unkC8 |= 0x201;
                 } else if (turn < 0) {
                     entity->unkC8 |= 0x101;
                 } else {
-                    entity->unkC8 |= func_00190F90(entity->radius + 100.0f + 30.0f, entity, 0);
+                    entity->unkC8 |= EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 0);
                 }
                 break;
             case 1:
-                if (func_0018EC78(entity, func_00194FB8(entity->model->unkD0[1] + 3.1415927f))) {
+                if (EntityAi_IsPushedFromFront(entity, EntityMath_WrapAngle(entity->model->unkD0[1] + 3.1415927f))) {
                     unkE0->unk78 = rand() % 3 + 2;
                 } else {
-                    entity->unkC8 |= ((u16 (*)(Entity *))func_00190BE0)(entity); // match: read as unsigned here
+                    entity->unkC8 |= ((u16 (*)(Entity *))EntityAi_TurnCommand)(entity); // match: read as unsigned here
                     entity->unkC8 |= 2;
                 }
                 break;
             case 2:
-                if (func_0018EC78(entity, func_00194FB8(entity->model->unkD0[1] - 1.5707964f))) {
+                if (EntityAi_IsPushedFromFront(entity, EntityMath_WrapAngle(entity->model->unkD0[1] - 1.5707964f))) {
                     unkE0->unk78 = 3;
                 } else {
-                    entity->unkC8 |= ((u16 (*)(Entity *))func_00190BE0)(entity); // match: read as unsigned here
+                    entity->unkC8 |= ((u16 (*)(Entity *))EntityAi_TurnCommand)(entity); // match: read as unsigned here
                     entity->unkC8 |= 4;
                     if ((f32)entity->params->unk438 < entity->distance_to_player) {
                         entity->unkC8 |= 1;
@@ -309,10 +309,10 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
                 }
                 break;
             case 3:
-                if (func_0018EC78(entity, func_00194FB8(entity->model->unkD0[1] + 1.5707964f))) {
+                if (EntityAi_IsPushedFromFront(entity, EntityMath_WrapAngle(entity->model->unkD0[1] + 1.5707964f))) {
                     unkE0->unk78 = 2;
                 } else {
-                    entity->unkC8 |= ((u16 (*)(Entity *))func_00190BE0)(entity); // match: read as unsigned here
+                    entity->unkC8 |= ((u16 (*)(Entity *))EntityAi_TurnCommand)(entity); // match: read as unsigned here
                     entity->unkC8 |= 8;
                     if ((f32)entity->params->unk438 < entity->distance_to_player) {
                         entity->unkC8 |= 1;
@@ -322,7 +322,7 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
                 }
                 break;
             case 4:
-                entity->unkC8 |= func_00190BE0(entity);
+                entity->unkC8 |= EntityAi_TurnCommand(entity);
                 break;
             }
         }
@@ -340,22 +340,22 @@ static void DarkPuppet_Move(Entity *entity) {
         }
     }
     if (entity->unkC8 & 4) {
-        func_00192C98(entity, 6, 0, entity->params->unkC4, 0);
+        Motion_Start(entity, 6, 0, entity->params->unkC4, 0);
         return;
     }
     if (entity->unkC8 & 8) {
-        func_00192C98(entity, 7, 0, entity->params->unkC4, 0);
+        Motion_Start(entity, 7, 0, entity->params->unkC4, 0);
         return;
     }
     if (entity->unkC8 & 1) {
-        func_00192C98(entity, 3, 0, entity->params->unkC4, 0);
+        Motion_Start(entity, 3, 0, entity->params->unkC4, 0);
         return;
     }
     if (entity->unkC8 & 2) {
-        func_00192C98(entity, 5, 0, entity->params->unkC4, 0);
+        Motion_Start(entity, 5, 0, entity->params->unkC4, 0);
         return;
     }
-    func_00192C98(entity, 0, 0, entity->params->unkC4, 0);
+    Motion_Start(entity, 0, 0, entity->params->unkC4, 0);
 }
 
 /* Carries out the movement command in Entity.unkC8; DarkPuppet_Think, DarkPuppet_MeleeAttack
@@ -465,7 +465,7 @@ static void DarkPuppet_ApplyMoveCommand(Entity *entity) {
 }
 
 /* The melee attack (busy bit 1): as EntityAi_MeleeAttack, but it turns by adding the command of
-   func_00190BE0, and calls DarkPuppet_ApplyMoveCommand every frame. */
+   EntityAi_TurnCommand, and calls DarkPuppet_ApplyMoveCommand every frame. */
 static void DarkPuppet_MeleeAttack(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     s32 kind = (s32)(entity->flags >> 58) & 3;
@@ -475,7 +475,7 @@ static void DarkPuppet_MeleeAttack(Entity *entity) {
     entity->unkC6 |= 1;
     switch (entity->action_step) {
     case 0:
-        func_00192C98(entity, kind | 0x14, 0, entity->params->unkC4 >> 1, 1);
+        Motion_Start(entity, kind | 0x14, 0, entity->params->unkC4 >> 1, 1);
         if (entity->params->flags & 0x100) {
             ENTITY_FLAG_BITS(entity)->bits11 = 0;
         } else {
@@ -491,22 +491,22 @@ static void DarkPuppet_MeleeAttack(Entity *entity) {
             entity->action_step++;
         }
         if (unk240->unk01 != 0) {
-            entity->unkC8 |= func_00190BE0(entity);
+            entity->unkC8 |= EntityAi_TurnCommand(entity);
         }
         break;
     case 2:
         if (unk240->unk01 >= entity->model->unkFC->unk82) {
-            entity->unkC8 |= func_00190BE0(entity);
+            entity->unkC8 |= EntityAi_TurnCommand(entity);
         }
         elapsed = (entity->model->unkFC->unk84 - entity->params->unk80[entity->unkD1]) >> 8;
         if (!((s32)(entity->flags >> 54) & 1)) {
-            ENTITY_FLAG_BITS(entity)->bit54 = func_00195AC0(entity, unk240, 0, elapsed, entity->model->unkFC->unk82);
+            ENTITY_FLAG_BITS(entity)->bit54 = EntityAi_CheckMeleeHit(entity, unk240, 0, elapsed, entity->model->unkFC->unk82);
         }
         if (!((s32)(entity->flags >> 55) & 1)) {
-            ENTITY_FLAG_BITS(entity)->bit55 = func_00195AC0(entity, unk240, 1, elapsed, entity->model->unkFC->unk82);
+            ENTITY_FLAG_BITS(entity)->bit55 = EntityAi_CheckMeleeHit(entity, unk240, 1, elapsed, entity->model->unkFC->unk82);
         }
         if (!((s32)(entity->flags >> 56) & 1)) {
-            ENTITY_FLAG_BITS(entity)->bit56 = func_00195AC0(entity, unk240, 2, elapsed, entity->model->unkFC->unk82);
+            ENTITY_FLAG_BITS(entity)->bit56 = EntityAi_CheckMeleeHit(entity, unk240, 2, elapsed, entity->model->unkFC->unk82);
         }
         if (entity->model->unkFC->unk82 > 0 && unk240->unk03 >= entity->model->unkFC->unk82) {
             entity->flags |= 0x80000;
@@ -517,7 +517,7 @@ static void DarkPuppet_MeleeAttack(Entity *entity) {
             entity->unkC6 = 0;
             entity->unkC8 = 0;
             entity->unkA0 = 0;
-            func_0019A290(entity, unk240->unk02);
+            EntityAi_SetAttackDelay(entity, unk240->unk02);
             if ((s32)(entity->flags >> 5) & 1) {
                 unkE0->think(entity, 1);
                 return;
@@ -532,7 +532,7 @@ static void DarkPuppet_MeleeAttack(Entity *entity) {
 
 /* The ranged attack with record 0 (busy bit 1; DarkPuppet_ThinkCombat starts it for index 0
    only): animation 23; on frame 30 it launches the record's shot unk10 from the point func_0010CAB8
-   gives for the record's unk11, along the model's angles (func_00195E48). Turns and moves as
+   gives for the record's unk11, along the model's angles (EntityAi_LaunchShot). Turns and moves as
    DarkPuppet_MeleeAttack does. */
 static void DarkPuppet_RangedAttack0(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
@@ -543,7 +543,7 @@ static void DarkPuppet_RangedAttack0(Entity *entity) {
     entity->unkC6 |= 1;
     switch (entity->action_step) {
     case 0:
-        func_00192C98(entity, 0x17, 0, entity->params->unkC4 >> 1, 1);
+        Motion_Start(entity, 0x17, 0, entity->params->unkC4 >> 1, 1);
         if (entity->params->flags & 0x100) {
             ENTITY_FLAG_BITS(entity)->bits11 = 0;
         } else {
@@ -556,18 +556,18 @@ static void DarkPuppet_RangedAttack0(Entity *entity) {
             entity->action_step++;
         }
         if (unk3D8->record.unk01 != 0) {
-            entity->unkC8 |= func_00190BE0(entity);
+            entity->unkC8 |= EntityAi_TurnCommand(entity);
         }
         break;
     case 2:
         if (unk3D8->record.unk01 >= entity->model->unkFC->unk82) {
-            entity->unkC8 |= func_00190BE0(entity);
+            entity->unkC8 |= EntityAi_TurnCommand(entity);
         }
         if (((s32)(entity->flags >> 58) & 3) == 0 && entity->model->unkFC->unk82 == 0x1E &&
             (entity->unk2A == 0 || unk3D8->unk0C != 0)) {
             point = func_0010CAB8((char *)entity->model, unk3D8->unk11);
             if (point != NULL) {
-                func_00195E48(entity, unk3D8->unk10, point, entity->model->unkD0);
+                EntityAi_LaunchShot(entity, unk3D8->unk10, point, entity->model->unkD0);
             }
         }
         if (entity->model->unkFC->unk82 > 0 && unk3D8->record.unk03 >= entity->model->unkFC->unk82) {
@@ -579,7 +579,7 @@ static void DarkPuppet_RangedAttack0(Entity *entity) {
             entity->unkC6 = 0;
             entity->unkC8 = 0;
             entity->unkA0 = 0;
-            func_0019A290(entity, unk3D8->record.unk02);
+            EntityAi_SetAttackDelay(entity, unk3D8->record.unk02);
             if ((s32)(entity->flags >> 5) & 1) {
                 unkE0->think(entity, 1);
             } else {
@@ -602,7 +602,7 @@ static void DarkPuppet_RangedAttack(Entity *entity) {
     entity->unkC6 |= 1;
     switch (entity->action_step) {
     case 0:
-        func_00192C98(entity, kind + 0x17, 0, entity->params->unkC4 >> 1, 1);
+        Motion_Start(entity, kind + 0x17, 0, entity->params->unkC4 >> 1, 1);
         if (entity->params->flags & 0x100) {
             ENTITY_FLAG_BITS(entity)->bits11 = 0;
         } else {
@@ -615,14 +615,14 @@ static void DarkPuppet_RangedAttack(Entity *entity) {
             entity->action_step++;
         }
         if (unk3D8->unk01 != 0) {
-            entity->unkC8 |= func_00190BE0(entity);
+            entity->unkC8 |= EntityAi_TurnCommand(entity);
         }
         break;
     case 2:
         if (unk3D8->unk01 >= entity->model->unkFC->unk82) {
-            entity->unkC8 |= func_00190BE0(entity);
+            entity->unkC8 |= EntityAi_TurnCommand(entity);
         }
-        func_00195ED0(entity, unk3D8, (entity->model->unkFC->unk84 - entity->params->unk80[entity->unkD1]) >> 8,
+        EntityAi_LaunchShots(entity, unk3D8, (entity->model->unkFC->unk84 - entity->params->unk80[entity->unkD1]) >> 8,
                       entity->model->unkFC->unk82);
         if (entity->model->unkFC->unk82 > 0 && unk3D8->unk03 >= entity->model->unkFC->unk82) {
             entity->flags |= 0x80000;
@@ -633,7 +633,7 @@ static void DarkPuppet_RangedAttack(Entity *entity) {
             entity->unkC6 = 0;
             entity->unkC8 = 0;
             entity->unkA0 = 0;
-            func_0019A290(entity, unk3D8->unk02);
+            EntityAi_SetAttackDelay(entity, unk3D8->unk02);
             if ((s32)(entity->flags >> 5) & 1) {
                 unkE0->think(entity, 1);
                 return;
@@ -647,7 +647,7 @@ static void DarkPuppet_RangedAttack(Entity *entity) {
 }
 
 /* The death action (busy bit 0x40): animation 16; once it is past frame EntityParams.unk434 it
-   calls func_0018DCD8 and fades the model out over the rest of the motion (the frames left, kept in
+   calls EntityEvent_OnDeath and fades the model out over the rest of the motion (the frames left, kept in
    work word unk68), then removes the entity when the motion has ended. */
 static void DarkPuppet_Death(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
@@ -655,7 +655,7 @@ static void DarkPuppet_Death(Entity *entity) {
     entity->unkC6 = 0x40;
     switch (entity->action_step) {
     case 0:
-        func_00192C98(entity, 0x10, 0, 5, 1);
+        Motion_Start(entity, 0x10, 0, 5, 1);
         entity->flags &= ~0x3800;
         entity->flags |= 0x4000;
         entity->flags |= 0x100000;
@@ -675,7 +675,7 @@ static void DarkPuppet_Death(Entity *entity) {
             entity->unkA0 = unkE0->unk68 = func_0019A3F0(entity, entity->unkD1) - entity->model->unkFC->unk82;
             ENTITY_FLAG_BITS(entity)->bits2 = 2;
             ENTITY_FLAG_BITS(entity)->bit4 = 1;
-            func_0018DCD8(entity);
+            EntityEvent_OnDeath(entity);
             entity->action_step++;
         }
         break;
