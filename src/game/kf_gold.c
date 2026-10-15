@@ -6,6 +6,7 @@
 #include "kf_player.h"
 #include "kf_screen.h"
 #include "kf_message.h"
+#include "kf_gs.h"
 
 void *memset(void *, int, u32);
 int func_00102238(char *, int, int);
@@ -434,4 +435,13 @@ void Gold_ClearMark(MapActor *actor) {
     // match: retail adds the tag row and the slot before the table base
     mark = (ObjectMark *)((u8 *)D_00362928 + (entry->tag * sizeof(D_00362928[0]) + slot * sizeof(ObjectMark)));
     memset(mark, 0, sizeof(ObjectMark));
+}
+
+void func_001CB710(OverlaySprite *sprite) {
+    func_00109A50();
+    func_00109A80(GS_REG_ALPHA_1, ((s64)sprite->unk146 << 32) | 0x64);
+    func_00109A80(GS_REG_TEST_1, 0x51001);
+    func_00109A80(0x48, 0x30001);
+    func_00109AD0();
+    func_0010AEB8(sprite);
 }

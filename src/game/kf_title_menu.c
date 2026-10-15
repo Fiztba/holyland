@@ -1,0 +1,62 @@
+#include "kf_title.h"
+#include "kf_menu_screens.h"
+#include "kf_item.h"
+
+extern u8 item_counts[];
+extern u8 spell_levels[6][5];
+extern char D_00402DA8[];
+
+int func_001F91F8(void) {
+    int screen = 0;
+
+    do {
+        switch (Title_Run(screen)) {
+        case 1:
+            return 0;
+        case 2:
+            if (Menu_Run(1) != 0) {
+                return 1;
+            }
+            screen = 2;
+            break;
+        case 3:
+            Menu_Run(2);
+            screen = 2;
+            break;
+        case 4:
+            Menu_Run(3);
+            screen = 2;
+            break;
+        }
+    } while (screen != -1);
+}
+
+int func_001F92D0(void) {
+    int i;
+
+    for (i = 0; i < ITEM_COUNT; i++) {
+        if (item_counts[i] != 0 && (i < ITEM_KEY_FIRST || i == ITEM_KEY_UNUSED || i > ITEM_KEY_LAST) && i != 0
+            && i != ITEM_WEAPON_FIRST && i != ITEM_SHIELD_NONE && i != ITEM_HELM_NONE && i != ITEM_ARMOR_NONE
+            && i != ITEM_GAUNTLET_NONE && i != ITEM_BOOT_NONE && i != ITEM_RING_NONE && i != ITEM_BRACELET_NONE
+            && i != ITEM_AMULET_NONE && i != 0) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+int func_001F93A8(void) {
+    int i;
+    int j;
+
+    for (i = 0; i < 6; i++) {
+        for (j = 0; j < 5; j++) {
+            if (spell_levels[i][j] != 0) {
+                if (D_00402DA8[(15 * i + 3 * j + spell_levels[i][j]) * 0x110 + 0x102] == 1) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}

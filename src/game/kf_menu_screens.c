@@ -22,6 +22,7 @@
 #include "kf_state.h"
 #include "kf_screen.h"
 #include "kf_save_card.h"
+#include "kf_item.h"
 
 extern LevelRecord D_003679A0[70];
 extern LevelRecord D_003682F0[160];
@@ -304,6 +305,10 @@ int sceGsSyncPath(int, int);
 void sceGsSetHalfOffset(void *, int, int, s16); // match: void, so the test after the call uses $2
 int sceGsSetHalfOffset2(void *, int, int, s16);
 int sceGsSwapDBuffDc(GsDoubleBufferDc *, int);
+
+// match: called as a void function, so the result register is free at once
+#define SET_TEST(value) ((void (*)(int, s64))MenuDraw_SetGsRegister)(GS_REG_TEST_1, value)
+
 extern ColorBytes D_00446B18[]; // match: the initialiser of the local below ({ 0x10, 0x10, 0x10 }); an array so it is not reached through $gp
 int func_001E5210(u8);
 void MenuSprite_DrawPlain(int owner, int index, int param);
@@ -7392,4 +7397,253 @@ static void Menu_OpenCardSlot(void) {
     SaveCard_ClearLoadFailed(1);
     SaveCard_StartCheck(1);
     D_00446B20 = (void *)Menu_UpdateCardSlot;
+}
+
+/* Tells whether value (an equipment slot's number) differs from the "None" of the slot the given step stands for. */
+int func_001E4FE0(s32 value, u32 step) {
+    switch (step) {
+        case 0:
+        case 1:
+        case 2:
+        case 11:
+            return value != 0;
+        case 3:
+            return value != ITEM_WORN_INDEX(ITEM_HELM_NONE);
+        case 4:
+            return value != ITEM_WORN_INDEX(ITEM_ARMOR_NONE);
+        case 5:
+            return value != ITEM_WORN_INDEX(ITEM_GAUNTLET_NONE);
+        case 6:
+            return value != ITEM_WORN_INDEX(ITEM_BOOT_NONE);
+        case 7:
+            return value != ITEM_WORN_INDEX(ITEM_RING_NONE);
+        case 8:
+            return value != ITEM_WORN_INDEX(ITEM_BRACELET_NONE);
+        case 9:
+            return value != ITEM_WORN_INDEX(ITEM_AMULET_NONE);
+        default:
+            return FALSE;
+    }
+}
+
+/* Sends a five-quadword packet that draws one sprite in the grey level given, into the frame buffer D_00446F78 selects. */
+void func_001E5070(s32 level) {
+    GsPacketWord *packet;
+    GsPacketWord *cursor;
+    u32 colour;
+
+    packet = (GsPacketWord *)MenuDraw_NextPacket();
+    packet[0].as_int = 0x8001;
+    packet[1].as_int = 0x740B4000;
+    packet[2].as_int = 0xF5252160;
+    packet[3].as_int = 0;
+    packet[4].as_int = 0x16;
+    packet[5].as_int = 0;
+    // match: the do/while (a macro in the original, most likely) keeps the stores above ahead of the load below
+    do {
+        cursor = packet + 8;
+        if (D_00446F78 == 0) {
+            *(u64 *)&packet[6] = 0x668028000;
+        } else {
+            *(u64 *)&packet[6] = 0x6680288C0;
+        }
+    } while (0);
+    colour = level | 0x80000000;
+    colour |= (level << 16) | (level << 8);
+    (cursor++)->as_int = colour;
+    (cursor++)->as_float = 1.0f;
+    (cursor++)->as_int = 0;
+    (cursor++)->as_int = 0;
+    (cursor++)->as_int = 0x79006C00;
+    (cursor++)->as_int = 0xFFFFF;
+    (cursor++)->as_float = 0.625f;
+    (cursor++)->as_float = 0.4375f;
+    cursor[0].as_int = 0x86F89400;
+    cursor[1].as_int = 0xFFFFF;
+    while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
+    *D2_QWC = 5;
+    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_CHCR = 0x105;
+}
+
+/* Sets the alpha test and the blend mode of ALPHA_1 from mode and writes them; the value is never seeded. */
+int func_001E5210(u8 mode) {
+    GsAlphaReg reg;
+
+    if (mode == 0) {
+        SET_TEST( 0x30000);
+        reg.f.a_source = 0;
+        reg.f.b_source = 1;
+        reg.f.c_source = 0;
+        reg.f.d_source = 1;
+        reg.f.fix = 0;
+    } else if (mode == 1) {
+        SET_TEST( 0x30000);
+        reg.f.a_source = 0;
+        reg.f.b_source = 2;
+        reg.f.c_source = 0;
+        reg.f.d_source = 1;
+        reg.f.fix = 0;
+    } else if (mode == 2) {
+        SET_TEST( 0x30000);
+        reg.f.a_source = 2;
+        reg.f.b_source = 0;
+        reg.f.c_source = 0;
+        reg.f.d_source = 1;
+        reg.f.fix = 0;
+    } else if (mode == 3) {
+        SET_TEST( 3);
+        reg.f.a_source = 0;
+        reg.f.b_source = 2;
+        reg.f.c_source = 0;
+        reg.f.d_source = 0;
+        reg.f.fix = 0;
+    }
+    return MenuDraw_SetGsRegister(GS_REG_ALPHA_1, reg.raw);
+}
+
+/* Sets the blend mode of ALPHA_1 from mode and writes it; the value is never seeded. */
+s32 func_001E53A8(u8 mode, char flag) {
+    GsAlphaReg reg;
+
+    if (flag == 0) {
+        MenuDraw_SetGsRegister(GS_REG_TEST_1, 0x30000);
+    } else {
+        MenuDraw_SetGsRegister(GS_REG_TEST_1, 0x70000);
+    }
+    if (mode == 0) {
+        reg.f.a_source = 0;
+        reg.f.b_source = 1;
+        reg.f.c_source = 0;
+        reg.f.d_source = 1;
+        reg.f.fix = 0;
+    } else if (mode == 1) {
+        reg.f.a_source = 0;
+        reg.f.b_source = 2;
+        reg.f.c_source = 0;
+        reg.f.d_source = 1;
+        reg.f.fix = 0;
+    } else if (mode == 2) {
+        reg.f.a_source = 2;
+        reg.f.b_source = 0;
+        reg.f.c_source = 0;
+        reg.f.d_source = 1;
+        reg.f.fix = 0;
+    }
+    return MenuDraw_SetGsRegister(GS_REG_ALPHA_1, reg.raw);
+}
+
+/* Empties one equipment slot: its menu entry goes back to the first item of its list and the player's number to the "nothing" one. */
+void func_001E54A8(s8 slot) {
+    switch (slot) {
+        case 0:
+            *D_00420D60[0] = D_004231F0;
+            D_00413F80.weapon = 0;
+            break;
+        case 1:
+            *D_00420D60[1] = D_00424050;
+            D_00413F80.equipped_magic = 0;
+            break;
+        case 2:
+            *D_00420D60[2] = D_00423650;
+            D_00413F80.equipment[EQUIP_SHIELD] = ITEM_WORN_INDEX(ITEM_SHIELD_NONE);
+            break;
+        case 3:
+            *D_00420D60[3] = D_00423830;
+            D_00413F80.equipment[EQUIP_HELM] = ITEM_WORN_INDEX(ITEM_HELM_NONE);
+            break;
+        case 4:
+            *D_00420D60[4] = D_004239C0;
+            D_00413F80.equipment[EQUIP_ARMOR] = ITEM_WORN_INDEX(ITEM_ARMOR_NONE);
+            break;
+        case 5:
+            *D_00420D60[5] = D_00423B50;
+            D_00413F80.equipment[EQUIP_GAUNTLET] = ITEM_WORN_INDEX(ITEM_GAUNTLET_NONE);
+            break;
+        case 6:
+            *D_00420D60[6] = D_00423CE0;
+            D_00413F80.equipment[EQUIP_BOOT] = ITEM_WORN_INDEX(ITEM_BOOT_NONE);
+            break;
+        case 7:
+            *D_00420D60[7] = D_00423E70;
+            D_00413F80.equipment[EQUIP_RING] = ITEM_WORN_INDEX(ITEM_RING_NONE);
+            break;
+        case 8:
+            *D_00420D60[8] = D_00423F10;
+            D_00413F80.equipment[EQUIP_BRACELET] = ITEM_WORN_INDEX(ITEM_BRACELET_NONE);
+            break;
+        case 9:
+            *D_00420D60[9] = D_00423FB0;
+            D_00413F80.equipment[EQUIP_AMULET] = ITEM_WORN_INDEX(ITEM_AMULET_NONE);
+            break;
+        case 11:
+            *D_00420D60[10] = D_00424600;
+            D_00413F80.shortcut_type = 0;
+            D_00413F80.shortcut = 0;
+            break;
+    }
+}
+
+/* Tells whether the item numbered value is the one the player has in the given equipment slot. */
+int func_001E5660(u32 slot, s32 kind, s32 value) {
+    switch (slot) {
+        case 0:
+            if (value == D_00413F80.weapon + ITEM_WEAPON_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 1:
+            if (value == D_00413F80.equipped_magic) {
+                return TRUE;
+            }
+            break;
+        case 2:
+            if (value == D_00413F80.equipment[EQUIP_SHIELD] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 3:
+            if (value == D_00413F80.equipment[EQUIP_HELM] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 4:
+            if (value == D_00413F80.equipment[EQUIP_ARMOR] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 5:
+            if (value == D_00413F80.equipment[EQUIP_GAUNTLET] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 6:
+            if (value == D_00413F80.equipment[EQUIP_BOOT] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 7:
+            if (value == D_00413F80.equipment[EQUIP_RING] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 8:
+            if (value == D_00413F80.equipment[EQUIP_BRACELET] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 9:
+            if (value == D_00413F80.equipment[EQUIP_AMULET] + ITEM_WORN_FIRST) {
+                return TRUE;
+            }
+            break;
+        case 10:
+            if ((kind == 11 && D_00413F80.shortcut_type < 2) || (kind == 1 && D_00413F80.shortcut_type == 2)) {
+                if (value == D_00413F80.shortcut) {
+                    return TRUE;
+                }
+            }
+            break;
+    }
+    return FALSE;
 }

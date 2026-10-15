@@ -35,7 +35,7 @@ extern s32 D_004467B8[2];
 extern MapObject D_003A1A30[];
 extern MapObject D_003AFA30[];
 void Vector_Copy(void *, void *);
-void func_001C2128(void *, int, int, float);
+void func_001C2128(MapObject *, f32 *, f32 *, f32);
 extern MapSlot D_0038CD20[];
 void func_001B2C48(void *);
 
@@ -458,7 +458,7 @@ s32 EntitySight_ObjectInWay(Entity *entity) {
                 if (highest[2] < object->model->position.z - reach) {
                     continue;
                 }
-                func_001C2128(object, (int)position, (int)direction, distance);
+                func_001C2128(object, position, direction, distance);
                 if (COLLISION_RESULT->hit != 0) {
                     return TRUE;
                 }

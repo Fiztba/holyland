@@ -10,7 +10,7 @@
 #include "kf_player.h"
 #include "kf_shot.h"
 #include "kf_sound.h"
-
+#include "kf_vu0.h"
 
 static s32 swing_magic_frames;                    /* 0x447114 frames the swing-cast magic still runs */
 static s32 swing_magic_id;                        /* 0x447118 magic id cast from the swing */
@@ -26,6 +26,7 @@ extern struct PlayerWeaponModel *D_00446978;
 
 extern PlayerState D_00413F80;
 extern PlayerState D_00414280;      /* the player as of the frame before */
+extern PlayerScreenTint D_00414580;
 extern PlayerItemDef weapon_defs[];
 extern GameStatus D_0038CC50;
 extern MapSlot D_0038CD20[];
@@ -65,17 +66,123 @@ int Sound_PlayCommon(int);
 int func_001B4F30(u16, void *, void *, void *, void *);
 void Player_Move(u16 held, u16 pressed); // match: retail passes both pad words
 void func_001B9078(void);
+void func_001B92C0(float);
 void func_001B9478(void);
 void func_001B94C0(void);
 void func_001B9588(void);
 void func_001B9610(void);
 void func_001B96C8(void);
 void func_001BA310(void);
+void func_001BAE88(void);
+void func_001BB260(int);
 void func_001BB2E8(int);
+int func_001BB308(int);
+void func_001BB5E8(void);
+void func_001BB728(u16 *, u32);
 void func_001BB908(void);
 void func_001BB978(void);
+int func_001BF6E8(void);
+void func_001B4B10(int, int);
+void func_001B4DF8(int idx, int amount);
+
+extern u8 spell_levels[6][5];
+extern u64 D_00414448[];            /* D_00414280.unk1C8 */
+extern GameDefinition D_00416D78[70];
+extern LevelRecord D_003679A0[70];
+extern LevelDef item_name_defs[0x17C];
 
 #define STRIDE_LENGTH 0x1400
+
+#define GAUGE_FULL 5000
+/* a timer that is running, stepped; TRUE on the frame it runs out */
+#define TIMER_SIGNED_ENDS(timer) ((timer) != 0 && --(timer) <= 0)
+#define TIMER_ENDS(timer) ((timer) != 0 && --(timer) == 0)
+#define RUN_DOWN_PAIR(index, timers, second, first) \
+    if (TIMER_SIGNED_ENDS(D_00413F80.timers[index])) { \
+        D_00413F80.first[index] = 0; \
+        D_00413F80.second[index] = 0; \
+    }
+#define RUN_DOWN_SIGNED(index, timers, values) \
+    if (TIMER_SIGNED_ENDS(D_00413F80.timers[index])) { \
+        D_00413F80.values[index] = 0; \
+    }
+#define RUN_DOWN(index, timers, values) \
+    if (TIMER_ENDS(D_00413F80.timers[index])) { \
+        D_00413F80.values[index] = 0; \
+    }
+#define WEAR_OFF(index) \
+    if (wear < (u16)D_00413F80.timed_flags[index]) { \
+        D_00413F80.timed_flags[index] -= wear; \
+    } else { \
+        D_00413F80.timed_flags[index] = 0; \
+    }
+/* one of the nine values: the item's row for its level plus what it gained, scaled by LevelRecord.level in percent */
+#define SET_SCALED(n)     D_00413F80.unk60.values[n] = (item_def->unk00[record->unk14].values[n] + record->unk00[n]) * record->level / 100
+
+/* Sets the player up for a new game. */
+void func_001B5810(void) {
+    int i;
+    int j;
+
+    memset(&D_00413F80, 0, sizeof(PlayerState));
+    memset(&D_00414280, 0, sizeof(PlayerState));
+    memset(&D_00414580, 0, sizeof(PlayerScreenTint));
+    D_00413F80.magic_base = D_00413F80.power_base = 20;
+    D_00413F80.gold = 50000;
+    D_00413F80.level = 1;
+    D_00413F80.hp_base = 50;
+    D_00413F80.mp_base = 15;
+    D_00413F80.experience = 0;
+    for (i = 0; i < 6; i++) {
+        for (j = 0; j < 5; j++) {
+            spell_levels[i][j] = 0;
+        }
+    }
+    D_00413F80.equipment[EQUIP_HELM] = ITEM_WORN_INDEX(ITEM_HELM_NONE);
+    D_00413F80.equipment[EQUIP_ARMOR] = ITEM_WORN_INDEX(ITEM_ARMOR_NONE);
+    D_00413F80.equipment[EQUIP_GAUNTLET] = ITEM_WORN_INDEX(ITEM_GAUNTLET_NONE);
+    D_00413F80.equipment[EQUIP_BOOT] = ITEM_WORN_INDEX(ITEM_BOOT_NONE);
+    D_00413F80.equipment[EQUIP_RING] = ITEM_WORN_INDEX(ITEM_RING_NONE);
+    D_00413F80.equipment[EQUIP_BRACELET] = ITEM_WORN_INDEX(ITEM_BRACELET_NONE);
+    D_00413F80.equipment[EQUIP_AMULET] = ITEM_WORN_INDEX(ITEM_AMULET_NONE);
+    D_00413F80.position.x = D_00413F80.position.y = D_00413F80.position.z = D_00413F80.position.w = 0.0f;
+    D_00413F80.hp_now = D_00413F80.hp_base;
+    D_00413F80.mp_now = D_00413F80.mp_base;
+    D_00413F80.rotation.y = D_00413F80.rotation.z = D_00413F80.rotation.w = 0.0f;
+    D_00413F80.timed_flags[0] = 0;
+    D_00413F80.timed_flags[1] = 0;
+    D_00413F80.timed_flags[2] = 0;
+    D_00413F80.timed_flags[3] = 0;
+    D_00413F80.timed_flags[4] = 0;
+    D_00413F80.timed_flags[5] = 0;
+    D_00413F80.weapon = 0;
+    D_00413F80.equipment[EQUIP_SHIELD] = ITEM_WORN_INDEX(ITEM_SHIELD_NONE);
+    D_00413F80.shortcut_type = 0;
+    D_00413F80.shortcut = 0;
+    D_00413F80.unkBC = 0;
+    D_00413F80.unkC0 = 0;
+    D_00413F80.unk1A4 = 0;
+    D_00413F80.unk1A6 = 0;
+    D_00413F80.unk264 = 0;
+    D_00413F80.rotation.x = 0.0f;
+    D_00413F80.unk250 = 0xFF;
+    D_00413F80.map_index = 0xFFFF;
+    D_00413F80.unk1C4 = 0.0f;
+    D_00413F80.unk1A8 = 0;
+    D_00413F80.unk1C0 = 0;
+    func_001BA310();
+    func_001B96C8();
+    D_00414280 = D_00413F80;
+}
+
+void func_001B5A10(void) {
+    D_00413F80.unkBC = 0;
+    D_00413F80.unkC0 = 0;
+    D_00413F80.unk1A4 = 0;
+    D_00413F80.unk1A6 = 0;
+    D_00413F80.unk264 = 0;
+    ((int (*)(void))func_001BB5E8)(); // match: called as if it returned something, which keeps the call from being a jump
+}
 
 /* Makes sure the player's map record index is a valid one. */
 static inline void check_map_index(void) {
@@ -379,8 +486,6 @@ void Player_Update(void) {
     D_0038CC50.unk07 = 1;
 }
 
-extern PlayerScreenTint D_00414580;
-
 void func_0010A4E8(int, int, int, int, int);
 
 /* Draws the colours that lie over the screen (PlayerScreenTint). */
@@ -415,12 +520,9 @@ void Player_DrawScreenTints(void) {
     }
 }
 
-extern PlayerState D_00413F80;
-extern PlayerScreenTint D_00414580;
 extern MapDrawState D_0038A1B0;
 extern s32 D_00413EE8[][3];
 extern const s8 D_0043F260[30];
-extern u32 D_00446ED4;
 
 /* Works out the colours laid over the screen (PlayerScreenTint) for the frame: which timed
    flag shows, how strong each tint is, and the map's glow. */
@@ -582,11 +684,7 @@ void Player_UpdateScreenTints(void) {
     }
 }
 
-extern PlayerState D_00413F80;
-extern PlayerItemDef weapon_defs[];
-extern GameStatus D_0038CC50;
 extern void (*D_00413F50[])(u16, u16);
-extern u16 D_0044693E;
 
 /* The player's actions for this frame: runs the handler of the item in hand, then the magic button. */
 void Player_UpdateActions(u16 held, u16 pressed) {
@@ -618,20 +716,12 @@ void Player_UpdateActions(u16 held, u16 pressed) {
     }
 }
 
-extern PlayerState D_00413F80;
-extern PlayerItemDef weapon_defs[];
 extern LevelRecord D_003679A0[];
-extern FxTableEntry D_00402DA8[];
-extern u16 D_0044693C;
-extern u16 D_0044693E;
-extern u16 D_00446940;
 
-void *memset(void *, int, u32);
 void func_00108A08(ModelInstance *, int);
 void func_00108AC8(void *);
 void Sound_PlaySw(int mode);
 s32 func_001B1470(Unk1B1470Request *, Unk1B1470Extra *);
-void Vector_Copy(void *, void *);
 
 /* Handler of a weapon that is swung: the button starts the swing; while its motion runs the
    swing hits what it reaches, plays its sound and casts the weapon's two magics when they were
@@ -784,16 +874,8 @@ void Player_InvokeTargetHandler(u16 target_id, u16 command) {
     D_00413F60[D_004141D8[0]](target_id, command);
 }
 
-extern PlayerState D_00413F80;
-extern PlayerItemDef weapon_defs[];
-extern u8 item_counts[];
 extern int D_00413F30[];
 extern float D_00413F40[];
-extern u16 D_0044693C;
-
-void func_00108A08(ModelInstance *, int);
-void func_00108AC8(void *);
-int func_001B4F30(u16, void *, void *, void *, void *);
 
 /* Handler of an item that shoots: on the button, starts the motion and launches the item's shot. */
 void Player_FireProjectile(u16 held, u16 pressed) {
@@ -819,19 +901,11 @@ void Player_FireProjectile(u16 held, u16 pressed) {
     }
 }
 
-extern PlayerState D_00413F80;
-extern PlayerItemDef weapon_defs[];
 extern GameDefinition D_00416D78[];
-extern u8 item_counts[];
 extern Unk1B1470Request D_0057A350[32];
-extern u16 D_0044693C;
 
-void *memset(void *, s32, u32);
-void func_00108AC8(void *);
 int func_00109098(ModelInstance *model, u8 index, u16 speed);
 void Sound_StopVoice(s8 slot);
-void Sound_PlaySw(int mode);
-
 
 /* Handler of a drawn weapon while the button is held: the draw motion runs to its last frame and the
    strength builds up; letting go looses the shot, anything else lowers the weapon. */
@@ -900,19 +974,11 @@ void Player_DrawBow(u16 held, u16 pressed) {
     D_00413F80.unk258 += 3;
 }
 
-extern PlayerState D_00413F80;
-
-void Sound_PlaySw(int mode);
-
 void Player_PlayEquipSound(void) {
     Sound_PlaySw(1);
     D_00413F80.unkBC = 0;
     D_00413F80.unk258++;
 }
-
-extern PlayerState D_00413F80;
-
-void func_00108AC8(void *);
 
 void Player_FinishWeaponMotion(void) {
     if (MODEL_CHANNEL(WEAPON_MODEL)->value != 0) {
@@ -928,10 +994,6 @@ void Player_FinishWeaponMotion(void) {
     }
 }
 
-extern u8 D_004141D8[];
-
-void func_00108AC8(void *);
-
 void Player_HolsterWeapon(void) {
     func_00108AC8(WEAPON_MODEL);
     if (MODEL_CHANNEL(WEAPON_MODEL)->value == 0) {
@@ -940,11 +1002,7 @@ void Player_HolsterWeapon(void) {
     }
 }
 
-extern PlayerState D_00413F80;
 extern float D_00420D10[];
-
-void Vector_Scale(float *, float *, float);
-void Vector_Add(void *dst, void *a, void *b);
 
 int Player_CanFireAtAim(void) {
     float vec[4];
@@ -962,10 +1020,6 @@ int Player_CanFireAtAim(void) {
 
 float atan2f(float, float);
 float sqrtf(float);
-void Vector_Copy(void *, void *);
-void Vector_Subtract(void *, void *, void *);
-extern float D_00413F40[];
-extern int D_00413F30[];
 
 void Player_UpdateWeaponAim(void) {
     float vec[4];
@@ -981,11 +1035,6 @@ void Player_UpdateWeaponAim(void) {
     D_00413F40[1] = atan2f(vec[0], vec[2]);
 }
 
-extern PlayerState D_00413F80;
-extern PlayerState D_00414280;      /* the player as of the frame before */
-extern GameStatus D_0038CC50;
-extern MapSlot D_0038CD20[];
-extern int D_00446770;
 extern f32 D_00431AF0[16];
 
 /* the movement tables, one row per way of moving (see movement_row) */
@@ -1001,41 +1050,20 @@ extern f32 D_00413EB8[6];           /* how fast the view levels out */
 extern f32 D_00413ED0[6];           /* falling speed gained per frame */
 
 /* the pad bits of each control */
-extern u16 D_0044692C;              /* forward */
-extern u16 D_0044692E;              /* back */
-extern u16 D_00446930;              /* turn right */
-extern u16 D_00446932;              /* turn left */
-extern u16 D_00446934;              /* step right */
-extern u16 D_00446936;              /* step left */
-extern u16 D_00446938;              /* look down */
-extern u16 D_0044693A;              /* look up */
 
-void *memset(void *, int, u32);
-float sqrtf(float);
-float sinf(float);
 float cosf(float);
-float atan2f(float, float);
 double sin(double);
 void sceVu0RotMatrixX(float *, float *, float);
 void sceVu0RotMatrixY(float *, float *, float);
 void sceVu0RotMatrixZ(float *, float *, float);
-void Vector_Subtract(void *, void *, void *);
-void Vector_Scale(float *, float *, float);
 float Angle_Wrap(float);
 int Angle_Approach(float *, float, float);
-int Sound_PlayCommon(int);
 int Sound_PlayMap(int);
-void func_001B92C0(float);
-void func_001B9610(void);
 int func_001BDDC0(void);
 void func_001BE760(void);
 void func_001BEA50(void);
 void func_001BECA8(int);
 void func_001BF350(int);
-void Vector_Copy(void *, void *);
-void Vector_ApplyMatrix(void *, void *, void *);
-void Vector_Add(void *, void *, void *);
-void Vector_Normalize(void *, void *);
 
 #define PLAYER_FLAG_32 0x100000000L /* the view is levelling out */
 #define PLAYER_FLAG_37 0x2000000000L /* the view dips after a landing */
@@ -1467,5 +1495,633 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
         D_00413F80.hp_now = 0;
         D_00413F80.unk1A4 = 0;
         func_001B9610();
+    }
+}
+
+/* What the ground under the player does to him: death, poison (by chance or at once), damage, or experience. */
+void func_001B9078(void) {
+    if (D_00413F80.unk1EC != 0) {
+        D_00413F80.hp_now = 0;
+        D_00413F80.unk1A4 = 0;
+        if (D_00413F80.unk1A8 == 0) {
+            func_001B9610();
+        }
+    }
+    if (D_00413F80.unk1E0 == 0) {
+        return;
+    }
+    switch (D_00413F80.unk1E4) {
+    case 1:
+        if ((u16)D_00413F80.timed_flags[0] == 0 && D_00413F80.flag_timers[0] == 0) {
+            if (D_00413F80.unk1E8 % 60 == 0) {
+                // match: the chance (at least 5 in 100) is worked out after the roll, inside the comparison
+                if ((int)(rand() * 100.0f * 4.656613e-10f) < (20 - D_00413F80.unkDC[0] > 4 ? 20 - D_00413F80.unkDC[0] : 5)) {
+                    D_00413F80.timed_flags[0] = 1800;
+                    D_00413F80.unk2C4 = D_00446ED4;
+                }
+            }
+        }
+        break;
+    case 2:
+        if ((u16)D_00413F80.timed_flags[0] == 0 && D_00413F80.flag_timers[0] == 0) {
+            if (D_00413F80.unk1E8 % 60 == 0) {
+                // match: the chance (at least 5 in 100) is worked out after the roll, inside the comparison
+                if ((int)(rand() * 100.0f * 4.656613e-10f) < (50 - D_00413F80.unkDC[0] > 4 ? 50 - D_00413F80.unkDC[0] : 5)) {
+                    D_00413F80.timed_flags[0] = 1800;
+                    D_00413F80.unk2C4 = D_00446ED4;
+                }
+            }
+        }
+        break;
+    case 3:
+        if ((u16)D_00413F80.timed_flags[0] == 0) {
+            D_00413F80.timed_flags[0] = 1800;
+            D_00413F80.unk2C4 = D_00446ED4;
+        }
+        break;
+    case 4:
+        func_001BB2E8(10);
+        break;
+    case 5:
+        func_001BB2E8(1);
+        func_001B4B10(D_00413F80.weapon, 1);
+        func_001B4DF8(D_00413F80.equipment[EQUIP_SHIELD], 1);
+        func_001B4DF8(D_00413F80.equipment[EQUIP_HELM], 1);
+        func_001B4DF8(D_00413F80.equipment[EQUIP_ARMOR], 1);
+        func_001B4DF8(D_00413F80.equipment[EQUIP_GAUNTLET], 1);
+        func_001B4DF8(D_00413F80.equipment[EQUIP_BOOT], 1);
+        break;
+    }
+}
+
+void func_001B92C0(float speed) {
+    int amount;
+
+    if (speed < 66.666664f) {
+        return;
+    }
+    amount = speed * speed / (1800.0f / (speed / 6.6666665f - 9.0f));
+    if (D_00413F80.unk204 != 0) {
+        amount = amount * 60 / 100;
+    } else if ((D_00413F80.unk1C8 >> 38 & 1) == 1) {
+        if (!(D_00414448[0] >> 38 & 1)) {
+            amount = amount * 80 / 100;
+        }
+    }
+    if (amount > 0) {
+        func_001BB260(amount);
+        if (D_00413F80.equipment[EQUIP_BOOT] != ITEM_WORN_INDEX(ITEM_ABSORPTION_BOOTS)) {
+            D_00413F80.unk200 = 60;
+        }
+    }
+}
+
+/* Moves both player records by offset (the other map slot became the current one): their positions and the
+   heights kept with them. */
+void func_001B93B8(f32 *offset) {
+    Vector_Add(&D_00413F80.position, &D_00413F80.position, offset);
+    Vector_Add(&D_00414280.position, &D_00414280.position, offset);
+    D_00413F80.unk1D8 += offset[1];
+    D_00413F80.unk1DC += offset[1];
+    D_00413F80.unk214 += offset[1];
+    D_00414280.unk1D8 += offset[1];
+    D_00414280.unk1DC += offset[1];
+    D_00414280.unk214 += offset[1];
+}
+
+void func_001B9478(void) {
+    D_00413F80.unk1C4 = 0.0f;
+    D_00413F80.unk1B0 = 0.0f;
+    D_00413F80.unk1B4 = 0.0f;
+    D_00413F80.unk1B8 = 0.0f;
+    D_00413F80.unk1BC = 0.0f;
+    D_00413F80.unk1C0 = 0;
+    D_00413F80.unk1C8 &= ~0x100000000L;
+}
+
+void func_001B94C0(void) {
+    PlayerState *player;
+    u64 was_set;
+    int start_full;
+    u64 is_set;
+    int full;
+    int filled;
+
+    player = &D_00413F80;
+    was_set = (D_00414448[0] >> 39) & 1;
+    is_set = (player->unk1C8 >> 39) & 1;
+    if (is_set != was_set) {
+        if (is_set != 0) {
+            start_full = (player->power * 9) + 0x78;
+            player->unkCC = player->unkD0 = start_full;
+        } else {
+            player->unkD0 = player->unkCC = 0;
+        }
+    } else if (is_set != 0) {
+        filled = player->unkCC;
+        full = (player->power * 9) + 0x78;
+        player->unkD0 = full;
+        if (full < filled) {
+            player->unkCC = full;
+            filled = full;
+        }
+        if (filled > 0) {
+            if ((player->equipment[EQUIP_AMULET] != 0x9A) || ((D_00446ED4 & 1) != 0)) {
+                player->unkCC = filled - 1;
+            }
+        } else {
+            func_001BB308(1);
+        }
+    }
+}
+
+/* Counts six countdown timers down to zero, clearing each matching flag on the way. */
+void func_001B9588(void) {
+    PlayerState *player = &D_00413F80;
+
+    if (player->flag_timers[0] != 0) {
+        player->timed_flags[0] = 0;
+        player->flag_timers[0]--;
+    }
+    if (player->flag_timers[1] != 0) {
+        player->timed_flags[1] = 0;
+        player->flag_timers[1]--;
+    }
+    if (player->flag_timers[2] != 0) {
+        player->timed_flags[2] = 0;
+        player->flag_timers[2]--;
+    }
+    if (player->flag_timers[3] != 0) {
+        player->timed_flags[3] = 0;
+        player->flag_timers[3]--;
+    }
+    if (player->flag_timers[4] != 0) {
+        player->timed_flags[4] = 0;
+        player->flag_timers[4]--;
+    }
+    if (player->flag_timers[5] != 0) {
+        player->timed_flags[5] = 0;
+        player->flag_timers[5]--;
+    }
+}
+
+void func_001B9610(void)
+{
+    PlayerState *player = &D_00413F80;
+
+    if (player->unk1A8 == 0) {
+        if (player->unk1A4 > 0) {
+            return;
+        }
+        if (player->hp_now > 0) {
+            return;
+        }
+        player->unk1A8 = 1;
+        Sound_PlayCommon(0x28);
+    }
+    if (player->unk1A8 < 0x3C) {
+        player->rotation.x += (1.012291f - player->rotation.x) / (0x3D - player->unk1A8);
+        player->unk1A8++;
+    } else {
+        D_0038CC50.bit9 = 1;
+    }
+}
+
+/* TRUE once every `period` frames */
+static inline s32 is_frame_multiple(u32 period) {
+    return D_00446ED4 % period == 0;
+}
+
+/* The per-frame bookkeeping of the player: timers, the two gauges, and the drawn bars. */
+void func_001B96C8(void) {
+    GameDefinition *definition = &D_00416D78[D_00413F80.weapon];
+    PlayerItemDef *item_def = &weapon_defs[D_00413F80.weapon];
+    FxTableEntry *fx_entry = &D_00402DA8[D_00413F80.unk264];
+    s32 wear;
+    s32 draining;
+    s32 bar_target;
+    s32 bar_step;
+
+    if (D_00413F80.unk1A8 == 0 && D_00413F80.unk2B4 != 0 && D_00446ED4 % D_00413F80.unk2B4 == 0) {
+        if (D_00413F80.unk2B0 > 0) {
+            if (D_00413F80.hp_now > 0) {
+                D_00413F80.hp_now++;
+            }
+            D_00413F80.unk2B0--;
+        } else {
+            D_00413F80.unk2B0++;
+            D_00413F80.hp_now--;
+        }
+        if (D_00413F80.unk2B0 == 0) {
+            D_00413F80.unk2B4 = 0;
+        }
+    }
+
+    RUN_DOWN_PAIR(0, unk158, unk188, unk11C);
+    RUN_DOWN_PAIR(1, unk158, unk188, unk11C);
+    RUN_DOWN_PAIR(2, unk158, unk188, unk11C);
+    RUN_DOWN_PAIR(0, unk15E, unk18E, unk122);
+    RUN_DOWN_PAIR(1, unk15E, unk18E, unk122);
+    RUN_DOWN_PAIR(2, unk15E, unk18E, unk122);
+    RUN_DOWN_PAIR(3, unk15E, unk18E, unk122);
+    RUN_DOWN_PAIR(4, unk15E, unk18E, unk122);
+    RUN_DOWN_PAIR(5, unk15E, unk18E, unk122);
+    RUN_DOWN(0, unk14C, unk110);
+    RUN_DOWN(1, unk14C, unk110);
+    RUN_DOWN(2, unk14C, unk110);
+    RUN_DOWN(3, unk14C, unk110);
+    RUN_DOWN(4, unk14C, unk110);
+    RUN_DOWN(5, unk14C, unk110);
+    RUN_DOWN_SIGNED(0, unk176, unk13A);
+    RUN_DOWN_SIGNED(1, unk176, unk13A);
+    RUN_DOWN_SIGNED(2, unk176, unk13A);
+    RUN_DOWN_SIGNED(0, unk17C, unk140);
+    RUN_DOWN_SIGNED(1, unk17C, unk140);
+    RUN_DOWN_SIGNED(2, unk17C, unk140);
+    RUN_DOWN_SIGNED(3, unk17C, unk140);
+    RUN_DOWN_SIGNED(4, unk17C, unk140);
+    RUN_DOWN_SIGNED(5, unk17C, unk140);
+    RUN_DOWN(0, unk16A, unk12E);
+    RUN_DOWN(1, unk16A, unk12E);
+    RUN_DOWN(2, unk16A, unk12E);
+    RUN_DOWN(3, unk16A, unk12E);
+    RUN_DOWN(4, unk16A, unk12E);
+    RUN_DOWN(5, unk16A, unk12E);
+
+    draining = D_00413F80.unkEC != 0;
+    if (D_00413F80.unkF0 != 0 && D_00446ED4 % D_00413F80.unkF0 == 0 && D_00413F80.unk1A8 == 0 && D_00413F80.hp_now > 0) {
+        D_00413F80.hp_now++;
+    }
+    if (D_00413F80.unkF4 != 0 && D_00446ED4 % D_00413F80.unkF4 == 0 && D_00413F80.unk1A8 == 0) {
+        D_00413F80.hp_now--;
+    }
+    if (D_00413F80.unkF8 != 0 && D_00446ED4 % D_00413F80.unkF8 == 0 && D_00413F80.unk1A8 == 0) {
+        D_00413F80.mp_now++;
+    }
+    if (D_00413F80.unkFC != 0 && D_00446ED4 % D_00413F80.unkFC == 0 && D_00413F80.unk1A8 == 0) {
+        D_00413F80.mp_now--;
+    }
+    if (D_00413F80.power_seed_timer > 0) {
+        D_00413F80.power_seed_timer--;
+    }
+    if (D_00413F80.widda_needle_timer > 0) {
+        D_00413F80.widda_needle_timer--;
+    }
+
+    wear = 1;
+    if (is_frame_multiple(3)) {
+        if (D_00413F80.equipment[EQUIP_ARMOR] == ITEM_WORN_INDEX(ITEM_DEMON_ARMOR)) {
+            wear = 0;
+        }
+        if (D_00413F80.equipment[EQUIP_AMULET] == ITEM_WORN_INDEX(ITEM_PURITY_AMULET)) {
+            wear++;
+        }
+    }
+    if ((u16)D_00413F80.timed_flags[0] != 0) {
+        if (D_00413F80.unk2DC <= 0 ? is_frame_multiple(30) : is_frame_multiple(90)) {
+            func_001BB2E8(3);
+        }
+    }
+    if ((u16)D_00413F80.timed_flags[3] != 0) {
+        draining = TRUE;
+    }
+    if (wear != 0) {
+        WEAR_OFF(0);
+        WEAR_OFF(3);
+        WEAR_OFF(1);
+        WEAR_OFF(2);
+        WEAR_OFF(4);
+        WEAR_OFF(5);
+    }
+    if (draining) {
+        if (is_frame_multiple(30)) {
+            func_001BB2E8(1);
+            D_00413F80.mp_now--;
+        }
+    }
+
+    if (D_00413F80.hp_now > D_00413F80.hp_max) {
+        D_00413F80.hp_now = D_00413F80.hp_max;
+    } else if (D_00413F80.hp_now < 0) {
+        D_00413F80.hp_now = 0;
+    }
+    if (D_00413F80.mp_now > D_00413F80.mp_max) {
+        D_00413F80.mp_now = D_00413F80.mp_max;
+    } else if (D_00413F80.mp_now < 0) {
+        D_00413F80.mp_now = 0;
+    }
+
+    if (D_00413F80.unk1A8 == 0 && D_00413F80.unk258 == 0) {
+        if ((s32)(D_00413F80.unk1C8 >> 35) & 1) {
+            D_00413F80.unkBC -= 83;
+            if (D_00413F80.unkBC < 0) {
+                D_00413F80.unkBC = 0;
+            }
+        } else if (item_def->unk63 < 2) {
+            if (D_00413F80.unkC4 <= 0) {
+                if (D_00413F80.unkBC < GAUGE_FULL) {
+                    s32 rate = D_00413F80.power;
+
+                    if (rate < 20) {
+                        rate = 20;
+                    }
+                    D_00413F80.unkBC += rate * 42 / (definition->unk33 + 1);
+                    if (D_00413F80.unkBC > GAUGE_FULL) {
+                        D_00413F80.unkBC = GAUGE_FULL;
+                    }
+                }
+            }
+            if (D_00413F80.unkC4 > 0) {
+                D_00413F80.unkC4--;
+            }
+        } else {
+            D_00413F80.unkBC = 0;
+        }
+    }
+    if (D_00413F80.unk1A8 == 0 && D_00413F80.unk264 != 0) {
+        if ((s32)(D_00413F80.unk1C8 >> 35) & 1) {
+            D_00413F80.unkC0 -= 83;
+            if (D_00413F80.unkC0 < 0) {
+                D_00413F80.unkC0 = 0;
+            }
+        } else {
+            if (D_00413F80.unkC8 <= 0) {
+                if (D_00413F80.unkC0 < GAUGE_FULL) {
+                    s32 rate = D_00413F80.magic;
+
+                    if (rate < 20) {
+                        rate = 20;
+                    }
+                    D_00413F80.unkC0 += rate * 42 / (fx_entry->unkFE + 1);
+                    if (D_00413F80.unkC0 > GAUGE_FULL) {
+                        D_00413F80.unkC0 = GAUGE_FULL;
+                    }
+                }
+            }
+            if (D_00413F80.unkC8 > 0) {
+                D_00413F80.unkC8--;
+            }
+        }
+    }
+    if (D_00413F80.equipped_magic == 0 && item_def->unk42 == 0xFFFF
+        && (item_def->unk52 == 0xFFFF || (D_003679A0 + D_00413F80.weapon)->unk14 + 1 < 3) && func_001BF6E8() == 0) {
+        D_00413F80.unkC0 = 0;
+        D_00413F80.unk264 = 0;
+    }
+    if ((u16)D_00413F80.timed_flags[5] != 0) {
+        D_00413F80.unkC0 = 0;
+    }
+    if (!((s32)(D_00413F80.unk1C8 >> 37) & 1) && D_00413F80.unk200 > 0) {
+        D_00413F80.unk200--;
+    }
+
+    if (D_00413F80.unk1A8 == 0 && D_00413F80.hp_now > 0) {
+        bar_target = D_00413F80.hp_now * 49 / D_00413F80.hp_max;
+        if (bar_target < D_00413F80.unk1A4) {
+            D_00413F80.unk1A4 -= 2;
+            if (D_00413F80.unk1A4 < bar_target) {
+                D_00413F80.unk1A4 = bar_target;
+            }
+        } else if (D_00413F80.unk1A4 < bar_target) {
+            D_00413F80.unk1A4++;
+            if (bar_target < D_00413F80.unk1A4) {
+                D_00413F80.unk1A4 = bar_target;
+            }
+        }
+    } else {
+        D_00413F80.unk1A4 = 0;
+    }
+
+    if (D_00413F80.mp_max < D_00413F80.unk1A6) {
+        D_00413F80.unk1A6 = D_00413F80.mp_max;
+    }
+    bar_step = D_00413F80.mp_max / 64;
+    if (bar_step <= 0) {
+        bar_step = 1;
+    }
+    if (D_00413F80.mp_now < D_00413F80.unk1A6) {
+        D_00413F80.unk1A6 -= bar_step;
+        if (D_00413F80.unk1A6 < D_00413F80.mp_now) {
+            D_00413F80.unk1A6 = D_00413F80.mp_now;
+        }
+        if (D_00413F80.unk1A6 < 0) {
+            D_00413F80.unk1A6 = 0;
+        }
+    } else if (D_00413F80.unk1A6 < D_00413F80.mp_now) {
+        D_00413F80.unk1A6 += bar_step;
+        if (D_00413F80.mp_now < D_00413F80.unk1A6) {
+            D_00413F80.unk1A6 = D_00413F80.mp_now;
+        }
+    }
+
+    if (D_00413F80.weapon == 0x24) {
+        if (is_frame_multiple(600)) {
+            if ((s32)(rand() * 100.0f * 4.656613e-10f) < 70) {
+                D_00413F80.timed_flags[0] = 1800;
+                D_00413F80.unk2C4 = D_00446ED4;
+            }
+        }
+    }
+}
+
+/* Works the player's derived numbers out again from the base ones, what is worn and the magic in effect. */
+void func_001BA310(void) {
+    PlayerItemDef *item_def = &weapon_defs[D_00413F80.weapon];
+    LevelRecord *record = &D_003679A0[D_00413F80.weapon];
+    s32 unused_third;
+    s32 unused_fifth;
+    s32 unused_fifteenth;
+
+    if (D_00413F80.equipped_magic != 0) {
+        // match: three divisions whose results are never used; only their divide checks are left in retail,
+        // so what was divided is not known
+        unused_third = D_00413F80.hp_base / 3;
+        unused_fifth = D_00413F80.hp_base / 5;
+        unused_fifteenth = D_00413F80.hp_base / 15;
+    }
+    D_00413F80.hp_max = D_00413F80.hp_base;
+    D_00413F80.mp_max = D_00413F80.mp_base;
+    D_00413F80.power = D_00413F80.power_base;
+    D_00413F80.magic = D_00413F80.magic_base;
+    func_001BAE88();
+    D_00413F80.unkA8 = D_00413F80.power * 3 + 80;
+    D_00413F80.unkA8 = (f32)D_00413F80.unkA8 * 2.2046;
+    D_00413F80.weight = item_name_defs[D_00413F80.weapon + ITEM_WEAPON_FIRST].unk3E;
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_SHIELD] + ITEM_WORN_FIRST].unk3E;
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_HELM] + ITEM_WORN_FIRST].unk3E;
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_ARMOR] + ITEM_WORN_FIRST].unk3E;
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_GAUNTLET] + ITEM_WORN_FIRST].unk3E;
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_BOOT] + ITEM_WORN_FIRST].unk3E;
+    if (PLAYER_WEARS_ANCIENT_SET(&D_00413F80)) {
+        D_00413F80.weight /= 3;
+    }
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_RING] + ITEM_WORN_FIRST].unk3E;
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_BRACELET] + ITEM_WORN_FIRST].unk3E;
+    D_00413F80.weight += item_name_defs[D_00413F80.equipment[EQUIP_AMULET] + ITEM_WORN_FIRST].unk3E;
+    SET_SCALED(0);
+    SET_SCALED(1);
+    SET_SCALED(2);
+    SET_SCALED(3);
+    SET_SCALED(4);
+    SET_SCALED(5);
+    SET_SCALED(6);
+    SET_SCALED(7);
+    SET_SCALED(8);
+    D_00413F80.unk60.values[0] += D_00413F80.unk11C[0];
+    D_00413F80.unk60.values[1] += D_00413F80.unk11C[1];
+    D_00413F80.unk60.values[2] += D_00413F80.unk11C[2];
+    D_00413F80.unk60.values[3] += D_00413F80.unk122[0];
+    D_00413F80.unk60.values[4] += D_00413F80.unk122[1];
+    D_00413F80.unk60.values[5] += D_00413F80.unk122[2];
+    D_00413F80.unk60.values[6] += D_00413F80.unk122[3];
+    D_00413F80.unk60.values[7] += D_00413F80.unk122[4];
+    D_00413F80.unk60.values[8] += D_00413F80.unk122[5];
+    D_00413F80.unk72 = item_def->unk36;
+    D_00413F80.unk72.values[0] += D_00413F80.unk110[0];
+    D_00413F80.unk72.values[1] += D_00413F80.unk110[1];
+    D_00413F80.unk72.values[2] += D_00413F80.unk110[2];
+    D_00413F80.unk72.values[3] += D_00413F80.unk110[3];
+    D_00413F80.unk72.values[4] += D_00413F80.unk110[4];
+    D_00413F80.unk72.values[5] += D_00413F80.unk110[5];
+    memset(&D_00413F80.unk7E, 0, sizeof(PlayerShotStats));
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_SHIELD]);
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_HELM]);
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_ARMOR]);
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_GAUNTLET]);
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_BOOT]);
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_RING]);
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_BRACELET]);
+    func_001BB728((u16 *)D_00413F80.unk7E.values, D_00413F80.equipment[EQUIP_AMULET]);
+    memset(&D_00413F80.unk90, 0, sizeof(PlayerShotStats));
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_SHIELD]);
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_HELM]);
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_ARMOR]);
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_GAUNTLET]);
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_BOOT]);
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_RING]);
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_BRACELET]);
+    func_001BB728((u16 *)D_00413F80.unk90.values, D_00413F80.equipment[EQUIP_AMULET]);
+    D_00413F80.unk90.values[0] += D_00413F80.unk13A[0];
+    D_00413F80.unk90.values[1] += D_00413F80.unk13A[1];
+    D_00413F80.unk90.values[2] += D_00413F80.unk13A[2];
+    D_00413F80.unk90.values[3] += D_00413F80.unk140[0];
+    D_00413F80.unk90.values[4] += D_00413F80.unk140[1];
+    D_00413F80.unk90.values[5] += D_00413F80.unk140[2];
+    D_00413F80.unk90.values[6] += D_00413F80.unk140[3];
+    D_00413F80.unk90.values[7] += D_00413F80.unk140[4];
+    D_00413F80.unk90.values[8] += D_00413F80.unk140[5];
+    D_00413F80.unkDC[0] += D_00413F80.unk12E[0];
+    D_00413F80.unkDC[1] += D_00413F80.unk12E[1];
+    D_00413F80.unkDC[2] += D_00413F80.unk12E[2];
+    D_00413F80.unkDC[3] += D_00413F80.unk12E[3];
+    D_00413F80.unkDC[4] += D_00413F80.unk12E[4];
+    D_00413F80.unkDC[5] += D_00413F80.unk12E[5];
+    if (D_00413F80.unkEC != 0 || (u16)D_00413F80.timed_flags[3] != 0) { // match: read unsigned here
+        D_00413F80.power /= 2;
+        D_00413F80.magic /= 2;
+    }
+    if (D_00413F80.unk2EC > 0) {
+        D_00413F80.power += D_00413F80.unk2F0;
+    }
+    if (D_00413F80.power_seed_timer != 0) {
+        D_00413F80.power += D_00413F80.power / 10;
+    }
+    if (D_00413F80.widda_needle_timer != 0) {
+        D_00413F80.magic += D_00413F80.magic / 10;
+    }
+    if (D_00413F80.unk2EC > 0) {
+        D_00413F80.magic = 1;
+    }
+    if (D_00413F80.equipment[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_SACRED_GLOVES)) {
+        s32 item_weight = item_name_defs[D_00413F80.weapon + ITEM_WEAPON_FIRST].unk3E;
+
+        D_00413F80.weight -= item_weight / 4;
+    }
+    if (D_00413F80.equipment[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_BONE_HANDS)) {
+        D_00413F80.weight += item_name_defs[D_00413F80.weapon + ITEM_WEAPON_FIRST].unk3E;
+    }
+    if (D_00413F80.equipment[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_LORD_MYUS_GLOVES)) {
+        s32 item_weight = item_name_defs[D_00413F80.weapon + ITEM_WEAPON_FIRST].unk3E;
+
+        D_00413F80.weight -= item_weight / 4;
+    }
+    if (D_00413F80.equipment[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_SILVERY_GLOVES)) {
+        D_00413F80.unk60.values[0] += D_00413F80.unk60.values[0] / 10;
+        D_00413F80.unk60.values[1] += D_00413F80.unk60.values[1] / 10;
+        D_00413F80.unk60.values[2] += D_00413F80.unk60.values[2] / 10;
+    }
+    if (D_00413F80.equipment[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_VENOM_GLOVES)) {
+        D_00413F80.unk72.values[0] += 70;
+    }
+    if (D_00413F80.equipment[EQUIP_RING] == ITEM_WORN_INDEX(ITEM_WIDDAS_RING)) {
+        D_00413F80.hp_max += D_00413F80.hp_max / 5;
+    }
+    if (D_00413F80.equipment[EQUIP_RING] == ITEM_WORN_INDEX(ITEM_RING_OF_FIRE)) {
+        D_00413F80.unk60.values[3] += 20;
+    }
+    if (D_00413F80.equipment[EQUIP_RING] == ITEM_WORN_INDEX(ITEM_RING_OF_EARTH)) {
+        D_00413F80.unk60.values[4] += 20;
+    }
+    if (D_00413F80.equipment[EQUIP_RING] == ITEM_WORN_INDEX(ITEM_RING_OF_WIND)) {
+        D_00413F80.unk60.values[5] += 20;
+    }
+    if (D_00413F80.equipment[EQUIP_RING] == ITEM_WORN_INDEX(ITEM_RING_OF_WATER)) {
+        D_00413F80.unk60.values[6] += 20;
+    }
+    if (D_00413F80.equipment[EQUIP_BRACELET] == ITEM_WORN_INDEX(ITEM_POWER_BRACELET)) {
+        D_00413F80.unk60.values[0] += D_00413F80.unk60.values[0] / 10;
+        D_00413F80.unk60.values[1] += D_00413F80.unk60.values[1] / 10;
+        D_00413F80.unk60.values[2] += D_00413F80.unk60.values[2] / 10;
+    }
+    if (D_00413F80.equipment[EQUIP_BRACELET] == ITEM_WORN_INDEX(ITEM_FEATHER_BRACELET)) {
+        D_00413F80.weight = D_00413F80.weight * 3 / 4;
+    }
+    if (D_00413F80.equipment[EQUIP_HELM] == ITEM_WORN_INDEX(ITEM_ANGELIC_CROWN)) {
+        D_00413F80.mp_max += D_00413F80.mp_max / 5;
+    }
+    if (D_00413F80.equipment[EQUIP_BRACELET] == ITEM_WORN_INDEX(ITEM_CLARITY_BRACELET)) {
+        D_00413F80.mp_max *= 5;
+    }
+    if (D_00413F80.hp_max >= 1000) {
+        D_00413F80.hp_max = 999;
+    }
+    if (D_00413F80.mp_max >= 1000) {
+        D_00413F80.mp_max = 999;
+    }
+    if (D_00413F80.unk72.values[0] > 100) {
+        D_00413F80.unk72.values[0] = 100;
+    }
+    if (D_00413F80.unk72.values[1] > 100) {
+        D_00413F80.unk72.values[1] = 100;
+    }
+    if (D_00413F80.unk72.values[2] > 100) {
+        D_00413F80.unk72.values[2] = 100;
+    }
+    if (D_00413F80.unk72.values[3] > 100) {
+        D_00413F80.unk72.values[3] = 100;
+    }
+    if (D_00413F80.unk72.values[4] > 100) {
+        D_00413F80.unk72.values[4] = 100;
+    }
+    if (D_00413F80.unk72.values[5] > 100) {
+        D_00413F80.unk72.values[5] = 100;
+    }
+    if (D_00413F80.unkDC[0] > 100) {
+        D_00413F80.unkDC[0] = 100;
+    }
+    if (D_00413F80.unkDC[1] > 100) {
+        D_00413F80.unkDC[1] = 100;
+    }
+    if (D_00413F80.unkDC[2] > 100) {
+        D_00413F80.unkDC[2] = 100;
+    }
+    if (D_00413F80.unkDC[3] > 100) {
+        D_00413F80.unkDC[3] = 100;
+    }
+    if (D_00413F80.unkDC[4] > 100) {
+        D_00413F80.unkDC[4] = 100;
+    }
+    if (D_00413F80.unkDC[5] > 100) {
+        D_00413F80.unkDC[5] = 100;
     }
 }

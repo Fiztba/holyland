@@ -144,6 +144,19 @@ typedef struct {
     u8 year;                        /* 0x07 years since 2000 */
 } ClockTime;
 
+/* the C library's struct tm, which mktime fills in (func_001D2200) */
+typedef struct {
+    int tm_sec;                     /* 0x00 */
+    int tm_min;                     /* 0x04 */
+    int tm_hour;                    /* 0x08 */
+    int tm_mday;                    /* 0x0C */
+    int tm_mon;                     /* 0x10 0 to 11 */
+    int tm_year;                    /* 0x14 years since 1900 */
+    int tm_wday;                    /* 0x18 0: Sunday */
+    int tm_yday;                    /* 0x1C */
+    int tm_isdst;                   /* 0x20 */
+} CalendarTime;
+
 /* D_00431CE8: the game clock (kf_game_clock.c) */
 typedef struct {
     char pad00[0x08];

@@ -32,7 +32,7 @@ extern MapObject D_003AFA30[];
 void Collision_CylinderEdge(void *, void *, f32, void *, f32, f32);
 void Collision_CylinderCylinder(void *, f32, f32, void *, f32, f32);
 void Collision_BallEdge(void *, void *, f32, void *, f32);
-void func_001C2128(void *, int, int, float);
+void func_001C2128(MapObject *, f32 *, f32 *, f32);
 extern ModelInstanceBlock *D_00432224[];
 
 /* tests the entity's upright capsule against the triangle at `point` and pushes `position`
@@ -2340,7 +2340,7 @@ s32 EntityCollision_LineHits(Entity *target, f32 *from, PlayerData *destination)
     Vector_Subtract(direction, destination, from);
     Vector_Normalize(direction, direction);
     // match: EntityMath_Distance returns the distance (other files declare it void)
-    func_001C2128(target, (int)from, (int)direction, ((f32 (*)(f32 *, void *))EntityMath_Distance)(from, destination));
+    func_001C2128((MapObject *)target, from, direction, ((f32 (*)(f32 *, void *))EntityMath_Distance)(from, destination));
     return COLLISION_RESULT->hit;
 }
 
