@@ -109,6 +109,10 @@ static Vector4 bounds_min;                  /* 0x472060 the lowest corner of eve
 static Vector4 bounds_max;                  /* 0x472070 the highest corner */
 static ModelInstance pointer_model;         /* 0x472080 the pointer model, viewer 4 only */
 
+void func_0011A430(void) {
+    func_0011A598();
+}
+
 void func_0011A438(int viewer_number) {
     u32 viewer_index;
     u8 *row;
@@ -859,4 +863,19 @@ static void func_0011C160(void) {
     func_00109E18();
     func_0010A100(D_0038D8F0);
     func_00107CD8(D_00349680[10]);
+}
+
+/* Whether a map object of this kind is one of the ordinary ones. */
+int func_0011C678(int kind) {
+    switch (kind) {
+        case 0:
+        case 2:
+        case 4:
+        case 8:
+        case 9:
+        case 0x62:
+        case 0x63:
+            return FALSE;
+    }
+    return TRUE;
 }

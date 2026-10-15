@@ -1,6 +1,16 @@
 /* The KF4.DAT file layer: one packed archive read through two file slots, or loose files under \DATA\. */
 #include "kf_file.h"
 
+int sceCdInit(int);
+int sceCdMmode(int);
+
+/* Starts the disc drive in DVD mode. */
+void func_00102150(void) {
+    while (sceCdInit(0) == 0) {
+    }
+    sceCdMmode(2);
+}
+
 /* loads the KF4.DAT table of contents */
 void func_00102178(void) {
     int file;

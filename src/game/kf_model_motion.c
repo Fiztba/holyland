@@ -1,0 +1,292 @@
+/* Model motions: loading them into a ModelChannel, playing a frame (Hermite between keys) and blending in. */
+#include "kf_model.h"
+
+void *memset(void *, int, u32);
+MotionData *func_001086E8(MotionData *, ModelInstance *, int);
+void func_00109100(void *, void *, void *, void *, void *, f32);
+void func_00109178(ModelInstance *);
+float Angle_Wrap(float);
+void func_00108A08(ModelInstance *, int);
+void Vector_WeightedSum4(void *, void *, void *, void *, void *, float *);
+
+/* Adds a motion to the model's channel and poses the parts on its first key; returns the end of the motion. */
+MotionData *func_001086E8(MotionData *data, ModelInstance *model, int unused) {
+    MotionData *motion = data;
+    ModelChannel *channel;
+    int i;
+    ModelPart *parts;
+    MotionKey *key;
+    MotionVector *vectors;
+    MotionVector *vector;
+    u8 limit;
+
+    // match: retail was scheduled with a loop boundary before the channel load and after the vectors fix-up
+    do {
+        channel = MODEL_CHANNEL(model);
+        i = 0;
+        limit = channel->limit;
+        channel->word = 0x100;
+        channel->index = limit;
+        channel->limit = limit + 1;
+        channel->param = 0;
+        channel->param_shifted = 0;
+        channel->value = 0;
+        model->unk100 |= 1;
+        channel->tables[channel->index] = motion->parts;
+        motion->vectors = (MotionVector *)((char *)motion + motion->vectors_offset);
+    } while (0);
+    model->part_count = motion->part_count;
+    // match: the parameter is reused as a cursor nothing reads (cleared, stepped per part, set to the end below)
+    for (data = NULL; i < model->part_count; i++, data++) {
+        model->parts[i].level = 0;
+        if (channel->tables[channel->index][i].keys_offset != 0 &&
+            channel->tables[channel->index][i].thresholds == NULL) {
+            channel->tables[channel->index][i].thresholds =
+                (u16 *)((char *)motion + channel->tables[channel->index][i].keys_offset);
+        }
+        parts = model->parts;
+        vectors = motion->vectors;
+        key = (MotionKey *)channel->tables[channel->index][i].thresholds;
+        vector = &vectors[key->position];
+        parts[i].unk40[0] = vector->x;
+        parts[i].unk40[1] = vector->y;
+        parts[i].unk40[2] = vector->z;
+        parts[i].unk40[3] = 1.0f;
+        vector = &vectors[key->rotation];
+        parts[i].unk50 = vector->x;
+        parts[i].unk54 = vector->y;
+        parts[i].unk58 = vector->z;
+        parts[i].unk5C = 1.0f;
+        vector = &vectors[key->scale];
+        parts[i].unk60[0] = vector->x;
+        parts[i].unk60[1] = vector->y;
+        parts[i].unk60[2] = vector->z;
+        if (channel->tables[channel->index][i].child != 0) {
+            parts[i].child = &parts[channel->tables[channel->index][i].child];
+        } else {
+            parts[i].child = NULL;
+        }
+        if (channel->tables[channel->index][i].sibling != 0) {
+            parts[i].sibling = &parts[channel->tables[channel->index][i].sibling];
+        } else {
+            parts[i].sibling = NULL;
+        }
+        // match: indexing level_tables as an array swaps the addu operands
+        parts[i].unk78_32 = (*(ModelPartLevels **)((char *)model->level_tables + (channel->index << 2)))[i].unk02;
+    }
+    data = (MotionData *)((char *)motion + motion->size);
+    return data;
+}
+
+/* Gives the model a fresh ModelChannel and loads every motion of the file; returns the end of the file.
+   `mode` is handed on to func_001086E8, which ignores it. */
+MotionData *func_00108940(MotionFile *file, ModelChannel **alloc, ModelInstance *model, int mode) {
+    MotionData *motion = (MotionData *)file;   // match: the cursor is its own variable; the file stays in $4
+    u32 i;
+
+    model->motion_file = file;
+    motion = (MotionData *)((MotionFile *)motion)->entries;
+    motion = (MotionData *)((MotionFileEntry *)motion + file->motion_count);
+    MODEL_CHANNEL(model) = *alloc;
+    memset(MODEL_CHANNEL(model), 0, sizeof(ModelChannel));
+    (*alloc)++;
+    for (i = 0; i < model->motion_file->motion_count; i++) {
+        motion = func_001086E8(motion, model, mode);
+    }
+    return motion;
+}
+
+/* Switches the model to one of its loaded motions, at frame 0. */
+void func_00108A08(ModelInstance *model, int index) {
+    int i;
+
+    MODEL_CHANNEL(model)->index = index;
+    MODEL_CHANNEL(model)->param = 0;
+    MODEL_CHANNEL(model)->param_shifted = 0;
+    for (i = 0; i < model->part_count; i++) {
+        model->parts[i].level = 0;
+    }
+}
+
+/* Whether the model's motion has reached its last frame. */
+int func_00108A78(ModelInstance *model) {
+    ModelChannel *channel = MODEL_CHANNEL(model);
+
+    return channel->param >= ((ModelTableHeader *)channel->tables[channel->index] - 1)->unk00;
+}
+
+/* Whether the model's motion is at the given frame. */
+int func_00108AA0(ModelInstance *model, int frame) {
+    ModelChannel *channel = MODEL_CHANNEL(model);
+
+    return channel->unk8E != 0 && channel->param == frame;
+}
+
+/* Plays one frame of the model's current motion: every part is posed between the two keys around the frame. */
+void func_00108AC8(void *model_arg) {
+    ModelInstance *model = model_arg;
+    Vector4 *point0 = &MOTION_SCRATCH_POINTS[0];
+    Vector4 *point1 = &MOTION_SCRATCH_POINTS[1];
+    Vector4 *tangent0 = &MOTION_SCRATCH_POINTS[2];
+    Vector4 *tangent1 = &MOTION_SCRATCH_POINTS[3];
+    ModelChannel *channel;
+    MotionData *motion;
+    ModelPartLevels *record;
+    MotionVector *vectors;
+    ModelPart *part;
+    MotionKey *key;
+    MotionKey *next;
+    int level;
+    int i;
+    f32 ratio;
+    u32 elapsed;
+    u32 length;
+    u16 old_frame;
+
+    if (MODEL_UNK100_BITS(model)->has_motion) {
+        channel = MODEL_CHANNEL(model);
+        if (channel->value != 0) {
+            func_00109178(model);
+            return;
+        }
+        // match: two steps (the MotionData header is as long as one ModelPartLevels)
+        motion = (MotionData *)channel->tables[channel->index];
+        motion = (MotionData *)((ModelPartLevels *)motion - 1);
+        record = channel->tables[channel->index];
+        vectors = motion->vectors;
+        for (i = 0; i < model->part_count; i++, record++) {
+            part = &model->parts[i];
+            if (record->thresholds != NULL && record->count != 0) {
+                // match: the level is read twice, as a shift and mask of the whole doubleword
+                key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+                level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
+                while (level < record->count && channel->param >= key->frame) {
+                    level++;
+                    key++;
+                }
+                if (level == record->count) {
+                    part->level = 0;
+                } else if (level != 0) {
+                    part->level = level - 1;
+                    next = key;
+                    key = next - 1;
+                    // match: both values are read first and scaled afterwards
+                    elapsed = key->frame;
+                    length = key->length;
+                    elapsed = channel->param_shifted - (elapsed << 8);
+                    length <<= 8;
+                    ratio = (f32)elapsed / (f32)length;
+
+                    *(MotionVector *)point0 = vectors[key->rotation];
+                    point0->w = 1.0f;
+                    *(MotionVector *)point1 = vectors[next->rotation];
+                    point1->w = 1.0f;
+                    *(MotionVector *)tangent0 = vectors[key->rotation_out];
+                    tangent0->w = 1.0f;
+                    *(MotionVector *)tangent1 = vectors[next->rotation_in];
+                    tangent1->w = 1.0f;
+                    func_00109100(&part->unk50, point0, point1, tangent0, tangent1, ratio);
+                    part->unk50 = Angle_Wrap(part->unk50);
+                    part->unk54 = Angle_Wrap(part->unk54);
+                    part->unk58 = Angle_Wrap(part->unk58);
+
+                    *(MotionVector *)point0 = vectors[key->position];
+                    *(MotionVector *)point1 = vectors[next->position];
+                    *(MotionVector *)tangent0 = vectors[key->position_out];
+                    *(MotionVector *)tangent1 = vectors[next->position_in];
+                    func_00109100(part->unk40, point0, point1, tangent0, tangent1, ratio);
+
+                    part->unk60[0] = vectors[key->scale].x * (1.0f - ratio) + vectors[next->scale].x * ratio;
+                    part->unk60[1] = vectors[key->scale].y * (1.0f - ratio) + vectors[next->scale].y * ratio;
+                    part->unk60[2] = vectors[key->scale].z * (1.0f - ratio) + vectors[next->scale].z * ratio;
+                }
+            }
+        }
+        old_frame = channel->param;
+        channel->param_shifted += channel->word;
+        channel->param = channel->param_shifted >> 8;
+        channel->unk8E = old_frame != channel->param;
+        if (motion->frame_count < channel->param) {
+            channel->param = 0;
+            channel->param_shifted = 0;
+            for (i = 0; i < model->part_count; i++) {
+                model->parts[i].level = 0;
+            }
+        }
+    }
+}
+
+/* Switches the model to a motion and sets its speed. */
+int func_00109098(ModelInstance *model, u8 index, u16 speed) {
+    func_00108A08(model, index);
+    MODEL_CHANNEL(model)->value = speed << 8;
+    return 0;
+}
+
+/* The last frame of the model's current motion. */
+u16 func_001090E0(char *model_arg) {
+    ModelInstance *model = (ModelInstance *)model_arg;
+    ModelChannel *channel = MODEL_CHANNEL(model);
+
+    return ((ModelTableHeader *)channel->tables[channel->index] - 1)->unk00;
+}
+
+/* Hermite interpolation: hands the four basis weights for the ratio to Vector_WeightedSum4. */
+void func_00109100(void *result, void *point0, void *point1, void *tangent0, void *tangent1, f32 ratio) {
+    f32 weights[4];
+    f32 squared = ratio * ratio;
+    f32 cubed = squared * ratio;
+
+    weights[0] = cubed + cubed - 3.0f * squared + 1.0f;
+    weights[1] = -2.0f * cubed + 3.0f * squared;
+    weights[2] = cubed - (squared + squared) + ratio;
+    weights[3] = cubed - squared;
+    Vector_WeightedSum4(result, point0, point1, tangent0, tangent1, weights);
+}
+
+/* One frame of blending the pose into the first key of the current motion (while ModelChannel.value is not 0):
+   every part moves 1/divisor of the way, and value drops by word until it reaches 0. */
+void func_00109178(ModelInstance *model) {
+    ModelChannel *channel = MODEL_CHANNEL(model);
+    MotionData *motion;
+    ModelPartLevels *record;
+    MotionVector *vectors;
+    ModelPart *part;
+    MotionKey *key;
+    f32 divisor;
+    f32 unused[4]; // match: the frame has 16 bytes nothing uses
+    int i;
+
+    // match: two steps, as in func_00108AC8 (the MotionData header is as long as one ModelPartLevels)
+    motion = (MotionData *)channel->tables[channel->index];
+    motion = (MotionData *)((ModelPartLevels *)motion - 1);
+    record = channel->tables[channel->index];
+    vectors = motion->vectors;
+    if (channel->word >= channel->value) {
+        divisor = 1.0f;
+    } else if (channel->unk8F == 0) {
+        divisor = (f32)channel->value / (f32)channel->word;
+    } else {
+        divisor = 255.0f / (f32)channel->unk8F;
+    }
+    part = model->parts;
+    for (i = 0; i < model->part_count; i++, record++, part++) {
+        key = (MotionKey *)record->thresholds;
+        if (key != NULL) {
+            part->unk50 += (vectors[key->rotation].x - part->unk50) / divisor;
+            part->unk54 += (vectors[key->rotation].y - part->unk54) / divisor;
+            part->unk58 += (vectors[key->rotation].z - part->unk58) / divisor;
+            part->unk40[0] += (vectors[key->position].x - part->unk40[0]) / divisor;
+            part->unk40[1] += (vectors[key->position].y - part->unk40[1]) / divisor;
+            part->unk40[2] += (vectors[key->position].z - part->unk40[2]) / divisor;
+            part->unk60[0] += (vectors[key->scale].x - part->unk60[0]) / divisor;
+            part->unk60[1] += (vectors[key->scale].y - part->unk60[1]) / divisor;
+            part->unk60[2] += (vectors[key->scale].z - part->unk60[2]) / divisor;
+        }
+    }
+    if (channel->word >= channel->value) {
+        channel->value = 0;
+    } else {
+        channel->value -= channel->word;
+    }
+}

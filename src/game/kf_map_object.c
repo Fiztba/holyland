@@ -8,6 +8,7 @@
 #include "kf_map.h"
 #include "kf_player.h"
 #include "kf_scroll_texture.h"
+#include "kf_model.h"
 
 void *memset(void *, int, u32);
 float sinf(float);
@@ -44,6 +45,7 @@ float Angle_Wrap(float);
 int Sound_PlayCommonAt(float, int, void *);
 int Sound_PlayMapAtRange(u8, u8, float *, float);
 s32 Sound_StartTaggedAt(s8, u8, u8, f32, Vector4Arg *);
+int Sound_StopTagged(char);
 void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 int Script_Start(int, int);
@@ -81,6 +83,12 @@ static MapObject *jointed_draw_list[2];         /* 0x447090 per map, through Map
 static MapObject *objects_by_id[2][0x100];      /* 0x472240 per map, by MapObjectUnk08.unk38.bytes[2] */
 static MapSlotUnk10Vectors glow_lights_shared;  /* 0x472A40 D_0038A1B0.unkC0 blended for the glow */
 static MapSlotUnk10Vectors glow_lights[2][0x20]; /* 0x472AC0 D_0038A1B0.unkA90 blended for the glow */
+
+/* Empties the map objects of both maps. */
+void func_0011C6E8(void) {
+    MapObject_ClearMap(0);
+    MapObject_ClearMap(1);
+}
 
 /* Sets up the objects of a map once it is loaded: puts each model where its
    source says, works out how far the object reaches, picks the functions that
@@ -842,4 +850,56 @@ void MapObject_ClearMap(int map) {
     jointed_draw_list[map] = NULL;
     memset(D_003A1A30[map], 0, sizeof(D_003A1A30[map]));
     memset(objects_by_id[map], 0, sizeof(objects_by_id[map]));
+}
+
+/* Draws the model with the GS state as it is. */
+void func_0011E8E8(int *model) {
+    func_0010AEB8(model);
+}
+
+/* Sets the GS Z-buffer, alpha and test registers for model, then hands it on. */
+void func_0011E8F0(ModelInstance *model) {
+    func_00109A50();
+    if (model->alpha < 128.0f) {
+        func_00109A80(GS_REG_ZBUF_1, 0x10A000118L);
+        func_00109A80(GS_REG_ZBUF_2, 0x10A000118L);
+    } else {
+        func_00109A80(GS_REG_ZBUF_1, 0xA000118L);
+        func_00109A80(GS_REG_ZBUF_2, 0xA000118L);
+    }
+    func_00109A80(GS_REG_ALPHA_1, 0x44);
+    func_00109A80(GS_REG_ALPHA_2, 9);
+    func_00109A80(GS_REG_TEST_1, 0x5000D);
+    func_00109A80(GS_REG_TEST_2, 0x5000D);
+    func_00109AD0();
+    func_0010AEB8(model);
+}
+
+/* Sets the GS registers for drawing a map object's model, then draws it. */
+void func_0011E9D0(void *model) {
+    func_00109A50();
+    func_00109A80(0x4E, 0x10A000118);
+    func_00109A80(0x4F, 0x10A000118);
+    func_00109A80(0x42, 0x44);
+    func_00109A80(0x43, 9);
+    func_00109A80(0x47, 0x5000D);
+    func_00109A80(0x48, 0x5000D);
+    func_00109AD0();
+    func_0010AEB8(model);
+}
+
+void func_0011EA70(void) {
+}
+
+/* get_point of a model without points: its position, whatever the index. */
+char *func_0011EA78(char *model) {
+    return (char *)&((ModelInstance *)model)->position;
+}
+
+/* Stops the sound a map object is playing, if any. */
+void func_0011EA80(MapObject *object) {
+    if (object->sound != 0) {
+        Sound_StopTagged(object->sound);
+        object->sound = 0;
+    }
 }

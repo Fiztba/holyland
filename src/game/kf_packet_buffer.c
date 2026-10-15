@@ -1,7 +1,18 @@
+/* The GS packet buffers: start-up (packet area and VU1 microprograms), the two double-buffered DMA
+   chains, and lists of GS register writes. */
 #include "common.h"
 #include <eeregs.h>
+#include <libdma.h>
 #include "kf_gs.h"
 #include "kf_packet.h"
+
+/* sends a packet to VIF1 and waits for the transfer to end */
+#define SEND_TO_VIF1(packet)                    \
+    channel = sceDmaGetChan(1);                 \
+    channel->chcr |= 0x40;                      \
+    sceDmaSend(channel, (u32)(packet));         \
+    while (*D1_CHCR & 0x100) {                  \
+    }
 
 void *memset(void *, int, u32);
 int puts(char *);
@@ -13,10 +24,21 @@ extern int D_0044674C;          /* quadwords handed out */
 extern int D_00446750;          /* bytes in both buffers together */
 extern int D_00446F58;          /* start of the packet area */
 extern char D_0043E4A0[];
+extern u32 *D_00446754;         /* the register list being built, NULL: none */
+extern int D_00446758;          /* registers in it */
+/* the VIF1 packets that upload the VU1 microprograms */
+extern u32 D_0043B1D0[];
+extern u32 D_0043BB20[];
+extern u32 D_0043BB90[];
+extern u32 D_0043CD40[];
+extern u32 D_0043D290[];
+void func_00109430(void);
+void func_00109650(u32 *, u32 *);
+void func_00109878(int);
+u32 *func_00109990(int);
 void func_00109A50(void);
 void func_00109A80(int, s64);
 void func_00109AD0(void);
-
 
 static void *packet_chain_head[2];   /* 0x447018 first DMA tag of each buffer's chain */
 static void *packet_chain_tail[2]; /* 0x447020 last DMA tag of each buffer's chain */
@@ -26,6 +48,31 @@ static void *packet_next;             /* 0x447038 next free quadword */
 static int packet_overflowed;        /* 0x44703C the buffer overflowed: everything after goes to its start */
 static int spare_area_addr;          /* 0x447040 the area past both buffers */
 static int spare_area_size;          /* 0x447044 its size */
+
+/* Lays out the largest packet buffers and uploads the VU1 microprograms. */
+void func_00109410(void) {
+    func_00109878(0);
+    func_00109430();
+}
+
+/* Uploads the five VU1 microprograms. */
+void func_00109430(void) {
+    DmaChan *channel;
+
+    SEND_TO_VIF1(D_0043B1D0);
+    SEND_TO_VIF1(D_0043BB20);
+    SEND_TO_VIF1(D_0043BB90);
+    SEND_TO_VIF1(D_0043CD40);
+    SEND_TO_VIF1(D_0043D290);
+}
+
+/* Called before a frame's drawing; empty. */
+void func_001095D0(void) {
+}
+
+/* Called after a frame's drawing; empty. */
+void func_001095D8(void) {
+}
 
 /* Starts filling the other packet buffer. */
 void func_001095E0(void) {
@@ -174,4 +221,73 @@ void func_00109A38(int *addr, int *size) {
     int spare_size = spare_area_size;
     *addr = spare_addr;
     *size = spare_size;
+}
+
+/* Starts a list of GS register writes. */
+void func_00109A50(void) {
+    if (D_00446754 == NULL) {
+        D_00446754 = func_00109990(3);
+        D_00446758 = 0;
+    }
+}
+
+/* Adds a GS register write to the list. */
+void func_00109A80(int reg, s64 value) {
+    if (D_00446754 != NULL) {
+        s64 *entry = (s64 *)func_00109990(1);
+
+        entry[0] = value;
+        entry[1] = reg;
+        D_00446758++;
+    }
+}
+
+/* Ends the list of GS register writes: fills in its DMA, VIF and GIF tags and queues it. */
+void func_00109AD0(void) {
+    u32 *packet;
+    int i;
+    int count;
+    int blocks;
+    u64 descriptors = 0xE;
+
+    if (D_00446754 != NULL) {
+        packet = D_00446754;
+        i = 0;
+        *packet++ = (D_00446758 + 4) | 0x10000000;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = ((D_00446758 + 1) << 16) | 0x6C00C000;
+        count = D_00446758 / 16;
+        blocks = count;
+        count = D_00446758 - blocks * 16;
+        *(u64 *)packet = (u64)((blocks + 1) | 0x8000) | ((u64)count << 60);
+        packet += 2;
+        *(u64 *)packet = 0;
+        /* one "A+D" descriptor per register */
+        if (count > 0) {
+            // match: a for loop is turned into a count-down
+            do {
+                // match: volatile keeps the load and the store inside the loop
+                *(volatile u64 *)packet |= descriptors;
+                descriptors <<= 4;
+                i++;
+            } while (i < count);
+        }
+        packet = func_00109990(2);
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0x15000276;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0;
+        *packet++ = 0x13000000;
+        func_00109650(D_00446754, func_00109990(1));
+        D_00446754 = NULL;
+        D_00446758 = 0;
+    }
 }

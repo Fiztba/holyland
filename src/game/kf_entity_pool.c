@@ -102,6 +102,8 @@ static int D_004470B8;                  /* 0x4470B8 list A count */
 static int D_004470BC;                  /* 0x4470BC list B count */
 static int D_004470C0;                  /* 0x4470C0 list C count */
 
+float sqrtf(float);
+
 /* Clear the entity pool and empty every entity list. */
 void Entity_ResetAllLists(void) {
     EntityPoolSlot *block;
@@ -1158,4 +1160,14 @@ static Entity *func_00124D48(Entity *entity) {
     entity->flags &= ~1;
     D_004470C0--;
     return next;
+}
+
+/* Horizontal distance from the entity's spawn point to the player. */
+float func_00124DE0(Entity *entity) {
+    float delta_x;
+    float delta_z;
+
+    delta_x = entity->spawn_info->spawn_x - D_00413F80[0];
+    delta_z = entity->spawn_info->spawn_z - D_00413F80[2];
+    return sqrtf(delta_x * delta_x + delta_z * delta_z);
 }

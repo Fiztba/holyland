@@ -88,7 +88,7 @@ typedef struct {
     f32 unk30[4];                   /* 0x30 the point to move to (GameStatus.unk05) */
     f32 unk40;                      /* 0x40 how fast it turns to unk20 */
     f32 unk44;                      /* 0x44 how far it moves to unk30 in a frame */
-    char pad48[0x04];
+    f32 unk48;                      /* 0x48 512.0 after func_001127F8 */
     f32 unk4C;                      /* 0x4C added to the height above the player */
     f32 unk50[4];                   /* 0x50 the first shake's offset (func_00100D10) */
     f32 unk60[4];                   /* 0x60 the second shake's offset */

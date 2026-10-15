@@ -3,6 +3,7 @@
 #include "kf_linked_point.h"
 #include "kf_gs.h"
 #include "kf_map.h"
+#include "kf_entity.h"
 
 void *memset(void *, int, u32);
 int rand(void);
@@ -63,6 +64,28 @@ static void Entity_RebuildModelMatrices(Entity *entity);
 static int Entity_IsMapRecordActive(Entity *entity);
 static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity);
 static inline void entity_draw_set_model_tint(Entity *entity, f32 red, f32 green, f32 blue);
+
+void EntityAi_SetUpdate(char *, s32);
+
+/* Default init of an entity: clears the work area, sets flags 22-28 and the model of its kind. */
+void func_00124E48(Entity *entity) {
+    Motion_Start(entity, 0, 0, 0, 0);
+    memset(&entity->unkE0, 0, ENTITY_WORK_AREA_SIZE);
+    ENTITY_FLAG_BITS(entity)->bit22 = TRUE;
+    ENTITY_FLAG_BITS(entity)->bit23 = TRUE;
+    ENTITY_FLAG_BITS(entity)->bit24 = TRUE;
+    ENTITY_FLAG_BITS(entity)->bit25 = TRUE;
+    ENTITY_FLAG_BITS(entity)->bit26 = TRUE;
+    ENTITY_FLAG_BITS(entity)->bit27 = TRUE;
+    ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
+    EntityAi_SetUpdate((char *)entity, D_003E6E40[entity->params->unk02][1]);
+}
+
+void func_00124EF0(void) {
+}
+
+void func_00124EF8(void) {
+}
 
 /* Sets up the entities of a map from its spawn records, filling in defaults for values left at 0. */
 void Entity_InitFromMapSpawns(int map) {
@@ -679,4 +702,12 @@ Entity *Entity_GetBySpawnIdForMap(int map_index, int entity_id) {
         return NULL;
     }
     return entity_by_spawn_id[map_index][entity_id];
+}
+
+int func_00126818(void) {
+    return 0;
+}
+
+int func_00126820(void) {
+    return 0;
 }

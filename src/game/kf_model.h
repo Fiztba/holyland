@@ -125,7 +125,8 @@ typedef struct {
 
 /* the doubleword at ModelPartData+0x30 */
 typedef struct {
-    u64 pad0 : 37;
+    u64 unk00 : 14;                 /* the texture base pointer when it is a TEX0 (func_0010ED80) */
+    u64 pad14 : 23;
     u64 unk37 : 14;                 /* not 0 on the blocks func_0010B758 looks for */
     u64 pad51 : 10;
     u64 unk61 : 3;                  /* set to 2 on the first block of a model whose unk37 is not 0 */
@@ -474,6 +475,36 @@ typedef struct {
 
 /* the scratchpad as the motion code (kf_motion.c) uses it: the key vectors it blends between */
 #define MOTION_SCRATCH ((Vector4 *)0x70000000)
+
+/* the scratchpad as func_00108AC8 uses it: the two keys and their two tangents of a Hermite step */
+#define MOTION_SCRATCH_POINTS ((Vector4 *)0x70000000)
+
+/* the scratchpad as func_0010BA30 and func_0010C180 use it: the turn they work out, the two matrices
+   ModelMatrix_BuildDrawMatrices makes for the model, then a matrix per part and the same without the
+   model's own placement */
+#define MODEL_TURN_SCRATCH ((f32 *)0x70000000)
+#define MODEL_TURN_MATRIX_A ((void *)0x70000040)
+#define MODEL_TURN_MATRIX_B ((void *)0x70000080)
+#define MODEL_TURN_PART_MATRICES ((f32 (*)[16])0x700000C0)
+#define MODEL_TURN_PART_TURNS ((f32 (*)[16])0x70001100)
+
+/* the scratchpad as func_0010D308, func_0010DB40 and func_0010E010 use it: the two matrices
+   ModelMatrix_BuildDrawMatrices makes for the model */
+#define MODEL_DRAW_MATRIX_A ((void *)0x70000000)
+#define MODEL_DRAW_MATRIX_B ((void *)0x70000040)
+
+/* the scratchpad as func_0010EE98 uses it: where each vertex of a block lands on the screen */
+#define MODEL_CLIP_SCREEN_POINTS ((ModelScreenPoint *)0x70000000)
+
+/* the scratchpad as func_0010F478 uses it: the edge opposite the apex, then two rows of the fan */
+#define MODEL_CUT_EDGE ((ModelPartVertexWords *)0x70000200)
+#define MODEL_CUT_ROW_A ((ModelPartVertexWords *)0x700002A0)
+#define MODEL_CUT_ROW_B ((ModelPartVertexWords *)0x70000340)
+
+/* the same for func_00110050, which cuts with float vertices (BlendVertex) */
+#define MODEL_CUT_BLEND_EDGE ((BlendVertex *)0x70000200)
+#define MODEL_CUT_BLEND_ROW_A ((BlendVertex *)0x70000340)
+#define MODEL_CUT_BLEND_ROW_B ((BlendVertex *)0x70000480)
 
 /* what MapObject.unk08 points at */
 typedef struct {
