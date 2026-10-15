@@ -244,21 +244,20 @@ def constants(placed, real):
         data = o.secs[".text"][3]
         relocated = {off for off, *_ in o.relocs[".text"]}
         words = struct.unpack("<%dI" % (len(data) // 4), data[:len(data) // 4 * 4])
-        for i, w in enumerate(words):
-            if w >> 26 != 0xF or 4 * i in relocated:
-                continue
-            r = (w >> 16) & 31
-            val = (w & 0xFFFF) << 16
-            for j in range(i + 1, len(words)):
+        def walk(start, r, val):
+            """Follow register r, holding val, from instruction start."""
+            for j in range(start, len(words)):
                 x = words[j]
                 op, rs, rt = x >> 26, (x >> 21) & 31, (x >> 16) & 31
                 if 4 * j in relocated and r in (rs, rt):
-                    break       # a symbol's lo16: the address is named
+                    return      # a symbol's lo16: the address is named
+                if op == 0 and x & 0x3F in (0x21, 0x25) and r in (rs, rt) and rs != rt:
+                    walk(j + 1, (x >> 11) & 31, val)  # or/addu with a pointer (the uncached mirror)
                 if op == 0 and (x >> 11) & 31 == r or op == 0xF and rt == r:
-                    break       # the register is written from elsewhere
+                    return      # the register is written from elsewhere
                 if rs != r or op not in LO_OPS:
-                    if rt == r:
-                        break   # a load, or another ALU op, into r
+                    if rt == r and op != 0:   # an R-type's rt is a source
+                        return  # a load, or another ALU op, into r
                     continue
                 lo = x & 0xFFFF
                 ea = (val | lo) if op in ZERO_EXT else (val + sext16(lo)) & 0xFFFFFFFF
@@ -267,7 +266,11 @@ def constants(placed, real):
                 if rt == r and not 0x20 <= op < 0x40:   # an ALU result in r
                     val = ea
                 elif rt == r:
-                    break       # a load into r
+                    return      # a load into r
+
+        for i, w in enumerate(words):
+            if w >> 26 == 0xF and 4 * i not in relocated:
+                walk(i + 1, (w >> 16) & 31, (w & 0xFFFF) << 16)
         # an addiu or ori that adds to its own register and is not reached from a
         # lui in the straight run above: splat takes the nearest lui of that register
         for j, x in enumerate(words):

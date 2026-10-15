@@ -33,6 +33,8 @@ options:
 
   find_file_boundaries: False
   disassemble_all: True
+  # _copyRefImage holds _maxval inline; without this the whole function is dumped as .word
+  disasm_unknown: True
   create_c_files: False
   # hand-written library asm (src/sce/**/*.s) is a hasm unit; splat never overwrites it
   hasm_in_src_path: True
