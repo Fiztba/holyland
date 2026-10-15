@@ -6,8 +6,6 @@ void Vector_Add(void *, void *, void *);
 void sceVu0SubVector(void *, void *, void *);
 float sqrtf(float);
 
-LinkedPoint D_003E7500[LINKED_POINT_COUNT]; /* 0x3E7500 pool of influence points used as model lights */
-
 static LinkedPoint *linked_point_heads[2]; /* 0x4470C8 two active lists */
 static LinkedPoint *linked_point_free;     /* 0x4470D0 free list */
 
@@ -21,8 +19,8 @@ void LinkedPoint_Init(void) {
     LinkedPoint *node;
     int i;
 
-    memset(D_003E7500, 0, sizeof(D_003E7500));
-    node = D_003E7500;
+    memset(linked_point_pool, 0, sizeof(linked_point_pool));
+    node = linked_point_pool;
     node->handle = 0;
     node->prev = NULL;
     node->next = node + 1;
@@ -39,7 +37,7 @@ void LinkedPoint_Init(void) {
     for (i = 1; i >= 0; i--) {
         linked_point_heads[i] = NULL;
     }
-    linked_point_free = D_003E7500;
+    linked_point_free = linked_point_pool;
 }
 
 /* Starts a point with its owner slot fixed at -1; returns the pool index or -1. */
@@ -81,7 +79,7 @@ void LinkedPoint_ReleaseIndex(u32 index) {
     LinkedPoint *node;
 
     if (index < LINKED_POINT_COUNT) {
-        node = &D_003E7500[index];
+        node = &linked_point_pool[index];
         LinkedPoint_UnlinkActive(node);
         LinkedPoint_PushFree(node);
     }
@@ -255,7 +253,7 @@ void LinkedPoint_Retarget(f32 duration, s32 index, void *target) {
     LinkedPoint *point;
 
     if ((u32)index < LINKED_POINT_COUNT) {
-        point = &D_003E7500[index];
+        point = &linked_point_pool[index];
         point->duration = duration;
         point->position.w = 1.0f / duration;
         point->progress_scale = 1.0f / (duration * duration);
