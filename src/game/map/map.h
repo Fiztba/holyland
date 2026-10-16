@@ -150,6 +150,9 @@ typedef struct {
     s64 screen_fill_blend;          /* 0x80 its blend mode */
     s32 previous_frame_alpha;       /* 0x88 alpha Game_BlendPreviousFrame blends the last frame with */
 } MapDrawStateOverlays;
+_Static_assert(offsetof(MapDrawStateOverlays, hud_shown) == offsetof(MapDrawState, hud_shown), "MapDrawStateOverlays is not MapDrawState");
+_Static_assert(offsetof(MapDrawStateOverlays, screen_fill_blend) == offsetof(MapDrawState, screen_fill_blend), "MapDrawStateOverlays is not MapDrawState");
+_Static_assert(offsetof(MapDrawStateOverlays, previous_frame_alpha) == offsetof(MapDrawState, previous_frame_alpha), "MapDrawStateOverlays is not MapDrawState");
 
 /* a map record (MapRecord in entity/entity.h) as the code that draws the maps reads it */
 /* overlay: a map record in a map file */

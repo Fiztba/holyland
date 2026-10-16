@@ -1,6 +1,7 @@
 #include "model/model.h"
 #include "map_object/map_object.h"
 #include "map/map.h"
+#include "sound/sound.h"
 
 void Vector_Add(void *, void *, void *);
 s32 Sound_StartTaggedAt(s8, u8, u8, f32, Vector4Arg *);
@@ -11,7 +12,7 @@ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void Model_MultiplyChildMatrices(ModelPart *);
 void sceVu0CopyMatrix(void *, void *);
 extern int current_map_slot;
-extern int sound_load_queue[0x28 / 4];
+extern SoundLoadQueue sound_load_queue;
 
 /* Offset hook of every kind: moves the model and the object's source position by offset. */
 void MapObject_MoveByOffset(MapObject *object, void *offset) {
@@ -45,7 +46,7 @@ void MapObject_UpdateScenery(MapObject *object) {
                 if ((MAP_OBJECT_BYTES(object)->unk00 & 1) != current_map_slot) {
                     object->work[0] = 0;
                 }
-            } else if ((MAP_OBJECT_BYTES(object)->unk00 & 1) == current_map_slot && sound_load_queue[4] == 0 && sound_load_queue[5] == 0) {
+            } else if ((MAP_OBJECT_BYTES(object)->unk00 & 1) == current_map_slot && sound_load_queue.pending_map_slot == NULL && sound_load_queue.next_map_slot == NULL) {
                 Sound_StartTaggedAt(source->kind_param_0, source->kind_param_2, source->kind_param_1, source->kind_param_3, (Vector4Arg *)&object->model->position);
                 object->work[0] = 1;
             }

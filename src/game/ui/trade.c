@@ -284,7 +284,8 @@ extern s32 smith_step;              /* which of smith_steps runs */
 extern HandlerContext smith_context; /* what the smith steps and handlers get */
 extern u32 pretune_part_count;              /* how many parts the screen has */
 extern u32 tune_mess_part_count;
-extern s32 detail_panel_open; // match: this file reads and writes it as a word
+extern u8 detail_panel_open; /* PORT: retail reads and writes it as a word here, which takes in equipped_list_open
+                               (0x446AD5) and two pad bytes; on the PC the byte alone is read and written */
 extern SpritePacket *pretune_parts;
 extern SpritePacket *tune_mess_parts;
 extern s8 smith_choices_active;     /* nonzero once the cursor is on the three lines */

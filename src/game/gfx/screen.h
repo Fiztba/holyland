@@ -40,16 +40,21 @@ typedef struct {
     f32 phase;                      /* 0x0C */
 } WaveOscillator;
 
-/* what held_item_model_ptr points at */
+/* what held_item_model_ptr points at: a view of ModelInstance (model/model.h) and of the ModelChannel its
+   level_tables points at, with the padding worked out from those structs (their pointers move the fields on
+   the PC) */
 typedef struct {
-    char pad00[0x82];
-    u16 unk82;                      /* 0x82 */
+    char pad00[offsetof(ModelChannel, param)];
+    u16 unk82;                      /* 0x82 ModelChannel.param */
 } DisplaySettings;
 
 typedef struct {
-    char pad00[0xFC];
-    DisplaySettings *settings;      /* 0xFC */
+    char pad00[offsetof(ModelInstance, level_tables)];
+    DisplaySettings *settings;      /* 0xFC ModelInstance.level_tables */
 } DisplayContext;
+
+_Static_assert(offsetof(DisplaySettings, unk82) == offsetof(ModelChannel, param), "DisplaySettings is not ModelChannel");
+_Static_assert(offsetof(DisplayContext, settings) == offsetof(ModelInstance, level_tables), "DisplayContext is not ModelInstance");
 
 /* the nodes Map_InsertRecordBySize sorts into the lists record_boxes and backdrop_record_boxes by box area */
 typedef struct AreaNode {

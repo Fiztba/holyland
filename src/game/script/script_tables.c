@@ -233,6 +233,10 @@ ScriptCommandHandler script_general_command_handlers[0x64] = {
     ScriptCmd_Stall, ScriptCmd_Stall, ScriptCmd_Stall, ScriptCmd_Stall,
 }; /* 0x4331B0 commands 0 to 0x63 */
 
+/* PORT: scripts address these blocks by their PS2 byte offsets. Three of them are runtime structs whose pointer
+   fields move what follows on the PC: game_status from 0x40 (GameStatus.effect_owner), view_ray_status from 0x50
+   (EventRunner.current) and player_state from 0x204 (PlayerState.stepped_on_entity). A script variable past
+   those offsets needs its offset mapped to the PC field. */
 u8 *script_game_var_blocks[0x40] = {
     game_status, camera_state, player_state, view_ray_status,
     item_counts, trade_stock_1, trade_stock_2, trade_stock_3,
