@@ -25,11 +25,14 @@ git submodule update --init
 ```
 
 The PC edits are in `patches/`, as diffs against the decomp with paths relative to its root:
-- `patches/game/<folder>.patch`: one per top-level folder of `src/game`. PC-only files such as
-  `src/game/data/` are patches that create them.
+- `patches/game/<folder>.patch`: one per top-level folder of `src/game`.
 - `patches/game/_top.patch`: the files directly in `src/game`.
 - `patches/nonmatching.patch`: the map draw `src/nonmatching/func_00112BD0.c`, which the PC build
   compiles.
+
+Game code that exists only on the PC, with nothing in the decomp to patch, is ordinary files in
+`game/`: `game/data/` holds the data sections that the decomp still has in asm, defined in C. It is
+compiled with the patched decomp and edited in place.
 
 The decomp's own tooling and docs (its PS2 build, `build.sh`, `tools/match.py`, the splat config) live
 in kfiv-decomp. They do not apply to the patched game code here.
@@ -41,11 +44,13 @@ here with a pin move (see below).
 
 1. `python3 tools/patches.py apply`: makes `work/` (git-ignored) a fresh copy of the decomp with the
    patches applied. `work/` is its own git repository, and its `pristine` tag is the unpatched decomp.
+   If `work/` has changes that were not saved, `apply` refuses; `apply --force` discards them.
 2. Edit the game code in `work/src/game`, by the rules in [RULES.md](RULES.md).
 3. `python3 tools/patches.py save`: regenerates `patches/` from `work/`. Commit `patches/`.
-4. `cmake --build out/<preset>`: at configure time CMake copies `decomp/src/game` and
-   `decomp/src/nonmatching` into `out/<preset>/decomp_src/`, applies `patches/` there, and compiles
-   that copy with `port/`. Since the patches changed, configure runs again on its own.
+4. `cmake --build out/<preset>`: since the patches changed, configure runs again on its own. It
+   copies `decomp/src/game` and `decomp/src/nonmatching`, applies `patches/` to the copy, and updates
+   `out/<preset>/decomp_src/` with the files that changed, so only those recompile. The build compiles
+   `decomp_src/` with `game/` and `port/`. Configure fails if `decomp/` has local changes.
 
 ### Moving the pin
 
@@ -53,6 +58,10 @@ here with a pin move (see below).
 - it follows file renames (`git diff -M` between the two pins) and function and global renames (from
   `config/symbol_addrs.txt`, whose addresses are stable);
 - it re-applies the patches with `git apply -3` and reports conflicts.
+
+It does not follow renames of struct fields or types: `symbol_addrs.txt` has only functions and
+globals. Those come up as conflicts, or as compile errors after a clean upgrade, and are fixed by
+hand.
 
 If that is clean, it moves the submodule and rewrites `patches/`. Then commit `decomp` and `patches/`.
 If not, it keeps the scratch copy so the conflicts can be resolved there, and then
@@ -108,11 +117,13 @@ Next:
 |---|---|
 | `decomp/` | submodule: kfiv-decomp at the pinned commit. Never edited here |
 | `patches/` | the PC edits to `decomp/`, as diffs (`game/<folder>.patch`, `game/_top.patch`, `nonmatching.patch`) |
+| `game/` | PC-only game code, compiled with the patched decomp (`game/data/`: the data sections in C) |
 | `work/` | git-ignored: the decomp with the patches applied, for editing (`tools/patches.py apply`) |
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
 | `port/platform/` | the program's entry, game RAM, EE addresses, the register pages |
 | `port/sdk/` | the Sony libraries' PC versions (step 0: stand-ins) |
 | `port/math/` | libvu0 in C |
 | `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py` |
-| `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/` |
+| `.github/workflows/ci.yml` | CI: configure (the patches apply), build, `port_census.py` reports 0 errors |
+| `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |
 | `docs/port/` | these notes |

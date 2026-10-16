@@ -167,7 +167,7 @@ compile and link.
 ## 7. Data the decomp still has in asm
 
 About 800 small globals are not yet defined in C on the PS2 side; their definitions are in splat's
-data files. One agent defines them all in C, under `src/game/data/`. When your folder declares one of
+data files. One agent defines them all in C, under `game/data/`. When your folder declares one of
 them `extern`, keep the declaration (fixing its type by rule 2), and don't define it yourself.
 
 ## 8. Checking your work
