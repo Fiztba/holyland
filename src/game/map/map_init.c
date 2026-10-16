@@ -21,7 +21,7 @@ void Entity_AddGroupToWaiting(int);
 void MapItem_RollFixedItems(int);
 void MapSetup_RunForMap(int);
 void Game_MarkMapVisited(int);
-void Script_Init(int);
+void Script_Init(sptr);
 int Script_Start(int, int);
 extern char map_object_defs[];
 extern GameDefinition item_name_defs[380];

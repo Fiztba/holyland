@@ -155,22 +155,29 @@ void MapScroll_UpdateCopy(int map, int mode) {
    TEXFLUSH) and returns where the next packet goes. */
 u32 *MapScroll_AppendBitblt(u32 *packet, int end_of_packet, int format, int buffer_width, int width, int height,
                                int source_base, int source_x, int source_y, int dest_base, int dest_x, int dest_y) {
-    *((u64 *)packet)++ = ((s64)end_of_packet << 15) | 0x1000000000000005L;
-    *((u64 *)packet)++ = 0xE;
-    *((u64 *)packet)++ = (s64)source_base | ((s64)buffer_width << 16) | ((s64)format << 24) |
+    *(u64 *)packet = ((s64)end_of_packet << 15) | 0x1000000000000005LL;
+    packet += 2;
+    *(u64 *)packet = 0xE;
+    packet += 2;
+    *(u64 *)packet = (s64)source_base | ((s64)buffer_width << 16) | ((s64)format << 24) |
                          ((s64)dest_base << 32) | ((s64)buffer_width << 48) | ((s64)format << 56);
+    packet += 2;
     *packet++ = 0x50;
     *packet++ = 0;
-    *((u64 *)packet)++ = (s64)source_x | ((s64)source_y << 16) | ((s64)dest_x << 32) | ((s64)dest_y << 48);
+    *(u64 *)packet = (s64)source_x | ((s64)source_y << 16) | ((s64)dest_x << 32) | ((s64)dest_y << 48);
+    packet += 2;
     *packet++ = 0x51;
     *packet++ = 0;
-    *((u64 *)packet)++ = (s64)width | ((s64)height << 32);
+    *(u64 *)packet = (s64)width | ((s64)height << 32);
+    packet += 2;
     *packet++ = 0x52;
     *packet++ = 0;
-    *((u64 *)packet)++ = 2;
+    *(u64 *)packet = 2;
+    packet += 2;
     *packet++ = 0x53;
     *packet++ = 0;
-    *((u64 *)packet)++ = 0xFFFFFFFF;
+    *(u64 *)packet = 0xFFFFFFFF;
+    packet += 2;
     *packet++ = 0x3F;
     *packet++ = 0;
     return packet;
@@ -241,8 +248,8 @@ void MapScroll_UpdateDraw(int map, int mode) {
                 Packet_EndGsRegisters();
                 GsDraw_QueueFlush();
                 quad.tag = (s64)texture->base | ((s64)texture->width >> 6 << 14) | ((s64)texture->format << 20) |
-                           ((s64)width_log << 26) | ((s64)height_log << 30) | (1L << 34) |
-                           ((s64)texture->clut_base << 37) | ((s64)texture->clut_format << 51) | (4L << 61);
+                           ((s64)width_log << 26) | ((s64)height_log << 30) | (1LL << 34) |
+                           ((s64)texture->clut_base << 37) | ((s64)texture->clut_format << 51) | (4LL << 61);
                 quad.unk08 = 0x60;
                 quad.unk10 = 0x156;
                 half = texture->target_width >> 1;

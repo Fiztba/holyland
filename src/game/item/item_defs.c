@@ -9,6 +9,7 @@ ItemCommonDef item_common_defs[150] = { 0 };      /* 0x41A6F8 the common block, 
 PlayerItemDef weapon_defs[70] = { 0 };      /* 0x41B9B8 param/item_wpn.prm */
 LevelRecordDef worn_defs[160] = { 0 };      /* 0x41E118 param/item_pct.prm */
 
-/* The weapons and the worn items inside item_name_defs (items 150 and 220 on). */
-asm(".globl weapon_name_defs\nweapon_name_defs = item_name_defs + 0x2580\n");
-asm(".globl worn_name_defs\nworn_name_defs = item_name_defs + 0x3700\n");
+/* The weapons and the worn items inside item_name_defs (items 150 and 220 on: 0x2580 and 0x3700 bytes in). Retail
+   names them as symbols at those addresses; C cannot, so they are constant pointers. */
+GameDefinition *const weapon_name_defs = item_name_defs + 150;
+GameDefinition *const worn_name_defs = item_name_defs + 220;

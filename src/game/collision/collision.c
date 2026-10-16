@@ -106,25 +106,7 @@ void Collision_PointTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *p
     f32 weight_c;
 
     COLLISION_RESULT->hit = 0;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf16, $vf17\n"
-        "vsub.xyz $vf20, $vf18, $vf17\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vopmula.xyz ACC, $vf19, $vf20\n"
-        "vopmsub.xyz $vf16, $vf20, $vf19\n"
-        "sqc2 $vf19, 0(%3)\n"
-        "sqc2 $vf20, 0(%4)\n"
-        "vnop\n"
-        "sqc2 $vf16, 0(%5)\n"
-        :
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(edge_a), "r"(edge_c), "r"(normal));
+    Collision_TriangleEdges(corner_a, corner_b, corner_c, edge_a, edge_c, normal);
     sceVu0Normalize(normal, normal);
     distance = normal[0] * corner_a[0] + normal[1] * corner_a[1] + normal[2] * corner_a[2];
     distance += -normal[0] * point[0] - normal[1] * point[1] - normal[2] * point[2];
@@ -141,18 +123,10 @@ void Collision_PointTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *p
     Vector_Subtract(foot, point, foot);
     Vector_Subtract(from_b, foot, corner_b);
     COLLISION_RESULT->distance = distance;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vmul.xyz $vf16, $vf16, $vf16\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "sqc2 $vf16, 0(%0)\n"
-        :
-        : "r"(normal));
+    /* vmul.xyz: the normal's components squared (its w is kept) */
+    normal[0] = normal[0] * normal[0];
+    normal[1] = normal[1] * normal[1];
+    normal[2] = normal[2] * normal[2];
     if (normal[0] > normal[1]) {
         if (normal[2] < normal[0]) {
             denominator = edge_c[2] * edge_a[1] - edge_c[1] * edge_a[2];
@@ -208,32 +182,31 @@ void Collision_CapsuleTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 
 
     COLLISION_RESULT->hit = 0;
     result_normal = COLLISION_RESULT->normal;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf16, $vf17\n"
-        "vsub.xyz $vf20, $vf18, $vf17\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vopmula.xyz ACC, $vf19, $vf20\n"
-        "vopmsub.xyz $vf16, $vf20, $vf19\n"
-        "sqc2 $vf19, 0(%3)\n"
-        "sqc2 $vf20, 0(%4)\n"
-        "vnop\n"
-        "vmul.xyz $vf17, $vf16, $vf16\n"
-        "vaddx.xyz $vf17, $vf17, $vf17x\n"
-        "vaddy.xyz $vf17, $vf17, $vf17y\n"
-        "vrsqrt Q, $vf0w, $vf17z\n"
-        "vwaitq\n"
-        "vmulq.xyz $vf16, $vf16, Q\n"
-        "sqc2 $vf16, 0(%5)\n"
-        "sqc2 $vf16, 0(%6)\n"
-        :
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(edge), "r"(flat), "r"(normal), "r"(result_normal));
+    Collision_TriangleEdges(corner_a, corner_b, corner_c, edge, flat, normal);
+    {
+        /* vmul.xyz vf17 = n * n; vaddx.xyz vf17 += vf17.x; vaddy.xyz vf17 += vf17.y; vrsqrt Q = 1 / sqrt(vf17.z);
+           vmulq.xyz n *= Q. vf17.z ends as (z + x) + (y + x), twice x: retail scales the normal by that, not
+           to unit length. The normal (w from corner_a) goes to both normal and the result's normal. */
+        f32 squared[3];
+        f32 summed[3];
+        f32 q;
+
+        squared[0] = normal[0] * normal[0];
+        squared[1] = normal[1] * normal[1];
+        squared[2] = normal[2] * normal[2];
+        summed[0] = squared[0] + squared[0];
+        summed[1] = squared[1] + squared[0];
+        summed[2] = squared[2] + squared[0];
+        summed[2] = summed[2] + summed[1];
+        q = 1.0f / sqrtf(summed[2]);
+        normal[0] = normal[0] * q;
+        normal[1] = normal[1] * q;
+        normal[2] = normal[2] * q;
+        result_normal[0] = normal[0];
+        result_normal[1] = normal[1];
+        result_normal[2] = normal[2];
+        result_normal[3] = normal[3];
+    }
 
     radius_squared = radius * radius;
     middle[0] = centre[0];
@@ -394,25 +367,7 @@ void Collision_RayTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *ori
     f32 weight_c;
 
     COLLISION_RESULT->hit = 0;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf16, $vf17\n"
-        "vsub.xyz $vf20, $vf18, $vf17\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vopmula.xyz ACC, $vf19, $vf20\n"
-        "vopmsub.xyz $vf16, $vf20, $vf19\n"
-        "sqc2 $vf19, 0(%3)\n"
-        "sqc2 $vf20, 0(%4)\n"
-        "vnop\n"
-        "sqc2 $vf16, 0(%5)\n"
-        :
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(edge_a), "r"(edge_c), "r"(normal));
+    Collision_TriangleEdges(corner_a, corner_b, corner_c, edge_a, edge_c, normal);
     denominator = normal[0] * direction[0] + normal[1] * direction[1] + normal[2] * direction[2];
     if (-0.00001f < denominator && denominator < 0.00001f) {
         return;
@@ -430,20 +385,13 @@ void Collision_RayTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *ori
     foot[1] = origin[1] + direction[1] * denominator;
     foot[2] = origin[2] + direction[2] * denominator;
     COLLISION_RESULT->distance = denominator;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vmul.xyz $vf16, $vf16, $vf16\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf17, $vf18\n"
-        "vnop\n"
-        "sqc2 $vf16, 0(%0)\n"
-        "vnop\n"
-        "sqc2 $vf19, 0(%3)\n"
-        :
-        : "r"(normal), "r"(foot), "r"(corner_b), "r"(from_b));
+    /* vmul.xyz: the normal's components squared (its w is kept); vsub.xyz: from_b = foot - corner_b */
+    normal[0] = normal[0] * normal[0];
+    normal[1] = normal[1] * normal[1];
+    normal[2] = normal[2] * normal[2];
+    from_b[0] = foot[0] - corner_b[0];
+    from_b[1] = foot[1] - corner_b[1];
+    from_b[2] = foot[2] - corner_b[2];
     if (normal[0] > normal[1]) {
         if (normal[2] < normal[0]) {
             denominator = edge_c[2] * edge_a[1] - edge_c[1] * edge_a[2];
@@ -492,25 +440,7 @@ static void Collision_MoveTrianglePlane(f32 *corner_a, f32 *corner_b, f32 *corne
     f32 facing;
 
     COLLISION_RESULT->hit = 0;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf16, $vf17\n"
-        "vsub.xyz $vf20, $vf18, $vf17\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vopmula.xyz ACC, $vf19, $vf20\n"
-        "vopmsub.xyz $vf16, $vf20, $vf19\n"
-        "sqc2 $vf19, 0(%3)\n"
-        "sqc2 $vf20, 0(%4)\n"
-        "vnop\n"
-        "sqc2 $vf16, 0(%5)\n"
-        :
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(edge_a), "r"(edge_c), "r"(normal));
+    Collision_TriangleEdges(corner_a, corner_b, corner_c, edge_a, edge_c, normal);
     // match: the two edges are worked out again (the first one reversed), over what the VU0 code stored
     Vector_Subtract(edge_a, corner_b, corner_a);
     Vector_Subtract(edge_c, corner_c, corner_b);
@@ -555,46 +485,15 @@ static void Collision_DropOntoTriangle(f32 *corner_a, f32 *corner_b, f32 *corner
     f32 weight_c;
 
     COLLISION_RESULT->hit = 0;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf16, $vf17\n"
-        "vsub.xyz $vf20, $vf18, $vf17\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vopmula.xyz ACC, $vf19, $vf20\n"
-        "vopmsub.xyz $vf16, $vf20, $vf19\n"
-        "sqc2 $vf19, 0(%3)\n"
-        "sqc2 $vf20, 0(%4)\n"
-        "vnop\n"
-        "sqc2 $vf16, 0(%5)\n"
-        :
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(edge_a), "r"(edge_c), "r"(normal));
+    Collision_TriangleEdges(corner_a, corner_b, corner_c, edge_a, edge_c, normal);
     denominator = normal[1];
     if (-0.00001f < denominator && denominator < 0.00001f) {
         return;
     }
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf16, $vf17\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vmul.xyz $vf20, $vf19, $vf18\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "sqc2 $vf20, 0(%3)\n"
-        :
-        : "r"(corner_a), "r"(point), "r"(normal), "r"(from_b));
+    /* vsub.xyz then vmul.xyz: (corner_a - point) times the normal, component by component */
+    from_b[0] = (corner_a[0] - point[0]) * normal[0];
+    from_b[1] = (corner_a[1] - point[1]) * normal[1];
+    from_b[2] = (corner_a[2] - point[2]) * normal[2];
     denominator = (from_b[0] + from_b[1] + from_b[2]) / denominator;
     if (denominator < D_00446FC4[0]) {
         return;

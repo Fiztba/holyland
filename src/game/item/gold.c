@@ -56,7 +56,8 @@ static MapActor map_actors[2][MAP_ACTOR_COUNT]; /* 0x5B6100 sixteen piles per lo
 static ModelInstance map_actor_models[2][MAP_ACTOR_COUNT]; /* 0x5B6680 */
 static char map_gold_texture[0x2000];           /* 0x5B9E80 item/i0000.tx2 */
 static char map_gold_model[0x2000];             /* 0x5BBE80 item/i0000.om2 */
-static char map_actor_matrices[2][MAP_ACTOR_COUNT][0x80]; /* 0x5BDE80 */
+static char map_actor_matrices[2][MAP_ACTOR_COUNT][0x80]; /* 0x5BDE80 the work Model_SetUpSkinned lays each pile's part out in (a 0x80-byte ModelPart, 0x90 on the PC: too big for its 0x80);
+                                                            PORT: holds runtime structs, may need more room on the PC */
 
 /* Clears the map actors and loads their model (item/i0000.om2) and texture (item/i0000.tx2). */
 void Gold_Init(void) {
@@ -95,8 +96,8 @@ void Gold_InitMap(int map) {
     f32 position[4];
     f32 rotation[4];
     ObjectMarkRow marks;
-    int source; // match: two variables, an array of two would be padded to 16 bytes
-    int work;
+    char *source;
+    char *work;
     MapActor *actor;
     ModelInstance *model;
     char *matrix;
@@ -116,13 +117,13 @@ void Gold_InitMap(int map) {
     matrix = map_actor_matrices[map][0];
     for (i = 0; i < MAP_ACTOR_COUNT; i++, actor++, model++, matrix += 0x80) {
         actor->body = model;
-        work = (int)matrix;
-        source = (int)map_gold_model;
+        work = matrix;
+        source = map_gold_model;
         Model_SetUpSkinned(model, &source, &work);
         copy_matrix((ModelMatrixQwords *)matrix, (ModelMatrixQwords *)identity_matrix);
-        model->light_block = (s32)&map_draw_state.unkC0;
+        model->light_block = (sptr)&map_draw_state.unkC0;
         model->fog_block = &map_draw_state.unkA0;
-        model->texture_data = (int)map_gold_texture;
+        model->texture_data = (sptr)map_gold_texture;
         model->texture_slot = 2;
         model->draw = (void (*)(ModelInstance *))Gold_PrepareFadedDraw;
     }
@@ -320,7 +321,7 @@ int Gold_DropFromEntity(Entity *entity) {
     f32 angle;
 
     if (entity->params->gold == 0) {
-        return; // match: no value, though the function returns what Gold_Drop does (retail keeps $2 live here)
+        return FALSE; /* retail returns no value here, whatever $2 held; no caller reads it */
     }
     amount = 1;
     if (entity->params->gold >= 2) {
@@ -431,7 +432,7 @@ void Gold_ClearMark(MapActor *actor) {
 
     map_slot = (actor->flags >> 2) & 1;
     entry = &map_slots[map_slot];
-    slot = ((char *)actor - (char *)map_actors[map_slot]) / sizeof(MapActor);
+    slot = (u32)(((char *)actor - (char *)map_actors[map_slot]) / sizeof(MapActor));
     // match: retail adds the tag row and the slot before the table base
     mark = (ObjectMark *)((u8 *)map_object_marks + (entry->tag * sizeof(map_object_marks[0]) + slot * sizeof(ObjectMark)));
     memset(mark, 0, sizeof(ObjectMark));

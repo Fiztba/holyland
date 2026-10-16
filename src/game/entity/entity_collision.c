@@ -28,7 +28,7 @@ extern int current_map_slot;
 extern s32 map_objects_started[2];
 extern s32 map_object_counts[2];
 extern MapObject map_slot_objects[];
-extern MapObject map_slot1_objects[];
+extern MapObject *const map_slot1_objects;
 void Collision_CylinderEdge(void *, void *, f32, void *, f32, f32);
 void Collision_CylinderCylinder(void *, f32, f32, void *, f32, f32);
 void Collision_BallEdge(void *, void *, f32, void *, f32);

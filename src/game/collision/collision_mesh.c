@@ -14,25 +14,25 @@ char *Collision_RelocateMesh(char *data, ModelInstance *model, int use_scratchpa
     char *cursor = data;
     CollisionStrip *strip;
     CollisionStripPoint *point;
-    int *offsets;
+    EEWord *offsets;
     int i;
     int j;
 
     model->strips = (ModelStripList *)cursor;
     cursor += 0x50;
-    MODEL_MESH(model)->strips = (CollisionStrip *)cursor;
+    MODEL_MESH(model)->strips = EE_WORD(cursor);
     strip = (CollisionStrip *)cursor;
     /* the six strip lists and the two words after them are offsets from the mesh */
-    offsets = (int *)&MODEL_MESH(model)->wall_strips;
+    offsets = &MODEL_MESH(model)->wall_strips;
     for (i = 0; i < 8; i++) {
-        offsets[i] = (int)data + offsets[i];
+        offsets[i] = EE_WORD(data) + offsets[i];
     }
     for (i = 0; (u32)i < MODEL_MESH(model)->strip_count; i++) {
         point = strip->points;
         cursor += 0x20;
         if (use_scratchpad) {
             for (j = 0; j < strip->point_count; j++) {
-                point->position = &COLLISION_WORLD_POINTS[(int)point->position];
+                point->position = EE_WORD(&COLLISION_WORLD_POINTS[(s32)point->position]);
                 point++;
             }
         } else {
@@ -41,7 +41,7 @@ char *Collision_RelocateMesh(char *data, ModelInstance *model, int use_scratchpa
         cursor += strip->point_count * sizeof(CollisionStripPoint);
         strip = (CollisionStrip *)point;
     }
-    MODEL_MESH(model)->points = cursor;
+    MODEL_MESH(model)->points = EE_WORD(cursor);
     return cursor + MODEL_MESH(model)->point_count * 0x10;
 }
 

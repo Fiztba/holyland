@@ -280,6 +280,7 @@ int ScriptCmd_BlendEntityMotion(ScriptMotionBlendCommand *command) {
         }
     }
     command->active = 0;
+    return 0; /* retail returns whatever $2 held; the handler table calls it as void */
 }
 
 /* Command 238: turns the entity `target_id` to face the player (state 4, EntityAi_SetState: on the spot for
@@ -828,7 +829,7 @@ void ScriptCmd_TrySetEntityFlag18(ScriptQueryCommand *command) {
     entity = Entity_GetBySpawnId(command->input.value);
     if (entity != NULL) {
         flags = entity->flags;
-        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30L << 32) | 0xC)) == 0)) {
+        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30LL << 32) | 0xC)) == 0)) {
             entity->flags = flags | 0x40000;
             Script_StoreResult(&command->result, TRUE);
             command->active = 0;
@@ -848,7 +849,7 @@ void ScriptCmd_ClearEntityFlag18(ScriptObjectCommand *command) {
     entity = Entity_GetBySpawnId(command->object_id.value);
     if (entity != NULL) {
         flags = entity->flags;
-        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30L << 32) | 0xC)) == 0)) {
+        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30LL << 32) | 0xC)) == 0)) {
             entity->flags = flags & ~0x40000;
         }
     }

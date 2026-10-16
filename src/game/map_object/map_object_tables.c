@@ -30,7 +30,7 @@ void MapObject_SetupItemHolder(MapObject *object);
 void MapObject_StartChest(MapObject *object);
 void MapObject_UpdateOpeningChest(MapObject *object);
 void func_00120128();
-void MapObject_OpenChestOnSignal(GameEvent *event, int mode);
+void MapObject_OpenChestOnSignal(MapObject *event, int mode);
 void MapObject_SetupChest(MapObject *object);
 void MapObject_StartDistanceFade(MapObject *object);
 void MapObject_UpdateDistanceFade(MapObject *object);
@@ -111,8 +111,9 @@ int MapObject_UpdatePulse(MapTrigger *trigger);
 char map_object_defs[0x14000] = { 0 }; /* 0x38DA30 the param/obj.prm row of every object */
 
 MapObject map_slot_objects[2][0x200] = { 0 }; /* 0x3A1A30 the objects of both map slots, a row each */
-/* its second row, which other files name on its own */
-asm(".globl map_slot1_objects\nmap_slot1_objects = map_slot_objects + 0xE000");  /* 0x3AFA30 the objects of map slot 1 */
+/* its second row, which other files name on its own: retail names it as a symbol at 0x3AFA30 (0xE000 bytes in);
+   C cannot, so it is a constant pointer */
+MapObject *const map_slot1_objects = map_slot_objects[1];
 
 void (*map_object_step_handlers[0x20][16])(MapObject *) = { /* 0x3BDA30 the step handler of each object kind */
     MapObject_StartScenery, MapObject_UpdateScenery, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, MapObject_UpdateBreaking,

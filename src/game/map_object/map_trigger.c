@@ -239,7 +239,7 @@ void MapObject_FadeInObject(MapTrigger *trigger) {
     if (shot->unk10 < 100000.0f) {
         shot->unk10 += 6.6666f;
     }
-    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->unk10) == 0) {
+    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->unk10) == 0) {
         trigger->type = 3;
         shot->unk10 = 0.0f;
     }
@@ -264,7 +264,7 @@ void MapObject_FadeOutObject(MapTrigger *trigger) {
     if (shot->unk10 < 2000.0f) {
         shot->unk10 += 4.0f;
     }
-    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->unk10) == 0) {
+    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->unk10) == 0) {
         trigger->type = 1;
         shot->unk10 = 0.0f;
     }

@@ -6,13 +6,16 @@
 #include "model/model.h"
 
 /* a map's flag block, MapSlot.flag_blocks[n] */
+/* overlay: a flag block in a map file */
 typedef struct {
     u8 bits[0x20];                  /* 0x00 one bit per flag of this map */
     u8 tags[0x10];                  /* 0x20 other maps' tags... */
     u8 values[0x10];                /* 0x30 ...and the flag set for each */
 } MapFlagBlock;
+LAYOUT_SIZE(MapFlagBlock, 0x40);
 
 /* a map record with the doubleword of its flags (MapRecord.record_flags) as bit-fields */
+/* overlay: a map record in a map file */
 typedef struct {
     char pad00[0x38];
     u64 pad38_0 : 27;
@@ -23,6 +26,7 @@ typedef struct {
 #define MAP_RECORD_BITS(record) ((MapRecordBits *)(record))
 
 /* 16 bytes of a map's header; the first three are a colour */
+/* overlay: part of a map file's header (MapSlotUnk08.fog_color), copied whole into map_draw_state */
 typedef struct {
     u8 red;                         /* 0x00 */
     u8 green;                       /* 0x01 */
@@ -30,13 +34,17 @@ typedef struct {
     char pad03[0x01];
     s32 unk04[3];                   /* 0x04 */
 } MapFogColor;
+LAYOUT_SIZE(MapFogColor, 0x10);
 
 /* one of the 32 0x20-byte blocks MapSlot.fog_blocks points at; a model's unk14C points at one */
+/* overlay: a fog block in a map file (copied into map_draw_state) */
 typedef struct {
     u64 unk00[4];                   /* 0x00 */
 } MapSlotUnk0C;
+LAYOUT_SIZE(MapSlotUnk0C, 0x20);
 
 /* a MapSlotUnk0C block as the per-map set-up functions (MapSetup_RunForMap) fill it */
+/* overlay: a fog block, as MapSlotUnk0C */
 typedef struct {
     f32 unk00;                      /* 0x00 */
     f32 unk04;                      /* 0x04 */
@@ -45,12 +53,15 @@ typedef struct {
     s64 unk10;                      /* 0x10 */
     char pad18[0x08];
 } MapSlotUnk0CValues;
+LAYOUT_SIZE(MapSlotUnk0CValues, 0x20);
 
 /* one of the 32 0x80-byte blocks MapSlot.light_blocks points at, as whole doublewords (see MapSlotUnk10
    in entity/entity.h); a model's unk148 points at one */
+/* overlay: a light block in a map file (copied into map_draw_state) */
 typedef struct {
     u64 unk00[16];                  /* 0x00 */
 } MapSlotUnk10Words;
+LAYOUT_SIZE(MapSlotUnk10Words, 0x80);
 
 /* the first half of such a block: what the held item's models are lit by (held_item_light_blocks, Player_UpdateArmModels) */
 typedef struct {
@@ -59,6 +70,7 @@ typedef struct {
 
 /* a MapSlotUnk10Words block as the eight vectors it holds; MapObject_DrawAll blends the last four
    towards map_object_glow_colors */
+/* overlay: a light block, as MapSlotUnk10Words */
 typedef struct {
     Vector4 unk00[4];               /* 0x00 */
     Vector4 unk40[4];               /* 0x40 */
@@ -66,6 +78,7 @@ typedef struct {
 
 /* a MapSlotUnk10Words block as three lights: their directions are the columns of a matrix, their
    colours (0 to 1) the vectors after it (ScriptCmd_SetMapLight) */
+/* overlay: a light block, as MapSlotUnk10Words */
 typedef struct {
     f32 directions[4][4];           /* 0x00 [axis][light] */
     Vector4 colors[4];              /* 0x40 */
@@ -139,6 +152,7 @@ typedef struct {
 } MapDrawStateOverlays;
 
 /* a map record (MapRecord in entity/entity.h) as the code that draws the maps reads it */
+/* overlay: a map record in a map file */
 typedef struct MapDrawRecord {
     char pad00[0x34];
     u8 fog_block_index;             /* 0x34 which MapSlotUnk0C block it is drawn with */
@@ -150,10 +164,31 @@ typedef struct MapDrawRecord {
     f32 box_min[4];                 /* 0x40 lowest x, y, z of the box linked points are tested against (LinkedPoint_FindHitsForMapDraw) */
     f32 box_max[4];                 /* 0x50 highest x, y, z of that box */
     char pad60[0x0C];
-    struct MapDrawRecord *next;     /* 0x6C next in its draw list (record_draw_lists, late_record_draw_lists) */
+    EEWord next;                    /* 0x6C (struct MapDrawRecord *) next in its draw list (record_draw_lists,
+                                       late_record_draw_lists) */
     char pad70[0x0C];
-    ModelInstance *model;           /* 0x7C */
+    EEWord model;                   /* 0x7C (ModelInstance *) */
 } MapDrawRecord;
+LAYOUT_SIZE(MapDrawRecord, 0x80);
+LAYOUT_OFFSET(MapDrawRecord, flags, 0x3C);
+LAYOUT_OFFSET(MapDrawRecord, box_min, 0x40);
+LAYOUT_OFFSET(MapDrawRecord, next, 0x6C);
+LAYOUT_OFFSET(MapDrawRecord, model, 0x7C);
+
+/* the model of a map record (MapDrawRecord, MapRecordInfo, MapRecordBounds), which Map_BuildModels keeps in its
+   last word */
+#define MAP_RECORD_MODEL(record) EE_PTR(ModelInstance *, (record)->model)
+
+/* a map record as the lists of record boxes link it (record_boxes, backdrop_record_boxes: AreaNode in
+   gfx/screen.h, whose other fields all come before this one) */
+/* overlay: a map record in a map file */
+typedef struct {
+    char pad00[0x5C];
+    EEWord next;                    /* 0x5C (AreaNode *) the next box of its list */
+} MapRecordBox;
+LAYOUT_OFFSET(MapRecordBox, next, 0x5C);
+
+#define MAP_RECORD_BOX(node) ((MapRecordBox *)(node))
 
 /* map_scroll_copy_pairs and map_scroll_draw_pairs in map/map_scroll.c: 16 pairs per map slot */
 typedef struct {
@@ -163,6 +198,7 @@ typedef struct {
 
 /* one of the 16 0xC-byte entries MapSlot.scroll_copy_textures points at: a texture that MapScroll_UpdateCopy scrolls in
    place by copying it through a spare buffer, as far as the matching copy pair says */
+/* overlay: an entry of a map file's table at 0x1480 */
 typedef struct {
     u16 base;                       /* 0x00 0: the entry is unused */
     u16 format;                     /* 0x02 */
@@ -173,9 +209,11 @@ typedef struct {
     u8 period;                      /* 0x0A it moves every this many frames; 0: every frame */
     u8 mode;                        /* 0x0B which call of MapScroll_UpdateCopy moves it */
 } MapScrollCopy;
+LAYOUT_SIZE(MapScrollCopy, 0xC);
 
 /* one of the 16 0x28-byte entries MapSlot.scroll_draw_textures points at: a texture that MapScroll_UpdateDraw draws into
    another one, moved along by the matching draw pair */
+/* overlay: an entry of a map file's table at 0x1540 */
 typedef struct {
     u16 width;                      /* 0x00 */
     u16 height;                     /* 0x02 */
@@ -200,6 +238,7 @@ typedef struct {
     s16 step_x;                     /* 0x24 added to the pair each time */
     s16 step_y;                     /* 0x26 */
 } MapScrollTexture;
+LAYOUT_SIZE(MapScrollTexture, 0x28);
 
 /* MapScrollTexture.blend as bit-fields of the word it starts */
 typedef struct {
@@ -218,6 +257,7 @@ typedef struct {
 } MapSlotPackets;
 
 /* what MapSlot.header points at: the loaded map's header, as Sound_ReadMapBankFileStep reads it */
+/* overlay: the header of a map file (as MapSlotUnk08) */
 typedef struct {
     char pad00[0x20];
     s32 item_models_offset;         /* 0x20 from the header to the item models: sized blocks, a model then its texture per kind */
@@ -229,6 +269,10 @@ typedef struct {
     s8 unk70;                       /* 0x70 passed to sprintf as the file-name index */
     u8 unk71;                       /* 0x71 which block of MapDrawState.light_blocks the items lying in the map are drawn with */
 } MapHeader;
+LAYOUT_OFFSET(MapHeader, item_models_offset, 0x20);
+LAYOUT_OFFSET(MapHeader, record_count, 0x3C);
+LAYOUT_OFFSET(MapHeader, item_count, 0x44);
+LAYOUT_OFFSET(MapHeader, unk71, 0x71);
 
 /* one 0x60-byte entry of map_slots, indexed by the current map/slot current_map_slot */
 typedef struct MapSlot {
@@ -252,10 +296,12 @@ typedef struct MapSlot {
     char *scroll_copy_textures;     /* 0x38 the file at 0x1480 */
     char *scroll_draw_textures;     /* 0x3C the file at 0x1540 */
     MapSlotPackets unk40;           /* 0x40 */
-    s32 script;                     /* 0x5C passed to Script_Init when the map becomes current */
+    sptr script;                    /* 0x5C the address of the map's script, passed to Script_Init when the map
+                                       becomes current */
 } MapSlot;
 
 /* what MapSlot.unk08 points at */
+/* overlay: the header of a map file (MapSlot.header) */
 typedef struct {
     s32 file_size;                  /* 0x00 how long the map file's first part is */
     s32 record_models_offset;       /* 0x04 offset in the file of the record models (ModelFile, back to back) */
@@ -294,8 +340,18 @@ typedef struct {
     u8 screen_tint_blue;            /* 0x7A blue of that colour */
     u8 screen_tint_alpha;           /* 0x7B alpha of that colour; Wobble takes all four as one colour */
 } MapSlotUnk08;
+LAYOUT_SIZE(MapSlotUnk08, 0x7C);
+LAYOUT_OFFSET(MapSlotUnk08, packet_table_offset, 0x24);
+LAYOUT_OFFSET(MapSlotUnk08, record_model_count, 0x2C);
+LAYOUT_OFFSET(MapSlotUnk08, record_count, 0x3C);
+LAYOUT_OFFSET(MapSlotUnk08, script_offset, 0x4C);
+LAYOUT_OFFSET(MapSlotUnk08, fog_color, 0x50);
+LAYOUT_OFFSET(MapSlotUnk08, player_start_x, 0x60);
+LAYOUT_OFFSET(MapSlotUnk08, sound_bank_file_index, 0x70);
+LAYOUT_OFFSET(MapSlotUnk08, screen_tint_red, 0x78);
 
 /* a MapRecord (entity/entity.h) as the map code reads it */
+/* overlay: a map record in a map file */
 typedef struct {
     char pad00[0x34];
     u8 draw_block_index;            /* 0x34 which block of the map's draw state its models use */
@@ -307,16 +363,22 @@ typedef struct {
     char pad3B[0x01];
     s32 unk3C;                      /* 0x3C flags */
     char pad40[0x3C];
-    ModelInstance *model;           /* 0x7C */
+    EEWord model;                   /* 0x7C (ModelInstance *) */
 } MapRecordInfo;
+LAYOUT_SIZE(MapRecordInfo, 0x80);
+LAYOUT_OFFSET(MapRecordInfo, unk3C, 0x3C);
+LAYOUT_OFFSET(MapRecordInfo, model, 0x7C);
 
 /* where a map change leads: a position in the new map and the map's number. map_load_request is one. */
+/* overlay: one of a map file's MapSlot.origins (MapLoad_Update reads them as requests) */
 typedef struct {
     f32 x;                          /* 0x00 */
     f32 y;                          /* 0x04 */
     f32 z;                          /* 0x08 */
     u16 map;                        /* 0x0C the low byte becomes MapSlot.tag */
 } MapLoadRequest;
+LAYOUT_SIZE(MapLoadRequest, 0x10);
+LAYOUT_OFFSET(MapLoadRequest, map, 0x0C);
 
 /* map_load_state: the background load of a neighbouring map into the slot that is not current */
 typedef struct {
@@ -374,16 +436,24 @@ typedef struct {
     u16 unk44;                      /* 0x44 */
 } TriggerSource;
 
-/* a map event trigger (MapObject_PlaceStoneOnMarker) */
-typedef struct {
-    ModelInstance *model;           /* 0x00 */
-    u8 *unk04;                      /* 0x04 */
-    char *unk08;                    /* 0x08 TriggerSource; byte 0x3A is passed to Game_AddTriggerItem */
-    char pad0C[0x04];
-    u8 unk10;                       /* 0x10 bit 0 picks the MapSlot */
-    u8 type;                        /* 0x11 */
-    char pad12[0x2E];
-    MapTriggerShot shot;            /* 0x40 */
+/* a map event trigger (MapObject_PlaceStoneOnMarker): a MapObject (model/model.h) as the kinds' handlers read it.
+   On the PC its fields lie where MapObject's do (model, definition, source; state_flags; work), which the
+   pointers there move, so each group is placed by MapObject's own offsets. */
+typedef union {
+    struct {
+        ModelInstance *model;       /* 0x00 MapObject.model */
+        u8 *unk04;                  /* 0x04 MapObject.definition */
+        char *unk08;                /* 0x08 MapObject.source: TriggerSource; byte 0x3A is passed to Game_AddTriggerItem */
+    };
+    struct {
+        char pad_flags[offsetof(MapObject, state_flags)];
+        u8 unk10;                   /* 0x10 bit 0 picks the MapSlot */
+        u8 type;                    /* 0x11 */
+    };
+    struct {
+        char pad_work[offsetof(MapObject, work)];
+        MapTriggerShot shot;        /* 0x40 MapObject.work */
+    };
 } MapTrigger;
 
 #define MAP_TRIGGER_SOURCE(trigger) ((TriggerSource *)(trigger)->unk08)
@@ -468,13 +538,13 @@ typedef struct MapActor {
     char pad25[0x07];
 } MapActor;
 
-/* a MapActor where the code reads the high half of flags and the word at 0x24 whole */
+/* a MapActor where the code reads the high half of flags and the word at 0x24 whole (on the PC that word is where
+   MapActor.unk24 is, past the grown pointers) */
 typedef struct {
     u16 flags_low;                  /* 0x00 */
     u16 amount;                     /* 0x02 how much gold it is worth */
-    char pad04[0x20];
+    char pad04[offsetof(MapActor, unk24) - 4];
     s32 object_id;                  /* 0x24 the map object that dropped it (MapObject_MarkEmptiedById), 0: none */
-    char pad28[0x04];
 } MapActorWords;
 
 #define MAP_ACTOR_WORDS(actor) ((MapActorWords *)(actor))

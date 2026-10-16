@@ -71,7 +71,7 @@ extern int current_map_slot;
 static s32 sway_frame = 0;                      /* 0x4467A0 counts 0 to 59 */
 static s32 next_sound_channel = 0;              /* 0x4467A4 0 to 31, the next of the channels 0x20 to 0x3F */
 s32 map_objects_started[2] = { 0, 0 };         /* the objects of each map have been started */
-int map_object_placements[2] = { 0, 0 };                   /* the MapObjectUnk08 array of each map */
+sptr map_object_placements[2] = { 0, 0 };                  /* the MapObjectUnk08 array of each map */
 s32 map_object_counts[2] = { 0, 0 };           /* how many objects each map has */
 
 static s32 glow_item_worn;                      /* 0x447078 Myu's Necklace is worn */
@@ -232,7 +232,7 @@ void MapObject_StartMap(int map) {
         if (Game_GetTriggerItem(tag, object->source->spawn_flags.bytes[2])) {
             flag = 1;
         }
-        object->map_record = (s32)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
+        object->map_record = (sptr)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
         if (in_use) {
             MapObject_Activate(object);
         } else {
@@ -535,19 +535,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             }
             if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&glow_lights_shared;
+                    object->model->light_block = (sptr)&glow_lights_shared;
                 } else {
-                    object->model->light_block = (s32)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             } else {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&map_draw_state.unkC0;
+                    object->model->light_block = (sptr)&map_draw_state.unkC0;
                 } else {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             }
             if ((s8)object->source->spawn_flags.bytes[4] != -1) {
@@ -564,7 +564,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             } else {
                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
             }
-            if ((object->source->spawn_flags.flags & 0x1000000000000L) || (object->model->alpha < 128.0f && !(object->definition->definition_flags & 0x10000))) {
+            if ((object->source->spawn_flags.flags & 0x1000000000000LL) || (object->model->alpha < 128.0f && !(object->definition->definition_flags & 0x10000))) {
                 DrawList_Add(object->model, 0, mode);
             } else {
                 ModelTexture_SendForModel(object->model);
@@ -594,19 +594,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             }
             if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&glow_lights_shared;
+                    object->model->light_block = (sptr)&glow_lights_shared;
                 } else {
-                    object->model->light_block = (s32)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             } else {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&map_draw_state.unkC0;
+                    object->model->light_block = (sptr)&map_draw_state.unkC0;
                 } else {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             }
             if ((s8)object->source->spawn_flags.bytes[4] == -1) {
@@ -625,7 +625,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             } else {
                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
             }
-            if ((object->source->spawn_flags.flags & 0x1000000000000L) || (object->model->fade_enabled != 0 && (s16)object->model->fade_alpha < 0x80 && !(object->definition->definition_flags & 0x10000))) {
+            if ((object->source->spawn_flags.flags & 0x1000000000000LL) || (object->model->fade_enabled != 0 && (s16)object->model->fade_alpha < 0x80 && !(object->definition->definition_flags & 0x10000))) {
                 DrawList_Add(object->model, 0, mode);
             } else {
                 ModelTexture_SendForModel(object->model);
@@ -719,6 +719,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
     channel->param = 0;
     channel->param_shifted = 0;
     MapObject_StepAnim(object);
+    return 0; /* retail returns whatever $2 held; no caller reads it */
 }
 
 /* Advances a map object's animation one frame, starting the sounds tied to the
@@ -787,7 +788,7 @@ void MapObject_MarkEmptied(MapObject *object) {
     u8 kind = object->definition->kind;
 
     if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
-        ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
+        ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
         object->state_flags |= 0x40000;
     }
 }
@@ -800,7 +801,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
     if (object != NULL) {
         kind = object->definition->kind;
         if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
-            ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
+            ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
             object->state_flags |= 0x40000;
         }
     }
@@ -862,11 +863,11 @@ void MapObject_DrawModel(int *model) {
 void MapObject_DrawModelWithAlpha(ModelInstance *model) {
     Packet_BeginGsRegisters();
     if (model->alpha < 128.0f) {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
     } else {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118LL);
     }
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
     Packet_AddGsRegister(GS_REG_ALPHA_2, 9);

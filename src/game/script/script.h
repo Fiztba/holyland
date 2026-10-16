@@ -526,7 +526,7 @@ typedef struct {
 } ScriptSetFlagsCommand;
 
 /* Gets the interpreter ready for a map's script (the address as a word). */
-void Script_Init(s32 script_data);
+void Script_Init(sptr script_data);
 /* Starts a script in a free thread unless it is running already; returns the thread's index. */
 int Script_Start(int script_id, int argument);
 /* TRUE if a thread is running the script. */

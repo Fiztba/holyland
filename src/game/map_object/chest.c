@@ -5,14 +5,14 @@
 #include "core/game.h"
 
 ItemNode *MapItem_PutOutForObject(int, int, void *, void *, void *, void *);
-int MapItem_StartPickup(ModelNode *);
+int MapItem_StartPickup(ItemNode *);
 void MapObject_SpawnHeldItem(MapObject *);
 void MapObject_UpdateBreaking(MapObject *);
 void *memset(void *, int, u32);
 void MapObject_ShowKeyUsed(int);
 int Sound_PlayMapAtRange(u8, u8, float *, float);
 void MapObject_UpdateOpenChest(MapObject *);
-ModelNode *MapItem_FindForObject(int);
+ItemNode *MapItem_FindForObject(void *);
 void MapObject_UpdateClosedChest(void *, int);
 void MapObject_SetupItemHolder(MapObject *);
 extern void (*map_object_update_hooks[])(MapObject *);
@@ -36,7 +36,7 @@ void MapObject_UpdateItemHolder(MapObject *object) {
     if (((game_status_flags[0] >> 1) & 1) && faced_object[0] == object) {
         if (object->source->kind_param_0 != 0 && !(object->state_flags & 0x40000)) {
             object->model->update_bone_points(object->model);
-            MapItem_StartPickup((ModelNode *)MapItem_PutOutForObject(
+            MapItem_StartPickup(MapItem_PutOutForObject(
                 MAP_OBJECT_BYTES(object)->unk00 & 1, object->source->kind_param_0, (void *)object->model->get_point(object->model, 0),
                 &object->model->rotation, &unk_value, object));
         } else if (work[0] <= 0) {
@@ -186,7 +186,7 @@ void MapObject_UpdateOpeningChest(MapObject *object) {
 void MapObject_UpdateOpenChest(MapObject *object) {
     s32 *work = object->work;
     MapObjectUnk08Words *source;
-    ModelNode *pickup;
+    ItemNode *pickup;
 
     if (work[1] > 0) {
         work[1]--;
@@ -194,7 +194,7 @@ void MapObject_UpdateOpenChest(MapObject *object) {
     if (((game_status_flags[0] >> 1) & 1) && faced_object[0] == object) {
         if (!(object->state_flags & 0x40000) &&
             ((source = MAP_OBJECT_WORDS(object))->kind_param_0 != 0 || source->kind_param_2 != 0)) {
-            pickup = MapItem_FindForObject((int)object);
+            pickup = MapItem_FindForObject(object);
             if (pickup != NULL) {
                 MapItem_StartPickup(pickup);
             }
@@ -215,11 +215,12 @@ void func_00120128(void) {
 /* Signal hook of the chests: opens a closed chest (step 1) as if the player had used it, by running
    MapObject_UpdateClosedChest with the use bit (GameStatus.bit1) set and the chest as the thing in front of
    the player. */
-void MapObject_OpenChestOnSignal(GameEvent *event, int mode) {
+/* (Retail reads the object as a GameEvent, core/game.h, whose flags lie at MapObject.state_flags only on the PS2.) */
+void MapObject_OpenChestOnSignal(MapObject *event, int mode) {
     void *saved;
     int bit;
 
-    if ((event->flags & 0x2FF00) == 0x100 && mode != 0) {
+    if ((event->state_flags & 0x2FF00) == 0x100 && mode != 0) {
         saved = view_ray_status.current;
         bit = game_status.bit1;
         game_status.bit1 = 1;
