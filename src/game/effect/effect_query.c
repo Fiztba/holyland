@@ -5,6 +5,7 @@
 #include "effect/effect.h"
 #include "math/vu0.h"
 #include "collision/collision.h"
+#include <math.h>
 
 float Effect_Distance(void *, void *);
 void Collision_CastRayAtMap(f32, void *, void *);
@@ -45,21 +46,17 @@ int Effect_IsNearAnyEntity(float radius, void *point) {
 
 /* Distance between two points. */
 float Effect_Distance(void *from, void *target) {
-    f32 distance[4];
+    f32 *a = from;
+    f32 *b = target;
+    f32 dx = b[0] - a[0];
+    f32 dy = b[1] - a[1];
+    f32 dz = b[2] - a[2];
+    f32 sum;
 
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf17, $vf16\n"
-        "vmul.xyz $vf17, $vf16, $vf16\n"
-        "vaddx.z $vf17, $vf17, $vf17x\n"
-        "vaddy.z $vf17, $vf17, $vf17y\n"
-        "vsqrt Q, $vf17z\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(from), "r"(target), "r"(distance) : "memory");
-    return distance[0];
+    /* vsub, vmul, then z + x, then + y, and the square root (VU0) */
+    sum = dz * dz + dx * dx;
+    sum = sum + dy * dy;
+    return sqrtf(sum);
 }
 
 // Horizontal (XZ-plane) distance between origin and target.
@@ -71,20 +68,17 @@ float Effect_DistanceXZ(float *origin, float *target) {
     target_at_origin_height.y = origin[1];
     target_at_origin_height.z = target[2];
     target_at_origin_height.w = 0;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf17, $vf16\n"
-        "vmul.xyz $vf17, $vf16, $vf16\n"
-        "vaddx.z $vf17, $vf17, $vf17x\n"
-        "vaddy.z $vf17, $vf17, $vf17y\n"
-        "vsqrt Q, $vf17z\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        :
-        : "r"(origin), "r"(&target_at_origin_height), "r"(&out)
-        : "memory");
+    {
+        f32 dx = target_at_origin_height.x - origin[0];
+        f32 dy = target_at_origin_height.y - origin[1];
+        f32 dz = target_at_origin_height.z - origin[2];
+        f32 sum;
+
+        /* vsub, vmul, then z + x, then + y, and the square root (VU0) */
+        sum = dz * dz + dx * dx;
+        sum = sum + dy * dy;
+        out.x = sqrtf(sum);
+    }
     return out.x;
 }
 

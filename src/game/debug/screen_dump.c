@@ -146,7 +146,7 @@ void ScreenDump_Bmp(u8 *buffer) {
     } while (TRUE);
     if (in_range) {
         aligned = buffer;
-        misalign = (u32)aligned & 0xF;
+        misalign = (u32)((uptr)aligned & 0xF);
         if (misalign != 0) {
             aligned -= misalign - 0x10;
         }
@@ -209,7 +209,7 @@ static void ScreenDump_Raw(u8 *buffer) {
     } while (TRUE);
     if (in_range) {
         aligned = buffer;
-        misalign = (u32)aligned & 0xF;
+        misalign = (u32)((uptr)aligned & 0xF);
         if (misalign != 0) {
             aligned -= misalign - 0x10;
         }

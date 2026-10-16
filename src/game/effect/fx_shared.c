@@ -45,7 +45,7 @@ void EffectStart_TurnModel(EffectActor *effect, EffectSlot *spawn_slot);
 static int EffectKeys_FindStage(void *effect, int *frames);
 static void EffectKeys_Weights(f32 *result, f32 *eased, int value, int min, int max, int mode);
 void EffectSteer_Toward(Vector4 *velocity, Vector4 *direction, float speed, float turn);
-int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
+Entity *EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
 Entity *EffectHit_FindNearestEntity(EffectActor *effect, Vector4 *position, Vector4 *unused_rotation);
 
 /* Sets the model's scale from the definition's scale keys; returns the key reached, or -1 while it blends
@@ -335,7 +335,7 @@ void EffectSteer_Toward(Vector4 *velocity, Vector4 *direction, float speed, floa
 
 /* The entity within def->interval of position that lies most nearly in the direction of the reference
    angles, inside def->unkE4 of pitch and def->unkE8 of heading; 0 when none. */
-int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference) {
+Entity *EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference) {
     Vector4 angles;
     Vector4 offset;
     Entity *entity;
@@ -374,7 +374,7 @@ int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *r
             best = entity;
         }
     }
-    return (int)best;
+    return best;
 }
 
 /* The nearest entity within def->interval of position that can be targeted, or NULL. */

@@ -30,7 +30,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin);
 void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void DrawList_Add(ModelInstance *, s32, s32);
-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
+char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
 void Sound_StopTracked(s8 handle);
 void Model_SetUpPosed(ModelInstance *, char **, char **);
 int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last);
@@ -60,7 +60,7 @@ static int effect_count = 0;        /* 0x4468D0 live effects */
 static u32 *effect_texture_packet;  /* 0x4470F8 DMA packet holding the effect textures read back from the GS */
 static char *effect_model_file;     /* 0x4470FC sfx/sfx.dat */
 static char *effect_model_memory;   /* 0x447100 0x800 bytes of model memory per effect */
-static char **effect_model_table;   /* 0x447104 the model of each EffectDef.model_index, inside effect_model_file */
+static EEWord *effect_model_table; /* 0x447104 (char *) the model of each EffectDef.model_index, inside effect_model_file */
 
 /* 0x502260 param/sfx.prm; entries is the view whose bit-field tests stay array reads */
 static union {
@@ -81,7 +81,7 @@ void Effect_Init(void) {
     char unused_buffer[0x2C0];
     char *buffer;
     int handle;
-    char **table;
+    EEWord *table;
     int i;
     int key;
     EffectDef *def;
@@ -100,7 +100,7 @@ void Effect_Init(void) {
     buffer += 0xC0000;
     effect_model_file = buffer;
     buffer += 0x9FC00;
-    effect_model_table = (char **)effect_model_file;
+    effect_model_table = (EEWord *)effect_model_file;
     memset(effect_light_block, 0, sizeof(effect_light_block));
     effect_light_block[7].z = 1.0f;
     effect_light_block[7].y = 1.0f;
@@ -119,7 +119,7 @@ void Effect_Init(void) {
     File_Close(handle);
     table = effect_model_table;
     for (i = 0; i < 0x200; i++) {
-        table[i] += (int)table; /* file offsets become pointers */
+        table[i] += EE_WORD(table); /* file offsets become pointers */
     }
     Effect_CaptureTextures();
     scale = 0.017453292f;
@@ -404,7 +404,7 @@ void Effect_UploadTextures(void) {
     GsDraw_QueueFlush();
     first_word = cursor = Packet_Alloc(2);
     *cursor++ = effect_texture_packet[0] | 0x30000000;
-    *cursor++ = (u32)(effect_texture_packet + 4);
+    *cursor++ = EE_WORD(effect_texture_packet + 4);
     *cursor++ = 0;
     *cursor = 0;
     Packet_AppendToChain(first_word, cursor + 1);
@@ -486,9 +486,9 @@ void Effect_DrawAll(int pass) {
         model->fog_block = map_draw_slot_blocks + (current_map_slot << 10);
         // match: the flag is read through the union so the test stays behind the unk14C store
         if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000LL << 25))) {
-            model->light_block = (s32)effect_light_block;
+            model->light_block = (sptr)effect_light_block;
         } else {
-            model->light_block = (s32)(map_draw_slot_blocks - 0x1D0);
+            model->light_block = (sptr)(map_draw_slot_blocks - 0x1D0);
         }
         model->hit_count = 0;
         if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000LL << 26))) {
@@ -557,9 +557,9 @@ static void Effect_RunSpawner(EffectSlot *slot) {
         effect_kind_handlers[effect->def->kind_index][0](effect, slot);
         EFFECT_FLAG_BITS(effect)->bit59 = effect->def->sound_id != 0;
         if (fx_table[effect->effect_param].item_menu_magic != 0) {
-            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (int)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
+            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
         } else if (EFFECT_FLAG_BITS(effect)->bit59 || effect->effect_param == player_state.equipped_magic) {
-            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (int)&effect->model->position, EFFECT_FLAG_PARTS(effect)->unk46);
+            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (float *)&effect->model->position, EFFECT_FLAG_PARTS(effect)->unk46);
         }
         if (EFFECT_FLAG_PARTS(effect)->unk46 > 0) {
             effect_sound_count++;
@@ -698,7 +698,7 @@ static void Effect_SetupModel(int index) {
         }
     }
     model->model_flags |= 0x1800;
-    file_cursor = effect_model_table[def->model_index];
+    file_cursor = EE_PTR(char *, effect_model_table[def->model_index]);
     memory = effect_model_memory + (index << 11);
     Model_SetUpPosed(model, &file_cursor, &memory);
     model->draw = effect_draw_hooks[((EffectTableEntry *)effect->def)->placement][effect->def->draw_hook_index];
@@ -717,9 +717,9 @@ static void Effect_SetupModel(int index) {
             map = current_map_slot;
         }
         effect->model->texture_slot = 3;
-        effect->model->texture_data = (int)Map_GetSlotPacket(map, 4);
+        effect->model->texture_data = (sptr)Map_GetSlotPacket(map, 4);
         effect->model->shared_texture_slot = 0;
-        effect->model->shared_texture_packet = (int)Map_GetSlotPacket(map, 5);
+        effect->model->shared_texture_packet = (sptr)Map_GetSlotPacket(map, 5);
     }
 }
 
@@ -738,7 +738,7 @@ static void Effect_FindModelRecord(ModelInstance *model, int unused_arg1, int re
     for (part_index = 0; part_index < part_total; part_index++, part++) {
         int record_count = part->data_count;
 
-        record = (char *)(int)part->data_addr;
+        record = EE_PTR(char *, part->data_addr);
         for (record_index = 0; record_index < record_count; record_index++, record += 0x10) {
             if ((((ModelPartRecord *)record)->id_word & 0x3FFF) == record_id) {
                 *(UnalignedQword *)model->found_record = *(UnalignedQword *)&((ModelPartRecord *)record)->id_word;

@@ -26,7 +26,7 @@ void Sound_SetBankVolumes(int level);
 void Sound_SyncBgmLevel(void);
 /* Starts a tracked sound with the player of `kind` in tracked_sound_players (0 Sound_PlayTracked, 1
    Sound_PlayTrackedAt) */
-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
+char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
 /* Starts a sound on the next tracked voice (0x64..0x7D) whose tracked_voices slot is free, from the mg bank
    (sound below 8) or the sfx_com bank, at the sound volume option; returns the voice, -1 if 11 tries find
    none */

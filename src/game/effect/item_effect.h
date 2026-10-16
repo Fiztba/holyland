@@ -5,7 +5,7 @@
 #include "common.h"
 
 void ItemEffect_Load(void);
-int ItemEffect_Reset(void);
+void ItemEffect_Reset(void);
 void ItemEffect_Start(int kind, int marked);
 void ItemEffect_Update(void);
 void ItemEffect_Draw(void);

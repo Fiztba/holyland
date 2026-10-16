@@ -187,7 +187,7 @@ int PlayTime_ToMinutes(ClockTime play_time) {
 int PlayTime_ReadRealTimeClock(ClockTime *time) {
     int result;
 
-    result = sceCdReadClock(time);
+    result = sceCdReadClock((sceCdCLOCK *)time);
     time->sec = BCD2DEC(time->sec);
     time->min = BCD2DEC(time->min);
     time->hour = BCD2DEC(time->hour);

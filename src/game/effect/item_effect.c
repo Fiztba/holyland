@@ -102,8 +102,8 @@ void (*item_effect_steps[4])(void) = {
 };
 
 static inline char *align16(char *address) {
-    if ((int)address & 0xF) {
-        address -= ((int)address & 0xF) - 0x10;
+    if ((uptr)address & 0xF) {
+        address -= (int)((uptr)address & 0xF) - 0x10;
     }
     return address;
 }
@@ -190,7 +190,7 @@ void ItemEffect_Load(void) {
 }
 
 /* Clears the item use effect state. */
-int ItemEffect_Reset(void) { // match: GameLoop_ResetSystems only matches with it declared to return a value
+void ItemEffect_Reset(void) {
     item_effect_active = 0;
     item_effect_kind = 0;
     item_effect_step = 0;
@@ -219,12 +219,12 @@ void ItemEffect_Start(int kind, int marked) {
     if (kind >= 0x4D) {
         model = item_effect_model_b;
         model->texture_slot = 2;
-        model->texture_data = (int)item_effect_textures[kind - 0x4C];
+        model->texture_data = (sptr)item_effect_textures[kind - 0x4C];
         item_effect_model = model;
     } else {
         model = item_effect_model_a;
         model->texture_slot = 2;
-        model->texture_data = (int)item_effect_textures[kind - 0x46];
+        model->texture_data = (sptr)item_effect_textures[kind - 0x46];
         item_effect_model = model;
     }
     item_effect_model->draw_parts = Model_DrawPosedDepthByPart;
@@ -238,7 +238,7 @@ void ItemEffect_Start(int kind, int marked) {
     Vector_Copy(&item_effect_model->rotation, &player_state.rotation);
     item_effect_model->scale_x = item_effect_model->scale_y = item_effect_model->scale_z = 1.0f;
     item_effect_model->scale_w = 1.0f;
-    item_effect_model->light_block = (s32)item_effect_light_block;
+    item_effect_model->light_block = (sptr)item_effect_light_block;
     item_effect_model->fog_block = &map_draw_slot_blocks[current_map_slot * 0x400];
     for (i = 0; i < item_effect_model->part_count; i++) {
         if (i == 0) {

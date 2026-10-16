@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <eekernel.h>
+#include <stdarg.h>
 
 
 char text_log_font_palette[0x40] = {
@@ -1047,10 +1048,6 @@ static int gs_regs_packet[0x18] __attribute__((aligned(16)));     /* 0x1E0E960 D
 static TextLog text_log;                                           /* 0x1E0E9C0 */
 static TextLogPacket text_log_packet;                              /* 0x1E0F210 */
 
-/* EE EABI varargs: the register save area a1..a7 is spilled to, as in libsdr.c */
-typedef char *va_list;
-#define va_start(ap, last) ((ap) = (char *)__builtin_next_arg(last) - 0x38)
-
 void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z);
 void TextLog_SendGsRegs(void);
 
@@ -1074,7 +1071,7 @@ void TextLog_LoadFont(int font_base, int palette_base) {
     sceGsExecLoadImage(&image, text_log_font_palette);
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
     }
-    packet = (u32 *)((u32)font_flush_packet | 0x20000000);
+    packet = UNCACHED(font_flush_packet);
     *packet++ = 0x8001;
     *packet++ = 0x10004000;
     *packet++ = 0xE;
@@ -1086,7 +1083,7 @@ void TextLog_LoadFont(int font_base, int palette_base) {
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = 2;
-    *D2_MADR = (int)font_flush_packet;
+    *D2_MADR = EE_WORD(font_flush_packet);
     *D2_CHCR = 0x100;
 }
 
@@ -1150,7 +1147,7 @@ void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z) {
 void TextLog_SendGsRegs(void) {
     int *packet;
 
-    packet = (int *)((u32)gs_regs_packet | 0x20000000);
+    packet = UNCACHED(gs_regs_packet);
     *packet++ = 0x8005;
     *packet++ = 0x10004000;
     *packet++ = 0xE;
@@ -1179,12 +1176,12 @@ void TextLog_SendGsRegs(void) {
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = 6;
-    *D2_MADR = (int)gs_regs_packet;
+    *D2_MADR = EE_WORD(gs_regs_packet);
     *D2_CHCR = 0x100;
 }
 
 /* printf-style append to the text log, cut off at its 0x800 bytes. */
-void TextLog_AppendV(char *format, char *args) {
+void TextLog_AppendV(char *format, va_list args) {
     char line[0x400];
     TextLog *log;
     char *text;
@@ -1192,7 +1189,7 @@ void TextLog_AppendV(char *format, char *args) {
     int used;
 
     vsprintf(line, format, args);
-    length = strlen(line);
+    length = (int)strlen(line);
     log = &text_log;
     used = log->used;
     if (length + used >= 0x801) {
@@ -1250,8 +1247,8 @@ void TextLog_Flush(void) {
         FlushCache(0);
         while (*D2_CHCR & 0x100) {
         }
-        *D2_QWC = ((int)text_log.packet - (int)&text_log_packet) >> 4;
-        *D2_MADR = (u32)&text_log_packet & 0x7FFFFFFF;
+        *D2_QWC = (s32)((u8 *)text_log.packet - (u8 *)&text_log_packet) >> 4;
+        *D2_MADR = EE_WORD(&text_log_packet) & 0x7FFFFFFF;
         *D2_CHCR = 0x100;
     }
     text_log.used = 0;

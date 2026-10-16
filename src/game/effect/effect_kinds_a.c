@@ -13,12 +13,12 @@ extern f32 identity_matrix[16];
 extern Entity *active_entities_head;
 extern int floor_skim_spawn_count;
 
-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
+char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
 void EffectHit_CheckAndEnd(EffectActor *effect, s8 *state);
 int EffectHit_CheckAndEndByFlag(EffectActor *effect, s8 *state);
 void EffectHit_End(EffectActor *effect, s8 *state);
 void EffectAngle_FromVector(float *angles, float *direction);
-int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
+Entity *EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
 Entity *EffectHit_FindNearestEntity(EffectActor *effect, Vector4 *position, Vector4 *unused_rotation);
 int Effect_IsEntityUntargetable(Entity *entity);
 int Effect_IsNearAnyEntity(float radius, void *point);
@@ -134,7 +134,7 @@ void EffectFly_UpdateGrowing(EffectActor *effect) {
 void EffectAtTarget_Start(EffectActor *effect, EffectSlot *spawn_slot) {
     TargetMotion *motion;
     EffectTarget *target;
-    int target_id;
+    Entity *target_id;
 
     target_id = EffectHit_FindAimedEntity(effect, &player_state.position, &player_state.rotation);
     effect->unk6C = target_id;
@@ -177,7 +177,7 @@ void EffectAtTargetFloor_Start(EffectActor *actor, EffectSlot *spawn_slot) {
 
     source = (Entity *)EffectHit_FindAimedEntity(actor, &player_state.position, &player_state.rotation);
     motion = (SnappedMotion *)&actor->motion;
-    actor->unk6C = (int)source;
+    actor->unk6C = source;
     motion->unk04 = 1;
     if (actor->unk6C == 0) {
         EffectStart_PlaceModel(actor, spawn_slot);
@@ -341,7 +341,7 @@ void EffectTrailHoming_Update(EffectActor *actor) {
         EffectSteer_Toward(&motion->velocity, &delta, actor->def->speed, motion->unkDC);
         EffectAngle_FromVector(&actor->model->rotation.x, &motion->velocity.x);
         if (ENTITY_FLAG_BITS((Entity *)actor->unk6C)->bits2 > 0) {
-            actor->unk6C = (int)EffectHit_FindNearestEntity(actor, &actor->model->position, &actor->model->rotation);
+            actor->unk6C = EffectHit_FindNearestEntity(actor, &actor->model->position, &actor->model->rotation);
         }
     }
     if (actor->frame < actor->def->max_frames || actor->def->max_frames == 0) {
@@ -1010,7 +1010,7 @@ void EffectGroundSway_Update(EffectActor *effect) {
         return;
     }
     if (effect->frame == 0) {
-        result = Sound_PlayTrackedKind(1, 10, 0, (int)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
+        result = Sound_PlayTrackedKind(1, 10, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
         EFFECT_FLAG_PARTS(effect)->unk46 = result;
         if ((s8)result > 0) {
             effect_sound_count += 1;
@@ -1104,7 +1104,7 @@ void EffectGroundTrail_Update(EffectActor *effect) {
         return;
     }
     if (effect->frame == 0) {
-        result = Sound_PlayTrackedKind(1, 10, 0, (int)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
+        result = Sound_PlayTrackedKind(1, 10, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
         EFFECT_FLAG_PARTS(effect)->unk46 = result;
         if ((s8)result > 0) {
             effect_sound_count += 1;
@@ -1406,7 +1406,7 @@ void EffectBeam_Start(EffectActor *actor, EffectSlot *spawn_slot) {
     motion->scale_per_mille = 0;
     chosen = picked->entity[EFFECT_SLOT_FLAG_PARTS(spawn_slot)->level - 1];
     if (chosen != NULL) {
-        actor->unk6C = (int)chosen;
+        actor->unk6C = chosen;
         motion->scale_per_mille = picked->distance[EFFECT_SLOT_FLAG_PARTS(spawn_slot)->level - 1];
         Vector_Copy(&motion->end_position, chosen->model->position);
         EffectBeam_AnglesToward(&actor->model->rotation, ((Entity *)actor->unk6C)->model->position, &actor->model->position);
@@ -1678,7 +1678,7 @@ void EffectBobHoming_Update(EffectActor *effect) {
     effect->model->position.y += motion->bob_speed;
     if (effect->frame == effect->def->max_frames && effect->def->interval != 0) {
         // match: retail passes the rotation as a third argument the function does not take
-        effect->unk6C = (int)((Entity *(*)(EffectActor *, Vector4 *, Vector4 *))EffectHit_FindNearestEntity)(effect, &effect->model->position, &effect->model->rotation);
+        effect->unk6C = ((Entity *(*)(EffectActor *, Vector4 *, Vector4 *))EffectHit_FindNearestEntity)(effect, &effect->model->position, &effect->model->rotation);
         motion->turn = 0.0f;
     }
     if (effect->unk6C != 0) {

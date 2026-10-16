@@ -52,7 +52,7 @@ int Collision_FindWaterBelow(f32, void *);
 extern GameStatus game_status;
 extern u16 pad_state[];
 extern u16 attack_button;
-int EffectHit_FindAimedEntity(void *, void *, void *);
+Entity *EffectHit_FindAimedEntity(void *, void *, void *);
 extern s64 light_point_start_target[2];
 /* LinkedPoint_StartDefault called as returning s16 (the caller keeps the handle in a halfword) */
 // match: only this type matches; model/linked_point.c defines it as returning int

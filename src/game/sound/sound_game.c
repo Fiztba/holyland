@@ -367,8 +367,8 @@ void Sound_SyncBgmLevel(void) {
 
 /* Starts a tracked sound with the player of `kind` in tracked_sound_players (0 Sound_PlayTracked, 1
    Sound_PlayTrackedAt). */
-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth) {
-    int (*handler)(int, int, int, char);
+char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth) {
+    int (*handler)(int, int, float *, char);
 
     handler = tracked_sound_players[index];
     return handler(first, second, third, (char)fourth);
