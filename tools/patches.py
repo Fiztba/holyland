@@ -18,6 +18,8 @@ Commands:
            Edit it freely. An existing work copy with unsaved changes is
            refused unless --force is given; only empty directories and
            work copies made by patches.py are ever replaced.
+           If a patch does not apply, the work copy is tagged `incomplete`
+           and save refuses it; fix the patch and run apply again.
 
   save     Regenerate patches/ from the work copy's changes. Each patch is
            the diff of the work copy against the `pristine` tag, so it works
@@ -47,7 +49,9 @@ Work copies are their own git repos, so always use `git -C work ...`.
 import argparse
 import io
 import re
+import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -59,6 +63,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COPIED = ["src/game", "src/nonmatching"]
 PRISTINE = "pristine"
+INCOMPLETE = "incomplete"  # tag on a work copy whose patches did not all apply
 SYMBOLS = "config/symbol_addrs.txt"
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 SYMBOL_LINE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)\s*;")
@@ -69,6 +74,17 @@ class Fail(Exception):
 
 
 # --- git and filesystem helpers ---------------------------------------------
+
+def rmtree(path):
+    """shutil.rmtree that also removes read-only files (git's objects are read-only on Windows)."""
+    def make_writable(func, target, _):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=make_writable)
+    else:
+        shutil.rmtree(path, onerror=make_writable)
+
 
 def git(repo, *args, stdin=None, check=True):
     proc = subprocess.run(["git", "-C", str(repo), *args], input=stdin, capture_output=True)
@@ -120,7 +136,7 @@ def clean_dir(path, root):
         is_ours = has_ref(path, f"refs/tags/{PRISTINE}") or has_ref(path, "refs/heads/old-patched")
         if path.is_file() or (path.is_dir() and next(path.iterdir(), None) is not None and not is_ours):
             raise Fail(f"refusing to replace {path}: not a work copy made by patches.py (remove it yourself)")
-        shutil.rmtree(path)
+        rmtree(path)
     path.mkdir(parents=True)
 
 
@@ -129,7 +145,7 @@ def clear_worktree(work):
         if child.name == ".git":
             continue
         if child.is_dir() and not child.is_symlink():
-            shutil.rmtree(child)
+            rmtree(child)
         else:
             child.unlink()
 
@@ -156,12 +172,19 @@ def extract_rev(root, rev, dest):
     # Not every commit has every COPIED path (src/nonmatching may be absent), so ask first.
     present = [c for c in COPIED if out_text(git(decomp, "ls-tree", "--name-only", sha, "--", c))]
     if present:
-        tar = git(decomp, "archive", "--format=tar", sha, "--", *present).stdout
+        tar = git(decomp, "-c", "core.autocrlf=false", "archive", "--format=tar", sha, "--", *present).stdout
         with tarfile.open(fileobj=io.BytesIO(tar)) as archive:
             if hasattr(tarfile, "data_filter"):
                 archive.extractall(dest, filter="data")
             else:
                 archive.extractall(dest)
+        # Stage the executable bits from the decomp's tree: on Windows (core.filemode false) git
+        # cannot see them on disk, and the patches would flip those files' modes.
+        tree = out_text(git(decomp, "ls-tree", "-r", sha, "--", *present)).splitlines()
+        executable = [line.split("\t", 1)[1] for line in tree if line.startswith("100755 ")]
+        git(dest, "add", "-A")
+        if executable:
+            git(dest, "update-index", "--chmod=+x", "--", *executable)
     return sha
 
 
@@ -203,13 +226,16 @@ def has_unsaved(work):
 
 def cmd_apply(args, root):
     work = resolve_arg(args.out, root, "work")
-    if not args.force and has_ref(work, f"refs/tags/{PRISTINE}") and has_unsaved(work):
+    incomplete = has_ref(work, f"refs/tags/{INCOMPLETE}")
+    if not args.force and not incomplete and has_ref(work, f"refs/tags/{PRISTINE}") and has_unsaved(work):
         raise Fail(f"work copy {work} has unsaved changes: run `python3 tools/patches.py save` first, "
                    "or pass --force to discard them")
     clean_dir(work, root)
     sha = make_pristine(work, root, "HEAD")
     git(work, "tag", PRISTINE)
+    git(work, "tag", INCOMPLETE)
     apply_patches(work, root)
+    git(work, "tag", "-d", INCOMPLETE)
     print(f"work copy: {work}  (pristine decomp {sha[:12]} + patches)")
 
 
@@ -235,6 +261,9 @@ def patch_specs(folders):
 def save(work, root, base=PRISTINE):
     if git(work, "rev-parse", "-q", "--verify", f"{base}^{{commit}}", check=False).returncode:
         raise Fail(f"{work} has no `{base}` tag: it is not a work copy made by apply or upgrade")
+    if has_ref(work, f"refs/tags/{INCOMPLETE}"):
+        raise Fail(f"{work} is incomplete: its patches did not all apply, so saving it would drop "
+                   "the rest. Fix the patch, then run apply again")
     if out_text(git(work, "diff", "--name-only", "--diff-filter=U")):
         raise Fail(f"{work} has unresolved conflicts: resolve them and `git add` the files first")
     git(work, "add", "-A")
@@ -486,7 +515,7 @@ def cmd_upgrade(args, root):
     print("\n".join(changed) if changed else "  no patch files changed")
     print("next: git add decomp patches")
     if not args.keep:
-        shutil.rmtree(work)
+        rmtree(work)
 
 
 # --- command line -------------------------------------------------------------
