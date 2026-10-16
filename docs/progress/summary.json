@@ -70,6 +70,22 @@
   "total_functions": 3839,
   "total_units": 455
  },
+ "readability": {
+  "bit_ops": 2919,
+  "field_uses": 56858,
+  "fn_ptr_casts": 1455,
+  "gotos": 79,
+  "long_comments": 1784,
+  "match_comments": 1054,
+  "named_bit_ops": 134,
+  "named_field_uses": 35899,
+  "named_fields": 1845,
+  "named_globals": 539,
+  "recovered_structs": 206,
+  "total_fields": 3774,
+  "total_globals": 1446,
+  "total_structs": 616
+ },
  "units": [
   {
    "category": "sce",

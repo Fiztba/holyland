@@ -5,7 +5,7 @@ FromSoftware, 2001) for the PlayStation 2. The target is the USA retail boot
 ELF, `SLUS_203.18` (SLUS-20318). The goal is C source that the original
 toolchain compiles back into the identical executable.
 
-[![code](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-code.json)](docs/progress/) [![functions](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-functions.json)](docs/progress/) [![game named](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-named.json)](docs/progress/)
+[![code](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-code.json)](docs/progress/) [![functions](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-functions.json)](docs/progress/) [![game named](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-named.json)](docs/progress/) [![structs recovered](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-structs.json)](docs/progress/)
 
 **Status:** the build reproduces the retail ROM image (all bytes the console
 loads) **byte for byte**. The SDK, libc, libm and libgcc code is in C (181
@@ -92,7 +92,11 @@ GUI also works on this checkout. A checkout set up before objdiff-cli was
 added needs `tools/setup.sh` run once more.
 
 `ninja progress` also prints the summary and writes `build/progress.html`, a
-local per-function page (not committed). `tools/progress.py --write` refreshes
+local per-function page (not committed). Before that it runs
+`tools/readability_scan.py`, which measures how readable the game C is past
+its function names: structs with no `unkXX`/`padXX` field left, named fields,
+globals and flag bits, and counts of casts, `// match:` comments, gotos and
+long comments still to clean up. `tools/progress.py --write` refreshes
 `docs/progress/` (a summary without per-function data, shields badges and a
 static page) and the table below; commit those with each batch of work.
 `docs/progress/index.html` can be served with GitHub Pages (Settings → Pages →
@@ -104,6 +108,18 @@ static page) and the table below; commit those with each batch of work.
 | overall | 99.58% | 99.58% | 3837 / 3839 | 3748 / 3839 | 411 / 455 |
 | game | 99.53% | 99.53% | 2990 / 2991 | 2922 / 2991 | 207 / 249 |
 | sce | 100.00% | 100.00% | 847 / 848 | 826 / 848 | 204 / 206 |
+
+| game readability | | |
+| --- | ---: | ---: |
+| structs recovered | 33.44% | 206 of 616 |
+| struct fields named | 48.89% | 1845 of 3774 |
+| field uses named | 63.14% | 35899 of 56858 |
+| globals named | 37.28% | 539 of 1446 |
+| bit operations named | 4.59% | 134 of 2919 |
+| function-pointer casts | 1455 | left |
+| `// match:` comments | 1054 | left |
+| gotos | 79 | left |
+| multi-line comments | 1784 | left |
 <!-- progress:end -->
 
 ## Contributing

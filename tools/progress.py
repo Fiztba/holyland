@@ -8,7 +8,9 @@ linked code, functions, named functions, data and linked units. Percentages
 come from the byte and function counts. Linked is objdiff's complete measure:
 units marked complete in objdiff.json (every C and hand-written .s unit). A function is named once its symbol is no
 longer splat's func_XXXXXXXX; objdiff has no such measure, so it is counted
-here from the report's function names.
+here from the report's function names. The game readability measures
+(structs recovered, names of fields, globals and flag bits, and debt counts)
+come from build/readability.json, written by tools/readability_scan.py.
 
 --write refreshes docs/progress/, which is committed: summary.json (no
 per-function data), badge-*.json (shields.io endpoints), index.html, a
@@ -31,6 +33,19 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs" / "progress"
 README = ROOT / "README.md"
 START, END = "<!-- progress:start -->", "<!-- progress:end -->"
+READABILITY = ROOT / "build" / "readability.json"
+# (label, done key, total key); a total of None is a debt count, lower is better
+READABILITY_ROWS = [
+    ("structs recovered", "recovered_structs", "total_structs"),
+    ("struct fields named", "named_fields", "total_fields"),
+    ("field uses named", "named_field_uses", "field_uses"),
+    ("globals named", "named_globals", "total_globals"),
+    ("bit operations named", "named_bit_ops", "bit_ops"),
+    ("function-pointer casts", "fn_ptr_casts", None),
+    ("`// match:` comments", "match_comments", None),
+    ("gotos", "gotos", None),
+    ("multi-line comments", "long_comments", None),
+]
 AUTO_NAME = re.compile(r"(func|sub|D)_[0-9A-Fa-f]{8}$")
 
 
@@ -58,6 +73,20 @@ def linked_pct(m: dict) -> float:
 
 def named_pct(m: dict) -> float:
     return pct(m.get("named_functions", 0), m.get("total_functions", 0))
+
+
+def readability_rows(data) -> list:
+    """(label, value, detail) for each game readability measure present."""
+    r = data.get("readability", {})
+    out = []
+    for label, done, total in READABILITY_ROWS:
+        if done not in r:
+            continue
+        if total is None:
+            out.append((label, str(r[done]), "left"))
+        else:
+            out.append((label, f"{pct(r[done], r[total]):.2f}%", f"{r[done]} of {r[total]}"))
+    return out
 
 
 def is_named(name: str) -> bool:
@@ -107,6 +136,11 @@ def load(path: Path, detail: bool) -> dict:
     add_named(data["measures"], data["units"])
     for c in data["categories"]:
         add_named(c["measures"], [u for u in data["units"] if u["category"] == c["id"]])
+    if READABILITY.exists():
+        data["readability"] = json.loads(READABILITY.read_text())["measures"]
+    else:
+        print(f"warning: {READABILITY.relative_to(ROOT)} not found, no readability measures "
+              "(run tools/readability_scan.py)", file=sys.stderr)
     return data
 
 
@@ -129,6 +163,10 @@ def terminal(data) -> str:
         out.append(f"{label:8} {code_pct(x):6.2f}%  {num(mc) + ' / ' + num(tc):>23}  "
                    f"{linked_pct(x):6.2f}%  {f'{mf}/{tf}':>11}  {f'{nf}/{tf}':>11}  "
                    f"{dp:6.2f}%  {f'{cu}/{tu}':>12}")
+    rows_ = readability_rows(data)
+    if rows_:
+        out.append("game readability:")
+        out += [f"  {label:24} {value:>8}  {detail}" for label, value, detail in rows_]
     return "\n".join(out)
 
 
@@ -149,6 +187,9 @@ def badges(data) -> dict:
         "badge-sce.json": badge("sce", code_pct(cats.get("sce", {}))),
         "badge-game.json": badge("game", code_pct(cats.get("game", {}))),
         "badge-named.json": badge("game named", named_pct(cats.get("game", {}))),
+        "badge-structs.json": badge("structs recovered",
+                                    pct(data.get("readability", {}).get("recovered_structs", 0),
+                                        data.get("readability", {}).get("total_structs", 0))),
     }
 
 
@@ -161,6 +202,10 @@ def readme_table(data) -> str:
         cu, tu = x.get("complete_units", 0), x.get("total_units", 0)
         out.append(f"| {label} | {code_pct(x):.2f}% | {linked_pct(x):.2f}% | {mf} / {tf} "
                    f"| {nf} / {tf} | {cu} / {tu} |")
+    rows_ = readability_rows(data)
+    if rows_:
+        out += ["", "| game readability | | |", "| --- | ---: | ---: |"]
+        out += [f"| {label} | {value} | {detail} |" for label, value, detail in rows_]
     return "\n".join(out)
 
 
@@ -201,6 +246,12 @@ def cards_and_bars(data) -> tuple:
             f'functions {mf}/{tf}, named {nf}/{tf}, '
             f'data {dp:.2f}%, '
             f'units {cu}/{tu} linked</p></section>')
+    rows_ = readability_rows(data)
+    if rows_:
+        bars.append('<section class="cat"><h2>Game readability</h2><div class="cards">'
+                    + "".join(f'<div class="card"><span>{escape(a)}</span><b>{escape(b)}</b>'
+                              f'<span>{escape(c)}</span></div>' for a, b, c in rows_)
+                    + '</div></section>')
     return html_cards, "".join(bars)
 
 
