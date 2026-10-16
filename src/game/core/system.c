@@ -22,7 +22,8 @@ extern int map_file_area_size;          /* the size it is given for that heap */
 extern int context1_buffer_half;          /* the half of the first double buffer in use; each swap flips it */
 extern int context2_buffer_half;          /* the same for the second */
 extern int D_00446F80;
-extern u32 game_status_flags[];
+extern GameStatus game_status;
+#define game_status_flags ((u32 *)((u8 *)&game_status + 0x24)) /* the flag word at 0x24 */
 extern s64 game_dbuff_clear_color[];
 extern s64 game_dbuff_context2_clear_color[];
 extern char opening_movie_path[];       /* "cdrom0:\DATA\KF4OP.PSS;1" */
@@ -42,7 +43,7 @@ void Packet_SwapBuffers(void);
 void DrawList_Clear(void);
 void func_001095D0(void);
 void GsDraw_ResetDrawTarget(void);
-void GsDraw_FillScreen(s64, s64, s64, s64, s64); // match: retail passes the last value as a 64-bit constant (0x100000044)
+void GsDraw_FillScreen(int, int, int, int, int);
 void func_001095D8(void);
 void Packet_SendChain(void);
 void Packet_WaitForSend(void);
@@ -83,7 +84,7 @@ void Movie_PlayOpening(void) {
     context1_buffer_half = 0;
     context2_buffer_half = 0;
     GsDraw_ResetDrawTarget();
-    GsDraw_FillScreen(0, 0, 0, 0x80, 0x100000044LL);
+    GsDraw_FillScreen(0, 0, 0, 0x80, (int)0x100000044LL); /* retail passes the 64-bit word; the callee takes its int */
     func_001095D8();
     context1_buffer_half = 1;
     context2_buffer_half = 1;

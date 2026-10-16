@@ -1731,7 +1731,7 @@ void EffectBobFly_Start(EffectActor *effect, EffectSlot *spawn_slot) {
     float bob_limit;
 
     motion = (BobbingGrowMotion *)&effect->motion;
-    ((void (*)(void))EffectStart_TurnModel)(); // match: retail calls with no arguments
+    EffectStart_TurnModel(effect, spawn_slot); /* retail passes no arguments: a0 and a1 still hold these two */
     EffectStart_PlaceModel(effect, spawn_slot);
     EffectAngle_ToVector(effect->def->speed, &motion->velocity, &effect->model->rotation);
     effect->flags |= EFFECT_FLAG_HAS_TARGETERS;

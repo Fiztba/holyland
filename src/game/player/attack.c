@@ -88,7 +88,6 @@ extern const VuVector4 y_axis_vector;
 extern GameStatus game_status;
 extern Entity entity_pool[][0x80];
 extern u32 frame_counter;
-extern Entity entity_pool_last;           /* the last entity of entity_pool */
 extern char last_boss_hits_format[];           /* "g_dmgLassBossCnt[%d]\n" */
 extern char hp_halved_format[];           /* "HP halved!! %d / 2 = %d" in Japanese */
 extern s32 dark_one_hits_left;              /* g_dmgLassBossCnt: weapon hits the last boss still takes */
@@ -664,7 +663,7 @@ void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra) {
     s32 percent;
     s32 damage;
 
-    if (owner >= entity_pool[0] && owner < (Entity *)entity_pool_slots) {
+    if (owner >= entity_pool[0] && owner <= &entity_pool[1][0x7F]) {
         if (extra->is_magic_shot == 0) {
             owner->flags |= 0x8000LL << 26;
         } else {
@@ -831,7 +830,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
     }
 
     // match: the range test (not one of the entities) is always true for the player
-    if (IS_PLAYER(owner) && (owner < entity_pool[0] || owner > &entity_pool_last)) {
+    if (IS_PLAYER(owner) && (owner < entity_pool[0] || owner > &entity_pool[1][0x7F])) {
         entity->flags |= 0x8000LL << 28;
     }
     if (extra->is_magic_shot == 1) {
@@ -1170,7 +1169,7 @@ void Attack_GetEffectiveStrengths(EntityParamsUnk240PartUnk00 *out, Unk1B1470Req
             STORE_ROUNDED_UP(out->unk00[7], request->unk50.unk00[7] + (f32)extra->player_magic * request->unk50.unk00[7] / 50.0f + extra->worn_magic_bonus[4] / 50.0f);
             STORE_ROUNDED_UP(out->unk00[8], request->unk50.unk00[8] + (f32)extra->player_magic * request->unk50.unk00[8] / 50.0f + extra->worn_magic_bonus[5] / 50.0f);
         }
-    } else if (request->owner >= entity_pool[0] && request->owner <= &entity_pool_last) {
+    } else if (request->owner >= entity_pool[0] && request->owner <= &entity_pool[1][0x7F]) {
         if (extra->is_magic_shot == 0) {
             *out = request->unk50;
         } else {

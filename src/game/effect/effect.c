@@ -41,7 +41,6 @@ extern MapSlot map_slots[2];
 extern char map_draw_slot_blocks[];
 extern MapObject map_slot_objects[][0x200];
 extern Entity entity_pool[][0x80];
-extern Entity entity_pool_last;           /* the last entity of entity_pool */
 extern void (*effect_draw_hooks[4][4])(ModelInstance *);
 extern void (*effect_kind_handlers[][2])();
 extern FxTableEntry fx_table[];
@@ -437,8 +436,7 @@ void Effect_DrawAll(int pass) {
         placement = EFFECT_DEF_FLAGS(effect->def) & 0x600000;
         model = effect->model;
         if (placement == 0 || placement == 0x600000) {
-            // match: the margin is set up before the node, so the call passes it first
-            if (((int (*)(f32 *, f32, AreaNode *))Map_IsPointInRecord)((f32 *)&model->position, 0.0f, (AreaNode *)effect->unk58) == 0) {
+            if (Map_IsPointInRecord((f32 *)&model->position, (AreaNode *)effect->unk58, 0.0f) == 0) {
                 effect->unk58 = (char *)Map_FindRecordAt((f32 *)&effect->model->position, 0.0f);
             }
             if (effect->unk58 == NULL && effect->owner_entity == (Entity *)&player_state && ((PlayerState *)effect->owner_entity)->map_index != 0xFFFF) {
@@ -711,7 +709,7 @@ static void Effect_SetupModel(int index) {
             map = 1;
         } else if ((MapObject *)effect->owner_entity >= map_slot_objects[0] && (MapObject *)effect->owner_entity <= &map_slot_objects[1][0x1FF]) {
             map = (u8)((MapObject *)effect->owner_entity)->state_flags & 1;
-        } else if (effect->owner_entity >= entity_pool[0] && effect->owner_entity <= &entity_pool_last) {
+        } else if (effect->owner_entity >= entity_pool[0] && effect->owner_entity <= &entity_pool[1][0x7F]) {
             map = effect->owner_entity->group_id; /* an entity: the map it is in */
         } else {
             map = current_map_slot;

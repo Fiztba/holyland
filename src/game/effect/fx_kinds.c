@@ -57,8 +57,9 @@ extern s64 light_point_start_target[2];
 /* LinkedPoint_StartDefault called as returning s16 (the caller keeps the handle in a halfword) */
 // match: only this type matches; model/linked_point.c defines it as returning int
 #define LINKED_POINT_START_S16 ((s16(*)(f32, void *, void *))LinkedPoint_StartDefault)
-extern u8 dark_sanctuary_idol_of_sorrow_placed[];
-extern u8 D_0034AFD6[];
+extern u8 map_script_flags[0x2000];
+#define dark_sanctuary_idol_of_sorrow_placed (map_script_flags + 0x989) /* map 038 [9] */
+#define D_0034AFD6 (map_script_flags + 0x1946)
 void Sound_PlaySw(int mode);
 /* 0x402D50 seven (weapon, effect param) pairs EffectWeaponSound_Start matches to play sound 3 */
 u32 weapon_sound_pairs[14] = { '%', '[', '&', ']', '\'', '^', '(', '\\', ')', '`', ',', 'a', '.', 'b' };
@@ -2036,8 +2037,7 @@ void EffectScatterAroundPlayer_Start(EffectActor *effect) {
     offset.y = 3000.0f;
     offset.x = 0.0f;
     offset.z = 0.0f;
-    // match: argument order as (position, direction, scale) schedules the argument moves as retail does
-    ((void (*)(void *, void *, f32))Collision_CastRayAtMap)(&effect->model->position, &offset, 1.0f);
+    Collision_CastRayAtMap(1.0f, &effect->model->position, &offset);
     if (COLLISION_RESULT->hit != 0) {
         effect->model->position.y = COLLISION_RESULT->point[1] - (f32)effect->def->radius_half;
     } else {

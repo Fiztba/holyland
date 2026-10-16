@@ -39,7 +39,8 @@ extern SoundLoadQueue sound_load_queue;
 extern u16 pad_state[];
 extern u8 item_counts[];
 extern s8 game_options[];
-extern u8 guardians_room_water_purified[];
+extern u8 map_script_flags[0x2000];
+#define guardians_room_water_purified (map_script_flags + 0x8C6) /* map 035 [6] */
 extern int current_map_slot;
 extern u32 frame_counter;
 extern int sacrificial_mask_cooldown;              /* frames until the item 0x32 may launch its effect again */

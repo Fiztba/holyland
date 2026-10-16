@@ -48,11 +48,11 @@ extern u8 voice_range_cursors[8];
 extern SoundJob map_bank_job;
 extern SoundJob sw_bank_job;
 extern SoundJob mg_bank_job;
-extern u8 music_volume[];
+#define music_volume (game_options + 1) /* the music volume option */
 extern int bgm_fade_level;
 extern void *tracked_sound_players[];
 extern PlayerState player_state;
-extern u8 sfx_volume[];
+#define sfx_volume (game_options + 2)   /* the sound volume option */
 extern int tagged_bend;
 extern int tagged_bend_high;
 extern int tagged_bend_low;

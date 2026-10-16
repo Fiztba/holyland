@@ -146,7 +146,8 @@ void Input_ResumeRumble(void);
 extern PlayerState player_state;
 extern int save_loaded;          /* nonzero: a saved game was loaded */
 extern u8 game_options[0x10];
-extern PlayTime save_play_time[];   /* the play time in the loaded save (save_image + 8) */
+extern u8 save_image[0x20000];
+#define save_play_time ((PlayTime *)(save_image + 8)) /* the play time in the loaded save */
 extern SoundLoadQueue sound_load_queue;
 extern GameStatus game_status;
 extern MapSlot map_slots[];
@@ -156,7 +157,8 @@ extern f32 world_screen_matrix[16];
 extern s64 game_dbuff_clear_color[];
 extern s64 game_dbuff_context2_clear_color[];
 extern u32 frame_counter;
-extern u8 guardians_room_water_purified[];
+extern u8 map_script_flags[0x2000];
+#define guardians_room_water_purified (map_script_flags + 0x8C6) /* map 035 [6] */
 extern MapDrawStateOverlays map_draw_state;
 extern int message_dim_alpha;
 extern int current_map_slot;
@@ -499,9 +501,8 @@ void GameLoop_DrawFrame(int arg) {
     }
     Hud_Draw();
     if (map_draw_state.screen_fill_alpha > 0) {
-        // match: the last argument is passed as the 64-bit word
-        ((void (*)(int, int, int, int, s64))GsDraw_FillScreen)(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
-                                                             map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
+        GsDraw_FillScreen(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
+                          map_draw_state.screen_fill_alpha, (int)map_draw_state.screen_fill_blend);
     }
     Game_DrawFade();
     Splash_Draw();
