@@ -33,7 +33,7 @@ void Vu0_ProjectToScreen(int *, void *);
 
 extern char *held_weapon_area;
 extern PlayerState player_state;
-extern GameDefinition weapon_name_defs[70];
+extern GameDefinition *const weapon_name_defs;
 extern PlayerItemDef weapon_defs[];
 extern MapSlotUnk0C current_fog_block;
 extern char file_load_buffer[0x80000];

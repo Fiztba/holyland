@@ -92,10 +92,10 @@ extern char last_boss_hits_format[];           /* "g_dmgLassBossCnt[%d]\n" */
 extern char hp_halved_format[];           /* "HP halved!! %d / 2 = %d" in Japanese */
 extern s32 dark_one_hits_left;              /* g_dmgLassBossCnt: weapon hits the last boss still takes */
 extern PlayerItemDef weapon_defs[];
-extern LevelDef weapon_name_defs[];
+extern LevelDef *const weapon_name_defs;
 extern LevelRecord weapon_level_records[];
 extern LevelRecord worn_item_level_records[];
-extern LevelDef worn_name_defs[];
+extern LevelDef *const worn_name_defs;
 extern char magic_param_path[];
 
 int Attack_TestMapModel(ModelInstance *, void *, f32);

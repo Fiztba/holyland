@@ -394,7 +394,7 @@ typedef struct ModelInstance {
     u8 hit_count;                   /* 0x144 how many of hit_handles are used */
     u8 fade_enabled;                /* 0x145 1: drawn with fade_alpha instead of the parts' own alpha */
     s16 fade_alpha;                 /* 0x146 alpha (0..0x100) the model fades with while fade_enabled */
-    sptr light_block;               /* 0x148 pointer to the model's lights: two 0x40 matrices */
+    s32 light_block;                /* 0x148 pointer to the model's lights: two 0x40 matrices */
     void *fog_block;                /* 0x14C pointer to the model's fog block (near, far, colour) */
     f32 colour_red;                 /* 0x150 the model's red tint */
     f32 colour_green;               /* 0x154 the model's green tint */
@@ -407,8 +407,8 @@ typedef struct ModelInstance {
     int found_record[4];            /* 0x180 a copy of that record, its id bits replaced; a quadword sent after it */
     u16 texture_slot;               /* 0x190 slot of unk194 in texture_slots (0..2), 3: always sent */
     s16 shared_texture_slot;        /* 0x192 which entry of the shared last-sent texture record applies */
-    sptr texture_data;              /* 0x194 the model's texture: a chunk table, or a raw packet */
-    sptr shared_texture_packet;     /* 0x198 map texture packet 5, tracked in the shared record */
+    int texture_data;               /* 0x194 the model's texture: a chunk table, or a raw packet */
+    int shared_texture_packet;      /* 0x198 map texture packet 5, tracked in the shared record */
     int texture_packet_3;           /* 0x19C the map's texture packet 3, queued when it changes */
     int texture_packet_5;           /* 0x1A0 the map's texture packet 5, queued when it changes */
     struct ModelWaveUv *wave_uvs;   /* 0x1A4 one per vertex, built by Wobble_BuildWaveUvs */

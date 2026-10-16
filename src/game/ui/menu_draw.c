@@ -31,7 +31,7 @@ static s32 heap_mark;               /* 0x447348 what MenuHeap_FreeToMark goes ba
 static s32 heap_top;                /* 0x44734C where the next block of the menus' heap comes from */
 static u32 long_text_packets[2][0x3700]; /* 0x5DDF00 the two packet buffers of the long text drawers */
 
-extern sptr menu_heap;              /* the base of the menus' heap */
+extern s32 menu_heap;              /* the base of the menus' heap */
 
 /* the menus' words and font */
 extern u64 *menu_font_page_tex0[];  /* where the TEX0 of each font page is kept */
