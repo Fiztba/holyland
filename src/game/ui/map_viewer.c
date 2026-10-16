@@ -11,6 +11,10 @@
 #include "player/player.h"
 #include "gfx/texture.h"
 #include "ui/message.h"
+#include <libvu0.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
 
 int MapViewer_IsKingsMapUsable(int);
 void MapViewer_Reset(void);
@@ -24,14 +28,12 @@ void Sound_UnmuteTagged(void);
 void Sound_UnmutePositional(void);
 void Sound_MutePositional(void);
 int SoundDriver_FlushCommands(void);
-void *memset(void *, int, u32);
 u8 Packet_WaitForSend(void); // match: u8 here; declared void, the call site is compiled differently
 void Packet_LayOutBuffers(int);
-int sprintf(char *, char *, ...);
 int File_Open(char *, int, int);
 int File_Close(int);
 int File_Read(int, void *, int);
-void Packet_GetSpareArea(int *, int *);
+void Packet_GetSpareArea(sptr *, int *); /* PORT: the area's address is pointer-sized (gfx/packet_buffer.c must agree) */
 void TextureTable_SetBasePointers(char *, int, int);
 void Model_MultiplyChildMatrices(ModelPart *);
 void Model_SetUpPosed(ModelInstance *, char **, char **);
@@ -46,8 +48,6 @@ void DrawList_Clear(void);
 void func_001095D0(void);
 void func_001095D8(void);
 void Input_Update(void);
-float cosf(float);
-float sinf(float);
 void Game_ApplyBrightness(int);
 void Packet_AppendToChain(u32 *, u32 *);
 u32 *Packet_Alloc(int);
@@ -58,11 +58,6 @@ void GsDraw_QueueFlush(void);
 void GsDraw_QueueTexFlush(void);
 void GsDraw_QueueTexturedSprite(void *);
 void TextureTable_QueueOne(TextureTableHeader *, s32);
-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0MulMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 void Vector_Subtract(void *, void *, void *);
 void GsDraw_QueueVu1Matrix(void *);
@@ -125,7 +120,7 @@ void MapViewer_OpenForItem(int viewer_number) {
 
     if (!(((u32)game_status[9] >> 8) & 1) && ((viewer_index = viewer_number - 1) < 5U)) {
         if (viewer_number == 5) {
-            row = (u8 *)map_slots + current_map_slot * 0x60;
+            row = (u8 *)&map_slots[current_map_slot];
             if (MapViewer_IsKingsMapUsable(row[1]) == 0) {
                 Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_UNABLE_TO_USE_HERE);
                 return;
@@ -176,8 +171,8 @@ static void MapViewer_RestorePacketBuffers(void) {
 }
 
 static inline char *align16(char *address) {
-    if ((int)address & 0xF) {
-        address -= ((int)address & 0xF) - 0x10;
+    if ((sptr)address & 0xF) {
+        address -= ((sptr)address & 0xF) - 0x10;
     }
     return address;
 }
@@ -204,7 +199,7 @@ static int MapViewer_Load(void) {
     Packet_LayOutBuffers(2);
     viewer_data = NULL;
     viewer_data_size = 0;
-    Packet_GetSpareArea((int *)&viewer_data, &viewer_data_size);
+    Packet_GetSpareArea((sptr *)&viewer_data, &viewer_data_size);
     memset(viewer_data, 0, viewer_data_size);
     size = File_Read(file, viewer_data, -1);
     File_Close(file);
@@ -773,7 +768,7 @@ static void MapViewer_DrawKingsMap(void) {
     Packet_AddGsRegister(GS_REG_TEST_2, 0x51001);
     Packet_AddGsRegister(GS_REG_ALPHA_2, ((s64)alpha << 32) | 0x68);
     Packet_EndGsRegisters();
-    pointer_model.light_block = (s32)&viewer_default_lights;
+    pointer_model.light_block = (sptr)&viewer_default_lights;
     pointer_model.hit_count = 0;
     pointer_model.fog_block = &map_draw_state.unkA0;
     Model_DrawPosed(&pointer_model);
@@ -811,14 +806,14 @@ static void MapViewer_DrawKingsMap(void) {
                             continue;
                         }
                         if (flags & 0x10) {
-                            record->model->light_block = (s32)&map_draw_state.unkC0;
+                            record->model->light_block = (sptr)&map_draw_state.unkC0;
                             record->model->fog_block = &map_draw_state.unkA0;
                         } else {
-                            record->model->light_block = (s32)&map_draw_state.light_blocks[map][record->light_block_index];
+                            record->model->light_block = (sptr)&map_draw_state.light_blocks[map][record->light_block_index];
                             record->model->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
                         }
                         record->model->hit_count = 0;
-                        record->model->light_block = (s32)&viewer_default_lights;
+                        record->model->light_block = (sptr)&viewer_default_lights;
                         record->model->fog_block = &map_draw_state.unkA0;
                         Model_DrawPosed(record->model);
                     }

@@ -394,7 +394,7 @@ typedef struct ModelInstance {
     u8 hit_count;                   /* 0x144 how many of hit_handles are used */
     u8 fade_enabled;                /* 0x145 1: drawn with fade_alpha instead of the parts' own alpha */
     s16 fade_alpha;                 /* 0x146 alpha (0..0x100) the model fades with while fade_enabled */
-    s32 light_block;                /* 0x148 pointer to the model's lights: two 0x40 matrices */
+    sptr light_block;               /* 0x148 pointer to the model's lights: two 0x40 matrices */
     void *fog_block;                /* 0x14C pointer to the model's fog block (near, far, colour) */
     f32 colour_red;                 /* 0x150 the model's red tint */
     f32 colour_green;               /* 0x154 the model's green tint */
