@@ -27,7 +27,9 @@ extern SoundJob sfx_com_job;
 extern SoundFileBuffer se_com_bank;
 extern SoundFileBuffer sfx_com_bank;
 extern SoundChannel sound_channels[];
-extern char sound_heap_base[];
+extern char file_load_buffer[];
+/* the sound heap's base byte: rounded down to 64 bytes it is file_load_buffer's first 64-byte boundary */
+#define sound_heap_base (file_load_buffer + 0x3F)
 extern int D_004468BC;
 extern float D_004468C0;
 extern int D_004468C4;
@@ -63,11 +65,10 @@ extern int sound_heap_next;
 void File_Lock(void);
 int File_GetSize(int);
 void File_Unlock(void);
-extern int bgm_header_buffer[];
+extern SoundFileBuffer bgm_buffers;    /* the BGM's buffers; limit and used are its header and sequence buffers */
 extern int bgm_hd_size;
 int File_Open(char *name, int nowait, int pack);
 int File_Read(int file, void *buf, int size);
-extern int bgm_sequence_buffer[];
 extern int bgm_sq_size;
 extern u8 bgm_reverb_slot;
 extern int heap_file_read_step;
@@ -91,7 +92,7 @@ extern int (*map_bank_load_steps[])(void);
 extern SoundBankSpec map_bank_files;
 extern SoundFileBuffer sw_bank;
 extern SoundFileBuffer mg_bank;
-extern int sound_load_queue[0x28 / 4];
+extern SoundLoadQueue sound_load_queue;
 extern MapSlot map_slots[];
 extern int current_map_slot;
 
@@ -154,7 +155,7 @@ void Sound_Init(void) {
     SoundDriver_Remote(1, 0x100, 0xA, 0x800);
     SoundDriver_EnableOutput();
     se_com_bank.used = 0;
-    se_com_bank.base = heap_start = ((u32)sound_heap_base >> 6) << 6;
+    se_com_bank.base = heap_start = (EE_WORD(sound_heap_base) >> 6) << 6;
     se_com_bank.limit = heap_start + 0xA0000;
     Sound_LoadJob(&se_com_job);
     sfx_com_bank.base = se_com_bank.base;
@@ -215,75 +216,98 @@ void Sound_Update(void) {
    |angle|, the sine its square root complement, negated for a negative angle). The first output is the
    cosine. */
 static void Sound_CosSin(f32 angle, f32 *cos_out, f32 *sin_out) {
-    __asm__ volatile(
-        "mtc1 $0, $f0\n"
-        "c.lt.s %0, $f0\n"
-        "li.s $f0, 1.5707964\n"
-        "bc1f 0f\n"
-        "add.s %0, $f0, %0\n"
-        "li $7, 1\n"
-        "j 1f\n"
-        "0:\n"
-        "sub.s %0, $f0, %0\n"
-        "move $7, $0\n"
-        "1:\n"
-        "mfc1 $8, %0\n"
-        "qmtc2 $8, $vf6\n"
-        "la $8, sound_cos_polynomial\n"
-        "lqc2 $vf5, 0($8)\n"
-        "vmr32.w $vf6, $vf6\n"
-        "vaddx.x $vf4, $vf0, $vf6x\n"
-        "vmul.x $vf6, $vf6, $vf6\n"
-        "vmulx.yzw $vf4, $vf4, $vf0x\n"
-        "vmulw.xyzw $vf8, $vf5, $vf6w\n"
-        "vsub.xyzw $vf5, $vf0, $vf0\n"
-        "vmulx.xyzw $vf8, $vf8, $vf6x\n"
-        "vmulx.xyz $vf8, $vf8, $vf6x\n"
-        "vaddw.x $vf4, $vf4, $vf8w\n"
-        "vmulx.xy $vf8, $vf8, $vf6x\n"
-        "vaddz.x $vf4, $vf4, $vf8z\n"
-        "vmulx.x $vf8, $vf8, $vf6x\n"
-        "vaddy.x $vf4, $vf4, $vf8y\n"
-        "vaddx.x $vf4, $vf4, $vf8x\n"
-        "vaddx.xy $vf4, $vf5, $vf4x\n"
-        "sqc2 $vf4, 0(%2)\n"
-        "vmul.x $vf7, $vf4, $vf4\n"
-        "vsubx.w $vf7, $vf0, $vf7x\n"
-        "vsqrt Q, $vf7w\n"
-        "vwaitq\n"
-        "vaddq.x $vf7, $vf0, Q\n"
-        "bnez $7, 2f\n"
-        "vaddx.x $vf4, $vf5, $vf7x\n"
-        "b 3f\n"
-        "2:\n"
-        "vsubx.x $vf4, $vf5, $vf7x\n"
-        "3:\n"
-        "sqc2 $vf4, 0(%3)\n"
-        : "=f"(angle)
-        : "0"(angle), "r"(cos_out), "r"(sin_out)
-        : "$f0", "$7", "$8", "memory");
+    /* the VU0 code in C on ee_vu0's registers, which it leaves as the PS2 did (vf4-vf8 and Q) */
+    f32 *vf4 = ee_vu0.vf[4];
+    f32 *vf5 = ee_vu0.vf[5];
+    f32 *vf6 = ee_vu0.vf[6];
+    f32 *vf7 = ee_vu0.vf[7];
+    f32 *vf8 = ee_vu0.vf[8];
+    int negative;
+    int i;
+
+    if (angle < 0.0f) {
+        angle = 1.5707964f + angle;
+        negative = 1;
+    } else {
+        angle = 1.5707964f - angle;
+        negative = 0;
+    }
+    vf6[0] = angle; /* qmtc2: y, z and w get the rest of the GPR, which nothing reads */
+    for (i = 0; i < 4; i++) {
+        vf5[i] = sound_cos_polynomial[i];
+    }
+    vf6[3] = vf6[0];                        /* vmr32.w */
+    vf4[0] = 0.0f + vf6[0];                 /* vaddx.x */
+    vf6[0] = vf6[0] * vf6[0];               /* vmul.x */
+    vf4[1] = vf4[1] * 0.0f;                 /* vmulx.yzw by vf0x */
+    vf4[2] = vf4[2] * 0.0f;
+    vf4[3] = vf4[3] * 0.0f;
+    for (i = 0; i < 4; i++) {
+        vf8[i] = vf5[i] * vf6[3];           /* vmulw.xyzw */
+    }
+    for (i = 0; i < 4; i++) {
+        vf5[i] = 0.0f;                      /* vsub vf0 - vf0 (vf0.w - vf0.w is 0 as well) */
+    }
+    for (i = 0; i < 4; i++) {
+        vf8[i] = vf8[i] * vf6[0];           /* vmulx.xyzw */
+    }
+    for (i = 0; i < 3; i++) {
+        vf8[i] = vf8[i] * vf6[0];           /* vmulx.xyz */
+    }
+    vf4[0] = vf4[0] + vf8[3];               /* vaddw.x */
+    vf8[0] = vf8[0] * vf6[0];               /* vmulx.xy */
+    vf8[1] = vf8[1] * vf6[0];
+    vf4[0] = vf4[0] + vf8[2];               /* vaddz.x */
+    vf8[0] = vf8[0] * vf6[0];               /* vmulx.x */
+    vf4[0] = vf4[0] + vf8[1];               /* vaddy.x */
+    vf4[0] = vf4[0] + vf8[0];               /* vaddx.x */
+    vf4[1] = vf5[1] + vf4[0];               /* vaddx.xy */
+    vf4[0] = vf5[0] + vf4[0];
+    for (i = 0; i < 4; i++) {
+        cos_out[i] = vf4[i];
+    }
+    vf7[0] = vf4[0] * vf4[0];               /* vmul.x */
+    vf7[3] = 1.0f - vf7[0];                 /* vsubx.w from vf0 */
+    ee_vu0.q = sqrtf(vf7[3]);               /* vsqrt */
+    vf7[0] = 0.0f + ee_vu0.q;               /* vaddq.x */
+    if (negative) {
+        vf4[0] = vf5[0] - vf7[0];
+    } else {
+        vf4[0] = vf5[0] + vf7[0];
+    }
+    for (i = 0; i < 4; i++) {
+        sin_out[i] = vf4[i];
+    }
 }
 
 /* Writes point_a - point_b to out and returns its length (VU0 macro code). */
 static float Sound_Delta(f32 *out, f32 *point_a, f32 *point_b) {
-    f32 length[4];
+    /* the VU0 code in C on ee_vu0's registers, which it leaves as the PS2 did (vf1-vf6, vf31, ACC.x and Q) */
+    f32 (*vf)[4] = ee_vu0.vf;
+    int i;
 
-    __asm__ volatile(
-        "vaddw.xyz $vf31, $vf0, $vf0w\n"
-        "lqc2 $vf1, 0(%1)\n"
-        "lqc2 $vf2, 0(%2)\n"
-        "vsub.xyzw $vf3, $vf1, $vf2\n"
-        "vmul.xyzw $vf4, $vf3, $vf3\n"
-        "vmulax.x ACC, $vf3, $vf3x\n"
-        "vmadday.x ACC, $vf31, $vf4y\n"
-        "vmaddz.x $vf5, $vf31, $vf4z\n"
-        "vsqrt Q, $vf5x\n"
-        "vwaitq\n"
-        "vmulq.x $vf6, $vf31, Q\n"
-        "sqc2 $vf3, 0(%0)\n"
-        "sqc2 $vf6, 0(%3)\n"
-        : : "r"(out), "r"(point_a), "r"(point_b), "r"(length) : "memory");
-    return length[0];
+    for (i = 0; i < 3; i++) {
+        vf[31][i] = 0.0f + 1.0f;            /* vaddw.xyz vf0 + vf0w */
+    }
+    for (i = 0; i < 4; i++) {
+        vf[1][i] = point_a[i];
+        vf[2][i] = point_b[i];
+    }
+    for (i = 0; i < 4; i++) {
+        vf[3][i] = vf[1][i] - vf[2][i];
+    }
+    for (i = 0; i < 4; i++) {
+        vf[4][i] = vf[3][i] * vf[3][i];
+    }
+    ee_vu0.acc[0] = vf[3][0] * vf[3][0];
+    ee_vu0.acc[0] = ee_vu0.acc[0] + vf[31][0] * vf[4][1];
+    vf[5][0] = ee_vu0.acc[0] + vf[31][0] * vf[4][2];
+    ee_vu0.q = sqrtf(vf[5][0]);
+    vf[6][0] = vf[31][0] * ee_vu0.q;
+    for (i = 0; i < 4; i++) {
+        out[i] = vf[3][i];
+    }
+    return vf[6][0];
 }
 
 /* Steps the cursor of voice group `group` round its range (voice_ranges) and returns the next voice. */
@@ -310,6 +334,7 @@ static s8 Sound_ClaimTaggedVoice(void) {
             return i + 0x54;
         }
     }
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Sets up the SPU2 mixer: command 0x100 (0xA, 0x800) as Sound_Init sends it, then through command 0xD0
@@ -507,7 +532,7 @@ s32 Sound_PlayMenu(s32 sound) {
     if (sound != 0xFF) {
         SoundDriver_NoteOn(1, se_com_job.result, 0, (char)sound, 0x3C, sfx_volume[0], 0, 0x3F);
     }
-    /* match: no return; an s32 function, so $2 stays live and the beq delay slot takes the second lui */
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Plays a sound of the sw bank on voice 2. */
@@ -547,7 +572,7 @@ int Sound_PlayMapAt(u8 sound, void *position) {
         volume = 0x7F;
     }
     pan = ((diff[0] * direction[0] + diff[1] * direction[1] + diff[2] * direction[2]) / distance + 1.0f) * 63.0f;
-    detune = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+    detune = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
     SoundDriver_NoteOn(Sound_NextVoice(3), map_bank_job.result, 0, sound, 0x3C, volume, detune, (char) pan);
     return 1;
 }
@@ -567,7 +592,7 @@ int Sound_PlayFootstep(int sound) {
         return -1;
     }
     slot = Sound_NextVoice(1);
-    bend = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+    bend = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
     SoundDriver_NoteOn(slot, bank->result, 0, sound, 0x3C, sfx_volume[0], bend, 0x3F);
     return slot;
 }
@@ -624,6 +649,7 @@ int Sound_PlayCommonAt(float range, int sound, float *position) {
             return slot;
         }
     }
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Plays a map bank sound at volume (scaled by the sound option) with a random bend; -1 while map_sounds_enabled is
@@ -642,7 +668,7 @@ int Sound_PlayMapVolume(u8 sound, int volume) {
     if (volume >= 128) {
         volume = 127;
     }
-    bend = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+    bend = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
     slot = Sound_NextVoice(3);
     if (volume != 0) {
         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, bend, 0x3F);
@@ -704,7 +730,7 @@ int Sound_PlayMapAtRange(u8 sound, u8 mode, float *position, float range) {
     Sound_CosSin(angle, origin, offset);
     pan = (offset[0] + 1.0f) * 63.0f;
     if (mode < 3) {
-        detune = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        detune = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
     } else {
         detune = 0;
     }
@@ -751,6 +777,7 @@ int Sound_StartTagged(s8 sound, u8 voice, int volume) {
     channel->unk30 = volume;
     voice_id = channel->unk3B = Sound_ClaimTaggedVoice();
     SoundDriver_NoteOn(voice_id, map_bank_job.result, 0, voice, 0x3C, volume, 0, 0x3F);
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Starts a tagged sound at a point, heard within range (SoundChannel.volume); queued in tagged_requests while
@@ -791,7 +818,7 @@ s32 Sound_StartTaggedAt(s8 sound_id, u8 voice, u8 mode, f32 volume, Vector4Arg *
     channel->unk39 = mode;
     channel->unk3C = 1;
     channel->volume = volume;
-    /* match: no return; "return channel" adds a $2 copy retail lacks (implicit-int style fall-off) */
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* As Sound_StartTaggedAt for a sound along the segment origin..target. */
@@ -838,7 +865,7 @@ s32 Sound_StartTaggedAlong(s8 sound_id, u8 voice, u8 mode, Vector4Arg *origin, V
     channel->unk39 = mode;
     channel->unk3C = 2;
     channel->volume = volume;
-    /* match: no return; "return channel" adds a $2 copy retail lacks (implicit-int style fall-off) */
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Each frame, updates the voice of every positioned tagged sound: stops it out of range, else sets its
@@ -1002,6 +1029,7 @@ static int Sound_TaggedNearestPoint(s32 index, Vector4 *nearest) {
     case 3:
         break;
     }
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Finds the point on the segment start..end nearest the player (x/z only) and returns its distance; the
@@ -1116,6 +1144,7 @@ int Sound_StopTagged(char sound) {
     } else {
         (sound_channels + i)->unk3A = -1;
     }
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Silences every sound voice and marks all channels (and optionally all queued requests) free. */
@@ -1160,7 +1189,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
     if (SoundDriver_StepUpload() == 0) {
         return -1;
     }
-    load_addr = ((u32)(sound_bank_area + 0x3F) >> 6) << 6;
+    load_addr = (EE_WORD(sound_bank_area + 0x3F) >> 6) << 6;
     job->buffers[0] = sound_heap_next = load_addr;
     sound_heap_next = load_addr + 0x80000;
     sprintf(name, job->name, index);
@@ -1168,7 +1197,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
     job->file_handle = handle;
     bgm_bd_size = File_GetSize(handle);
     File_Lock();
-    File_Read(job->file_handle, (void *)job->buffers[0], -1);
+    File_Read(job->file_handle, EE_PTR(void *, job->buffers[0]), -1);
     bgm_load_step += 1;
     return 0;
 }
@@ -1255,7 +1284,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
         return -1;
     }
     heap_top = sound_heap_next;
-    bgm_header_buffer[0] = heap_top;
+    bgm_buffers.limit = heap_top;
     sound_heap_next = ((u32)(heap_top + 0x2003F) >> 6) << 6;
     sprintf(name, job->unk08, index);
     file = File_Open(name, 1, 1);
@@ -1263,7 +1292,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
     bgm_hd_size = File_GetSize(file);
     File_Lock();
     buffers = job->buffers;
-    File_Read(job->file_handle, (void *)buffers[1], -1);
+    File_Read(job->file_handle, EE_PTR(void *, buffers[1]), -1);
     bgm_load_step += 1;
     return 0;
 }
@@ -1296,7 +1325,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
         return -1;
     }
     heap_top = sound_heap_next;
-    bgm_sequence_buffer[0] = heap_top;
+    bgm_buffers.used = heap_top;
     sound_heap_next = ((u32)(heap_top + 0x2003F) >> 6) << 6;
     sprintf(name, job->name_format, index);
     handle = File_Open(name, TRUE, TRUE);
@@ -1304,7 +1333,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
     bgm_sq_size = File_GetSize(handle);
     File_Lock();
     buffers = job->buffers;
-    File_Read(job->file_handle, (void *)buffers[2], -1);
+    File_Read(job->file_handle, EE_PTR(void *, buffers[2]), -1);
     bgm_load_step += 1;
     return 0;
 }
@@ -1402,14 +1431,14 @@ static int Sound_ReadHeapFileStep(LoadJob *job, int index) {
     if (SoundDriver_StepUpload() != 0) {
         switch (heap_file_read_step) {
         case 0:
-            heap_start = ((u32)&sound_heap_base >> 6) << 6;
+            heap_start = (EE_WORD(sound_heap_base) >> 6) << 6;
             sound_heap_next = heap_start;
             *job->buffers = heap_start;
             sound_heap_next = heap_start + 0xA0000;
             sprintf(sound_file_path, job->name, index);
             file = File_Open(sound_file_path, 1, 1);
             heap_file_handle = file;
-            File_Read(file, (void *)*job->buffers, -1);
+            File_Read(file, EE_PTR(void *, *job->buffers), -1);
             heap_file_read_step += 1;
             break;
         case 1:
@@ -1434,7 +1463,7 @@ s32 Sound_ReadMapBankFileStep(LoadRequest *request) {
         switch (map_bank_file_read_step) {
         case 0:
             buffer = sound_heap_next;
-            request->target->buffer = (void *)buffer;
+            request->target->buffer = EE_PTR(void *, buffer);
             sound_heap_next = (((buffer + 0x2003F) >> 6) << 6);
             sprintf(map_bank_file_path, request->name, map_slots[0].header->unk70);
             map_bank_file_handle = File_Open(map_bank_file_path, TRUE, TRUE);
@@ -1545,7 +1574,7 @@ int Sound_ReadJobFile(LoadJob *job) {
         return -1;
     }
     file_handle = File_Open(job->name, 0, 1);
-    File_Read(file_handle, (void *)*job->buffers, -1);
+    File_Read(file_handle, EE_PTR(void *, *job->buffers), -1);
     File_Close(file_handle);
     return 1;
 }
@@ -1636,7 +1665,7 @@ void Sound_PlayLinear(u8 sound, int bank, float range, float distance, float ang
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         SoundDriver_NoteOn(Sound_NextVoice(2), bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
 }
@@ -1659,7 +1688,7 @@ void Sound_PlaySteep(u8 sound, int bank, float range, float distance, float angl
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         slot = Sound_NextVoice(2);
         SoundDriver_NoteOn(slot, bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
@@ -1682,7 +1711,7 @@ void Sound_PlayRound(u8 sound, int bank, float range, float distance, float angl
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         slot = Sound_NextVoice(2);
         SoundDriver_NoteOn(slot, bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
@@ -1768,7 +1797,7 @@ void Sound_PlaySfxLinear(u8 sound, float range, float distance, float angle) {
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         SoundDriver_NoteOn(Sound_NextVoice(2), sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
 }
@@ -1792,7 +1821,7 @@ void Sound_PlaySfxSteep(u8 sound, float range, float distance, float angle) {
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         SoundDriver_NoteOn(Sound_NextVoice(2), sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
 }
@@ -1814,7 +1843,7 @@ void Sound_PlaySfxRound(u8 sound, float range, float distance, float angle) {
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         slot = Sound_NextVoice(2);
         SoundDriver_NoteOn(slot, sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
@@ -1837,7 +1866,7 @@ void Sound_PlayMapLinear(u8 sound, float range, float distance, float angle) {
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         slot = Sound_NextVoice(2);
         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
@@ -1863,7 +1892,7 @@ void Sound_PlayMapSteep(u8 sound, float range, float distance, float angle) {
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         slot = Sound_NextVoice(2);
         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
@@ -1886,7 +1915,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
         if (volume >= 128) {
             volume = 127;
         }
-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
+        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
         slot = Sound_NextVoice(2);
         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
     }
@@ -1896,7 +1925,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
    the job; moves on once it is loaded. */
 int Sound_EntityBankLoadVoice(SoundJob *job) {
     SoundJobSpec *spec = job->spec;
-    int result = SoundDriver_LoadVoiceStep(job->unk18, (int)spec->buffer_b, spec->size_b, (int)spec->buffer_a, spec->size_a, 0, job->unk1C);
+    int result = SoundDriver_LoadVoiceStep(job->unk18, spec->buffer_b, spec->size_b, spec->buffer_a, spec->size_a, 0, job->unk1C);
 
     job->result = result;
     if (result >= 0) {
@@ -1932,14 +1961,14 @@ static int Sound_RunEntityBankLoad(void *sequence, int index) {
 /* Loads the sound bank of the entity type file just read (args: its header, the two buffers and their
    sizes) into voice index + 6 (index: the entity pool slot), at 0x138810 + index * 0x11800 in sound
    memory, a step a call; 0 and the voice in *voice_out once done, else 1. */
-int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out) {
+int Sound_LoadEntityBankStep(sptr args_addr, int index, sptr voice_out) {
     SoundStartArgs *args = (SoundStartArgs *)args_addr;
     int pending = 1;
 
     sound_load_job.unk18 = index + 6;
     sound_load_job.unk1C = index * 0x11800 + 0x138810;
-    sound_load_spec.buffer_a = (void *)args->buffer_a;
-    sound_load_spec.buffer_b = (void *)args->buffer_b;
+    sound_load_spec.buffer_a = args->buffer_a;
+    sound_load_spec.buffer_b = args->buffer_b;
     sound_load_spec.size_a = args->size_a;
     sound_load_spec.size_b = args->size_b;
     sound_load_job.spec = (SoundJobSpec *)&sound_load_spec;
@@ -1982,7 +2011,7 @@ int Sound_MapBankLoadVoice(SoundJob *job) {
         reverb_change_pending = 0;
     }
     spec = job->spec;
-    result = SoundDriver_LoadVoiceStep(job->unk18, (int)spec->buffer_b, spec->size_b, (int)spec->buffer_a, spec->size_a, 0, job->unk1C);
+    result = SoundDriver_LoadVoiceStep(job->unk18, spec->buffer_b, spec->size_b, spec->buffer_a, spec->size_a, 0, job->unk1C);
     job->result = result;
     if (result >= 0) {
         map_bank_load_step += 1;
@@ -2108,7 +2137,7 @@ void Sound_LoadSwBank(int file_id) {
     file_number = file_id + 0x96;
     sprintf(path_a, sw_bank_job.name_a, file_number);
     sprintf(path_b, sw_bank_job.name_b, file_number);
-    buffer_base = ((u32)sound_heap_base >> 6) << 6;
+    buffer_base = (EE_WORD(sound_heap_base) >> 6) << 6;
     sw_bank.base = buffer_base;
     buffer_limit = buffer_base + 0x20000;
     sw_bank.limit = buffer_limit;
@@ -2135,7 +2164,7 @@ void Sound_LoadMgBank(int file_number) {
 
     sprintf(path_a, mg_bank_job.name_a, file_number);
     sprintf(path_b, mg_bank_job.name_b, file_number);
-    heap_start = ((u32)sound_heap_base >> 6) << 6;
+    heap_start = (EE_WORD(sound_heap_base) >> 6) << 6;
     mg_bank.base = heap_start;
     buffer_end = heap_start + 0x10000;
     mg_bank.limit = buffer_end;
@@ -2159,16 +2188,16 @@ static int Sound_LoadFilePair(char *name_a, char *name_b, SoundJobSpec *spec, in
         File_Close(handle);
         return 0;
     }
-    File_Read(handle, spec->buffer_a, spec->size_a);
+    File_Read(handle, EE_PTR(void *, spec->buffer_a), spec->size_a);
     File_Close(handle);
     handle = File_Open(name_b, 0, 1);
     if (handle < 0) {
         File_Close(handle);
         return 0;
     }
-    File_Read(handle, spec->buffer_b, spec->size_b);
+    File_Read(handle, EE_PTR(void *, spec->buffer_b), spec->size_b);
     File_Close(handle);
-    return SoundDriver_LoadVoiceAt(first_arg, (int)spec->buffer_b, spec->size_b, (int)spec->buffer_a, spec->size_a, 0, second_arg);
+    return SoundDriver_LoadVoiceAt(first_arg, spec->buffer_b, spec->size_b, spec->buffer_a, spec->size_a, 0, second_arg);
 }
 
 /* Keeps the driver's upload going (SoundDriver_StepUpload); 1 once it is done. */
@@ -2194,7 +2223,7 @@ static int Sound_UpdateMapReverbVolume(void) {
     int cached;
     int wanted;
 
-    if (sound_load_queue[3] == 0 && sound_load_queue[6] == 0 && sound_load_queue[1] == 0) {
+    if (sound_load_queue.map_bank_load_pending == 0 && sound_load_queue.entity_bank_load_pending == 0 && sound_load_queue.bgm_load_pending == 0) {
         slot = &map_slots[current_map_slot];
         cached = map_reverb_volume;
         if ((u8)slot->records[(player_state.map_index << 7) + 0x4D] != cached) {
@@ -2209,6 +2238,7 @@ static int Sound_UpdateMapReverbVolume(void) {
             return SoundDriver_Remote(1, 0xD0, 0xC81, map_reverb_volume << 8);
         }
     }
+    return 0; /* retail falls off the end here and leaves v0 as it was */
 }
 
 /* Lets Sound_UpdateTagged give positioned tagged sounds their volume again. */

@@ -10,15 +10,11 @@
 #include <libmpeg.h>
 #include <sifdev.h>
 #include <sifrpc.h>
-
-/* EE EABI varargs: the register save area a1..a7 is spilled to, as in libsdr.c */
-typedef char *va_list;
-#define va_start(ap, last) ((ap) = (char *)__builtin_next_arg(last) - 0x38)
-#define va_arg(ap, type) (*(type *)((ap += 8) - 8))
+#include <stdarg.h>
 
 static void SoundDriver_DisableOutput(void);
 static int SoundDriver_GetFileSize(const char *);
-static int SoundDriver_LoadIopFile(char *, void *);
+static int SoundDriver_LoadIopFile(char *, int);
 /* SDK: loads an IOP heap file, returns below zero until the IOP is ready */
 extern char rpc_timeout_message[];
 extern char voice_load_waiting_message[];
@@ -45,7 +41,7 @@ static SoundRpcRequest sound_rpc_buffer;        /* 0x5BF280 */
 static SoundState sound_state_storage;          /* 0x5BF380 */
 static SoundDmaRequest sound_dma;               /* 0x5BF860 */
 static SoundUpload sound_upload;                /* 0x5BF870 */
-static int sound_rpc_client[10];                /* 0x5BF890 sceSifClientData of the driver's RPC service */
+static sceSifClientData sound_rpc_client;      /* 0x5BF890 the driver's RPC service */
 static SoundDmaRequest sound_command_dma;       /* 0x5BF8B8 sends sound_command_list */
 
 /* Starts the sound driver: binds its RPC service on the IOP, then resets the driver state,
@@ -58,25 +54,23 @@ int SoundDriver_Init(void) {
     int i;
 
     do {
-        if (sceSifBindRpc(sound_rpc_client, 0x1010, 0) < 0) {
+        if (sceSifBindRpc(&sound_rpc_client, 0x1010, 0) < 0) {
             while (TRUE) {
             }
         }
         for (i = 10000; i != -1; i--) {
         }
-    } while (sound_rpc_client[9] == 0);
+    } while (sound_rpc_client.server == NULL);
     FlushCache(0);
     sound_state = &sound_state_storage;
     sound_state->dma_src = SoundDriver_Remote(1, 0x10);
     *(int *)sound_state->unk4D0 = 0x3FFF; // match: the int at 0x4D0; the header has six chars there
     SoundDriver_Remote(1, 0x30, 0x3FFF, 0x3FFF);
-    sound_state->load_addr = NULL;
+    sound_state->load_addr = 0;
     sound_state->unk4C8 = SoundDriver_Remote(1, 0xA0);
-    // match: retail stores these three as pointers (the header has them as integers)
-    *(int **)&sound_state->dma_dest = sound_command_list;
+    sound_state->dma_dest = sound_command_list;
     sound_command_list[0] = 0;
-    // match: as above
-    *(char **)&sound_state->unk4BC = *(char **)&sound_state->unk4C0 = (char *)0x5010;
+    sound_state->unk4BC = sound_state->unk4C0 = 0x5010;
     *(u16 *)&sound_state->unk4D0[4] = 1; // match: the u16 at 0x4D4
     sound_state->active = 0;
     voice = sound_state->voices;
@@ -141,7 +135,7 @@ void SoundDriver_ReleaseAll(void) {
 static int SoundDriver_WaitRpc(void) {
     int retries = 0x989680;
 
-    while (sceSifCheckStatRpc(sound_rpc_client) == 1) {
+    while (sceSifCheckStatRpc(&sound_rpc_client) == 1) {
         if (retries < 0) {
             printf(rpc_timeout_message);
             return -1;
@@ -153,7 +147,7 @@ static int SoundDriver_WaitRpc(void) {
 
 /* The state of the sound driver's RPC client: 1 while a call is still running. */
 int SoundDriver_IsBusy(void) {
-    return sceSifCheckStatRpc(sound_rpc_client);
+    return sceSifCheckStatRpc(&sound_rpc_client);
 }
 
 /* Sends a command and its arguments to the sound driver on the IOP (the game's own sceSdRemote;
@@ -167,7 +161,7 @@ int SoundDriver_Remote(int blocking, ...) {
     int i;
 
     va_start(ap, blocking);
-    sound_rpc_buffer.self = &sound_rpc_buffer;
+    sound_rpc_buffer.self = EE_WORD(&sound_rpc_buffer);
     command = va_arg(ap, int);
     // match: copies eight words although the save area only holds six more
     for (i = 0; i < 8; i++) {
@@ -182,15 +176,15 @@ int SoundDriver_Remote(int blocking, ...) {
         return result;
     }
     if (command & 0x80000) {
-        sceSifCallRpc(sound_rpc_client, command, no_wait, (char *)&sound_rpc_buffer, 0xA0, (int *)sound_rpc_buffer.args[0], 0xA0, 0,
-                      sound_rpc_buffer.args[0]);
+        sceSifCallRpc(&sound_rpc_client, command, no_wait, &sound_rpc_buffer, 0xA0, EE_PTR(void *, sound_rpc_buffer.args[0]), 0xA0, 0,
+                      EE_PTR(void *, sound_rpc_buffer.args[0]));
     } else if (command & 0x40000) {
-        sceSifCallRpc(sound_rpc_client, command, no_wait, (char *)sound_rpc_buffer.args[0], 0x40, (int *)&sound_rpc_buffer, 0x10, 0,
-                      (int)sound_rpc_buffer.self);
+        sceSifCallRpc(&sound_rpc_client, command, no_wait, EE_PTR(void *, sound_rpc_buffer.args[0]), 0x40, &sound_rpc_buffer, 0x10, 0,
+                      EE_PTR(void *, sound_rpc_buffer.self));
         result = (int)sound_rpc_buffer.self;
     } else {
-        sceSifCallRpc(sound_rpc_client, command, no_wait, (char *)&sound_rpc_buffer, 0x40, (int *)&sound_rpc_buffer, 0x10, 0,
-                      (int)&sound_rpc_buffer);
+        sceSifCallRpc(&sound_rpc_client, command, no_wait, &sound_rpc_buffer, 0x40, &sound_rpc_buffer, 0x10, 0,
+                      &sound_rpc_buffer);
         result = (int)sound_rpc_buffer.self;
     }
     return result;
@@ -220,12 +214,12 @@ static int SoundDriver_StartUpload(int dest, int src, u32 size) {
     }
     dma = &sound_dma;
     iop_buffer = sound_state->unk4C8;
-    dma->src = sound_upload.src;
+    dma->src = EE_PTR(void *, sound_upload.src);
     dma->dest = iop_buffer;
     dma->size = sound_upload.padded_size;
     dma->mode = 0;
     FlushCache(0);
-    dma_id = sceSifSetDma((int *)dma, 1);
+    dma_id = sceSifSetDma((sceSifDmaData *)dma, 1);
     sound_upload.dma_id = dma_id;
     return (dma_id != 0) ? 0 : -1;
 }
@@ -264,12 +258,12 @@ int SoundDriver_StepUpload(void) {
     }
     dma = &sound_dma;
     iop_buffer = sound_state->unk4C8;
-    dma->src = sound_upload.src;
+    dma->src = EE_PTR(void *, sound_upload.src);
     dma->dest = iop_buffer;
     dma->size = sound_upload.padded_size;
     dma->mode = 0;
     FlushCache(0);
-    dma_id = sceSifSetDma((int *)dma, 1);
+    dma_id = sceSifSetDma((sceSifDmaData *)dma, 1);
     sound_upload.dma_id = dma_id;
     return 0;
 }
@@ -435,7 +429,7 @@ int SoundDriver_LoadVoiceFiles(int voice_id, char *header_name, char *sample_nam
         SoundDriver_FreeVoice(voice_index);
         return -1;
     }
-    if (SoundDriver_LoadIopFile(header_name, (void *)voice->stereo_header_block) != 0) {
+    if (SoundDriver_LoadIopFile(header_name, voice->stereo_header_block) != 0) {
         return -1; // match: the voice is not released here (the other loaders call SoundDriver_FreeVoice first)
     }
     SoundDriver_Remote(1, 0x1070, voice->mono_header_block, voice->stereo_header_block, size);
@@ -459,7 +453,7 @@ int SoundDriver_LoadVoiceFiles(int voice_id, char *header_name, char *sample_nam
         SoundDriver_FreeVoice(voice_index);
         return -1;
     }
-    if (SoundDriver_LoadIopFile(sample_name, (void *)voice->iop_heap) != 0) {
+    if (SoundDriver_LoadIopFile(sample_name, voice->iop_heap) != 0) {
         SoundDriver_FreeVoice(voice_index);
         return -1;
     }
@@ -707,11 +701,11 @@ int SoundDriver_LoadVoiceBuffered(int voice_id, int header_data, int header_size
             } else {
                 sound_dma.size = remaining;
             }
-            sound_dma.src = sample_data;
+            sound_dma.src = EE_PTR(void *, sample_data);
             sound_dma.dest = heap;
             sound_dma.mode = 0;
             SoundDriver_Remote(1, 0x80, voice->dma_channel, 1);
-            i = sceSifSetDma((int *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
+            i = sceSifSetDma((sceSifDmaData *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
             if (i == 0) {
                 sceSifFreeIopHeap(heap);
                 SoundDriver_FreeVoice(voice_index);
@@ -757,11 +751,11 @@ int SoundDriver_VoiceLoadSendHeader(SoundLoadArgs *args, SoundReloadRequest *req
     SoundVoice *voice;
     int voice_index;
 
-    request->voice = NULL;
+    request->voice = 0;
     request->unk04 = 0;
     request->unk08 = 0;
-    *(void **)&request->unk0C = NULL; // match: unk0C and heap_addr are stored as pointers here
-    *(void **)&request->heap_addr = NULL; // match: as above
+    request->unk0C = 0;
+    request->heap_addr = 0;
     request->unk14 = 0;
     request->unk18 = 0;
     request->unk1C = 0;
@@ -784,7 +778,7 @@ int SoundDriver_VoiceLoadSendHeader(SoundLoadArgs *args, SoundReloadRequest *req
     while (SoundDriver_StepUpload() == 0) {
     }
     SoundDriver_Remote(1, 0x1070, voice->mono_header_block, voice->stereo_header_block, voice->header_size);
-    request->voice = voice;
+    request->voice = EE_WORD(voice);
     request->unk14 = voice_index;
     return 1;
 }
@@ -797,7 +791,7 @@ int SoundDriver_VoiceLoadAllocBuffer(IopLoadRequest *request, IopLoadContext *co
     s32 unk18;
     s32 aligned;
 
-    buffer = context->buffer;
+    buffer = EE_PTR(IopLoadBuffer *, context->buffer);
     aligned = ((u32)(request->size + 0xF) >> 4) << 4;
     request->size = aligned;
     context->size = aligned;
@@ -828,14 +822,14 @@ int SoundDriver_VoiceLoadSendPiece(SoundLoadArgs *args, SoundReloadRequest *requ
         sound_dma.size = remaining;
     }
     heap_addr = request->heap_addr;
-    sound_dma.src = (int)args->unk0C;
+    sound_dma.src = EE_PTR(void *, args->unk0C);
     sound_dma.dest = heap_addr;
     sound_dma.mode = 0;
-    if (SoundDriver_Remote(1, 0x80, request->voice->dma_channel, 0) == 0) {
+    if (SoundDriver_Remote(1, 0x80, EE_PTR(SoundVoice *, request->voice)->dma_channel, 0) == 0) {
         printf(voice_load_waiting_message);
         return 0;
     }
-    dma_id = sceSifSetDma((int *)&sound_dma, 1);
+    dma_id = sceSifSetDma((sceSifDmaData *)&sound_dma, 1);
     if (dma_id == 0) {
         sceSifFreeIopHeap(request->heap_addr);
         SoundDriver_FreeVoice(request->unk14);
@@ -853,7 +847,7 @@ int SoundDriver_VoiceLoadWritePiece(SoundLoadArgs *args, SoundReloadRequest *req
     if (sceSifDmaStat(request->unk1C) >= 0) {
         return 0;
     }
-    if (SoundDriver_Remote(1, 0x90, request->voice->dma_channel, 0, request->heap_addr, request->unk0C, sound_dma.size) < 0) {
+    if (SoundDriver_Remote(1, 0x90, EE_PTR(SoundVoice *, request->voice)->dma_channel, 0, request->heap_addr, request->unk0C, sound_dma.size) < 0) {
         sceSifFreeIopHeap(request->heap_addr);
         SoundDriver_FreeVoice(request->unk14);
         return -1;
@@ -871,7 +865,7 @@ int SoundDriver_VoiceLoadBind(s32 unused, SoundReloadRequest *request) {
     SoundVoice *desc;
     s32 heap_src;
 
-    desc = request->voice;
+    desc = EE_PTR(SoundVoice *, request->voice);
     if (SoundDriver_Remote(1, 0x80, desc->dma_channel, 0) != 0) {
         sceSifFreeIopHeap(request->heap_addr);
         if (desc->stereo_selected != 0) {
@@ -978,11 +972,11 @@ int SoundDriver_LoadVoiceAt(int voice_index, int header_data, int header_size, i
             } else {
                 sound_dma.size = remaining;
             }
-            sound_dma.src = sample_data;
+            sound_dma.src = EE_PTR(void *, sample_data);
             sound_dma.dest = heap;
             sound_dma.mode = 0;
             SoundDriver_Remote(1, 0x80, voice->dma_channel, 1);
-            i = sceSifSetDma((int *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
+            i = sceSifSetDma((sceSifDmaData *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
             if (i == 0) {
                 sceSifFreeIopHeap(heap);
                 SoundDriver_FreeVoice(voice_index);
@@ -1443,7 +1437,7 @@ int SoundDriver_LoadSequenceFile(int bank_id, int voice_index, char *name) {
     if ((u32)(bank->iop_heap + bank->unk04) > 0x1FFFFF) {
         return -1;
     }
-    if (SoundDriver_LoadIopFile(name, (void *)bank->iop_heap) != 0) {
+    if (SoundDriver_LoadIopFile(name, bank->iop_heap) != 0) {
         return -1;
     }
     if (voice->stereo_selected != 0) {
@@ -1759,7 +1753,7 @@ int SoundDriver_NoteOn(u32 slot, int voice_index, char channel, char program, ch
     if (state->active == 0) {
         return -1;
     }
-    queue_size = (int *)(state->dma_dest | 0x20000000);
+    queue_size = (int *)UNCACHED(state->dma_dest);
     length = 0x19;
     if (program != -1) {
         length = 0x1B;
@@ -1769,7 +1763,7 @@ int SoundDriver_NoteOn(u32 slot, int voice_index, char channel, char program, ch
         return -2;
     }
     offset = queued + 4;
-    out = (u8 *)(((int)queue_size + offset) | 0x20000000);
+    out = (u8 *)UNCACHED((u8 *)queue_size + offset);
     voice = &state->voices[voice_index];
     if (slot >= 0x7E) {
         return -1;
@@ -1831,13 +1825,13 @@ int SoundDriver_NoteOff(u32 key_index) {
     if (key_index >= 0x7E) {
         return -1;
     }
-    command_list = (int *)(sound_state->dma_dest | 0x20000000);
+    command_list = (int *)UNCACHED(sound_state->dma_dest);
     list_used = *command_list;
     if ((u32)(list_used + 0xA) >= 0x3FC) {
         return -2;
     }
     write_offset = list_used + 4;
-    write_ptr = (u8 *)(((int)command_list + write_offset) | 0x20000000);
+    write_ptr = (u8 *)UNCACHED((u8 *)command_list + write_offset);
     key = (SoundKey *)sound_state->unk240[key_index];
     *write_ptr++ = 0xFF;
     // match: byte 0x18 of the voice (low byte of unk18), read as a byte
@@ -1871,13 +1865,13 @@ int SoundDriver_SetNoteControl(int kind, u32 slot, int value) {
     if (slot >= 0x7E) {
         return -1;
     }
-    queue_size = (int *)(state->dma_dest | 0x20000000);
+    queue_size = (int *)UNCACHED(state->dma_dest);
     queued = *queue_size;
     if ((u32)(queued + 0xA) >= 0x3FC) {
         return -2;
     }
     offset = queued + 4;
-    out = (u8 *)(((int)queue_size + offset) | 0x20000000);
+    out = (u8 *)UNCACHED((u8 *)queue_size + offset);
     key = (SoundKey *)state->unk240[slot];
     voice = &state->voices[key->voice];
     *out++ = 0xFF;
@@ -1931,13 +1925,13 @@ int SoundDriver_ProgramChange(int voice_index, char first_value, char second_val
     if (sound_state->active == 0) {
         return -1;
     }
-    command_list = (int *)(sound_state->dma_dest | 0x20000000);
+    command_list = (int *)UNCACHED(sound_state->dma_dest);
     list_used = *command_list;
     if ((u32)(list_used + 5) >= 0x3FC) {
         return -2;
     }
     write_offset = list_used + 4;
-    write_ptr = (u8 *)(((int)command_list + write_offset) | 0x20000000);
+    write_ptr = (u8 *)UNCACHED((u8 *)command_list + write_offset);
     *write_ptr++ = 0xFF;
     *write_ptr++ = (u8)sound_state->voices[voice_index].driver_voice_id;
     *write_ptr++ = 2;
@@ -1954,12 +1948,12 @@ int SoundDriver_FlushCommands(void) {
     int *flag;
     int size;
     int transfer_id;
-    int dest;
+    int *dest;
 
     if (sound_state->active == 0) {
         return -1;
     }
-    flag = (int *)(sound_state->dma_dest | 0x20000000);
+    flag = (int *)UNCACHED(sound_state->dma_dest);
     size = *flag + 4;
     while (size & 0xF) {
         size++;
@@ -1969,7 +1963,7 @@ int SoundDriver_FlushCommands(void) {
     sound_command_dma.src = dest;
     sound_command_dma.size = size;
     sound_command_dma.mode = 0;
-    transfer_id = sceSifSetDma((int *)&sound_command_dma, 1);
+    transfer_id = sceSifSetDma((sceSifDmaData *)&sound_command_dma, 1);
     if (transfer_id == 0) {
         return -1;
     }
@@ -1986,7 +1980,7 @@ int SoundDriver_FlushCommands(void) {
 int SoundDriver_OpenStreamFile(int stream, char *file_name, int value) {
     strcpy(sound_rpc_file_name, file_name);
     stream &= 1;
-    sceSifCallRpc(sound_rpc_client, stream | 0x3000, 0, sound_rpc_file_name, 0x100, (int *)&sound_rpc_buffer, 1, 0, 0);
+    sceSifCallRpc(&sound_rpc_client, stream | 0x3000, 0, sound_rpc_file_name, 0x100, &sound_rpc_buffer, 1, NULL, NULL);
     if (sound_rpc_buffer.self == 0) {
         if (SoundDriver_Remote(1, 0x3040, stream, value) != 0) {
             SoundDriver_Remote(1, 0x3030, stream);
@@ -2005,7 +1999,7 @@ int SoundDriver_PlayStreamFile(int stream, char *file_name, int value) {
         return -1;
     }
     strcpy(sound_rpc_file_name, file_name);
-    sceSifCallRpc(sound_rpc_client, stream | 0x30A0, 0, sound_rpc_file_name, 0x100, (int *)&sound_rpc_buffer, 1, 0, 0);
+    sceSifCallRpc(&sound_rpc_client, stream | 0x30A0, 0, sound_rpc_file_name, 0x100, &sound_rpc_buffer, 1, NULL, NULL);
     if (sound_rpc_buffer.self != 0) {
         SoundDriver_Remote(1, 0x3030, stream);
         return -1;
@@ -2069,7 +2063,7 @@ int SoundDriver_FreeReverb(u32 effect_index) {
 void SoundDriver_ApplyReverb(u32 effect_index) {
     if (effect_index < 5) {
         sound_state->effect = sound_state->effects[effect_index];
-        SoundDriver_Remote(1, 0x40070, &sound_state->effect);
+        SoundDriver_Remote(1, 0x40070, EE_WORD(&sound_state->effect));
     }
 }
 
@@ -2077,7 +2071,7 @@ void SoundDriver_ApplyReverb(u32 effect_index) {
 void SoundDriver_ApplyReverbNoWait(u32 index) {
     if (index < 5) {
         sound_state->effect = sound_state->effects[index];
-        SoundDriver_Remote(0, 0x40070, &sound_state->effect);
+        SoundDriver_Remote(0, 0x40070, EE_WORD(&sound_state->effect));
     }
 }
 
@@ -2103,8 +2097,8 @@ static int SoundDriver_GetFileSize(const char *name) {
 
 /* Loads a file into IOP memory at addr (sceSifLoadIopHeap, retried until it works) and remembers the
    first address it loaded to. Returns 0. */
-static int SoundDriver_LoadIopFile(char *name, void *addr) {
-    if (sound_state->load_addr == NULL) {
+static int SoundDriver_LoadIopFile(char *name, int addr) {
+    if (sound_state->load_addr == 0) {
         sound_state->load_addr = addr;
     }
     while (sceSifLoadIopHeap(name, addr) < 0) {

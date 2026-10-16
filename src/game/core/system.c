@@ -37,7 +37,7 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
 extern GsRegisterPair frame_dispfb_regs;    /* the DISPFB values of the two frames */
 extern GsRegisterPair frame_display_regs;   /* the DISPLAY values of the two frames */
 
-int Movie_Play(char *, uptr, u32, int (*)(void), u32, s16, s16, s16);
+int Movie_Play(char *, char *, u32, int (*)(void), u32, s16, s16, s16);
 void Packet_SwapBuffers(void);
 void DrawList_Clear(void);
 void func_001095D0(void);
@@ -70,7 +70,7 @@ void Movie_PlayOpening(void) {
     char buf[0x40]; /* unused, but retail reserves the 0x40 bytes */
 
     opening_movie_skipped = 0;
-    Movie_Play(opening_movie_path, (uptr)map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
+    Movie_Play(opening_movie_path, map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
     temp = (s64)0xC000 << 17;
     game_dbuff_clear_color[0] = temp;
     game_dbuff_clear_color[30] = temp;
@@ -101,9 +101,9 @@ void Movie_PlayEnding(void) {
 
     opening_movie_skipped = 0;
     if ((game_status_flags[0] >> 11) & 1) {
-        Movie_Play(ending_movie_path, (uptr)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+        Movie_Play(ending_movie_path, map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
     } else {
-        Movie_Play(staff_roll_movie_path, (uptr)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+        Movie_Play(staff_roll_movie_path, map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
     }
     sceGsSyncV(0);
     sceGsSyncV(0);

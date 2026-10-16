@@ -119,7 +119,7 @@ void Vector_Add(void *, void *, void *);
 int Angle_Approach(float *, float, float);
 void Sound_StopAll(int);
 int Sound_LoadMapBankStep(MapSlot *, int);
-int Sound_LoadEntityBankStep(int, int, int);
+int Sound_LoadEntityBankStep(sptr, int, sptr);
 int Sound_LoadBgm(int, int);
 void MapLoad_RequestHold(void);
 int MapLoad_IsHeld(void);

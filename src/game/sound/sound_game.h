@@ -161,7 +161,7 @@ int Sound_EntityBankLoadVoice(SoundJob *job);
 int Sound_EntityBankFreeSampleBuffer(SoundJob *job);
 /* Loads the sound bank of the entity type file just read into voice index + 6, a step a call; 0 and the
    voice in *voice_out once done, else 1 */
-int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out);
+int Sound_LoadEntityBankStep(sptr args_addr, int index, sptr voice_out);
 /* Plays sound from bank with the falloff player kind of falloff_sound_players */
 void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle);
 /* Map bank load step: does nothing but move on */

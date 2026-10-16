@@ -42,8 +42,6 @@ SoundBankSlot sfx_com_bank = { /* 0x3EF520 the sfx_com bank */
 SoundBankSlot bgm_buffers = { /* 0x3EF540 the BGM's buffers (bgm_load_job's) */
     .size_a = 0x4B000, .size_b = 0x1400, .unk14 = 0x5000,
 };
-asm(".globl bgm_header_buffer\nbgm_header_buffer = bgm_buffers + 0x4");  /* 0x3EF544 the BGM's second buffer (Sound_BgmReadHeader) */
-asm(".globl bgm_sequence_buffer\nbgm_sequence_buffer = bgm_buffers + 0x8");  /* 0x3EF548 the BGM's third buffer (Sound_BgmReadSequence) */
 
 SoundBankSlot sw_bank = { /* 0x3EF560 the sw bank (Sound_LoadSwBank) */
     .size_a = 0x1A400, .size_b = 0x1400,

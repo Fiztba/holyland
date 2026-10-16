@@ -1,6 +1,7 @@
 /* The game module: new-game state, event flags, the save image, the screen fade and GS screen effects. */
 #include "core/file.h"
 #include "core/game.h"
+#include "sound/sound.h"
 #include "input/pad.h"
 #include "map_object/map_object.h"
 #include "player/player.h"
@@ -40,7 +41,7 @@ extern DefinitionByteSet trade_stock_3;
 extern DefinitionByteSet trade_stock_4;
 extern DefinitionByteSet trade_stock_5;
 extern u8 save_image[0x20000];          /* the save image */
-extern char sound_load_queue[0x28];
+extern SoundLoadQueue sound_load_queue;
 extern MapSlot map_slots[];
 extern const DefinitionByteSet initial_trade_stock_1;
 extern const DefinitionByteSet initial_trade_stock_2;
@@ -161,7 +162,7 @@ void Game_ResetProgress(void) {
     memset(spell_experience, 0, sizeof(spell_experience));
     memset(spell_levels, 0, sizeof(spell_levels));
     Menu_ClearKeyItems();
-    memset(sound_load_queue, 0, sizeof(sound_load_queue));
+    memset(&sound_load_queue, 0, sizeof(sound_load_queue));
 }
 
 /* marks what the player has equipped as found and tidies the spell tables */

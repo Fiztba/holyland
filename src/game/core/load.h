@@ -20,7 +20,8 @@ typedef struct {
 /* the job Sound_BgmFadeOut and Sound_BgmLoadVoice step: control words, the IOP handle it got and its arguments */
 typedef struct {
     int *ctl;                       /* 0x00 */
-    char pad04[0x0C];
+    char *pad04[2];                 /* 0x04 SoundJob.name_a and name_b: this is a view of SoundJob */
+    char pad0C[0x04];
     s32 result;                     /* 0x10 handle, negative until loaded */
     s32 unk14;                      /* 0x14 */
     s32 unk18;                      /* 0x18 */
@@ -84,7 +85,7 @@ typedef struct {
 
 /* an IOP heap block load: the sizes it settled on and the heap it got */
 typedef struct {
-    IopLoadBuffer *buffer;          /* 0x00 */
+    EEWord buffer;                  /* 0x00 (IopLoadBuffer *) a view of SoundReloadRequest */
     char pad04[0x04];
     s32 size;                       /* 0x08 */
     s32 unk0C;                      /* 0x0C */
