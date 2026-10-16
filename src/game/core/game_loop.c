@@ -63,7 +63,7 @@ void Game_StepFade(void);
 void GameLoop_UpdateCamera(void);
 void GameLoop_SetCameraMatrices(int, int);
 void GsDraw_QueueVu1Matrix(void *);
-int GameLoop_DrawFrame(int);
+void GameLoop_DrawFrame(int);
 void Packet_WaitForSend(void);
 void MapItem_UpdatePickup(void);
 void Map_RunFreeCamera(void);
@@ -126,7 +126,7 @@ void sceVu0TransMatrix(float *, float *, float *);
 void sceVu0InversMatrix(void *, void *);
 void sceVu0MulMatrix(void *, void *, void *);
 void Sound_StopAll(int);
-int Sound_LoadMapBankStep(int, int);
+int Sound_LoadMapBankStep(MapSlot *, int);
 int Sound_LoadEntityBankStep(int, int, int);
 int Sound_LoadBgm(int, int);
 void MapLoad_RequestHold(void);
@@ -302,10 +302,10 @@ void GameLoop_Run(int arg) {
         MapChange_RunToEnd();
         GameLoop_UpdatePause();
     }
-    game_dbuff_clear_color[0] = 0xC000L << 17;
-    game_dbuff_clear_color[30] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
+    game_dbuff_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_clear_color[30] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
     Input_StopRumble();
     Message_CloseBox();
     Message_ClearNotices();
@@ -331,7 +331,7 @@ void GameLoop_Run(int arg) {
 
 /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
    tints, the overlays MapDrawState asks for, the fades and the pause shade. */
-int GameLoop_DrawFrame(int arg) {
+void GameLoop_DrawFrame(int arg) {
     int tinted = FALSE;
     f32 tint;
     int red;
@@ -728,7 +728,7 @@ void GameLoop_RunSoundLoads(void) {
     }
     switch (sound_load_queue.step) {
     case 1:
-        sound_load_queue.map_bank_load_pending = Sound_LoadMapBankStep((int)sound_load_queue.pending_map_slot, sound_load_queue.map_bank_load_pending);
+        sound_load_queue.map_bank_load_pending = Sound_LoadMapBankStep(sound_load_queue.pending_map_slot, sound_load_queue.map_bank_load_pending);
         if (sound_load_queue.map_bank_load_pending == 0) {
             sound_load_queue.pending_map_slot = NULL;
             sound_load_queue.step = 0;

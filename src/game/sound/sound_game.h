@@ -179,7 +179,7 @@ int Sound_MapBankApplyReverb(void);
    sounds start (map_sounds_enabled) and ends the load */
 int Sound_MapBankFinishUnlessFirst(void);
 /* Loads the sound bank of a map slot (MapSlot.sound_bank) a step a call while pending; returns 0 once it is done */
-int Sound_LoadMapBankStep(int slot_addr, int pending);
+int Sound_LoadMapBankStep(MapSlot *slot, int pending);
 /* Loads the sound bank of a map slot (MapSlot.sound_bank), waiting until it is done */
 int Sound_LoadMapBank(MapSlot *slot);
 /* Loads the sw bank file_id (sw%03d with 0x96 added) into the sound heap and hands it to the driver, waiting

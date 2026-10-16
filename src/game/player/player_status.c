@@ -401,7 +401,7 @@ void Player_DrawScreenFade(void) {
     if (player_state.screen_fade != 0.0f) {
         Packet_BeginGsRegisters();
         Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
         Packet_EndGsRegisters();
         if (player_state.screen_fade > 0.0f) {
             GsDraw_FillScreen(0xFF, 0xFF, 0xFF, (int)player_state.screen_fade, 0x48);
@@ -409,7 +409,7 @@ void Player_DrawScreenFade(void) {
             GsDraw_FillScreen(0, 0, 0, (int)-player_state.screen_fade, 0x44);
         }
         Packet_BeginGsRegisters();
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
         Packet_EndGsRegisters();
     }
 }

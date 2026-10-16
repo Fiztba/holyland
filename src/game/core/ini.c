@@ -91,8 +91,6 @@ IniKeyHandler ini_keys[30] = {
     { "debug_magic_rapid_fire", (void (*)(char *))Ini_SetDebugMagicRapidFire },
     { "", NULL },
 };
-/* 0x42BBE0 effect/item_effect.c's item_effect_defs as indexed from item kind 0 */
-asm(".globl item_effect_defs_by_kind\nitem_effect_defs_by_kind = ini_keys + 0x3D0\n");
 
 static void Ini_SetText(char *text, int length);
 static char *Ini_ReadLine(void);
@@ -105,6 +103,7 @@ void Ini_Load(int number) {
     int file;
     int i;
     char *line;
+    int size;
 
     sprintf(path, ini_path_format, number);
     file = File_Open(path, 0, 1);
@@ -115,9 +114,9 @@ void Ini_Load(int number) {
             return;
         }
     }
-    line = (char *)File_Read(file, file_load_buffer, -1);
+    size = File_Read(file, file_load_buffer, -1);
     File_Close(file);
-    Ini_SetText(file_load_buffer, (int)line);
+    Ini_SetText(file_load_buffer, size);
     while ((line = Ini_ReadLine()) != NULL) {
         for (i = 0; ini_keys[i].handler != NULL; i++) {
             if (strncmp(line, ini_keys[i].key, strlen(ini_keys[i].key)) == 0) {

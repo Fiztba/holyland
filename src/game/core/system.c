@@ -30,7 +30,7 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
 extern GsRegisterPair frame_dispfb_regs;    /* the DISPFB values of the two frames */
 extern GsRegisterPair frame_display_regs;   /* the DISPLAY values of the two frames */
 
-int Movie_Play(char *, u32, u32, int (*)(void), u32, s16, s16, s16);
+int Movie_Play(char *, uptr, u32, int (*)(void), u32, s16, s16, s16);
 void Packet_SwapBuffers(void);
 void DrawList_Clear(void);
 void func_001095D0(void);
@@ -74,7 +74,7 @@ void Movie_PlayOpening(void) {
     char buf[0x40]; /* unused, but retail reserves the 0x40 bytes */
 
     opening_movie_skipped = 0;
-    Movie_Play(opening_movie_path, (u32)map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
+    Movie_Play(opening_movie_path, (uptr)map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
     temp = (s64)0xC000 << 17;
     game_dbuff_clear_color[0] = temp;
     game_dbuff_clear_color[30] = temp;
@@ -87,7 +87,7 @@ void Movie_PlayOpening(void) {
     context1_buffer_half = 0;
     context2_buffer_half = 0;
     GsDraw_ResetDrawTarget();
-    GsDraw_FillScreen(0, 0, 0, 0x80, 0x100000044L);
+    GsDraw_FillScreen(0, 0, 0, 0x80, 0x100000044LL);
     func_001095D8();
     context1_buffer_half = 1;
     context2_buffer_half = 1;
@@ -105,9 +105,9 @@ void Movie_PlayEnding(void) {
 
     opening_movie_skipped = 0;
     if ((game_status_flags[0] >> 11) & 1) {
-        Movie_Play(ending_movie_path, (u32)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+        Movie_Play(ending_movie_path, (uptr)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
     } else {
-        Movie_Play(staff_roll_movie_path, (u32)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+        Movie_Play(staff_roll_movie_path, (uptr)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
     }
     sceGsSyncV(0);
     sceGsSyncV(0);
@@ -159,7 +159,7 @@ void Display_Init(void) {
     Display_BuildProjection(projection_matrix, 512.0f, 1.0f, 65536.0f);
     context1_buffer_half = 0;
     D_00446F80 = 0;
-    game_dbuff.clear1.rgbaq = game_dbuff.clear0.rgbaq = 0x100000000L;
+    game_dbuff.clear1.rgbaq = game_dbuff.clear0.rgbaq = 0x100000000LL;
     sceGsSetDefDBuff(&game_dbuff_context2, 0, 0x280, 0x1C0, 3, 0x3A, 1);
     game_dbuff_context2.disp[0].dispfb.fbp = 0;
     game_dbuff_context2.disp[1].dispfb.fbp = 0x8C;

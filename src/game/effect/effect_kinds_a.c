@@ -846,7 +846,7 @@ void EffectGroundRunWait_Update(EffectActor *actor) {
         return;
     }
     for (i = 0; i < 0x180; i++, slot++) {
-        if (slot->flags & (0x8000L << 41)) {
+        if (slot->flags & (0x8000LL << 41)) {
             if (slot->def->kind_index == 0xE) {
                 actor->frame++;
                 return;

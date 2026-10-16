@@ -68,7 +68,7 @@ int Pad_Init(int mode) {
         pad->mode_request = PAD_MODE_NONE;
         pad->mode_lock = 0;
         pad++;
-    } while ((int)pad < (int)&pad_system.slots[8]); // match: retail compares signed
+    } while (pad < &pad_system.slots[8]);
     return scePadInit(mode);
 }
 

@@ -163,7 +163,7 @@ static void Effect_CaptureTextures(void) {
     packet += 2;
     *(u64 *)packet = 0xE;
     packet += 2;
-    *(u64 *)packet = 0x8B90L << 34;
+    *(u64 *)packet = 0x8B90LL << 34;
     packet += 2;
     *packet++ = 0x50;
     *packet++ = 0;
@@ -486,13 +486,13 @@ void Effect_DrawAll(int pass) {
         }
         model->fog_block = map_draw_slot_blocks + (current_map_slot << 10);
         // match: the flag is read through the union so the test stays behind the unk14C store
-        if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000L << 25))) {
+        if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000LL << 25))) {
             model->light_block = (s32)effect_light_block;
         } else {
             model->light_block = (s32)(map_draw_slot_blocks - 0x1D0);
         }
         model->hit_count = 0;
-        if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000L << 26))) {
+        if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000LL << 26))) {
             DrawList_Add(model, ((EffectTableEntry *)effect->def)->placement, pass);
         }
         if (pass == 0 && effect->frame >= effect->def->keyframe_end) {
@@ -993,12 +993,12 @@ int Effect_IsDefRangeInUse(int first_def, int last_def) {
 }
 
 /* GS values for the model draw hooks below (effect_draw_hooks, picked by Effect_SetupModel) */
-#define EFFECT_ZBUF_NO_WRITE 0x10A000118L       /* ZBUF_1: the depth buffer, masked: no depth writes */
-#define EFFECT_ZBUF_WRITE 0xA000118L            /* ZBUF_1: the depth buffer, written */
+#define EFFECT_ZBUF_NO_WRITE 0x10A000118LL       /* ZBUF_1: the depth buffer, masked: no depth writes */
+#define EFFECT_ZBUF_WRITE 0xA000118LL            /* ZBUF_1: the depth buffer, written */
 #define EFFECT_ALPHA_ADD 0x48                   /* ALPHA_1: Cs * As + Cd */
 #define EFFECT_ALPHA_SUBTRACT 0x42              /* ALPHA_1: Cd - Cs * As */
 #define EFFECT_ALPHA_BLEND 0x44                 /* ALPHA_1: (Cs - Cd) * As + Cd */
-#define EFFECT_ALPHA_OPAQUE 0x80000000A8L       /* ALPHA_1: Cs (FIX 0x80) */
+#define EFFECT_ALPHA_OPAQUE 0x80000000A8LL       /* ALPHA_1: Cs (FIX 0x80) */
 #define EFFECT_TEST_COLOUR_DEPTH 0x53001        /* TEST_1: colour only (alpha test NEVER, AFAIL RGB_ONLY), depth test GEQUAL */
 #define EFFECT_TEST_COLOUR_ON_TOP 0x33001       /* TEST_1: colour only, depth test ALWAYS */
 #define EFFECT_TEST_CUTOUT_DEPTH 0x5000D        /* TEST_1: pixels with alpha above 0, depth test GEQUAL */

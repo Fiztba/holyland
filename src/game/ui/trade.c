@@ -104,7 +104,7 @@ extern MenuItem *item_list_last_page;
 extern s32 item_list_count;
 extern void (*trade_handler)(HandlerContext *); /* the screen Trade_RunHandler runs */
 extern s32 menu_file_block_count;
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern sptr trade_menu_arena;
 void *memset(void *, int, u32);
 void func_001095D0(void);

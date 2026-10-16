@@ -73,7 +73,6 @@ extern int heap_file_handle;
 int File_Close(int file);
 extern s32 map_bank_file_read_step;
 extern s32 map_bank_file_handle;
-extern MapHeader *map_slot0_header[];
 int FlushCache(int);
 int sceCdBreak(void);
 extern int (*const bgm_load_steps[])(LoadJob *, s32);
@@ -1437,7 +1436,7 @@ s32 Sound_ReadMapBankFileStep(LoadRequest *request) {
             buffer = sound_heap_next;
             request->target->buffer = (void *)buffer;
             sound_heap_next = (((buffer + 0x2003F) >> 6) << 6);
-            sprintf(map_bank_file_path, request->name, map_slot0_header[0]->unk70);
+            sprintf(map_bank_file_path, request->name, map_slots[0].header->unk70);
             map_bank_file_handle = File_Open(map_bank_file_path, TRUE, TRUE);
             File_Read(map_bank_file_handle, request->target->buffer, -1);
             map_bank_file_read_step += 1;
@@ -2055,8 +2054,7 @@ static int Sound_RunMapBankLoad(void *sequence, int kind) {
 }
 
 /* Loads the sound bank of a map slot (MapSlot.sound_bank) a step a call while pending; returns 0 once it is done. */
-int Sound_LoadMapBankStep(int slot_addr, int pending) {
-    MapSlot *slot = (MapSlot *)slot_addr;
+int Sound_LoadMapBankStep(MapSlot *slot, int pending) {
     SoundBankInfo *bank;
 
     if (pending == 0) {

@@ -77,7 +77,7 @@ int Player_CollideWithMap(void) {
     if (step_bit) {
         if (player_state.step_remainder <= player_state.step_per_frame) {
             player_state.position.y -= player_state.step_remainder;
-            player_state.status_bits &= ~(0x8000L << 18);
+            player_state.status_bits &= ~(0x8000LL << 18);
             player_state.step_per_frame = 0.0f;
             player_state.step_remainder = 0.0f;
         } else {
@@ -176,11 +176,11 @@ int Player_CollideWithMap(void) {
                                 && COLLISION_RESULT->point[1] <= player_state.position.y + player_state.fall_speed
                                 && (!((s32)(player_state.status_bits >> 38) & 1) || COLLISION_RESULT->point[1] < player_state.water_surface_y)) {
                                 player_state.water_surface_y = COLLISION_RESULT->point[1];
-                                player_state.status_bits |= 0x8000L << 23;
+                                player_state.status_bits |= 0x8000LL << 23;
                                 if (COLLISION_RESULT->point[1] <= player_state.position.y - 220.0f) {
-                                    player_state.status_bits |= 0x8000L << 24;
+                                    player_state.status_bits |= 0x8000LL << 24;
                                 } else {
-                                    player_state.status_bits &= ~(0x8000L << 24);
+                                    player_state.status_bits &= ~(0x8000LL << 24);
                                 }
                             }
                             strip_point++;
@@ -226,7 +226,7 @@ int Player_CollideWithMap(void) {
             if (drop < 16.666666f) {
                 player_state.position.y = floor_height;
             } else {
-                player_state.status_bits |= 0x8000L << 18;
+                player_state.status_bits |= 0x8000LL << 18;
                 player_state.step_per_frame = 16.666666f;
                 player_state.position.y -= 16.666666f;
                 player_state.step_remainder = drop - 16.666666f + 5.0f;
@@ -239,15 +239,15 @@ int Player_CollideWithMap(void) {
         }
     }
     if (((s32)(player_state.status_bits >> 33) & 1) || found) {
-        player_state.status_bits &= ~(0x8000L << 19);
+        player_state.status_bits &= ~(0x8000LL << 19);
     }
     if (!((s32)(player_previous.status_bits >> 38) & 1) && ((s32)(player_state.status_bits >> 38) & 1)) {
         player_state.fall_speed = 0.0f;
-        player_state.status_bits &= ~(0x8000L << 19);
+        player_state.status_bits &= ~(0x8000LL << 19);
     }
     if (player_previous.ground_effect_kind != 4 && player_state.ground_effect_kind == 4) {
         player_state.fall_speed = 0.0f;
-        player_state.status_bits &= ~(0x8000L << 19);
+        player_state.status_bits &= ~(0x8000LL << 19);
     }
     if (player_state.ground_effect_active == 0) {
         player_state.ground_effect_frames = 0;
@@ -470,10 +470,10 @@ void Player_CollideWithEntities(int climb) {
                 player_state.position.y = old_position[1] - step;
                 player_state.step_remainder = rise - step + 5.0f;
                 player_state.step_per_frame = step;
-                player_state.status_bits |= 1L << 33;
+                player_state.status_bits |= 1LL << 33;
             }
             player_state.fall_speed = 0.0f;
-            player_state.status_bits &= ~(1L << 34);
+            player_state.status_bits &= ~(1LL << 34);
         }
     }
     for (entity = active_entities_head; entity != NULL; entity = entity->next) {
@@ -563,10 +563,10 @@ void Player_CollideWithMapObjects(s32 climb) {
                 player_state.position.y = old_position[1] - step;
                 player_state.step_remainder = rise - step + 5.0f;
                 player_state.step_per_frame = step;
-                player_state.status_bits |= 1L << 33;
+                player_state.status_bits |= 1LL << 33;
             }
             player_state.fall_speed = 0.0f;
-            player_state.status_bits &= ~(1L << 34);
+            player_state.status_bits &= ~(1LL << 34);
         } else {
             Vector_Copy(&player_state, old_position);
         }

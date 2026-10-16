@@ -307,10 +307,10 @@ int Debug_PickMap(int *map_id) {
     saved_colours[1] = game_dbuff_clear_color[30];
     saved_colours[2] = game_dbuff_context2_clear_color[0];
     saved_colours[3] = game_dbuff_context2_clear_color[30];
-    game_dbuff_clear_color[0] = 0xC000L << 17;
-    game_dbuff_clear_color[30] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
+    game_dbuff_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_clear_color[30] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
     do {
         Display_SwapBuffers(0);
         Pad_Update();
@@ -385,10 +385,10 @@ void Debug_EditIniNumber(int *value) {
     saved_colours[1] = game_dbuff_clear_color[30];
     saved_colours[2] = game_dbuff_context2_clear_color[0];
     saved_colours[3] = game_dbuff_context2_clear_color[30];
-    game_dbuff_clear_color[0] = 0xC000L << 17;
-    game_dbuff_clear_color[30] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
+    game_dbuff_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_clear_color[30] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
     do {
         Display_SwapBuffers(0);
         Pad_Update();

@@ -15,9 +15,8 @@ void SyncDCache(void *start, void *end);
 void *MenuHeap_Alloc(int);
 int File_OpenUnflagged(char *, int, int);
 
-extern GameStatus game_status;
 extern int save_loaded;
-extern s32 save_area_name_id[];
+extern GameStatus game_status;
 extern s32 player_state[];
 extern PlayTime current_play_time;
 
@@ -1337,7 +1336,7 @@ static void SaveCard_FillSaveInfo(void *unused_arg0, s32 index) {
     info = save_infos + index;
     info->exists = 1;
     info->damaged = 0;
-    info->numbers[0] = save_area_name_id[0];
+    info->numbers[0] = game_status.save_area;
     info->numbers[1] = player_state[20];
     info->numbers[2] = player_state[21];
     info->numbers[3] = player_state[45];

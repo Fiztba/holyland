@@ -1074,8 +1074,8 @@ void Player_FindFloorMaterial(void);
 void Player_CollideWithEntities(int);
 void Player_CollideWithMapObjects(int);
 
-#define PLAYER_FLAG_32 0x100000000L /* the view is levelling out */
-#define PLAYER_FLAG_37 0x2000000000L /* the view dips after a landing */
+#define PLAYER_FLAG_32 0x100000000LL /* the view is levelling out */
+#define PLAYER_FLAG_37 0x2000000000LL /* the view dips after a landing */
 
 #define STEP_LENGTH 25.0f
 
@@ -1608,7 +1608,7 @@ void Player_StopWalking(void) {
     player_state.look_speed = 0.0f;
     player_state.turn_speed = 0.0f;
     player_state.stride_phase = 0;
-    player_state.status_bits &= ~0x100000000L;
+    player_state.status_bits &= ~0x100000000LL;
 }
 
 /* The breath bar under water (status bit 39, which Player_CollideWithMap sets while the water surface, strip

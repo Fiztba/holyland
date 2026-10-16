@@ -32,7 +32,7 @@ int Message_SplitDigits(int, u8 *);
 void *memset(void *, int, u32);
 int vsprintf(char *, const char *, char *);
 
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern u16 pad_pressed[];
 extern u16 action_button;
 

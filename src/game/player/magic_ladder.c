@@ -470,7 +470,7 @@ void Ladder_Start(ObjectReference *object, int from_far_end) {
 /* Clears ladder approach state when the player is knocked off during a climb. */
 void Ladder_CancelApproach(void) {
     ladder_state_index = 0;
-    player_state.status_bits &= ~(1L << 36);
+    player_state.status_bits &= ~(1LL << 36);
 }
 
 /* Dispatches pad input to the ladder state handler when the player is on a ladder. */
@@ -501,13 +501,13 @@ void Ladder_WalkToFoot(void) {
 /* Waits on a rung; up/down input starts climbing or leaves the ladder. */
 void Ladder_WaitOnRung(u16 buttons) {
     if (!(ladder_object->unk10 & 0x10000)) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     if (buttons & (step_right_button | step_left_button)) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     if ((buttons & (turn_right_button | turn_left_button)) && !(buttons & (forward_button | back_button))) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     if (forward_button & buttons) {
         ladder_current_rung++;
@@ -527,7 +527,7 @@ void Ladder_WaitOnRung(u16 buttons) {
             return;
         }
     }
-    player_state.status_bits &= ~(1L << 36);
+    player_state.status_bits &= ~(1LL << 36);
 }
 
 /* Moves the player one rung up along a sine ease and plays a step sound. */
@@ -537,13 +537,13 @@ void Ladder_ClimbRungUp(u16 buttons) {
     f32 fraction;
 
     if (!(ladder_object->unk10 & 0x10000)) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     if (buttons & (step_right_button | step_left_button)) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     if ((buttons & (turn_right_button | turn_left_button)) && !(buttons & (forward_button | back_button))) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     ladder_rung_anim_frame++;
     angle = 1.9198622f;
@@ -567,13 +567,13 @@ void Ladder_ClimbRungDown(u16 buttons) {
     f32 fraction;
 
     if (!(ladder_object->unk10 & 0x10000)) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     if (buttons & (step_right_button | step_left_button)) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     if ((buttons & (turn_right_button | turn_left_button)) && !(buttons & (forward_button | back_button))) {
-        player_state.status_bits &= ~(1L << 36);
+        player_state.status_bits &= ~(1LL << 36);
     }
     ladder_rung_anim_frame--;
     angle = 1.6580628f;

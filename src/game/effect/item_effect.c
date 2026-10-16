@@ -12,7 +12,6 @@ extern LevelRecord weapon_level_records[];
 extern GameStatus game_status;
 extern PlayerState player_state;
 extern EventRunner view_ray_status;
-extern ItemUseEffectDef item_effect_defs_by_kind[];
 extern char item_effect_small_model_path[];
 extern char item_effect_small_motion_path[];
 extern char item_effect_large_model_path[];
@@ -215,7 +214,7 @@ void ItemEffect_Start(int kind, int marked) {
     }
     item_effect_pending_effects = item_effect_active = 1;
     item_effect_marked = marked;
-    item_effect_def = &item_effect_defs_by_kind[kind];
+    item_effect_def = &item_effect_defs[kind - 0x46]; /* item_effect_defs_by_kind[kind] */
     item_effect_kind = kind;
     item_effect_step = 0;
     if (kind >= 0x4D) {

@@ -5,21 +5,7 @@
 #define KF_FILE_H
 
 #include "common.h"
-
-typedef struct {
-    u8 trycount;
-    u8 spindlctrl;
-    u8 datapattern;
-    u8 pad;
-} sceCdRMode;
-
-typedef struct {
-    u32 lsn;
-    u32 size;
-    char name[16];
-    u8 date[8];
-    u32 flag;
-} sceCdlFILE;
+#include <libcdvd.h>
 
 /* one open file */
 typedef struct {
@@ -38,22 +24,28 @@ typedef struct {
 } KFFile;
 
 /* a KF4.DAT member */
+/* overlay: an entry of the KF4.DAT table of contents (archive_toc, read from disc) */
 typedef struct {
     char name[0x34];
     u32 size;
     int unk38;
     u32 offset;    /* bytes from the start of KF4.DAT */
 } KFDirEntry;
+LAYOUT_SIZE(KFDirEntry, 0x40);
+LAYOUT_OFFSET(KFDirEntry, offset, 0x3C);
 
+/* overlay: the header of the KF4.DAT table of contents (archive_toc, read from disc) */
 typedef struct {
     int unk0;
     u32 count;
     int lsn;                /* first sector of KF4.DAT */
     char pad[0x34];
 } KFDirHeader;
+LAYOUT_SIZE(KFDirHeader, 0x40);
+LAYOUT_OFFSET(KFDirHeader, lsn, 0x8);
 
 extern int file_layer_locked;   /* file layer locked */
-extern int D_00447000[2];       /* [1] the KF4.DAT header, [2] its entries, [3] the fade direction (core/game.c); 8 bytes keeps it $gp-relative */
+extern sptr D_00447000[4];      /* [1] the KF4.DAT header, [2] its entries, [3] the fade direction (core/game.c) */
 extern KFFile file_slots[2];
 extern char archive_toc[];       /* the KF4.DAT table of contents */
 
@@ -69,10 +61,5 @@ char *strcpy(char *, const char *);
 char *strcat(char *, const char *);
 int strcasecmp(const char *, const char *);
 void *memset(void *, int, u32);
-int sceCdSearchFile(sceCdlFILE *, const char *);
-int sceCdRead(int lsn, int sectors, void *buf, sceCdRMode *mode);
-int sceCdSeek(int lsn);
-int sceCdSync(int mode);
-int sceCdGetError(void);
 
 #endif

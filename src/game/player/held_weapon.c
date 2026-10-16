@@ -387,7 +387,7 @@ void Player_DrawArm(void) {
         Packet_BeginGsRegisters();
         Packet_AddGsRegister(GS_REG_ALPHA_1, weapon_trail_kinds[trail_kind].blend);
         Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
         Packet_EndGsRegisters();
         clipped = 6;
         size = count * 2 + 1;
@@ -396,8 +396,8 @@ void Player_DrawArm(void) {
         packet += 7;
         *packet++ = size | 0x51000000;
         /* GIF tag: count vertices of two registers each, a shaded, blended triangle strip */
-        tag = count | 0x8000 | (0x8000L << 46);
-        tag |= 0x9900L << 38; // match: a second statement, or the two constants fold into one
+        tag = count | 0x8000 | (0x8000LL << 46);
+        tag |= 0x9900LL << 38; // match: a second statement, or the two constants fold into one
         *(u64 *)packet = tag;
         packet += 2;
         *(u64 *)packet = 0x51; /* the registers: RGBAQ, XYZ2 */

@@ -235,7 +235,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
             }
         }
     }
-    if ((UNK1B1470_REQUEST_UNIT(request) & (0xC000L << 29)) == (0xC000L << 29)) {
+    if ((UNK1B1470_REQUEST_UNIT(request) & (0xC000LL << 29)) == (0xC000LL << 29)) {
         kind = 0;
     } else if (request->target_mask & 8) {
         kind = 1;
@@ -748,9 +748,9 @@ void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra) {
 
     if (owner >= entity_pool[0] && owner < (Entity *)entity_pool_slots) {
         if (extra->is_magic_shot == 0) {
-            owner->flags |= 0x8000L << 26;
+            owner->flags |= 0x8000LL << 26;
         } else {
-            owner->flags |= 0x8000L << 27;
+            owner->flags |= 0x8000LL << 27;
         }
     }
     if (player_state.hp_now == 0) {
@@ -881,7 +881,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
         if (entity->hit_cooldown_frames != 0) {
             return;
         }
-        entity->flags |= 0x8000L << 28;
+        entity->flags |= 0x8000LL << 28;
         entity->hit_cooldown_frames = 15;
         printf(last_boss_hits_format, dark_one_hits_left);
         if (!by_weapon) {
@@ -914,7 +914,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
 
     // match: the range test (not one of the entities) is always true for the player
     if (IS_PLAYER(owner) && (owner < entity_pool[0] || owner > &entity_pool_last)) {
-        entity->flags |= 0x8000L << 28;
+        entity->flags |= 0x8000LL << 28;
     }
     if (extra->is_magic_shot == 1) {
         entity->stun_frames = request->stun_frames;

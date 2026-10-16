@@ -903,9 +903,9 @@ typedef struct {
 #define EFFECT_COLOUR(effect) ((EffectActorColour *)(effect))
 
 /* EffectActor.flags bits */
-#define EFFECT_FLAG_LIVE (0x8000L << 41)           /* bit 56: the actor is in use */
-#define EFFECT_FLAG_HAS_SLOTS (0x8000L << 42)      /* bit 57: free its spawner slots with it */
-#define EFFECT_FLAG_HAS_TARGETERS (0x8000L << 43)  /* bit 58: free the effects aimed at it with it */
+#define EFFECT_FLAG_LIVE (0x8000LL << 41)           /* bit 56: the actor is in use */
+#define EFFECT_FLAG_HAS_SLOTS (0x8000LL << 42)      /* bit 57: free its spawner slots with it */
+#define EFFECT_FLAG_HAS_TARGETERS (0x8000LL << 43)  /* bit 58: free the effects aimed at it with it */
 
 /* effect_table[effect id]: an effect's definition-table entry (0x120 bytes) */
 typedef struct {
@@ -963,7 +963,7 @@ typedef struct {
 } EffectSlot;
 
 /* EffectSlot.flags bit 32: the slot is in use */
-#define EFFECT_SLOT_LIVE (0x8000L << 17)
+#define EFFECT_SLOT_LIVE (0x8000LL << 17)
 
 /* EffectSlot.flags as the bit-fields the game writes */
 typedef struct {
