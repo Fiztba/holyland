@@ -17,6 +17,9 @@
 #include "gfx/gs.h"
 #include "save/save_card.h"
 #include "ui/menu_screens.h"
+#include <libvu0.h>
+#include <stdio.h>
+#include <string.h>
 
 extern u8 item_counts[380];
 extern LevelDef item_name_defs[380];
@@ -68,8 +71,7 @@ extern s32 owned_list_count;
             LINK_ITEM(&(nodes)[i], item_list_page_mark)                                                                     \
         }                                                                                                          \
     }
-int sceGsSyncPath(int, int);
-int sceGsSyncV(int);
+int sceGsSyncV(int mode); /* PORT: as libgraph.h has it, which cannot be included while gfx/packet.h declares SDK functions */
 void Vram_Clear(int, int);
 void Sound_MutePositional(void);
 void Sound_UnmutePositional(void);
@@ -106,7 +108,6 @@ extern void (*trade_handler)(HandlerContext *); /* the screen Trade_RunHandler r
 extern s32 menu_file_block_count;
 extern sptr menu_heap;
 extern sptr trade_menu_arena;
-void *memset(void *, int, u32);
 void func_001095D0(void);
 void func_001095D8(void);
 void Packet_SwapBuffers(void);
@@ -171,9 +172,6 @@ extern s32 D_00446E2C;
 extern s32 D_00446E3C;
 extern s32 D_00446E80;
 extern s8 trade_panel_state;        /* the panel's fade: 0 in, 1 open, 2 out and close, 3 out */
-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0TransMatrix(float *, float *, float *);
 void Menu_DrawItemModel(f32 *);
 int Menu_IsEquipSlotFilled(s32, u32);
 s32 MenuText_SetColor(ColorBytes bytes);
@@ -219,7 +217,6 @@ extern f32 trade_owned_list_model_angle;
 extern f32 trade_give_amount_model_position[4];
 extern f32 trade_give_amount_model_angle;
 void Menu_ClearEquipSlot(s8);
-int sprintf(char *, char *, ...);
 extern char model_name_shown[];           /* the names of the five link nodes at model_load_shown */
 extern char model_name_up[];
 extern char model_name_down[];
@@ -840,22 +837,22 @@ static void Trade_ChainModels(void) {
         Menu_TakeLoadBuffer(&model_load_left);
         Menu_TakeLoadBuffer(&model_load_right);
         model_load_shown.next = &model_load_up;
-        model_load_shown.callback = Menu_StepModelLoad;
+        model_load_shown.callback = (void (*)(void))Menu_StepModelLoad;
         model_load_shown.unk20 = 0;
         model_load_up.next = &model_load_down;
-        model_load_up.callback = Menu_StepModelLoad;
+        model_load_up.callback = (void (*)(void))Menu_StepModelLoad;
         model_load_up.unk20 = 0;
         model_load_up.unk1C = 0;
         model_load_down.next = &model_load_left;
-        model_load_down.callback = Menu_StepModelLoad;
+        model_load_down.callback = (void (*)(void))Menu_StepModelLoad;
         model_load_down.unk20 = 0;
         model_load_down.unk1C = 0;
         model_load_left.next = &model_load_right;
-        model_load_left.callback = Menu_StepModelLoad;
+        model_load_left.callback = (void (*)(void))Menu_StepModelLoad;
         model_load_left.unk20 = 0;
         model_load_left.unk1C = 0;
         model_load_right.next = NULL;
-        model_load_right.callback = Menu_StepModelLoad;
+        model_load_right.callback = (void (*)(void))Menu_StepModelLoad;
         model_load_right.unk20 = 0;
         model_load_shown.unk1C = model_load_right.unk1C = 0;
         model_load_chain = &model_load_shown;
@@ -1028,7 +1025,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
     SpritePacket *packets;
     u32 full_alpha;
     u32 count;
-    s32 texts;
+    sptr texts;
     s32 text_offset;
 
     if (trade_stock_list_cursor[0] == NULL) {
@@ -1130,7 +1127,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
             break;
         }
         MenuText_SetPen(position);
-        MenuText_DrawWrapped(label, 10);
+        MenuText_DrawWrapped((u16 *)label, 10);
     }
 
     MenuText_SetColor(menu_draw_color);
@@ -1326,7 +1323,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
     position.raw = 0x000A875083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
-        MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
+        MenuText_DrawWordWrappedLong((u16 *)(texts + text_offset), 0x33);
     }
 
     if (modal_input_locked == 0) {
@@ -1447,7 +1444,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
     SpritePacket *packets;
     u32 count;
     MenuItem *current;
-    s32 texts;
+    sptr texts;
     s32 text_offset;
     f32 angle;
 
@@ -1712,7 +1709,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
     MenuText_SetColor(menu_draw_color);
     position.raw = 0x0A2DC6C07DB078C0LL;
     MenuText_SetPen(position);
-    MenuText_DrawLineCentered(chosen, 0x18);
+    MenuText_DrawLineCentered((u16 *)chosen, 0x18);
     if (context->arg == 4) {
         position.raw = 0x000DBBA079E08A30LL;
         label_position.raw = 0x000DBBA081807C60LL;
@@ -1732,9 +1729,9 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
             label = claws_label;
             break;
         }
-        MenuText_DrawWrapped(label, 10);
+        MenuText_DrawWrapped((u16 *)label, 10);
         MenuText_SetPen(label_position);
-        MenuText_DrawWrapped(label, 10); // match: the same label a second time
+        MenuText_DrawWrapped((u16 *)label, 10); // match: the same label a second time
     }
 
     current = trade_stock_list_cursor[0];
@@ -1744,7 +1741,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
     position.raw = 0x000F424083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
-        MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
+        MenuText_DrawWordWrappedLong((u16 *)(texts + text_offset), 0x33);
     }
 
     if (modal_input_locked == 0) {
@@ -1908,7 +1905,7 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
     s32 worn;
     SpritePacket *packets;
     u32 count;
-    s32 texts;
+    sptr texts;
     s32 text_offset;
     s32 group;
 
@@ -2149,7 +2146,7 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
     position.raw = 0x000A875083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
-        MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
+        MenuText_DrawWordWrappedLong((u16 *)(texts + text_offset), 0x33);
     }
 
     if (modal_input_locked == 0) {
@@ -2258,7 +2255,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
     SpritePacket *packets;
     u32 count;
     MenuItem *current;
-    s32 texts;
+    sptr texts;
     s32 text_offset;
     f32 angle;
 
@@ -2491,7 +2488,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
     MenuText_SetColor(menu_draw_color);
     position.raw = 0x0A2DC6C07DB078C0LL;
     MenuText_SetPen(position);
-    MenuText_DrawLineCentered(chosen, 0x18);
+    MenuText_DrawLineCentered((u16 *)chosen, 0x18);
 
     current = item_list_cursor[0];
     texts = Message_GetFontText(menu_heap);
@@ -2500,7 +2497,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
     position.raw = 0x000A875083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
-        MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
+        MenuText_DrawWordWrappedLong((u16 *)(texts + text_offset), 0x33);
     }
 
     if (modal_input_locked == 0) {
@@ -3352,7 +3349,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
     s32 row;
     s32 number;
     s32 index;
-    s32 table;
+    sptr table;
     s32 entry;
     s32 variant;
     f32 angle;
@@ -3599,7 +3596,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
     word.raw = 0x000A875083207080;
     MenuText_SetPen(word);
     if (entry != 0) {
-        MenuText_DrawWordWrappedLong(table + entry, 0x33);
+        MenuText_DrawWordWrappedLong((u16 *)(table + entry), 0x33);
     }
     if ((menu_buttons & 0x4000) && modal_input_locked == 0) {
         if ((item_list_cursor[0]->unk0C < 220 ? GetWeaponLevel(item_list_cursor[0]->unk0C - 150) < 100
@@ -3706,7 +3703,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
     s32 row;
     s32 number;
     s32 index;
-    s32 table;
+    sptr table;
     s32 entry;
     s32 variant;
     f32 angle;
@@ -3926,7 +3923,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
     MenuText_SetColor(menu_draw_color);
     word.raw = 0x0A2DC6C07F5078C0;
     MenuText_SetPen(word);
-    MenuText_DrawLineCentered(selected_def, 0x18);
+    MenuText_DrawLineCentered((u16 *)selected_def, 0x18);
     selected = item_list_cursor[0];
     table = Message_GetFontText(menu_heap);
     text_index = selected->unk0C + MSG_ITEM_TEXT_FIRST + 1;
@@ -4085,7 +4082,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
     s32 row;
     s32 number;
     s32 index;
-    s32 table;
+    sptr table;
     s32 entry;
     s32 variant;
     f32 angle;
@@ -4563,7 +4560,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
     s32 line_offset;
     s32 number;
     s32 index;
-    s32 table;
+    sptr table;
     s32 entry;
     s32 variant;
     f32 angle;
@@ -4767,7 +4764,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
     word.raw = 0x000A875083207080LL;
     MenuText_SetPen(word);
     if (entry != 0) {
-        MenuText_DrawWordWrappedLong(table + entry, 0x33);
+        MenuText_DrawWordWrappedLong((u16 *)(table + entry), 0x33);
     }
     if (modal_input_locked == 0) {
         if (menu_buttons & 0x4000) {
@@ -4869,7 +4866,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
     s32 row;
     s32 number;
     s32 index;
-    s32 table;
+    sptr table;
     s32 entry;
     s32 variant;
     f32 angle;
@@ -5114,7 +5111,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
     word.raw = 0x000A875083207080;
     MenuText_SetPen(word);
     if (entry != 0) {
-        MenuText_DrawWordWrappedLong(table + entry, 0x33);
+        MenuText_DrawWordWrappedLong((u16 *)(table + entry), 0x33);
     }
     if (modal_input_locked == 0) {
         if (menu_buttons & 0x4000) {
@@ -5493,7 +5490,7 @@ static int SaveScreen_Start(HandlerContext *context) {
     *D2_CHCR = 0x100;
     Menu_InitLoadBuffers();
     // match: taking the handler first orders its lui before the save screen's
-    next_handler = SaveScreen_UpdateCardSelect;
+    next_handler = (int (*)())SaveScreen_UpdateCardSelect;
     screen = &save_screen_state;
     screen->dialog_id = -1;
     screen->card_update_result = 0;
@@ -6067,7 +6064,7 @@ static void SaveScreen_UpdateSaveList(void) {
                 text = (char *)table + kind;
                 MenuText_SetPen(word);
                 MenuText_SetColor(menu_draw_color);
-                MenuText_DrawWrapped((TradeValue *)text, 0x18);
+                MenuText_DrawWrapped((u16 *)text, 0x18);
             }
         }
         word.f.mid16 += 0x340;
