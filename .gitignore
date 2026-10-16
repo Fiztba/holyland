@@ -41,3 +41,6 @@ __pycache__/
 
 # --- PC port build output ---
 out/
+
+# --- tools/patches.py working copy ---
+work/
