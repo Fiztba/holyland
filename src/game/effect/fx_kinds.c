@@ -9,6 +9,10 @@
 #include "core/game.h"
 #include "model/linked_point.h"
 #include "collision/collision.h"
+#include <stdlib.h>
+#include <string.h>
+#include <libvu0.h>
+#include <sifrpc.h>
 
 #define TWO_PI 6.2831855f
 #define PI 3.1415927f
@@ -21,8 +25,6 @@ void Vector_Copy(void *dst, void *src);
 void Vector_Add(void *dst, void *lhs, void *rhs);
 void Vector_Scale(void *dst, void *src, float scale);
 void Vector_Subtract(void *dst, void *lhs, void *rhs);
-void sceVu0RotMatrixY(void *, void *, float);
-void sceVu0ApplyMatrix(void *, void *, void *);
 /* Wraps an angle into -pi..pi. */
 static inline f32 wrap_angle(f32 angle) {
     angle = angle - (float)(int)(angle / TWO_PI) * TWO_PI;
@@ -35,20 +37,15 @@ static inline f32 wrap_angle(f32 angle) {
 }
 s16 Effect_FramesToImpact(float, void *, void *, void *);
 void EffectHit_CheckAndEnd(EffectActor *effect, void *state);
-void sceVu0AddVector(void *, void *, void *);
 extern int ground_fan_index;
 int Collision_FindFloorBelow(f32, void *);
 typedef float Mat[4][4] __attribute__((aligned(16)));
-int rand(void);
-void sceVu0RotMatrixX(void *, void *, float);
 void Vector_Normalize(void *, void *);
 extern void (*effect_kind_handlers[][2])();
 extern u8 player_weapon[];
 extern int bolt_start_count;
 void Model_UpdateSkinnedBonePoints(ModelInstance *);
 char *Model_GetSkinnedBonePoint(char *, u32);
-void sceVu0RotMatrixZ(void *, void *, float);
-void *memset(void *, int, u32);
 extern int turn_fan_index;
 void Collision_CastRayAtMap(f32, void *, void *);
 int Sound_PlayMapAt(u8 sound, float *position);

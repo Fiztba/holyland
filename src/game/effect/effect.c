@@ -7,13 +7,12 @@
 #include "core/memory.h"
 #include "player/player.h"
 #include "gfx/screen.h"
+#include <stdio.h>
+#include <string.h>
+#include <eekernel.h>
+#include <libgraph.h>
+#include <sifrpc.h>
 
-void *memset(void *, int, u32);
-int printf(const char *, ...);
-int FlushCache(int);
-int sceGsSyncPath(int, int);
-void sceGsSetDefStoreImage(void *, s16, s16, s16, s16, s16, s16, s16);
-void sceGsExecStoreImage(void *, void *);
 char *Texture_UploadTable(char *base, int upload);
 void Texture_SendTexFlush(void);
 void Vector_Copy(void *dst, void *src);

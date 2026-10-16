@@ -5,6 +5,12 @@
 #include "gfx/gs.h"
 #include "core/memory.h"
 #include "core/timer.h"
+#include <stdio.h>
+#include <eekernel.h>
+#include <libgraph.h>
+#include <libvu0.h>
+#include <sifdev.h>
+#include <sifrpc.h>
 
 extern char ioprp_image_path[];         /* "cdrom0:\IOPRP224.IMG;1" */
 /* the paths of the nine IOP modules, "cdrom0:\IOP\SIO2MAN.IRX;1" and so on */
@@ -28,18 +34,7 @@ extern int context1_buffer_half;              /* the half of the first double bu
 extern int context2_buffer_half;              /* the same for the second */
 extern int vsync_even_field;        /* TRUE when the last vsync was of field 0 */
 
-void sceSifInitRpc(int);
 void File_InitDrive(void);
-int sceSifRebootIop(const char *);
-int sceSifSyncIop(void);
-void sceFsReset(void);
-int sceSifLoadModule(const char *, int, const char *);
-int printf(const char *, ...);
-void sceVu0UnitMatrix(f32 (*)[4]);
-int FlushCache(int);
-int sceGsSetHalfOffset(void *, int, int, s16);
-int sceGsSwapDBuff(void *, int);
-int sceGsSyncV(int);
 
 
 /* Reboots the IOP with IOPRP224.IMG and loads the nine IOP modules (pad, memory card, sound and file I/O). */

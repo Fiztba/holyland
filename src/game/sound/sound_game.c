@@ -10,6 +10,13 @@
 #include "map/map.h"
 #include "effect/effect.h"
 #include "sound/sound_game.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <eekernel.h>
+#include <libcdvd.h>
+#include <libmpeg.h>
 
 int File_IsLocked(void);
 int File_Sync(int, int);
@@ -32,7 +39,6 @@ extern u8 loaded_bgm;
 extern u8 bgm_load_running;
 extern s8 positional_sounds_muted;
 extern u8 loading_bgm;
-void *memset(void *, int, u32);
 extern u8 game_options[];
 extern f32 sound_cos_polynomial[4];
 extern u8 voice_ranges[][2];
@@ -45,9 +51,6 @@ extern int bgm_fade_level;
 extern void *tracked_sound_players[];
 extern PlayerState player_state;
 extern u8 sfx_volume[];
-double sqrt(double);
-int rand(void);
-float atan2f(float, float);
 extern int tagged_bend;
 extern int tagged_bend_high;
 extern int tagged_bend_low;
@@ -59,7 +62,6 @@ extern int bgm_bd_size;
 extern int sound_heap_next;
 void File_Lock(void);
 int File_GetSize(int);
-int sprintf(char *, char *, ...);
 void File_Unlock(void);
 extern int bgm_header_buffer[];
 extern int bgm_hd_size;
@@ -73,8 +75,6 @@ extern int heap_file_handle;
 int File_Close(int file);
 extern s32 map_bank_file_read_step;
 extern s32 map_bank_file_handle;
-int FlushCache(int);
-int sceCdBreak(void);
 extern int (*const bgm_load_steps[])(LoadJob *, s32);
 extern char rev_para_path[];
 extern s32 sound_file_load_step;

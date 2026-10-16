@@ -358,6 +358,7 @@ typedef struct {
 } PlayerArmPoints;
 
 /* an item_arm file (the model the player holds): up to three parts, each present when its size is not 0 */
+/* overlay: the header of an item_arm file */
 typedef struct {
     s32 texture_size;               /* 0x00 */
     s32 model_size;                 /* 0x04 */
@@ -367,6 +368,8 @@ typedef struct {
     s32 model_offset;               /* 0x18 */
     s32 motion_offset;              /* 0x1C */
 } PlayerArmFile;
+LAYOUT_SIZE(PlayerArmFile, 0x20);
+LAYOUT_OFFSET(PlayerArmFile, texture_offset, 0x14);
 
 /* item_name_defs[ITEM_COUNT]: param/item_nam.prm, 0x40 bytes per item, starting with its name. worn_name_defs is
    the run of them from ITEM_WORN_FIRST on (the items Attack_WearWornItem reads). */

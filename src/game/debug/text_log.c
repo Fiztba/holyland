@@ -3,11 +3,10 @@
 #include <eeregs.h>
 #include <libdma.h>
 #include <libgraph.h>
+#include <stdio.h>
+#include <string.h>
+#include <eekernel.h>
 
-int FlushCache(int);
-int vsprintf(char *, const char *, char *);
-u32 strlen(char *);
-void *memcpy(void *, const void *, u32);
 
 char text_log_font_palette[0x40] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

@@ -4,10 +4,11 @@
 #include "common.h"
 #include "effect/effect.h"
 #include "entity/entity.h"
+#include <math.h>
+#include <stdlib.h>
+#include <libvu0.h>
 
 void Vector_Copy(void *, void *);
-void sceVu0ScaleVectorXYZ(void *, void *, float);
-void sceVu0AddVector(void *, void *, void *);
 /* Wraps an angle into -pi..pi. */
 static inline f32 wrap_angle(f32 angle) {
     angle = angle - (float)(int)(angle / 6.2831855f) * 6.2831855f;
@@ -19,15 +20,7 @@ static inline f32 wrap_angle(f32 angle) {
     return angle;
 }
 int Attack_RunEffectHitCheck(void *effect);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, float *, float *);
 extern f32 identity_matrix[16];
-float sqrtf(float);
-float atan2f(float, float);
-int rand(void);
-double sin(double);
-double cos(double);
 #define TWO_PI 6.2831855f
 #define PI 3.1415927f
 void Vector_Normalize(void *dst, void *src);

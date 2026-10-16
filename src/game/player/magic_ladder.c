@@ -3,10 +3,9 @@
 #include "effect/effect.h"
 #include "effect/shot.h"
 #include "entity/entity.h"
+#include <math.h>
+#include <string.h>
 
-void *memset(void *, s32, u32);
-float sqrtf(float);
-float sinf(float);
 
 extern PlayerState player_state;
 extern PlayerState player_previous;

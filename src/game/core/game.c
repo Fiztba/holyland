@@ -10,6 +10,10 @@
 #include "libvu0.h"
 #include "ui/menu_screens.h"
 #include "ui/message.h"
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libvu0.h>
 
 extern u8 game_options[0x10];             /* the options (Game_SetDefaultOptions sets their defaults) */
 extern u8 map_script_flags[0x2000];
@@ -56,7 +60,6 @@ extern char current_play_time[8];
 extern int fade_frames_left;                  /* frames of the fade left */
 extern int fade_frames;                  /* frames the fade takes */
 
-void *memcpy(void *, const void *, u32);
 void GsDraw_FillScreen(int, int, int, int, int);
 extern int haze_layer_depths[8];               /* the screen depth of each haze layer */
 extern u32 haze_layer_distances[8];               /* the distances of the haze layers, nearest last */
@@ -82,11 +85,7 @@ static int wobble_grid_previous[8][11][2];     /* 0x467C00 the points of the fra
 static float wobble_grid_forces[8][11][2];   /* 0x467EC0 the force on each point */
 static int fade_color[3];            /* 0x468180 the fade colour */
 
-float sqrtf(float);
-int rand(void);
 u32 fptoui(float);
-void sceVu0TransMatrix(void *, void *, void *);
-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
 void Vu0_LoadMatrix(void *);
 void Vu0_ProjectToScreen(int *, void *);
 void Vector_MultiplyComponents(float *, float *, float *);

@@ -4,21 +4,15 @@
 #include "collision/collision.h"
 #include "player/player.h"
 #include "math/vu0.h"
+#include <math.h>
+#include <stdlib.h>
+#include <libvu0.h>
 
 extern PlayerState player_state;
 extern f32 identity_matrix[16];
 extern Entity *active_entities_head;
 extern int floor_skim_spawn_count;
 
-int rand(void);
-double sin(double);
-double cos(double);
-double sqrt(double);
-void sceVu0AddVector(void *, void *, void *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
-void sceVu0ApplyMatrix(void *, void *, void *);
 char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
 void EffectHit_CheckAndEnd(EffectActor *effect, s8 *state);
 int EffectHit_CheckAndEndByFlag(EffectActor *effect, s8 *state);

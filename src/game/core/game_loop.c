@@ -19,6 +19,11 @@
 #include "player/magic_ladder.h"
 #include "ui/menu_screens.h"
 #include "gfx/packet.h"
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libgraph.h>
+#include <libvu0.h>
 
 void Game_ResetProgress(void);
 void Player_ResetForNewGame(void);
@@ -73,7 +78,6 @@ void GameLoop_UpdatePause(void);
 void Input_StopRumble(void);
 void Sound_SetBgmVolume(int);
 void Sound_SetBankVolumes(int);
-int sceGsSyncV(int);
 int Sound_BgmLoadCanYield(void);
 void File_CloseAll(void);
 void Wobble_AdvanceSines(void);
@@ -107,24 +111,12 @@ void Game_DrawFade(void);
 void Game_ApplyBrightness(int);
 void func_001095D8(void);
 MapRecordInfo *Map_FindRecordAtInSlot(CameraState *, f32, int);
-int rand(void);
 float Angle_Wrap(float);
-void sceVu0CopyMatrix(void *, void *);
-void sceVu0RotMatrixZ(float *, float *, float);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, int *, float *);
 void Vector_Copy(void *, void *);
 void Vector_Scale(float *, float *, float);
 void Vector_Subtract(void *, void *, void *);
 void Vector_Add(void *, void *, void *);
 int Angle_Approach(float *, float, float);
-float atan2f(float, float);
-float sqrtf(float);
-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0InversMatrix(void *, void *);
-void sceVu0MulMatrix(void *, void *, void *);
 void Sound_StopAll(int);
 int Sound_LoadMapBankStep(MapSlot *, int);
 int Sound_LoadEntityBankStep(int, int, int);
@@ -144,7 +136,6 @@ void MapViewer_Run(void);
 void File_Lock(void);
 void MapLoad_Release(void);
 void GameLoop_ClearBothBuffers(void);
-void *memset(void *, int, u32);
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int, s64);
 void Packet_EndGsRegisters(void);

@@ -5,6 +5,9 @@
 #define KF_FILE_H
 
 #include "common.h"
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
 #include <libcdvd.h>
 
 /* one open file */
@@ -54,12 +57,5 @@ int File_Close(int fd);
 int File_Read(int fd, void *buf, int size);
 int File_Sync(int fd, int mode);
 int File_Open(char *name, int nowait, int pack);
-
-int printf(const char *, ...);
-int puts(const char *);
-char *strcpy(char *, const char *);
-char *strcat(char *, const char *);
-int strcasecmp(const char *, const char *);
-void *memset(void *, int, u32);
 
 #endif

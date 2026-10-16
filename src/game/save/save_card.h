@@ -67,6 +67,7 @@ typedef struct {
 
 /* one record of the list file, which holds three (0x180 bytes each): what the save list shows of a save.
    CardSaveInfo in ui/menu.h is the menu's view of the same record. */
+/* save: a record of the list file on the memory card */
 typedef struct {
     char exists;                    /* 0x00 */
     char damaged;                   /* 0x01 the list names the save but its file is gone, or writing it failed */
@@ -75,6 +76,9 @@ typedef struct {
     char pad2C[0x14C];
     PlayTime play_time;             /* 0x178 */
 } SaveInfo;
+LAYOUT_SIZE(SaveInfo, 0x180);
+LAYOUT_OFFSET(SaveInfo, numbers, 0x04);
+LAYOUT_OFFSET(SaveInfo, play_time, 0x178);
 
 /* Starts the memory card library and clears both task records. Returns -1 when the library does not start. */
 s32 SaveCard_Init(void);

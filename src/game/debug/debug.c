@@ -2,10 +2,10 @@
 #include "core/game.h"
 #include "input/pad.h"
 #include "ui/message.h"
+#include <stdio.h>
 
 static PadReport *debug_pad; /* 0x447108 the controller report the editors read; nothing in the retail game sets it */
 
-int sprintf(char *, const char *, ...);
 extern char debug_cursor_mark[];
 extern char debug_cursor_blank[];
 static char debug_cursor_marks[0x68]; /* 0x5742E0 the strings the debug menus draw, four bytes apart */

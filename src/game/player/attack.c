@@ -6,6 +6,10 @@
 #include "player/magic_ladder.h"
 #include "map_object/map_object.h"
 #include "effect/effect.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define IS_PLAYER(owner) ((owner) == (Entity *)&player_state)
 #define LARGER(first, second) ((first) < (second) ? (second) : (first))
@@ -24,7 +28,7 @@
     if (strength - whole > 0.001f) { \
         (dest) = whole + 1; \
     }
-#define SHOT_REQUEST ((Unk1B1470Request *)shot->attack_request)
+#define SHOT_REQUEST ((Unk1B1470Request *)(sptr)shot->attack_request)
 
 s32 Attack_RunSphere(Unk1B1470Request *, Unk1B1470Extra *);
 int func_001B1B80(void);
@@ -33,10 +37,9 @@ s32 Attack_RunSwept(Unk1B1470Request *, Unk1B1470Extra *);
 void Attack_HitPlayer(Unk1B1470Request *, Unk1B1470Extra *);
 void Attack_HitEntity(Unk1B1470Request *, Unk1B1470Extra *, Entity *, f32);
 void Attack_HitMapObject(Unk1B1470Request *, Unk1B1470Extra *, MapObject *);
-int Attack_HitMap(Unk1B1470Request *, Unk1B1470Extra *);
+void Attack_HitMap(Unk1B1470Request *, Unk1B1470Extra *);
 void Collision_HitSphereObj(MapObject *, f32 *, f32);
 void Collision_SphereCylinder(void *, void *, f32, f32, f32);
-float sqrtf(float);
 void Vector_Scale(float *, float *, float);
 void Vector_Subtract(void *, void *, void *);
 void Vector_Copy(void *, void *);
@@ -53,9 +56,6 @@ void Attack_WearArmorFromHit(int, Unk1B1470Request *);
 void Player_TakeDamage(int);
 void Player_KnockBackFromHit(void *, int);
 void Player_TiltViewFromHit(int);
-int rand(void);
-int printf(const char *, ...);
-float atan2f(float, float);
 int Attack_StrengthDamage(int, int, int, int);
 void Attack_RollEntityAilments(Entity *, EntityParamsUnk240PartUnk12 *);
 void Attack_WearWeapon(int, int);
@@ -70,7 +70,6 @@ void Attack_WearWornItem(int idx, int amount);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 int File_Close(int);
-void *memset(void *, int, u32);
 s32 Attack_Run(Unk1B1470Request *, Unk1B1470Extra *);
 
 // match: declared without a size, so it is not addressed through $gp
@@ -220,7 +219,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
                     if (!(body->unk00.flags & ENTITY_BODY_USED)) {
                         continue;
                     }
-                    point = (void *)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
+                    point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
                     if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
                         Collision_SphereCylinder(point, request, body->unk04 * scale, body->unk06 * ENTITY_MODEL(entity)->scale_y,
                                       request->radius);
@@ -267,8 +266,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
                 }
                 result = swing_hit_checks[kind](record->model, request, reach);
                 if (COLLISION_RESULT->hit != 0) {
-                    // match: called as void, retail reuses $2 at once
-                    ((void (*)(Unk1B1470Request *, Unk1B1470Extra *))Attack_HitMap)(request, extra);
+                    Attack_HitMap(request, extra);
                     switch (result) {
                     case 1:
                         result = 8;
@@ -381,7 +379,7 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
                     if (!(body->unk00.flags & ENTITY_BODY_USED)) {
                         continue;
                     }
-                    point = (void *)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
+                    point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
                     if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
                         if (IS_PLAYER(request->owner)) {
                             Collision_CylinderArcPitch(point, request, body->unk04 * width_scale, body->unk06 * ENTITY_MODEL(entity)->scale_y,
@@ -456,6 +454,26 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
     return 0;
 }
 
+/* vmulax/vmadday/vmaddaz/vmaddw with the matrix Vu0_LoadMatrix left in vf1-vf4: one point of a map model
+   into world space (the VU0 blocks of the three map-model tests) */
+static void Attack_ApplyVu0Matrix(Vector4 *world, Vector4 *local) {
+    f32 *in = (f32 *)local;
+    f32 *out = (f32 *)world;
+    f32 acc;
+    int c;
+
+    for (c = 0; c < 4; c++) {
+        acc = ee_vu0.vf[1][c] * in[0];
+        acc = acc + ee_vu0.vf[2][c] * in[1];
+        acc = acc + ee_vu0.vf[3][c] * in[2];
+        ee_vu0.vf[16][c] = acc + ee_vu0.vf[4][c] * in[3];
+    }
+    out[0] = ee_vu0.vf[16][0];
+    out[1] = ee_vu0.vf[16][1];
+    out[2] = ee_vu0.vf[16][2];
+    out[3] = ee_vu0.vf[16][3];
+}
+
 /* Tests a hit's sphere against four of a map model's strip lists (0, 1, 2 and 5). When it
    touches a triangle the result is left in the scratchpad and the list's number returned. */
 int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
@@ -475,58 +493,24 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
     mesh = (CollisionMeshLists *)model->strips;
     COLLISION_RESULT->hit = 0;
     if (mesh == NULL) {
-        return;
+        return 0;
     }
     if (((CollisionMesh *)mesh)->point_count < 4) {
-        return;
+        return 0;
     }
     Vu0_LoadMatrix(model->model_matrix);
     count = ((CollisionMesh *)mesh)->point_count;
     local = (Vector4 *)((CollisionMesh *)mesh)->points;
     i = count / 3;
     do {
-        __asm__ volatile("pref 0, 0x30(%0)\n" : : "r"(local));
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%3)\n"
-            "lqc2 $vf17, 0x0(%4)\n"
-            "lqc2 $vf18, 0x0(%5)\n"
-            "vnop\n"
-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
-            "vmulax.xyzw ACC, $vf1, $vf17x\n"
-            "vmadday.xyzw ACC, $vf2, $vf17y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf17z\n"
-            "vmaddw.xyzw $vf17, $vf4, $vf17w\n"
-            "vmulax.xyzw ACC, $vf1, $vf18x\n"
-            "vmadday.xyzw ACC, $vf2, $vf18y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf18z\n"
-            "vmaddw.xyzw $vf18, $vf4, $vf18w\n"
-            "sqc2 $vf16, 0x0(%0)\n"
-            "sqc2 $vf17, 0x0(%1)\n"
-            "vnop\n"
-            "sqc2 $vf18, 0x0(%2)\n"
-            : : "r"(world), "r"(world + 1), "r"(world + 2), "r"(local), "r"(local + 1), "r"(local + 2));
+        Attack_ApplyVu0Matrix(world, local);
+        Attack_ApplyVu0Matrix(world + 1, local + 1);
+        Attack_ApplyVu0Matrix(world + 2, local + 2);
         local += 3;
         world += 3;
     } while (--i != 0);
     for (i = count % 3 - 1; i != -1; i--) {
-        __asm__ volatile("pref 0, 0x10(%0)\n" : : "r"(local));
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%0)\n"
-            "vnop\n"
-            "vnop\n"
-            "vnop\n"
-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
-            "vnop\n"
-            "vnop\n"
-            "vnop\n"
-            "sqc2 $vf16, 0x0(%1)\n"
-            : : "r"(local), "r"(world));
+        Attack_ApplyVu0Matrix(world, local);
         local++;
         world++;
     }
@@ -537,7 +521,7 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
             strip_point = strip->points;
             points_left = strip->point_count - 2;
             do {
-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
+                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (f32 *)request, reach);
                 if (COLLISION_RESULT->hit != 0) {
                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
                     return lists.lists[list];
@@ -547,6 +531,7 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
             strip = (CollisionStrip *)&strip_point[2];
         }
     }
+    return 0; /* retail leaves v0 as it was; with no hit the caller does not read it */
 }
 
 /* Attack_TestMapModel for strip lists 1 and 5 only: returns 1 when the sphere touches a triangle
@@ -568,58 +553,24 @@ int Attack_TestMapModelFloors(ModelInstance *model, void *request, f32 reach) {
     mesh = (CollisionMeshLists *)model->strips;
     COLLISION_RESULT->hit = 0;
     if (mesh == NULL) {
-        return;
+        return 0;
     }
     if (((CollisionMesh *)mesh)->point_count < 4) {
-        return;
+        return 0;
     }
     Vu0_LoadMatrix(model->model_matrix);
     count = ((CollisionMesh *)mesh)->point_count;
     local = (Vector4 *)((CollisionMesh *)mesh)->points;
     i = count / 3;
     do {
-        __asm__ volatile("pref 0, 0x30(%0)\n" : : "r"(local));
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%3)\n"
-            "lqc2 $vf17, 0x0(%4)\n"
-            "lqc2 $vf18, 0x0(%5)\n"
-            "vnop\n"
-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
-            "vmulax.xyzw ACC, $vf1, $vf17x\n"
-            "vmadday.xyzw ACC, $vf2, $vf17y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf17z\n"
-            "vmaddw.xyzw $vf17, $vf4, $vf17w\n"
-            "vmulax.xyzw ACC, $vf1, $vf18x\n"
-            "vmadday.xyzw ACC, $vf2, $vf18y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf18z\n"
-            "vmaddw.xyzw $vf18, $vf4, $vf18w\n"
-            "sqc2 $vf16, 0x0(%0)\n"
-            "sqc2 $vf17, 0x0(%1)\n"
-            "vnop\n"
-            "sqc2 $vf18, 0x0(%2)\n"
-            : : "r"(world), "r"(world + 1), "r"(world + 2), "r"(local), "r"(local + 1), "r"(local + 2));
+        Attack_ApplyVu0Matrix(world, local);
+        Attack_ApplyVu0Matrix(world + 1, local + 1);
+        Attack_ApplyVu0Matrix(world + 2, local + 2);
         local += 3;
         world += 3;
     } while (--i != 0);
     for (i = count % 3 - 1; i != -1; i--) {
-        __asm__ volatile("pref 0, 0x10(%0)\n" : : "r"(local));
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%0)\n"
-            "vnop\n"
-            "vnop\n"
-            "vnop\n"
-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
-            "vnop\n"
-            "vnop\n"
-            "vnop\n"
-            "sqc2 $vf16, 0x0(%1)\n"
-            : : "r"(local), "r"(world));
+        Attack_ApplyVu0Matrix(world, local);
         local++;
         world++;
     }
@@ -630,7 +581,7 @@ int Attack_TestMapModelFloors(ModelInstance *model, void *request, f32 reach) {
             strip_point = strip->points;
             points_left = strip->point_count - 2;
             do {
-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
+                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (f32 *)request, reach);
                 if (COLLISION_RESULT->hit != 0) {
                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
                     return 1;
@@ -662,58 +613,24 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
     mesh = (CollisionMeshLists *)model->strips;
     COLLISION_RESULT->hit = 0;
     if (mesh == NULL) {
-        return;
+        return 0;
     }
     if (((CollisionMesh *)mesh)->point_count < 4) {
-        return;
+        return 0;
     }
     Vu0_LoadMatrix(model->model_matrix);
     count = ((CollisionMesh *)mesh)->point_count;
     local = (Vector4 *)((CollisionMesh *)mesh)->points;
     i = count / 3;
     do {
-        __asm__ volatile("pref 0, 0x30(%0)\n" : : "r"(local));
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%3)\n"
-            "lqc2 $vf17, 0x0(%4)\n"
-            "lqc2 $vf18, 0x0(%5)\n"
-            "vnop\n"
-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
-            "vmulax.xyzw ACC, $vf1, $vf17x\n"
-            "vmadday.xyzw ACC, $vf2, $vf17y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf17z\n"
-            "vmaddw.xyzw $vf17, $vf4, $vf17w\n"
-            "vmulax.xyzw ACC, $vf1, $vf18x\n"
-            "vmadday.xyzw ACC, $vf2, $vf18y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf18z\n"
-            "vmaddw.xyzw $vf18, $vf4, $vf18w\n"
-            "sqc2 $vf16, 0x0(%0)\n"
-            "sqc2 $vf17, 0x0(%1)\n"
-            "vnop\n"
-            "sqc2 $vf18, 0x0(%2)\n"
-            : : "r"(world), "r"(world + 1), "r"(world + 2), "r"(local), "r"(local + 1), "r"(local + 2));
+        Attack_ApplyVu0Matrix(world, local);
+        Attack_ApplyVu0Matrix(world + 1, local + 1);
+        Attack_ApplyVu0Matrix(world + 2, local + 2);
         local += 3;
         world += 3;
     } while (--i != 0);
     for (i = count % 3 - 1; i != -1; i--) {
-        __asm__ volatile("pref 0, 0x10(%0)\n" : : "r"(local));
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%0)\n"
-            "vnop\n"
-            "vnop\n"
-            "vnop\n"
-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
-            "vnop\n"
-            "vnop\n"
-            "vnop\n"
-            "sqc2 $vf16, 0x0(%1)\n"
-            : : "r"(local), "r"(world));
+        Attack_ApplyVu0Matrix(world, local);
         local++;
         world++;
     }
@@ -724,7 +641,7 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
             strip_point = strip->points;
             points_left = strip->point_count - 2;
             do {
-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
+                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (f32 *)request, reach);
                 if (COLLISION_RESULT->hit != 0) {
                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
                     return 0;
@@ -734,6 +651,7 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
             strip = (CollisionStrip *)&strip_point[2];
         }
     }
+    return 0; /* retail leaves v0 as it was; with no hit the caller does not read it */
 }
 
 /* A hit lands on the player: marks the attacking entity, works out the damage from the
@@ -1210,12 +1128,12 @@ void Attack_HitMapObject(Unk1B1470Request *request, Unk1B1470Extra *extra, MapOb
 }
 
 /* An attack struck the map: the player's weapon wears and bounces off. */
-int Attack_HitMap(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+void Attack_HitMap(Unk1B1470Request *request, Unk1B1470Extra *extra) {
     if (IS_PLAYER(request->owner)) {
         if (extra->is_magic_shot == 0) {
             Attack_WearWeapon(extra->weapon_index, 4);
             if (extra->attack_request == 0) {
-                return ((int (*)(void))Player_BounceWeapon)(); // match: a tail call, as if it returned int
+                Player_BounceWeapon();
             }
         }
     }

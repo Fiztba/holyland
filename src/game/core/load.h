@@ -51,7 +51,8 @@ typedef struct ChunkUpload {
     char pad00[0x08];
     int unk08;                      /* 0x08 set to -1 when done */
     ChunkPoolNode *pool_node;       /* 0x0C the node whose buffer holds the chunk list */
-    char pad10[0x08];
+    void *pad10[2];                 /* 0x10 LinkNode.unk10 and next (ui/link.h): the same nodes are viewed as both, so
+                                       on the PC these are pointer-sized like LinkNode's */
     void (*callback)(struct ChunkUpload *upload); /* 0x18 runs the next stage */
     int stage;                      /* 0x1C index into the stage handlers */
     int done;                       /* 0x20 */

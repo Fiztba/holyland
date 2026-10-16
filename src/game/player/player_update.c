@@ -11,6 +11,10 @@
 #include "effect/shot.h"
 #include "sound/sound.h"
 #include "math/vu0.h"
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libvu0.h>
 
 static s32 swing_magic_frames;                    /* 0x447114 frames the swing-cast magic still runs */
 static s32 swing_magic_id;                        /* 0x447118 magic id cast from the swing */
@@ -86,9 +90,6 @@ void (*item_step_handlers[8])(u16, u16) = {
     (void (*)(u16, u16))Player_HolsterWeapon, 0, 0, 0,
 };
 
-void *memset(void *, int, u32);
-float sinf(float);
-int rand(void);
 int Sound_PlayFootstep(int);
 int Sound_PlayCommon(int);
 int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
@@ -1039,8 +1040,6 @@ int Player_CanFireAtAim(void) {
     return result;
 }
 
-float atan2f(float, float);
-float sqrtf(float);
 
 void Player_UpdateWeaponAim(void) {
     float vec[4];
@@ -1060,11 +1059,6 @@ extern f32 identity_matrix[16];
 
 /* the pad bits of each control */
 
-float cosf(float);
-double sin(double);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 float Angle_Wrap(float);
 int Angle_Approach(float *, float, float);
 int Sound_PlayMap(int);

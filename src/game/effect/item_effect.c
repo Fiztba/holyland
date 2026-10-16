@@ -6,6 +6,8 @@
 #include "player/player.h"
 #include "ui/splash.h"
 #include "ui/message.h"
+#include <stdio.h>
+#include <string.h>
 
 extern char map_draw_slot_blocks[];
 extern LevelRecord weapon_level_records[];
@@ -23,8 +25,6 @@ extern int item_effect_area_size;
 extern char *item_effect_area;
 extern PlayerItemDef weapon_defs[];
 
-void *memset(void *, int, u32);
-int sprintf(char *, char *, ...);
 int File_Open(char *, int, int);
 int File_Close(int);
 int File_Read(int, void *, int);

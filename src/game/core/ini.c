@@ -2,6 +2,9 @@
    line to the handler of its key; the key table ini_keys lists the keys and their handlers. */
 #include "core/ini.h"
 #include "player/player.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 extern char ini_path_format[];           /* "ini/%4.4d.ini" */
 extern char file_load_buffer[];           /* where the file is read to */
@@ -12,13 +15,6 @@ extern LevelRecord worn_item_level_records[160];
 extern u8 spell_levels[6][5];
 extern u16 spell_experience[6][5];
 
-int sprintf(char *, char *, ...);
-u32 strlen(char *);
-int strncmp(const char *, const char *, u32);
-char *strchr(const char *, int);
-char *strrchr(const char *, int);
-int atoi(const char *);
-void *memset(void *, int, u32);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 int File_Close(int);

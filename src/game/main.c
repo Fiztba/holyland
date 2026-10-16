@@ -6,6 +6,8 @@
 #include "ui/title.h"
 #include "ui/menu_screens.h"
 #include "core/timer.h"
+#include <stdlib.h>
+#include <libgraph.h>
 
 extern GameStatus game_status;
 extern PlayerState player_state;
@@ -15,7 +17,6 @@ extern u32 frame_counter;          /* the frame counter */
 
 void System_Init(void);
 void Display_Init(void);
-int sceGsSyncV(int);
 void Vram_Clear(int, int);
 int SoundDriver_Init(void);
 void SoundDriver_ReleaseAll(void);
@@ -37,7 +38,6 @@ void Packet_Init(void);
 void Wobble_ResetOscillators(void);
 void Game_ProjectHazeLayers(void);
 int Timer_GetTicks(void);
-void srand(u32);
 int TitleMenu_Run(void);
 void Movie_PlayOpening(void);
 void GameLoop_ResetSystems(int);

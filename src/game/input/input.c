@@ -1,7 +1,7 @@
 #include "input/pad.h"
 #include "core/game.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void Input_ReadPort(int);
 void Input_StartRumble(u8, u8, u8);
 void Input_Update(void);

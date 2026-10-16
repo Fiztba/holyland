@@ -4,6 +4,7 @@
 #include "entity/entity.h"
 #include "effect/effect.h"
 #include "math/vu0.h"
+#include <math.h>
 
 /* moves the player out of the body just hit: to `push` from it, but by no more than 50 a frame */
 #define PUSH_PLAYER_OUT()                                                                          \
@@ -26,7 +27,6 @@ void Collision_DropOnTriangleWithin(void *, void *, void *, void *, f32);
 u32 Collision_GetFloorMaterial(int, u32, u32);
 u32 Collision_GetSurfaceEffect(u32, u32, int);
 void Map_MakeCurrent(int);
-float sqrtf(float);
 void Collision_CylinderCylinder(void *, f32, f32, void *, f32, f32);
 void Collision_PushOutOfObjects(f32 *, s32, f32, f32);
 s32 Collision_StandOnObjects(f32 *, s32, f32, f32);

@@ -6,6 +6,13 @@
 #include "core/game.h"
 #include "input/pad.h"
 #include "gfx/gs.h"
+#include <libdev.h>
+#include <libdma.h>
+#include <libgraph.h>
+#include <libmc.h>
+#include <libsdr.h>
+#include <libvu0.h>
+#include <sifdev.h>
 
 #define PAD_BUTTON_START 0x0008
 
@@ -41,20 +48,9 @@ void Packet_SendChain(void);
 void Packet_WaitForSend(void);
 void SoundDriver_ReleaseAll(void);
 void Sound_Init(void);
-int sceGsSyncV(int);
 void Vram_Clear(int, int);
 int func_0022B5B8();
 int func_0022B8E8();
-int sceDevVu0Pause();
-int sceDevVu0SetTBit();
-int sceDmaReset(int);
-int sceGsResetGraph(int, int, int, int);
-int sceGsResetPath();
-int sceMcInit();
-int sceSdRemoteInit();
-int sceSifInitIopHeap();
-void sceGsSetDefDBuff(void *, s16, s16, s16, s16, s16, s16);
-void sceVu0CopyMatrix(void *, void *);
 
 /* The opening movie's per-frame callback (given to Movie_Play by Movie_PlayOpening): polls the controller
    and returns TRUE, ending the movie, when START is pressed. */
