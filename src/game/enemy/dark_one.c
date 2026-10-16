@@ -6,8 +6,7 @@
    that takes the count to 0 kills him; Prima's official guide (2004) describes the same fight. */
 #include "entity/entity.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32); // match: an int result keeps $2 busy after the call
@@ -17,15 +16,15 @@ void EntityAi_Animate(void);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern s32 dark_one_hits_left;
 extern u32 frame_counter;
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 void EntityEvent_StartCue(Entity *, s32, s32, s32);
 int Sound_PlayMapAtRange(u8, u8, float *, float);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkCombat(Entity *, s32);
 extern u8 player_weapon[];
 int Motion_Start(void *, int, int, u32, int);
@@ -65,7 +64,7 @@ void DarkOne_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -96,18 +95,18 @@ static void DarkOne_Think(Entity *entity, s32 unknown) {
     if (frame_counter % 3U == 0) {
         switch (dark_one_hits_left) {
         case 3:
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, entity->model->rotation);
             break;
         case 2:
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->yaw_limit_deg, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->yaw_limit_deg, 0xFF, entity->model->rotation);
             break;
         default:
-            EntityEvent_StartEffectAtPoint((char **)entity, (s16)entity->params->action_frames, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, (s16)entity->params->action_frames, 0xFF, entity->model->rotation);
             break;
         }
     }
     if (ENTITY_FLAG_BITS(entity)->bit43) {
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x13D, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x13D, 0xFF, entity->model->rotation);
         ENTITY_FLAG_BITS(entity)->bit43 = FALSE;
         if (dark_one_hits_left <= 0) {
             entity->hit_flash_frames = 6;

@@ -2,9 +2,11 @@
    (bones) for looking at a point, and whether something stands between an entity and the player. */
 #include "entity/entity_aim.h"
 #include "entity/entity_collision.h"
+#include "entity/entity_math.h"
 #include "player/player.h"
 #include "collision/collision.h"
 #include "map/map.h"
+#include <libvu0.h>
 
 int rand(void);
 extern EntityRangeWeights near_point_range_weights;
@@ -13,18 +15,11 @@ float cosf(float);
 void Vector_Add(void *, void *, void *);
 extern PlayerState player_state;
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, int *, float *);
 void Vector_Scale(float *, float *, float);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Matrix_Multiply(void *, void *, void *);
-void sceVu0CopyMatrix(void *, void *);
 void Vector_Subtract(void *, void *, void *);
 void Vector_Normalize(void *, void *);
 void Vector_Cross(void *, void *, void *);
-void sceVu0TransposeMatrix(void *, void *);
 double sqrt(double);
 float atan2f(float, float);
 void Vector_ApplyMatrix(void *, void *, void *);
@@ -91,17 +86,8 @@ void EntityPoint_PickNear(float range, void *point_arg, void *centre, void *posi
     s32 roll;
     s32 i;
 
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xz $vf16, $vf16, $vf16\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(position), "r"(centre), "r"(distance_out) : "memory");
+    /* EntityMath_DistanceXZ inlined (one VU0 block) */
+    distance_out[0] = EntityMath_DistanceXZ(position, centre);
     if ((s32)(distance_out[0] * 100.0f / range) > 50) {
         for (i = 0; i < 5; i++) {
             table.weights[i + 5] *= 2;
@@ -398,18 +384,8 @@ s32 EntitySight_ObjectInWay(Entity *entity) {
     position[1] -= entity->collision_height * 0.5f;
     Vector_Copy(target, &player_state);
     target[1] -= 115.0f;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xyz $vf16, $vf16, $vf16\n"
-        "vaddy.x $vf16, $vf16, $vf16y\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(target), "r"(position), "r"(distance_out) : "memory");
+    /* EntityMath_Distance inlined (one VU0 block) */
+    distance_out[0] = EntityMath_Distance(target, position);
     distance = distance_out[0];
     Vector_Subtract(direction, target, position);
     Vector_Normalize(direction, direction);
@@ -477,7 +453,7 @@ s32 EntitySight_EntityInWay(Entity *entity) {
     while (other != NULL) {
         flags = other->flags;
         if (((s32)(flags >> 1) & 1) && ((s32)(flags >> 2) & 3) < 2 && other != entity) {
-            if (EntityCollision_PointNearSegment(other->radius, (int *)&player_state, (int)entity->model->position, (int)other->model->position)) {
+            if (EntityCollision_PointNearSegment(other->radius, (f32 *)&player_state, entity->model->position, other->model->position)) {
                 return TRUE;
             }
         }
@@ -502,18 +478,8 @@ s32 EntitySight_PropInWay(Entity *entity) {
     position[1] -= entity->collision_height * 0.5f;
     Vector_Copy(target, &player_state);
     target[1] -= 115.0f;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xyz $vf16, $vf16, $vf16\n"
-        "vaddy.x $vf16, $vf16, $vf16y\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(target), "r"(position), "r"(distance_out) : "memory");
+    /* EntityMath_Distance inlined (one VU0 block) */
+    distance_out[0] = EntityMath_Distance(target, position);
     distance = distance_out[0];
     Vector_Subtract(target, target, position);
     Vector_Normalize(target, target);
@@ -570,17 +536,8 @@ s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_he
     if (player_state.position.y < point[1] - max_height) {
         return FALSE;
     }
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xz $vf16, $vf16, $vf16\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(point), "r"(&player_state), "r"(distance_out) : "memory");
+    /* EntityMath_DistanceXZ inlined (one VU0 block) */
+    distance_out[0] = EntityMath_DistanceXZ(point, (f32 *)&player_state);
     if (max_distance < distance_out[0]) {
         return FALSE;
     }

@@ -5,15 +5,15 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "entity/entity_world.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 void EntityAi_LowerWeightsAfterHit(char *);
 int EntityAi_SetReaction(char *, void (*)(void), int);
 void EntityAi_SetState(char *, u8);
@@ -32,8 +32,8 @@ void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
 s32 EntityAi_MoveCommand(Entity *, s32, f32);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 void EntityEvent_StartCue(Entity *, s32, s32, s32);
@@ -51,9 +51,6 @@ int EntityAi_TurnCommand(Entity *);
 int EntityAi_PickAttack(char *);
 int Motion_Start(void *, int, int, u32, int);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 void EntityEvent_StartFrameCues(Entity *, s32, s32, s32);
@@ -118,7 +115,7 @@ void DarkSuccubus_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags |= 0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -821,7 +818,7 @@ static void DarkSuccubus_ReactionLight(Entity *entity) {
         entity->flags &= ~0x3800;
         entity->flags |= 0x4000;
         entity->flags &= ~0x80000;
-        entity->flags &= ~0x800000000L;
+        entity->flags &= ~0x800000000LL;
         entity->flags &= ~0x200;
         entity->reaction_step++;
         break;
@@ -857,7 +854,7 @@ static void DarkSuccubus_ReactionHeavy(Entity *entity) {
         entity->flags &= ~0x3800;
         entity->flags |= 0x4000;
         entity->flags &= ~0x80000;
-        entity->flags &= ~0x800000000L;
+        entity->flags &= ~0x800000000LL;
         entity->flags &= ~0x200;
         entity->reaction_step++;
         break;
@@ -1092,7 +1089,7 @@ static void DarkSuccubus_MoveAlongArc(Entity *entity) {
             entity->move_command |= ((u16 (*)(Entity *))EntityAi_TurnCommand)(entity); // match: read as unsigned here
             entity->move_command |= 0x400;
         }
-        if (entity->flags & (0x8200L << 35)) {
+        if (entity->flags & (0x8200LL << 35)) {
             Motion_Start(entity, 9, 0, 0, 1);
             unkE0->heading_speed = unkE0->pitch_speed = 0.0f;
             entity->action_step++;

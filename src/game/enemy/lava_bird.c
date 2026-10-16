@@ -5,22 +5,22 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "effect/shot.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Motion_SetPartSlots(EntityModel *, s32, s32, s32);
 void Vector_Copy(void *, void *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
 int rand(void);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
 int EntityAi_StartSlotMotion(void *, void *, int, int, int, int, int);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int EntityAi_TurnFromPush(void *, void *);
 extern PlayerData player_state;
 s32 EntityAi_PickCombatChoice(Entity *, s32);
@@ -29,13 +29,10 @@ int EntityAi_PickAttack(char *);
 void EntityPoint_PickNear(float, void *, void *, void *);
 extern f32 identity_matrix[16];
 float EntityMath_EaseAngleToward(float *, float, float);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 float EntityMath_HeadingTo(float *, float *);
 float EntityMath_AngleDifference(float, float);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 void EntityAi_SetState(char *, u8);
 s32 EntityAi_TurnToHeading(Entity *, f32 *, f32);
 void EntityAi_SetAttackDelay(Entity *entity, s32 base);
@@ -55,7 +52,7 @@ void EntityEvent_OnDeath(Entity *);
 int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
 s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
 void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
-int EntityAi_LookAtPoint(void *, int, int, int, int, float);
+int EntityAi_LookAtPoint(void *, f32 *, int, void *, f32 *, float);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 
 static void LavaBird_Think(Entity *entity, s32 unknown);
@@ -104,7 +101,7 @@ void LavaBird_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -536,7 +533,7 @@ static void LavaBird_Dormant(Entity *entity) {
     case 1:
         if (entity->distance_to_player < entity->spawn_info->wake_distance || ENTITY_FLAG_BITS(entity)->bit43) {
             unkE0->part_angle_z = entity->params->unk43A;
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x166, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x166, 0xFF, entity->model->rotation);
             entity->action_step++;
         }
         break;
@@ -889,7 +886,7 @@ static void LavaBird_Animate(Entity *entity) {
     limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
     limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
     if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
-        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
     } else {
         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
     }

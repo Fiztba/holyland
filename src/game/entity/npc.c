@@ -7,11 +7,12 @@
 #include "entity/entity_events.h"
 #include "model/motion.h"
 #include "entity/entity_math.h"
+#include <libvu0.h>
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Vector_Copy(void *, void *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 extern EntityGroupRecord entity_group_state[];
 int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now);
@@ -22,9 +23,6 @@ int EntityAi_AnimationFrameCount(void *, int);
 void EntityAi_SetAttackDelay(Entity *, s32);
 extern char story_flags[0x40];
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Normalize(void *, void *);
 void Vector_Scale(float *, float *, float);
@@ -52,7 +50,7 @@ static void Npc_Death(Entity *entity);
 static void Npc_Move(Entity *entity);
 static void Npc_OnHitType81(Entity *entity);
 static void Npc_ThinkType81(Entity *entity, s32 run_now);
-static int Npc_ThinkType81Stand(void *entity_ptr, int unknown);
+static void Npc_ThinkType81Stand(void *entity_ptr, int unknown);
 
 /* The set-up function of entity type 15, the talking characters (chr.prm): as EntityAi_InitDefaults, with the
    Npc_ handlers, its look part from EntityParams.unk43C, and flag bit 16 set. */
@@ -88,7 +86,7 @@ void Npc_Init(Entity *entity) {
     if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
         ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
     }
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -620,7 +618,7 @@ void Npc_InitType81(Entity *entity) {
     if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
         ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
     }
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -672,7 +670,7 @@ static void Npc_ThinkType81(Entity *entity, s32 run_now) {
 }
 
 /* The think function of type 81 that stands: as Npc_ThinkStand. */
-static int Npc_ThinkType81Stand(void *entity_ptr, int unknown) {
+static void Npc_ThinkType81Stand(void *entity_ptr, int unknown) {
     Entity *entity = entity_ptr;
 
     ENTITY_FLAG_BITS(entity)->bit9 = FALSE;

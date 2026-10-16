@@ -5,14 +5,14 @@
 #include "entity/entity.h"
 #include "common.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -27,7 +27,7 @@ int Motion_Start(void *, int, int, u32, int);
 float EntityMath_WrapAngle(float);
 float EntityMath_EaseAngleToward(float *, float, float);
 void EntityMath_FacingVector(Vector4 *, float);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 s32 EntityCollision_RayHitsPropWall(f32 *, f32 *, f32, f32 *);
 void Vector_Copy(void *, void *);
 float EntityMath_DistanceXZ(void *, void *);
@@ -60,7 +60,7 @@ void Phagos_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -154,12 +154,12 @@ static void Phagos_RunAwayAndRemove(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bit14 = FALSE;
             ENTITY_FLAG_BITS(entity)->bit18 = TRUE;
             entity->action_timer = 20;
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, entity->model->rotation);
             entity->action_step = 3;
         } else if (EntityCollision_RayHitsPropWall(entity->model->position, direction, entity->radius, bounds)) {
             Vector_Copy(unkE0->target_point, entity->model->position);
             ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, entity->model->rotation);
             entity->action_step++;
         }
         break;

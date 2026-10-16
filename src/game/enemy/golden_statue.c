@@ -6,7 +6,7 @@
 #include "common.h"
 #include "entity/entity_world.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -14,7 +14,7 @@ void Vector_Copy(void *, void *);
 void EntityAi_Think(Entity *, s32);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 void EntityAi_LowerWeightsAfterHit(char *);
 void EntityAi_SetState(char *, u8);
 int EntityAi_SetReaction(char *, void (*)(void), int);
@@ -29,7 +29,7 @@ int EntityAi_PickAttack(char *);
 float EntityMath_AngleDifference(float, float);
 void EntityAi_MeleeAttack(Entity *);
 void EntityAi_RangedAttack(Entity *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_StepState(void *);
 void EntityAi_CheckFarFromSpawn(void *);
 extern PlayerData player_state;
@@ -46,7 +46,6 @@ int EntityAi_TurnCommand(Entity *);
 int EntityAi_TurnFromPush(void *, void *);
 void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
-extern int entity_under_player[];
 int Motion_Start(void *, int, int, u32, int);
 double atan2(double, double);
 float EntityMath_WrapAngle(float);
@@ -102,7 +101,7 @@ void GoldenStatue_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -418,7 +417,7 @@ static void GoldenStatue_Move(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 turn;
 
-    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & 0x800)) {
+    if (entity == player_state.stood_on_entity && (entity->params->flags & 0x800)) {
         entity->move_command = 0;
     }
     if (entity->move_command & 0x100) {
@@ -495,7 +494,7 @@ static void GoldenStatue_Animate(Entity *entity) {
     unkE0 = &entity->unkE0;
     if (ENTITY_FLAG_BITS(entity)->bit14) {
         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
-            entity->flags = flags & ~0x3800L;
+            entity->flags = flags & ~0x3800LL;
         }
         blend_frames = entity->model->level_tables->unk88;
         if (blend_frames != 0) {

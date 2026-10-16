@@ -5,15 +5,14 @@
 #include "entity/entity.h"
 #include "common.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 void EntityAi_OnHit(char *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -29,7 +28,7 @@ int Motion_Start(void *, int, int, u32, int);
 s32 EntityAi_CheckMeleeHitAt(Entity *, void *, s32, s32, s32, f32);
 float EntityMath_WrapAngle(float);
 void EntityAi_SetAttackDelay(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 int EntityShot_LaunchAimed(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *, f32, f32);
 extern PlayerData player_state;
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
@@ -82,7 +81,7 @@ void WiddaQueen_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -351,8 +350,8 @@ static void WiddaQueen_RangedAttack0(Entity *entity) {
             unkE0->step_index = 2;
         }
         if (entity->model->level_tables->unk82 == 0x16 && (entity->ailment_4_frames == 0 || unk3D8->unk0C != 0)) {
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 4, (int)entity->model->rotation);
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 8, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 4, entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 8, entity->model->rotation);
         }
         elapsed = (entity->model->level_tables->unk84 - entity->params->motion_speeds[entity->animation_index]) >> 8;
         Vector_Copy(target, player_state.position);

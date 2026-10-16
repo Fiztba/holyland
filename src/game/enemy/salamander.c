@@ -5,18 +5,18 @@
 #include "entity/entity.h"
 #include "common.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 void Motion_SetPartSlots(EntityModel *, s32, s32, s32);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
 s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
 void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
 void EntityEvent_StartFrameCues(Entity *, s32, s32, s32);
-int EntityAi_LookAtPoint(void *, int, int, int, int, float);
+int EntityAi_LookAtPoint(void *, f32 *, int, void *, f32 *, float);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 void EntityAi_LowerWeightsAfterHit(char *);
 int EntityAi_SetReaction(char *entity, void (*callback)(void), int run);
@@ -91,7 +91,7 @@ void Salamander_Init(Entity *entity) {
         entity->attack_weights[i] = 0x80;
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -162,7 +162,7 @@ static void Salamander_Animate(Entity *entity) {
     limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
     limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
     if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
-        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
     } else {
         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
     }
@@ -527,7 +527,7 @@ static void Salamander_ThinkReturn(Entity *entity, s32 unknown) {
         entity->move_command = EntityAi_MoveCommand3D(entity, 0, 50.0f);
     } else {
         push[0] = push[1] = push[2] = push[3] = 0.0f;
-        if (entity->flags & (0xC000L << 31)) {
+        if (entity->flags & (0xC000LL << 31)) {
             push[0] += entity->wall_push[0];
             push[1] += entity->wall_push[1];
             push[2] += entity->wall_push[2];

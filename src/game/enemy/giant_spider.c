@@ -5,14 +5,14 @@
 #include "entity/entity.h"
 #include "common.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -76,7 +76,7 @@ void GiantSpider_Init(Entity *entity) {
         entity->attack_weights[i] = 0x80;
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);

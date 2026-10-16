@@ -4,15 +4,16 @@
    by hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 #include "common.h"
+#include <libvu0.h>
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -20,7 +21,7 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int rand(void);
 int EntityAi_TurnFromPush(void *, void *);
 void EntityPoint_PickNear(float, void *, void *, void *);
@@ -48,10 +49,6 @@ void EntityAi_SetState(char *, u8);
 float EntityMath_EaseAngleToward(float *, float, float);
 void EntityEvent_OnDeath(Entity *);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
-void sceVu0ApplyMatrix(float *, int *, float *);
 void Vector_Scale(float *, float *, float);
 void Vector_Add(void *, void *, void *);
 s32 EntityCollision_RayProps(f32 *, f32 *, void *, f32);
@@ -90,7 +87,7 @@ void Spider_Init(Entity *entity) {
     EntityAi_SetUpdate((char *)entity, entity_type_handlers[entity->params->entity_type][1]);
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         unkE0->think = Spider_Think;
         unkE0->animate = (void (*)(void))Spider_Animate;
         unkE0->on_hit = (void (*)(void))EntityAi_OnHit;
@@ -552,7 +549,7 @@ static void Spider_LevelOut(Entity *entity) {
     entity->busy_flags = 0x2000;
     pitch_left = EntityMath_EaseAngleToward(&entity->model->rotation[0], 0.0f, 6.0f);
     roll_left = EntityMath_EaseAngleToward(&entity->model->rotation[2], 0.0f, 6.0f);
-    if (entity->flags & (0x8200L << 35)) {
+    if (entity->flags & (0x8200LL << 35)) {
         pitch_left = ABS(pitch_left);
         roll_left = ABS(roll_left);
         if (ABS(pitch_left) < 0.01f && ABS(roll_left) < 0.01f) {

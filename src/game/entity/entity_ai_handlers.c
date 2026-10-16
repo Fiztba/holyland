@@ -7,6 +7,7 @@
 #include "entity/entity_events.h"
 #include "model/motion.h"
 #include "entity/entity_math.h"
+#include <libvu0.h>
 
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void EntityAi_SetState(char *, u8);
@@ -19,8 +20,8 @@ void Vector_Copy(void *, void *);
 void EntityAi_RaiseAttackWeight(Entity *);
 void EntityAi_RaiseRangedWeights(Entity *);
 void EntityAi_UpdateCollision(Entity *);
-void EntityAi_SetUpdate(char *, s32);
-extern s32 entity_type_handlers[][2];
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
+extern void (*entity_type_handlers[][2])(Entity *);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
@@ -32,9 +33,6 @@ int rand(void);
 extern PlayerData player_state;
 void EntityAi_ClearTurnInPlace(Entity *);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 float EntityAi_Accelerate(Entity *, float);
@@ -661,7 +659,7 @@ void EntityAi_InitDefaults(Entity *entity) {
     if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
         ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
     }
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -689,7 +687,7 @@ void EntityAi_Animate(Entity *entity) {
     unkE0 = &entity->unkE0;
     if (ENTITY_FLAG_BITS(entity)->bit14) {
         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
-            entity->flags = flags & ~0x3800L;
+            entity->flags = flags & ~0x3800LL;
         }
         blend_frames = entity->model->level_tables->unk88;
         if (blend_frames != 0) {
@@ -764,7 +762,7 @@ void EntityAi_Think(Entity *entity, s32 unknown) {
 
 /* The think function while flag bit 53 is set (too far from the spawn point): walks back to the spawn point,
    turning aside while something pushes the entity from the front. */
-int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
+void EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
     Entity *entity = entity_ptr;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 to_spawn[4];
@@ -786,7 +784,7 @@ int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
         entity->move_command = EntityAi_MoveCommand(entity, 0, 50.0f);
     } else {
         push[0] = push[1] = push[2] = push[3] = 0.0f;
-        if (entity->flags & (0xC000L << 31)) {
+        if (entity->flags & (0xC000LL << 31)) {
             push[0] += entity->wall_push[0];
             push[2] += entity->wall_push[2];
         }
@@ -819,7 +817,7 @@ int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
 
 /* The think function of state 0: every 120-180 frames picks a point near the spawn point to walk to
    (EntityPoint_PickNear), or stands for 60-90 frames (one time in five). */
-int EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
+void EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
     Entity *entity = entity_ptr;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 direction[4];

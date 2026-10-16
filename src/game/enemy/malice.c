@@ -5,22 +5,23 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "effect/effect.h"
+#include <libvu0.h>
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
 extern f32 D_00446814[];
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 extern PlayerData player_state;
@@ -43,13 +44,10 @@ void EntityAi_MeleeAttack(Entity *);
 void EntityAi_RangedAttack(Entity *);
 int Motion_Start(void *, int, int, u32, int);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 extern f32 D_00446818[];
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 float EntityMath_AngleXZ(float *, char *);
 float EntityMath_WrapAngle(float);
 float EntityMath_HeadingTo(float *, float *);
@@ -101,7 +99,7 @@ void Malice_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 1;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -502,7 +500,7 @@ static void Malice_FadeOutAndRelocate(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bit27 = 1;
             unkE0->action_counter = 0;
             unkE0->reload_timer = 0;
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x234, 0, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x234, 0, entity->model->rotation);
             entity->action_step++;
         }
         break;
@@ -554,7 +552,7 @@ static void Malice_FadeBackIn(Entity *entity) {
         if ((s16)entity->params->action_frames < unkE0->mode_timer++) {
             Motion_Start(entity, 1, 0, 0, 0);
             entity->model->rotation[1] = EntityMath_HeadingTo(entity->model->position, (f32 *)&player_state);
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x235, 0, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x235, 0, entity->model->rotation);
             entity->action_step++;
         }
         break;

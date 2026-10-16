@@ -7,14 +7,14 @@
 #include "map_object/map_object.h"
 #include "entity/entity_world.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void EntityAi_Think(Entity *, s32);
 void EntityAi_Move(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);

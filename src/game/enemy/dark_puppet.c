@@ -4,9 +4,9 @@
    hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 #include "common.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -14,7 +14,7 @@ void Vector_Copy(void *, void *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 void EntityAi_LowerWeightsAfterHit(char *);
 int EntityAi_SetReaction(char *, void (*)(void), int); // match: an int result keeps $2 busy after the call
 void EntityAi_SetState(char *, u8);
@@ -27,8 +27,8 @@ extern f32 D_00446834[];
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 extern PlayerData player_state;
@@ -49,11 +49,7 @@ void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
 void EntityAi_ClearTurnInPlace(Entity *);
 int Motion_Start(void *, int, int, u32, int);
-extern int entity_under_player[];
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 int EntityAi_CheckMeleeHit(Entity *, void *, s32, s32, s32);
@@ -104,7 +100,7 @@ void DarkPuppet_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags &= ~0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -334,7 +330,7 @@ done:
 /* The move handler: only picks the animation, 6 or 7 for command bits 4 and 8, 3 forward, 5
    backwards, else 0. DarkPuppet_ApplyMoveCommand does the turning and the moving. */
 static void DarkPuppet_Move(Entity *entity) {
-    if (entity == (Entity *)entity_under_player[0]) {
+    if (entity == player_state.stood_on_entity) {
         if (entity->params->flags & 0x800) {
             entity->move_command = 0;
         }

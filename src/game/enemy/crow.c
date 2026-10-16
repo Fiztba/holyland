@@ -5,19 +5,18 @@
 #include "entity/entity.h"
 #include "common.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
 int rand(void);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 float EntityMath_EaseAngleToward(float *, float, float);
 float EntityMath_DistanceXZ(void *, void *);
 int Motion_Start(void *, int, int, u32, int);
@@ -58,7 +57,7 @@ void Crow_Init(Entity *entity) {
         entity->attack_weights[i] = 0x80;
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -153,7 +152,7 @@ static void Crow_MoveOffAndRemove(Entity *entity, s32 unknown) {
     ENTITY_FLAG_BITS(entity)->bits11 = 0;
     entity->move_command |= 1;
     if (unkE0->pause_timer < entity->params->unk43A) {
-        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->far_distance, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->far_distance, 0xFF, entity->model->rotation);
         unkE0->pause_timer++;
     }
     // match: the whole step is written out in both arms (only the call is shared in retail)

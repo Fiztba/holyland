@@ -7,7 +7,7 @@
 #include "entity/entity_world.h"
 #include "effect/effect.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -17,18 +17,18 @@ void EntityAi_Animate(void);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 void EntityAi_ThinkCombat(Entity *, s32);
 int Motion_Start(void *, int, int, u32, int);
 void EntityAi_SetState(char *, u8);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 
 static void HighSkeleton_Think(Entity *entity, s32 unknown);
 static void HighSkeleton_Dormant(Entity *entity);
@@ -63,7 +63,7 @@ void HighSkeleton_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -216,7 +216,7 @@ static void HighSkeleton_DormantScaleUp(Entity *entity) {
         entity->action_step++;
         break;
     case 1:
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x22F, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x22F, 0xFF, entity->model->rotation);
         entity->action_step++;
         break;
     case 2:

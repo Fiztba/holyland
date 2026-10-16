@@ -8,16 +8,15 @@
 #include "entity/entity.h"
 #include "common.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
-int EntityAi_LookAtPoint(void *, int, int, int, int, float);
+int EntityAi_LookAtPoint(void *, f32 *, int, void *, f32 *, float);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 int Motion_Start(void *, int, int, u32, int);
 extern PlayerData player_state;
@@ -96,7 +95,7 @@ static void EyePedestal_Animate(Entity *entity) {
         point[2] = unkE0->part_angle_z;
         look_at_target = (s32)(entity->flags >> 9) & 1;
         if (look_at_target) {
-            EntityAi_LookAtPoint(entity, (s32)unkE0->look_part_angles, look_at_target, (s32)point, (s32)limits, (f32)(s16)params->action_frames);
+            EntityAi_LookAtPoint(entity, unkE0->look_part_angles, look_at_target, point, limits, (f32)(s16)params->action_frames);
         } else {
             EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, 0, NULL, 8.0f);
         }

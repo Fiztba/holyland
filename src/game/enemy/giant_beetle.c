@@ -5,13 +5,13 @@
 #include "entity/entity.h"
 #include "common.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -23,7 +23,7 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int rand(void);
 void EntityPoint_PickNear(float, void *, void *, void *);
 int EntityAi_TurnFromPush(void *, void *);
@@ -85,7 +85,7 @@ void GiantBeetle_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -381,7 +381,7 @@ static void GiantBeetle_MeleeAttack0(Entity *entity) {
         } else {
             entity->flags &= ~0x80000;
         }
-        if (entity->flags & (0x8800L << 34)) {
+        if (entity->flags & (0x8800LL << 34)) {
             entity->busy_flags = 0;
             entity->move_command = 0;
             entity->action_timer = 0;

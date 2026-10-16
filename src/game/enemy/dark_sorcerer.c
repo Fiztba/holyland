@@ -5,16 +5,16 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "map/map.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 void EntityAi_LowerWeightsAfterHit(char *);
 void EntityAi_SetState(char *, u8);
 int EntityAi_SetReaction(char *, void (*)(void), int);
@@ -27,7 +27,7 @@ extern f32 D_00446830[];
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 extern PlayerData player_state;
 int rand(void);
@@ -47,9 +47,6 @@ void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
 int Motion_Start(void *, int, int, u32, int);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 // match: the size is unknown; a complete small type would be read through $gp

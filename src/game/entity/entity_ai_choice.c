@@ -3,6 +3,7 @@
    commands (Entity.move_command) that take it towards its target or aside from a push. */
 #include "entity/entity_ai_choice.h"
 #include "entity/entity_aim.h"
+#include "entity/entity_math.h"
 #include "player/player.h"
 
 float sinf(float);
@@ -211,7 +212,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
     f32 angle;
 
     *(f32 *)heading_out = 0.0f;
-    if (!(entity->flags & (0xB000L << 33))) {
+    if (!(entity->flags & (0xB000LL << 33))) {
         return 0;
     }
     angle = entity->model->rotation[1];
@@ -220,7 +221,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
     facing[2] = -cosf(angle);
     facing[3] = 1.0f;
     push[0] = push[1] = push[2] = push[3] = 0.0f;
-    if (entity->flags & (0xC000L << 31)) {
+    if (entity->flags & (0xC000LL << 31)) {
         push[0] += entity->wall_push[0];
         push[2] += entity->wall_push[2];
     }
@@ -252,7 +253,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
 
     // match: the early return and the second `return FALSE` below leave a label in front of the body
     // until jump2 merges the two, which keeps `heading` copied back into $f12 for sinf
-    if (!(entity->flags & (0xB000L << 33))) {
+    if (!(entity->flags & (0xB000LL << 33))) {
         return FALSE;
     }
     facing[0] = -sinf(heading);
@@ -260,7 +261,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
     facing[2] = -cosf(heading);
     facing[3] = 1.0f;
     push[0] = push[1] = push[2] = push[3] = 0.0f;
-    if (entity->flags & (0xC000L << 31)) {
+    if (entity->flags & (0xC000LL << 31)) {
         push[0] += entity->wall_push[0];
         push[2] += entity->wall_push[2];
     }
@@ -829,18 +830,8 @@ s32 EntityAi_MoveCommand3D(Entity *entity, s32 mark_far, f32 range) {
     if (entity->params->max_speed < (0.0f <= diff ? diff : -diff)) {
         result |= 0.0f <= diff ? 0x20 : 0x10;
     }
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xyz $vf16, $vf16, $vf16\n"
-        "vaddy.x $vf16, $vf16, $vf16y\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(entity->model->position), "r"(entity->target), "r"(distance) : "memory");
+    /* EntityMath_Distance inlined (one VU0 block) */
+    distance[0] = EntityMath_Distance(entity->model->position, entity->target);
     if (range < distance[0]) {
         result |= 1;
         if (mark_far != 0) {
@@ -882,17 +873,8 @@ s32 EntityAi_MoveCommand(Entity *entity, s32 mark_far, f32 range) {
     if (entity->params->turn_limit < (0.0f <= diff ? diff : -diff)) {
         result = 0.0f <= diff ? 0x200 : 0x100;
     }
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xz $vf16, $vf16, $vf16\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(entity->model->position), "r"(entity->target), "r"(distance) : "memory");
+    /* EntityMath_DistanceXZ inlined (one VU0 block) */
+    distance[0] = EntityMath_DistanceXZ(entity->model->position, entity->target);
     if (range < distance[0]) {
         result |= 1;
         if (mark_far != 0) {
@@ -938,17 +920,8 @@ s32 EntityAi_TurnOrMoveCommand(Entity *entity, s32 far_flag, f32 reach) {
             result = 0x100;
         }
     } else {
-        __asm__ volatile(
-            "lqc2 $vf16, 0(%0)\n"
-            "lqc2 $vf17, 0(%1)\n"
-            "vsub.xyz $vf16, $vf16, $vf17\n"
-            "vmul.xz $vf16, $vf16, $vf16\n"
-            "vaddz.x $vf16, $vf16, $vf16z\n"
-            "vsqrt Q, $vf16x\n"
-            "vwaitq\n"
-            "vaddq.x $vf16, $vf0, Q\n"
-            "sqc2 $vf16, 0(%2)\n"
-            : : "r"(entity->model->position), "r"(entity->target), "r"(vec) : "memory");
+        /* EntityMath_DistanceXZ inlined (one VU0 block) */
+        vec[0] = EntityMath_DistanceXZ(entity->model->position, entity->target);
         distance = vec[0];
         if (reach < distance) {
             result |= 1;
@@ -967,7 +940,7 @@ int EntityAi_PushTurnCommand3D(Entity *entity, int turn) {
     int code = 0;
 
     push[0] = push[1] = push[2] = push[3] = 0.0f;
-    if (entity->flags & (0xC000L << 31)) {
+    if (entity->flags & (0xC000LL << 31)) {
         push[0] += entity->wall_push[0];
         push[1] += entity->wall_push[1];
         push[2] += entity->wall_push[2];

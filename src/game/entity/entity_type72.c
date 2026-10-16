@@ -2,12 +2,11 @@
    function, which the table names, and the handlers that function installs. */
 #include "entity/entity.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int Motion_StepModel(EntityModel *, s32, s32);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 
 static void EntityType72_Think(void);
 

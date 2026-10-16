@@ -5,7 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -14,7 +14,7 @@ void EntityAi_Animate(void);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 void EntityAi_LowerWeightsAfterHit(char *);
 void EntityAi_SetState(char *, u8);
 int EntityAi_SetReaction(char *, void (*)(void), int);
@@ -25,8 +25,8 @@ int Motion_Start(void *, int, int, u32, int);
 void EntityAi_SetAttackDelay(Entity *, s32);
 void EntityAi_RangedAttack(Entity *);
 extern u32 frame_counter;
-int EntityAi_ThinkIdle(void *, int);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_StepState(void *);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
@@ -74,7 +74,7 @@ void LivingDead_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);

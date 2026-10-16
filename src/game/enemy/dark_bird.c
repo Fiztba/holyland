@@ -5,10 +5,10 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "effect/shot.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-extern s32 entity_type_handlers[][2];
-void EntityAi_SetUpdate(char *, s32);
+extern void (*entity_type_handlers[][2])(Entity *);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 void Motion_SetPartSlots(EntityModel *, s32, s32, s32);
@@ -20,7 +20,7 @@ void EntityAi_SensePlayer(void *, int);
 int EntityAi_StartSlotMotion(void *, void *, int, int, int, int, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 extern PlayerData player_state;
 int rand(void);
@@ -31,9 +31,6 @@ int EntityAi_PickAttack(char *);
 int EntityAi_TurnFromPush(void *, void *);
 void EntityPoint_PickNear(float, void *, void *, void *);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 float EntityMath_HeadingTo(float *, float *);
@@ -61,7 +58,7 @@ void EntityEvent_OnDeath(Entity *);
 int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
 s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
 void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
-int EntityAi_LookAtPoint(void *, int, int, int, int, float);
+int EntityAi_LookAtPoint(void *, f32 *, int, void *, f32 *, float);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 
 static void DarkBird_Think(Entity *entity, s32 unknown);
@@ -117,7 +114,7 @@ void DarkBird_Init(Entity *entity) {
     }
     entity->flags |= 0x10000000;
     entity->target = NULL;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -405,7 +402,7 @@ static void DarkBird_ThinkIdle(Entity *entity, s32 unknown) {
 /* The move handler: keeps animation 3 on both motion slots, flag bits 11 to 13 at 0. DarkBird_ApplyMoveCommand
    does the turning and the moving. */
 static void DarkBird_Move(Entity *entity) {
-    entity->flags &= ~0x3800UL;
+    entity->flags &= ~0x3800ULL;
     EntityAi_StartSlotMotion(entity, entity->unkE0.motion_slot_0, 0, 3, 0, entity->params->motion_blend_frames, 0);
     EntityAi_StartSlotMotion(entity, entity->unkE0.motion_slot_1, 1, 3, 0, entity->params->motion_blend_frames, 0);
 }
@@ -1109,7 +1106,7 @@ static void DarkBird_Animate(Entity *entity) {
     limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
     limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
     if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
-        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
     } else {
         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
     }

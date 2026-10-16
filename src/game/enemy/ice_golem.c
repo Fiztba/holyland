@@ -4,8 +4,7 @@
    hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -15,15 +14,15 @@ void EntityAi_Animate(void);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 extern PlayerData player_state;
 int rand(void);
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
@@ -83,7 +82,7 @@ void IceGolem_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags &= ~0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -127,7 +126,7 @@ static void IceGolem_Think(Entity *entity, s32 unknown) {
         }
     }
     if (frame_counter % 3U == 0) {
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x3AD, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x3AD, 0xFF, entity->model->rotation);
     }
 }
 

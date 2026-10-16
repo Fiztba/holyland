@@ -4,7 +4,7 @@
    hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -12,7 +12,7 @@ int Motion_StepModel(EntityModel *, s32, s32);
 void EntityAi_Animate(void);
 void EntityAi_OnHit(char *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
 // match: const, so that the store to unk48 can follow the load of it
 extern const f32 D_00446804[];
@@ -20,7 +20,7 @@ void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn3D(char *);
 void EntityAi_StepState(void *);
 f32 EntityCollision_DistanceToGround(f32 *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int rand(void);
 void EntityPoint_PickNearWithHeight(f32 *, f32, f32, void *, void *);
 int EntityAi_TurnFromPush(void *, void *);
@@ -83,7 +83,7 @@ void Seafang_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 1;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);

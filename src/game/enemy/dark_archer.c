@@ -6,9 +6,9 @@
 #include "common.h"
 #include "map/map.h"
 #include "effect/effect.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -26,11 +26,6 @@ extern PlayerData player_state;
 extern f32 identity_matrix[16];
 double atan2(double, double);
 float EntityMath_WrapAngle(float);
-void sceVu0CopyMatrix(void *, void *);
-void sceVu0TransposeMatrix(void *, void *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 s32 Bone_MultiplyPathTo(void *, void *, void *);
 void Bone_MatrixToAngles(void *, void *);
 void Matrix_Multiply(void *, void *, void *);
@@ -54,8 +49,8 @@ extern EntitySpawnInfo *map_spawn_infos[2];
 void Game_CountSpawnDeath(u32, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 int rand(void);
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
@@ -115,7 +110,7 @@ void DarkArcher_Init(Entity *entity) {
     }
     entity->flags &= ~0x10000000;
     *(s32 *)&entity->target = 0; // match: stored as an int, so it can move ahead of the params load
-    EntityAi_SetUpdate((char *)entity, (s32)entity_type_handlers[entity->params->entity_type][1]);
+    EntityAi_SetUpdate((char *)entity, entity_type_handlers[entity->params->entity_type][1]);
     if (entity->spawn_info->spawn_mode != 0) {
         unkE0->think = DarkArcher_ThinkShootOrTurn;
         unkE0->animate = (void (*)(void))DarkArcher_Animate;
@@ -132,7 +127,7 @@ void DarkArcher_Init(Entity *entity) {
         unkE0->death = (void (*)(void))EntityAi_Death;
         unkE0->dormant = (void (*)(void))EntityAi_Dormant;
         unkE0->move = (void (*)(void))EntityAi_Move;
-        if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+        if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
             EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
         } else {
             EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -392,7 +387,7 @@ static void DarkArcher_DeathWithoutReward(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bit27 = 1;
             ENTITY_FLAG_BITS(entity)->bit26 = 1;
             entity->action_timer = 20;
-            Game_CountSpawnDeath(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
+            Game_CountSpawnDeath(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
             Effect_FreeForOwner(entity);
             entity->action_step++;
         }
@@ -438,7 +433,7 @@ static void DarkArcher_Think(Entity *entity, s32 unknown) {
             }
         }
     }
-    if ((s16)entity->params->action_frames != 0 && (entity->flags & (0x8200L << 35))) {
+    if ((s16)entity->params->action_frames != 0 && (entity->flags & (0x8200LL << 35))) {
         unkE0->step_index = 1;
     } else {
         unkE0->step_index = 0;
@@ -650,7 +645,7 @@ static void DarkArcher_MoveAlongArc(Entity *entity) {
     case 4:
         unkE0->keep_min_distance = EntityMath_Approach(unkE0->keep_min_distance, entity->params->max_speed, entity->params->speed_step_per_frame);
         unkE0->heading_speed = EntityMath_Approach(unkE0->heading_speed, entity->params->unk43C, entity->params->unk43A);
-        if (ENTITY_FLAGS(entity) & (0x8200L << 35)) {
+        if (ENTITY_FLAGS(entity) & (0x8200LL << 35)) {
             Motion_Start(entity, 9, 0, 0, 1);
             unkE0->heading_speed = 0.0f;
             unkE0->keep_min_distance = 0.0f;

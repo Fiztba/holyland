@@ -4,15 +4,15 @@
    hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 #include "common.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void EntityAi_OnHit(char *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -40,9 +40,6 @@ void EntityAi_Guard(Entity *);
 void EntityAi_MeleeAttack(Entity *);
 void EntityAi_RangedAttack(Entity *);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 float EntityAi_Accelerate(Entity *, float);
@@ -51,9 +48,9 @@ void EntityAi_SetState(char *, u8);
 
 static void BloodBat_Animate(Entity *entity);
 static void BloodBat_Think(Entity *entity, s32 unknown);
-static int BloodBat_ThinkReturn(void *entity_arg, int unknown);
+static void BloodBat_ThinkReturn(void *entity_arg, int unknown);
 static void BloodBat_ThinkWander(Entity *entity, s32 unknown);
-static int BloodBat_ThinkCombat(void *entity_arg, int unknown);
+static void BloodBat_ThinkCombat(void *entity_arg, int unknown);
 static void BloodBat_Move(Entity *entity);
 static void BloodBat_Dormant(Entity *entity);
 
@@ -84,7 +81,7 @@ void BloodBat_Init(Entity *entity) {
         entity->attack_weights[i] = 0x80;
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -107,7 +104,7 @@ static void BloodBat_Animate(Entity *entity) {
     unkE0 = &entity->unkE0;
     if (ENTITY_FLAG_BITS(entity)->bit14) {
         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
-            entity->flags = flags & ~0x3800L;
+            entity->flags = flags & ~0x3800LL;
         }
         blend_frames = entity->model->level_tables->unk88;
         if (blend_frames != 0) {
@@ -152,7 +149,7 @@ static void BloodBat_Think(Entity *entity, s32 unknown) {
    whatever is pushing the entity, as EntityAi_ThinkReturn; with flag bits 11 to 13 at 0, the
    command of EntityAi_MoveCommand3D, and, while it is pushed, command bit 0x20 or 0x10 by the y of the push.
    */
-static int BloodBat_ThinkReturn(void *entity_arg, int unknown) {
+static void BloodBat_ThinkReturn(void *entity_arg, int unknown) {
     Entity *entity = entity_arg;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 to_spawn[4];
@@ -168,7 +165,7 @@ static int BloodBat_ThinkReturn(void *entity_arg, int unknown) {
         entity->move_command = EntityAi_MoveCommand3D(entity, 0, 50.0f);
     } else {
         push[0] = push[1] = push[2] = push[3] = 0.0f;
-        if (entity->flags & (0xC000L << 31)) {
+        if (entity->flags & (0xC000LL << 31)) {
             push[0] += entity->wall_push[0];
             push[1] += entity->wall_push[1];
             push[2] += entity->wall_push[2];
@@ -244,7 +241,7 @@ static void BloodBat_ThinkWander(Entity *entity, s32 unknown) {
    Closing in, it goes forward turning to Entity.heading_to_player, with command bit 0x20 or 0x10 to bring its y
    to the player's less work float unk4C (EntityParams.yaw_limit_deg give or take unk434), and it chooses
    anew once the player is within the radius plus 130. */
-static int BloodBat_ThinkCombat(void *entity_arg, int unknown) {
+static void BloodBat_ThinkCombat(void *entity_arg, int unknown) {
     Entity *entity = entity_arg;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 direction[4];

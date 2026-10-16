@@ -7,8 +7,7 @@
 #include "map/map.h"
 #include "effect/effect.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -18,7 +17,7 @@ void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern float player_state[];
 extern EntitySpawnInfo *map_spawn_infos[2];
 extern MapSlot map_slots[];
@@ -58,7 +57,7 @@ void HammerSkeleton_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -116,7 +115,7 @@ static void HammerSkeleton_Death(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bits2 = 2;
             ENTITY_FLAG_BITS(entity)->bit4 = TRUE;
             entity->action_timer = 20;
-            Game_CountSpawnDeath(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
+            Game_CountSpawnDeath(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
             if (entity->spawn_info->death_script_id != 0 && entity->group_id == current_map_slot) {
                 Script_Start(entity->spawn_info->death_script_id, 0);
             }

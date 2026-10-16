@@ -5,7 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -16,13 +16,13 @@ void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 extern float player_state[];
 int rand(void);
@@ -82,7 +82,7 @@ void LavaLizard_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -103,7 +103,7 @@ void LavaLizard_Init(Entity *entity) {
 static void LavaLizard_Think(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
 
-    if (entity->flags & (0xD000L << 33)) {
+    if (entity->flags & (0xD000LL << 33)) {
         unkE0->step_index = entity->params->far_distance;
     }
     if (frame_counter % 10U == entity->spawn_index % 10U) {

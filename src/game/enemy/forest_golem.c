@@ -6,15 +6,14 @@
 #include "entity/entity_world.h"
 #include "map_object/map_object.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32); // match: an int result keeps $2 busy after the call
 void Vector_Copy(void *, void *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern char map_script_flags[0x2000];
 extern MapSlot map_slots[];
 extern int current_map_slot;
@@ -28,8 +27,8 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 extern float player_state[];
 int rand(void);

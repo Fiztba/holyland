@@ -5,26 +5,21 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "entity/entity_world.h"
+#include <libvu0.h>
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 extern f32 identity_matrix[16];
 float EntityMath_AngleDifference(float, float);
-void sceVu0CopyMatrix(void *, void *);
-void sceVu0TransposeMatrix(void *, void *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 s32 Bone_MultiplyPathTo(void *, void *, void *);
 void Bone_MatrixToAngles(void *, void *);
 void Matrix_Multiply(void *, void *, void *);
@@ -97,7 +92,7 @@ void FireGenie_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags |= 0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);

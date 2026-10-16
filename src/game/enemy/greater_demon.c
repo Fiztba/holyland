@@ -16,7 +16,7 @@ extern f32 D_00446828[];
 
 static KfVector climb_points[3]; /* 0x4FF390 the points GreaterDemon_Think climbs over (it indexes up to 5) */
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
@@ -24,7 +24,7 @@ void Vector_Copy(void *, void *);
 void EntityAi_Animate(void);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int EntityShot_Launch(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *);
 static void GreaterDemon_Think(Entity *entity, s32 unknown);
 static void GreaterDemon_Move(Entity *entity);
@@ -34,8 +34,8 @@ void EntityPoint_PickNear(float, void *, void *, void *);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 static void GreaterDemon_ThinkCombat(Entity *, s32);
 int rand(void);
@@ -73,7 +73,7 @@ void EntityAi_SetState(char *, u8);
 int EntityAi_SetReaction(char *, void (*)(void), int); // match: an int result keeps $2 busy after the call
 static void GreaterDemon_ReactionHeavy(Entity *);
 void EntityAi_SetAttackDelay(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
 float EntityMath_DistanceXZ(void *, void *);
 void EntityEvent_Respawn(char *);
@@ -108,7 +108,7 @@ void GreaterDemon_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags &= ~0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -724,17 +724,17 @@ static void GreaterDemon_Guard(Entity *entity) {
     case 1:
         if (entity->model->level_tables->unk88 == 0) {
             entity->action_timer = entity->params->guard_frames;
-            entity->flags |= 0x8000L << 20;
+            entity->flags |= 0x8000LL << 20;
             entity->flags &= ~0x4000;
             entity->action_step++;
         }
         break;
     case 2:
         if (ENTITY_FLAG_BITS(entity)->bit43 && ENTITY_FLAG_BITS(entity)->bit39 && !ENTITY_FLAG_BITS(entity)->bit38) {
-            entity->flags &= ~(0x8000L << 28);
+            entity->flags &= ~(0x8000LL << 28);
             entity->action_timer = entity->params->guard_frames;
         }
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x32F, 0, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x32F, 0, entity->model->rotation);
         if (entity->action_timer == 0) {
             ENTITY_FLAG_BITS(entity)->bit35 = 0;
             ENTITY_FLAG_BITS(entity)->bit14 = 1;

@@ -4,8 +4,7 @@
    hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -14,7 +13,7 @@ void EntityAi_Animate(void);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Start(void *, int, int, u32, int);
 void EntityAi_SetState(char *, u8);
 extern u32 frame_counter;
@@ -23,7 +22,7 @@ void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
 f32 EntityCollision_DistanceToGround(f32 *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int rand(void);
 int EntityAi_TurnFromPush(void *, void *);
 float EntityMath_WrapAngle(float);
@@ -76,7 +75,7 @@ void Critter_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);

@@ -5,8 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -16,7 +15,7 @@ void EntityAi_Animate(void);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 void EntityAi_LowerWeightsAfterHit(char *);
 void EntityAi_SetState(char *, u8);
 int EntityAi_SetReaction(char *, void (*)(void), int);
@@ -27,12 +26,12 @@ int rand(void);
 float sqrtf(float);
 float atan2f(float, float);
 char *Model_GetSkinnedBonePoint(char *, u32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 s32 EntityAi_ShouldDodge(Entity *, f32, f32);
 s32 EntityAi_PickCombatChoice(Entity *, s32);
@@ -104,7 +103,7 @@ void DarkKnight_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags &= ~0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -172,8 +171,8 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
     second_aim[0] = atan2f(-delta[1], sqrtf(delta[0] * delta[0] + delta[2] * delta[2]));
     second_aim[1] = atan2f(delta[0], delta[2]);
     second_aim[2] = 0.0f;
-    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1E, (int)first_aim);
-    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1F, (int)second_aim);
+    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1E, first_aim);
+    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1F, second_aim);
     if (unkE0->pause_timer > 0) {
         if (unkE0->pause_timer > (s16)entity->params->action_frames - entity->params->near_distance) {
             from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, 4);
@@ -184,7 +183,7 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
             aims->unk30[0] = atan2f(-delta[1], sqrtf(delta[0] * delta[0] + delta[2] * delta[2]));
             aims->unk30[1] = atan2f(delta[0], delta[2]);
             aims->unk30[2] = 0.0f;
-            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, (int)aims->unk30);
+            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, aims->unk30);
             frames = entity->params->far_distance;
             entity->params->melee_attacks[0].hit_parts[0].unk00.unk00[8] = frames;
             entity->params->melee_attacks[0].hit_parts[1].unk00.unk00[8] = frames;
@@ -216,12 +215,12 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
     }
     if (unkE0->sub_timer > 0) {
         if (frame_counter % 3U == 0) {
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x25C, 0, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x25C, 0, entity->model->rotation);
         }
-        ENTITY_FLAGS(entity) |= 0x8000L << 20;
+        ENTITY_FLAGS(entity) |= 0x8000LL << 20;
         unkE0->sub_timer--;
     } else {
-        ENTITY_FLAGS(entity) &= ~(0x8000L << 20);
+        ENTITY_FLAGS(entity) &= ~(0x8000LL << 20);
     }
     if (entity->busy_flags == 0) {
         EntityAi_CheckFarFromSpawn(entity);

@@ -5,8 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -15,7 +14,7 @@ void EntityAi_Animate(void);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 void EntityAi_LowerWeightsAfterHit(char *);
 void EntityAi_RangedAttack(Entity *);
 void EntityAi_ReactionRewind(Entity *);
@@ -56,7 +55,7 @@ void Stool_Init(Entity *entity) {
         entity->attack_weights[i] = 0x80;
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -78,7 +77,7 @@ static void Stool_OnHit(Entity *entity) {
     EntityAi_LowerWeightsAfterHit((char *)entity);
     flags = entity->flags;
     if ((s32)(flags >> 38) & 3) {
-        entity->flags = (flags & ~(3UL << 58)) | (1UL << 57);
+        entity->flags = (flags & ~(3ULL << 58)) | (1ULL << 57);
         EntityAi_StartAction(entity, EntityAi_RangedAttack, 1);
         return;
     }
