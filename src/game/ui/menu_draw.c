@@ -537,13 +537,13 @@ static SpritePacket *MenuSprite_SlideUp(SpritePacket *src_packet, int amount);
 static SpritePacket *MenuSprite_SlideDown(SpritePacket *packet, int amount);
 static SpritePacket *MenuSprite_Fade(SpritePacket *src_packet, int alpha);
 static SpritePacket *MenuSprite_SlideRightAlt(SpritePacket *src_packet, int amount);
-static void MenuSprite_Stub12(void);
-static void MenuSprite_Stub15(void);
-static void MenuSprite_Stub14(void);
+static KindObject *MenuSprite_Stub12(void);
+static KindObject *MenuSprite_Stub15(void);
+static KindObject *MenuSprite_Stub14(void);
 static SpritePacket *MenuSprite_TintWeaponStat(SpritePacket *packet);
 static SpritePacket *MenuSprite_TintWornStat(SpritePacket *packet, int index);
 static SpritePacket *MenuSprite_TintMagicStat(SpritePacket *packet);
-static void MenuSprite_Stub19(void);
+static KindObject *MenuSprite_Stub19(void);
 static SpritePacket *MenuSprite_ShowIfBitSet(SpritePacket *packet, s32 slot_mask);
 static SpritePacket *MenuSprite_ShowIfOptionChosen(SpritePacket *packet);
 static SpritePacket *MenuSprite_ShowIfFlagSet(SpritePacket *packet);
@@ -3606,16 +3606,22 @@ static SpritePacket *MenuSprite_SlideRightAlt(SpritePacket *src_packet, int amou
     return &copy;
 }
 
-/* Sprite handler 12: empty. */
-static void MenuSprite_Stub12(void) {
+/* Sprite handler 12: empty. Its callers use what it returns: on the PS2 that was $v0, the handler's own address,
+   so they read the code as a KindObject (kind 0: MenuDraw_Sprite then draws the code bytes as a sprite). The PC returns NULL, which draws nothing. */
+static KindObject *MenuSprite_Stub12(void) {
+    return NULL;
 }
 
-/* Sprite handler 15: empty. */
-static void MenuSprite_Stub15(void) {
+/* Sprite handler 15: empty. Its callers use what it returns: on the PS2 that was $v0, the handler's own address,
+   so they read the code as a KindObject (kind 16: nothing is drawn). The PC returns NULL, which draws nothing. */
+static KindObject *MenuSprite_Stub15(void) {
+    return NULL;
 }
 
-/* Sprite handler 14: empty. */
-static void MenuSprite_Stub14(void) {
+/* Sprite handler 14: empty. Its callers use what it returns: on the PS2 that was $v0, the handler's own address,
+   so they read the code as a KindObject (kind 0: MenuDraw_Sprite then draws the code bytes as a sprite). The PC returns NULL, which draws nothing. */
+static KindObject *MenuSprite_Stub14(void) {
+    return NULL;
 }
 
 /* Sprite handler: a copy of the sprite, blue when the number it stands for (44 to 52) is above what the
@@ -3772,8 +3778,10 @@ static SpritePacket *MenuSprite_TintMagicStat(SpritePacket *packet) {
     return &copy;
 }
 
-/* Sprite handler 19: empty. */
-static void MenuSprite_Stub19(void) {
+/* Sprite handler 19: empty. Its callers use what it returns: on the PS2 that was $v0, the handler's own address,
+   so they read the code as a KindObject (kind 0: MenuDraw_Sprite then draws the code bytes as a sprite). The PC returns NULL, which draws nothing. */
+static KindObject *MenuSprite_Stub19(void) {
+    return NULL;
 }
 
 /* Sprite handler: a copy of the sprite, opaque (alpha 0x80) when its slot's bit is set in the mask, else clear. */

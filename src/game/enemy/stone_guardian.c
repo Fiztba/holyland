@@ -561,7 +561,7 @@ static void StoneGuardian_Mode2ReturnToSpawn(Entity *entity) {
     f32 angle;
 
     if (unkE0->sub_timer > 0) {
-        unkE0->move();
+        ((void (*)(Entity *))unkE0->move)(entity);
         return;
     }
     ENTITY_FLAG_BITS(entity)->bits11 = 1;
@@ -778,7 +778,7 @@ static void StoneGuardian_Mode3ReturnToSpawn(Entity *entity) {
     f32 angle;
 
     if (unkE0->sub_timer > 0) {
-        unkE0->move();
+        ((void (*)(Entity *))unkE0->move)(entity);
         return;
     }
     ENTITY_FLAG_BITS(entity)->bits11 = 1;
@@ -991,7 +991,7 @@ static void StoneGuardian_Mode4ReturnToSpawn(Entity *entity) {
     f32 angle;
 
     if (unkE0->sub_timer > 0) {
-        unkE0->move();
+        ((void (*)(Entity *))unkE0->move)(entity);
         return;
     }
     ENTITY_FLAG_BITS(entity)->bits11 = 1;
@@ -1205,7 +1205,7 @@ static void StoneGuardian_Mode5ReturnToSpawn(Entity *entity) {
     f32 angle;
 
     if (unkE0->sub_timer > 0) {
-        unkE0->move();
+        ((void (*)(Entity *))unkE0->move)(entity);
         return;
     }
     ENTITY_FLAG_BITS(entity)->bits11 = 1;

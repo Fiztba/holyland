@@ -1807,7 +1807,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
     entity->reaction_step = 0;
     if (run_now != 0) {
         if (reaction != NULL) {
-            reaction();
+            ((void (*)(Entity *))reaction)(entity); /* the reactions take the entity, which the EE left in $a0 */
         }
     }
     return 1;

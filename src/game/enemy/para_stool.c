@@ -161,8 +161,7 @@ static void ParaStool_ThinkCombat(Entity *entity, s32 unknown) {
         if (entity->combat_choice != entity->prev_combat_choice) {
             entity->choice_change_frame = frame_counter;
         }
-        // match: called with one argument here
-        ((void (*)(Entity *))EntityAi_LowerChoiceWeight)(entity);
+        EntityAi_LowerChoiceWeight(entity, next_action); /* the choice: retail left it in $a1 from the store above */
         switch (entity->combat_choice) {
         case 0:
             if (unkE0->pause_timer == 0) {
