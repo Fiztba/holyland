@@ -6,6 +6,7 @@
 #   patches/         the PC edits to the decomp, as git diffs with paths relative to the decomp root
 #                    (patches/game/<folder>.patch, patches/game/_top.patch, patches/nonmatching.patch).
 #   port/            the PS2 side: libraries, SDK stubs and the host's main.
+#   game/            PC-only game code (the data sections in C), compiled with the patched decomp.
 # At configure time the decomp's src/game and src/nonmatching are copied, the patches are applied to
 # the copy, and the copy (out/<preset>/decomp_src/src/) is compiled.
 cmake_minimum_required(VERSION 3.21)
@@ -154,6 +155,10 @@ file(GLOB top_sources CONFIGURE_DEPENDS ${KF4_SRC}/src/game/*.c)
 list(FILTER top_sources EXCLUDE REGEX "/func_0022[0-9A-F]+\\.c$")
 add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
+# the PC-only data sections (game/data/), built with the decomp's game code
+file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
+add_library(game_data OBJECT ${game_data_sources})
+list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")
