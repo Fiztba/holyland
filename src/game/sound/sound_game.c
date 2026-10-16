@@ -82,7 +82,7 @@ extern s32 (*const sound_file_load_steps[])(void);
 extern int entity_bank_load_step;
 extern int (*entity_bank_load_steps[])(void);
 /* the falloff players Sound_PlayFalloff picks from (the Sfx and Map ones take no bank) */
-extern int (*falloff_sound_players[])(int, int); // match: an int result, though the players are void
+extern void (*falloff_sound_players[])(u8, int, float, float, float); /* entries 6 on: (u8, float, float, float) */
 extern int map_bank_load_step;
 extern SoundScriptState map_reverb_cue_indices;
 extern u8 map_reverb_slot;
@@ -1952,10 +1952,15 @@ int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out) {
 }
 
 /* Plays sound from bank with the falloff player kind of falloff_sound_players while distance is within range, panned by
-   angle (EntityEvent_StartCueAlways calls it for the sounds of an entity's animation). Range, distance and angle pass through in
-   $f12..$f14; match: declared without them, which keeps the registers retail uses. */
-void Sound_PlayFalloff(int sound, int kind, int bank) {
-    falloff_sound_players[kind & 0xFF](sound & 0xFF, bank);
+   angle (EntityEvent_StartCueAlways calls it for the sounds of an entity's animation). On the PS2 range, distance and angle
+   pass through in $f12..$f14 to the player, which reads them from there whether or not it takes the bank. */
+void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle) {
+    if ((kind & 0xFF) >= 6) {
+        /* the Sfx and Map players take no bank */
+        ((void (*)(u8, float, float, float))falloff_sound_players[kind & 0xFF])(sound & 0xFF, range, distance, angle);
+    } else {
+        falloff_sound_players[kind & 0xFF](sound & 0xFF, bank, range, distance, angle);
+    }
 }
 
 /* Map bank load step: does nothing but move on. */

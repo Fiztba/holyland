@@ -16,7 +16,8 @@ extern PlayerShot *channeled_shot;
 extern u32 frame_counter;
 /* 0x4145C8 the ladder's state handlers, one per LadderState (Ladder_DispatchPad picks one) */
 void (*ladder_state_handlers[6])(u16, u16) = {
-    (void (*)(u16, u16))Ladder_WalkToFoot, Ladder_WaitOnRung, Ladder_ClimbRungUp, Ladder_ClimbRungDown,
+    (void (*)(u16, u16))Ladder_WalkToFoot, (void (*)(u16, u16))Ladder_WaitOnRung, (void (*)(u16, u16))Ladder_ClimbRungUp,
+    (void (*)(u16, u16))Ladder_ClimbRungDown,
 };
 extern u16 forward_button;
 extern u16 back_button;
@@ -428,8 +429,8 @@ void Ladder_Start(ObjectReference *object, int from_far_end) {
     if ((s32)(player_state.status_bits >> 34) & 1) {
         return;
     }
-    Vector_Copy(&ladder_top_point, (void *)object->model->get_point(object->model, 1));
-    Vector_Copy(&ladder_bottom_point, (void *)object->model->get_point(object->model, 0));
+    Vector_Copy(&ladder_top_point, (void *)(sptr)object->model->get_point(object->model, 1));
+    Vector_Copy(&ladder_bottom_point, (void *)(sptr)object->model->get_point(object->model, 0));
     Vector_Subtract(&ladder_span, &ladder_top_point, &ladder_bottom_point);
     PLAYER_STATUS_BITS(&player_state)->bit36 = TRUE;
     PLAYER_STATUS_BITS(&player_state)->bit34 = FALSE;
@@ -606,4 +607,5 @@ int Ladder_PlayStepSound(void) {
             break;
         }
     }
+    return 0; /* retail leaves v0 as it was; the callers do not read it */
 }

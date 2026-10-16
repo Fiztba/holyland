@@ -19,7 +19,6 @@ extern char item_effect_small_motion_path[];
 extern char item_effect_large_model_path[];
 extern char item_effect_large_motion_path[];
 extern char item_effect_texture_path_format[];
-extern u8 player_weapon_step[];
 extern int current_map_slot;
 extern int item_effect_area_size;
 extern char *item_effect_area;
@@ -306,7 +305,7 @@ void ItemEffect_StepRequestGameStatus(void) {
 
 /* Item-effect step 1: waits until the confirmation overlay flag is clear. */
 void ItemEffect_StepWaitOverlay(void) {
-    if (player_weapon_step[0] == 0) {
+    if (player_state.item_action_step == 0) {
         game_status.update_hold_flags = 0xC5F;
         game_status.effect_owner = item_effect_model;
         item_effect_step++;

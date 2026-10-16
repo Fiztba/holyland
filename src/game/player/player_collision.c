@@ -459,7 +459,7 @@ void Player_CollideWithEntities(int climb) {
                 }
                 player_state.position.y = top;
                 stepped = TRUE;
-                player_state.stepped_on_entity = (s32)entity;
+                player_state.stepped_on_entity = entity;
             }
         }
         player_state.position.y -= 1.0f;
@@ -504,7 +504,7 @@ void Player_CollideWithEntities(int climb) {
                 if (entity->spawn_info->type_id == 0x9B && i != 3) {
                     continue;
                 }
-                point = (void *)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
+                point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
                 Vector_Copy(position, point);
                 if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
                     radius = body->unk04 * ENTITY_MODEL(entity)->scale_x;

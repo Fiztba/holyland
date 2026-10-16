@@ -115,7 +115,6 @@ void Attack_WearWeapon(int, int);
 void Attack_WearWornItem(int idx, int amount);
 
 extern u8 spell_levels[6][5];
-extern u64 player_status_bits[];            /* player_previous.unk1C8 */
 extern GameDefinition weapon_name_defs[70];
 extern LevelRecord weapon_level_records[70];
 extern LevelDef item_name_defs[0x17C];
@@ -891,11 +890,10 @@ void Player_SwingWeapon(u16 held, u16 pressed) {
     }
 }
 
-extern u8 player_weapon_step[];
 
 void Player_InvokeTargetHandler(u16 target_id, u16 command) {
     Player_UpdateWeaponAim();
-    item_step_handlers[player_weapon_step[0]](target_id, command);
+    item_step_handlers[player_state.item_action_step](target_id, command);
 }
 
 /* Handler of an item that shoots: on the button, starts the motion and launches the item's shot. */
@@ -1020,7 +1018,7 @@ void Player_HolsterWeapon(void) {
     ModelMotion_Step(WEAPON_MODEL);
     if (MODEL_CHANNEL(WEAPON_MODEL)->value == 0) {
         Effect_FreePlayerWeaponKinds();
-        player_weapon_step[0] = 0;
+        player_state.item_action_step = 0;
     }
 }
 
@@ -1569,7 +1567,7 @@ void Player_TakeFallDamage(float speed) {
     if (player_state.stepped_on_entity != 0) {
         amount = amount * 60 / 100;
     } else if ((player_state.status_bits >> 38 & 1) == 1) {
-        if (!(player_status_bits[0] >> 38 & 1)) {
+        if (!(player_previous.status_bits >> 38 & 1)) {
             amount = amount * 80 / 100;
         }
     }
@@ -1617,7 +1615,7 @@ void Player_UpdateBreath(void) {
     int filled;
 
     player = &player_state;
-    was_set = (player_status_bits[0] >> 39) & 1;
+    was_set = (player_previous.status_bits >> 39) & 1;
     is_set = (player->status_bits >> 39) & 1;
     if (is_set != was_set) {
         if (is_set != 0) {

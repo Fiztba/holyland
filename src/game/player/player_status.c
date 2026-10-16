@@ -26,8 +26,7 @@ int Sound_PlaySw(int); // match: an int return (the definition is void) keeps $2
 int Sound_PlayCommon(int);
 
 extern PlayerState player_state;
-extern int player_hp_max[];            /* player_state.hp_max */
-extern int player_previous_fade_level[];            /* player_previous + 0x2A4 */
+extern PlayerState player_previous;
 /* 0x414580 the tint the damage and the statuses fade the screen with (Player_DrawScreenTints draws it) */
 PlayerScreenTint player_screen_tint = { 0 };
 extern PlayerItemDef weapon_defs[];
@@ -175,7 +174,7 @@ void Player_TakeDamage(int damage)
 
     if (Player_LoseHp(damage) != 0) {
         Player_FlashDamage();
-        tint = ((damage << 7) / (player_hp_max[0] / 2)) + 0x7F;
+        tint = ((damage << 7) / (player_state.hp_max / 2)) + 0x7F;
         if (tint >= 0x100)
             tint = 0xFF;
         Input_StartRumble(tint, 4, 0);
@@ -368,9 +367,9 @@ void Player_UpdateScreenFade(void) {
 
     slot = &map_slots[current_map_slot];
     player = &player_state;
-    area = *(char *)((player->map_index << 7) + (int)slot->records + 0x4C); // match: summed as integers, index first
+    area = *(char *)(slot->records + (player->map_index << 7) + 0x4C);
     *(s32 *)player->pad2A4 = area;
-    if (area - player_previous_fade_level[0] < 0) {
+    if (area - *(s32 *)player_previous.pad2A4 < 0) {
         *(s32 *)player->pad2AC = -0x30;
     }
     step = *(s32 *)player->pad2AC;

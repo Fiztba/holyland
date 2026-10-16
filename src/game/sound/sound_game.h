@@ -163,7 +163,7 @@ int Sound_EntityBankFreeSampleBuffer(SoundJob *job);
    voice in *voice_out once done, else 1 */
 int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out);
 /* Plays sound from bank with the falloff player kind of falloff_sound_players */
-void Sound_PlayFalloff(int sound, int kind, int bank);
+void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle);
 /* Map bank load step: does nothing but move on */
 s32 Sound_MapBankNoOp(void);
 /* Map bank load step: waits for a pending reverb change, then loads the map's voice (SoundDriver_LoadVoiceStep) */

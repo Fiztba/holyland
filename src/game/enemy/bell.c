@@ -16,7 +16,6 @@ int Motion_Step(void *, int);
 extern PlayerData player_state;
 float EntityMath_AngleXZ(float *, char *);
 float EntityMath_WrapAngle(float);
-// match: the definition names only the three integer arguments; the floats go on to the handler it calls in their registers
 void Sound_PlayFalloff(s32, s32, s32, f32, f32, f32);
 
 static void Bell_Animate(Entity *entity);

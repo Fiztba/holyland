@@ -42,7 +42,6 @@ int Collision_FindFloorBelow(f32, void *);
 typedef float Mat[4][4] __attribute__((aligned(16)));
 void Vector_Normalize(void *, void *);
 extern void (*effect_kind_handlers[][2])();
-extern u8 player_weapon[];
 extern int bolt_start_count;
 void Model_UpdateSkinnedBonePoints(ModelInstance *);
 char *Model_GetSkinnedBonePoint(char *, u32);
@@ -647,7 +646,7 @@ void EffectBolt_StartCounted(EffectActor *effect, EffectSlot *spawn_slot) {
     s16 angle;
 
     motion = (TurningMotion *)&effect->motion;
-    if (player_weapon[0] != 0x26) {
+    if (player_state.weapon != 0x26) {
         Effect_FreeSpawner(spawn_slot);
         return;
     }
