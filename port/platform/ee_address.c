@@ -102,6 +102,9 @@ EEWord ee_word_of(const void *ptr, const char *file, int line) {
     if (p >= ee_ram && p < ee_ram + EE_RAM_SIZE) {
         return (EEWord)(p - ee_ram);
     }
+    if (p >= ee_scratchpad && p < ee_scratchpad + sizeof(ee_scratchpad)) {
+        return EE_SCRATCHPAD_ADDRESS + (EEWord)(p - ee_scratchpad);
+    }
     for (i = 0; i < region_count; i++) {
         if (address >= regions[i].start && address < regions[i].end) {
             return regions[i].ee_base + (uint32_t)(address - regions[i].start);
@@ -113,6 +116,11 @@ EEWord ee_word_of(const void *ptr, const char *file, int line) {
 void *ee_static_ptr_of(EEWord word) {
     static int last;
     int i;
+
+    /* the scratchpad keeps its PS2 address, so DMA tags and registers can name it as on the PS2 */
+    if (word - EE_SCRATCHPAD_ADDRESS < sizeof(ee_scratchpad)) {
+        return ee_scratchpad + (word - EE_SCRATCHPAD_ADDRESS);
+    }
 
     /* collision and drawing look up the same section (the scratchpad's) again and again */
     if (word >= regions[last].ee_base && word - regions[last].ee_base < regions[last].end - regions[last].start) {

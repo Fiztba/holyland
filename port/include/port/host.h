@@ -19,8 +19,8 @@ typedef uintptr_t uptr;
    addresses: ee_ram + 0x5FAF80 is where the PS2 had the game's memory arena. Everything the game
    loads from disc lives in it, so a 32-bit word in a file can hold an address in it. The game's
    globals (in the program's image, not in game RAM) get EE addresses from 0x40000000 up
-   (port/platform/ee_address.c), so a 32-bit word can point at them as well. Only the stack and the
-   C heap have no EE address. */
+   (port/platform/ee_address.c), so a 32-bit word can point at them as well; the scratchpad keeps its
+   PS2 address, 0x70000000. Only the stack and the C heap have no EE address. */
 #define EE_RAM_SIZE 0x4000000u /* 64 MB: the PS2's 32 MB, and as much again for host growth */
 extern unsigned char *ee_ram;
 
@@ -49,6 +49,8 @@ EEWord ee_word_of(const void *ptr, const char *file, int line);
    The EE's 16 KB of fast RAM at 0x70000000. SPR(T, offset) is a pointer into it:
    ((f32 *)0x70000000) becomes SPR(f32 *, 0). */
 extern unsigned char ee_scratchpad[0x4000];
+/* its EE address, which EE_WORD gives and EE_PTR takes, as on the PS2 */
+#define EE_SCRATCHPAD_ADDRESS 0x70000000u
 #define SPR(T, offset) ((T)(ee_scratchpad + (offset)))
 
 /* ---- Hardware registers ---------------------------------------------------------------------

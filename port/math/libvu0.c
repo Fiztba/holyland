@@ -56,21 +56,24 @@ void sceVu0ScaleVectorXYZ(void *dst, void *src, float scale) {
     d[3] = s[3];
 }
 
+/* VU0 divides once (Q = 1 / q) and multiplies */
 void sceVu0DivVector(void *dst, void *src, float q) {
     float *d = dst, *s = src;
+    float inverse = 1.0f / q;
     int i;
 
     for (i = 0; i < 4; i++) {
-        d[i] = s[i] / q;
+        d[i] = s[i] * inverse;
     }
 }
 
 void sceVu0DivVectorXYZ(void *dst, void *src, float q) {
     float *d = dst, *s = src;
+    float inverse = 1.0f / q;
 
-    d[0] = s[0] / q;
-    d[1] = s[1] / q;
-    d[2] = s[2] / q;
+    d[0] = s[0] * inverse;
+    d[1] = s[1] * inverse;
+    d[2] = s[2] * inverse;
     d[3] = s[3];
 }
 
@@ -95,14 +98,16 @@ void sceVu0OuterProduct(void *dst, void *a, void *b) {
     memcpy(dst, r, sizeof(r));
 }
 
+/* xyz scaled to length 1 (VU0's vsqrt takes the absolute value); w becomes 0 */
 void sceVu0Normalize(void *dst, void *src) {
     float *d = dst, *s = src;
-    float scale = 1.0f / sqrtf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+    float length = sqrtf(fabsf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]));
+    float scale = 1.0f / length;
 
     d[0] = s[0] * scale;
     d[1] = s[1] * scale;
     d[2] = s[2] * scale;
-    d[3] = s[3];
+    d[3] = 0.0f;
 }
 
 void sceVu0ApplyMatrix(void *dst, void *m, void *v) {
@@ -167,14 +172,47 @@ void sceVu0InversMatrix(void *dst, void *src) {
     for (i = 0; i < 3; i++) {
         r[3][i] = -(r[0][i] * s[3][0] + r[1][i] * s[3][1] + r[2][i] * s[3][2]);
     }
-    r[3][3] = 1.0f;
+    r[3][3] = s[3][3];
     memcpy(dst, r, sizeof(r));
+}
+
+/* libvu0's _sceVu0ecossin: cos(angle) as sin(pi/2 - |angle|) by an odd polynomial to t^9 (summed in
+   VU0's order), and sin as the square root of 1 - cos^2 with the sign of the angle. Exact within
+   [-pi, pi]; outside it the polynomial drifts as retail's does, and the game relies on retail. */
+static void ecossin(float angle, float *cos_out, float *sin_out) {
+    static const float coeff[4] = {2.601887e-06f, -0.00019807414f, 0.0083330255f, -0.16666657f};
+    const float half_pi = 1.57079637f; /* 0x3FC90FDB */
+    int negative = angle < 0.0f;
+    float t = negative ? half_pi + angle : half_pi - angle;
+    float t2 = t * t;
+    float term[4];
+    float sum, root;
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        term[i] = coeff[i] * t * t2;
+    }
+    term[0] *= t2;
+    term[1] *= t2;
+    term[2] *= t2;
+    sum = t + term[3];
+    term[0] *= t2;
+    term[1] *= t2;
+    sum = sum + term[2];
+    term[0] *= t2;
+    sum = sum + term[1];
+    sum = sum + term[0];
+    root = sqrtf(fabsf(1.0f - sum * sum));
+    *cos_out = sum;
+    *sin_out = negative ? 0.0f - root : 0.0f + root;
 }
 
 static void rotate(void *dst, void *src, int axis, float angle) {
     Mat rot;
-    float c = cosf(angle), s = sinf(angle);
+    float c, s;
     int a = (axis + 1) % 3, b = (axis + 2) % 3;
+
+    ecossin(angle, &c, &s);
 
     sceVu0UnitMatrix(rot);
     rot[a][a] = c;
