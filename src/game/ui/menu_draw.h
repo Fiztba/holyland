@@ -13,7 +13,7 @@
 #include "gfx/texture.h"
 
 /* a sprite handler (sprite_handlers): takes the sprite's address and a value, gives the sprite to draw or NULL */
-typedef KindObject *(*SpriteHandler)(int sprite, int param);
+typedef KindObject *(*SpriteHandler)(sptr sprite, int param);
 
 /* Empties the menus' heap: its mark and its top both go back to the base. */
 void MenuHeap_Reset(void);
@@ -28,7 +28,7 @@ void *MenuHeap_Alloc(int size);
 void MenuHeap_FreeToMark(void);
 
 /* Starts the second allocator at `value` and takes the part drawers' work buffer from it; no result is set. */
-s32 MenuArena_Init(s32 value);
+s32 MenuArena_Init(sptr value);
 
 /* Takes `size` bytes at a multiple of `align` from the second allocator; NULL when it has no room. */
 void *MenuArena_Alloc(s32 size, s32 align);
@@ -89,16 +89,16 @@ void PoolPartFile_Relocate(PoolPartFile *file);
 s32 PoolNodeFile_Relocate(RelocFile *file);
 
 /* Draws a part in one flat colour (the four bytes of the third argument). */
-void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color);
+void PoolPart_DrawTinted(PoolPart *part, f32 *parent, RenderSlotArg color);
 
 /* Draws a part with the colours of its points. */
-void PoolPart_Draw(PoolPart *part, s32 parent);
+void PoolPart_Draw(PoolPart *part, f32 *parent);
 
 /* Uploads a loaded model's texture and draws its parts with PoolPart_DrawTinted. */
-void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slot_arg);
+void MenuModel_DrawTinted(ChunkUpload *upload, f32 *draw_param, RenderSlotArg slot_arg);
 
 /* Uploads a loaded model's texture and draws its parts with PoolPart_Draw. */
-void MenuModel_Draw(ChunkUpload *upload, s32 draw_param);
+void MenuModel_Draw(ChunkUpload *upload, f32 *draw_param);
 
 /* Draws a slot's part like PoolPart_DrawTinted does a part, but with the slot's own matrix, and, when the part has
    a record, with its first points and normals moved by the parent slot's matrix instead. */
@@ -132,10 +132,10 @@ void PoolNode_Pose(RelocEntry *node, PoolSlot *slots, f32 *parent_matrix, s32 fr
 void PoolPartFile_Expand(PoolPartFile *source, PoolPartFile *dest);
 
 /* Draws a sprite after running sprite handler `index` on it (owner: the SpritePacket's address). */
-void MenuSprite_DrawPlain(int owner, int index, int param);
+void MenuSprite_DrawPlain(sptr owner, int index, int param);
 
 /* Reads a whole file into buffer; returns buffer, or 0 when the file does not open. */
-int MenuFile_Load(char *name, void *buffer);
+sptr MenuFile_Load(char *name, void *buffer);
 
 /* Notes the blocks of the loaded menu file: how many, and where each one is. */
 void MenuFile_IndexBlocks(char *file);
@@ -157,6 +157,6 @@ s16 MenuPad_Update(void);
 s32 MenuDraw_SetGsRegister(int reg_address, s64 reg_value);
 
 /* Draws a sprite like MenuSprite_DrawPlain, with handler entry_id % 1000; from 1000 on, with `variant` as its alpha. */
-void MenuSprite_Draw(int owner, int entry_id, int param, int variant);
+void MenuSprite_Draw(sptr owner, int entry_id, int param, int variant);
 
 #endif

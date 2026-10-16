@@ -8,12 +8,10 @@
 /* the model ModelTexture_SendForModel draws; the older name for ModelInstance */
 typedef ModelInstance OverlaySprite;
 
-/* one 0x70-byte element PoolSlot_Draw draws (PoolSlot_DrawAll, PoolSlot_DrawAllBut15 and
-   PoolSlot_DrawFirst20But15 run it over an array of them) */
-typedef struct {
-    Vector4 rows[4];                /* 0x00 a matrix, loaded whole */
-    char pad40[0x30];
-} RenderSlot;
+/* one element PoolSlot_Draw draws (PoolSlot_DrawAll, PoolSlot_DrawAllBut15 and PoolSlot_DrawFirst20But15 run it
+   over an array of them): a pool slot (PoolSlot, core/game.h), whose first 0x40 bytes are a matrix loaded whole.
+   On the PC it is the PoolSlot itself, so that the arrays step by the slot's PC size. */
+typedef struct PoolSlot RenderSlot;
 
 /* PoolSlot_Draw's second argument: eight bytes passed in one register, only spilled */
 typedef struct {

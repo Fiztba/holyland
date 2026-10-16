@@ -2,9 +2,11 @@
    words, numbers, the cursor bar and text), the loader and drawer of the menus' models (parts in pool slots, posed
    by a node tree), the texture upload, the sprite handlers that alter a sprite before it is drawn, and the menus'
    reading of the pad. */
+#include <eekernel.h>
 #include <libgraph.h>
 #include <libvu0.h>
 #include <eeregs.h>
+#include <sifdev.h>
 #include "ui/menu_draw.h"
 #include "player/player.h"
 #include "ui/message.h"
@@ -13,12 +15,6 @@
 #include "effect/effect.h"
 #include "input/pad.h"
 
-void FlushCache(int); // match: an int result would keep $2 busy after the call (MenuModel_Draw, MenuModel_DrawTinted)
-void sceVu0TransMatrix(void *, void *, void *);
-int sceOpen(const char *, int);
-int sceLseek(int, int, int);
-int sceRead(int, void *, int);
-int sceClose(int);
 int File_Open(char *, int, int);
 int File_Close(int);
 int File_Read(int, void *, int);
@@ -27,8 +23,8 @@ void Vector_WeightedSum4(void *, void *, void *, void *, void *, float *);
 /* The module's own variables are defined where the original has them: the initialised ones in front of the
    function that first uses them (retail keeps them in that order), the others here. */
 static s64 *color_data;             /* 0x447344 set by MenuSprite_ColorFromNumber and never read */
-static s32 heap_mark;               /* 0x447348 what MenuHeap_FreeToMark goes back to */
-static s32 heap_top;                /* 0x44734C where the next block of the menus' heap comes from */
+static sptr heap_mark;              /* 0x447348 what MenuHeap_FreeToMark goes back to */
+static sptr heap_top;               /* 0x44734C where the next block of the menus' heap comes from */
 static u32 long_text_packets[2][0x3700]; /* 0x5DDF00 the two packet buffers of the long text drawers */
 
 extern sptr menu_heap;             /* the base of the menus' heap */
@@ -343,9 +339,8 @@ void (*pool_slot_drawers[4])(RenderSlot *, RenderSlotArg) = {
 LoadedBlockRef menu_file_blocks[66] = { { 0 } };
 
 /* 0x42A8D0 the loaded menu font and the two words MenuTexture_GetRegisters reads from it; the second
-   (menu_font_second_tex0) is the TEX0 of the font's second page of glyphs */
+   (menu_font_second_tex0, 0x42A8D8: menu_font_texture.trailer on the PC) is the TEX0 of the font's second page of glyphs */
 LoadedTexture menu_font_texture = { 0 };
-asm(".globl menu_font_second_tex0\nmenu_font_second_tex0 = menu_font_texture + 8\n");
 
 /* 0x42A8E8 8 zero bytes after the loaded font the code never refers to */
 static u64 D_0042A8E8 __attribute__((section(".data"))) = 0;
@@ -368,6 +363,8 @@ f32 menu_view_screen_matrix[16] = { 0 };
 /* the two packet buffers in the scratchpad */
 #define PACKET_BUFFER_0 ((void *)((char *)POOL_DRAW_SCRATCH + 0x800))
 #define PACKET_BUFFER_1 ((void *)((char *)POOL_DRAW_SCRATCH + 0x2400))
+/* the part drawers' scratchpad block (larger on the PC, its pointers being 8 bytes) must stay below the first */
+_Static_assert(sizeof(PoolDrawScratch) <= 0x800, "PoolDrawScratch runs into the packet buffers");
 #define POOL(slot) ((PoolSlot *)(slot))
 #define HEADER_TEX0(header) ((BootTex0 *)&(header)->tex0)
 #define ANGLE_PI 3.1415927f
@@ -385,7 +382,7 @@ static inline void send_packet(u32 *packet, s32 size) {
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
     }
     *D2_QWC = size;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x105;
 }
 
@@ -402,7 +399,118 @@ static inline void UnpackColour(u8 *rgb, u32 *colour) {
     rgb[2] = *colour >> 8;
 }
 
-static s32 MenuHeap_GetTop(void);
+/* The part drawers' VU0 macro-mode code, in C on VU0's registers (ee_vu0): the drawers load matrices into vf1-vf15
+   and vf21 in one step and use them for every point after. */
+
+/* lqc2: `count` rows of a matrix into vf[first] on. */
+static inline void vu0_load_rows(int first, const void *rows, int count) {
+    __builtin_memcpy(ee_vu0.vf[first], rows, count * 16);
+}
+
+/* vftoi0: a float to an int, saturating like VU0. */
+static inline s32 vu0_ftoi(f32 value) {
+    if (value >= 2147483647.0f) {
+        return 0x7FFFFFFF;
+    }
+    if (value <= -2147483648.0f) {
+        return (s32)0x80000000;
+    }
+    return (s32)value;
+}
+
+/* vaddw.xyzw vf20, vf0, vf0w; vdiv Q, vf0w, vf20w; vmul.xyzw vf21, vf0, vf0; vmulq.w vf21, vf0, Q:
+   vf21 = (0, 0, 0, 0.5). */
+static inline void vu0_set_half_w(void) {
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        ee_vu0.vf[20][i] = ee_vu0.vf[0][i] + ee_vu0.vf[0][3];
+    }
+    ee_vu0.q = ee_vu0.vf[0][3] / ee_vu0.vf[20][3];
+    for (i = 0; i < 4; i++) {
+        ee_vu0.vf[21][i] = ee_vu0.vf[0][i] * ee_vu0.vf[0][i];
+    }
+    ee_vu0.vf[21][3] = ee_vu0.vf[0][3] * ee_vu0.q;
+}
+
+/* A point through the matrix in vf1-vf4, divided by its w and turned into 12.4 fixed point (vftoi4):
+   lqc2 vf16; vmulax/vmadday/vmaddaz ACC, vf1-vf3; vmaddw vf17, vf4; vdiv Q, vf0w, vf17w; vmulq vf26, vf17, Q;
+   vftoi4 vf17, vf26; sqc2 vf17. */
+static inline void vu0_project_point(void *target, const void *source) {
+    f32 *in = ee_vu0.vf[16];
+    f32 *out = ee_vu0.vf[17];
+    s32 fixed[4];
+    int i;
+
+    __builtin_memcpy(in, source, 16);
+    for (i = 0; i < 4; i++) {
+        ee_vu0.acc[i] = ee_vu0.vf[1][i] * in[0];
+    }
+    for (i = 0; i < 4; i++) {
+        ee_vu0.acc[i] = ee_vu0.acc[i] + ee_vu0.vf[2][i] * in[1];
+    }
+    for (i = 0; i < 4; i++) {
+        ee_vu0.acc[i] = ee_vu0.acc[i] + ee_vu0.vf[3][i] * in[2];
+    }
+    for (i = 0; i < 4; i++) {
+        out[i] = ee_vu0.acc[i] + ee_vu0.vf[4][i] * in[3];
+    }
+    ee_vu0.q = ee_vu0.vf[0][3] / out[3];
+    for (i = 0; i < 4; i++) {
+        ee_vu0.vf[26][i] = out[i] * ee_vu0.q;
+    }
+    for (i = 0; i < 4; i++) {
+        fixed[i] = vu0_ftoi(ee_vu0.vf[26][i] * 16.0f);
+    }
+    __builtin_memcpy(out, fixed, 16);
+    __builtin_memcpy(target, out, 16);
+}
+
+/* A normal through the matrix in vf12-vf14, then x and y moved from -1..1 to 0..1 and z set to 1 (texture
+   coordinates): lqc2 vf16; vmulax/vmadday ACC, vf12-vf13; vmaddz vf17, vf14; vaddw.xy vf17, vf17, vf0w;
+   vmulw.xy vf17, vf17, vf21w; vaddw.z vf17, vf0, vf0w; sqc2 vf17. */
+static inline void vu0_transform_normal(void *target, const void *source) {
+    f32 *in = ee_vu0.vf[16];
+    f32 *out = ee_vu0.vf[17];
+    int i;
+
+    __builtin_memcpy(in, source, 16);
+    for (i = 0; i < 4; i++) {
+        ee_vu0.acc[i] = ee_vu0.vf[12][i] * in[0];
+    }
+    for (i = 0; i < 4; i++) {
+        ee_vu0.acc[i] = ee_vu0.acc[i] + ee_vu0.vf[13][i] * in[1];
+    }
+    for (i = 0; i < 4; i++) {
+        out[i] = ee_vu0.acc[i] + ee_vu0.vf[14][i] * in[2];
+    }
+    out[0] = out[0] + ee_vu0.vf[0][3];
+    out[1] = out[1] + ee_vu0.vf[0][3];
+    out[0] = out[0] * ee_vu0.vf[21][3];
+    out[1] = out[1] * ee_vu0.vf[21][3];
+    out[2] = ee_vu0.vf[0][2] + ee_vu0.vf[0][3];
+    __builtin_memcpy(target, out, 16);
+}
+
+/* A colour's four floats to ints: lqc2 vf16; vftoi0.xyzw vf17, vf16; sqc2 vf17. */
+static inline void vu0_color_to_int(void *target, const void *source) {
+    s32 fixed[4];
+    int i;
+
+    __builtin_memcpy(ee_vu0.vf[16], source, 16);
+    for (i = 0; i < 4; i++) {
+        fixed[i] = vu0_ftoi(ee_vu0.vf[16][i]);
+    }
+    __builtin_memcpy(ee_vu0.vf[17], fixed, 16);
+    __builtin_memcpy(target, ee_vu0.vf[17], 16);
+}
+
+/* lq/sq: one quadword copied. */
+static inline void copy_qword(void *target, const void *source) {
+    __builtin_memcpy(target, source, 16);
+}
+
+static sptr MenuHeap_GetTop(void);
 static void MenuHeap_Clear(void);
 static void MenuArena_AllocWorkBuffer(void);
 static void MenuDraw_TextAt(u16 *text, GsPackedWord origin);
@@ -517,16 +625,16 @@ void *MenuHeap_Alloc(int size) {
     heap_top += size;
     // match: a pointer top keeps gcc from folding "- (misalign - 16)" into "+ 16 - misalign"
     top = (u8 *)heap_top;
-    misalign = (s32)top & 0xF;
+    misalign = (s32)((sptr)top & 0xF);
     if (misalign) {
         top -= misalign - 16;
     }
-    heap_top = (s32)top;
+    heap_top = (sptr)top;
     return block;
 }
 
 /* Returns the heap's top. */
-static s32 MenuHeap_GetTop(void) {
+static sptr MenuHeap_GetTop(void) {
     return heap_top;
 }
 
@@ -541,23 +649,24 @@ static void MenuHeap_Clear(void) {
 }
 
 /* the second allocator */
-static s32 arena_next = 0;                  /* 0x446D38 where its next block comes from */
-static s32 arena_start = 0;                 /* 0x446D3C */
+static sptr arena_next = 0;                 /* 0x446D38 where its next block comes from */
+static sptr arena_start = 0;                /* 0x446D3C */
 static f32 (*part_work_buffer)[4] = NULL;   /* 0x446D40 the part drawers' work buffer: 0x500 vectors each for points,
                                                screen points and normals */
 
 /* Starts the second allocator at `value` and takes the part drawers' work buffer from it. */
-s32 MenuArena_Init(s32 value) { // match: declared with a result that no path sets (func_001D55E8 only matches so)
+s32 MenuArena_Init(sptr value) { // match: declared with a result that no path sets (func_001D55E8 only matches so)
     arena_start = value;
     arena_next = value;
     MenuArena_AllocWorkBuffer();
+    return 0; /* the PS2 returned whatever was in $2; no caller uses it */
 }
 
 /* Takes `size` bytes at a multiple of `align` from the second allocator; returns the address, or 0 when
    that would end more than 0x280000 bytes from its start. */
 void *MenuArena_Alloc(s32 size, s32 align) {
-    s32 aligned;
-    s32 end;
+    sptr aligned;
+    sptr end;
 
     aligned = ((arena_next + align - 1) / align) * align;
     end = aligned + size;
@@ -617,7 +726,7 @@ void MenuDraw_Sprite(KindObject *object) {
         packet[25] = rect->first.depth;
         while (*D2_CHCR & 0x100);
         *D2_QWC = 7;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
     }
 }
@@ -667,28 +776,28 @@ void MenuDraw_Word(KindObject *object) {
     *cursor++ = 0x25252106;
     *cursor++ = 0xFFFFF525;
     for (index = 0; index < count && (code = menu_word_glyphs[start + index]) != 0xFFFF; index++) {
-        *((u64 *)cursor)++ = *menu_font_page_tex0[code / 625];
+        *(u64 *)cursor = *menu_font_page_tex0[code / 625]; cursor += 2;
         code %= 625;
         column = code % 25;
         row = code / 25;
         *cursor++ = 0x54;
         *cursor++ = 0;
         *cursor++ = sprite->red | (sprite->green << 8) | (sprite->blue << 16) | (sprite->alpha << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = (f32)column * cell[0] + 0.009765625f;
-        *((f32 *)cursor)++ = (f32)(row + 1) * cell[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = (f32)column * cell[0] + 0.009765625f;
+        *(f32 *)cursor++ = (f32)(row + 1) * cell[1];
         *cursor++ = ((s32)first.f.lo16 + index * (s32)step.f.lo16) | ((s32)second.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
-        *((f32 *)cursor)++ = (f32)column * cell[0] + 0.009765625f;
-        *((f32 *)cursor)++ = (f32)row * cell[1];
+        *(f32 *)cursor++ = (f32)column * cell[0] + 0.009765625f;
+        *(f32 *)cursor++ = (f32)row * cell[1];
         *cursor++ = ((s32)first.f.lo16 + index * (s32)step.f.lo16) | ((s32)first.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * cell[0] - 0.009765625f;
-        *((f32 *)cursor)++ = (f32)(row + 1) * cell[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * cell[0] - 0.009765625f;
+        *(f32 *)cursor++ = (f32)(row + 1) * cell[1];
         *cursor++ = ((index + 1) * (s32)step.f.lo16 + (s32)first.f.lo16) | ((s32)second.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * cell[0] - 0.009765625f;
-        *((f32 *)cursor)++ = (f32)row * cell[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * cell[0] - 0.009765625f;
+        *(f32 *)cursor++ = (f32)row * cell[1];
         *cursor++ = ((index + 1) * (s32)step.f.lo16 + (s32)first.f.lo16) | ((s32)first.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
         *cursor++ = 0;
@@ -697,7 +806,7 @@ void MenuDraw_Word(KindObject *object) {
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = count * 6 + 1;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
 }
 
@@ -734,7 +843,7 @@ void MenuDraw_Bar(MenuCursorBar *bar) {
         packet[15] = rect->first.depth;
         while (*D2_CHCR & 0x100);
         *D2_QWC = 4;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
     }
 }
@@ -952,7 +1061,7 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path 
     s32 right;
 
     if (sprite == NULL) {
-        return;
+        return 0;
     }
     if (sprite->kind == 2) {
         value = MenuDraw_GetNumber(sprite->number_id);
@@ -960,7 +1069,7 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path 
         value = sprite->number_id;
     }
     if (value < 0) {
-        return;
+        return 0;
     }
     if (value <= 999999999) {
         if (sprite->digit_count != 0) {
@@ -1022,28 +1131,28 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path 
         code = glyphs[index];
         column = code % 25;
         row = code / 25;
-        *((u64 *)cursor)++ = *menu_font_page_tex0[0];
+        *(u64 *)cursor = *menu_font_page_tex0[0]; cursor += 2;
         base = (s32)first.f.lo16 + (count << 5);
         left = index * (s32)step.f.lo16 - ((index * 6) << 4) + (count << 6);
         right = (index + 1) * (s32)step.f.lo16 - ((index * 6) << 4) + (count << 6);
         *cursor++ = 0x54;
         *cursor++ = 0;
         *cursor++ = sprite->red | (sprite->green << 8) | (sprite->blue << 16) | (sprite->alpha << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = (f32)column * cell[0];
-        *((f32 *)cursor)++ = (f32)(row + 1) * cell[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = (f32)column * cell[0];
+        *(f32 *)cursor++ = (f32)(row + 1) * cell[1];
         *cursor++ = (base + left) | ((s32)second.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
-        *((f32 *)cursor)++ = (f32)column * cell[0];
-        *((f32 *)cursor)++ = (f32)row * cell[1];
+        *(f32 *)cursor++ = (f32)column * cell[0];
+        *(f32 *)cursor++ = (f32)row * cell[1];
         *cursor++ = (base + left) | ((s32)first.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * cell[0];
-        *((f32 *)cursor)++ = (f32)(row + 1) * cell[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * cell[0];
+        *(f32 *)cursor++ = (f32)(row + 1) * cell[1];
         *cursor++ = (base + right) | ((s32)second.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * cell[0];
-        *((f32 *)cursor)++ = (f32)row * cell[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * cell[0];
+        *(f32 *)cursor++ = (f32)row * cell[1];
         *cursor++ = (base + right) | ((s32)first.f.mid16 << 16);
         *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
         *cursor++ = 0;
@@ -1052,8 +1161,9 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path 
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = count * 6 + 1;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
+    return 0; /* the PS2 returned whatever was in $2; no caller uses it */
 }
 
 /* Draws a line of text at a screen position (origin: x, y, z and the line height in 16ths): one textured
@@ -1095,14 +1205,14 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
             code += 0x47E;
             column = code % 50;
             row = code / 50;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[0];
+            *(u64 *)cursor = *menu_font_page_tex0[0]; cursor += 2;
             top.f.lo16 = bottom.f.lo16;
             bottom.f.lo16 += 0xA0;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
         } else {
             code = text[index];
-            *((u64 *)cursor)++ = *menu_font_page_tex0[code / 625];
+            *(u64 *)cursor = *menu_font_page_tex0[code / 625]; cursor += 2;
             code %= 625;
             top.f.lo16 = bottom.f.lo16;
             bottom.f.lo16 += 0x140;
@@ -1113,21 +1223,21 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
         *cursor++ = 0x54;
         *cursor++ = 0;
         *cursor++ = 0x80808080;
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = (f32)column * scale[0];
-        *((f32 *)cursor)++ = (f32)(row + 1) * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = (f32)column * scale[0];
+        *(f32 *)cursor++ = (f32)(row + 1) * scale[1];
         *cursor++ = (s32)top.f.lo16 | ((s32)bottom.f.mid16 << 16);
         *cursor++ = top.f.mid24;
-        *((f32 *)cursor)++ = (f32)column * scale[0];
-        *((f32 *)cursor)++ = (f32)row * scale[1];
+        *(f32 *)cursor++ = (f32)column * scale[0];
+        *(f32 *)cursor++ = (f32)row * scale[1];
         *cursor++ = (s32)top.f.lo16 | ((s32)top.f.mid16 << 16);
         *cursor++ = top.f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * scale[0];
-        *((f32 *)cursor)++ = (f32)(row + 1) * scale[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * scale[0];
+        *(f32 *)cursor++ = (f32)(row + 1) * scale[1];
         *cursor++ = (s32)bottom.f.lo16 | ((s32)bottom.f.mid16 << 16);
         *cursor++ = top.f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * scale[0];
-        *((f32 *)cursor)++ = (f32)row * scale[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * scale[0];
+        *(f32 *)cursor++ = (f32)row * scale[1];
         *cursor++ = (s32)bottom.f.lo16 | ((s32)top.f.mid16 << 16);
         *cursor++ = top.f.mid24;
         *cursor++ = 0;
@@ -1139,7 +1249,7 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = count * 6 + 1;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
 }
 
@@ -1185,14 +1295,14 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
             code += 0x47E;
             column = code % 50;
             row = code / 50;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[0];
+            *(u64 *)cursor = *menu_font_page_tex0[0]; cursor += 2;
             top.f.lo16 = bottom.f.lo16;
             bottom.f.lo16 += 0xA0;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
         } else {
             code = text[index];
-            *((u64 *)cursor)++ = *menu_font_page_tex0[code / 625];
+            *(u64 *)cursor = *menu_font_page_tex0[code / 625]; cursor += 2;
             code %= 625;
             top.f.lo16 = bottom.f.lo16;
             bottom.f.lo16 += 0x140;
@@ -1203,21 +1313,21 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
         *cursor++ = 0x54;
         *cursor++ = 0;
         *cursor++ = 0x80808080;
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = (f32)column * scale[0];
-        *((f32 *)cursor)++ = (f32)(row + 1) * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = (f32)column * scale[0];
+        *(f32 *)cursor++ = (f32)(row + 1) * scale[1];
         *cursor++ = (s32)top.f.lo16 | ((s32)bottom.f.mid16 << 16);
         *cursor++ = top.f.mid24;
-        *((f32 *)cursor)++ = (f32)column * scale[0];
-        *((f32 *)cursor)++ = (f32)row * scale[1];
+        *(f32 *)cursor++ = (f32)column * scale[0];
+        *(f32 *)cursor++ = (f32)row * scale[1];
         *cursor++ = (s32)top.f.lo16 | ((s32)top.f.mid16 << 16);
         *cursor++ = top.f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * scale[0];
-        *((f32 *)cursor)++ = (f32)(row + 1) * scale[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * scale[0];
+        *(f32 *)cursor++ = (f32)(row + 1) * scale[1];
         *cursor++ = (s32)bottom.f.lo16 | ((s32)bottom.f.mid16 << 16);
         *cursor++ = top.f.mid24;
-        *((f32 *)cursor)++ = (f32)(column + 1) * scale[0];
-        *((f32 *)cursor)++ = (f32)row * scale[1];
+        *(f32 *)cursor++ = (f32)(column + 1) * scale[0];
+        *(f32 *)cursor++ = (f32)row * scale[1];
         *cursor++ = (s32)bottom.f.lo16 | ((s32)top.f.mid16 << 16);
         *cursor++ = top.f.mid24;
         *cursor++ = 0;
@@ -1229,7 +1339,7 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = count * 6 + 1;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
 }
 
@@ -1371,13 +1481,13 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
             glyph_column = glyph % 50;
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
         } else {
             glyph = text[i];
-            *((u64 *)cursor)++ = *menu_font_page_tex0[(glyph / 625) % 2]; // match: % 2, not & 1
+            *(u64 *)cursor = *menu_font_page_tex0[(glyph / 625) % 2]; cursor += 2; // match: % 2, not & 1
             glyph %= 625;
             glyph_column = glyph % 25;
             glyph_row = glyph / 25;
@@ -1389,13 +1499,13 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
         *cursor++ = 0x56;
         *cursor++ = 0;
         *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = glyph_column * scale[0];
-        *((f32 *)cursor)++ = glyph_row * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = glyph_column * scale[0];
+        *(f32 *)cursor++ = glyph_row * scale[1];
         *cursor++ = (s32)top_left.pos_x | ((s32)top_left.pos_y << 16);
         *cursor++ = top_left.depth;
-        *((f32 *)cursor)++ = (glyph_column + 1) * scale[0];
-        *((f32 *)cursor)++ = (glyph_row + 1) * scale[1];
+        *(f32 *)cursor++ = (glyph_column + 1) * scale[0];
+        *(f32 *)cursor++ = (glyph_row + 1) * scale[1];
         *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
         *cursor++ = top_left.depth;
         *cursor++ = 0;
@@ -1405,8 +1515,8 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
     text_pen.pos_y = bottom_right.pos_y;
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     return count;
 }
@@ -1498,12 +1608,12 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
         } else {
             glyph = text[i];
-            *((u64 *)cursor)++ = *menu_font_page_tex0[(glyph / 625) % 2]; // match: % 2, not & 1
+            *(u64 *)cursor = *menu_font_page_tex0[(glyph / 625) % 2]; cursor += 2; // match: % 2, not & 1
             glyph %= 625;
             glyph_column = glyph % 25;
             glyph_row = glyph / 25;
@@ -1515,13 +1625,13 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
         *cursor++ = 0x56;
         *cursor++ = 0;
         *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = glyph_column * scale[0];
-        *((f32 *)cursor)++ = glyph_row * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = glyph_column * scale[0];
+        *(f32 *)cursor++ = glyph_row * scale[1];
         *cursor++ = (s32)top_left.pos_x | ((s32)top_left.pos_y << 16);
         *cursor++ = top_left.depth;
-        *((f32 *)cursor)++ = (glyph_column + 1) * scale[0];
-        *((f32 *)cursor)++ = (glyph_row + 1) * scale[1];
+        *(f32 *)cursor++ = (glyph_column + 1) * scale[0];
+        *(f32 *)cursor++ = (glyph_row + 1) * scale[1];
         *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
         *cursor++ = top_left.depth;
         *cursor++ = 0;
@@ -1532,8 +1642,8 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
     FlushCache(0);
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = (u32)packet & 0x7FFFFFFF;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = EE_WORD(packet) & 0x7FFFFFFF;
     *D2_CHCR = 0x100;
     return count;
 }
@@ -1599,14 +1709,14 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
             glyph_column = glyph % 50;
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
         } else {
             glyph = text[i];
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[glyph / 625];
+            *(u64 *)cursor = *menu_font_page_tex0[glyph / 625]; cursor += 2;
             glyph %= 625;
             glyph_column = glyph % 25;
             glyph_row = glyph / 25;
@@ -1616,13 +1726,13 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
         *cursor++ = 0x56;
         *cursor++ = 0;
         *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = glyph_column * scale[0];
-        *((f32 *)cursor)++ = glyph_row * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = glyph_column * scale[0];
+        *(f32 *)cursor++ = glyph_row * scale[1];
         *cursor++ = (s32)top_left.pos_x | ((s32)top_left.pos_y << 16);
         *cursor++ = top_left.depth;
-        *((f32 *)cursor)++ = (glyph_column + 1) * scale[0];
-        *((f32 *)cursor)++ = (glyph_row + 1) * scale[1];
+        *(f32 *)cursor++ = (glyph_column + 1) * scale[0];
+        *(f32 *)cursor++ = (glyph_row + 1) * scale[1];
         *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
         *cursor++ = top_left.depth;
         *cursor++ = 0;
@@ -1632,8 +1742,8 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
     text_pen.pos_y = bottom_right.pos_y;
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     return count;
 }
@@ -1717,14 +1827,14 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
             glyph_column = glyph % 50;
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
         } else {
             glyph = text[i];
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[glyph / 625];
+            *(u64 *)cursor = *menu_font_page_tex0[glyph / 625]; cursor += 2;
             glyph %= 625;
             glyph_column = glyph % 25;
             glyph_row = glyph / 25;
@@ -1734,13 +1844,13 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
         *cursor++ = 0x56;
         *cursor++ = 0;
         *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = glyph_column * scale[0];
-        *((f32 *)cursor)++ = glyph_row * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = glyph_column * scale[0];
+        *(f32 *)cursor++ = glyph_row * scale[1];
         *cursor++ = (s32)top_left.pos_x | ((s32)top_left.pos_y << 16);
         *cursor++ = top_left.depth;
-        *((f32 *)cursor)++ = (glyph_column + 1) * scale[0];
-        *((f32 *)cursor)++ = (glyph_row + 1) * scale[1];
+        *(f32 *)cursor++ = (glyph_column + 1) * scale[0];
+        *(f32 *)cursor++ = (glyph_row + 1) * scale[1];
         *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
         *cursor++ = top_left.depth;
         *cursor++ = 0;
@@ -1750,8 +1860,8 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
     text_pen.pos_y = bottom_right.pos_y;
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     return count;
 }
@@ -1826,14 +1936,14 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
             glyph_column = glyph % 50;
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
         } else {
             glyph = text[i];
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[glyph / 625];
+            *(u64 *)cursor = *menu_font_page_tex0[glyph / 625]; cursor += 2;
             glyph %= 625;
             glyph_column = glyph % 25;
             glyph_row = glyph / 25;
@@ -1843,13 +1953,13 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
         *cursor++ = 0x56;
         *cursor++ = 0;
         *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = glyph_column * scale[0];
-        *((f32 *)cursor)++ = glyph_row * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = glyph_column * scale[0];
+        *(f32 *)cursor++ = glyph_row * scale[1];
         *cursor++ = (s32)top_left.pos_x | ((s32)top_left.pos_y << 16);
         *cursor++ = top_left.depth;
-        *((f32 *)cursor)++ = (glyph_column + 1) * scale[0];
-        *((f32 *)cursor)++ = (glyph_row + 1) * scale[1];
+        *(f32 *)cursor++ = (glyph_column + 1) * scale[0];
+        *(f32 *)cursor++ = (glyph_row + 1) * scale[1];
         *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
         *cursor++ = top_left.depth;
         *cursor++ = 0;
@@ -1859,8 +1969,8 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
     text_pen.pos_y = bottom_right.pos_y;
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     return count;
 }
@@ -1947,14 +2057,14 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
             glyph_column = glyph % 50;
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
         } else {
             glyph = text[i];
             top_left.pos_x = bottom_right.pos_x;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[glyph / 625];
+            *(u64 *)cursor = *menu_font_page_tex0[glyph / 625]; cursor += 2;
             glyph %= 625;
             glyph_column = glyph % 25;
             glyph_row = glyph / 25;
@@ -1964,13 +2074,13 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
         *cursor++ = 0x56;
         *cursor++ = 0;
         *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = glyph_column * scale[0];
-        *((f32 *)cursor)++ = glyph_row * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = glyph_column * scale[0];
+        *(f32 *)cursor++ = glyph_row * scale[1];
         *cursor++ = (s32)top_left.pos_x | ((s32)top_left.pos_y << 16);
         *cursor++ = top_left.depth;
-        *((f32 *)cursor)++ = (glyph_column + 1) * scale[0];
-        *((f32 *)cursor)++ = (glyph_row + 1) * scale[1];
+        *(f32 *)cursor++ = (glyph_column + 1) * scale[0];
+        *(f32 *)cursor++ = (glyph_row + 1) * scale[1];
         *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
         *cursor++ = top_left.depth;
         *cursor++ = 0;
@@ -1980,8 +2090,8 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
     text_pen.pos_y = bottom_right.pos_y;
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = (EE_WORD(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     return count;
 }
@@ -2076,7 +2186,7 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
         } else if (text[i] == 0x8000) {
@@ -2087,12 +2197,12 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
             glyph_row = glyph / 50;
             top_left.pos_x = bottom_right.pos_x;
             bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
-            *((u64 *)cursor)++ = *menu_font_page_tex0[1];
+            *(u64 *)cursor = *menu_font_page_tex0[1]; cursor += 2;
             scale[0] = 0.01953125f;
             scale[1] = 0.0390625f;
         } else {
             glyph = text[i];
-            *((u64 *)cursor)++ = *menu_font_page_tex0[glyph / 625];
+            *(u64 *)cursor = *menu_font_page_tex0[glyph / 625]; cursor += 2;
             glyph %= 625;
             glyph_column = glyph % 25;
             glyph_row = glyph / 25;
@@ -2104,13 +2214,13 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
         *cursor++ = 0x56;
         *cursor++ = 0;
         *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
-        *((f32 *)cursor)++ = 1.0f;
-        *((f32 *)cursor)++ = glyph_column * scale[0];
-        *((f32 *)cursor)++ = glyph_row * scale[1];
+        *(f32 *)cursor++ = 1.0f;
+        *(f32 *)cursor++ = glyph_column * scale[0];
+        *(f32 *)cursor++ = glyph_row * scale[1];
         *cursor++ = (s32)top_left.pos_x | ((s32)top_left.pos_y << 16);
         *cursor++ = top_left.depth;
-        *((f32 *)cursor)++ = (glyph_column + 1) * scale[0];
-        *((f32 *)cursor)++ = (glyph_row + 1) * scale[1];
+        *(f32 *)cursor++ = (glyph_column + 1) * scale[0];
+        *(f32 *)cursor++ = (glyph_row + 1) * scale[1];
         *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
         *cursor++ = top_left.depth;
         *cursor++ = 0;
@@ -2121,8 +2231,8 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
     FlushCache(0);
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = (u32)packet & 0x7FFFFFFF;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = EE_WORD(packet) & 0x7FFFFFFF;
     *D2_TADR = 0;
     *D2_CHCR = 0x105;
     return count;
@@ -2135,14 +2245,14 @@ void PoolPartFile_Relocate(PoolPartFile *file) {
 
     part = file->parts;
     for (i = 0; i < file->part_count; i++) {
-        if (part->material != NULL) {
-            part->material = (PoolPartMaterial *)((char *)file + (s32)part->material);
+        if (part->material != 0) {
+            part->material = EE_WORD(file) + part->material;
         }
-        if (part->points != NULL) {
-            part->points = (f32 (*)[4])((char *)file + (s32)part->points);
+        if (part->points != 0) {
+            part->points = EE_WORD(file) + part->points;
         }
-        if (part->normals != NULL) {
-            part->normals = (f32 (*)[4])((char *)file + (s32)part->normals);
+        if (part->normals != 0) {
+            part->normals = EE_WORD(file) + part->normals;
         }
         part++;
     }
@@ -2159,24 +2269,24 @@ s32 PoolNodeFile_Relocate(RelocFile *file) {
 
     for (i = 0; i < file->entry_count; i++) {
         entry = cursor;
-        if (entry->unk30 != NULL) {
-            entry->unk30 = (char *)file + (s32)entry->unk30;
+        if (entry->unk30 != 0) {
+            entry->unk30 = EE_WORD(file) + entry->unk30;
         }
-        if (entry->layers != NULL) {
-            entry->layers = (RelocLayer *)((char *)file + (s32)entry->layers);
+        if (entry->layers != 0) {
+            entry->layers = EE_WORD(file) + entry->layers;
         }
-        if (entry->unk38 != NULL) {
-            entry->unk38 = (char *)file + (s32)entry->unk38;
+        if (entry->unk38 != 0) {
+            entry->unk38 = EE_WORD(file) + entry->unk38;
         }
-        if (entry->unk3C != NULL) {
-            entry->unk3C = (char *)file + (s32)entry->unk3C;
+        if (entry->unk3C != 0) {
+            entry->unk3C = EE_WORD(file) + entry->unk3C;
         }
-        for (j = 0, layer = entry->layers; j < entry->layer_count; j++, layer++) {
-            if (layer->unk08 != NULL) {
-                layer->unk08 = (char *)file + (s32)layer->unk08;
+        for (j = 0, layer = EE_PTR(RelocLayer *, entry->layers); j < entry->layer_count; j++, layer++) {
+            if (layer->unk08 != 0) {
+                layer->unk08 = EE_WORD(file) + layer->unk08;
             }
-            if (layer->unk0C != NULL) {
-                layer->unk0C = (char *)file + (s32)layer->unk0C;
+            if (layer->unk0C != 0) {
+                layer->unk0C = EE_WORD(file) + layer->unk0C;
             }
         }
         cursor = entry + 1;
@@ -2188,13 +2298,13 @@ s32 PoolNodeFile_Relocate(RelocFile *file) {
    points, then sends each strip to the GS as it stands, its registers first, with the colour on every
    point, and, when the strip has a second texture (unk10), the same strip again with that texture and the
    points' normals as texture coordinates. Last a packet that sets ALPHA_1. */
-void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+void PoolPart_DrawTinted(PoolPart *part, f32 *parent, RenderSlotArg color) {
     PoolDrawScratch *scratch = POOL_DRAW_SCRATCH;
     PoolDrawScratch *again;
     u32 *out;
     f32 unit[16] = { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f };
-    s32 source;
-    s32 target;
+    f32 *source;
+    f32 *target;
 
     scratch->unkA0[0] = 128.0f;
     scratch->unkA0[1] = 128.0f;
@@ -2203,7 +2313,7 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
     scratch->work = part_work_buffer;
     scratch->screen_points = part_work_buffer + 0x500;
     scratch->normals = part_work_buffer + 0xA00;
-    *(Uint128 *)scratch->unk1A0 = 0x00000080000000000000000000000000;
+    *(Uint128 *)scratch->unk1A0 = (Uint128)0x80 << 96;
     scratch->point_count = part->point_count;
     scratch->strip_count = part->strip_count;
     scratch->normal_count = part->normal_count;
@@ -2213,69 +2323,23 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
     sceVu0RotMatrixZ(scratch->world, scratch->world, part->rotation[2]);
     sceVu0RotMatrixY(scratch->world, scratch->world, part->rotation[1]);
     sceVu0TransMatrix(scratch->world, scratch->world, part->position);
-    sceVu0MulMatrix(scratch->world, (void *)parent, scratch->world);
+    sceVu0MulMatrix(scratch->world, parent, scratch->world);
     sceVu0MulMatrix(scratch->screen, menu_view_screen_matrix, scratch->world);
     sceVu0MulMatrix(scratch->light, scratch->world, menu_model_light_directions);
-    __asm__ volatile("lqc2 $vf12, 0x0(%0)\n"
-                     "lqc2 $vf13, 0x10(%0)\n"
-                     "lqc2 $vf14, 0x20(%0)\n"
-                     "lqc2 $vf15, 0x30(%0)\n"
-                     : : "r"(scratch->world));
-    __asm__ volatile("lqc2 $vf1, 0x0(%0)\n"
-                     "lqc2 $vf2, 0x10(%0)\n"
-                     "lqc2 $vf3, 0x20(%0)\n"
-                     "lqc2 $vf4, 0x30(%0)\n"
-                     : : "r"(scratch->screen));
+    vu0_load_rows(12, scratch->world, 4);
+    vu0_load_rows(1, scratch->screen, 4);
     scratch->point_index = 0;
     scratch->normal_index = 0;
-    __asm__ volatile("lqc2 $vf5, 0x0(%0)\n"
-                     "lqc2 $vf6, 0x10(%0)\n"
-                     "lqc2 $vf7, 0x20(%0)\n"
-                     : : "r"(scratch->light));
-    __asm__ volatile("lqc2 $vf8, 0x0(%0)\n"
-                     "lqc2 $vf9, 0x10(%0)\n"
-                     "lqc2 $vf10, 0x20(%0)\n"
-                     "lqc2 $vf11, 0x30(%0)\n"
-                     : : "r"(menu_model_light_colors));
-    __asm__ volatile("vaddw.xyzw $vf20, $vf0, $vf0w\n"
-                     "vdiv Q, $vf0w, $vf20w\n"
-                     "vmul.xyzw $vf21, $vf0, $vf0\n"
-                     "vwaitq\n"
-                     "vmulq.w $vf21, $vf0, Q\n");
+    vu0_load_rows(5, scratch->light, 3);
+    vu0_load_rows(8, menu_model_light_colors, 4);
+    vu0_set_half_w();
     for (scratch->point_at = 0; scratch->point_at < scratch->point_count; scratch->point_at++) {
-        source = scratch->point_index * 16 + (s32)part->points;
-        target = scratch->point_index++ * 16 + (s32)scratch->screen_points;
-        __asm__ volatile("lqc2 $vf16, 0x0(%1)\n"
-                         "vmulax.xyzw ACC, $vf1, $vf16x\n"
-                         "vmadday.xyzw ACC, $vf2, $vf16y\n"
-                         "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-                         "vmaddw.xyzw $vf17, $vf4, $vf16w\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vdiv Q, $vf0w, $vf17w\n"
-                         "vwaitq\n"
-                         "vmulq.xyzw $vf26, $vf17, Q\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vftoi4.xyzw $vf17, $vf26\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "sqc2 $vf17, 0x0(%0)\n"
-                         : : "r"(target), "r"(source));
+        source = EE_PTR(f32 (*)[4], part->points)[scratch->point_index];
+        target = scratch->screen_points[scratch->point_index++];
+        vu0_project_point(target, source);
     }
     for (scratch->normal = 0; scratch->normal < scratch->normal_count; scratch->normal++) {
-        __asm__ volatile("lqc2 $vf16, 0x0(%1)\n"
-                         "vmulax.xyzw ACC, $vf12, $vf16x\n"
-                         "vmadday.xyzw ACC, $vf13, $vf16y\n"
-                         "vmaddz.xyzw $vf17, $vf14, $vf16z\n"
-                         "vaddw.xy $vf17, $vf17, $vf0w\n"
-                         "vmulw.xy $vf17, $vf17, $vf21w\n"
-                         "vaddw.z $vf17, $vf0, $vf0w\n"
-                         "sqc2 $vf17, 0x0(%0)\n"
-                         : : "r"(scratch->normal_index * 16 + (s32)scratch->normals), "r"(scratch->normal_index * 16 + (s32)part->normals));
+        vu0_transform_normal(scratch->normals[scratch->normal_index], EE_PTR(f32 (*)[4], part->normals)[scratch->normal_index]);
         scratch->normal_index++;
     }
     FlushCache(0);
@@ -2284,7 +2348,7 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
     scratch->reg_tag[1] = 0x10004000;
     scratch->reg_tag[2] = 0xE;
     scratch->prim_tag[3] = 0;
-    scratch->strip_at = part->material;
+    scratch->strip_at = EE_PTR(PoolPartMaterial *, part->material);
     scratch->reg_tag[3] = 0;
     scratch->tex0 = scratch->strip_at->tex0; // match: every strip is sent with the first strip's TEX0
     for (scratch->strip = 0; scratch->strip < scratch->strip_count; scratch->strip++) {
@@ -2307,10 +2371,10 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
         scratch->registers[6] = 0;
         scratch->registers[7] = 9;
         scratch->cursor += 0x10;
-        *((u64 *)scratch->cursor)++ = 4;
-        *((u64 *)scratch->cursor)++ = 0x1C;
-        *((u64 *)scratch->cursor)++ = scratch->tex0;
-        *((u64 *)scratch->cursor)++ = 0x17;
+        *(u64 *)scratch->cursor = 4; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = 0x1C; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = scratch->tex0; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = 0x17; scratch->cursor += 2;
         *scratch->cursor++ = scratch->strip_at->unk04;
         *scratch->cursor++ = 0;
         *scratch->cursor++ = 0x43;
@@ -2330,16 +2394,14 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
             ((f32 *)scratch->cursor)[0] = scratch->strip_point->tex_s;
             ((f32 *)scratch->cursor)[1] = scratch->strip_point->tex_t;
             ((f32 *)scratch->cursor)[2] = 1.0f;
-            POOL_DRAW_SCRATCH_CURSOR(scratch).words += 4; // match: through the union this store waits for the float stores, which decides the loop's registers
+            scratch->cursor += 4;
             scratch->cursor[0] = ((u8 *)&color)[0];
             again = POOL_DRAW_SCRATCH; // match: a second pointer the compiler cannot fold: its reload of the cursor is the daddu copy
             out = again->cursor;
             out[1] = ((u8 *)&color)[1];
             out[2] = ((u8 *)&color)[2];
             out[3] = ((u8 *)&color)[3];
-            __asm__ volatile("lq $9, 0x0(%0)\n"
-                             "sq $9, 0x0(%1)\n"
-                             : : "r"(&scratch->screen_points[scratch->strip_point->point]), "r"(out + 4) : "$9");
+            copy_qword(out + 4, &scratch->screen_points[scratch->strip_point->point]);
             scratch->cursor = out + 8;
             scratch->strip_point++;
         }
@@ -2361,11 +2423,11 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
             scratch->registers[6] = 0;
             scratch->registers[7] = 9;
             scratch->cursor += 0x10;
-            *((u64 *)scratch->cursor)++ = 4;
-            *((u64 *)scratch->cursor)++ = 0x1C;
-            *((u64 *)scratch->cursor)++ = scratch->strip_at->unk10;
-            *((u64 *)scratch->cursor)++ = 0x17;
-            *((u64 *)scratch->cursor)++ = 9;
+            *(u64 *)scratch->cursor = 4; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = 0x1C; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = scratch->strip_at->unk10; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = 0x17; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = 9; scratch->cursor += 2;
             *scratch->cursor++ = 0x43;
             *scratch->cursor++ = 0;
             *scratch->cursor++ = 0x50000;
@@ -2382,20 +2444,15 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
             *scratch->cursor++ = scratch->prim_tag[2];
             *scratch->cursor++ = scratch->prim_tag[3];
             for (scratch->point = 0; scratch->point < scratch->strip_at->point_count; scratch->point++) {
-                __asm__ volatile("lq $9, 0x0(%0)\n"
-                                 "sq $9, 0x0(%1)\n"
-                                 : : "r"(&scratch->normals[scratch->strip_point->normal]), "r"(scratch->cursor) : "$9");
-                __asm__ volatile("lq $9, 0x0(%0)\n"
-                                 "lq $8, 0x0(%2)\n"
-                                 "sq $9, 0x0(%1)\n"
-                                 "sq $8, 0x0(%3)\n"
-                                 : : "r"(&scratch->screen_points[scratch->strip_point->point]), "r"(scratch->cursor + 8), "r"(scratch->unk1A0), "r"(scratch->cursor + 4) : "$8", "$9");
+                copy_qword(scratch->cursor, &scratch->normals[scratch->strip_point->normal]);
+                copy_qword(scratch->cursor + 8, &scratch->screen_points[scratch->strip_point->point]);
+                copy_qword(scratch->cursor + 4, scratch->unk1A0);
                 scratch->cursor += 12;
                 scratch->strip_point++;
             }
         }
         scratch->strip_at = (PoolPartMaterial *)scratch->strip_point;
-        scratch->packet_size = ((s32)scratch->cursor - (s32)scratch->packet) >> 4;
+        scratch->packet_size = (s32)((u8 *)scratch->cursor - (u8 *)scratch->packet) >> 4;
         if (scratch->packet_size < 3) { // match: never true, the packet is 9 quadwords before its points
             return;
         }
@@ -2407,20 +2464,20 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
     *scratch->cursor++ = 0x10004000;
     *scratch->cursor++ = 0xE;
     *scratch->cursor++ = 0;
-    *((u64 *)scratch->cursor)++ = 0x44;
+    *(u64 *)scratch->cursor = 0x44; scratch->cursor += 2;
     *scratch->cursor++ = 0x42;
     *scratch->cursor++ = 0;
-    scratch->packet_size = ((s32)scratch->cursor - (s32)scratch->packet) >> 4;
+    scratch->packet_size = (s32)((u8 *)scratch->cursor - (u8 *)scratch->packet) >> 4;
     send_packet(scratch->packet, scratch->packet_size);
 }
 
 /* Draws a part: turns its points into screen points, then sends each strip to the GS as it stands,
    its registers first, and last a packet that sets ALPHA_1. */
-void PoolPart_Draw(PoolPart *part, s32 parent) {
+void PoolPart_Draw(PoolPart *part, f32 *parent) {
     PoolDrawScratch *scratch = POOL_DRAW_SCRATCH;
     f32 unit[16] = { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f };
-    s32 source;
-    s32 target;
+    f32 *source;
+    f32 *target;
 
     scratch->unkA0[0] = 128.0f;
     scratch->unkA0[1] = 128.0f;
@@ -2429,7 +2486,7 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
     scratch->work = part_work_buffer;
     scratch->screen_points = part_work_buffer + 0x500;
     scratch->normals = part_work_buffer + 0xA00;
-    *(Uint128 *)scratch->unk1A0 = 0x00000080000000000000000000000000;
+    *(Uint128 *)scratch->unk1A0 = (Uint128)0x80 << 96;
     scratch->point_count = part->point_count;
     scratch->strip_count = part->strip_count;
     scratch->normal_count = part->normal_count;
@@ -2439,70 +2496,24 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
     sceVu0RotMatrixZ(scratch->world, scratch->world, part->rotation[2]);
     sceVu0RotMatrixY(scratch->world, scratch->world, part->rotation[1]);
     sceVu0TransMatrix(scratch->world, scratch->world, part->position);
-    sceVu0MulMatrix(scratch->world, (void *)parent, scratch->world);
+    sceVu0MulMatrix(scratch->world, parent, scratch->world);
     sceVu0MulMatrix(scratch->screen, menu_view_screen_matrix, scratch->world);
     sceVu0MulMatrix(scratch->light, scratch->world, menu_model_light_directions);
-    __asm__ volatile("lqc2 $vf12, 0x0(%0)\n"
-                     "lqc2 $vf13, 0x10(%0)\n"
-                     "lqc2 $vf14, 0x20(%0)\n"
-                     "lqc2 $vf15, 0x30(%0)\n"
-                     : : "r"(scratch->world));
-    __asm__ volatile("lqc2 $vf1, 0x0(%0)\n"
-                     "lqc2 $vf2, 0x10(%0)\n"
-                     "lqc2 $vf3, 0x20(%0)\n"
-                     "lqc2 $vf4, 0x30(%0)\n"
-                     : : "r"(scratch->screen));
+    vu0_load_rows(12, scratch->world, 4);
+    vu0_load_rows(1, scratch->screen, 4);
     scratch->point_index = 0; // match: both zeroed a second time
     scratch->normal_index = 0;
-    __asm__ volatile("lqc2 $vf5, 0x0(%0)\n"
-                     "lqc2 $vf6, 0x10(%0)\n"
-                     "lqc2 $vf7, 0x20(%0)\n"
-                     : : "r"(scratch->light));
-    __asm__ volatile("lqc2 $vf8, 0x0(%0)\n"
-                     "lqc2 $vf9, 0x10(%0)\n"
-                     "lqc2 $vf10, 0x20(%0)\n"
-                     "lqc2 $vf11, 0x30(%0)\n"
-                     : : "r"(menu_model_light_colors));
-    __asm__ volatile("vaddw.xyzw $vf20, $vf0, $vf0w\n"
-                     "vdiv Q, $vf0w, $vf20w\n"
-                     "vmul.xyzw $vf21, $vf0, $vf0\n"
-                     "vwaitq\n"
-                     "vmulq.w $vf21, $vf0, Q\n");
+    vu0_load_rows(5, scratch->light, 3);
+    vu0_load_rows(8, menu_model_light_colors, 4);
+    vu0_set_half_w();
     for (scratch->point_at = 0; scratch->point_at < scratch->point_count; scratch->point_at++) {
-        source = scratch->point_index * 16 + (s32)part->points;
-        target = scratch->point_index++ * 16 + (s32)scratch->screen_points;
-        __asm__ volatile("lqc2 $vf16, 0x0(%1)\n"
-                         "vmulax.xyzw ACC, $vf1, $vf16x\n"
-                         "vmadday.xyzw ACC, $vf2, $vf16y\n"
-                         "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-                         "vmaddw.xyzw $vf17, $vf4, $vf16w\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vdiv Q, $vf0w, $vf17w\n"
-                         "vwaitq\n"
-                         "vmulq.xyzw $vf26, $vf17, Q\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vftoi4.xyzw $vf17, $vf26\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "sqc2 $vf17, 0x0(%0)\n"
-                         : : "r"(target), "r"(source));
+        source = EE_PTR(f32 (*)[4], part->points)[scratch->point_index];
+        target = scratch->screen_points[scratch->point_index++];
+        vu0_project_point(target, source);
     }
     /* match: the normals are transformed, and vf5 to vf11 loaded above, though nothing here uses them */
     for (scratch->normal = 0; scratch->normal < scratch->normal_count; scratch->normal++) {
-        __asm__ volatile("lqc2 $vf16, 0x0(%1)\n"
-                         "vmulax.xyzw ACC, $vf12, $vf16x\n"
-                         "vmadday.xyzw ACC, $vf13, $vf16y\n"
-                         "vmaddz.xyzw $vf17, $vf14, $vf16z\n"
-                         "vaddw.xy $vf17, $vf17, $vf0w\n"
-                         "vmulw.xy $vf17, $vf17, $vf21w\n"
-                         "vaddw.z $vf17, $vf0, $vf0w\n"
-                         "sqc2 $vf17, 0x0(%0)\n"
-                         : : "r"(scratch->normal_index * 16 + (s32)scratch->normals), "r"(scratch->normal_index * 16 + (s32)part->normals));
+        vu0_transform_normal(scratch->normals[scratch->normal_index], EE_PTR(f32 (*)[4], part->normals)[scratch->normal_index]);
         scratch->normal_index++;
     }
     FlushCache(0);
@@ -2511,7 +2522,7 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
     scratch->reg_tag[1] = 0x10004000;
     scratch->reg_tag[2] = 0xE;
     scratch->prim_tag[3] = 0;
-    scratch->strip_at = part->material;
+    scratch->strip_at = EE_PTR(PoolPartMaterial *, part->material);
     scratch->reg_tag[3] = 0;
     scratch->tex0 = scratch->strip_at->tex0; // match: the first strip's TEX0 serves every strip
     for (scratch->strip = 0; scratch->strip < scratch->strip_count; scratch->strip++) {
@@ -2534,10 +2545,10 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
         scratch->registers[6] = 0;
         scratch->registers[7] = 9;
         scratch->cursor += 0x10;
-        *((u64 *)scratch->cursor)++ = 4;
-        *((u64 *)scratch->cursor)++ = 0x1C;
-        *((u64 *)scratch->cursor)++ = scratch->tex0;
-        *((u64 *)scratch->cursor)++ = 0x17;
+        *(u64 *)scratch->cursor = 4; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = 0x1C; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = scratch->tex0; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = 0x17; scratch->cursor += 2;
         *scratch->cursor++ = scratch->strip_at->unk04;
         *scratch->cursor++ = 0;
         *scratch->cursor++ = 0x43;
@@ -2557,18 +2568,13 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
             ((f32 *)scratch->cursor)[0] = scratch->strip_point->tex_s;
             ((f32 *)scratch->cursor)[1] = scratch->strip_point->tex_t;
             ((f32 *)scratch->cursor)[2] = 1.0f;
-            __asm__ volatile("lqc2 $vf16, 0x0(%0)\n"
-                             "vftoi0.xyzw $vf17, $vf16\n"
-                             "sqc2 $vf17, 0x0(%1)\n"
-                             : : "r"(scratch->strip_point->color), "r"(scratch->cursor + 4));
-            __asm__ volatile("lq $9, 0x0(%0)\n"
-                             "sq $9, 0x0(%1)\n"
-                             : : "r"(&scratch->screen_points[scratch->strip_point->point]), "r"(scratch->cursor + 8) : "$9");
+            vu0_color_to_int(scratch->cursor + 4, scratch->strip_point->color);
+            copy_qword(scratch->cursor + 8, &scratch->screen_points[scratch->strip_point->point]);
             scratch->cursor += 12;
             scratch->strip_point++;
         }
         scratch->strip_at = (PoolPartMaterial *)scratch->strip_point;
-        scratch->packet_size = ((s32)scratch->cursor - (s32)scratch->packet) >> 4;
+        scratch->packet_size = (s32)((u8 *)scratch->cursor - (u8 *)scratch->packet) >> 4;
         if (scratch->packet_size < 3) { // match: never true, the packet is 9 quadwords before its points
             return;
         }
@@ -2580,10 +2586,10 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
     *scratch->cursor++ = 0x10004000;
     *scratch->cursor++ = 0xE;
     *scratch->cursor++ = 0;
-    *((u64 *)scratch->cursor)++ = 0x44;
+    *(u64 *)scratch->cursor = 0x44; scratch->cursor += 2;
     *scratch->cursor++ = 0x42;
     *scratch->cursor++ = 0;
-    scratch->packet_size = ((s32)scratch->cursor - (s32)scratch->packet) >> 4;
+    scratch->packet_size = (s32)((u8 *)scratch->cursor - (u8 *)scratch->packet) >> 4;
     send_packet(scratch->packet, scratch->packet_size);
 }
 
@@ -2591,7 +2597,7 @@ static u8 tinted_model_page = 0;            /* 0x446D80 which place in GS memory
 static u8 model_page = 0;                   /* 0x446D81 the same for MenuModel_Draw */
 
 /* Uploads a loaded model's texture and draws its parts with PoolPart_DrawTinted. */
-void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slot_arg) {
+void MenuModel_DrawTinted(ChunkUpload *upload, f32 *draw_param, RenderSlotArg slot_arg) {
     u64 texture_pages[1] = { 0x2840 }; // match: one entry, though indexed like clut_pages (tinted_model_page is always 0)
     u64 clut_pages[2] = { 0x3D68, 0x3D6C };
     KeyItemModelFile *file;
@@ -2610,7 +2616,7 @@ void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slo
         FlushCache(0);
         part = part_file->parts;
         for (i = 0; i < part_file->part_count; i++) {
-            part->material->tex0 = texture->tex0;
+            EE_PTR(PoolPartMaterial *, part->material)->tex0 = texture->tex0;
             PoolPart_DrawTinted(part, draw_param, slot_arg);
             part++;
         }
@@ -2618,7 +2624,7 @@ void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slo
 }
 
 /* Uploads a loaded model's texture and draws its parts with PoolPart_Draw. */
-void MenuModel_Draw(ChunkUpload *upload, s32 draw_param) {
+void MenuModel_Draw(ChunkUpload *upload, f32 *draw_param) {
     u64 texture_pages[1] = { 0x2840 }; // match: one entry, though indexed like clut_pages (model_page is always 0)
     u64 clut_pages[2] = { 0x3D68, 0x3D6C };
     KeyItemModelFile *file;
@@ -2637,7 +2643,7 @@ void MenuModel_Draw(ChunkUpload *upload, s32 draw_param) {
         FlushCache(0);
         part = part_file->parts;
         for (i = 0; i < part_file->part_count; i++) {
-            part->material->tex0 = texture->tex0;
+            EE_PTR(PoolPartMaterial *, part->material)->tex0 = texture->tex0;
             PoolPart_Draw(part, draw_param);
             part++;
         }
@@ -2653,8 +2659,8 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
     sceVu0FVECTOR unused_vector = { 0.0f, 128.0f, 0.0f, 128.0f };
     PoolPart *part;
     PoolPartRecord *record;
-    s32 source;
-    s32 target;
+    f32 *source;
+    f32 *target;
 
     part = POOL(slot)->part;
     if (part == NULL) {
@@ -2667,7 +2673,7 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
     scratch->unkA0[1] = 128.0f;
     scratch->unkA0[2] = 128.0f;
     scratch->unkA0[3] = 128.0f;
-    *(Uint128 *)scratch->unk1A0 = 0x00000080000000000000000000000000;
+    *(Uint128 *)scratch->unk1A0 = (Uint128)0x80 << 96;
     scratch->point_count = part->point_count;
     scratch->strip_count = part->strip_count;
     scratch->normal_count = part->normal_count;
@@ -2680,133 +2686,41 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
         scratch->parent_normal_count = record->unk04;
         sceVu0MulMatrix(scratch->screen, menu_view_screen_matrix, POOL(slot)->unk40);
         sceVu0MulMatrix(scratch->light, POOL(slot)->unk40, menu_model_light_directions);
-        __asm__ volatile("lqc2 $vf12, 0x0(%0)\n"
-                         "lqc2 $vf13, 0x10(%0)\n"
-                         "lqc2 $vf14, 0x20(%0)\n"
-                         "lqc2 $vf15, 0x30(%0)\n"
-                         : : "r"(POOL(slot)->unk40));
-        __asm__ volatile("lqc2 $vf1, 0x0(%0)\n"
-                         "lqc2 $vf2, 0x10(%0)\n"
-                         "lqc2 $vf3, 0x20(%0)\n"
-                         "lqc2 $vf4, 0x30(%0)\n"
-                         : : "r"(scratch->screen));
-        __asm__ volatile("lqc2 $vf5, 0x0(%0)\n"
-                         "lqc2 $vf6, 0x10(%0)\n"
-                         "lqc2 $vf7, 0x20(%0)\n"
-                         : : "r"(scratch->light));
-        __asm__ volatile("lqc2 $vf8, 0x0(%0)\n"
-                         "lqc2 $vf9, 0x10(%0)\n"
-                         "lqc2 $vf10, 0x20(%0)\n"
-                         "lqc2 $vf11, 0x30(%0)\n"
-                         : : "r"(menu_model_light_colors));
-        __asm__ volatile("vaddw.xyzw $vf20, $vf0, $vf0w\n"
-                         "vdiv Q, $vf0w, $vf20w\n"
-                         "vmul.xyzw $vf21, $vf0, $vf0\n"
-                         "vwaitq\n"
-                         "vmulq.w $vf21, $vf0, Q\n");
+        vu0_load_rows(12, POOL(slot)->unk40, 4);
+        vu0_load_rows(1, scratch->screen, 4);
+        vu0_load_rows(5, scratch->light, 3);
+        vu0_load_rows(8, menu_model_light_colors, 4);
+        vu0_set_half_w();
         for (scratch->point_at = 0; scratch->point_at < scratch->parent_point_count; scratch->point_at++) {
-            __asm__ volatile("lqc2 $vf16, 0x0(%0)\n"
-                             "vmulax.xyzw ACC, $vf1, $vf16x\n"
-                             "vmadday.xyzw ACC, $vf2, $vf16y\n"
-                             "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-                             "vmaddw.xyzw $vf17, $vf4, $vf16w\n"
-                             "vnop\n"
-                             "vnop\n"
-                             "vnop\n"
-                             "vdiv Q, $vf0w, $vf17w\n"
-                             "vwaitq\n"
-                             "vmulq.xyzw $vf26, $vf17, Q\n"
-                             "vnop\n"
-                             "vnop\n"
-                             "vnop\n"
-                             "vftoi4.xyzw $vf17, $vf26\n"
-                             "vnop\n"
-                             "vnop\n"
-                             "vnop\n"
-                             "sqc2 $vf17, 0x0(%1)\n"
-                             : : "r"(scratch->point_at * 16 + (s32)part->points), "r"(scratch->point_at * 16 + (s32)scratch->screen_points));
+            vu0_project_point(scratch->screen_points[scratch->point_at], EE_PTR(f32 (*)[4], part->points)[scratch->point_at]);
             scratch->point_index++;
         }
         scratch->point_index = scratch->parent_point_count;
         for (scratch->normal = 0; scratch->normal < scratch->parent_normal_count; scratch->normal++) {
-            __asm__ volatile("lqc2 $vf16, 0x0(%1)\n"
-                             "vmulax.xyzw ACC, $vf12, $vf16x\n"
-                             "vmadday.xyzw ACC, $vf13, $vf16y\n"
-                             "vmaddz.xyzw $vf17, $vf14, $vf16z\n"
-                             "vaddw.xy $vf17, $vf17, $vf0w\n"
-                             "vmulw.xy $vf17, $vf17, $vf21w\n"
-                             "vaddw.z $vf17, $vf0, $vf0w\n"
-                             "sqc2 $vf17, 0x0(%0)\n"
-                         : : "r"(scratch->normal * 16 + (s32)scratch->normals), "r"(scratch->normal * 16 + (s32)part->normals));
+            vu0_transform_normal(scratch->normals[scratch->normal], EE_PTR(f32 (*)[4], part->normals)[scratch->normal]);
             scratch->normal_index++;
         }
         scratch->normal_index = scratch->parent_normal_count;
     }
     sceVu0MulMatrix(scratch->screen, menu_view_screen_matrix, slot);
     sceVu0MulMatrix(scratch->light, slot, menu_model_light_directions);
-    __asm__ volatile("lqc2 $vf12, 0x0(%0)\n"
-                     "lqc2 $vf13, 0x10(%0)\n"
-                     "lqc2 $vf14, 0x20(%0)\n"
-                     "lqc2 $vf15, 0x30(%0)\n"
-                     : : "r"(slot));
-    __asm__ volatile("lqc2 $vf1, 0x0(%0)\n"
-                     "lqc2 $vf2, 0x10(%0)\n"
-                     "lqc2 $vf3, 0x20(%0)\n"
-                     "lqc2 $vf4, 0x30(%0)\n"
-                     : : "r"(scratch->screen));
-    __asm__ volatile("lqc2 $vf5, 0x0(%0)\n"
-                     "lqc2 $vf6, 0x10(%0)\n"
-                     "lqc2 $vf7, 0x20(%0)\n"
-                     : : "r"(scratch->light));
-    __asm__ volatile("lqc2 $vf8, 0x0(%0)\n"
-                     "lqc2 $vf9, 0x10(%0)\n"
-                     "lqc2 $vf10, 0x20(%0)\n"
-                     "lqc2 $vf11, 0x30(%0)\n"
-                     : : "r"(menu_model_light_colors));
-    __asm__ volatile("vaddw.xyzw $vf20, $vf0, $vf0w\n"
-                     "vdiv Q, $vf0w, $vf20w\n"
-                     "vmul.xyzw $vf21, $vf0, $vf0\n"
-                     "vwaitq\n"
-                     "vmulq.w $vf21, $vf0, Q\n");
+    vu0_load_rows(12, slot, 4);
+    vu0_load_rows(1, scratch->screen, 4);
+    vu0_load_rows(5, scratch->light, 3);
+    vu0_load_rows(8, menu_model_light_colors, 4);
+    vu0_set_half_w();
     while (scratch->point_index < scratch->point_count) {
-        source = scratch->point_index * 16 + (s32)part->points;
-        target = scratch->point_index++ * 16 + (s32)scratch->screen_points;
-        __asm__ volatile("lqc2 $vf16, 0x0(%1)\n"
-                         "vmulax.xyzw ACC, $vf1, $vf16x\n"
-                         "vmadday.xyzw ACC, $vf2, $vf16y\n"
-                         "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
-                         "vmaddw.xyzw $vf17, $vf4, $vf16w\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vdiv Q, $vf0w, $vf17w\n"
-                         "vwaitq\n"
-                         "vmulq.xyzw $vf26, $vf17, Q\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vftoi4.xyzw $vf17, $vf26\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "vnop\n"
-                         "sqc2 $vf17, 0x0(%0)\n"
-                         : : "r"(target), "r"(source));
+        source = EE_PTR(f32 (*)[4], part->points)[scratch->point_index];
+        target = scratch->screen_points[scratch->point_index++];
+        vu0_project_point(target, source);
     }
     while (scratch->normal_index < scratch->normal_count) {
-        __asm__ volatile("lqc2 $vf16, 0x0(%1)\n"
-                         "vmulax.xyzw ACC, $vf12, $vf16x\n"
-                         "vmadday.xyzw ACC, $vf13, $vf16y\n"
-                         "vmaddz.xyzw $vf17, $vf14, $vf16z\n"
-                         "vaddw.xy $vf17, $vf17, $vf0w\n"
-                         "vmulw.xy $vf17, $vf17, $vf21w\n"
-                         "vaddw.z $vf17, $vf0, $vf0w\n"
-                         "sqc2 $vf17, 0x0(%0)\n"
-                         : : "r"(scratch->normal_index * 16 + (s32)scratch->normals), "r"(scratch->normal_index * 16 + (s32)part->normals));
+        vu0_transform_normal(scratch->normals[scratch->normal_index], EE_PTR(f32 (*)[4], part->normals)[scratch->normal_index]);
         scratch->normal_index++;
     }
     FlushCache(0);
     scratch->prim_tag[2] = 0x412;
-    scratch->strip_at = part->material;
+    scratch->strip_at = EE_PTR(PoolPartMaterial *, part->material);
     scratch->reg_tag[0] = 0x8008;
     scratch->reg_tag[1] = 0x10004000;
     scratch->reg_tag[2] = 0xE;
@@ -2833,10 +2747,10 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
         scratch->registers[6] = 0;
         scratch->registers[7] = 9;
         scratch->cursor += 0x10;
-        *((u64 *)scratch->cursor)++ = 4;
-        *((u64 *)scratch->cursor)++ = 0x1C;
-        *((u64 *)scratch->cursor)++ = scratch->tex0;
-        *((u64 *)scratch->cursor)++ = 0x16;
+        *(u64 *)scratch->cursor = 4; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = 0x1C; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = scratch->tex0; scratch->cursor += 2;
+        *(u64 *)scratch->cursor = 0x16; scratch->cursor += 2;
         *scratch->cursor++ = scratch->strip_at->unk04;
         *scratch->cursor++ = 0;
         *scratch->cursor++ = 0x42;
@@ -2856,13 +2770,8 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
             ((f32 *)scratch->cursor)[0] = scratch->strip_point->tex_s;
             ((f32 *)scratch->cursor)[1] = scratch->strip_point->tex_t;
             ((f32 *)scratch->cursor)[2] = 1.0f;
-            __asm__ volatile("lqc2 $vf16, 0x0(%0)\n"
-                             "vftoi0.xyzw $vf17, $vf16\n"
-                             "sqc2 $vf17, 0x0(%1)\n"
-                             : : "r"(scratch->strip_point->color), "r"(scratch->cursor + 4));
-            __asm__ volatile("lq $9, 0x0(%0)\n"
-                             "sq $9, 0x0(%1)\n"
-                             : : "r"(&scratch->screen_points[scratch->strip_point->point]), "r"(scratch->cursor + 8) : "$9");
+            vu0_color_to_int(scratch->cursor + 4, scratch->strip_point->color);
+            copy_qword(scratch->cursor + 8, &scratch->screen_points[scratch->strip_point->point]);
             scratch->cursor += 12;
             scratch->strip_point++;
         }
@@ -2884,11 +2793,11 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
             scratch->registers[6] = 0;
             scratch->registers[7] = 9;
             scratch->cursor += 0x10;
-            *((u64 *)scratch->cursor)++ = 4;
-            *((u64 *)scratch->cursor)++ = 0x1C;
-            *((u64 *)scratch->cursor)++ = scratch->strip_at->unk10 | 0x800000000;
-            *((u64 *)scratch->cursor)++ = 0x16;
-            *((u64 *)scratch->cursor)++ = 9;
+            *(u64 *)scratch->cursor = 4; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = 0x1C; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = scratch->strip_at->unk10 | 0x800000000; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = 0x16; scratch->cursor += 2;
+            *(u64 *)scratch->cursor = 9; scratch->cursor += 2;
             *scratch->cursor++ = 0x42;
             *scratch->cursor++ = 0;
             *scratch->cursor++ = 0x50000;
@@ -2905,20 +2814,15 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
             *scratch->cursor++ = scratch->prim_tag[2];
             *scratch->cursor++ = scratch->prim_tag[3];
             for (scratch->point = 0; scratch->point < scratch->strip_at->point_count; scratch->point++) {
-                __asm__ volatile("lq $9, 0x0(%0)\n"
-                                 "sq $9, 0x0(%1)\n"
-                                 : : "r"(&scratch->normals[scratch->strip_point->normal]), "r"(scratch->cursor) : "$9");
-                __asm__ volatile("lq $9, 0x0(%0)\n"
-                                 "lq $8, 0x0(%2)\n"
-                                 "sq $9, 0x0(%1)\n"
-                                 "sq $8, 0x0(%3)\n"
-                                 : : "r"(&scratch->screen_points[scratch->strip_point->point]), "r"(scratch->cursor + 8), "r"(scratch->unk1A0), "r"(scratch->cursor + 4) : "$8", "$9");
+                copy_qword(scratch->cursor, &scratch->normals[scratch->strip_point->normal]);
+                copy_qword(scratch->cursor + 8, &scratch->screen_points[scratch->strip_point->point]);
+                copy_qword(scratch->cursor + 4, scratch->unk1A0);
                 scratch->cursor += 12;
                 scratch->strip_point++;
             }
         }
         scratch->strip_at = (PoolPartMaterial *)scratch->strip_point;
-        scratch->packet_size = ((s32)scratch->cursor - (s32)scratch->packet) >> 4;
+        scratch->packet_size = (s32)((u8 *)scratch->cursor - (u8 *)scratch->packet) >> 4;
         if (scratch->packet_size < 3) { // match: never true, the packet is 9 quadwords before its points
             return;
         }
@@ -2930,19 +2834,19 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
     *scratch->cursor++ = 0x10004000;
     *scratch->cursor++ = 0xE;
     *scratch->cursor++ = 0;
-    *((u64 *)scratch->cursor)++ = 0x44;
+    *(u64 *)scratch->cursor = 0x44; scratch->cursor += 2;
     *scratch->cursor++ = 0x42;
     *scratch->cursor++ = 0;
-    scratch->packet_size = ((s32)scratch->cursor - (s32)scratch->packet) >> 4;
+    scratch->packet_size = (s32)((u8 *)scratch->cursor - (u8 *)scratch->packet) >> 4;
     send_packet(scratch->packet, scratch->packet_size);
 }
 
 /* Runs PoolSlot_Draw on the first 21 slots of the slot array. */
 void PoolSlot_DrawAll(RenderSlot *slots, RenderSlotArg slot_arg) {
-    s32 slot; // match: the slots are walked as integers (a signed compare ends the loop)
-    s32 end;
+    sptr slot; // match: the slots are walked as integers (a signed compare ends the loop)
+    sptr end;
 
-    slot = (s32)slots;
+    slot = (sptr)slots;
     end = slot + 21 * sizeof(RenderSlot);
     do {
         PoolSlot_Draw((RenderSlot *)slot, slot_arg);
@@ -3074,8 +2978,9 @@ void PoolSlot_LoadGroup(PoolPartSource *source, u32 group) {
             remaining = group_sizes[group] - i;
             pool_slots[slots[i]].part = part;
             // match: tex0 and unk18 go across as one 16-byte struct
-            POOL_SLOT_REGISTERS(&pool_slots[slots[i]]) = *(PoolSlotRegisters *)&texture->tex0;
-            record = (PoolPartRecord *)((char *)file + (s32)file->records_end) - remaining;
+            pool_slots[slots[i]].unk58 = texture->tex0;
+            pool_slots[slots[i]].unk60 = texture->unk18;
+            record = (PoolPartRecord *)((char *)file + file->records_end) - remaining;
             if (record->unk00 > 0) {
                 pool_slots[slots[i]].unk48 = record;
                 pool_slots[slots[i]].unk40 = &pool_slots[slots[record->unk08]];
@@ -3088,7 +2993,8 @@ void PoolSlot_LoadGroup(PoolPartSource *source, u32 group) {
     } else {
         part = file->parts;
         pool_slots[groups[group][0]].part = part;
-        POOL_SLOT_REGISTERS(&pool_slots[groups[group][0]]) = *(PoolSlotRegisters *)&texture->tex0; // match: as above
+        pool_slots[groups[group][0]].unk58 = texture->tex0;
+        pool_slots[groups[group][0]].unk60 = texture->unk18;
         pool_slots[groups[group][0]].unk48 = NULL;
         pool_slots[groups[group][0]].unk40 = NULL;
     }
@@ -3138,8 +3044,8 @@ void PoolNode_Pose(RelocEntry *node, PoolSlot *slots, f32 *parent_matrix, s32 fr
             slot->key_index = 0;
         }
         // match: with no keys, key, next and phase are used below without being set
-        if (node->unk30 != NULL) {
-            key = &((PoolNodeKey *)node->unk30)[slot->key_index];
+        if (node->unk30 != 0) {
+            key = &EE_PTR(PoolNodeKey *, node->unk30)[slot->key_index];
             for (;;) {
                 if (frame < key->frame + key->length) {
                     phase = (f32)(frame - key->frame) / (f32)key->length;
@@ -3177,11 +3083,11 @@ void PoolNode_Pose(RelocEntry *node, PoolSlot *slots, f32 *parent_matrix, s32 fr
         sceVu0ScaleVectorXYZ(local[2], local[2], slot->part->scale[2]);
     }
     sceVu0MulMatrix(slot, parent_matrix, local);
-    if (node->unk38 != NULL) {
-        PoolNode_Pose(node->unk38, slots, (f32 *)slot, frame);
+    if (node->unk38 != 0) {
+        PoolNode_Pose(EE_PTR(RelocEntry *, node->unk38), slots, (f32 *)slot, frame);
     }
-    if (node->unk3C != NULL) {
-        PoolNode_Pose(node->unk3C, slots, parent_matrix, frame);
+    if (node->unk3C != 0) {
+        PoolNode_Pose(EE_PTR(RelocEntry *, node->unk3C), slots, parent_matrix, frame);
     }
 }
 
@@ -3207,11 +3113,11 @@ void PoolPartFile_Expand(PoolPartFile *source, PoolPartFile *dest) {
     dest_strip = (PoolPartFlatStrip *)(dest_part + part_count);
     while (--part_count != -1) {
         *dest_part = *source_part;
-        source_strip = source_part->material;
+        source_strip = EE_PTR(PoolPartMaterial *, source_part->material);
         strip_count = dest_part->strip_count;
-        points = source_part->points;
-        normals = source_part->normals;
-        dest_part->material = (PoolPartMaterial *)dest_strip;
+        points = EE_PTR(f32 (*)[4], source_part->points);
+        normals = EE_PTR(f32 (*)[4], source_part->normals);
+        dest_part->material = EE_WORD(dest_strip);
         while (--strip_count != -1) {
             // match: the strip's 0x20 bytes go over a word at a time through a union, between the other statements
             ((PoolPartStripWords *)dest_strip)->words[0] = ((PoolPartStripWords *)source_strip)->words[0];
@@ -3245,7 +3151,7 @@ void PoolPartFile_Expand(PoolPartFile *source, PoolPartFile *dest) {
 
 /* Draws a sprite: runs sprite handler `index` on it and draws what the handler gives back by its kind
    (0: a textured rectangle, 1: a word, 2: a number). */
-void MenuSprite_DrawPlain(int owner, int index, int param) {
+void MenuSprite_DrawPlain(sptr owner, int index, int param) {
     SpriteHandler handler = sprite_handlers[index];
     KindObject *object = NULL;
 
@@ -3269,7 +3175,7 @@ void MenuSprite_DrawPlain(int owner, int index, int param) {
 
 /* Reads a whole file through the game's file functions into buffer; returns buffer, or 0 when the file
    does not open. */
-int MenuFile_Load(char *name, void *buffer) {
+sptr MenuFile_Load(char *name, void *buffer) {
     int file_handle;
 
     file_handle = File_Open(name, 0, 1);
@@ -3279,7 +3185,7 @@ int MenuFile_Load(char *name, void *buffer) {
     File_Read(file_handle, buffer, -1);
     File_Close(file_handle);
     FlushCache(0);
-    return (int)buffer;
+    return (sptr)buffer;
 }
 
 /* Reads a whole file into buffer; returns buffer, or NULL when the file does not open. */
@@ -3323,7 +3229,7 @@ void MenuFile_IndexBlocks(char *file) {
         s32 offset = entries[i].offset;
         LoadedBlockRef *block = &menu_file_blocks[i];
 
-        block->data = (char *)(offset + (s32)file);
+        block->data = file + offset;
     }
 }
 
@@ -3457,8 +3363,6 @@ void MenuTexture_UploadTwoCluts(TextureHeader *header, u64 *tex0_out, u64 *trail
     if (tex0_out != NULL) {
         *tex0_out = header->tex0;
     }
-    // match: no code; without it gcc loads TEX0 into other registers ($7/$5 in retail), same instructions otherwise
-    __asm__ volatile("" : : : "memory");
     image = (char *)header + sizeof(TextureHeader);
     switch (HEADER_TEX0(header)->psm) {
     case 0x00:
@@ -4566,12 +4470,11 @@ s32 MenuDraw_SetGsRegister(int reg_address, s64 reg_value) {
     cursor++;
     while (*D2_CHCR & 0x100) {
     }
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = (u32)packet & 0x7FFFFFFF;
+    *D2_QWC = (s32)((cursor - packet) / 4);
+    *D2_MADR = EE_WORD(packet) & 0x7FFFFFFF;
     *D2_TADR = 0;
     *D2_CHCR = 0x105;
-    /* match: retail tail-calls sceGsSyncPath and returns its result; a written return defeats the tail call */
-    sceGsSyncPath(0, 0);
+    return sceGsSyncPath(0, 0);
 }
 
 /* A copy of the sprite with the alpha passed in. */
@@ -4584,7 +4487,7 @@ static SpritePacket *MenuSprite_SetAlpha(SpritePacket *packet, int alpha) {
 
 /* Draws a sprite like MenuSprite_DrawPlain, with handler entry_id % 1000; from 1000 on the sprite is drawn
    with `variant` as its alpha. */
-void MenuSprite_Draw(int owner, int entry_id, int param, int variant) {
+void MenuSprite_Draw(sptr owner, int entry_id, int param, int variant) {
     static SpritePacket unused_copy; /* 0x5DDEA0 0x60 bytes that nothing uses; which function had them is a guess */
     SpriteHandler handler = sprite_handlers[entry_id % 1000];
     KindObject *object = NULL;
