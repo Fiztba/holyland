@@ -1,7 +1,7 @@
 #include "common.h"
 #include "model/model.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void Vector_Subtract(void *, void *, void *);
 float sqrtf(float);
 

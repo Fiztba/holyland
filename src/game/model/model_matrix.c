@@ -3,6 +3,9 @@
    matrices a model is drawn with. Several builders are not called by anything. */
 #include "model/model_matrix.h"
 #include "core/game.h"
+#include "math/vu0.h"
+#include <string.h>
+#include "libvu0.h"
 
 extern f32 identity_matrix[16];          /* the unit matrix */
 extern f32 scale_matrices[4][4];
@@ -15,16 +18,8 @@ extern f32 D_00432620[16];
 extern CameraState camera_state;
 extern Vector4Arg mirrored_flat_offset; /* (0, -160000, 32768, 1): z times sin(pitch) is added to y */
 
-void sceVu0CopyMatrix(void *, void *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0DivVectorXYZ(void *, void *, float);
-void sceVu0SubVector(void *, void *, void *);
 void Matrix_Multiply(void *, void *, void *);
 void Vector_ApplyMatrix(void *, void *, void *);
-void *memset(void *, int, u32);
 float atan2f(float, float);
 float sqrtf(float);
 float sinf(float);
@@ -271,28 +266,20 @@ static void Matrix_BuildEulerRotation(f32 (*matrix)[4], f32 *angles) {
 
 /* Rotates the three axis rows of a matrix by the rotation part of another (3x3 product) with VU0. */
 static void Matrix_MultiplyRotation(void *dest, void *rotation, void *matrix) {
-    __asm__ volatile(
-        "lqc2 $vf1, 0x0(%1)\n"
-        "lqc2 $vf2, 0x10(%1)\n"
-        "lqc2 $vf3, 0x20(%1)\n"
-        "lqc2 $vf4, 0x30(%1)\n"
-        "lqc2 $vf22, 0x0(%2)\n"
-        "lqc2 $vf23, 0x10(%2)\n"
-        "lqc2 $vf24, 0x20(%2)\n"
-        "lqc2 $vf25, 0x30(%2)\n"
-        "vmulax.xyz ACC, $vf1, $vf22x\n"
-        "vmadday.xyz ACC, $vf2, $vf22y\n"
-        "vmaddz.xyz $vf22, $vf3, $vf22z\n"
-        "vmulax.xyz ACC, $vf1, $vf23x\n"
-        "vmadday.xyz ACC, $vf2, $vf23y\n"
-        "vmaddz.xyz $vf23, $vf3, $vf23z\n"
-        "vmulax.xyz ACC, $vf1, $vf24x\n"
-        "vmadday.xyz ACC, $vf2, $vf24y\n"
-        "vmaddz.xyz $vf24, $vf3, $vf24z\n"
-        "sqc2 $vf22, 0x0(%0)\n"
-        "sqc2 $vf23, 0x10(%0)\n"
-        "sqc2 $vf24, 0x20(%0)\n"
-        : : "r"(dest), "r"(rotation), "r"(matrix));
+    int row;
+
+    for (row = 0; row < 4; row++) {
+        Vu_Lqc2(1 + row, (u8 *)rotation + row * 0x10);
+        Vu_Lqc2(22 + row, (u8 *)matrix + row * 0x10);
+    }
+    for (row = 22; row < 25; row++) {
+        Vu_MulA(VU_XYZ, 1, VF(row)[0]);
+        Vu_MaddA(VU_XYZ, 2, VF(row)[1]);
+        Vu_Madd(VU_XYZ, row, 3, VF(row)[2]);
+    }
+    for (row = 0; row < 3; row++) {
+        Vu_Sqc2((u8 *)dest + row * 0x10, 22 + row);
+    }
 }
 
 /* Transforms src_vec by src_matrix without its translation, into dst. */
@@ -308,7 +295,7 @@ static void Matrix_RotateVector(void *dst, void *src_matrix, void *src_vec) {
 
 /* Makes the two matrices a model is drawn with: the first with its rows divided by the model's scale;
    the second, for models flagged 0x400, emptied but for the model's colour times its alpha. */
-void ModelMatrix_BuildDrawMatrices(ModelInstance *model, s32 normal_src, s32 light_src, void *normal_dest,
+void ModelMatrix_BuildDrawMatrices(ModelInstance *model, sptr normal_src, sptr light_src, void *normal_dest,
                                    void *light_dest) {
     f32 (*normal)[4] = normal_dest;
     f32 (*light)[4] = light_dest;

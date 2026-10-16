@@ -13,7 +13,7 @@ int sprintf(char *, char *, ...);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 int File_Close(int);
-void Model_SetUpSkinned(ModelInstance *, int *, int *);
+void Model_SetUpSkinned(ModelInstance *, char **, char **);
 void TextureTable_QueueAll(TextureTableHeader *);
 MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
 void GsDraw_QueueTexFlush(void);

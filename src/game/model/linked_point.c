@@ -1,9 +1,9 @@
 #include "model/linked_point.h"
+#include <string.h>
+#include "libvu0.h"
 
-void *memset(void *, int, u32);
 void Vector_Copy(void *, void *);
 void Vector_Add(void *, void *, void *);
-void sceVu0SubVector(void *, void *, void *);
 float sqrtf(float);
 
 static LinkedPoint *linked_point_heads[2]; /* 0x4470C8 two active lists */

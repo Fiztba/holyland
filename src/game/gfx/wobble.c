@@ -2,9 +2,9 @@
 #include "model/model.h"
 #include "gfx/packet.h"
 #include "gfx/screen.h"
+#include <string.h>
 
 double sin(double);
-void *memset(void *, int, u32);
 u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
 void Matrix_Multiply(void *, void *, void *);

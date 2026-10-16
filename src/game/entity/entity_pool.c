@@ -40,7 +40,7 @@ int File_IsLocked(void);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 void File_Lock(void);
-void Model_SetUpSkinned(ModelInstance *, int *, int *);
+void Model_SetUpSkinned(ModelInstance *, char **, char **);
 s64 *Model_SaveGsWordsAndUvs(ModelInstance *, s64 *);
 MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
 u32 *Map_GetSlotPacket(int, int);

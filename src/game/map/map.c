@@ -50,7 +50,7 @@ int Map_ClassifyRecordOnScreen(MapDrawRecord *, ModelInstance *);
 void *memset(void *, int, u32);
 void Map_InsertRecordBySize(AreaNode *);
 void Model_SetUpPosed(ModelInstance *, char **, char **);
-void Model_SetUpSkinned(ModelInstance *, int *, int *);
+void Model_SetUpSkinned(ModelInstance *, char **, char **);
 MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
 u32 *Map_GetSlotPacket(int, int);
 void Model_SetPrimBits(ModelInstance *, s64, s64);

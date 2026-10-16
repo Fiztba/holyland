@@ -4,6 +4,7 @@
 #include "gfx/texture.h"
 #include <eeregs.h>
 #include <libgraph.h>
+#include <string.h>
 
 #define TEX0_BITS(header) ((TextureTex0Bits *)&(header)->tex0)
 #define DMA_TAG_ID_END (7 << 28)    /* a DMA tag of id 7: end the chain after its data */
@@ -28,7 +29,6 @@ static u32 texflush_packet[0xC];    /* 0x1DFAF80 where Texture_SendTexFlush buil
 int puts(char *);
 int printf(const char *, ...);
 int FlushCache(int);
-void *memcpy(void *, const void *, u32);
 
 static void Texture_LoadTm2(TextureHeader *header);
 static void Texture_BuildPacket(char **texture, char **packet);

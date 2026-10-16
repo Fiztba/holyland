@@ -5,6 +5,7 @@
 #include <libdma.h>
 #include "gfx/gs.h"
 #include "gfx/packet.h"
+#include <string.h>
 
 /* sends a packet to VIF1 and waits for the transfer to end */
 #define SEND_TO_VIF1(packet)                    \
@@ -14,7 +15,6 @@
     while (*D1_CHCR & 0x100) {                  \
     }
 
-void *memset(void *, int, u32);
 int puts(char *);
 void FlushCache(int); // match: void, the return value is unused and int changes the code
 

@@ -44,29 +44,37 @@ typedef struct __attribute__((packed)) {
 typedef s32 VuIntVector[4] __attribute__((aligned(16)));
 
 /* one vertex of a strip */
+/* overlay: a collision mesh file (CollisionStripPoint, collision/collision.h) */
 typedef struct {
-    void *unk00;                    /* 0x00 */
+    EEWord unk00;                   /* 0x00 (f32 *) the point's position, relocated by Collision_RelocateMesh */
     s32 unk04;                      /* 0x04 */
     s32 unk08;                      /* 0x08 */
     s32 unk0C;                      /* 0x0C */
 } StripVertex;
+LAYOUT_SIZE(StripVertex, 0x10);
 
 /* a strip: a header, then vertex_count vertices */
+/* overlay: a collision mesh file (CollisionStrip) */
 typedef struct {
     u16 vertex_count;               /* 0x00 */
     char pad02[0x1E];
     StripVertex vertices[1];        /* 0x20 vertex_count of them */
 } Strip;
+LAYOUT_OFFSET(Strip, vertices, 0x20);
 
 /* ModelInstance.strips: the strips back to back */
+/* overlay: a collision mesh file (CollisionMesh) */
 typedef struct {
     s32 strip_count;                /* 0x00 */
-    Strip *strips;                  /* 0x04 */
+    EEWord strips;                  /* 0x04 (Strip *) */
     s32 unk08;                      /* 0x08 */
     u32 unk0C;                      /* 0x0C */
 } ModelStripList;
+LAYOUT_SIZE(ModelStripList, 0x10);
 
-/* one 0x80-byte part (joint) of a model, ModelInstance.parts[i] */
+/* one 0x80-byte part (joint) of a model, ModelInstance.parts[i]. Runtime: on the PC child and sibling
+   are 8 bytes and the part is 0x90. data_addr stays the 32-bit EE address of the part's data (in game
+   RAM) because the code reads the last doubleword whole (MODEL_PART_WORD). */
 typedef struct ModelPart {
     char matrix[0x40];              /* 0x00 the part's matrix, passed by address */
     f32 position[4];                /* 0x40 where it sits on its parent */
@@ -79,14 +87,15 @@ typedef struct ModelPart {
     char pad6D[0x03];
     struct ModelPart *child;        /* 0x70 first part hanging off this one, NULL: none */
     struct ModelPart *sibling;      /* 0x74 next part on the same parent, NULL: none */
-    u64 data_addr : 32;             /* 0x78 */
+    u64 data_addr : 32;             /* 0x78 (ModelPartData *) the EE address of the first data block */
     u64 part_flags : 7;             /* MotionPart.unk02 of the motion last loaded */
     u64 level : 7;                  /* detail level picked by Motion_SeekKeys */
     u64 pad78_46 : 7;
     u64 data_count : 11;
-} ModelPart;
+} __attribute__((aligned(16))) ModelPart; /* 16: its matrix is moved with lqc2/sqc2 */
 
 /* one vertex of a ModelPartData block */
+/* overlay: a model file */
 typedef struct {
     s16 x;                          /* 0x00 */
     s16 y;                          /* 0x02 */
@@ -99,9 +108,11 @@ typedef struct {
     char pad16[0x02];
     s16 colour[4];                  /* 0x18 red, green, blue, alpha: 0..0xFF each (set by Model_SetVertexColour) */
 } ModelPartVertex;
+LAYOUT_SIZE(ModelPartVertex, 0x20);
 
 /* a ModelPartVertex with every field a signed word, as the code that builds vertices between
    two others reads it (ModelScreen_StepVertices, ModelScreen_StepVerticesRounded) */
+/* overlay: a model file's vertices */
 typedef struct {
     s16 x;                          /* 0x00 */
     s16 y;                          /* 0x02 */
@@ -115,13 +126,16 @@ typedef struct {
     s16 unk16;                      /* 0x16 0x7FFF on a vertex built between two others, 0 on the two ends */
     s16 colour[4];                  /* 0x18 */
 } ModelPartVertexWords;
+LAYOUT_SIZE(ModelPartVertexWords, 0x20);
 
 /* a ModelPartData block from 0x70 on, for the models whose vertices start at 0x80 (ModelScreen_SetUvsFromScreen) */
+/* overlay: a model file */
 typedef struct {
     s32 unk00;                      /* 0x00 low 15 bits: how many vertices */
     char pad04[0x0C];
     ModelPartVertex vertices[1];    /* 0x10 */
 } ModelPartDataTail;
+LAYOUT_OFFSET(ModelPartDataTail, vertices, 0x10);
 
 /* the doubleword at ModelPartData+0x30 */
 typedef struct {
@@ -134,6 +148,7 @@ typedef struct {
 
 /* one block of a part's data (ModelPart.data_addr): 0x90 bytes of GS setup, then the vertices.
    The next block starts (length + 1) * 16 bytes after this one. */
+/* overlay: a model file (the DMA packets the parts are drawn with refer to it) */
 typedef struct {
     u16 length;                     /* 0x00 in 16-byte units, not counting the first */
     char pad02[0x2E];
@@ -148,8 +163,15 @@ typedef struct {
     char pad78[0x18];
     ModelPartVertex vertices[1];    /* 0x90 */
 } ModelPartData;
+LAYOUT_OFFSET(ModelPartData, unk30, 0x30);
+LAYOUT_OFFSET(ModelPartData, tex0, 0x40);
+LAYOUT_OFFSET(ModelPartData, blend, 0x50);
+LAYOUT_OFFSET(ModelPartData, vertex_count, 0x70);
+LAYOUT_OFFSET(ModelPartData, gif_tag_high, 0x74);
+LAYOUT_OFFSET(ModelPartData, vertices, 0x90);
 
 /* one record of a part's data (ModelPart.data_addr): 0x80 bytes plus its payload */
+/* overlay: a model file */
 typedef struct {
     char pad00[0x40];
     int id_word;                    /* 0x40 low 14 bits: the record id */
@@ -157,13 +179,16 @@ typedef struct {
     int payload_size;               /* 0x60 low 15 bits: the payload length in 0x40-byte units */
     char pad64[0x0C];
 } ModelPartRecord;
+LAYOUT_OFFSET(ModelPartRecord, id_word, 0x40);
+LAYOUT_OFFSET(ModelPartRecord, payload_size, 0x60);
 
 /* ModelPart with its last doubleword (the bit-fields) whole. Bits 32-38 clear:
    Bone_MultiplyPathTo leaves the part's turn and offset out. */
 typedef struct {
-    char pad00[0x78];
+    char pad00[offsetof(ModelPart, sibling) + sizeof(struct ModelPart *)]; /* 0x78 on the PS2 */
     u64 unk78;                      /* 0x78 */
 } ModelPartWords;
+_Static_assert(offsetof(ModelPartWords, unk78) + 8 + 8 == sizeof(ModelPart), "ModelPartWords.unk78 must be ModelPart's last doubleword");
 
 #define MODEL_PART_WORD(part) (((ModelPartWords *)(part))->unk78)
 
@@ -180,6 +205,7 @@ typedef union {
 #define MODEL_PART_PARENT_ANY(part) ((s32)(MODEL_PART_WORD_ANY(part) >> 46) & 0x7F)
 
 /* one 0x40-byte vertex of a ModelWideData block */
+/* overlay: a model file */
 typedef struct {
     f32 position[4];                /* 0x00 */
     f32 offset[4];                  /* 0x10 added to the position before it is projected (Model_SetUvsFromScreen) */
@@ -189,9 +215,11 @@ typedef struct {
     s32 on_parent;                  /* 0x2C 0: placed by its own part's matrix, otherwise by the parent part's */
     char pad30[0x10];
 } ModelWideVertex;
+LAYOUT_SIZE(ModelWideVertex, 0x40);
 
 /* a block of a part's data in the models drawn with their own texture (MODEL_FLAG_800):
    0xB0 bytes of GS setup, then 0x40-byte vertices */
+/* overlay: a model file */
 typedef struct {
     u16 length;                     /* 0x00 in 16-byte units, not counting the first */
     char pad02[0x8E];
@@ -199,6 +227,8 @@ typedef struct {
     char pad94[0x1C];
     ModelWideVertex vertices[1];    /* 0xB0 */
 } ModelWideData;
+LAYOUT_OFFSET(ModelWideData, unk90, 0x90);
+LAYOUT_OFFSET(ModelWideData, vertices, 0xB0);
 
 /* the doubleword at ModelPartData+0x70 (the block's GIF tag) */
 typedef struct {
@@ -208,6 +238,7 @@ typedef struct {
 } ModelPartDataBits70;
 
 /* one part of a PosedModelFile */
+/* overlay: a model file */
 typedef struct {
     f32 position[3];                /* 0x00 where the part rests: ModelPart.position */
     f32 rotation[3];                /* 0x0C ModelPart.rotation_x, unk54, unk58 */
@@ -216,8 +247,10 @@ typedef struct {
     u16 data_count;                 /* 0x28 how many blocks */
     char pad2A[0x06];
 } PosedModelFilePart;
+LAYOUT_SIZE(PosedModelFilePart, 0x30);
 
 /* a model file as Model_SetUpPosed reads it: every part comes with the pose it rests in */
+/* overlay: a model file */
 typedef struct {
     s32 size;                       /* 0x00 the next file starts this many bytes on */
     u16 part_count;                 /* 0x04 */
@@ -225,6 +258,8 @@ typedef struct {
     s32 bone_anchors_offset;        /* 0x0C from the start of the file to 32 BoneAnchor, 0: none */
     PosedModelFilePart parts[1];    /* 0x10 part_count of them */
 } PosedModelFile;
+LAYOUT_OFFSET(PosedModelFile, bone_anchors_offset, 0x0C);
+LAYOUT_OFFSET(PosedModelFile, parts, 0x10);
 
 /* ModelPart with the bit-fields that share a doubleword with unk60[2] */
 typedef struct {
@@ -248,6 +283,7 @@ typedef struct {
 #define MODEL_PART_BIT41 (0x8000L << 26)
 
 /* per-part level thresholds, ModelInstance.level_tables[n][part] */
+/* overlay: a motion file (MotionData.parts), relocated in place by ModelMotion_Load */
 typedef struct {
     u8 count;                       /* 0x00 */
     char pad01;
@@ -256,10 +292,12 @@ typedef struct {
     u8 sibling;                     /* 0x04 index of the next part on the same parent, 0: none */
     char pad05[0x03];
     u32 keys_offset;                /* 0x08 from the start of the MotionData, 0: no keys */
-    u16 *thresholds;                /* 0x0C u16 values at a stride of 0x12 bytes (MotionKey), set from keys_offset */
+    EEWord thresholds;              /* 0x0C (u16 *) u16 values at a stride of 0x12 bytes (MotionKey), set from keys_offset */
 } ModelPartLevels;
+LAYOUT_SIZE(ModelPartLevels, 0x10);
 
 /* one 0x12-byte key of a part: three (unknown, unknown, vector index) groups */
+/* overlay: a motion file */
 typedef struct {
     u16 frame;                      /* 0x00 the threshold */
     u16 length;                     /* 0x02 frames from this key to the next */
@@ -271,6 +309,7 @@ typedef struct {
     u16 rotation_out;               /* 0x0E tangent of the rotation curve leaving this key */
     u16 scale;                      /* 0x10 */
 } MotionKey;
+LAYOUT_SIZE(MotionKey, 0x12);
 
 /* a vector of a motion (12 bytes) */
 typedef struct {
@@ -280,15 +319,18 @@ typedef struct {
 } MotionVector;
 
 /* one motion of a MotionFile; ModelMotion_Load hooks it up to a model */
+/* overlay: a motion file, relocated in place by ModelMotion_Load */
 typedef struct {
     u32 size;                       /* 0x00 the next motion starts this many bytes on */
     u32 vectors_offset;             /* 0x04 */
-    MotionVector *vectors;          /* 0x08 set from vectors_offset */
+    EEWord vectors;                 /* 0x08 (MotionVector *) set from vectors_offset */
     u16 frame_count;                /* 0x0C ModelTableHeader.unk00 */
     u8 part_count;                  /* 0x0E */
     char pad0F;
     ModelPartLevels parts[1];       /* 0x10 part_count of them; ModelChannel.tables[n] points here */
 } MotionData;
+LAYOUT_OFFSET(MotionData, frame_count, 0x0C);
+LAYOUT_OFFSET(MotionData, parts, 0x10);
 
 /* a 16-byte directory entry of a MotionFile */
 typedef struct {
@@ -296,19 +338,23 @@ typedef struct {
 } MotionFileEntry;
 
 /* a file of motions: the directory, then the MotionData blocks back to back */
+/* overlay: a motion file */
 typedef struct {
     char pad00[0x04];
     u32 motion_count;               /* 0x04 */
     char pad08[0x08];
     MotionFileEntry entries[1];     /* 0x10 motion_count of them */
 } MotionFile;
+LAYOUT_OFFSET(MotionFile, entries, 0x10);
 
 /* where a bone sits: an offset from a part's origin (bone 0xFF: the model origin) */
+/* overlay: a model file */
 typedef struct {
     f32 offset[3];                  /* 0x00 */
     u8 bone;                        /* 0x0C */
     char pad0D[0x03];
 } BoneAnchor;
+LAYOUT_SIZE(BoneAnchor, 0x10);
 
 /* the 4 bytes in front of each block ModelInstance.level_tables[n] points at */
 typedef struct {
@@ -317,6 +363,7 @@ typedef struct {
 } ModelTableHeader;
 
 /* one part of a ModelFile */
+/* overlay: a model file */
 typedef struct {
     s32 data_offset;                /* 0x00 from the start of the file to the part's ModelPartData blocks */
     u16 data_count;                 /* 0x04 how many blocks */
@@ -324,8 +371,10 @@ typedef struct {
     s8 unk07;                       /* 0x07 */
     char pad08[0x08];
 } ModelFilePart;
+LAYOUT_SIZE(ModelFilePart, 0x10);
 
 /* a model file as Model_SetUpSkinned reads it */
+/* overlay: a model file */
 typedef struct ModelFile {
     s32 size;                       /* 0x00 the next file starts this many bytes on */
     u16 part_count;                 /* 0x04 */
@@ -333,6 +382,8 @@ typedef struct ModelFile {
     BoneAnchor bone_anchors[32];    /* 0x10 */
     ModelFilePart parts[1];         /* 0x210 part_count of them */
 } ModelFile;
+LAYOUT_OFFSET(ModelFile, bone_anchors, 0x10);
+LAYOUT_OFFSET(ModelFile, parts, 0x210);
 
 /* a model file's header through a union of its two layouts: a read through it aliases everything
    (Model_SetUpPosed tests the part count that way, after it has moved the memory cursor) */
@@ -345,14 +396,9 @@ typedef union {
 
 #define MODEL_FLAG_800  0x800
 
-/* ModelInstance with the three part slots at 0x130 as the array Model_SetUpSkinned fills
-   (ModelInstance.root_part is the first) */
-typedef struct {
-    char pad00[0x130];
-    ModelPart *parts[3];            /* 0x130 the parts whose ModelFilePart.unk06 is 1, 2 and 3 */
-} ModelInstanceSlots;
-
-#define MODEL_SLOT_PARTS(model) (((ModelInstanceSlots *)(model))->parts)
+/* ModelInstance's three part slots at 0x130 as the array Model_SetUpSkinned fills (ModelInstance.root_part
+   is the first, pad134 the other two): the parts whose ModelFilePart.unk06 is 1, 2 and 3 */
+#define MODEL_SLOT_PARTS(model) ((ModelPart **)((char *)(model) + offsetof(ModelInstance, root_part)))
 
 /* a vertex's own texture coordinates and the wave (gfx/screen.h WaveOscillator) that moves them */
 typedef struct ModelWaveUv {
@@ -388,13 +434,13 @@ typedef struct ModelInstance {
     Vector4 *bone_positions;        /* 0x124 32 of them, written from bone_anchors */
     struct ModelInstance *draw_next[2]; /* 0x128 next model in the same depth bucket, per draw list */
     ModelPart *root_part;           /* 0x130 the part whose placement Entity_RebuildModelMatrices leaves out (the root?) */
-    char pad134[0x08];
+    ModelPart *pad134[2];           /* 0x134 part slots 2 and 3 (MODEL_SLOT_PARTS) */
     f32 radius;                     /* 0x13C how far the model reaches around its position (a map object's MapObject.reach_radius) */
     u8 hit_handles[4];              /* 0x140 handles of the linked points (linked_point_pool) that touch it; the drawing code lights it by them */
     u8 hit_count;                   /* 0x144 how many of hit_handles are used */
     u8 fade_enabled;                /* 0x145 1: drawn with fade_alpha instead of the parts' own alpha */
     s16 fade_alpha;                 /* 0x146 alpha (0..0x100) the model fades with while fade_enabled */
-    s32 light_block;                /* 0x148 pointer to the model's lights: two 0x40 matrices */
+    sptr light_block;               /* 0x148 pointer to the model's lights: two 0x40 matrices */
     void *fog_block;                /* 0x14C pointer to the model's fog block (near, far, colour) */
     f32 colour_red;                 /* 0x150 the model's red tint */
     f32 colour_green;               /* 0x154 the model's green tint */
@@ -407,10 +453,10 @@ typedef struct ModelInstance {
     int found_record[4];            /* 0x180 a copy of that record, its id bits replaced; a quadword sent after it */
     u16 texture_slot;               /* 0x190 slot of unk194 in texture_slots (0..2), 3: always sent */
     s16 shared_texture_slot;        /* 0x192 which entry of the shared last-sent texture record applies */
-    int texture_data;               /* 0x194 the model's texture: a chunk table, or a raw packet */
-    int shared_texture_packet;      /* 0x198 map texture packet 5, tracked in the shared record */
-    int texture_packet_3;           /* 0x19C the map's texture packet 3, queued when it changes */
-    int texture_packet_5;           /* 0x1A0 the map's texture packet 5, queued when it changes */
+    sptr texture_data;              /* 0x194 the model's texture: a chunk table, or a raw packet */
+    sptr shared_texture_packet;     /* 0x198 map texture packet 5, tracked in the shared record */
+    sptr texture_packet_3;          /* 0x19C the map's texture packet 3, queued when it changes */
+    sptr texture_packet_5;          /* 0x1A0 the map's texture packet 5, queued when it changes */
     struct ModelWaveUv *wave_uvs;   /* 0x1A4 one per vertex, built by Wobble_BuildWaveUvs */
     void (*draw_parts)(struct ModelInstance *model); /* 0x1A8 queues the model's part packets */
     void (*draw)(struct ModelInstance *model); /* 0x1AC sets the GS state and draws */
@@ -418,7 +464,7 @@ typedef struct ModelInstance {
     void (*update_bone_points)(struct ModelInstance *model); /* 0x1B4 recomputes the 32 bone positions from the bone anchors */
     int (*get_point)(void *model, int index); /* 0x1B8 */
     void (*on_textures_sent)(struct ModelInstance *model); /* 0x1BC called when ModelTexture_SendForModel sent new textures */
-} ModelInstance;
+} __attribute__((aligned(16))) ModelInstance; /* 16: its matrices are moved with lqc2/sqc2 */
 
 /* a 0x40-byte vertex of four vectors; ModelScreen_StepFloatVertices fills the steps between two of them */
 typedef struct {
@@ -427,15 +473,6 @@ typedef struct {
     f32 unk20[4];                   /* 0x20 two values, then 1 and 0 */
     f32 unk30[4];                   /* 0x30 */
 } BlendVertex;
-
-/* one of the 0x40-byte lights at linked_point_pool, as the drawing code copies it into a packet */
-typedef struct {
-    f32 unk00[4];                   /* 0x00 sent whole, but for the last word */
-    f32 unk10[4];                   /* 0x10 sent whole */
-    char pad20[0x04];
-    f32 unk24;                      /* 0x24 sent in place of unk00[3] */
-    char pad28[0x18];
-} __attribute__((aligned(16))) ModelLight;
 
 /* where a vertex lands on the screen, as Vu0_ProjectToScreen and Vu0_ProjectToScreen3 write it */
 typedef struct {
@@ -468,43 +505,43 @@ typedef struct {
     s32 screen[4];                  /* 0x1010 */
 } ModelProjectScratch;
 
-#define MODEL_PROJECT_SCRATCH ((ModelProjectScratch *)0x70000000)
+#define MODEL_PROJECT_SCRATCH SPR(ModelProjectScratch *, 0)
 
 /* the scratchpad as a matrix, where the builders of model/model_matrix.c work */
-#define MODEL_MATRIX_SCRATCH ((f32 *)0x70000000)
+#define MODEL_MATRIX_SCRATCH SPR(f32 *, 0)
 
 /* the scratchpad as the motion code (model/motion.c) uses it: the key vectors it blends between */
-#define MOTION_SCRATCH ((Vector4 *)0x70000000)
+#define MOTION_SCRATCH SPR(Vector4 *, 0)
 
 /* the scratchpad as ModelMotion_Step uses it: the two keys and their two tangents of a Hermite step */
-#define MOTION_SCRATCH_POINTS ((Vector4 *)0x70000000)
+#define MOTION_SCRATCH_POINTS SPR(Vector4 *, 0)
 
 /* the scratchpad as Model_DrawSkinned and Model_DrawSkinnedTwoPass use it: the turn they work out, the two matrices
    ModelMatrix_BuildDrawMatrices makes for the model, then a matrix per part and the same without the
    model's own placement */
-#define MODEL_TURN_SCRATCH ((f32 *)0x70000000)
-#define MODEL_TURN_MATRIX_A ((void *)0x70000040)
-#define MODEL_TURN_MATRIX_B ((void *)0x70000080)
-#define MODEL_TURN_PART_MATRICES ((f32 (*)[16])0x700000C0)
-#define MODEL_TURN_PART_TURNS ((f32 (*)[16])0x70001100)
+#define MODEL_TURN_SCRATCH SPR(f32 *, 0)
+#define MODEL_TURN_MATRIX_A SPR(void *, 0x40)
+#define MODEL_TURN_MATRIX_B SPR(void *, 0x80)
+#define MODEL_TURN_PART_MATRICES SPR(f32 (*)[16], 0xC0)
+#define MODEL_TURN_PART_TURNS SPR(f32 (*)[16], 0x1100)
 
 /* the scratchpad as Model_DrawPosed, Model_DrawPosedDepthByPart and Model_DrawPosedWithAlpha use it: the two matrices
    ModelMatrix_BuildDrawMatrices makes for the model */
-#define MODEL_DRAW_MATRIX_A ((void *)0x70000000)
-#define MODEL_DRAW_MATRIX_B ((void *)0x70000040)
+#define MODEL_DRAW_MATRIX_A SPR(void *, 0)
+#define MODEL_DRAW_MATRIX_B SPR(void *, 0x40)
 
 /* the scratchpad as ModelScreen_CutClippedTriangles uses it: where each vertex of a block lands on the screen */
-#define MODEL_CLIP_SCREEN_POINTS ((ModelScreenPoint *)0x70000000)
+#define MODEL_CLIP_SCREEN_POINTS SPR(ModelScreenPoint *, 0)
 
 /* the scratchpad as ModelScreen_QueueCutTriangle uses it: the edge opposite the apex, then two rows of the fan */
-#define MODEL_CUT_EDGE ((ModelPartVertexWords *)0x70000200)
-#define MODEL_CUT_ROW_A ((ModelPartVertexWords *)0x700002A0)
-#define MODEL_CUT_ROW_B ((ModelPartVertexWords *)0x70000340)
+#define MODEL_CUT_EDGE SPR(ModelPartVertexWords *, 0x200)
+#define MODEL_CUT_ROW_A SPR(ModelPartVertexWords *, 0x2A0)
+#define MODEL_CUT_ROW_B SPR(ModelPartVertexWords *, 0x340)
 
 /* the same for ModelScreen_QueueCutFloatTriangle, which cuts with float vertices (BlendVertex) */
-#define MODEL_CUT_BLEND_EDGE ((BlendVertex *)0x70000200)
-#define MODEL_CUT_BLEND_ROW_A ((BlendVertex *)0x70000340)
-#define MODEL_CUT_BLEND_ROW_B ((BlendVertex *)0x70000480)
+#define MODEL_CUT_BLEND_EDGE SPR(BlendVertex *, 0x200)
+#define MODEL_CUT_BLEND_ROW_A SPR(BlendVertex *, 0x340)
+#define MODEL_CUT_BLEND_ROW_B SPR(BlendVertex *, 0x480)
 
 /* what MapObject.source points at */
 typedef struct {
@@ -616,15 +653,18 @@ typedef struct {
     s32 unk18;                      /* 0x18 */
 } AnimObjectBody;
 
-/* an animated object: the model, its animation table and a small state machine */
+/* an animated object: the model, its animation table and a small state machine. A view of a MapObject
+   (runtime): the pads are its fields, so the offsets agree on the PC too (checked after MapObject) */
 typedef struct {
     ModelInstance *model;           /* 0x00 */
     void *anims;                    /* 0x04 8-byte entries */
-    char pad08[0x08];
+    void *pad08[2];                 /* 0x08 MapObject.source, map_record */
     u8 unk10;                       /* 0x10 the flag word is ANIM_OBJECT_FLAGS */
     u8 mode;                        /* 0x11 */
     char pad12[0x02];
-    char pad14[0x2C];
+    f32 pad14[2];                   /* 0x14 MapObject.reach_radius, tested_point_distance */
+    void *pad1C;                    /* 0x1C MapObject.next_in_draw_list */
+    char pad20[0x20];               /* 0x20 */
     AnimObjectBody body;            /* 0x40 */
 } AnimObject;
 
@@ -636,7 +676,7 @@ typedef struct {
     ModelInstance *model;           /* 0x00 */
     MapObjectUnk04 *definition;     /* 0x04 its row of param/obj.prm: kind, model, scripts, toughness */
     MapObjectUnk08 *source;         /* 0x08 its record in the map's object list: where it stands, its model */
-    s32 map_record;                 /* 0x0C what Map_FindRecordAtInSlot returns for its position */
+    sptr map_record;                /* 0x0C what Map_FindRecordAtInSlot returns for its position */
     u32 state_flags;                /* 0x10 flags, MAP_OBJECT_BITS */
     f32 reach_radius;               /* 0x14 how far around its position it reaches, 0: nothing to hit */
     f32 tested_point_distance;      /* 0x18 how far it is from the point last tested against the map objects (Collision_PushOutOfObjects, Collision_StandOnObjects) */
@@ -654,6 +694,8 @@ typedef struct {
     u32 door_open_flags;            /* 0x60 flags */
     char pad64[0x0C];
 } MapObject;
+_Static_assert(offsetof(AnimObject, unk10) == offsetof(MapObject, state_flags), "AnimObject is a view of MapObject");
+_Static_assert(offsetof(AnimObject, body) == offsetof(MapObject, work), "AnimObject is a view of MapObject");
 
 /* the first word of the definition, whole (bit 11 0x800, bit 12 0x1000) */
 #define MAP_OBJECT_DEF_WORD(object) (*(u32 *)(object)->definition)
@@ -857,9 +899,10 @@ typedef struct {
 /* the object Collision_HitCapsuleQuadObj tests against a model's points */
 typedef struct {
     ModelInstance *model;           /* 0x00 */
-    char pad04[0x0C];
+    void *pad04[3];                 /* 0x04 MapObject.definition, source, map_record: it is a view of a MapObject */
     int flags;                      /* 0x10 */
 } CollisionOwner;
+_Static_assert(offsetof(CollisionOwner, flags) == offsetof(MapObject, state_flags), "CollisionOwner is a view of MapObject");
 
 /* ChannelOwner.channel: the playback state Motion_Start resets */
 typedef struct {
@@ -893,11 +936,11 @@ typedef struct {
     f32 z;                          /* 0x48 */
 } ChannelVector;
 
-/* what ChannelActor.owner points at */
+/* what ChannelActor.owner points at: a ModelInstance (level_tables, root_part) */
 typedef struct {
-    char pad00[0xFC];
+    char pad00[offsetof(ModelInstance, level_tables)]; /* 0x00 */
     ModelChannel *channel;          /* 0xFC */
-    char pad100[0x30];
+    char pad100[offsetof(ModelInstance, root_part) - offsetof(ModelInstance, level_tables) - sizeof(void *)];
     ChannelVector *vec;             /* 0x130 */
 } ChannelOwner;
 
