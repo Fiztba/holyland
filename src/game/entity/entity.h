@@ -273,6 +273,8 @@ typedef struct {
     struct Entity *owner;           /* 0x48 */
     u64 flags : 32;                 /* 0x4C */
 } Unk1B1470RequestWord;
+_Static_assert(offsetof(Unk1B1470RequestWord, owner) == offsetof(Unk1B1470Request, owner), "Unk1B1470RequestWord is not Unk1B1470Request");
+_Static_assert(offsetof(Unk1B1470Request, target_mask) == offsetof(Unk1B1470Request, owner) + sizeof(struct Entity *) + 1, "the flag bits of Unk1B1470Request are not the byte after owner");
 
 /* Unk1B1470Request with the owner and the flag bytes after it as the one 64-bit word
    Attack_RunSphere and Attack_HitPlayer test bits of (the flag bytes are its upper half) */

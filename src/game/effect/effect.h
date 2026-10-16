@@ -536,6 +536,8 @@ typedef struct {
     f32 drift_x;
     f32 drift_y;
 } DriftModel;
+_Static_assert(offsetof(DriftModel, drift_x) == offsetof(ModelInstance, scale_x), "DriftModel is not ModelInstance");
+_Static_assert(offsetof(DriftModel, drift_y) == offsetof(ModelInstance, scale_y), "DriftModel is not ModelInstance");
 
 /* EffectMotion as EffectWobble_Update uses it */
 typedef struct {
@@ -670,6 +672,7 @@ typedef struct {
     char pad00[0xE4];
     f32 unkE4;                      /* 0xE4 */
 } TiltModel;
+_Static_assert(offsetof(TiltModel, unkE4) == offsetof(ModelInstance, scale_y), "TiltModel is not ModelInstance");
 
 /* Local view: the motion's spin angle after the velocity. */
 typedef struct {

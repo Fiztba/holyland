@@ -39,6 +39,7 @@ typedef struct {
     void *effect_owner;             /* 0x40 the model of the item effect that asked for unk30 = 0xC5F (ItemEffect_StepRequestGameStatus) */
     int item_use_cooldown;          /* 0x44 counts down to 0; 1 when an item was just used (Player_UseItem) */
 } GameStatus;
+LAYOUT_OFFSET(GameStatus, magic_to_cast, 0x28); /* the bit-fields before it are the word at 0x24 (GameStatusSplitBits, GameStatusFlagWord) */
 
 /* GameStatus with bits 10 and 11 of the flag word (GameStatus.bits10) apart, as ScriptCmd_ExitMainLoop
    sets them */

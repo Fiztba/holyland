@@ -204,6 +204,20 @@ typedef struct {
     s32 rage_power_bonus;           /* 0x2F0 10, 20 or 30 for magic 0x52, 0x53, 0x54 */
     char pad2F4[0x0C];              /* the block is 0x300 bytes (Player_ResetForNewGame clears and copies that many) */
 } PlayerState;
+/* Game_WriteSaveImage and Game_ReadSaveImage copy the fields up to 0xDC by these PS2 offsets */
+LAYOUT_OFFSET(PlayerState, rotation, 0x10);
+LAYOUT_OFFSET(PlayerState, hp_base, 0x20);
+LAYOUT_OFFSET(PlayerState, magic_base, 0x2C);
+LAYOUT_OFFSET(PlayerState, timed_flags, 0x30);
+LAYOUT_OFFSET(PlayerState, weapon, 0x3C);
+LAYOUT_OFFSET(PlayerState, gold, 0x4C);
+LAYOUT_OFFSET(PlayerState, experience, 0x50);
+LAYOUT_OFFSET(PlayerState, level, 0x54);
+LAYOUT_OFFSET(PlayerState, hp_now, 0xB4);
+LAYOUT_OFFSET(PlayerState, mp_now, 0xB8);
+LAYOUT_OFFSET(PlayerState, weapon_use_count, 0xD4);
+LAYOUT_OFFSET(PlayerState, magic_use_count, 0xD8);
+LAYOUT_OFFSET(PlayerState, ailment_defence, 0xDC);
 
 /* weapon_trail_kinds[7]: colour and life of the weapon trail, one per kind (trail_kind picks one) */
 typedef struct {
