@@ -116,10 +116,6 @@ void Attack_WearWeapon(int, int);
 void Attack_WearWornItem(int idx, int amount);
 
 extern u8 spell_levels[6][5];
-<<<<<<< HEAD
-extern u64 player_status_bits[];            /* player_previous.unk1C8 */
-=======
->>>>>>> port/s0-game
 extern GameDefinition *const weapon_name_defs;
 extern LevelRecord weapon_level_records[70];
 extern LevelDef item_name_defs[0x17C];
