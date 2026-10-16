@@ -90,4 +90,111 @@ void Vector_WeightedSum4(void *dst, void *vector0, void *vector1, void *vector2,
 /* dst = src scaled to length 1 (x, y, z). */
 void Vector_Normalize(void *dst, void *src);
 
+/* ---- VU0 macro-mode instructions in C (the PC port) ------------------------------------------
+   The converted inline asm of math/vu0.c and math/vu0_macro.c runs on ee_vu0 (port/host.h), so the
+   matrices and vectors the game leaves in VU0 registers between calls stay there. Each helper is one
+   instruction; mask is its field mask (VU_X | VU_Y | VU_Z | VU_W), a broadcast operand is passed as
+   the float it reads. vf0 is never written. Integer results (vftoi) keep their bits in the float
+   slots, as on VU0. */
+#include <math.h>
+#include <string.h>
+
+#define VU_X 1
+#define VU_Y 2
+#define VU_Z 4
+#define VU_W 8
+#define VU_XYZ (VU_X | VU_Y | VU_Z)
+#define VU_XYZW (VU_X | VU_Y | VU_Z | VU_W)
+#define VF(n) (ee_vu0.vf[n])
+
+/* lqc2 / sqc2: a quadword between memory and vf[r] */
+static inline void Vu_Lqc2(int r, const void *src) { memcpy(ee_vu0.vf[r], src, 16); }
+static inline void Vu_Sqc2(void *dst, int r) { memcpy(dst, ee_vu0.vf[r], 16); }
+
+/* vmula(bc): ACC = fs * t */
+static inline void Vu_MulA(int mask, int fs, float t) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.acc[i] = ee_vu0.vf[fs][i] * t;
+}
+/* vmadda(bc): ACC = ACC + fs * t */
+static inline void Vu_MaddA(int mask, int fs, float t) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.acc[i] = ee_vu0.acc[i] + ee_vu0.vf[fs][i] * t;
+}
+/* vmadd(bc): fd = ACC + fs * t */
+static inline void Vu_Madd(int mask, int fd, int fs, float t) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.acc[i] + ee_vu0.vf[fs][i] * t;
+}
+/* vmul(bc/q): fd = fs * t */
+static inline void Vu_MulBc(int mask, int fd, int fs, float t) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] * t;
+}
+/* vmul: fd = fs * ft, by component */
+static inline void Vu_Mul(int mask, int fd, int fs, int ft) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] * ee_vu0.vf[ft][i];
+}
+/* vadd: fd = fs + ft, by component */
+static inline void Vu_Add(int mask, int fd, int fs, int ft) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] + ee_vu0.vf[ft][i];
+}
+/* vadd(bc): fd = fs + t */
+static inline void Vu_AddBc(int mask, int fd, int fs, float t) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] + t;
+}
+/* vsub: fd = fs - ft, by component */
+static inline void Vu_Sub(int mask, int fd, int fs, int ft) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] - ee_vu0.vf[ft][i];
+}
+/* vmax(bc): fd = max(fs, t) */
+static inline void Vu_MaxBc(int mask, int fd, int fs, float t) {
+    int i;
+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] > t ? ee_vu0.vf[fs][i] : t;
+}
+/* One float to the integer vftoi gives: times 2^fraction_bits, truncated, saturated. */
+static inline int32_t Vu_FloatToInt(float f, int fraction_bits) {
+    float scaled = f * (float)(1 << fraction_bits);
+    if (scaled >= 2147483648.0f) return INT32_MAX;
+    if (scaled <= -2147483648.0f) return INT32_MIN;
+    if (scaled != scaled) return 0; /* NaN: VU0 has none */
+    return (int32_t)scaled;
+}
+/* vftoi0 / vftoi4: fd = fs as integers with 0 or 4 fraction bits */
+static inline void Vu_Ftoi(int mask, int fd, int fs, int fraction_bits) {
+    int i;
+    for (i = 0; i < 4; i++) {
+        if (mask & (1 << i)) {
+            int32_t v = Vu_FloatToInt(ee_vu0.vf[fs][i], fraction_bits);
+            memcpy(&ee_vu0.vf[fd][i], &v, 4);
+        }
+    }
+}
+/* vitof0 / vitof4: fd = the integers in fs, with 0 or 4 fraction bits, as floats */
+static inline void Vu_Itof(int mask, int fd, int fs, int fraction_bits) {
+    int i;
+    for (i = 0; i < 4; i++) {
+        if (mask & (1 << i)) {
+            int32_t v;
+            memcpy(&v, &ee_vu0.vf[fs][i], 4);
+            ee_vu0.vf[fd][i] = (float)v / (float)(1 << fraction_bits);
+        }
+    }
+}
+
+/* vdiv: Q = num / den; dividing by zero gives the largest float with the quotient's sign, as on VU0 */
+static inline void Vu_Div(float num, float den) {
+    if (den == 0.0f) {
+        ee_vu0.q = ((signbit(num) != 0) != (signbit(den) != 0)) ? -3.40282347e38f : 3.40282347e38f;
+    } else {
+        ee_vu0.q = num / den;
+    }
+}
+/* vsqrt: Q = sqrt(|t|) */
+static inline void Vu_Sqrt(float t) { ee_vu0.q = sqrtf(fabsf(t)); }
+
 #endif
