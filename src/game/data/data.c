@@ -124,7 +124,7 @@ f32 use_item_model_position[4] __attribute__((aligned(16))) = { 3.0f, -20.0f, 19
 f32 cast_spell_model_position[4] __attribute__((aligned(16))) = { 3.0f, -20.0f, 195.0f };
 
 /* 0x00421020 */
-f32 equip_item_model_position[4] __attribute__((aligned(16))) = { 0.0f, 2.0f, 195.0f };
+f32 equip_item_model_position[8] __attribute__((aligned(16))) = { 0.0f, 2.0f, 195.0f, 0.0f, 105.0f, 110.0f, 380.0f, 1.0f }; /* the second vector (0x421030) is read by nothing */
 
 /* 0x00421040 */
 f32 equip_weapon_model_position[4] __attribute__((aligned(16))) = { 118.0f, 72.0f, 380.0f, 1.0f };

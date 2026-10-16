@@ -5,7 +5,7 @@
 
 #include <string.h>
 #include "sound/sound.h"
-int sprintf(char *, const char *, ...);
+#include <stdio.h>
 
 extern GameStatus game_status;
 extern SoundLoadQueue sound_load_queue;

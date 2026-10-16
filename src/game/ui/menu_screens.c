@@ -372,7 +372,7 @@ s32 MenuText_DrawLine(u16 *text, s32 limit);
 #define player_weapon (&player_state.weapon)
 extern MenuItem **equipped_item_refs[11];
 extern LinkNode *equip_model_loads[];
-extern f32 equip_item_model_position[4];
+extern f32 equip_item_model_position[8];
 extern f32 equip_weapon_model_position[4];
 extern void (*pool_slot_drawers[])(PoolSlot *, ColorBytes);
 extern PoolSlot pool_slots[32];

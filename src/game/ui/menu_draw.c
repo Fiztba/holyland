@@ -455,7 +455,8 @@ static inline void vu0_project_point(void *target, const void *source) {
     for (i = 0; i < 4; i++) {
         out[i] = ee_vu0.acc[i] + ee_vu0.vf[4][i] * in[3];
     }
-    ee_vu0.q = ee_vu0.vf[0][3] / out[3];
+    /* VU0's vdiv by 0 gives the largest float with the quotient's sign, not an infinity (no NaN follows) */
+    ee_vu0.q = out[3] != 0.0f ? ee_vu0.vf[0][3] / out[3] : (__builtin_signbit(out[3]) ? -__FLT_MAX__ : __FLT_MAX__);
     for (i = 0; i < 4; i++) {
         ee_vu0.vf[26][i] = out[i] * ee_vu0.q;
     }

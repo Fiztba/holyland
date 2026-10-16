@@ -1210,6 +1210,7 @@ void TextLog_Printf(char *format, ...) {
 
     va_start(args, format);
     TextLog_AppendV(format, args);
+    va_end(args);
 }
 
 /* Draws the text log in its window, wrapping at the right edge and stopping at the bottom, then empties it. */
