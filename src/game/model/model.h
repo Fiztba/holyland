@@ -646,30 +646,8 @@ typedef struct {
 /* MapObjectUnk04.kind read as the byte it is, where retail compares it that way (Collision_PushOutOfMeshObj) */
 #define MAP_OBJECT_DEF_KIND(def) (*(u8 *)(def))
 
-/* AnimObject+0x40 */
-typedef struct {
-    char pad00[0x14];
-    s32 unk14;                      /* 0x14 */
-    s32 unk18;                      /* 0x18 */
-} AnimObjectBody;
 
-/* an animated object: the model, its animation table and a small state machine. A view of a MapObject
-   (runtime): the pads are its fields, so the offsets agree on the PC too (checked after MapObject) */
-typedef struct {
-    ModelInstance *model;           /* 0x00 */
-    void *anims;                    /* 0x04 8-byte entries */
-    void *pad08[2];                 /* 0x08 MapObject.source, map_record */
-    u8 unk10;                       /* 0x10 the flag word is ANIM_OBJECT_FLAGS */
-    u8 mode;                        /* 0x11 */
-    char pad12[0x02];
-    f32 pad14[2];                   /* 0x14 MapObject.reach_radius, tested_point_distance */
-    void *pad1C;                    /* 0x1C MapObject.next_in_draw_list */
-    char pad20[0x20];               /* 0x20 */
-    AnimObjectBody body;            /* 0x40 */
-} AnimObject;
 
-/* the 32-bit flags at AnimObject+0x10 */
-#define ANIM_OBJECT_FLAGS(object) (*(u32 *)&(object)->unk10)
 
 /* the objects of a map, looked up by MapObject_GetById(map, id) */
 typedef struct {
@@ -694,8 +672,6 @@ typedef struct {
     u32 door_open_flags;            /* 0x60 flags */
     char pad64[0x0C];
 } MapObject;
-_Static_assert(offsetof(AnimObject, unk10) == offsetof(MapObject, state_flags), "AnimObject is a view of MapObject");
-_Static_assert(offsetof(AnimObject, body) == offsetof(MapObject, work), "AnimObject is a view of MapObject");
 
 /* the first word of the definition, whole (bit 11 0x800, bit 12 0x1000) */
 #define MAP_OBJECT_DEF_WORD(object) (*(u32 *)(object)->definition)
@@ -795,29 +771,16 @@ typedef struct {
 #define MAP_OBJECT_BITS_LOW(object) ((MapObjectBitsLow *)&(object)->state_flags)
 
 /* the props of a map, looked up by Map_GetRecordById(map, id) */
+/* overlay: a 0x80-byte map record of the map file (map/map.h MapRecordInfo) */
 typedef struct {
     char pad00[0x32];
     u16 unk32;                      /* 0x32 0xFFFF: nothing to collide with */
     char pad34[0x48];
-    ModelInstance *model;           /* 0x7C */
+    EEWord model;                   /* 0x7C (ModelInstance *) MAP_RECORD_MODEL (map/map.h) reads it */
 } MapProp;
+LAYOUT_SIZE(MapProp, 0x80);
+LAYOUT_OFFSET(MapProp, model, 0x7C);
 
-/* what pickup_item points at: one of the nodes at fixed_items. lying_items heads
-   the list of the ones in use. */
-typedef struct ModelNode {
-    s32 unk00;                      /* 0x00 */
-    s32 unk04;                      /* 0x04 cleared when the node is unlinked */
-    s32 unk08;                      /* 0x08 cleared when the node is unlinked */
-    s32 unk0C;                      /* 0x0C bit 0: the map slot */
-    char pad10[0x04];
-    void *unk14;                    /* 0x14 the MapRecordInfo (map/map.h) it is standing in, found every frame */
-    ModelInstance *model;           /* 0x18 non-null while the node is in use */
-    s16 item;                       /* 0x1C which item it is (index into item_name_defs) */
-    s16 unk1E;                      /* 0x1E index into the map's row of map_item_pickup_counts */
-    struct ModelNode *prev;         /* 0x20 */
-    struct ModelNode *next;         /* 0x24 */
-    char pad28[0x14];
-} ModelNode;
 
 /* one of a map's fixed items: where it lies and what it is (0x40 bytes, map_item_defs[map]) */
 typedef struct {
@@ -850,7 +813,7 @@ typedef struct {
     DroppedItemRecord records[16];  /* 0x00 */
 } DroppedItemRecords;
 
-/* a ModelNode as the item code reads it: 64 fixed items per map at fixed_items, then 16
+/* a node as the item code reads it: 64 fixed items per map at fixed_items, then 16
    dropped ones per map at dropped_items */
 typedef struct ItemNode {
     MapItemDef *def;                /* 0x00 NULL on a dropped item */
@@ -901,6 +864,7 @@ typedef struct {
     void *pad04[3];                 /* 0x04 MapObject.definition, source, map_record: it is a view of a MapObject */
     int flags;                      /* 0x10 */
 } CollisionOwner;
+_Static_assert(offsetof(CollisionOwner, model) == offsetof(MapObject, model), "CollisionOwner is a view of MapObject");
 _Static_assert(offsetof(CollisionOwner, flags) == offsetof(MapObject, state_flags), "CollisionOwner is a view of MapObject");
 
 /* ChannelOwner.channel: the playback state Motion_Start resets */

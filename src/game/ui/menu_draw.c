@@ -3303,9 +3303,11 @@ static void MenuTexture_UploadInStrips(TextureHeader *header) {
     int clut_width;
     int clut_height;
 
-    // match: menu_font_page_tex0 is a table of pointers; its address is never NULL and the store overwrites two of them
+    /* menu_font_page_tex0 is a table of pointers; its address is never NULL, and retail stores the 64-bit TEX0 over
+       both 32-bit entries: the low word becomes the first, the high word the second. Nothing calls this function. */
     if (menu_font_page_tex0 != NULL) {
-        *(u64 *)menu_font_page_tex0 = header->tex0;
+        menu_font_page_tex0[0] = (u64 *)(uptr)(u32)header->tex0;
+        menu_font_page_tex0[1] = (u64 *)(uptr)(u32)(header->tex0 >> 32);
     }
     image = (char *)header + sizeof(TextureHeader);
     strip_rows = 131068.0f / (((f32)(u32)header->data_offset - 16.0f) / width);
