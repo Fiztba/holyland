@@ -14,9 +14,10 @@ int rand(void);
 s32 EntitySight_PropInWay(Entity *entity);
 s32 EntitySight_ObjectInWay(Entity *entity);
 #include "gfx/gs.h"
+#include "core/game.h"
 #include <string.h>
 
-extern float camera_state[];
+extern CameraState camera_state;
 s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_height, f32 max_distance, f32 heading);
 void Vector_Copy(void *, void *);
 s32 Attack_Run(Unk1B1470Request *, Unk1B1470Extra *);
@@ -113,8 +114,8 @@ float EntityAi_RandomAngle(void) {
 /* Starts the second camera shake (GameLoop_UpdateCameraShake plays it): its reach (CameraState.entity_shake_reach) and its frames
    (unk7C). The Giant Beetle's ranged attack uses it. */
 void EntityAi_ShakeCamera(int float_value, int int_value) {
-    camera_state[30] = float_value;
-    *(int *)&camera_state[31] = int_value;
+    camera_state.entity_shake_reach = float_value;
+    camera_state.entity_shake_frames = int_value;
 }
 
 /* Sets Entity.state and keeps the old value in prev_state. */

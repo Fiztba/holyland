@@ -1,4 +1,5 @@
 #include "common.h"
+#include "core/game.h"
 
 /* The camera, view and projection matrices. */
 
@@ -16,8 +17,10 @@ f32 world_screen_matrix[0x60] = { 0 };     /* 0x4323E0 world to screen: view_scr
 
 f32 projection_matrix[0x10] = { 0 };       /* 0x432560 a perspective projection (Display_BuildProjection) */
 
-f32 camera_state[0x12] = { 0 };            /* 0x4325A0 the camera (CameraState) up to its word at 0x48 */
-
-f32 D_004325E8[0xE] = { 0 };               /* 0x4325E8 */
+/* 0x4325A0 the camera; the decomp had it as two arrays, the second (D_004325E8, 0x4325E8) from screen_scale on */
+CameraState camera_state = { 0 };
+LAYOUT_SIZE(CameraState, 0x80);
+LAYOUT_OFFSET(CameraState, screen_scale, 0x48);
+LAYOUT_OFFSET(CameraState, entity_shake_reach, 0x78);
 
 f32 D_00432620[0x80] = { 0 };              /* 0x432620 */

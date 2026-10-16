@@ -3,13 +3,14 @@
 #include "core/game.h"
 #include "gfx/gs.h"
 #include "model/model.h"
+#include "map/map.h"
 #include "player/player.h"
 #include "ui/splash.h"
 #include "ui/message.h"
 #include <stdio.h>
 #include <string.h>
 
-extern char map_draw_slot_blocks[];
+extern MapDrawState map_draw_state;
 extern LevelRecord weapon_level_records[];
 extern GameStatus game_status;
 extern PlayerState player_state;
@@ -239,7 +240,7 @@ void ItemEffect_Start(int kind, int marked) {
     item_effect_model->scale_x = item_effect_model->scale_y = item_effect_model->scale_z = 1.0f;
     item_effect_model->scale_w = 1.0f;
     item_effect_model->light_block = (sptr)item_effect_light_block;
-    item_effect_model->fog_block = &map_draw_slot_blocks[current_map_slot * 0x400];
+    item_effect_model->fog_block = map_draw_state.fog_blocks[current_map_slot];
     for (i = 0; i < item_effect_model->part_count; i++) {
         if (i == 0) {
             MODEL_PART_FLAG_BITS(&item_effect_model->parts[0])->bit41 = TRUE;

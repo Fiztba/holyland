@@ -1,5 +1,6 @@
 #include "map_object/map_object.h"
 #include "model/model.h"
+#include "core/game.h"
 #include <string.h>
 
 void Vector_Subtract(void *, void *, void *);
@@ -13,7 +14,7 @@ void Vector_ApplyMatrix(void *, void *, void *);
 float atan2f(float, float);
 void Vector_MultiplyComponents(float *, float *, float *);
 extern float player_state[];
-extern float camera_state[];
+extern CameraState camera_state;
 extern f32 scale_matrices[4][4];
 
 /* Start handler of the kind that fades with the distance to the player: takes
@@ -100,7 +101,7 @@ void MapObject_RebuildBillboardMatrices(MapObject *object) {
     for (; i < part_count; i++) {
         Matrix_Multiply(matrix, object->model->model_matrix, part);
         Vector_ApplyMatrix(&world, matrix, &unit);
-        Vector_Subtract(&delta, camera_state, &world);
+        Vector_Subtract(&delta, camera_state.position, &world);
         pitch = atan2f(delta.y, sqrtf(delta.x * delta.x + delta.z * delta.z));
         yaw = atan2f(-delta.x, -delta.z);
         part->position[0] = world.x;

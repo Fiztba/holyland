@@ -38,7 +38,7 @@ u32 *Map_GetSlotPacket(int, int);
 
 extern GameStatus game_status;
 extern MapSlot map_slots[2];
-extern char map_draw_slot_blocks[];
+extern MapDrawState map_draw_state;
 extern MapObject map_slot_objects[][0x200];
 extern Entity entity_pool[][0x80];
 extern void (*effect_draw_hooks[4][4])(ModelInstance *);
@@ -481,12 +481,12 @@ void Effect_DrawAll(int pass) {
         for (part_index = 0; part_index < model->part_count; part_index++, part++) {
             ModelMatrix_BuildPartLocal(model, part, part);
         }
-        model->fog_block = map_draw_slot_blocks + (current_map_slot << 10);
+        model->fog_block = map_draw_state.fog_blocks[current_map_slot];
         // match: the flag is read through the union so the test stays behind the unk14C store
         if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000LL << 25))) {
             model->light_block = (sptr)effect_light_block;
         } else {
-            model->light_block = (sptr)(map_draw_slot_blocks - 0x1D0);
+            model->light_block = (sptr)&map_draw_state.unkC0;
         }
         model->hit_count = 0;
         if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000LL << 26))) {

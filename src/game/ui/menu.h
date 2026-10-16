@@ -262,4 +262,17 @@ typedef struct {
     GsPackedWord word[6];           /* 0x00 */
 } KeyItemNameWords;
 
+/* detail_panel_flags (0x446AD4): two menu bytes in one word. ui/menu_screens.c reads them as the bytes
+   detail_panel_open and equipped_list_open; ui/trade.c reads and writes the whole word as detail_panel_open,
+   which takes in equipped_list_open and two pad bytes. */
+typedef union {
+    u32 word;
+    struct {
+        u8 detail_panel_open;       /* 0x00 */
+        u8 equipped_list_open;      /* 0x01 */
+        u8 pad02[2];
+    } bytes;
+} DetailPanelFlags;
+LAYOUT_SIZE(DetailPanelFlags, 4);
+
 #endif

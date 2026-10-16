@@ -145,10 +145,10 @@ f32 recollection_page_model_position[4] __attribute__((aligned(16))) = { 0.0f, -
 f32 visible_item_model_position[4] __attribute__((aligned(16))) = { 3.0f, -20.0f, 195.0f };
 
 /* 0x004210B0 */
-s8 button_choices[12] = "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF";
+s8 button_choices[16] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0 }; /* the PS2 symbol is 0x10 bytes */
 
 /* 0x004210C0 */
-s8 button_choices_shown[12] = "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF";
+s8 button_choices_shown[16] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0 }; /* [12] is read (Menu_UpdateButtonConfig) */
 
 /* 0x004210D0 */
 MenuItem common_item_entries[150] __attribute__((aligned(16)));
@@ -187,7 +187,7 @@ MenuItem amulet_entries[10] __attribute__((aligned(16)));
 MenuItem spell_entries[91] __attribute__((aligned(16)));
 
 /* 0x00424600 */
-MenuItem shortcut_entries[150] __attribute__((aligned(16)));
+MenuItem shortcut_entries[241] __attribute__((aligned(16))); /* 150 items, then 91 spells (the PS2 symbol runs to 0x425510) */
 
 /* 0x00425510 */
 f32 screen_part_alphas[256] __attribute__((aligned(16)));

@@ -7,6 +7,7 @@
 #include "map/map.h"
 #include "model/model.h"
 #include "player/player.h"
+#include "ui/menu.h"
 
 extern ModelInstance held_item_model; /* player/held_weapon.c */
 
@@ -349,11 +350,8 @@ s32 D_00446ACC;
 /* 0x00446AD0 */
 int model_read_file = -1;
 
-/* 0x00446AD4 */
-u8 detail_panel_open;
-
-/* 0x00446AD5 */
-u8 equipped_list_open;
+/* 0x00446AD4 detail_panel_open (0x446AD4) and equipped_list_open (0x446AD5), one word for ui/trade.c */
+DetailPanelFlags detail_panel_flags;
 
 /* 0x00446AE0 */
 char sunday_name[8] = "\xC6\xFC\xCD\xCB\xC6\xFC";

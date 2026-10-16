@@ -35,13 +35,12 @@ extern char *held_weapon_area;
 extern PlayerState player_state;
 extern GameDefinition *const weapon_name_defs;
 extern PlayerItemDef weapon_defs[];
-extern MapSlotUnk0C current_fog_block;
 extern char file_load_buffer[0x80000];
 extern char arm_phong_texture_path[];
 extern char item_arm_path_format[];
 extern char default_held_item_path[];
 extern char default_arm_path[];
-extern MapSlotUnk10Half current_light_block;
+extern MapDrawState map_draw_state;
 extern CameraState camera_state;
 extern f32 identity_matrix[16];
 extern f32 world_screen_matrix[16];
@@ -180,7 +179,7 @@ void Player_LoadArmModels(void) {
             held_item_textures = held_item_file + file->texture_offset;
         }
         held_item_model.light_block = (sptr)held_item_light_blocks;
-        held_item_model.fog_block = &current_fog_block;
+        held_item_model.fog_block = &map_draw_state.unkA0;
         MODEL_CHANNEL(&held_item_model)->unk8F = 0x80;
         Sound_LoadSwBank(player_state.weapon);
         WeaponTrail_Reset();
@@ -222,7 +221,7 @@ void Player_LoadArmModels(void) {
             arm_textures = arm_file + file->texture_offset;
         }
         arm_model.light_block = (sptr)held_item_light_blocks;
-        arm_model.fog_block = &current_fog_block;
+        arm_model.fog_block = &map_draw_state.unkA0;
     }
 }
 
@@ -285,7 +284,7 @@ void Player_UpdateArmModels(void) {
         Vector_Copy(&held_item_arm_points.points[0], (void *)(sptr)held_item_model.get_point(&held_item_model, 30));
         Vector_Copy(&held_item_arm_points.points[1], (void *)(sptr)held_item_model.get_point(&held_item_model, 31));
     }
-    held_item_light_blocks[0] = current_light_block;
+    held_item_light_blocks[0] = *(MapSlotUnk10Half *)&map_draw_state.unkC0; /* its first half */
 }
 
 /* each frame: ages the weapon trail and queues the two ends of the held weapon, in screen space */

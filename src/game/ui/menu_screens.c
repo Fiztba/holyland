@@ -377,8 +377,9 @@ extern f32 equip_weapon_model_position[4];
 extern void (*pool_slot_drawers[])(PoolSlot *, ColorBytes);
 extern PoolSlot pool_slots[32];
 extern s32 D_00446ACC;
-extern u8 detail_panel_open; // match: a byte here; ui/trade.c reads and writes it as a word
-extern u8 equipped_list_open;
+extern DetailPanelFlags detail_panel_flags;
+#define detail_panel_open (detail_panel_flags.bytes.detail_panel_open) /* a byte here; ui/trade.c reads and writes it as a word */
+#define equipped_list_open (detail_panel_flags.bytes.equipped_list_open)
 extern s8 detail_panel_sound_pending;
 extern f32 equip_item_model_angle;
 extern f32 equip_weapon_model_angle;
@@ -595,8 +596,8 @@ void Sound_SetBgmVolume(s32);
 void Sound_SyncBgmLevel(void);
 void SoundDriver_SetMono(void);
 void SoundDriver_SetStereo(void);
-extern s8 button_choices[12];
-extern s8 button_choices_shown[12];
+extern s8 button_choices[16];
+extern s8 button_choices_shown[16];
 extern s8 buttons_leave_steps;
 extern s32 button_line;
 extern s32 button_prompt_choice;

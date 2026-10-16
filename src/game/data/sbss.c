@@ -2,7 +2,7 @@
 #include "common.h"
 
 /* 0x00447000 */
-int D_00447000[2];
+sptr D_00447000[4]; /* four PS2 words: [1] and [2] hold pointers (core/file.h) */
 
 /* 0x00447010 */
 int fade_frames_left;
