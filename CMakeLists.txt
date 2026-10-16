@@ -61,6 +61,7 @@ foreach(folder ${KF4_GAME_FOLDERS})
         list(APPEND KF4_GAME_TARGETS ${target})
     endif()
 endforeach()
+target_sources(game_map PRIVATE ${CMAKE_SOURCE_DIR}/src/nonmatching/func_00112BD0.c) # the map draw at 0x112BD0, asm on the PS2
 file(GLOB top_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/game/*.c)
 list(FILTER top_sources EXCLUDE REGEX "/func_0022[0-9A-F]+\\.c$")
 add_library(game_top OBJECT ${top_sources})
