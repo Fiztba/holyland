@@ -95,7 +95,7 @@ int main(void) {
         GameLoop_Run(save_loaded != 0 ? saved_map_tag : 0x63);
         SoundDriver_ReleaseAll();
         Sound_Init();
-        if (player_state.unk1A8 != 0) {
+        if (player_state.death_timer != 0) {
             sceGsSyncV(0);
             Vram_Clear(0, 0x4000);
             do {

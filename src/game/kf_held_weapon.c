@@ -141,8 +141,8 @@ void Player_LoadArmModels(void) {
 
     if (loaded_held_weapon != player_state.weapon) {
         loaded_held_weapon = player_state.weapon;
-        if (player_state.unk258 != 0) {
-            player_state.unk258 = 0;
+        if (player_state.item_action_step != 0) {
+            player_state.item_action_step = 0;
             Effect_FreePlayerWeaponKinds();
         }
         memset((void *)held_item_file, 0, 0x30000);
@@ -150,7 +150,7 @@ void Player_LoadArmModels(void) {
         memset(held_item_setup, 0, 0x1000);
         memset(held_item_channels, 0, 0x90);
         held_item_textures = 0;
-        sprintf(path, item_arm_path_format, item->unk30);
+        sprintf(path, item_arm_path_format, item->model_file_number);
         handle = File_Open(path, 0, 1);
         if (handle < 0) {
             handle = File_Open(default_held_item_path, 0, 1);
@@ -182,15 +182,15 @@ void Player_LoadArmModels(void) {
         if (file->texture_size != 0) {
             held_item_textures = held_item_file + file->texture_offset;
         }
-        held_item_model.unk148 = (s32)held_item_light_blocks;
-        held_item_model.unk14C = &current_fog_block;
+        held_item_model.light_block = (s32)held_item_light_blocks;
+        held_item_model.fog_block = &current_fog_block;
         MODEL_CHANNEL(&held_item_model)->unk8F = 0x80;
         Sound_LoadSwBank(player_state.weapon);
         WeaponTrail_Reset();
         WeaponTrail_SetMinLife(3);
-        held_item_offsets[0] = weapon_defs[player_state.weapon].unk87;
-        held_item_offsets[1] = weapon_defs[player_state.weapon].unk88;
-        held_item_offsets[2] = weapon_defs[player_state.weapon].unk89;
+        held_item_offsets[0] = weapon_defs[player_state.weapon].held_offset_x;
+        held_item_offsets[1] = weapon_defs[player_state.weapon].held_offset_y;
+        held_item_offsets[2] = weapon_defs[player_state.weapon].held_offset_z;
     }
     if (loaded_arm_gauntlet != player_state.equipment[EQUIP_GAUNTLET]) {
         loaded_arm_gauntlet = player_state.equipment[EQUIP_GAUNTLET];
@@ -199,7 +199,7 @@ void Player_LoadArmModels(void) {
         memset(arm_setup, 0, 0x1000);
         memset(arm_channels, 0, 0x90);
         arm_textures = 0;
-        sprintf(path, item_arm_path_format, arm->unk30);
+        sprintf(path, item_arm_path_format, arm->model_file_number);
         handle = File_Open(path, 0, 1);
         if (handle < 0) {
             handle = File_Open(default_arm_path, 0, 1);
@@ -224,8 +224,8 @@ void Player_LoadArmModels(void) {
         if (file->texture_size != 0) {
             arm_textures = arm_file + file->texture_offset;
         }
-        arm_model.unk148 = (s32)held_item_light_blocks;
-        arm_model.unk14C = &current_fog_block;
+        arm_model.light_block = (s32)held_item_light_blocks;
+        arm_model.fog_block = &current_fog_block;
     }
 }
 
@@ -243,10 +243,10 @@ void Player_UpdateArmModels(void) {
 
     held_item_arm_points_prev = held_item_arm_points;
     memset(&held_item_arm_points, 0, 0x20);
-    if (player_state.unk258 != 0) {
+    if (player_state.item_action_step != 0) {
         sceVu0RotMatrixY(matrix, identity_matrix, 3.1415927f);
         sceVu0TransMatrix(matrix, matrix, held_item_offsets);
-        pitch = player_state.rotation.x - player_state.unk238;
+        pitch = player_state.rotation.x - player_state.view_tilt_pitch;
         if (pitch > 1.0122910f) {
             pitch = 1.0122910f;
         } else if (pitch < -1.0122910f) {
@@ -255,17 +255,17 @@ void Player_UpdateArmModels(void) {
         sceVu0RotMatrixX(matrix, matrix, pitch);
         sceVu0RotMatrixY(matrix, matrix, player_state.rotation.y);
         Vector_Copy(position, &player_state);
-        position[1] = position[1] - 220.0f + player_state.unk1C4 + player_state.unk1F0;
-        Vector_Add(position, position, camera_state.unk50);
-        Vector_Add(position, position, camera_state.unk60);
-        position[1] += camera_state.unk4C;
-        sceVu0TransMatrix((f32 *)held_item_model.unk40, matrix, position);
+        position[1] = position[1] - 220.0f + player_state.head_bob_offset + player_state.landing_dip_offset;
+        Vector_Add(position, position, camera_state.script_shake_offset);
+        Vector_Add(position, position, camera_state.entity_shake_offset);
+        position[1] += camera_state.height_offset;
+        sceVu0TransMatrix((f32 *)held_item_model.model_matrix, matrix, position);
         count = held_item_model.part_count;
         part = held_item_model.parts;
         for (i = 0; i < count; i++, part++) {
             ModelMatrix_BuildPartLocal(&held_item_model, part, part);
         }
-        if (held_item_model.unk100 & 1) {
+        if (held_item_model.model_flags & 1) {
             part = held_item_model.parts;
             for (i = 0; i < count; i++, part++) {
                 Model_MultiplyChildMatrices(part);
@@ -273,18 +273,18 @@ void Player_UpdateArmModels(void) {
         }
         Vector_Copy(&held_item_model.rotation, &player_state.rotation);
         Vector_Copy(&arm_model.rotation, &player_state.rotation);
-        *(ModelMatrix *)arm_model.unk40 = *(ModelMatrix *)held_item_model.unk40;
+        *(ModelMatrix *)arm_model.model_matrix = *(ModelMatrix *)held_item_model.model_matrix;
         part = held_item_model.parts;
         arm_part = arm_model.parts;
         // match: retail takes the larger part count of the two models, not the smaller
         count = held_item_model.part_count > arm_model.part_count ? held_item_model.part_count : arm_model.part_count;
         for (i = 0; i < count; i++, part++, arm_part++) {
-            Vector_Copy(arm_part->unk40, part->unk40);
-            Vector_Copy(&arm_part->unk50, &part->unk50);
-            Vector_Copy(arm_part->unk60, part->unk60);
-            *(ModelMatrix *)arm_part->unk00 = *(ModelMatrix *)part->unk00;
+            Vector_Copy(arm_part->position, part->position);
+            Vector_Copy(&arm_part->rotation_x, &part->rotation_x);
+            Vector_Copy(arm_part->scale, part->scale);
+            *(ModelMatrix *)arm_part->matrix = *(ModelMatrix *)part->matrix;
         }
-        held_item_model.unk1B4(&held_item_model);
+        held_item_model.update_bone_points(&held_item_model);
         Vector_Copy(&held_item_arm_points.points[0], (void *)held_item_model.get_point(&held_item_model, 30));
         Vector_Copy(&held_item_arm_points.points[1], (void *)held_item_model.get_point(&held_item_model, 31));
     }
@@ -302,10 +302,10 @@ void WeaponTrail_Update(void) {
     s32 item;
 
     WeaponTrail_Age();
-    if (player_state.unk258 != 0) {
+    if (player_state.item_action_step != 0) {
         weapon = &held_item_model;
-        weapon->unk1B4(weapon);
-        if (weapon_defs[player_state.weapon].unk63 == 2) {
+        weapon->update_bone_points(weapon);
+        if (weapon_defs[player_state.weapon].action_handler_index == 2) {
             return;
         }
         item = player_state.weapon + ITEM_WEAPON_FIRST;
@@ -348,7 +348,7 @@ void Player_DrawArm(void) {
     s32 size;
     u64 tag;
 
-    if (player_state.unk258 != 0) {
+    if (player_state.item_action_step != 0) {
         TextureTable_QueueAll((TextureTableHeader *)shared_texture_table);
         GsDraw_QueueTexFlush();
         Packet_BeginGsRegisters();
@@ -359,16 +359,16 @@ void Player_DrawArm(void) {
         Packet_EndGsRegisters();
         TextureTable_QueueAll((TextureTableHeader *)arm_textures);
         GsDraw_QueueTexFlush();
-        arm_model.unk1A8(&arm_model);
+        arm_model.draw_parts(&arm_model);
         TextureTable_QueueAll((TextureTableHeader *)held_item_textures);
         GsDraw_QueueTexFlush();
         if (player_state.weapon != 0x2E) {
-            held_item_model.unk1A8(&held_item_model);
+            held_item_model.draw_parts(&held_item_model);
         } else {
             for (i = 0; i < held_item_model.part_count; i++) {
                 MODEL_PART_FLAG_BITS(&held_item_model.parts[i])->bit40 = i == 5;
             }
-            held_item_model.unk1A8(&held_item_model);
+            held_item_model.draw_parts(&held_item_model);
             for (i = 0; i < held_item_model.part_count; i++) {
                 MODEL_PART_FLAG_BITS(&held_item_model.parts[i])->bit40 = i != 5;
             }
@@ -376,7 +376,7 @@ void Player_DrawArm(void) {
             Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
             Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
             Packet_EndGsRegisters();
-            held_item_model.unk1A8(&held_item_model);
+            held_item_model.draw_parts(&held_item_model);
             for (i = 0; i < held_item_model.part_count; i++) {
                 MODEL_PART_FLAG_BITS(&held_item_model.parts[i])->bit40 = FALSE;
             }
@@ -432,28 +432,28 @@ void WeaponTrail_PickKind(void) {
     s32 best = 0;
 
     trail_kind = 0;
-    if (player_state.unk122[0] != 0 && player_state.unk18E[0] > best) {
-        best = player_state.unk18E[0];
+    if (player_state.magic_strength_bonus[0] != 0 && player_state.magic_bonus_stamp[0] > best) {
+        best = player_state.magic_bonus_stamp[0];
         trail_kind = 1;
     }
-    if (player_state.unk122[1] != 0 && player_state.unk18E[1] > best) {
-        best = player_state.unk18E[1];
+    if (player_state.magic_strength_bonus[1] != 0 && player_state.magic_bonus_stamp[1] > best) {
+        best = player_state.magic_bonus_stamp[1];
         trail_kind = 2;
     }
-    if (player_state.unk122[2] != 0 && player_state.unk18E[2] > best) {
-        best = player_state.unk18E[2];
+    if (player_state.magic_strength_bonus[2] != 0 && player_state.magic_bonus_stamp[2] > best) {
+        best = player_state.magic_bonus_stamp[2];
         trail_kind = 3;
     }
-    if (player_state.unk122[3] != 0 && player_state.unk18E[3] > best) {
-        best = player_state.unk18E[3];
+    if (player_state.magic_strength_bonus[3] != 0 && player_state.magic_bonus_stamp[3] > best) {
+        best = player_state.magic_bonus_stamp[3];
         trail_kind = 4;
     }
-    if (player_state.unk122[4] != 0 && player_state.unk18E[4] > best) {
-        best = player_state.unk18E[4];
+    if (player_state.magic_strength_bonus[4] != 0 && player_state.magic_bonus_stamp[4] > best) {
+        best = player_state.magic_bonus_stamp[4];
         trail_kind = 5;
     }
-    if (player_state.unk122[5] != 0 && player_state.unk18E[5] > best) {
-        best = player_state.unk18E[5];
+    if (player_state.magic_strength_bonus[5] != 0 && player_state.magic_bonus_stamp[5] > best) {
+        best = player_state.magic_bonus_stamp[5];
         trail_kind = 6;
     }
     if (trail_kind == 0) {

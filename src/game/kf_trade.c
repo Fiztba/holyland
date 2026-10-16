@@ -191,11 +191,11 @@ static inline s32 ScaleValue(s32 value, s32 percent, s32 divisor) {
         (levels)[i] = full_alpha;                           \
     }
 /* Draws a list of packets at their current fade levels. */
-#define DRAW_PACKETS(packets, count, param)                                                             \
-    for (i = 0; i < (count); i++) {                                                                     \
-        SELECT_PART((s8)(packets)[i].unk42);                                                            \
-        MenuSprite_Draw((int)&(packets)[i], (packets)[i].unk3E + 1000, (param), (int)panel_part_alphas[i]);      \
-        SELECT_PART(0);                                                                                 \
+#define DRAW_PACKETS(packets, count, param)                                                          \
+    for (i = 0; i < (count); i++) {                                                                  \
+        SELECT_PART((s8)(packets)[i].blend_mode);                                                    \
+        MenuSprite_Draw((int)&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
+        SELECT_PART(0);                                                                              \
     }
 extern PlayerState player_state;
 extern f32 trade_take_amount_model_position[4];
@@ -410,7 +410,7 @@ s32 SaveCard_GetFreeClusters(s32);
 // match: called as a void function, so the result register is free at once
 #define SET_PART_MODE(mode) ((void (*)(u8))Menu_SetBlendMode)(mode)
 // match: this file hands Menu_SetBlendMode a signed byte
-#define SET_PART_MODE_OF(packet) ((void (*)(s8))Menu_SetBlendMode)((s8)(packet)->unk42)
+#define SET_PART_MODE_OF(packet) ((void (*)(s8))Menu_SetBlendMode)((s8)(packet)->blend_mode)
 
 static s32 Trade_CopyFrameToTexture(void);
 static int Trade_RunStep(int value);
@@ -902,7 +902,7 @@ static void Trade_UpdateSelectScreen(HandlerContext *context) {
 
     bar_drawn = 0;
     for (i = 0; i < preshop_part_count; i++) {
-        if (bar_drawn == 0 && preshop_parts[i].unk43 == 1) {
+        if (bar_drawn == 0 && preshop_parts[i].has_cursor_bar == 1) {
             bar.first.f.lo16 = 0x76C0;
             bar.first.f.mid16 = context->unk04 * 0xE0 + 0x7F50;
             bar.first.f.mid24 = 900000;
@@ -921,8 +921,8 @@ static void Trade_UpdateSelectScreen(HandlerContext *context) {
             bar.alpha = (s32)screen_part_alphas[0xFD];
             MenuDraw_Bar(&bar);
         }
-        kind = preshop_parts[i].unk3E;
-        SELECT_PART((s8)preshop_parts[i].unk42);
+        kind = preshop_parts[i].handler_index;
+        SELECT_PART((s8)preshop_parts[i].blend_mode);
         MenuSprite_Draw((int)&preshop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         SELECT_PART(0);
     }
@@ -1040,7 +1040,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
     }
     record = trade_stock_list_cursor[0]->unk0C - bases.first_item[trade_stock_list_cursor[0]->group];
     if (context->arg == 4) {
-        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].unk30_20 & 3) {
+        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].upgrade_material_kind & 3) {
         case 1:
             D_00446E80 = item_counts[ITEM_BONE];
             break;
@@ -1056,8 +1056,8 @@ static void Trade_UpdateStockList(HandlerContext *context) {
         D_00446E3C = weapon_level_records[record].unk14 + 1;
     }
     for (i = 0; i < shop_part_count; i++) {
-        kind = shop_parts[i].unk3E;
-        SELECT_PART((s8)shop_parts[i].unk42);
+        kind = shop_parts[i].handler_index;
+        SELECT_PART((s8)shop_parts[i].blend_mode);
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
@@ -1113,7 +1113,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
 
     if (context->arg == 4) {
         position.raw = 0x000DBBA079E08A30L;
-        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].unk30_20 & 3) {
+        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].upgrade_material_kind & 3) {
         case 1:
             label = bones_label;
             break;
@@ -1228,7 +1228,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
             D_00446E24 = worn_item_level_records[record].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].weight_tenths_of_pound;
             glow = player_weapon[trade_stock_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE(panel_part_alphas, shop_g_parts, shop_g_part_count)
@@ -1253,7 +1253,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
             D_00446E0C = ScaleValue(worn_defs[record].unk00[6], worn_item_level_records[record].level, 100);
             D_00446E10 = ScaleValue(worn_defs[record].unk00[7], worn_item_level_records[record].level, 100);
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
-            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].weight_tenths_of_pound;
             glow = player_weapon[trade_stock_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE(panel_part_alphas, shop_g2_parts, shop_g2_part_count)
@@ -1267,18 +1267,18 @@ static void Trade_UpdateStockList(HandlerContext *context) {
                 Sound_PlayMenu(1);
             }
             trade_stock_list_panel_sound_pending = 0;
-            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
-            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
-            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
-            D_00446E00 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
-            D_00446E04 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
-            D_00446E08 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
-            D_00446E0C = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
-            D_00446E10 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
-            D_00446E14 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
-            D_00446E20 = (s32)(weapon_defs[record].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
+            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
+            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
+            D_00446E00 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
+            D_00446E04 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
+            D_00446E08 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
+            D_00446E0C = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
+            D_00446E10 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
+            D_00446E14 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
+            D_00446E20 = (s32)(weapon_defs[record].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[record].level;
-            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[trade_stock_list_cursor[0]->group];
             D_00446E2C = 100;
             if (trade_panel_state == 1) {
@@ -1486,7 +1486,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
         D_00446E48 = stock.counts[4][trade_stock_list_cursor[0]->unk0C];
         D_00446E4C = context->unk04;
         D_00446E50 = context->unk04 * values.values[4][trade_stock_list_cursor[0]->unk0C].take_value;
-        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].unk30_20 & 3) {
+        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].upgrade_material_kind & 3) {
         case 1:
             D_00446E30 = item_counts[ITEM_BONE];
             break;
@@ -1505,8 +1505,8 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
         D_00446E3C = weapon_level_records[record].unk14 + 1;
     }
     for (i = 0; i < shop_part_count; i++) {
-        kind = shop_parts[i].unk3E;
-        SELECT_PART((s8)shop_parts[i].unk42);
+        kind = shop_parts[i].handler_index;
+        SELECT_PART((s8)shop_parts[i].blend_mode);
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
@@ -1578,7 +1578,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
             D_00446E24 = worn_item_level_records[record].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].weight_tenths_of_pound;
             kind = player_weapon[trade_stock_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE(panel_part_alphas, shop_g_parts, shop_g_part_count)
@@ -1603,7 +1603,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
             D_00446E0C = ScaleValue(worn_defs[record].unk00[6], worn_item_level_records[record].level, 100);
             D_00446E10 = ScaleValue(worn_defs[record].unk00[7], worn_item_level_records[record].level, 100);
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
-            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].weight_tenths_of_pound;
             kind = player_weapon[trade_stock_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE(panel_part_alphas, shop_g2_parts, shop_g2_part_count)
@@ -1617,18 +1617,18 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
                 Sound_PlayMenu(1);
             }
             trade_take_amount_panel_sound_pending = 0;
-            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
-            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
-            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
-            D_00446E00 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
-            D_00446E04 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
-            D_00446E08 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
-            D_00446E0C = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
-            D_00446E10 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
-            D_00446E14 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
-            D_00446E20 = (s32)(weapon_defs[record].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
+            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
+            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
+            D_00446E00 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
+            D_00446E04 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
+            D_00446E08 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
+            D_00446E0C = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
+            D_00446E10 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
+            D_00446E14 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
+            D_00446E20 = (s32)(weapon_defs[record].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[record].level;
-            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[trade_stock_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[trade_stock_list_cursor[0]->group];
             D_00446E2C = 100;
             if (trade_panel_state == 1) {
@@ -1681,7 +1681,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
 
     bar_drawn = 0;
     for (i = 0; i < shop_mess_part_count; i++) {
-        if (bar_drawn == 0 && shop_mess_parts[i].unk43 == 1) {
+        if (bar_drawn == 0 && shop_mess_parts[i].has_cursor_bar == 1) {
             bar.first.f.lo16 = 0x7850;
             bar.first.f.mid16 = 0x80B0;
             bar.first.f.mid24 = 250000;
@@ -1698,8 +1698,8 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
             bar.alpha = (s32)screen_part_alphas[0xFD];
             MenuDraw_Bar(&bar);
         }
-        SELECT_PART((s8)shop_mess_parts[i].unk42);
-        kind = shop_mess_parts[i].unk3E;
+        SELECT_PART((s8)shop_mess_parts[i].blend_mode);
+        kind = shop_mess_parts[i].handler_index;
         if (context->arg != 4) {
             MenuSprite_Draw((int)&shop_mess_parts[i], kind + 1000, 2, (int)message_part_alphas[i]);
         } else {
@@ -1717,7 +1717,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
         position.raw = 0x000DBBA079E08A30L;
         label_position.raw = 0x000DBBA081807C60L;
         MenuText_SetPen(position);
-        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].unk30_20 & 3) {
+        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].upgrade_material_kind & 3) {
         case 1:
             label = bones_label;
             break;
@@ -1830,7 +1830,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
                         trade_handler = Trade_UpdateSelectScreen;
                         ((void (*)(s32))Menu_ResetLoadBuffers)(0); // match: the callee takes nothing
                     } else {
-                        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].unk30_20 & 3) {
+                        switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].upgrade_material_kind & 3) {
                         case 1:
                             item_counts[ITEM_BONE] -= D_00446E50;
                             break;
@@ -1924,8 +1924,8 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
         D_00446E3C = weapon_level_records[record].unk14 + 1;
     }
     for (i = 0; i < shop_part_count; i++) {
-        kind = shop_parts[i].unk3E;
-        SELECT_PART((s8)shop_parts[i].unk42);
+        kind = shop_parts[i].handler_index;
+        SELECT_PART((s8)shop_parts[i].blend_mode);
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
@@ -2054,7 +2054,7 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
             D_00446E24 = worn_item_level_records[record].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             worn = player_weapon[item_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE_2(panel_part_alphas, shop_g_parts, shop_g_part_count)
@@ -2078,7 +2078,7 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
             D_00446E0C = ScaleValue(worn_defs[record].unk00[6], worn_item_level_records[record].level, 100);
             D_00446E10 = ScaleValue(worn_defs[record].unk00[7], worn_item_level_records[record].level, 100);
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             worn = player_weapon[item_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE_2(panel_part_alphas, shop_g2_parts, shop_g2_part_count)
@@ -2091,18 +2091,18 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
             if (details_opened != 0) {
                 Sound_PlayMenu(1);
             }
-            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
-            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
-            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
-            D_00446E00 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
-            D_00446E04 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
-            D_00446E08 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
-            D_00446E0C = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
-            D_00446E10 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
-            D_00446E14 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
-            D_00446E20 = (s32)(weapon_defs[record].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
+            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
+            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
+            D_00446E00 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
+            D_00446E04 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
+            D_00446E08 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
+            D_00446E0C = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
+            D_00446E10 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
+            D_00446E14 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
+            D_00446E20 = (s32)(weapon_defs[record].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[record].level;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[item_list_cursor[0]->group];
             D_00446E2C = 100;
             if (trade_panel_state == 1) {
@@ -2289,8 +2289,8 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
         D_00446E3C = weapon_level_records[record].unk14 + 1;
     }
     for (i = 0; i < shop_part_count; i++) {
-        kind = shop_parts[i].unk3E;
-        SELECT_PART((s8)shop_parts[i].unk42);
+        kind = shop_parts[i].handler_index;
+        SELECT_PART((s8)shop_parts[i].blend_mode);
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
@@ -2366,7 +2366,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
             D_00446E24 = worn_item_level_records[record].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             glow = player_weapon[item_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE(panel_part_alphas, shop_g_parts, shop_g_part_count)
@@ -2390,7 +2390,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
             D_00446E0C = ScaleValue(worn_defs[record].unk00[6], worn_item_level_records[record].level, 100);
             D_00446E10 = ScaleValue(worn_defs[record].unk00[7], worn_item_level_records[record].level, 100);
             D_00446E14 = ScaleValue(worn_defs[record].unk00[8], worn_item_level_records[record].level, 100);
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             glow = player_weapon[item_list_cursor[0]->group];
             if (trade_panel_state == 1) {
                 FILL_FADE(panel_part_alphas, shop_g2_parts, shop_g2_part_count)
@@ -2403,18 +2403,18 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
             if (info_pressed != 0) {
                 Sound_PlayMenu(1);
             }
-            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
-            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
-            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].unk00[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
-            D_00446E00 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
-            D_00446E04 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
-            D_00446E08 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
-            D_00446E0C = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
-            D_00446E10 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
-            D_00446E14 = ScaleValue(weapon_defs[record].unk00[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
-            D_00446E20 = (s32)(weapon_defs[record].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = ScaleValue(weapon_level_records[record].unk00[0] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[0], weapon_level_records[record].level, 100);
+            D_00446DF8 = ScaleValue(weapon_level_records[record].unk00[1] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[1], weapon_level_records[record].level, 100);
+            D_00446DFC = ScaleValue(weapon_level_records[record].unk00[2] + weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[2], weapon_level_records[record].level, 100);
+            D_00446E00 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[3], weapon_level_records[record].level, 100);
+            D_00446E04 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[4], weapon_level_records[record].level, 100);
+            D_00446E08 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[5], weapon_level_records[record].level, 100);
+            D_00446E0C = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[6], weapon_level_records[record].level, 100);
+            D_00446E10 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[7], weapon_level_records[record].level, 100);
+            D_00446E14 = ScaleValue(weapon_defs[record].attack_by_level[weapon_level_records[record].unk14].values[8], weapon_level_records[record].level, 100);
+            D_00446E20 = (s32)(weapon_defs[record].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[record].level;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[item_list_cursor[0]->group];
             D_00446E2C = 100;
             if (trade_panel_state == 1) {
@@ -2464,7 +2464,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
 
     bar_drawn = 0;
     for (i = 0; i < shop_mess_part_count; i++) {
-        if (bar_drawn == 0 && shop_mess_parts[i].unk43 == 1) {
+        if (bar_drawn == 0 && shop_mess_parts[i].has_cursor_bar == 1) {
             bar.first.f.lo16 = 0x7850;
             bar.first.f.mid16 = 0x80B0;
             bar.first.f.mid24 = 250000;
@@ -2481,8 +2481,8 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
             bar.alpha = (s32)screen_part_alphas[0xFD];
             MenuDraw_Bar(&bar);
         }
-        kind = shop_mess_parts[i].unk3E;
-        SELECT_PART((s8)shop_mess_parts[i].unk42);
+        kind = shop_mess_parts[i].handler_index;
+        SELECT_PART((s8)shop_mess_parts[i].blend_mode);
         MenuSprite_Draw((int)&shop_mess_parts[i], kind + 1000, 4, (int)message_part_alphas[i]);
         SELECT_PART(0);
     }
@@ -2786,7 +2786,7 @@ static void Smith_BuildItemRings(s32 mode) {
         if (i >= 150) {
             if (i < 220) {
                 if (i != 150 && weapon_level_records[i - 150].unk18 != 0 && !(item_name_defs[i].state & 2) &&
-                    PlayTime_SecondsBetween(weapon_level_records[i - 150].unk19.time, current_play_time) >= item_name_defs[i].unk36 * 60) {
+                    PlayTime_SecondsBetween(weapon_level_records[i - 150].unk19.time, current_play_time) >= item_name_defs[i].upgrade_wait_minutes * 60) {
                     // match: written out; through APPEND's `(node)->next` the item pointer is reduced differently
                     count++;
                     if (count == 7) {
@@ -2802,7 +2802,7 @@ static void Smith_BuildItemRings(s32 mode) {
                 }
             } else {
                 if (i != 220 && worn_item_level_records[i - 220].unk18 != 0 && !(item_name_defs[i].state & 2) &&
-                    PlayTime_SecondsBetween(worn_item_level_records[i - 220].unk19.time, current_play_time) >= item_name_defs[i].unk36 * 60) {
+                    PlayTime_SecondsBetween(worn_item_level_records[i - 220].unk19.time, current_play_time) >= item_name_defs[i].upgrade_wait_minutes * 60) {
                     count++;
                     if (count == 7) {
                         smith_collect_list_page_mark[0] = &all_item_entries[i];
@@ -3157,7 +3157,7 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
 
     bar_drawn = FALSE;
     for (i = 0; i < pretune_part_count; i++) {
-        if (!bar_drawn && pretune_parts[i].unk43 == 1) {
+        if (!bar_drawn && pretune_parts[i].has_cursor_bar == 1) {
             bar.first.f.lo16 = 0x76C0;
             bar.first.f.mid16 = context->unk04 * 0xD0 + 0x7EF0;
             bar.first.f.mid24 = 0xDBBA0;
@@ -3175,14 +3175,14 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
             bar.alpha = (s32)screen_part_alphas[253];
             MenuDraw_Bar(&bar);
         }
-        ((int (*)(s8))Menu_SetBlendMode)(pretune_parts[i].unk42); // match: the byte is passed sign-extended here
+        ((int (*)(s8))Menu_SetBlendMode)(pretune_parts[i].blend_mode); // match: the byte is passed sign-extended here
         MenuSprite_Draw((int)&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
     if (smith_choices_active == 0) {
         for (i = 0; i < tune_mess_part_count; i++) {
-            kind = tune_mess_parts[i].unk3E;
+            kind = tune_mess_parts[i].handler_index;
             MenuSprite_DrawPlain((int)&tune_mess_parts[i], kind, 1);
         }
     }
@@ -3383,8 +3383,8 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
         D_00446E34 = GetItemLevel(item_list_cursor[0]->unk0C - 220);
     }
     for (i = 0; i < tune_part_count; i++) {
-        kind = tune_parts[i].unk3E;
-        SELECT_PART((s8)tune_parts[i].unk42);
+        kind = tune_parts[i].handler_index;
+        SELECT_PART((s8)tune_parts[i].blend_mode);
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
@@ -3480,7 +3480,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
             D_00446E24 = worn_item_level_records[index].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g_part_count; i++) {
@@ -3489,8 +3489,8 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g_part_count; i++) {
-                SELECT_PART((s8)shop_g_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -3512,7 +3512,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             D_00446E0C = worn_defs[index].unk00[6] * worn_item_level_records[index].level / 100;
             D_00446E10 = worn_defs[index].unk00[7] * worn_item_level_records[index].level / 100;
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g2_part_count; i++) {
@@ -3521,8 +3521,8 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g2_part_count; i++) {
-                SELECT_PART((s8)shop_g2_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g2_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -3533,18 +3533,18 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
                 Sound_PlayMenu(1);
             }
             smith_upgrade_list_panel_sound_pending = 0;
-            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
-            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
-            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
-            D_00446E00 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
-            D_00446E04 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
-            D_00446E08 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
-            D_00446E0C = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
-            D_00446E10 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
-            D_00446E14 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
-            D_00446E20 = (s32)(weapon_defs[index].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
+            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
+            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
+            D_00446E00 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
+            D_00446E04 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
+            D_00446E08 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
+            D_00446E0C = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
+            D_00446E10 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
+            D_00446E14 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
+            D_00446E20 = (s32)(weapon_defs[index].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[index].level;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[item_list_cursor[0]->group];
             D_00446E2C = 100;
             if (smith_panel_state == 1) {
@@ -3554,8 +3554,8 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_a_part_count; i++) {
-                SELECT_PART((s8)shop_a_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].unk3E + 1000, 0, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_a_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -3689,7 +3689,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
 
 /* The screen Smith_UpdateUpgradeList opens for the item chosen from its list: draws the parts, the list with the item's panel,
    its name and its text, waits for accept or cancel and fades out. On accept the item's record gets level 100, the
-   play time of now and the flag that makes that time count (LevelDef.unk36 minutes, shown through D_00446E38); item
+   play time of now and the flag that makes that time count (LevelDef.upgrade_wait_minutes minutes, shown through D_00446E38); item
    183 is given up for item 184; and the item is taken off if it was equipped. Looks like leaving an item to be
    restored (a guess from what is written). */
 static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
@@ -3729,8 +3729,8 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
         D_00446E3C = weapon_level_records[index].unk14 + 1;
     }
     for (i = 0; i < tune_part_count; i++) {
-        kind = tune_parts[i].unk3E;
-        SELECT_PART((s8)tune_parts[i].unk42);
+        kind = tune_parts[i].handler_index;
+        SELECT_PART((s8)tune_parts[i].blend_mode);
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
@@ -3795,7 +3795,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
             D_00446E24 = worn_item_level_records[index].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g_part_count; i++) {
@@ -3804,8 +3804,8 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g_part_count; i++) {
-                SELECT_PART((s8)shop_g_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -3827,7 +3827,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             D_00446E0C = worn_defs[index].unk00[6] * worn_item_level_records[index].level / 100;
             D_00446E10 = worn_defs[index].unk00[7] * worn_item_level_records[index].level / 100;
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g2_part_count; i++) {
@@ -3836,10 +3836,10 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g2_part_count; i++) {
-                SELECT_PART((s8)shop_g2_parts[i].unk42);
+                SELECT_PART((s8)shop_g2_parts[i].blend_mode);
                 // match: called as returning a value, which keeps $2 away from the pointer formed for the next call
-                ((int (*)(int, int, int, int))MenuSprite_Draw)((int)&shop_g2_parts[i], shop_g2_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
-                SELECT_PART((s8)shop_g2_parts[i].unk42); // match: the other lists hand 0 here
+                ((int (*)(int, int, int, int))MenuSprite_Draw)((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g2_parts[i].blend_mode); // match: the other lists hand 0 here
             }
             parts = shop_g2_parts;
             count = shop_g2_part_count;
@@ -3849,18 +3849,18 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
                 Sound_PlayMenu(1);
             }
             smith_upgrade_confirm_panel_sound_pending = 0;
-            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
-            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
-            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
-            D_00446E00 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
-            D_00446E04 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
-            D_00446E08 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
-            D_00446E0C = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
-            D_00446E10 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
-            D_00446E14 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
-            D_00446E20 = (s32)(weapon_defs[index].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
+            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
+            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
+            D_00446E00 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
+            D_00446E04 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
+            D_00446E08 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
+            D_00446E0C = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
+            D_00446E10 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
+            D_00446E14 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
+            D_00446E20 = (s32)(weapon_defs[index].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[index].level;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[item_list_cursor[0]->group];
             D_00446E2C = 100;
             if (smith_panel_state == 1) {
@@ -3870,8 +3870,8 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_a_part_count; i++) {
-                SELECT_PART((s8)shop_a_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].unk3E + 1000, 0, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_a_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -3915,10 +3915,10 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             break;
         }
     }
-    D_00446E38 = item_name_defs[item_list_cursor[0]->unk0C].unk36;
+    D_00446E38 = item_name_defs[item_list_cursor[0]->unk0C].upgrade_wait_minutes;
     for (i = 0; i < tune_mess_part_count; i++) {
-        kind = tune_mess_parts[i].unk3E;
-        SELECT_PART((s8)tune_mess_parts[i].unk42);
+        kind = tune_mess_parts[i].handler_index;
+        SELECT_PART((s8)tune_mess_parts[i].blend_mode);
         MenuSprite_Draw((int)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
         SELECT_PART(0);
     }
@@ -4117,8 +4117,8 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
         D_00446E34 = GetItemLevel(item_list_cursor[0]->unk0C - 220);
     }
     for (i = 0; i < tune_part_count; i++) {
-        kind = tune_parts[i].unk3E;
-        SELECT_PART((s8)tune_parts[i].unk42);
+        kind = tune_parts[i].handler_index;
+        SELECT_PART((s8)tune_parts[i].blend_mode);
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
@@ -4231,7 +4231,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
             D_00446E24 = worn_item_level_records[index].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g_part_count; i++) {
@@ -4240,8 +4240,8 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g_part_count; i++) {
-                SELECT_PART((s8)shop_g_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -4263,7 +4263,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             D_00446E0C = worn_defs[index].unk00[6] * worn_item_level_records[index].level / 100;
             D_00446E10 = worn_defs[index].unk00[7] * worn_item_level_records[index].level / 100;
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g2_part_count; i++) {
@@ -4272,8 +4272,8 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g2_part_count; i++) {
-                SELECT_PART((s8)shop_g2_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g2_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -4284,18 +4284,18 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
                 Sound_PlayMenu(1);
             }
             smith_confirm_list_panel_sound_pending = 0;
-            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
-            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
-            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
-            D_00446E00 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
-            D_00446E04 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
-            D_00446E08 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
-            D_00446E0C = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
-            D_00446E10 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
-            D_00446E14 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
-            D_00446E20 = (s32)(weapon_defs[index].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
+            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
+            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
+            D_00446E00 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
+            D_00446E04 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
+            D_00446E08 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
+            D_00446E0C = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
+            D_00446E10 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
+            D_00446E14 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
+            D_00446E20 = (s32)(weapon_defs[index].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[index].level;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[item_list_cursor[0]->group];
             D_00446E2C = 100;
             if (smith_panel_state == 1) {
@@ -4305,8 +4305,8 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_a_part_count; i++) {
-                SELECT_PART((s8)shop_a_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].unk3E + 1000, 0, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_a_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -4341,10 +4341,10 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
         }
     }
     if (smith_confirm_shown != 0) {
-        D_00446E38 = item_name_defs[item_list_cursor[0]->unk0C].unk36;
+        D_00446E38 = item_name_defs[item_list_cursor[0]->unk0C].upgrade_wait_minutes;
         for (i = 0; i < tune_mess_part_count; i++) {
-            kind = tune_mess_parts[i].unk3E;
-            SELECT_PART((s8)tune_mess_parts[i].unk42);
+            kind = tune_mess_parts[i].handler_index;
+            SELECT_PART((s8)tune_mess_parts[i].blend_mode);
             MenuSprite_Draw((int)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
             SELECT_PART(0);
         }
@@ -4595,7 +4595,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
     }
     bar_drawn = FALSE;
     for (i = 0; i < tune_s_part_count; i++) {
-        if (!bar_drawn && tune_s_parts[i].unk43 == 1) {
+        if (!bar_drawn && tune_s_parts[i].has_cursor_bar == 1) {
             word.raw = 0x0E0864707DF07490L;
             bar_drawn = TRUE;
             bar.first.f.lo16 = word.f.lo16;
@@ -4619,8 +4619,8 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             bar.alpha = (s32)screen_part_alphas[253];
             MenuDraw_Bar(&bar);
         }
-        kind = tune_s_parts[i].unk3E;
-        SELECT_PART((s8)tune_s_parts[i].unk42);
+        kind = tune_s_parts[i].handler_index;
+        SELECT_PART((s8)tune_s_parts[i].blend_mode);
         MenuSprite_Draw((int)&tune_s_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         SELECT_PART(0);
     }
@@ -4671,11 +4671,11 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
             D_00446E24 = worn_item_level_records[index].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             for (i = 0; i < shop_g_part_count; i++) {
-                SELECT_PART((s8)shop_g_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -4696,11 +4696,11 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             D_00446E0C = worn_defs[index].unk00[6] * worn_item_level_records[index].level / 100;
             D_00446E10 = worn_defs[index].unk00[7] * worn_item_level_records[index].level / 100;
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[item_list_cursor[0]->group];
             for (i = 0; i < shop_g2_part_count; i++) {
-                SELECT_PART((s8)shop_g2_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g2_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -4710,23 +4710,23 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             if (play_sound) {
                 Sound_PlayMenu(1);
             }
-            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
-            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
-            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
-            D_00446E00 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
-            D_00446E04 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
-            D_00446E08 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
-            D_00446E0C = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
-            D_00446E10 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
-            D_00446E14 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
-            D_00446E20 = (s32)(weapon_defs[index].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
+            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
+            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
+            D_00446E00 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
+            D_00446E04 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
+            D_00446E08 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
+            D_00446E0C = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
+            D_00446E10 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
+            D_00446E14 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
+            D_00446E20 = (s32)(weapon_defs[index].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[index].level;
-            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[item_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[item_list_cursor[0]->group];
             D_00446E2C = 100;
             for (i = 0; i < shop_a_part_count; i++) {
-                SELECT_PART((s8)shop_a_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].unk3E + 1000, 0, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_a_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -4900,8 +4900,8 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
         D_00446E34 = GetItemLevel(smith_collect_list_cursor[0]->unk0C - 220);
     }
     for (i = 0; i < tune_part_count; i++) {
-        kind = tune_parts[i].unk3E;
-        SELECT_PART((s8)tune_parts[i].unk42);
+        kind = tune_parts[i].handler_index;
+        SELECT_PART((s8)tune_parts[i].blend_mode);
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
@@ -4997,7 +4997,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
             D_00446E24 = worn_item_level_records[index].level;
             D_00446E28 = 100;
-            D_00446E1C = item_name_defs[smith_collect_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[smith_collect_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[smith_collect_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g_part_count; i++) {
@@ -5006,8 +5006,8 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g_part_count; i++) {
-                SELECT_PART((s8)shop_g_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -5029,7 +5029,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             D_00446E0C = worn_defs[index].unk00[6] * worn_item_level_records[index].level / 100;
             D_00446E10 = worn_defs[index].unk00[7] * worn_item_level_records[index].level / 100;
             D_00446E14 = worn_defs[index].unk00[8] * worn_item_level_records[index].level / 100;
-            D_00446E1C = item_name_defs[smith_collect_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[smith_collect_list_cursor[0]->unk0C].weight_tenths_of_pound;
             variant = player_weapon[smith_collect_list_cursor[0]->group];
             if (smith_panel_state == 1) {
                 for (i = 0; i < shop_g2_part_count; i++) {
@@ -5038,8 +5038,8 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_g2_part_count; i++) {
-                SELECT_PART((s8)shop_g2_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].unk3E + 1000, variant, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_g2_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -5050,18 +5050,18 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
                 Sound_PlayMenu(1);
             }
             smith_collect_list_panel_sound_pending = 0;
-            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
-            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
-            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].unk00[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
-            D_00446E00 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
-            D_00446E04 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
-            D_00446E08 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
-            D_00446E0C = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
-            D_00446E10 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
-            D_00446E14 = weapon_defs[index].unk00[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
-            D_00446E20 = (s32)(weapon_defs[index].unk68 * 0.03281f * 10.0f);
+            D_00446DF4 = (weapon_level_records[index].unk00[0] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[0]) * weapon_level_records[index].level / 100;
+            D_00446DF8 = (weapon_level_records[index].unk00[1] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[1]) * weapon_level_records[index].level / 100;
+            D_00446DFC = (weapon_level_records[index].unk00[2] + weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[2]) * weapon_level_records[index].level / 100;
+            D_00446E00 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[3] * weapon_level_records[index].level / 100;
+            D_00446E04 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[4] * weapon_level_records[index].level / 100;
+            D_00446E08 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[5] * weapon_level_records[index].level / 100;
+            D_00446E0C = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[6] * weapon_level_records[index].level / 100;
+            D_00446E10 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[7] * weapon_level_records[index].level / 100;
+            D_00446E14 = weapon_defs[index].attack_by_level[weapon_level_records[index].unk14].values[8] * weapon_level_records[index].level / 100;
+            D_00446E20 = (s32)(weapon_defs[index].weapon_length_cm * 0.03281f * 10.0f);
             D_00446E24 = weapon_level_records[index].level;
-            D_00446E1C = item_name_defs[smith_collect_list_cursor[0]->unk0C].unk3E;
+            D_00446E1C = item_name_defs[smith_collect_list_cursor[0]->unk0C].weight_tenths_of_pound;
             D_00446E28 = player_weapon[smith_collect_list_cursor[0]->group];
             D_00446E2C = 100;
             if (smith_panel_state == 1) {
@@ -5071,8 +5071,8 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
                 }
             }
             for (i = 0; i < shop_a_part_count; i++) {
-                SELECT_PART((s8)shop_a_parts[i].unk42);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].unk3E + 1000, 0, (int)panel_part_alphas[i]);
+                SELECT_PART((s8)shop_a_parts[i].blend_mode);
+                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -5333,105 +5333,105 @@ static s32 SaveScreen_DrawBackground(void) {
 
     packet = MenuDraw_NextPacket();
     flag = context1_buffer_half != 0 ? 0x1180 : 0;
-    packet->unk04 = 0x100B4000;
-    packet->unk08 = 0xE;
-    packet->unk0C = 0;
-    packet->unk10 = (menu_first_draw_env[0] & ~0x1FFLL) | 0x192;
-    packet->unk18 = 0x4C;
-    packet->unk1C = 0;
-    packet->unk20 = 0;
-    packet->unk24 = 0;
-    packet->unk28 = 0x18;
-    packet->unk2C = 0;
-    packet->unk30 = 0x30000;
-    packet->unk34 = 0;
-    packet->unk38 = 0x47;
-    packet->unk3C = 0;
-    packet->unk40 = 0x02800000;
-    packet->unk44 = 0xE00000;
-    packet->unk48 = 0x40;
-    packet->unk4C = 0;
-    packet->unk50 = (s64)(flag | 0x28028000 | ((s64)0xC800 << 19));
-    packet->unk58 = 6;
-    packet->unk5C = 0;
-    packet->unk60 = 0x80808080;
-    packet->unk64 = 1.0f;
-    packet->unk68 = 1;
-    packet->unk6C = 0;
-    packet->unk70 = 0;
-    packet->unk74 = 0;
-    packet->unk78 = 2;
-    packet->unk7C = 0;
-    packet->unk80 = 0;
-    packet->unk84 = 0;
-    packet->unk88 = 5;
-    packet->unk8C = 0;
-    packet->unk90 = 0.625f;
-    packet->unk94 = 0.875f;
-    packet->unk98 = 2;
-    packet->unk9C = 0;
-    packet->unkA0 = 0x0E002800;
-    packet->unkA4 = 0;
-    packet->unkA8 = 5;
-    packet->unkAC = 0;
-    packet->unkB0 = 0;
-    packet->unkB4 = 0;
-    packet->unkB8 = 0x3F;
-    packet->unkBC = 0;
-    packet->unkC0 = menu_first_draw_env[0];
-    packet->unkC8 = 0x4C;
-    packet->unkCC = 0;
-    packet->unkD0 = 0x66802B240LL;
-    packet->unkD8 = 6;
-    packet->unkDC = 0;
-    packet->unkE0 = 0;
-    packet->unkE4 = 0;
-    packet->unkE8 = 2;
-    packet->unkEC = 0;
-    packet->unkF0 = 0;
-    packet->unkF4 = 0;
-    packet->unkF8 = 5;
-    packet->unkFC = 0;
-    packet->unk100 = 0.625f;
-    packet->unk104 = 0.4375f;
-    packet->unk108 = 2;
-    packet->unk10C = 0;
-    packet->unk110 = 0x0E002800;
-    packet->unk114 = 0;
-    packet->unk118 = 5;
-    packet->unk11C = 0;
-    packet->unk120 = menu_first_draw_env[0x2E];
-    packet->unk128 = 0x4C;
-    packet->unk12C = 0;
-    packet->unk130 = 0;
-    packet->unk134 = 0;
-    packet->unk138 = 2;
-    packet->unk13C = 0;
-    packet->unk140 = 0;
-    packet->unk144 = 0;
-    packet->unk148 = 5;
-    packet->unk14C = 0;
-    packet->unk150 = 0.625f;
-    packet->unk154 = 0.4375f;
-    packet->unk158 = 2;
-    packet->unk15C = 0;
-    packet->unk160 = 0x0E002800;
-    packet->unk164 = 0;
-    packet->unk168 = 5;
-    packet->unk16C = 0;
-    packet->unk170 = 0x50000;
-    packet->unk174 = 0;
-    packet->unk178 = 0x47;
-    packet->unk17C = 0;
-    packet->unk180 = 0;
-    packet->unk184 = 0;
-    packet->unk188 = 0x3F;
-    packet->unk18C = 0;
-    packet->unk190 = 0x44;
-    packet->unk194 = 0;
-    packet->unk198 = 0x42;
-    packet->unk19C = 0;
-    packet->unk00 = 0x8019;
+    packet->gif_tag_prim = 0x100B4000;
+    packet->gif_tag_register_list = 0xE;
+    packet->gif_tag_register_list_hi = 0;
+    packet->work_target_frame = (menu_first_draw_env[0] & ~0x1FFLL) | 0x192;
+    packet->work_target_frame_register = 0x4C;
+    packet->work_target_frame_pad = 0;
+    packet->xyoffset = 0;
+    packet->xyoffset_hi = 0;
+    packet->xyoffset_register = 0x18;
+    packet->xyoffset_pad = 0;
+    packet->test = 0x30000;
+    packet->test_hi = 0;
+    packet->test_register = 0x47;
+    packet->test_pad = 0;
+    packet->scissor_x = 0x02800000;
+    packet->scissor_y = 0xE00000;
+    packet->scissor_register = 0x40;
+    packet->scissor_pad = 0;
+    packet->source_tex0 = (s64)(flag | 0x28028000 | ((s64)0xC800 << 19));
+    packet->source_tex0_register = 6;
+    packet->source_tex0_pad = 0;
+    packet->rgbaq_rgba = 0x80808080;
+    packet->rgbaq_q = 1.0f;
+    packet->rgbaq_register = 1;
+    packet->rgbaq_pad = 0;
+    packet->source_st_corner0_s = 0;
+    packet->source_st_corner0_t = 0;
+    packet->source_st_corner0_register = 2;
+    packet->source_st_corner0_pad = 0;
+    packet->source_xy_corner0 = 0;
+    packet->source_z_corner0 = 0;
+    packet->source_xy_corner0_register = 5;
+    packet->source_xy_corner0_pad = 0;
+    packet->source_st_corner1_s = 0.625f;
+    packet->source_st_corner1_t = 0.875f;
+    packet->source_st_corner1_register = 2;
+    packet->source_st_corner1_pad = 0;
+    packet->source_xy_corner1 = 0x0E002800;
+    packet->source_z_corner1 = 0;
+    packet->source_xy_corner1_register = 5;
+    packet->source_xy_corner1_pad = 0;
+    packet->texflush = 0;
+    packet->texflush_hi = 0;
+    packet->texflush_register = 0x3F;
+    packet->texflush_pad = 0;
+    packet->first_frame = menu_first_draw_env[0];
+    packet->first_frame_register = 0x4C;
+    packet->first_frame_pad = 0;
+    packet->work_tex0 = 0x66802B240LL;
+    packet->work_tex0_register = 6;
+    packet->work_tex0_pad = 0;
+    packet->first_frame_st_corner0_s = 0;
+    packet->first_frame_st_corner0_t = 0;
+    packet->first_frame_st_corner0_register = 2;
+    packet->first_frame_st_corner0_pad = 0;
+    packet->first_frame_xy_corner0 = 0;
+    packet->first_frame_z_corner0 = 0;
+    packet->first_frame_xy_corner0_register = 5;
+    packet->first_frame_xy_corner0_pad = 0;
+    packet->first_frame_st_corner1_s = 0.625f;
+    packet->first_frame_st_corner1_t = 0.4375f;
+    packet->first_frame_st_corner1_register = 2;
+    packet->first_frame_st_corner1_pad = 0;
+    packet->first_frame_xy_corner1 = 0x0E002800;
+    packet->first_frame_z_corner1 = 0;
+    packet->first_frame_xy_corner1_register = 5;
+    packet->first_frame_xy_corner1_pad = 0;
+    packet->second_frame = menu_first_draw_env[0x2E];
+    packet->second_frame_register = 0x4C;
+    packet->second_frame_pad = 0;
+    packet->second_frame_st_corner0_s = 0;
+    packet->second_frame_st_corner0_t = 0;
+    packet->second_frame_st_corner0_register = 2;
+    packet->second_frame_st_corner0_pad = 0;
+    packet->second_frame_xy_corner0 = 0;
+    packet->second_frame_z_corner0 = 0;
+    packet->second_frame_xy_corner0_register = 5;
+    packet->second_frame_xy_corner0_pad = 0;
+    packet->second_frame_st_corner1_s = 0.625f;
+    packet->second_frame_st_corner1_t = 0.4375f;
+    packet->second_frame_st_corner1_register = 2;
+    packet->second_frame_st_corner1_pad = 0;
+    packet->second_frame_xy_corner1 = 0x0E002800;
+    packet->second_frame_z_corner1 = 0;
+    packet->second_frame_xy_corner1_register = 5;
+    packet->second_frame_xy_corner1_pad = 0;
+    packet->test_again = 0x50000;
+    packet->test_again_hi = 0;
+    packet->test_again_register = 0x47;
+    packet->test_again_pad = 0;
+    packet->texflush_again = 0;
+    packet->texflush_again_hi = 0;
+    packet->texflush_again_register = 0x3F;
+    packet->texflush_again_pad = 0;
+    packet->alpha = 0x44;
+    packet->alpha_hi = 0;
+    packet->alpha_register = 0x42;
+    packet->alpha_pad = 0;
+    packet->gif_tag = 0x8019;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 0x1A;
     *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
@@ -5495,20 +5495,20 @@ static int SaveScreen_Start(HandlerContext *context) {
     // match: taking the handler first orders its lui before the save screen's
     next_handler = SaveScreen_UpdateCardSelect;
     screen = &save_screen_state;
-    screen->unk12 = -1;
-    screen->unk00 = 0;
+    screen->dialog_id = -1;
+    screen->card_update_result = 0;
     save_screen_handler = next_handler;
     // match: this store order schedules into retail's unk18, unk11, unk14, ... order
-    screen->unk14 = 0;
-    screen->unk0C = 0;
-    screen->unk0D = 1;
-    screen->unk0E = 1;
-    screen->unk1B = 0;
-    screen->unk1E = 0;
-    screen->unk1F = 0;
-    screen->unk20 = 0;
-    screen->unk18 = 1;
-    screen->unk11 = 0;
+    screen->card_op_running = 0;
+    screen->selected_card = 0;
+    screen->selected_save = 1;
+    screen->confirm_choice = 1;
+    screen->check_finished = 0;
+    screen->save_state_0 = 0;
+    screen->save_state_1 = 0;
+    screen->save_state_2 = 0;
+    screen->input_locked = 1;
+    screen->is_leaving = 0;
     SaveCard_Open();
     SaveCard_StartCheck(1);
     memset(screen_part_alphas, 0, 0x400);
@@ -5557,20 +5557,20 @@ static void SaveScreen_UpdateCardSelect(void) {
     PadReport *report;
 
     card_result = SaveCard_Update();
-    if (SaveCard_HasCard(save_screen_state.unk0C) == 0 && save_screen_state.unk12 == 14) {
+    if (SaveCard_HasCard(save_screen_state.selected_card) == 0 && save_screen_state.dialog_id == 14) {
         card_result = -1;
     }
-    if (save_screen_state.unk1B == 0 && SaveCard_IsCheckRunning() == 0) {
-        save_screen_state.unk18 = 0;
-        save_screen_state.unk1B = 1;
+    if (save_screen_state.check_finished == 0 && SaveCard_IsCheckRunning() == 0) {
+        save_screen_state.input_locked = 0;
+        save_screen_state.check_finished = 1;
         if (SaveCard_IsPresent(0) == 0 && SaveCard_IsPresent(1) != 0) {
-            save_screen_state.unk0C = 1;
+            save_screen_state.selected_card = 1;
         }
     }
 
     for (i = 0; i < slot_part_count; i++) {
-        kind = slot_parts[i].unk3E;
-        SELECT_PART((s8)slot_parts[i].unk42);
+        kind = slot_parts[i].handler_index;
+        SELECT_PART((s8)slot_parts[i].blend_mode);
         switch (kind) {
         case 2:
             MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
@@ -5582,16 +5582,16 @@ static void SaveScreen_UpdateCardSelect(void) {
             }
             break;
         case 31:
-            if (save_screen_state.unk1B != 0) {
+            if (save_screen_state.check_finished != 0) {
                 if (system_screen_state != 1) {
-                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, save_screen_state.unk0C, screen_part_alphas[i]);
+                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, save_screen_state.selected_card, screen_part_alphas[i]);
                 } else {
-                    MenuSprite_Draw((int)&slot_parts[i], kind, save_screen_state.unk0C, screen_part_alphas[i]);
+                    MenuSprite_Draw((int)&slot_parts[i], kind, save_screen_state.selected_card, screen_part_alphas[i]);
                 }
             }
             break;
         case 3:
-            switch (save_screen_state.unk12) {
+            switch (save_screen_state.dialog_id) {
             case 4:
             case 5:
             case 10:
@@ -5631,7 +5631,7 @@ static void SaveScreen_UpdateCardSelect(void) {
             }
             break;
         case 28:
-            switch (save_screen_state.unk12) {
+            switch (save_screen_state.dialog_id) {
             case 4:
                 MenuSprite_DrawPlain((int)&slot_parts[i], kind, 4);
                 break;
@@ -5668,13 +5668,13 @@ static void SaveScreen_UpdateCardSelect(void) {
         SELECT_PART(0);
     }
 
-    if (save_screen_state.unk12 == 12) {
+    if (save_screen_state.dialog_id == 12) {
         // match: a depth nothing reads; without it the 64-bit mask of the bar's depth field is loaded after the branch below
         unused_corner.f.mid24 = 0x5F370;
         bar.first.f.lo16 = 0x7580;
-        bar.first.f.mid16 = save_screen_state.unk0D * 0xB0 + 0x80E0;
-        if (save_screen_state.unk0D != 0) {
-            bar.first.f.mid16 = save_screen_state.unk0D * 0xB0 + 0x80F0;
+        bar.first.f.mid16 = save_screen_state.selected_save * 0xB0 + 0x80E0;
+        if (save_screen_state.selected_save != 0) {
+            bar.first.f.mid16 = save_screen_state.selected_save * 0xB0 + 0x80F0;
         }
         bar.first.f.mid24 = 0x5F370;
         bar.second.f.lo16 = bar.first.f.lo16 + 0x1540;
@@ -5688,129 +5688,129 @@ static void SaveScreen_UpdateCardSelect(void) {
         MenuDraw_Bar(&bar); // match: the float at bar+0x24 that MenuDraw_Bar copies is never set
     }
 
-    if (save_screen_state.unk21 != 0) {
+    if (save_screen_state.confirm_pending != 0) {
         if (SaveCard_IsCheckRunning() == 0) {
-            save_screen_state.unk21 = 0;
-            save_screen_state.unk18 = 0;
-            if (save_screen_state.unk12 == 12) {
-                if (save_screen_state.unk0D == 0) {
-                    SaveCard_StartFormat(save_screen_state.unk0C);
-                    save_screen_state.unk12 = 13;
-                    save_screen_state.unk14 = 1;
+            save_screen_state.confirm_pending = 0;
+            save_screen_state.input_locked = 0;
+            if (save_screen_state.dialog_id == 12) {
+                if (save_screen_state.selected_save == 0) {
+                    SaveCard_StartFormat(save_screen_state.selected_card);
+                    save_screen_state.dialog_id = 13;
+                    save_screen_state.card_op_running = 1;
                 } else {
-                    save_screen_state.unk12 = -1;
+                    save_screen_state.dialog_id = -1;
                 }
-            } else if (save_screen_state.unk12 == 14) {
-                if (SaveCard_StartReadList(save_screen_state.unk0C, 0) == 0) {
-                    save_screen_state.unk14 = 1;
+            } else if (save_screen_state.dialog_id == 14) {
+                if (SaveCard_StartReadList(save_screen_state.selected_card, 0) == 0) {
+                    save_screen_state.card_op_running = 1;
                 }
-            } else if (save_screen_state.unk12 == 21) {
-                save_screen_state.unk12 = -1;
-            } else if (save_screen_state.unk12 != -1) {
-                save_screen_state.unk12 = -1;
-            } else if (SaveCard_IsPresent(save_screen_state.unk0C) != 0) {
-                if (SaveCard_IsFormatted(save_screen_state.unk0C) == 0) {
-                    save_screen_state.unk12 = 12;
-                } else if (SaveCard_HasSaveFolder(save_screen_state.unk0C) == 0 && SaveCard_HasRoomForFolder(save_screen_state.unk0C) < 0) {
-                    save_screen_state.unk12 = 21;
+            } else if (save_screen_state.dialog_id == 21) {
+                save_screen_state.dialog_id = -1;
+            } else if (save_screen_state.dialog_id != -1) {
+                save_screen_state.dialog_id = -1;
+            } else if (SaveCard_IsPresent(save_screen_state.selected_card) != 0) {
+                if (SaveCard_IsFormatted(save_screen_state.selected_card) == 0) {
+                    save_screen_state.dialog_id = 12;
+                } else if (SaveCard_HasSaveFolder(save_screen_state.selected_card) == 0 && SaveCard_HasRoomForFolder(save_screen_state.selected_card) < 0) {
+                    save_screen_state.dialog_id = 21;
                     SaveCard_StartCheck(1);
-                } else if (SaveCard_StartReadList(save_screen_state.unk0C, 1) == 0) {
-                    save_screen_state.unk14 = 1;
+                } else if (SaveCard_StartReadList(save_screen_state.selected_card, 1) == 0) {
+                    save_screen_state.card_op_running = 1;
                 }
-            } else if (save_screen_state.unk0C == 0) {
-                save_screen_state.unk12 = 4;
-            } else if (save_screen_state.unk0C == 1) {
-                save_screen_state.unk12 = 5;
+            } else if (save_screen_state.selected_card == 0) {
+                save_screen_state.dialog_id = 4;
+            } else if (save_screen_state.selected_card == 1) {
+                save_screen_state.dialog_id = 5;
             }
         }
-    } else if (save_screen_state.unk14 != 0) {
+    } else if (save_screen_state.card_op_running != 0) {
         if (SaveCard_CheckBusy() == 0) {
-            if (save_screen_state.unk12 == 13) {
-                save_screen_state.unk12 = 14;
-                save_screen_state.unk0D = 1;
-                save_screen_state.unk13 = -1;
-            } else if (SaveCard_HasAnySave() != 0 || SaveCard_HasRoomForFolder(save_screen_state.unk0C) > 0) {
-                save_screen_state.unk18 = 1;
-                save_screen_state.unk13 = -1;
+            if (save_screen_state.dialog_id == 13) {
+                save_screen_state.dialog_id = 14;
+                save_screen_state.selected_save = 1;
+                save_screen_state.list_step = -1;
+            } else if (SaveCard_HasAnySave() != 0 || SaveCard_HasRoomForFolder(save_screen_state.selected_card) > 0) {
+                save_screen_state.input_locked = 1;
+                save_screen_state.list_step = -1;
                 system_screen_state = 2;
-                save_screen_state.unk0D = 0;
+                save_screen_state.selected_save = 0;
             } else {
-                save_screen_state.unk12 = 21;
+                save_screen_state.dialog_id = 21;
                 SaveCard_StartCheck(1);
             }
-            save_screen_state.unk14 = 0;
+            save_screen_state.card_op_running = 0;
         } else if (card_result < 0) {
-            if (save_screen_state.unk12 == 13) {
-                save_screen_state.unk12 = 15;
-                save_screen_state.unk14 = 0;
-                save_screen_state.unk0D = 1;
+            if (save_screen_state.dialog_id == 13) {
+                save_screen_state.dialog_id = 15;
+                save_screen_state.card_op_running = 0;
+                save_screen_state.selected_save = 1;
                 SaveCard_StartCheck(1);
                 card_result = 0;
-            } else if (save_screen_state.unk12 == -1) {
-                if (SaveCard_IsDamaged(save_screen_state.unk0C) != 0) {
-                    if (SaveCard_HasAnySave() != 0 || SaveCard_HasRoomForFolder(save_screen_state.unk0C) > 0) {
-                        save_screen_state.unk18 = 1;
+            } else if (save_screen_state.dialog_id == -1) {
+                if (SaveCard_IsDamaged(save_screen_state.selected_card) != 0) {
+                    if (SaveCard_HasAnySave() != 0 || SaveCard_HasRoomForFolder(save_screen_state.selected_card) > 0) {
+                        save_screen_state.input_locked = 1;
                         system_screen_state = 2;
-                        save_screen_state.unk13 = -1;
-                        save_screen_state.unk0D = 0;
-                        SaveCard_Cancel(save_screen_state.unk0C);
+                        save_screen_state.list_step = -1;
+                        save_screen_state.selected_save = 0;
+                        SaveCard_Cancel(save_screen_state.selected_card);
                     } else {
-                        save_screen_state.unk12 = 21;
+                        save_screen_state.dialog_id = 21;
                         SaveCard_StartCheck(1);
                     }
                 } else {
-                    save_screen_state.unk12 = 10;
+                    save_screen_state.dialog_id = 10;
                 }
                 card_result = 0;
-                save_screen_state.unk14 = 0;
+                save_screen_state.card_op_running = 0;
             }
         }
     }
 
-    if (save_screen_state.unk11 != 0) {
+    if (save_screen_state.is_leaving != 0) {
         if (card_result < 0) {
-            save_screen_state.unk18 = 1;
+            save_screen_state.input_locked = 1;
             system_screen_state = 3;
         }
-    } else if (save_screen_state.unk12 == 12 && SaveCard_IsPresent(save_screen_state.unk0C) == 0) {
-        save_screen_state.unk12 = 10;
-        save_screen_state.unk0D = 1;
+    } else if (save_screen_state.dialog_id == 12 && SaveCard_IsPresent(save_screen_state.selected_card) == 0) {
+        save_screen_state.dialog_id = 10;
+        save_screen_state.selected_save = 1;
     } else if (card_result < 0) {
-        save_screen_state.unk12 = 10;
-        save_screen_state.unk0D = 1;
-        save_screen_state.unk14 = 0;
+        save_screen_state.dialog_id = 10;
+        save_screen_state.selected_save = 1;
+        save_screen_state.card_op_running = 0;
         SaveCard_StartCheck(1);
-    } else if (save_screen_state.unk14 == 0 && save_screen_state.unk18 == 0) {
-        if ((menu_buttons & 0xA0) && modal_pad_mode != 0xFF && save_screen_state.unk12 == -1) {
+    } else if (save_screen_state.card_op_running == 0 && save_screen_state.input_locked == 0) {
+        if ((menu_buttons & 0xA0) && modal_pad_mode != 0xFF && save_screen_state.dialog_id == -1) {
             Sound_PlayMenu(1);
-            save_screen_state.unk0C = (save_screen_state.unk0C + 1) & 1;
+            save_screen_state.selected_card = (save_screen_state.selected_card + 1) & 1;
         } else {
             report = Pad_GetReport(0, 0);
             if ((report->pressed & 0x4000) && modal_pad_mode != 0xFF) {
                 Sound_PlayMenu(0);
-                save_screen_state.unk21 = 1;
-                save_screen_state.unk18 = 1;
+                save_screen_state.confirm_pending = 1;
+                save_screen_state.input_locked = 1;
             } else {
                 report = Pad_GetReport(0, 0);
                 if ((report->pressed & 0x2000) && modal_pad_mode != 0xFF) {
                     Sound_PlayMenu(2);
-                    if (save_screen_state.unk12 == 14) {
-                        if (SaveCard_StartReadList(save_screen_state.unk0C, 0) == 0) {
-                            save_screen_state.unk14 = 1;
+                    if (save_screen_state.dialog_id == 14) {
+                        if (SaveCard_StartReadList(save_screen_state.selected_card, 0) == 0) {
+                            save_screen_state.card_op_running = 1;
                         }
-                    } else if (save_screen_state.unk12 != -1) {
-                        save_screen_state.unk12 = -1;
-                        save_screen_state.unk0D = 1;
+                    } else if (save_screen_state.dialog_id != -1) {
+                        save_screen_state.dialog_id = -1;
+                        save_screen_state.selected_save = 1;
                     } else {
-                        save_screen_state.unk11 = 1;
+                        save_screen_state.is_leaving = 1;
                         SaveCard_Close();
                     }
-                } else if ((menu_buttons & 0x10) && modal_pad_mode != 0xFF && save_screen_state.unk12 == 12) {
+                } else if ((menu_buttons & 0x10) && modal_pad_mode != 0xFF && save_screen_state.dialog_id == 12) {
                     Sound_PlayMenu(1);
-                    save_screen_state.unk0D = (save_screen_state.unk0D + 1) & 1;
-                } else if ((menu_buttons & 0x40) && modal_pad_mode != 0xFF && save_screen_state.unk12 == 12) {
+                    save_screen_state.selected_save = (save_screen_state.selected_save + 1) & 1;
+                } else if ((menu_buttons & 0x40) && modal_pad_mode != 0xFF && save_screen_state.dialog_id == 12) {
                     Sound_PlayMenu(1);
-                    save_screen_state.unk0D = (save_screen_state.unk0D - 1) & 1;
+                    save_screen_state.selected_save = (save_screen_state.selected_save - 1) & 1;
                 }
             }
         }
@@ -5824,13 +5824,13 @@ static void SaveScreen_UpdateCardSelect(void) {
             if (screen_part_alphas[0xFF] > 16.0f) {
                 screen_part_alphas[0xFF] = 16.0f;
             }
-            if (slot_parts[i].unk3E == 26) {
+            if (slot_parts[i].handler_index == 26) {
                 if (SaveCard_IsPresent(0) != 0) {
                     SPRITE_PACKET_COLOR_VIEW(&slot_parts[i])->alpha = 0x80;
                 } else {
                     SPRITE_PACKET_COLOR_VIEW(&slot_parts[i])->alpha = 0x20;
                 }
-            } else if (slot_parts[i].unk3E == 27) {
+            } else if (slot_parts[i].handler_index == 27) {
                 if (SaveCard_IsPresent(1) != 0) {
                     SPRITE_PACKET_COLOR_VIEW(&slot_parts[i])->alpha = 0x80;
                 } else {
@@ -5843,8 +5843,8 @@ static void SaveScreen_UpdateCardSelect(void) {
                     screen_part_alphas[i] = SPRITE_PACKET_COLOR_VIEW(&slot_parts[i])->alpha;
                 }
                 system_screen_state = 1;
-                if (save_screen_state.unk1B != 0) {
-                    save_screen_state.unk18 = 0;
+                if (save_screen_state.check_finished != 0) {
+                    save_screen_state.input_locked = 0;
                 }
                 break;
             }
@@ -5857,13 +5857,13 @@ static void SaveScreen_UpdateCardSelect(void) {
             if (screen_part_alphas[0xFF] < 0.0f) {
                 screen_part_alphas[0xFF] = 0.0f;
             }
-            if (slot_parts[i].unk3E == 26) {
+            if (slot_parts[i].handler_index == 26) {
                 if (SaveCard_IsPresent(0) != 0) {
                     SPRITE_PACKET_COLOR_VIEW(&slot_parts[i])->alpha = 0x80;
                 } else {
                     SPRITE_PACKET_COLOR_VIEW(&slot_parts[i])->alpha = 0x20;
                 }
-            } else if (slot_parts[i].unk3E == 27) {
+            } else if (slot_parts[i].handler_index == 27) {
                 if (SaveCard_IsPresent(1) != 0) {
                     SPRITE_PACKET_COLOR_VIEW(&slot_parts[i])->alpha = 0x80;
                 } else {
@@ -5874,10 +5874,10 @@ static void SaveScreen_UpdateCardSelect(void) {
             if (screen_part_alphas[i] < 0.0f) {
                 memset(screen_part_alphas, 0, 0x400);
                 if (system_screen_state == 2) {
-                    save_screen_state.unk1D = 0;
+                    save_screen_state.confirm_press_state = 0;
                     save_screen_handler = (int (*)())SaveScreen_UpdateSaveList;
-                    save_screen_state.unk08 = 0;
-                    save_screen_state.unk0D = 0;
+                    save_screen_state.free_clusters = 0;
+                    save_screen_state.selected_save = 0;
                     pulse_value_falling = 0;
                     pulse_sprite_falling = 0;
                     card_flags = SaveCard_GetSaveMask();
@@ -5899,11 +5899,11 @@ static void SaveScreen_UpdateCardSelect(void) {
                     save_line_slots[1] = 1;
                     save_line_slots[2] = 2;
                 } else if (system_screen_state == 3) {
-                    save_screen_state.unk0D = 0;
+                    save_screen_state.selected_save = 0;
                     save_screen_step++;
                     MenuHeap_FreeToMark();
                 }
-                save_screen_state.unk12 = -1;
+                save_screen_state.dialog_id = -1;
                 system_screen_state = 0;
                 break;
             }
@@ -5933,48 +5933,48 @@ static void SaveScreen_UpdateSaveList(void) {
     s32 swapped;
 
     info[0] = (CardSaveInfo *)SaveCard_GetSaveInfo(save_line_slots[0]);
-    D_00446DF4 = info[0]->unk0C;
-    D_00446DF8 = info[0]->unk08;
-    D_00446DFC = info[0]->unk28;
-    D_00446E00 = info[0]->unk10;
-    D_00446E04 = info[0]->unk14;
-    D_00446E08 = info[0]->unk18;
-    D_00446E0C = info[0]->unk1C;
-    D_00446E10 = info[0]->unk20;
-    D_00446E14 = info[0]->unk24;
-    D_00446E18 = info[0]->unk17B;
-    D_00446E1C = info[0]->unk17A;
-    D_00446E20 = info[0]->unk179;
+    D_00446DF4 = info[0]->level;
+    D_00446DF8 = info[0]->experience;
+    D_00446DFC = info[0]->gold;
+    D_00446E00 = info[0]->hp_now;
+    D_00446E04 = info[0]->hp_max;
+    D_00446E08 = info[0]->mp_now;
+    D_00446E0C = info[0]->mp_max;
+    D_00446E10 = info[0]->power_base;
+    D_00446E14 = info[0]->magic_base;
+    D_00446E18 = info[0]->play_hours;
+    D_00446E1C = info[0]->play_minutes;
+    D_00446E20 = info[0]->play_seconds;
     info[1] = (CardSaveInfo *)SaveCard_GetSaveInfo(save_line_slots[1]);
-    D_00446E24 = info[1]->unk0C;
-    D_00446E28 = info[1]->unk08;
-    D_00446E2C = info[1]->unk28;
-    D_00446E30 = info[1]->unk10;
-    D_00446E34 = info[1]->unk14;
-    D_00446E38 = info[1]->unk18;
-    D_00446E3C = info[1]->unk1C;
-    D_00446E40 = info[1]->unk20;
-    D_00446E44 = info[1]->unk24;
-    D_00446E48 = info[1]->unk17B;
-    D_00446E4C = info[1]->unk17A;
-    D_00446E50 = info[1]->unk179;
+    D_00446E24 = info[1]->level;
+    D_00446E28 = info[1]->experience;
+    D_00446E2C = info[1]->gold;
+    D_00446E30 = info[1]->hp_now;
+    D_00446E34 = info[1]->hp_max;
+    D_00446E38 = info[1]->mp_now;
+    D_00446E3C = info[1]->mp_max;
+    D_00446E40 = info[1]->power_base;
+    D_00446E44 = info[1]->magic_base;
+    D_00446E48 = info[1]->play_hours;
+    D_00446E4C = info[1]->play_minutes;
+    D_00446E50 = info[1]->play_seconds;
     info[2] = (CardSaveInfo *)SaveCard_GetSaveInfo(save_line_slots[2]);
-    D_00446E54 = info[2]->unk0C;
-    D_00446E58 = info[2]->unk08;
-    D_00446E5C = info[2]->unk28;
-    D_00446E60 = info[2]->unk10;
-    D_00446E64 = info[2]->unk14;
-    D_00446E68 = info[2]->unk18;
-    D_00446E6C = info[2]->unk1C;
-    D_00446E70 = info[2]->unk20;
-    D_00446E74 = info[2]->unk24;
-    D_00446E78 = info[2]->unk17B;
-    D_00446E7C = info[2]->unk17A;
-    D_00446E80 = info[2]->unk179;
+    D_00446E54 = info[2]->level;
+    D_00446E58 = info[2]->experience;
+    D_00446E5C = info[2]->gold;
+    D_00446E60 = info[2]->hp_now;
+    D_00446E64 = info[2]->hp_max;
+    D_00446E68 = info[2]->mp_now;
+    D_00446E6C = info[2]->mp_max;
+    D_00446E70 = info[2]->power_base;
+    D_00446E74 = info[2]->magic_base;
+    D_00446E78 = info[2]->play_hours;
+    D_00446E7C = info[2]->play_minutes;
+    D_00446E80 = info[2]->play_seconds;
 
-    if ((save_screen_state.unk13 == -1 && (save_screen_state.unk08 == 0 || save_screen_state.unk08 != SaveCard_GetFreeClusters(save_screen_state.unk0C))) ||
-        (save_screen_state.unk13 == 2 && save_screen_state.unk08 != SaveCard_GetFreeClusters(save_screen_state.unk0C))) {
-        save_screen_state.unk08 = 0;
+    if ((save_screen_state.list_step == -1 && (save_screen_state.free_clusters == 0 || save_screen_state.free_clusters != SaveCard_GetFreeClusters(save_screen_state.selected_card))) ||
+        (save_screen_state.list_step == 2 && save_screen_state.free_clusters != SaveCard_GetFreeClusters(save_screen_state.selected_card))) {
+        save_screen_state.free_clusters = 0;
         for (i = 0; i < 3; i++) {
             MENU_SCREEN_SAVES(&save_screen_state)->save_state[i] = SaveCard_GetSaveState(i);
         }
@@ -5982,7 +5982,7 @@ static void SaveScreen_UpdateSaveList(void) {
             if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[i] != 1) {
                 switch (i) {
                 case 0:
-                    if (save_screen_state.unk1F > 0 || save_screen_state.unk20 > 0) {
+                    if (save_screen_state.save_state_1 > 0 || save_screen_state.save_state_2 > 0) {
                         first_arg = 1;
                         second_arg = 0;
                     } else {
@@ -5991,37 +5991,37 @@ static void SaveScreen_UpdateSaveList(void) {
                     }
                     break;
                 case 1:
-                    if (save_screen_state.unk1E > 0 && save_screen_state.unk20 > 0) {
+                    if (save_screen_state.save_state_0 > 0 && save_screen_state.save_state_2 > 0) {
                         second_arg = 0;
                         first_arg = 1;
-                    } else if (save_screen_state.unk1E > 0 && save_screen_state.unk20 == 0) {
+                    } else if (save_screen_state.save_state_0 > 0 && save_screen_state.save_state_2 == 0) {
                         second_arg = 0;
                         first_arg = 1;
-                    } else if (save_screen_state.unk1E == 0 && save_screen_state.unk20 > 0) {
+                    } else if (save_screen_state.save_state_0 == 0 && save_screen_state.save_state_2 > 0) {
                         second_arg = 0;
                         first_arg = 2;
-                    } else if (save_screen_state.unk1E == 0 && save_screen_state.unk20 == 0) { // match: no else: a negative byte sets neither argument
+                    } else if (save_screen_state.save_state_0 == 0 && save_screen_state.save_state_2 == 0) { // match: no else: a negative byte sets neither argument
                         second_arg = 1;
                         first_arg = 1;
                     }
                     break;
                 case 2:
-                    if (save_screen_state.unk1E > 0 && save_screen_state.unk1F > 0) {
+                    if (save_screen_state.save_state_0 > 0 && save_screen_state.save_state_1 > 0) {
                         second_arg = 0;
                         first_arg = 1;
-                    } else if (save_screen_state.unk1E > 0 && save_screen_state.unk1F == 0) {
+                    } else if (save_screen_state.save_state_0 > 0 && save_screen_state.save_state_1 == 0) {
                         second_arg = 0;
                         first_arg = 2;
-                    } else if (save_screen_state.unk1E == 0 && save_screen_state.unk1F > 0) {
+                    } else if (save_screen_state.save_state_0 == 0 && save_screen_state.save_state_1 > 0) {
                         second_arg = 0;
                         first_arg = 2;
-                    } else if (save_screen_state.unk1E == 0 && save_screen_state.unk1F == 0) { // match: a last test, not an else: retail keeps a path that sets neither
+                    } else if (save_screen_state.save_state_0 == 0 && save_screen_state.save_state_1 == 0) { // match: a last test, not an else: retail keeps a path that sets neither
                         second_arg = 1;
                         first_arg = 2;
                     }
                     break;
                 }
-                if (SaveCard_HasRoomFor(save_screen_state.unk0C, first_arg, second_arg) > 0) {
+                if (SaveCard_HasRoomFor(save_screen_state.selected_card, first_arg, second_arg) > 0) {
                     MENU_SCREEN_SAVES(&save_screen_state)->save_state[i] = 0;
                 } else {
                     MENU_SCREEN_SAVES(&save_screen_state)->save_state[i] = -1;
@@ -6031,9 +6031,9 @@ static void SaveScreen_UpdateSaveList(void) {
     }
 
     for (i = 0; i < data_part_count; i++) {
-        kind = data_parts[i].unk3E;
+        kind = data_parts[i].handler_index;
         slot = data_parts[i].slot;
-        ((int (*)(s8))Menu_SetBlendMode)((s8)data_parts[i].unk42); // match: a signed byte, see SET_PART_MODE_OF
+        ((int (*)(s8))Menu_SetBlendMode)((s8)data_parts[i].blend_mode); // match: a signed byte, see SET_PART_MODE_OF
         switch (kind) {
         case 2:
             MenuSprite_Draw((int)&data_parts[i], 0x3EA, 0, screen_part_alphas[i]);
@@ -6048,11 +6048,11 @@ static void SaveScreen_UpdateSaveList(void) {
             break;
         case 25:
             if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[slot]] != -1) {
-                MenuSprite_Draw((int)&data_parts[i], 0x401, save_screen_state.unk0D, screen_part_alphas[i]);
+                MenuSprite_Draw((int)&data_parts[i], 0x401, save_screen_state.selected_save, screen_part_alphas[i]);
             }
             break;
         default:
-            MenuSprite_Draw((int)&data_parts[i], kind + 1000, save_screen_state.unk0D, screen_part_alphas[i]);
+            MenuSprite_Draw((int)&data_parts[i], kind + 1000, save_screen_state.selected_save, screen_part_alphas[i]);
             break;
         }
         SET_PART_MODE(0);
@@ -6062,7 +6062,7 @@ static void SaveScreen_UpdateSaveList(void) {
     word.raw = 0x000A87507C107120;
     for (i = 0; i < 3; i++) {
         if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[i]] == 1) {
-            kind = table[info[i]->unk04 + 1]; // match: the text's offset in the kind variable: retail keeps both in one register
+            kind = table[info[i]->save_area + 1]; // match: the text's offset in the kind variable: retail keeps both in one register
             if (kind != 0) {
                 text = (char *)table + kind;
                 MenuText_SetPen(word);
@@ -6074,10 +6074,10 @@ static void SaveScreen_UpdateSaveList(void) {
     }
 
     for (i = 0; i < mc_part_count; i++) {
-        kind = mc_parts[i].unk3E;
+        kind = mc_parts[i].handler_index;
         SET_PART_MODE_OF(&mc_parts[i]);
         if (kind == 3) {
-            switch (save_screen_state.unk13) {
+            switch (save_screen_state.list_step) {
             case 6:
                 MenuSprite_DrawPlain((int)&mc_parts[i], kind, 6);
                 break;
@@ -6101,7 +6101,7 @@ static void SaveScreen_UpdateSaveList(void) {
                 break;
             }
         } else {
-            switch (save_screen_state.unk13) {
+            switch (save_screen_state.list_step) {
             case 0:
             case 2:
             case 6:
@@ -6116,9 +6116,9 @@ static void SaveScreen_UpdateSaveList(void) {
         SET_PART_MODE(0);
     }
 
-    if (save_screen_state.unk13 == 6 || save_screen_state.unk13 == 7) {
+    if (save_screen_state.list_step == 6 || save_screen_state.list_step == 7) {
         bar.first.f.lo16 = 0x7490;
-        bar.first.f.mid16 = save_screen_state.unk0E * 0xC0 + 0x80A0;
+        bar.first.f.mid16 = save_screen_state.confirm_choice * 0xC0 + 0x80A0;
         bar.first.f.mid24 = 0x5F370;
         bar.second.f.lo16 = bar.first.f.lo16 + 0x1720;
         bar.second.f.mid16 = bar.first.f.mid16 + 0xB0;
@@ -6131,19 +6131,19 @@ static void SaveScreen_UpdateSaveList(void) {
         MenuDraw_Bar(&bar); // match: the float at bar+0x24 that MenuDraw_Bar copies is never set
     }
 
-    save_screen_state.unk00 = SaveCard_Update();
-    if (SaveCard_HasCard(save_screen_state.unk0C) == 0) {
-        save_screen_state.unk00 = -1;
+    save_screen_state.card_update_result = SaveCard_Update();
+    if (SaveCard_HasCard(save_screen_state.selected_card) == 0) {
+        save_screen_state.card_update_result = -1;
     }
-    if (save_screen_state.unk00 < 0) {
-        if (save_screen_state.unk13 == 0 || save_screen_state.unk13 == 11) {
-            save_screen_state.unk13 = 11;
+    if (save_screen_state.card_update_result < 0) {
+        if (save_screen_state.list_step == 0 || save_screen_state.list_step == 11) {
+            save_screen_state.list_step = 11;
         } else {
-            save_screen_state.unk13 = 10;
+            save_screen_state.list_step = 10;
         }
     }
-    if (save_screen_state.unk13 == 0 && SaveCard_CheckBusy() == 0) {
-        save_screen_state.unk13 = 2;
+    if (save_screen_state.list_step == 0 && SaveCard_CheckBusy() == 0) {
+        save_screen_state.list_step = 2;
         if (save_lines_reorder_pending != 0) {
             save_lines_reorder_pending = 0;
             same_count = 0;
@@ -6157,17 +6157,17 @@ static void SaveScreen_UpdateSaveList(void) {
                 same_count++;
             }
             for (i = 0; i < 3; i++) {
-                if (i != save_screen_state.unk0D && save_line_write_slots[i] >= save_line_write_slots[save_screen_state.unk0D]) {
+                if (i != save_screen_state.selected_save && save_line_write_slots[i] >= save_line_write_slots[save_screen_state.selected_save]) {
                     save_line_write_slots[i]++;
                 }
             }
-            if (save_line_slots[save_screen_state.unk0D] != 0) {
+            if (save_line_slots[save_screen_state.selected_save] != 0) {
                 if (same_count == 1) {
-                    swapped = save_line_slots[save_line_write_slots[save_screen_state.unk0D]];
-                    save_line_slots[save_line_write_slots[save_screen_state.unk0D]] = save_line_slots[save_screen_state.unk0D];
-                    save_line_slots[save_screen_state.unk0D] = swapped;
+                    swapped = save_line_slots[save_line_write_slots[save_screen_state.selected_save]];
+                    save_line_slots[save_line_write_slots[save_screen_state.selected_save]] = save_line_slots[save_screen_state.selected_save];
+                    save_line_slots[save_screen_state.selected_save] = swapped;
                 } else if (same_count == 2) {
-                    if (save_line_slots[save_screen_state.unk0D] != 1) {
+                    if (save_line_slots[save_screen_state.selected_save] != 1) {
                         for (i = 0; i < 3; i++) {
                             if (save_line_slots[i] == 1) {
                                 break;
@@ -6190,104 +6190,104 @@ static void SaveScreen_UpdateSaveList(void) {
 
     report = Pad_GetReport(0, 0);
     if ((report->pressed & 0x4000) && modal_pad_mode != 0xFF) {
-        if (save_screen_state.unk13 != 0) {
+        if (save_screen_state.list_step != 0) {
             report = Pad_GetReport(0, 0);
             if (report->held & 0x50) {
-                save_screen_state.unk1D = 1;
+                save_screen_state.confirm_press_state = 1;
             } else {
-                save_screen_state.unk1D = 3;
+                save_screen_state.confirm_press_state = 3;
             }
         }
     }
-    if (save_screen_state.unk1D == 2) {
-        save_screen_state.unk1D = 3;
+    if (save_screen_state.confirm_press_state == 2) {
+        save_screen_state.confirm_press_state = 3;
     }
-    if (save_screen_state.unk1D == 1) {
+    if (save_screen_state.confirm_press_state == 1) {
         report = Pad_GetReport(0, 0);
         if (report->held & 0x50) {
             if (menu_buttons & 0x50) {
-                save_screen_state.unk1D = 2;
+                save_screen_state.confirm_press_state = 2;
             }
         } else {
-            save_screen_state.unk1D = 3;
+            save_screen_state.confirm_press_state = 3;
         }
     }
 
-    if (save_screen_state.unk13 != 0 && save_screen_state.unk18 == 0) {
-        if (save_screen_state.unk1D == 3) {
-            save_screen_state.unk1D = 0;
-            switch (save_screen_state.unk13) {
+    if (save_screen_state.list_step != 0 && save_screen_state.input_locked == 0) {
+        if (save_screen_state.confirm_press_state == 3) {
+            save_screen_state.confirm_press_state = 0;
+            switch (save_screen_state.list_step) {
             case -1:
                 Sound_PlayMenu(0);
-                save_state = SaveCard_GetSaveState(save_line_write_slots[save_screen_state.unk0D]);
+                save_state = SaveCard_GetSaveState(save_line_write_slots[save_screen_state.selected_save]);
                 if (save_state == 0) {
-                    if (SaveCard_HasRoomFor(save_screen_state.unk0C, 1, 0) > 0 &&
-                        MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_screen_state.unk0D] != -1) {
+                    if (SaveCard_HasRoomFor(save_screen_state.selected_card, 1, 0) > 0 &&
+                        MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_screen_state.selected_save] != -1) {
                         save_lines_reorder_pending = 1;
-                        save_screen_state.unk13 = 6;
-                        save_screen_state.unk08 = SaveCard_GetFreeClusters(save_screen_state.unk0C);
+                        save_screen_state.list_step = 6;
+                        save_screen_state.free_clusters = SaveCard_GetFreeClusters(save_screen_state.selected_card);
                     } else {
-                        save_screen_state.unk13 = 20;
+                        save_screen_state.list_step = 20;
                         save_lines_reorder_pending = 0;
                     }
                 } else if (save_state == 1) {
-                    save_screen_state.unk13 = 7;
+                    save_screen_state.list_step = 7;
                 }
                 break;
             case 6:
             case 7:
-                if (save_screen_state.unk0E == 0) {
+                if (save_screen_state.confirm_choice == 0) {
                     Sound_PlayMenu(0);
-                    save_screen_state.unk13 = 0;
+                    save_screen_state.list_step = 0;
                     PlayTime_Update();
                     Game_WriteSaveImage();
-                    SaveCard_StartSave(save_screen_state.unk0C, save_line_write_slots[save_screen_state.unk0D], (s32 *)save_image);
+                    SaveCard_StartSave(save_screen_state.selected_card, save_line_write_slots[save_screen_state.selected_save], (s32 *)save_image);
                 } else {
                     Sound_PlayMenu(2);
-                    save_screen_state.unk13 = -1;
+                    save_screen_state.list_step = -1;
                 }
-                save_screen_state.unk0E = 1;
+                save_screen_state.confirm_choice = 1;
                 break;
             case 2:
             case 20:
                 Sound_PlayMenu(0);
-                save_screen_state.unk13 = -1;
+                save_screen_state.list_step = -1;
                 break;
             case 10:
             case 11:
                 Sound_PlayMenu(0);
                 system_screen_state = 3;
-                save_screen_state.unk18 = 1;
+                save_screen_state.input_locked = 1;
                 break;
             }
         } else {
             report = Pad_GetReport(0, 0);
-            if ((report->pressed & 0x2000) && modal_pad_mode != 0xFF && save_screen_state.unk1D == 0) {
+            if ((report->pressed & 0x2000) && modal_pad_mode != 0xFF && save_screen_state.confirm_press_state == 0) {
                 Sound_PlayMenu(2);
-                switch (save_screen_state.unk13) {
+                switch (save_screen_state.list_step) {
                 case -1:
                     system_screen_state = 2;
-                    save_screen_state.unk18 = 1;
+                    save_screen_state.input_locked = 1;
                     break;
                 case 10:
                 case 11:
                     system_screen_state = 3;
-                    save_screen_state.unk18 = 1;
+                    save_screen_state.input_locked = 1;
                     break;
                 case 6:
                 case 7:
-                    save_screen_state.unk0E = 1;
+                    save_screen_state.confirm_choice = 1;
                 case 2:
                 case 20:
-                    save_screen_state.unk13 = -1;
+                    save_screen_state.list_step = -1;
                     break;
                 }
             } else if (menu_buttons & 0x40) {
-                switch (save_screen_state.unk13) {
+                switch (save_screen_state.list_step) {
                 case -1:
                     for (i = 0; i < 3; i++) {
-                        save_screen_state.unk0D = ((s8)(save_screen_state.unk0D + 1) + 3) % 3;
-                        if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_screen_state.unk0D] >= 0) {
+                        save_screen_state.selected_save = ((s8)(save_screen_state.selected_save + 1) + 3) % 3;
+                        if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_screen_state.selected_save] >= 0) {
                             if (i != 2) {
                                 Sound_PlayMenu(1);
                             }
@@ -6298,15 +6298,15 @@ static void SaveScreen_UpdateSaveList(void) {
                 case 6:
                 case 7:
                     Sound_PlayMenu(1);
-                    save_screen_state.unk0E = (save_screen_state.unk0E + 1) & 1;
+                    save_screen_state.confirm_choice = (save_screen_state.confirm_choice + 1) & 1;
                     break;
                 }
             } else if (menu_buttons & 0x10) {
-                switch (save_screen_state.unk13) {
+                switch (save_screen_state.list_step) {
                 case -1:
                     for (i = 0; i < 3; i++) {
-                        save_screen_state.unk0D = ((s8)(save_screen_state.unk0D - 1) + 3) % 3;
-                        if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_screen_state.unk0D] >= 0) {
+                        save_screen_state.selected_save = ((s8)(save_screen_state.selected_save - 1) + 3) % 3;
+                        if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_screen_state.selected_save] >= 0) {
                             if (i != 2) {
                                 Sound_PlayMenu(1);
                             }
@@ -6317,7 +6317,7 @@ static void SaveScreen_UpdateSaveList(void) {
                 case 6:
                 case 7:
                     Sound_PlayMenu(1);
-                    save_screen_state.unk0E = (save_screen_state.unk0E + 1) & 1;
+                    save_screen_state.confirm_choice = (save_screen_state.confirm_choice + 1) & 1;
                     break;
                 }
             }
@@ -6338,7 +6338,7 @@ static void SaveScreen_UpdateSaveList(void) {
                     screen_part_alphas[i] = SPRITE_PACKET_COLOR_VIEW(&data_parts[i])->alpha;
                 }
                 system_screen_state = 1;
-                save_screen_state.unk18 = 0;
+                save_screen_state.input_locked = 0;
                 break;
             }
         }
@@ -6357,8 +6357,8 @@ static void SaveScreen_UpdateSaveList(void) {
                 pulse_sprite_alpha = 128.0f;
                 save_screen_handler = (int (*)())SaveScreen_UpdateCardSelect;
                 pulse_sprite_falling = 0;
-                save_screen_state.unk0D = 1;
-                save_screen_state.unk0E = 1;
+                save_screen_state.selected_save = 1;
+                save_screen_state.confirm_choice = 1;
                 if (system_screen_state == 2) {
                     SaveCard_StartCheck(0);
                 } else {

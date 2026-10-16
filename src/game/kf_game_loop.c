@@ -228,10 +228,10 @@ void GameLoop_Run(int arg) {
     if (save_loaded == 0) {
         PlayTime_Start();
         header = (MapSlotUnk08 *)map_slots[0].header;
-        player_state.position.x = header->unk60;
-        player_state.position.y = header->unk64;
-        player_state.position.z = header->unk68;
-        player_state.rotation.y = header->unk6C;
+        player_state.position.x = header->player_start_x;
+        player_state.position.y = header->player_start_y;
+        player_state.position.z = header->player_start_z;
+        player_state.rotation.y = header->player_start_heading;
     } else {
         save_loaded = 0;
         PlayTime_Resume(save_play_time[0]);
@@ -262,7 +262,7 @@ void GameLoop_Run(int arg) {
                 pad_state[0] = 0;
             }
         }
-        if (!(game_status.unk30 & 0x40) && player_state.unk1A8 == 0) {
+        if (!(game_status.update_hold_flags & 0x40) && player_state.death_timer == 0) {
             Script_UpdateAll();
         }
         Player_Update();
@@ -313,9 +313,9 @@ void GameLoop_Run(int arg) {
     game_options[1] = 0;
     Sound_SetBgmVolume(0);
     Sound_SetBankVolumes(0);
-    while (sound_load_queue.unk0C != 0 ||
-           ((sound_load_queue.unk04 != 0 || sound_load_queue.unk18 != 0) &&
-            (sound_load_queue.unk18 != 0 || sound_load_queue.unk04 == 0 || Sound_BgmLoadCanYield() == 0))) {
+    while (sound_load_queue.map_bank_load_pending != 0 ||
+           ((sound_load_queue.bgm_load_pending != 0 || sound_load_queue.entity_bank_load_pending != 0) &&
+            (sound_load_queue.entity_bank_load_pending != 0 || sound_load_queue.bgm_load_pending == 0 || Sound_BgmLoadCanYield() == 0))) {
         while (sceGsSyncV(0) != 1) {
         }
         Timer_Restart();
@@ -456,13 +456,13 @@ int GameLoop_DrawFrame(int arg) {
     }
     GameLoop_SetCameraMatrices(0, 0);
     GsDraw_QueueVu1Matrix(world_screen_matrix);
-    if ((s32)(player_state.unk1C8 >> 39) & 1) {
+    if ((s32)(player_state.status_bits >> 39) & 1) {
         GsDraw_CopyFrame(0x2BC0);
         tinted = TRUE;
         Game_DrawWobblingScreen(0x80, 0x80, 0x80, 0x80, 1.0f);
     }
-    if (player_state.unk29C != 0) {
-        tint = (f32)player_state.unk29C * 0.125f;
+    if (player_state.mp_drain_tint != 0) {
+        tint = (f32)player_state.mp_drain_tint * 0.125f;
         red = (int)(tint * -58.0f + 128.0f);
         green = (int)(tint * -78.0f + 128.0f);
         blue = (int)(tint * 12.0f + 128.0f);
@@ -484,7 +484,7 @@ int GameLoop_DrawFrame(int arg) {
         Game_BlendScreenOffsetUpDown();
     }
     if (map_draw_state.bit40) {
-        Game_BlendPreviousFrame(map_draw_state.unk88);
+        Game_BlendPreviousFrame(map_draw_state.previous_frame_alpha);
     }
     if (player_state.aim_speed > 0.0f) {
         Game_BlendPreviousFrame(0x40);
@@ -499,7 +499,7 @@ int GameLoop_DrawFrame(int arg) {
     DrawList_Draw(3, 0);
     Player_DrawArm();
     Player_DrawScreenTints();
-    if ((s32)(player_state.unk1C8 >> 39) & 1) {
+    if ((s32)(player_state.status_bits >> 39) & 1) {
         if (map_slots[current_map_slot].tag == 0x23 && guardians_room_water_purified[0] == 0) {
             GsDraw_FillScreen(0x40, 0x80, 0x40, 0x78, 0x44);
         } else {
@@ -507,10 +507,10 @@ int GameLoop_DrawFrame(int arg) {
         }
     }
     Hud_Draw();
-    if (map_draw_state.unk78 > 0) {
+    if (map_draw_state.screen_fill_alpha > 0) {
         // match: the last argument is passed as the 64-bit word
-        ((void (*)(int, int, int, int, s64))GsDraw_FillScreen)(map_draw_state.unk6C, map_draw_state.unk70, map_draw_state.unk74,
-                                                             map_draw_state.unk78, map_draw_state.unk80);
+        ((void (*)(int, int, int, int, s64))GsDraw_FillScreen)(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
+                                                             map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
     }
     Game_DrawFade();
     Splash_Draw();
@@ -545,48 +545,48 @@ void GameLoop_UpdateCameraShake(void) {
     MapRecordInfo *record;
     f32 angle;
 
-    if (game_status.unk03 != 0) {
+    if (game_status.camera_mode != 0) {
         record = Map_FindRecordAtInSlot(&camera_state, 100.0f, current_map_slot);
         if (record != NULL) {
             player_state.map_index = (u32)((char *)record - map_slots[current_map_slot].records) >> 14; // match: the byte offset of 0x80-byte records shifted by 14; 7 would give the record number
-            player_state.unk250 = record->unk38;
+            player_state.record_flag_block = record->flag_block_bit;
         }
     }
-    if (camera_state.unk74 != 0 && camera_state.unk70 > 0.0f) {
+    if (camera_state.script_shake_frames != 0 && camera_state.script_shake_reach > 0.0f) {
         angle = (f32)(int)((f32)rand() * 360.0f / 2147483648.0f) * 0.017453292f;
-        angle = Angle_Wrap(angle + camera_state.unk18);
-        camera_state.unk50[0] = camera_state.unk70;
-        camera_state.unk50[1] = 0.0f;
-        camera_state.unk50[2] = 0.0f;
-        camera_state.unk50[3] = 1.0f;
+        angle = Angle_Wrap(angle + camera_state.roll);
+        camera_state.script_shake_offset[0] = camera_state.script_shake_reach;
+        camera_state.script_shake_offset[1] = 0.0f;
+        camera_state.script_shake_offset[2] = 0.0f;
+        camera_state.script_shake_offset[3] = 1.0f;
         sceVu0CopyMatrix(matrix, scale_matrices);
         sceVu0RotMatrixZ(matrix[0], matrix[0], angle);
-        sceVu0RotMatrixX(matrix[0], matrix[0], camera_state.unk10);
-        sceVu0RotMatrixY(matrix[0], matrix[0], camera_state.unk14);
-        sceVu0ApplyMatrix(camera_state.unk50, (int *)matrix, camera_state.unk50);
-        if (camera_state.unk74 > 0) {
-            camera_state.unk74--;
+        sceVu0RotMatrixX(matrix[0], matrix[0], camera_state.pitch);
+        sceVu0RotMatrixY(matrix[0], matrix[0], camera_state.yaw);
+        sceVu0ApplyMatrix(camera_state.script_shake_offset, (int *)matrix, camera_state.script_shake_offset);
+        if (camera_state.script_shake_frames > 0) {
+            camera_state.script_shake_frames--;
         }
     } else {
-        Vector_Copy(camera_state.unk50, origin_point);
+        Vector_Copy(camera_state.script_shake_offset, origin_point);
     }
-    if (camera_state.unk7C != 0 && camera_state.unk78 > 0.0f) {
+    if (camera_state.entity_shake_frames != 0 && camera_state.entity_shake_reach > 0.0f) {
         angle = (f32)(int)((f32)rand() * 360.0f / 2147483648.0f) * 0.017453292f;
-        angle = Angle_Wrap(angle + camera_state.unk18);
-        camera_state.unk60[0] = camera_state.unk78;
-        camera_state.unk60[1] = 0.0f;
-        camera_state.unk60[2] = 0.0f;
-        camera_state.unk60[3] = 1.0f;
+        angle = Angle_Wrap(angle + camera_state.roll);
+        camera_state.entity_shake_offset[0] = camera_state.entity_shake_reach;
+        camera_state.entity_shake_offset[1] = 0.0f;
+        camera_state.entity_shake_offset[2] = 0.0f;
+        camera_state.entity_shake_offset[3] = 1.0f;
         sceVu0CopyMatrix(matrix, scale_matrices);
         sceVu0RotMatrixZ(matrix[0], matrix[0], angle);
-        sceVu0RotMatrixX(matrix[0], matrix[0], camera_state.unk10);
-        sceVu0RotMatrixY(matrix[0], matrix[0], camera_state.unk14);
-        sceVu0ApplyMatrix(camera_state.unk60, (int *)matrix, camera_state.unk60);
-        if (camera_state.unk7C > 0) {
-            camera_state.unk7C--;
+        sceVu0RotMatrixX(matrix[0], matrix[0], camera_state.pitch);
+        sceVu0RotMatrixY(matrix[0], matrix[0], camera_state.yaw);
+        sceVu0ApplyMatrix(camera_state.entity_shake_offset, (int *)matrix, camera_state.entity_shake_offset);
+        if (camera_state.entity_shake_frames > 0) {
+            camera_state.entity_shake_frames--;
         }
     } else {
-        Vector_Copy(camera_state.unk60, origin_point);
+        Vector_Copy(camera_state.entity_shake_offset, origin_point);
     }
 }
 
@@ -600,53 +600,53 @@ void GameLoop_UpdateCamera(void) {
     f32 pitch;
     f32 length;
 
-    switch (game_status.unk03) {
+    switch (game_status.camera_mode) {
     case 0:
-        Vector_Scale(target, view_ray_status.unk10, view_ray_status.unk40);
-        Vector_Add(target, target, view_ray_status.unk00);
+        Vector_Scale(target, view_ray_status.view_direction, view_ray_status.view_distance);
+        Vector_Add(target, target, view_ray_status.view_origin);
         camera_state.position[0] = player_state.position.x;
         camera_state.position[2] = player_state.position.z;
         camera_state.position[1] =
-            player_state.position.y - 220.0f + player_state.unk1C4 + player_state.unk1F0 + camera_state.unk4C;
+            player_state.position.y - 220.0f + player_state.head_bob_offset + player_state.landing_dip_offset + camera_state.height_offset;
         Vector_Subtract(direction, target, camera_state.position);
-        camera_state.unk10 =
+        camera_state.pitch =
             atan2f(-direction[1], sqrtf(direction[0] * direction[0] + direction[2] * direction[2]));
-        camera_state.unk14 = atan2f(direction[0], direction[2]);
-        camera_state.unk18 = 0.0f;
+        camera_state.yaw = atan2f(direction[0], direction[2]);
+        camera_state.roll = 0.0f;
         break;
     case 1:
-        if (game_status.unk05 != 0) {
-            Vector_Subtract(direction, camera_state.unk30, camera_state.position);
+        if (game_status.camera_move_enabled != 0) {
+            Vector_Subtract(direction, camera_state.move_to_point, camera_state.position);
             length = sqrtf(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
-            if (camera_state.unk44 < length) {
-                Vector_Scale(direction, direction, camera_state.unk44 / length);
+            if (camera_state.move_speed < length) {
+                Vector_Scale(direction, direction, camera_state.move_speed / length);
                 Vector_Add(camera_state.position, camera_state.position, direction);
             } else {
-                Vector_Copy(camera_state.position, camera_state.unk30);
+                Vector_Copy(camera_state.position, camera_state.move_to_point);
             }
         }
         break;
     case 2:
         break;
     }
-    if (game_status.unk03 != 0 && (s8)game_status.unk04 != 0) {
-        Vector_Subtract(direction, camera_state.unk20, camera_state.position);
+    if (game_status.camera_mode != 0 && (s8)game_status.camera_look_mode != 0) {
+        Vector_Subtract(direction, camera_state.look_at_point, camera_state.position);
         yaw = atan2f(direction[0], direction[2]);
         length = sqrtf(direction[0] * direction[0] + direction[2] * direction[2]);
         pitch = atan2f(-direction[1], length);
-        switch ((s8)game_status.unk04) {
+        switch ((s8)game_status.camera_look_mode) {
         case 1:
-            camera_state.unk10 = pitch;
-            camera_state.unk14 = yaw;
+            camera_state.pitch = pitch;
+            camera_state.yaw = yaw;
             break;
         case 2:
-            Angle_Approach(&camera_state.unk10, pitch, camera_state.unk40);
-            Angle_Approach(&camera_state.unk14, yaw, camera_state.unk40);
+            Angle_Approach(&camera_state.pitch, pitch, camera_state.turn_speed);
+            Angle_Approach(&camera_state.yaw, yaw, camera_state.turn_speed);
             break;
         }
     }
-    Vector_Add(camera_state.position, camera_state.position, camera_state.unk50);
-    Vector_Add(camera_state.position, camera_state.position, camera_state.unk60);
+    Vector_Add(camera_state.position, camera_state.position, camera_state.script_shake_offset);
+    Vector_Add(camera_state.position, camera_state.position, camera_state.entity_shake_offset);
 }
 
 /* Builds the camera matrices: the projection, world to view, and world to screen for the given mode. */
@@ -670,11 +670,11 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
     translation[2] = -camera_state.position[2];
     translation[3] = 0.0f;
     sceVu0TransMatrix(world_view_matrix, identity_matrix, translation);
-    sceVu0RotMatrixY(world_view_matrix, world_view_matrix, -camera_state.unk14);
-    sceVu0RotMatrixX(world_view_matrix, world_view_matrix, -camera_state.unk10);
-    sceVu0RotMatrixY(inverse_camera_rotation, identity_matrix, Angle_Wrap(3.1415927f - camera_state.unk14));
-    sceVu0RotMatrixX(inverse_camera_rotation, inverse_camera_rotation, Angle_Wrap(-camera_state.unk10));
-    sceVu0RotMatrixZ(inverse_camera_rotation, inverse_camera_rotation, camera_state.unk18);
+    sceVu0RotMatrixY(world_view_matrix, world_view_matrix, -camera_state.yaw);
+    sceVu0RotMatrixX(world_view_matrix, world_view_matrix, -camera_state.pitch);
+    sceVu0RotMatrixY(inverse_camera_rotation, identity_matrix, Angle_Wrap(3.1415927f - camera_state.yaw));
+    sceVu0RotMatrixX(inverse_camera_rotation, inverse_camera_rotation, Angle_Wrap(-camera_state.pitch));
+    sceVu0RotMatrixZ(inverse_camera_rotation, inverse_camera_rotation, camera_state.roll);
     sceVu0InversMatrix(inverse_camera_rotation, inverse_camera_rotation);
     switch (mode) {
     case 0:
@@ -706,46 +706,46 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
 
 /* Runs the queued sound loads, one at a time. */
 void GameLoop_RunSoundLoads(void) {
-    if (sound_load_queue.unk10 == NULL && sound_load_queue.unk14 != NULL) {
-        sound_load_queue.unk10 = sound_load_queue.unk14;
-        sound_load_queue.unk0C = 1;
-        sound_load_queue.unk14 = NULL;
+    if (sound_load_queue.pending_map_slot == NULL && sound_load_queue.next_map_slot != NULL) {
+        sound_load_queue.pending_map_slot = sound_load_queue.next_map_slot;
+        sound_load_queue.map_bank_load_pending = 1;
+        sound_load_queue.next_map_slot = NULL;
     }
-    if (sound_load_queue.step == 3 && (sound_load_queue.unk0C != 0 || sound_load_queue.unk18 != 0)) {
+    if (sound_load_queue.step == 3 && (sound_load_queue.map_bank_load_pending != 0 || sound_load_queue.entity_bank_load_pending != 0)) {
         if (Sound_BgmLoadCanYield() != 0) {
             sound_load_queue.step = 0;
         }
     }
     if (sound_load_queue.step == 0) {
-        if (sound_load_queue.unk0C != 0) {
+        if (sound_load_queue.map_bank_load_pending != 0) {
             sound_load_queue.step = 1;
             Sound_StopAll(0);
-        } else if (sound_load_queue.unk18 != 0) {
+        } else if (sound_load_queue.entity_bank_load_pending != 0) {
             sound_load_queue.step = 2;
-        } else if (sound_load_queue.unk04 != 0) {
+        } else if (sound_load_queue.bgm_load_pending != 0) {
             sound_load_queue.step = 3;
         }
     }
     switch (sound_load_queue.step) {
     case 1:
-        sound_load_queue.unk0C = Sound_LoadMapBankStep((int)sound_load_queue.unk10, sound_load_queue.unk0C);
-        if (sound_load_queue.unk0C == 0) {
-            sound_load_queue.unk10 = NULL;
+        sound_load_queue.map_bank_load_pending = Sound_LoadMapBankStep((int)sound_load_queue.pending_map_slot, sound_load_queue.map_bank_load_pending);
+        if (sound_load_queue.map_bank_load_pending == 0) {
+            sound_load_queue.pending_map_slot = NULL;
             sound_load_queue.step = 0;
         }
         break;
     case 2:
-        if (sound_load_queue.unk18 != 0) {
-            sound_load_queue.unk18 = Sound_LoadEntityBankStep(sound_load_queue.unk1C, sound_load_queue.unk20, sound_load_queue.unk24 + 7);
-            if (sound_load_queue.unk18 == 0) {
+        if (sound_load_queue.entity_bank_load_pending != 0) {
+            sound_load_queue.entity_bank_load_pending = Sound_LoadEntityBankStep(sound_load_queue.entity_bank_args, sound_load_queue.entity_slot_index, sound_load_queue.entity_slot_voice_out + 7);
+            if (sound_load_queue.entity_bank_load_pending == 0) {
                 sound_load_queue.step = 0;
             }
         }
         break;
     case 3:
-        if (sound_load_queue.unk04 != 0) {
-            sound_load_queue.unk04 = Sound_LoadBgm(sound_load_queue.unk00, sound_load_queue.unk04);
-            if (sound_load_queue.unk04 == 0) {
+        if (sound_load_queue.bgm_load_pending != 0) {
+            sound_load_queue.bgm_load_pending = Sound_LoadBgm(sound_load_queue.bgm_id, sound_load_queue.bgm_load_pending);
+            if (sound_load_queue.bgm_load_pending == 0) {
                 sound_load_queue.step = 0;
             }
         } else {
@@ -772,19 +772,19 @@ void GameLoop_OpenRequestedMenu(void) {
     if (context1_buffer_half == 0) {
         return;
     }
-    if (game_status.unk30 & 1) {
+    if (game_status.update_hold_flags & 1) {
         return;
     }
-    if (player->unk1A8 != 0) {
+    if (player->death_timer != 0) {
         return;
     }
-    if (sound_load_queue.unk0C != 0) {
+    if (sound_load_queue.map_bank_load_pending != 0) {
         return;
     }
-    if (sound_load_queue.unk18 != 0) {
+    if (sound_load_queue.entity_bank_load_pending != 0) {
         return;
     }
-    if (sound_load_queue.unk04 != 0 && Sound_BgmLoadCanYield() == 0) {
+    if (sound_load_queue.bgm_load_pending != 0 && Sound_BgmLoadCanYield() == 0) {
         return;
     }
     load_held = FALSE;
@@ -801,7 +801,7 @@ void GameLoop_OpenRequestedMenu(void) {
         return;
     }
     Input_StopRumble();
-    if (game_status.bit14 && player_state.unk254 >= 2) {
+    if (game_status.bit14 && player_state.frames_since_item_action >= 2) {
         Player_LoadArmModels();
         game_status.bit14 = FALSE;
     }
@@ -812,7 +812,7 @@ void GameLoop_OpenRequestedMenu(void) {
         }
         game_status.bit3 = FALSE;
         menu_ran = TRUE;
-        Trade_Run(game_status.unk2C);
+        Trade_Run(game_status.trade_screen_id);
         Packet_SwapBuffers();
         Packet_SwapBuffers();
     } else if (game_status.bit4) {
@@ -825,7 +825,7 @@ void GameLoop_OpenRequestedMenu(void) {
         Smith_Run();
         Packet_SwapBuffers();
         Packet_SwapBuffers();
-    } else if (game_status.save_requested && game_status.unk00 != 0) {
+    } else if (game_status.save_requested && game_status.player_control != 0) {
         if (!faded_out) {
             faded_out = TRUE;
             GameLoop_DrawFrameWithoutHud();
@@ -834,14 +834,14 @@ void GameLoop_OpenRequestedMenu(void) {
         SaveScreen_Run();
         Packet_SwapBuffers();
         Packet_SwapBuffers();
-    } else if (game_status.bit2 && game_status.unk00 != 0) {
+    } else if (game_status.bit2 && game_status.player_control != 0) {
         if (!faded_out) {
             faded_out = TRUE;
             GameLoop_DrawFrameWithoutHud();
         }
         game_status.bit2 = FALSE;
         game_status.bit6 = FALSE;
-        game_status.unk28 = 0;
+        game_status.magic_to_cast = 0;
         menu_ran = TRUE;
         Menu_Run(0);
         Packet_SwapBuffers();
@@ -849,35 +849,35 @@ void GameLoop_OpenRequestedMenu(void) {
     }
     if (menu_ran) {
         Player_LoadArmModels();
-        if (game_status.unk28 != 0) {
-            Player_CastMagic(game_status.unk28);
-            game_status.unk28 = 0;
+        if (game_status.magic_to_cast != 0) {
+            Player_CastMagic(game_status.magic_to_cast);
+            game_status.magic_to_cast = 0;
         }
         if (player_state.weapon != player_previous.weapon) {
-            player_state.unkBC = 0;
+            player_state.power_gauge = 0;
         }
         if (player_state.equipped_magic != 0 && player_previous.equipped_magic != player_state.equipped_magic) {
-            player_state.unk264 = player_state.equipped_magic;
-            player_state.unkC0 = 0;
+            player_state.charging_magic = player_state.equipped_magic;
+            player_state.magic_gauge = 0;
         } else if (player_state.shortcut_type == 2 &&
                    (player_previous.shortcut_type != player_state.shortcut_type || player_state.shortcut != player_previous.shortcut)) {
-            player_state.unkC0 = 0;
-            player_state.unk264 = player_state.shortcut;
+            player_state.magic_gauge = 0;
+            player_state.charging_magic = player_state.shortcut;
         } else if (player_state.weapon != player_previous.weapon) {
             item_def = &weapon_defs[player_state.weapon];
-            if (item_def->unk63 != 2) {
-                if (item_def->unk42 != 0xFFFF) {
-                    player_state.unkC0 = 0;
-                    player_state.unk264 = item_def->unk42;
-                } else if (item_def->unk52 != 0xFFFF && weapon_level_records[player_state.weapon].unk14 + 1 == 3) {
-                    player_state.unkC0 = 0;
-                    player_state.unk264 = item_def->unk52;
+            if (item_def->action_handler_index != 2) {
+                if (item_def->first_magic_id != 0xFFFF) {
+                    player_state.magic_gauge = 0;
+                    player_state.charging_magic = item_def->first_magic_id;
+                } else if (item_def->second_magic_id != 0xFFFF && weapon_level_records[player_state.weapon].unk14 + 1 == 3) {
+                    player_state.magic_gauge = 0;
+                    player_state.charging_magic = item_def->second_magic_id;
                 }
             }
         }
-        if (game_status.bit6 && item_common_defs[game_status.unk20].type == 6) {
-            MapViewer_OpenForItem(game_status.unk20);
-            game_status.unk20 = 0;
+        if (game_status.bit6 && item_common_defs[game_status.item_to_use].type == 6) {
+            MapViewer_OpenForItem(game_status.item_to_use);
+            game_status.item_to_use = 0;
             game_status.bit6 = FALSE;
         }
     }
@@ -918,17 +918,17 @@ void GameLoop_RedrawFrame(void) {
     Display_SwapBuffers(0);
 }
 
-/* Draws a game frame with the HUD off (MapDrawStateOverlays.unk68) and shows it: the picture a menu opens over. */
+/* Draws a game frame with the HUD off (MapDrawStateOverlays.hud_shown) and shows it: the picture a menu opens over. */
 void GameLoop_DrawFrameWithoutHud(void) {
     int saved_unk68;
 
     Packet_SwapBuffers();
     Packet_SwapBuffers();
     DrawList_Clear();
-    saved_unk68 = map_draw_state.unk68;
-    map_draw_state.unk68 = 0;
+    saved_unk68 = map_draw_state.hud_shown;
+    map_draw_state.hud_shown = 0;
     GameLoop_DrawFrame(0);
-    map_draw_state.unk68 = saved_unk68;
+    map_draw_state.hud_shown = saved_unk68;
     Packet_WaitForSend();
     Display_SwapBuffers(0);
     Packet_SendChain();
