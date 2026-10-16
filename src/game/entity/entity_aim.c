@@ -6,6 +6,7 @@
 #include "player/player.h"
 #include "collision/collision.h"
 #include "map/map.h"
+#include <libvu0.h>
 
 int rand(void);
 extern EntityRangeWeights near_point_range_weights;
@@ -14,18 +15,11 @@ float cosf(float);
 void Vector_Add(void *, void *, void *);
 extern PlayerState player_state;
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, int *, float *);
 void Vector_Scale(float *, float *, float);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Matrix_Multiply(void *, void *, void *);
-void sceVu0CopyMatrix(void *, void *);
 void Vector_Subtract(void *, void *, void *);
 void Vector_Normalize(void *, void *);
 void Vector_Cross(void *, void *, void *);
-void sceVu0TransposeMatrix(void *, void *);
 double sqrt(double);
 float atan2f(float, float);
 void Vector_ApplyMatrix(void *, void *, void *);

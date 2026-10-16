@@ -6,6 +6,7 @@
 #include "common.h"
 #include "map/map.h"
 #include "effect/effect.h"
+#include <libvu0.h>
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
@@ -25,11 +26,6 @@ extern PlayerData player_state;
 extern f32 identity_matrix[16];
 double atan2(double, double);
 float EntityMath_WrapAngle(float);
-void sceVu0CopyMatrix(void *, void *);
-void sceVu0TransposeMatrix(void *, void *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 s32 Bone_MultiplyPathTo(void *, void *, void *);
 void Bone_MatrixToAngles(void *, void *);
 void Matrix_Multiply(void *, void *, void *);

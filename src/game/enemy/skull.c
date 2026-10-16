@@ -5,6 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "effect/shot.h"
+#include <libvu0.h>
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
@@ -39,9 +40,6 @@ void EntityAi_MeleeAttack(Entity *);
 int Motion_Start(void *, int, int, u32, int);
 void EntityEvent_OnDeath(Entity *);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 float EntityMath_WrapAngle(float);

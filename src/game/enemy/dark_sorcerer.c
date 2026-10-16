@@ -5,6 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "map/map.h"
+#include <libvu0.h>
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
@@ -46,9 +47,6 @@ void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
 int Motion_Start(void *, int, int, u32, int);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 // match: the size is unknown; a complete small type would be read through $gp

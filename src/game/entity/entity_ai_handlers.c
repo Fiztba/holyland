@@ -7,6 +7,7 @@
 #include "entity/entity_events.h"
 #include "model/motion.h"
 #include "entity/entity_math.h"
+#include <libvu0.h>
 
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void EntityAi_SetState(char *, u8);
@@ -32,9 +33,6 @@ int rand(void);
 extern PlayerData player_state;
 void EntityAi_ClearTurnInPlace(Entity *);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 float EntityAi_Accelerate(Entity *, float);

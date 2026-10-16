@@ -5,6 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "entity/entity_world.h"
+#include <libvu0.h>
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
@@ -19,11 +20,6 @@ int Motion_BlendToPose(EntityModel *, f32);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 extern f32 identity_matrix[16];
 float EntityMath_AngleDifference(float, float);
-void sceVu0CopyMatrix(void *, void *);
-void sceVu0TransposeMatrix(void *, void *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 s32 Bone_MultiplyPathTo(void *, void *, void *);
 void Bone_MatrixToAngles(void *, void *);
 void Matrix_Multiply(void *, void *, void *);

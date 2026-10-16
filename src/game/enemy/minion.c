@@ -5,6 +5,7 @@
 #include "entity/entity.h"
 #include "effect/shot.h"
 #include "common.h"
+#include <libvu0.h>
 
 int rand(void);
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
@@ -55,11 +56,6 @@ float EntityMath_DistanceXZ(void *, void *);
 f32 EntityMath_Approach(f32, f32, f32);
 int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
 void *memset(void *, int, u32);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
-void sceVu0ApplyMatrix(float *, float *, float *);
 
 static void Minion_Think(Entity *entity, s32 unknown);
 static void Minion_ThinkCombat(Entity *entity, s32 unknown);

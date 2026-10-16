@@ -4,6 +4,7 @@
    hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 #include "common.h"
+#include <libvu0.h>
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
@@ -49,9 +50,6 @@ void EntityAi_Guard(Entity *);
 void EntityAi_ClearTurnInPlace(Entity *);
 int Motion_Start(void *, int, int, u32, int);
 extern f32 identity_matrix[16];
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 int EntityAi_CheckMeleeHit(Entity *, void *, s32, s32, s32);

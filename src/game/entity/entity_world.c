@@ -4,6 +4,7 @@
 #include "gfx/gs.h"
 #include "map/map.h"
 #include "entity/entity.h"
+#include <libvu0.h>
 
 void *memset(void *, int, u32);
 int rand(void);
@@ -40,8 +41,6 @@ float EntityMath_DistanceXZ(void *, void *);
 float EntityMath_HeadingTo(float *, float *);
 void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 float EntityMath_WrapAngle(float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, float *, float *);
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int, s64);
 void Packet_EndGsRegisters(void);

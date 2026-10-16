@@ -5,13 +5,13 @@
 #include "entity/entity_math.h"
 #include "map/map.h"
 #include "collision/collision.h"
+#include <libvu0.h>
 
 extern PlayerData player_state;
 void Vector_Normalize(void *, void *);
 double sqrt(double);
 float sqrtf(float);
 void Vector_Subtract(void *, void *, void *);
-void sceVu0Normalize(float *, float *);
 void Vector_Scale(float *, float *, float);
 void Vector_Add(void *, void *, void *);
 int rand(void);
