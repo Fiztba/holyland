@@ -15,11 +15,14 @@ Commands:
   apply    Build a work copy (work/ by default). It holds COPIED at the
            submodule's commit, committed as "pristine decomp <sha>" and
            tagged `pristine`, then the patches, committed as "patches".
-           Edit it freely.
+           Edit it freely. An existing work copy with unsaved changes is
+           refused unless --force is given; only empty directories and
+           work copies made by patches.py are ever replaced.
 
   save     Regenerate patches/ from the work copy's changes. Each patch is
            the diff of the work copy against the `pristine` tag, so it works
-           on any copy made by apply or upgrade.
+           on any copy made by apply or upgrade. The saved state is
+           committed in the work copy as "patches".
 
   upgrade  Move decomp/ to another commit and carry the patches along.
            Renames of files (from `git diff -M`) and of symbols (matched by
@@ -96,13 +99,27 @@ def init_repo(path):
     git(path, "config", "core.autocrlf", "false")
 
 
+def has_ref(repo, ref):
+    """True if repo is its own git repo (not a directory inside another) and has ref."""
+    if not (repo.is_dir() and (repo / ".git").exists()):
+        return False
+    return git(repo, "rev-parse", "-q", "--verify", ref, check=False).returncode == 0
+
+
 def clean_dir(path, root):
-    """Create an empty directory at path, replacing whatever is there."""
+    """Create an empty directory at path, replacing whatever is there.
+
+    An existing directory is replaced only if it is empty or a work copy made by
+    patches.py (a repo tagged `pristine`, or the upgrade scratch with `old-patched`).
+    """
     path = path.resolve()
     unsafe = [root / "decomp", root / "patches", root / ".git"]
     if path == root or path in root.parents or any(path.is_relative_to(u) for u in unsafe):
         raise Fail(f"refusing to replace {path}")
     if path.exists():
+        is_ours = has_ref(path, f"refs/tags/{PRISTINE}") or has_ref(path, "refs/heads/old-patched")
+        if path.is_file() or (path.is_dir() and next(path.iterdir(), None) is not None and not is_ours):
+            raise Fail(f"refusing to replace {path}: not a work copy made by patches.py (remove it yourself)")
         shutil.rmtree(path)
     path.mkdir(parents=True)
 
@@ -176,8 +193,19 @@ def apply_patches(work, root):
     commit(work, "patches")
 
 
+def has_unsaved(work):
+    """True if work has changes not saved to patches/: uncommitted, or commits not made by apply or save."""
+    if out_text(git(work, "status", "--porcelain")):
+        return True
+    subjects = out_text(git(work, "log", "--format=%s", f"{PRISTINE}..HEAD")).splitlines()
+    return any(s != "patches" for s in subjects)
+
+
 def cmd_apply(args, root):
     work = resolve_arg(args.out, root, "work")
+    if not args.force and has_ref(work, f"refs/tags/{PRISTINE}") and has_unsaved(work):
+        raise Fail(f"work copy {work} has unsaved changes: run `python3 tools/patches.py save` first, "
+                   "or pass --force to discard them")
     clean_dir(work, root)
     sha = make_pristine(work, root, "HEAD")
     git(work, "tag", PRISTINE)
@@ -232,6 +260,9 @@ def save(work, root, base=PRISTINE):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(new)
             changed.append(f"  {'new' if old is None else 'updated':8} {name}")
+    # what is saved is committed, so apply can tell saved work from unsaved
+    if git(work, "diff", "--cached", "--quiet", check=False).returncode:
+        git(work, "commit", "-q", "-m", "patches")
     return changed
 
 
@@ -470,6 +501,8 @@ def main(argv=None):
     p = sub.add_parser("apply", help="build a work copy: pristine decomp plus the patches")
     p.add_argument("--out", metavar="DIR", help="work copy directory, replaced if it exists "
                                                 "(default: work/ in the repo root)")
+    p.add_argument("--force", action="store_true", help="replace an existing work copy even if it "
+                                                        "has unsaved changes")
 
     p = sub.add_parser("save", help="regenerate patches/ from a work copy's changes")
     p.add_argument("--from", dest="source", metavar="DIR",
