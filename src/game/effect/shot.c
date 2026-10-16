@@ -1,16 +1,17 @@
 #include "effect/shot.h"
+#include "entity/entity.h"
 #include <string.h>
 
 
 extern s32 dark_one_hits_left;
 
 #define SHOT_RING_SLOTS 0x100
-#define SHOT_SLOT_SIZE 0x30
+#define SHOT_SLOT_SIZE sizeof(PlayerShot) /* 0x30 on the PS2; filled as a PlayerShot, read as an Unk1B1470Extra */
 
 static s32 shot_ring_next;                                  /* 0x44710C next slot of shot_ring */
 static s32 second_ring_next;                                /* 0x447110 next slot of second_ring */
-static char shot_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE];   /* 0x574348 the shots the player and entities launch */
-static char second_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE]; /* 0x577348 the same, nothing claims from it */
+static char shot_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE] __attribute__((aligned(16)));   /* 0x574348 the shots the player and entities launch */
+static char second_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE] __attribute__((aligned(16))); /* 0x577348 the same, nothing claims from it */
 
 /* Empties both rings of shot slots. */
 void Shot_ClearAll(void) {

@@ -245,6 +245,16 @@ typedef struct {
     char pad28[0x08];
 } Unk1B1470Extra;
 
+/* a shot slot (effect/shot.c) is filled as a PlayerShot (player/player.h) and read as an Unk1B1470Extra */
+_Static_assert(sizeof(Unk1B1470Extra) == sizeof(PlayerShot), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, strength_gauge) == offsetof(PlayerShot, strength_gauge), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, attack_request) == offsetof(PlayerShot, attack_request), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, player_power) == offsetof(PlayerShot, player_power), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, player_magic) == offsetof(PlayerShot, player_magic), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, weapon_index) == offsetof(PlayerShot, weapon_index), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, magic_id) == offsetof(PlayerShot, magic_id), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, pad28) == offsetof(PlayerShot, pad28), "Unk1B1470Extra is not PlayerShot");
+
 /* Unk1B1470Request with the bits at 0x4C as byte-sized fields: Attack_HitEntity reads unk4C_3 as a u8.
    The owner is there so that on the PC the bits follow it as they do in Unk1B1470Request. */
 typedef struct {
@@ -282,15 +292,21 @@ typedef struct {
     s64 value;
 } __attribute__((packed)) EntityUnaligned64;
 
-/* what Shot_Alloc returns: something an entity launches */
+/* what Shot_Alloc returns: something an entity launches, read back as an Unk1B1470Extra; that struct's pointer
+   moves the later fields on the PC, so the padding follows it */
 typedef struct {
-    char unk00;                     /* 0x00 */
-    char pad01[0x1F];
-    u16 unk20;                      /* 0x20 */
-    s16 unk22;                      /* 0x22 */
-    char pad24[0x04];
+    char unk00;                     /* 0x00 Unk1B1470Extra.is_magic_shot */
+    char pad01[offsetof(Unk1B1470Extra, player_power) - 1];
+    u16 unk20;                      /* 0x20 Unk1B1470Extra.player_power */
+    s16 unk22;                      /* 0x22 Unk1B1470Extra.player_magic */
+    char pad24[offsetof(Unk1B1470Extra, pad28) - offsetof(Unk1B1470Extra, player_magic) - sizeof(s16)];
     EntityUnaligned64 unk28;        /* 0x28 copy of EntityParams.unk238 */
 } EntityUnk1B1390;
+
+_Static_assert(offsetof(EntityUnk1B1390, unk20) == offsetof(Unk1B1470Extra, player_power), "EntityUnk1B1390 is not Unk1B1470Extra");
+_Static_assert(offsetof(EntityUnk1B1390, unk22) == offsetof(Unk1B1470Extra, player_magic), "EntityUnk1B1390 is not Unk1B1470Extra");
+_Static_assert(offsetof(EntityUnk1B1390, unk28) == offsetof(Unk1B1470Extra, pad28), "EntityUnk1B1390 is not Unk1B1470Extra");
+_Static_assert(sizeof(EntityUnk1B1390) <= sizeof(Unk1B1470Extra), "EntityUnk1B1390 is not Unk1B1470Extra");
 
 /* one launch of a record at EntityParams+0x3D8 */
 typedef struct {

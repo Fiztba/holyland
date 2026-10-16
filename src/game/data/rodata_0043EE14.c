@@ -7,22 +7,23 @@
 char rev_para_path[24] = "snd/rev_para.dat";
 
 /* 0x0043EE30 */
-int (*falloff_sound_players[18])(int, int) = {
-    (int (*)(int, int))Sound_PlayLinear,
-    (int (*)(int, int))Sound_PlaySteep,
-    (int (*)(int, int))Sound_PlayRound,
-    (int (*)(int, int))Sound_PlayLinearSteady,
-    (int (*)(int, int))Sound_PlaySteepSteady,
-    (int (*)(int, int))Sound_PlayRoundSteady,
-    (int (*)(int, int))Sound_PlaySfxLinear,
-    (int (*)(int, int))Sound_PlaySfxSteep,
-    (int (*)(int, int))Sound_PlaySfxRound,
+/* entries 6 on take no bank: (u8, float, float, float); Sound_PlayFalloff calls them through that type */
+void (*falloff_sound_players[18])(u8, int, float, float, float) = {
+    Sound_PlayLinear,
+    Sound_PlaySteep,
+    Sound_PlayRound,
+    Sound_PlayLinearSteady,
+    Sound_PlaySteepSteady,
+    Sound_PlayRoundSteady,
+    (void (*)(u8, int, float, float, float))Sound_PlaySfxLinear,
+    (void (*)(u8, int, float, float, float))Sound_PlaySfxSteep,
+    (void (*)(u8, int, float, float, float))Sound_PlaySfxRound,
     0,
     0,
     0,
-    (int (*)(int, int))Sound_PlayMapLinear,
-    (int (*)(int, int))Sound_PlayMapSteep,
-    (int (*)(int, int))Sound_PlayMapRound,
+    (void (*)(u8, int, float, float, float))Sound_PlayMapLinear,
+    (void (*)(u8, int, float, float, float))Sound_PlayMapSteep,
+    (void (*)(u8, int, float, float, float))Sound_PlayMapRound,
 };
 
 /* 0x0043EE78 */
