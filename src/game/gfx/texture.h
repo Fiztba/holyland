@@ -5,6 +5,7 @@
 #include "common.h"
 
 /* a 0x20-byte image header; the image (and then its CLUT) follows it */
+/* overlay: a texture file */
 typedef struct {
     int data_offset;                /* 0x00 from this header */
     int image_size;                 /* 0x04 bytes */
@@ -13,6 +14,7 @@ typedef struct {
     u64 tex0;                       /* 0x10 GS TEX0: TBP0 at bit 0, CBP at bit 37 */
     u64 unk18;                      /* 0x18 copied to PoolSlot.unk60 with tex0 (Menu_UpdateKeyItems) */
 } TextureHeader;
+LAYOUT_SIZE(TextureHeader, 0x20);
 
 /* the fields of a GS TEX0 value (TextureHeader.tex0), as Texture_BuildPacket reads them */
 typedef struct {
@@ -58,12 +60,14 @@ typedef struct {
 } LoadedTexture;
 
 /* a chunk table: this header, then entry_count TextureTableEntry */
+/* overlay: a texture chunk table file */
 typedef struct {
     int unk00;                      /* 0x00 */
     u32 entry_count;                /* 0x04 */
     int unk08;                      /* 0x08 Texture_BuildPacketTable clears it */
     int unk0C;                      /* 0x0C Texture_BuildPacketTable clears it */
 } TextureTableHeader;
+LAYOUT_SIZE(TextureTableHeader, 0x10);
 
 /* a texture GsDraw_DrawScrollingTexture redraws into another one every frame, scrolled (scroll_textures in gfx/scroll_texture.c) */
 typedef struct {
@@ -97,12 +101,14 @@ typedef struct {
     s16 y;                          /* 0x02 */
 } ScrollOffset;
 
+/* overlay: a texture chunk table file */
 typedef struct {
     int offset;                     /* 0x00 from the table base, to a chunk: its size in quadwords, 12 bytes, the data */
     int unk04;                      /* 0x04 Texture_BuildPacketTable clears it */
     int unk08;                      /* 0x08 Texture_BuildPacketTable clears it */
     int unk0C;                      /* 0x0C not 0: TextureTable_QueueEnabled skips it (set by TextureTable_SetChunkEnabled) */
 } TextureTableEntry;
+LAYOUT_SIZE(TextureTableEntry, 0x10);
 
 /* Sends the GS a TEXFLUSH through DMA channel 2 (gfx/texture_upload.c). */
 void Texture_SendTexFlush(void);

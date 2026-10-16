@@ -3,6 +3,7 @@
 #include "common.h"
 #include <eeregs.h>
 #include <libdma.h>
+#include <eekernel.h>
 #include "gfx/gs.h"
 #include "gfx/packet.h"
 #include <string.h>
@@ -11,12 +12,12 @@
 #define SEND_TO_VIF1(packet)                    \
     channel = sceDmaGetChan(1);                 \
     channel->chcr |= 0x40;                      \
-    sceDmaSend(channel, (u32)(packet));         \
+    sceDmaSend(channel, (packet));              \
+    PORT_TODO("waits for D1_CHCR STR (bit 8)"); \
     while (*D1_CHCR & 0x100) {                  \
     }
 
 int puts(char *);
-void FlushCache(int); // match: void, the return value is unused and int changes the code
 
 /* the game's own data and functions, outside this file */
 extern int packet_fill_index;       /* which of the two packet buffers is being filled */
@@ -47,7 +48,7 @@ static int gs_send_pending[2];       /* 0x447028 [0] set while the GS reads a bu
 static void *packet_buffer[2];        /* 0x447030 start of each buffer */
 static void *packet_next;             /* 0x447038 next free quadword */
 static int packet_overflowed;        /* 0x44703C the buffer overflowed: everything after goes to its start */
-static int spare_area_addr;          /* 0x447040 the area past both buffers */
+static sptr spare_area_addr;         /* 0x447040 the area past both buffers */
 static int spare_area_size;          /* 0x447044 its size */
 
 /* Lays out the largest packet buffers and uploads the VU1 microprograms. */
@@ -93,7 +94,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
     packet_head = &packet_chain_head[packet_fill_index];
     packet_tail = &packet_chain_tail[packet_fill_index];
     if (packet_overflowed == 0) {
-        if ((u32)packet_end >= (u32)packet_next) {
+        if ((u8 *)packet_end >= (u8 *)packet_next) {
             puts(packet_overflow_message);
             while (1) {
             }
@@ -101,7 +102,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
             if (*packet_head != 0) {
                 DmaTag *tail_tag = *packet_tail;
                 tail_tag->id_and_qwc = 0x20000000;
-                tail_tag->address = (int)packet;
+                tail_tag->address = EE_WORD(packet);
                 tail_tag->unk0C = tail_tag->unk08 = 0;
             } else {
                 *packet_head = packet;
@@ -122,7 +123,7 @@ void Packet_SendChain(void) {
         if (packet_overflowed == 0) {
             gs_send_pending[0] = 1;
             Packet_BeginGsRegisters();
-            Packet_AddGsRegister(GS_REG_FINISH, 0xFFFFFFFFUL);
+            Packet_AddGsRegister(GS_REG_FINISH, 0xFFFFFFFFULL);
             Packet_EndGsRegisters();
             end_tag = packet_chain_tail[packet_fill_index];
             end_tag->id_and_qwc = 0x70000000;
@@ -130,13 +131,14 @@ void Packet_SendChain(void) {
             end_tag->unk08 = 0;
             end_tag->unk0C = 0;
             FlushCache(0);
+            PORT_TODO("waits for D1_CHCR STR (bit 8)");
             do {
             } while (*D1_CHCR & 0x100);
             *GS_CSR |= 2;
             FlushCache(0);
             *D1_QWC = 0;
             *D1_MADR = 0;
-            *D1_TADR = (u32)*chain_head;
+            *D1_TADR = (int)EE_WORD(*chain_head);
             *D1_CHCR = 0x105;
         }
     }
@@ -146,6 +148,7 @@ void Packet_SendChain(void) {
 void Packet_WaitForSend(void) {
     if (gs_send_pending[0] != 0) {
         gs_send_pending[0] = 0;
+        PORT_TODO("waits for D1_CHCR STR (bit 8)");
         do {
         } while (*D1_CHCR & 0x100);
         sceGsSyncPath(0, 0);
@@ -157,7 +160,7 @@ void Packet_WaitForSend(void) {
 /* Lays out the packet buffers in the packet area for the given size (0 = largest). */
 void Packet_LayOutBuffers(int size_index) {
     u32 size;
-    int base;
+    sptr base;
     int half;
 
     packet_fill_index = 0;
@@ -218,8 +221,8 @@ u32 *Packet_Alloc(int quadwords) {
 }
 
 /* Returns the spare area's address and size. */
-void Packet_GetSpareArea(int *addr, int *size) {
-    int spare_addr = spare_area_addr;
+void Packet_GetSpareArea(sptr *addr, int *size) {
+    sptr spare_addr = spare_area_addr;
     int spare_size = spare_area_size;
     *addr = spare_addr;
     *size = spare_size;

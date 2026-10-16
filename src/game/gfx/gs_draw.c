@@ -3,6 +3,7 @@
 #include "gfx/gs.h"
 #include "gfx/packet.h"
 #include "gfx/texture.h"
+#include "math/vu0.h"
 
 u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
@@ -77,7 +78,7 @@ void GsDraw_QueueFlush(void) {
 /* Queues a GS TEXFLUSH write. */
 void GsDraw_QueueTexFlush(void) {
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xFFFFFFFFL);
+    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xFFFFFFFFLL);
     Packet_EndGsRegisters();
 }
 
@@ -96,8 +97,8 @@ void GsDraw_DisableDepthTest(void) {
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
     Packet_AddGsRegister(GS_REG_TEST_2, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
     Packet_EndGsRegisters();
 }
 
@@ -120,7 +121,7 @@ void GsDraw_ResetDrawTarget(void) {
     if (context1_buffer_half != 0) {
         frame_base = 0;
     }
-    GsDraw_SetDrawTarget((frame_base >> 5) | 0xA0000, 0x1BF0000027F0000L, 0x720000006C00L);
+    GsDraw_SetDrawTarget((frame_base >> 5) | 0xA0000, 0x1BF0000027F0000LL, 0x720000006C00LL);
 }
 
 /* Queues a copy of the 640x448 frame being drawn to dest_base in GS memory. */
@@ -151,7 +152,7 @@ void GsDraw_QueueTexturedSprite(void *sprite_arg) {
     *packet++ = 0;
     *packet++ = 0;
     *packet++ = 0x6C09C000;
-    *(u64 *)packet = ((s64)(prim | 6) << 47) | 0x8000400000008001L;
+    *(u64 *)packet = ((s64)(prim | 6) << 47) | 0x8000400000008001LL;
     packet += 2;
     *(u64 *)packet = 0x513513EE;
     packet += 2;
@@ -215,7 +216,7 @@ void GsDraw_QueueFlatSprite(void *sprite_arg) {
     *packet++ = 0;
     *packet++ = 0;
     *packet++ = 0x6C05C000;
-    *(u64 *)packet = ((s64)prim << 47) | 0x4000400000008001L;
+    *(u64 *)packet = ((s64)prim << 47) | 0x4000400000008001LL;
     packet += 2;
     *(u64 *)packet = 0x5151;
     packet += 2;
@@ -280,7 +281,7 @@ void GsDraw_ClearFrame(void) {
 
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(0x47, 0x30000);
-    Packet_AddGsRegister(0x4E, 0x10A000118UL);
+    Packet_AddGsRegister(0x4E, 0x10A000118ULL);
     Packet_EndGsRegisters();
     sprite.prim = 6;
     sprite.vertex[0].x = 0x6C00;
@@ -366,16 +367,14 @@ void GsDraw_QueueVu1Matrix(void *matrix) {
     *packet++ = 0;
     *packet++ = 0;
     *packet++ = 0x6C040000;
-    __asm__ volatile(
-        "lqc2 $vf16, 0x0(%0)\n"
-        "lqc2 $vf17, 0x10(%0)\n"
-        "lqc2 $vf18, 0x20(%0)\n"
-        "lqc2 $vf19, 0x30(%0)\n"
-        "sqc2 $vf16, 0x0(%1)\n"
-        "sqc2 $vf17, 0x10(%1)\n"
-        "sqc2 $vf18, 0x20(%1)\n"
-        "sqc2 $vf19, 0x30(%1)\n"
-        : : "r"(matrix), "r"(packet));
+    Vu_Lqc2(16, (u8 *)matrix + 0x0); /* copied through vf16..vf19 */
+    Vu_Lqc2(17, (u8 *)matrix + 0x10);
+    Vu_Lqc2(18, (u8 *)matrix + 0x20);
+    Vu_Lqc2(19, (u8 *)matrix + 0x30);
+    Vu_Sqc2((u8 *)packet + 0x0, 16);
+    Vu_Sqc2((u8 *)packet + 0x10, 17);
+    Vu_Sqc2((u8 *)packet + 0x20, 18);
+    Vu_Sqc2((u8 *)packet + 0x30, 19);
     packet += 0x10;
     Packet_AppendToChain(packet_start, packet);
 }
@@ -440,7 +439,7 @@ void GsDraw_DrawScrollingTexture(void *texture_arg, void *offset_arg) {
     // match: the half width is read before TEX0 is built (it decides the registers of the TEX0 terms)
     half = texture->target_width >> 1;
     sprite.tex0 = (u64)texture->tbp | ((u64)(texture->width >> 6) << 14) | ((u64)texture->psm << 20) | ((u64)width_log2 << 26) |
-                  ((u64)height_log2 << 30) | (1L << 34) | ((u64)texture->cbp << 37) | ((u64)texture->cpsm << 51) | (4L << 61);
+                  ((u64)height_log2 << 30) | (1LL << 34) | ((u64)texture->cbp << 37) | ((u64)texture->cpsm << 51) | (4LL << 61);
     sprite.tex1 = 0x60;
     sprite.prim = 0x156;
     sprite.rgba[0] = texture->rgba[0];
@@ -480,12 +479,12 @@ void GsDraw_CopyFrameToTexture(int fbp, int psm, int width, int height) {
                   ((u64)(width - 1) << 16) | ((u64)(height - 1) << 48),
                   ((0x800 - (width >> 1)) << 4) | ((u64)((0x800 - (height >> 1)) << 4) << 32));
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8L);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8LL);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
     Packet_AddGsRegister(8, 5);
     Packet_EndGsRegisters();
     GsDraw_QueueFlush();
-    sprite.tex0 = frame_base | 0x28028000L | (0xC800L << 19);
+    sprite.tex0 = frame_base | 0x28028000LL | (0xC800LL << 19);
     sprite.tex1 = 0x60;
     sprite.prim = 0x156;
     sprite.rgba[3] = sprite.rgba[2] = sprite.rgba[1] = sprite.rgba[0] = 0x80;

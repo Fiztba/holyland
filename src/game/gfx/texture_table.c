@@ -27,7 +27,7 @@ void TextureTable_QueueAll(TextureTableHeader *table) {
     for (i = 0; i < table->entry_count; i++) {
         chunk = (u32 *)((char *)table + entries[i].offset);
         *packet++ = (*chunk & 0x8FFFFFFF) | 0x30000000;
-        *packet++ = (u32)(chunk + 4);
+        *packet++ = EE_WORD(chunk + 4);
         *packet++ = 0;
         *packet++ = 0;
     }
@@ -53,7 +53,7 @@ void TextureTable_QueueEnabled(TextureTableHeader *table_arg, s32 skip_mask) {
             }
             chunk = (u32 *)((char *)table + entries[i].offset);
             *packet++ = (*chunk & 0x8FFFFFFF) | 0x30000000;
-            *packet++ = (u32)(chunk + 4);
+            *packet++ = EE_WORD(chunk + 4);
             *packet++ = 0;
             *packet++ = 0;
         }
@@ -75,7 +75,7 @@ void TextureTable_QueueOne(TextureTableHeader *table, s32 index) {
         packet_start = packet = Packet_Alloc(2);
         chunk = (u32 *)((char *)table + entries[index].offset);
         *packet++ = (*chunk & 0x8FFFFFFF) | 0x30000000;
-        *packet++ = (u32)(chunk + 4);
+        *packet++ = EE_WORD(chunk + 4);
         *packet++ = 0;
         *packet++ = 0;
         Packet_AppendToChain(packet_start, packet);

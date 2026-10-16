@@ -408,8 +408,8 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
             Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
             Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
         } else {
-            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-            Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+            Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
         }
         Packet_EndGsRegisters();
         part = model->parts;
@@ -1083,7 +1083,7 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
                 Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
                 Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
             } else {
-                Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+                Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
                 Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
             }
             Packet_EndGsRegisters();
@@ -1184,7 +1184,7 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
                 if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT41) {
                     Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
                 } else {
-                    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+                    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
                 }
             } else {
                 Packet_AddGsRegister(0x1A, 0);
@@ -1199,7 +1199,7 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
                 if ((s16)model->fade_alpha >= 0x80) {
                     Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
                 } else {
-                    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+                    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
                 }
             }
             Packet_EndGsRegisters();
@@ -1221,8 +1221,8 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
         }
         Packet_BeginGsRegisters();
         Packet_AddGsRegister(0x1A, 1);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L); // match: ZBUF_2 twice; ZBUF_1 is left as the last part set it
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL); // match: ZBUF_2 twice; ZBUF_1 is left as the last part set it
         Packet_EndGsRegisters();
     }
 }

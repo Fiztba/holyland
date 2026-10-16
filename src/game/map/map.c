@@ -56,7 +56,7 @@ u32 *Map_GetSlotPacket(int, int);
 void Model_SetPrimBits(ModelInstance *, s64, s64);
 void Model_SetAlphaBlend(ModelInstance *, s64);
 MapRecordInfo *Map_FindRecordAtInSlot(CameraState *, f32, int);
-void Wobble_BuildWaveUvs(ModelInstance *, u32 *);
+void Wobble_BuildWaveUvs(ModelInstance *, char **);
 void Vector_Copy(void *, void *);
 char *Collision_RelocateMesh(char *, ModelInstance *, int);
 void Player_MoveByOffset(f32 *);

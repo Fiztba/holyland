@@ -3,6 +3,7 @@
    pointers of a table of them, and a TEXFLUSH. */
 #include "gfx/texture.h"
 #include <eeregs.h>
+#include <eekernel.h>
 #include <libgraph.h>
 #include <string.h>
 
@@ -28,7 +29,6 @@ static u32 texflush_packet[0xC];    /* 0x1DFAF80 where Texture_SendTexFlush buil
 
 int puts(char *);
 int printf(const char *, ...);
-int FlushCache(int);
 
 static void Texture_LoadTm2(TextureHeader *header);
 static void Texture_BuildPacket(char **texture, char **packet);
@@ -64,6 +64,7 @@ static void Texture_LoadTm2(TextureHeader *header) {
     sceGsSetDefLoadImage(&load_image, (u16)(header->tex0 & 0x3FFF), buffer_width, image_format, 0, 0, width, height);
     FlushCache(0);
     sceGsExecLoadImage(&load_image, (char *)header + sizeof(TextureHeader));
+    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
     }
     pixel_format = (header->tex0 >> 20) & 0x3F;
@@ -71,13 +72,15 @@ static void Texture_LoadTm2(TextureHeader *header) {
         sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 16, 16);
         FlushCache(0);
         sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
-        while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
+    while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
         }
     } else if (pixel_format == 0x14 || pixel_format == 0x24 || pixel_format == 0x2C) {
         sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 8, 2);
         FlushCache(0);
         sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
-        while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
+    while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
         }
     }
 }
@@ -110,13 +113,13 @@ static void Texture_BuildPacketTable(char **textures, char **packets) {
     target_cursor += target->entry_count * sizeof(TextureTableEntry);
     for (i = 0; i < source->entry_count; i++) {
         source_cursor = *textures + source_entry[i].offset;
-        target_entry[i].offset = target_cursor - *packets;
+        target_entry[i].offset = (int)(target_cursor - *packets);
         target_entry[i].unk0C = 0;
         target_entry[i].unk08 = 0;
         target_entry[i].unk04 = 0;
         Texture_BuildPacket(&source_cursor, &target_cursor);
     }
-    target->unk00 = target_cursor - *packets;
+    target->unk00 = (int)(target_cursor - *packets);
     *packets = target_cursor;
 }
 
@@ -207,34 +210,54 @@ static void Texture_BuildPacket(char **texture, char **packet) {
     } else {
         total = quadwords + 6;
     }
-    // match: one cursor stepped through casts gives the separate increments; the CLUT part below is indexed
-    *((u32 *)cursor)++ = (total + 1) | 0x70000000;
-    *((u32 *)cursor)++ = 0;
-    *((u32 *)cursor)++ = 0;
-    *((u32 *)cursor)++ = 0;
-    *((u32 *)cursor)++ = 0;
-    *((u32 *)cursor)++ = 0;
-    *((u32 *)cursor)++ = 0;
-    *((u32 *)cursor)++ = total | 0x51000000;
-    *((u64 *)cursor)++ = 0x1000000000000004;
-    *((u64 *)cursor)++ = 0xE;
+    *(u32 *)cursor = (total + 1) | 0x70000000;
+    cursor += 4;
+    *(u32 *)cursor = 0;
+    cursor += 4;
+    *(u32 *)cursor = 0;
+    cursor += 4;
+    *(u32 *)cursor = 0;
+    cursor += 4;
+    *(u32 *)cursor = 0;
+    cursor += 4;
+    *(u32 *)cursor = 0;
+    cursor += 4;
+    *(u32 *)cursor = 0;
+    cursor += 4;
+    *(u32 *)cursor = total | 0x51000000;
+    cursor += 4;
+    *(u64 *)cursor = 0x1000000000000004;
+    cursor += 8;
+    *(u64 *)cursor = 0xE;
+    cursor += 8;
     base_pointer = TEX0_BITS(header)->base_pointer;
     buffer_width = TEX0_BITS(header)->buffer_width;
     image_format = TEX0_BITS(header)->pixel_format;
-    *((u64 *)cursor)++ = ((u64)base_pointer << 32) | ((u64)buffer_width << 48) | ((u64)image_format << 56);
-    *((u64 *)cursor)++ = 0x50;
-    *((u64 *)cursor)++ = 0;
-    *((u64 *)cursor)++ = 0x51;
-    *((u64 *)cursor)++ = width | ((u64)height << 32);
-    *((u64 *)cursor)++ = 0x52;
-    *((u64 *)cursor)++ = 0;
-    *((u64 *)cursor)++ = 0x53;
+    *(u64 *)cursor = ((u64)base_pointer << 32) | ((u64)buffer_width << 48) | ((u64)image_format << 56);
+    cursor += 8;
+    *(u64 *)cursor = 0x50;
+    cursor += 8;
+    *(u64 *)cursor = 0;
+    cursor += 8;
+    *(u64 *)cursor = 0x51;
+    cursor += 8;
+    *(u64 *)cursor = width | ((u64)height << 32);
+    cursor += 8;
+    *(u64 *)cursor = 0x52;
+    cursor += 8;
+    *(u64 *)cursor = 0;
+    cursor += 8;
+    *(u64 *)cursor = 0x53;
+    cursor += 8;
     if (has_clut) {
-        *((u64 *)cursor)++ = quadwords | (0x8000L << 44);
+        *(u64 *)cursor = quadwords | (0x8000LL << 44);
+        cursor += 8;
     } else {
-        *((u64 *)cursor)++ = (quadwords | 0x8000) | (0x8000L << 44);
+        *(u64 *)cursor = (quadwords | 0x8000) | (0x8000LL << 44);
+        cursor += 8;
     }
-    *((u64 *)cursor)++ = 0;
+    *(u64 *)cursor = 0;
+    cursor += 8;
     bytes = cursor;
     memcpy(bytes, (char *)header + sizeof(TextureHeader), size);
     bytes += size;
@@ -245,7 +268,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
         tags = (u64 *)bytes;
         tags[0] = 0x1000000000000004;
         tags[1] = 0xE;
-        tags[2] = ((u64)(int)TEX0_BITS(header)->clut_pointer << 32) | (0x8000L << 33) | ((u64)(int)TEX0_BITS(header)->clut_format << 56);
+        tags[2] = ((u64)(int)TEX0_BITS(header)->clut_pointer << 32) | (0x8000LL << 33) | ((u64)(int)TEX0_BITS(header)->clut_format << 56);
         tags[3] = 0x50;
         tags[4] = 0;
         tags[5] = 0x51;
@@ -253,7 +276,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
         tags[7] = 0x52;
         tags[8] = 0;
         tags[9] = 0x53;
-        tags[10] = (clut_quadwords | 0x8000) | (0x8000L << 44);
+        tags[10] = (clut_quadwords | 0x8000) | (0x8000LL << 44);
         tags[11] = 0;
         bytes += 12 * sizeof(u64);
         clut_offset = header->image_size + sizeof(TextureHeader);   // match: its own variable, as above
@@ -299,10 +322,11 @@ void Texture_SendTexFlush(void) {
     *cursor++ = 0x3F;
     *cursor = 0;
     FlushCache(0);
+    PORT_TODO("waits for D2_CHCR STR (bit 8)");
     while (*D2_CHCR & 0x100) {
     }
     *D2_MADR = 0;
-    *D2_TADR = (int)texflush_packet;
+    *D2_TADR = (int)EE_WORD(texflush_packet);
     *D2_CHCR = 0x105;
 }
 
@@ -325,7 +349,7 @@ char *Texture_UploadTable(char *base, int upload) {
     entry = (TextureTableEntry *)cursor;
     cursor += header->entry_count * sizeof(TextureTableEntry);
     for (i = 0; i < header->entry_count; i++) {
-        cursor = Texture_UploadChunk((char *)(entry[i].offset + (int)base), upload);
+        cursor = Texture_UploadChunk(base + entry[i].offset, upload);
     }
     return cursor;
 }
@@ -338,10 +362,10 @@ static void *Texture_MoveBasePointers(TextureHeader *header, int tbp_delta, int 
     int cbp;
 
     tbp = ((int) (bits & 0x3FFF) + tbp_delta) & 0x3FFF;
-    bits &= ~0x3FFFUL;
+    bits &= ~0x3FFFULL;
     bits |= tbp;
     cbp = (int) ((bits >> 37) & 0x3FFF);
-    bits &= 0xFFF8001FFFFFFFFFUL;
+    bits &= 0xFFF8001FFFFFFFFFULL;
     bits |= (u64) ((cbp + cbp_delta) & 0x3FFF) << 37;
     header->tex0 = bits;
     return (char *) header + header->data_offset;
@@ -361,7 +385,7 @@ static char *Texture_MoveTableBasePointers(char *base, int tbp_delta, int cbp_de
     entry = (TextureTableEntry *)cursor;
     cursor += header->entry_count * sizeof(TextureTableEntry);
     for (i = 0; i < header->entry_count; i++) {
-        cursor = Texture_MoveBasePointers((TextureHeader *)(entry[i].offset + (int)base), tbp_delta, cbp_delta);
+        cursor = Texture_MoveBasePointers((TextureHeader *)(base + entry[i].offset), tbp_delta, cbp_delta);
     }
     return cursor;
 }

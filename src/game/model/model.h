@@ -279,8 +279,8 @@ typedef struct {
 } ModelPartFlagWord;
 
 #define MODEL_PART_FLAG_WORD(part) (((ModelPartFlagWord *)(part))->unk68)
-#define MODEL_PART_BIT40 (0x8000L << 25)
-#define MODEL_PART_BIT41 (0x8000L << 26)
+#define MODEL_PART_BIT40 (0x8000LL << 25)
+#define MODEL_PART_BIT41 (0x8000LL << 26)
 
 /* per-part level thresholds, ModelInstance.level_tables[n][part] */
 /* overlay: a motion file (MotionData.parts), relocated in place by ModelMotion_Load */

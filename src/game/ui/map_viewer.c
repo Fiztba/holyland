@@ -31,7 +31,7 @@ int sprintf(char *, char *, ...);
 int File_Open(char *, int, int);
 int File_Close(int);
 int File_Read(int, void *, int);
-void Packet_GetSpareArea(int *, int *);
+void Packet_GetSpareArea(sptr *, int *);
 void TextureTable_SetBasePointers(char *, int, int);
 void Model_MultiplyChildMatrices(ModelPart *);
 void Model_SetUpPosed(ModelInstance *, char **, char **);
