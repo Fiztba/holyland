@@ -21,7 +21,7 @@ int ModelMotion_BlendInto(ModelInstance *model, u8 index, u16 speed);
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int, s64);
 void Packet_EndGsRegisters(void);
-void GsDraw_FillScreen(int, int, int, int, int);
+void GsDraw_FillScreen(int, int, int, int, s64);
 void Sound_PlaySw(int);
 int Sound_PlayCommon(int);
 
@@ -252,7 +252,10 @@ void Player_TiltViewFromHit(int damage) {
     if (game_status.player_control != 0 && !(game_status.update_hold_flags & 1)) {
         player = &player_state;
         if (!((float)damage * 100.0f / (float)player->hp_max < 10.0f)) {
-            frames = (damage * 500 / (player->hp_max + 50)) / player->power;
+            frames = damage * 500 / (player->hp_max + 50);
+            /* retail divides by power with no zero test; the EE does not trap and gives -1 (1 for a negative
+               dividend) where x86 would stop the program */
+            frames = player->power != 0 ? frames / player->power : (frames < 0 ? 1 : -1);
             if (player->view_tilt_frames < frames) {
                 float angle = player->view_tilt_pitch;
 

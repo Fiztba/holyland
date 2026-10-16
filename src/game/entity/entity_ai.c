@@ -387,7 +387,7 @@ static int func_00196248(Entity *entity, f32 *angles, int mode, f32 *limits, flo
 s32 EntityAi_RemoveIfFallen(Entity *entity) {
     u16 ctrl_flags;
 
-    if (*(f32 *)((char *)entity->model + 0xC4) > 10000.0f) {
+    if (entity->model->position[1] > 10000.0f) {
         ctrl_flags = ENTITY_CONTROLLER(entity)->respawn_effect_id;
         if (ctrl_flags != 0 && ctrl_flags != 0xFFFF) {
             Effect_FreeForOwner(entity);

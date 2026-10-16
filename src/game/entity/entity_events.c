@@ -332,7 +332,7 @@ void EntityEvent_Respawn(Entity *entity) {
     if (entity->params->respawn_effect_id != 0) {
         if (entity->params->respawn_effect_id != 0xFFFF) {
             bone = Model_GetSkinnedBonePoint((char *)entity->model, entity->params->respawn_effect_bone);
-            Effect_StartSpawner(entity->params->respawn_effect_id, bone, (char *)entity->model + 0xD0, entity);
+            Effect_StartSpawner(entity->params->respawn_effect_id, bone, entity->model->rotation, entity);
         }
     }
 }

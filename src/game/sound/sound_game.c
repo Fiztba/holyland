@@ -268,7 +268,7 @@ static void Sound_CosSin(f32 angle, f32 *cos_out, f32 *sin_out) {
     }
     vf7[0] = vf4[0] * vf4[0];               /* vmul.x */
     vf7[3] = 1.0f - vf7[0];                 /* vsubx.w from vf0 */
-    ee_vu0.q = sqrtf(vf7[3]);               /* vsqrt */
+    ee_vu0.q = sqrtf(fabsf(vf7[3]));        /* vsqrt: VU0 takes the root of the absolute value */
     vf7[0] = 0.0f + ee_vu0.q;               /* vaddq.x */
     if (negative) {
         vf4[0] = vf5[0] - vf7[0];

@@ -43,7 +43,7 @@ void Packet_SwapBuffers(void);
 void DrawList_Clear(void);
 void func_001095D0(void);
 void GsDraw_ResetDrawTarget(void);
-void GsDraw_FillScreen(int, int, int, int, int);
+void GsDraw_FillScreen(int, int, int, int, s64);
 void func_001095D8(void);
 void Packet_SendChain(void);
 void Packet_WaitForSend(void);
@@ -84,7 +84,7 @@ void Movie_PlayOpening(void) {
     context1_buffer_half = 0;
     context2_buffer_half = 0;
     GsDraw_ResetDrawTarget();
-    GsDraw_FillScreen(0, 0, 0, 0x80, (int)0x100000044LL); /* retail passes the 64-bit word; the callee takes its int */
+    GsDraw_FillScreen(0, 0, 0, 0x80, 0x100000044LL);
     func_001095D8();
     context1_buffer_half = 1;
     context2_buffer_half = 1;

@@ -137,6 +137,7 @@ typedef struct {
     f32 alpha;                      /* 0x15C the model's alpha, 0x80 is opaque */
 } EntityModel;
 _Static_assert(offsetof(EntityModel, position) == offsetof(ModelInstance, position), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, rotation) == offsetof(ModelInstance, rotation), "EntityModel is not ModelInstance");
 _Static_assert(offsetof(EntityModel, parts) == offsetof(ModelInstance, parts), "EntityModel is not ModelInstance");
 _Static_assert(offsetof(EntityModel, level_tables) == offsetof(ModelInstance, level_tables), "EntityModel is not ModelInstance");
 _Static_assert(offsetof(EntityModel, draw_flags) == offsetof(ModelInstance, draw_flags), "EntityModel is not ModelInstance");

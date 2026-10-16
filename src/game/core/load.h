@@ -17,16 +17,20 @@ typedef struct {
     int file_handle;                /* 0x24 -1 when closed */
 } LoadJob;
 
-/* the job Sound_BgmFadeOut and Sound_BgmLoadVoice step: control words, the IOP handle it got and its arguments */
+/* the job Sound_BgmFadeOut and Sound_BgmLoadVoice step: the BGM's LoadJob (bgm_load_job) seen as control words,
+   the IOP handles it got and its arguments. On the PC its fields are placed by LoadJob's own offsets. */
 typedef struct {
-    int *ctl;                       /* 0x00 */
-    char *pad04[2];                 /* 0x04 SoundJob.name_a and name_b: this is a view of SoundJob */
-    char pad0C[0x04];
-    s32 result;                     /* 0x10 handle, negative until loaded */
-    s32 unk14;                      /* 0x14 */
-    s32 unk18;                      /* 0x18 */
-    s32 unk1C;                      /* 0x1C */
+    int *ctl;                       /* 0x00 LoadJob.buffers */
+    char pad04[offsetof(LoadJob, unk10) - sizeof(int *)];
+    s32 result;                     /* 0x10 LoadJob.unk10: the voice, negative until loaded */
+    s32 unk14;                      /* 0x14 LoadJob.unk14: the sequence */
+    s32 unk18;                      /* 0x18 the first word of LoadJob.pad18 */
+    s32 unk1C;                      /* 0x1C its second word (0xBB810 in bgm_load_job) */
 } IopLoadJob;
+_Static_assert(offsetof(IopLoadJob, result) == offsetof(LoadJob, unk10), "IopLoadJob is not LoadJob");
+_Static_assert(offsetof(IopLoadJob, unk14) == offsetof(LoadJob, unk14), "IopLoadJob is not LoadJob");
+_Static_assert(offsetof(IopLoadJob, unk18) == offsetof(LoadJob, pad18), "IopLoadJob is not LoadJob");
+_Static_assert(offsetof(IopLoadJob, unk1C) == offsetof(LoadJob, pad18) + 4, "IopLoadJob is not LoadJob");
 
 /* LoadRequest.target (Sound_ReadRequestFile) */
 typedef struct {

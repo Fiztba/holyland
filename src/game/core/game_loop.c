@@ -106,7 +106,7 @@ void Game_BlendScreenOffsetDown(void);
 void Game_BlendScreenOffsetUpDown(void);
 void Game_BlendPreviousFrame(int);
 void Game_ShiftScreenByViewTurn(void);
-void GsDraw_FillScreen(int, int, int, int, int);
+void GsDraw_FillScreen(int, int, int, int, s64);
 void Game_TintScreen(int, int, int);
 void Game_DrawFade(void);
 void Game_ApplyBrightness(int);
@@ -505,7 +505,7 @@ void GameLoop_DrawFrame(int arg) {
     Hud_Draw();
     if (map_draw_state.screen_fill_alpha > 0) {
         GsDraw_FillScreen(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
-                          map_draw_state.screen_fill_alpha, (int)map_draw_state.screen_fill_blend);
+                          map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
     }
     Game_DrawFade();
     Splash_Draw();

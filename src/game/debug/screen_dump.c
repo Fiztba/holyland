@@ -148,7 +148,7 @@ void ScreenDump_Bmp(u8 *buffer) {
         aligned = buffer;
         misalign = (u32)((uptr)aligned & 0xF);
         if (misalign != 0) {
-            aligned -= misalign - 0x10;
+            aligned += 0x10 - misalign; /* retail: aligned -= misalign - 0x10, which wraps the same way on the EE */
         }
         sceGsSetDefStoreImage(store_image, base, 0xA, 1, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
         FlushCache(0);
@@ -211,7 +211,7 @@ static void ScreenDump_Raw(u8 *buffer) {
         aligned = buffer;
         misalign = (u32)((uptr)aligned & 0xF);
         if (misalign != 0) {
-            aligned -= misalign - 0x10;
+            aligned += 0x10 - misalign; /* retail: aligned -= misalign - 0x10, which wraps the same way on the EE */
         }
         sceGsSetDefStoreImage(store_image, base, 0xA, 1, 0, 0, 0x280, 0x1C0);
         FlushCache(0);
