@@ -590,7 +590,7 @@ int MapViewer_LocateOnEarthFolksMap(int *map_x, int *map_y) {
     int area;
     char *entry;
 
-    entry = (char *)map_slots + current_map_slot * 0x60;
+    entry = (char *)&map_slots[current_map_slot]; /* 0x60 bytes a slot on the PS2 */
     area = ((u8 *)entry)[1];
     if (area >= 0x11) {
         if (area < 0x14) {
