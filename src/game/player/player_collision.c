@@ -120,12 +120,12 @@ int Player_CollideWithMap(void) {
                 ((void (*)(void *))Collision_TransformMeshPoints)(model); // match: called as if it returned nothing
                 if (player_state.ground_effect_active == 0) {
                     strips_left = mesh->hazard_strip_count;
-                    strip = mesh->hazard_strips;
+                    strip = EE_PTR(CollisionStrip *, mesh->hazard_strips);
                     while (--strips_left != -1) {
                         strip_point = strip->points;
                         points_left = strip->point_count - 2;
                         do {
-                            Collision_DropOnTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position,
+                            Collision_DropOnTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
                                           &player_state.position);
                             if (COLLISION_RESULT->hit != 0 && player_state.position.y - 230.0f <= COLLISION_RESULT->point[1]
                                 && COLLISION_RESULT->point[1] <= player_state.position.y) {
@@ -143,13 +143,13 @@ int Player_CollideWithMap(void) {
                     }
                 }
                 strips_left = mesh->wall_strip_count;
-                strip = mesh->wall_strips;
+                strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
                 while (--strips_left != -1) {
                     strip_point = strip->points;
                     points_left = strip->point_count - 2;
                     do {
-                        Collision_CapsuleTriangle((f32 *)strip_point[0].position, (f32 *)strip_point[1].position,
-                                      (f32 *)strip_point[2].position, (f32 *)&COLLISION_SCRATCH->unk90, 100.0f, 230.0f);
+                        Collision_CapsuleTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position),
+                                      EE_PTR(f32 *, strip_point[2].position), (f32 *)&COLLISION_SCRATCH->unk90, 100.0f, 230.0f);
                         if (COLLISION_RESULT->hit != 0) {
                             COLLISION_SCRATCH->push.x = COLLISION_SCRATCH->unk90.x - COLLISION_RESULT->point[0];
                             COLLISION_SCRATCH->push.y = 0.0f;
@@ -165,12 +165,12 @@ int Player_CollideWithMap(void) {
                 }
                 if (map == 0) {
                     strips_left = mesh->water_strip_count;
-                    strip = mesh->water_strips;
+                    strip = EE_PTR(CollisionStrip *, mesh->water_strips);
                     while (--strips_left != -1) {
                         strip_point = strip->points;
                         points_left = strip->point_count - 2;
                         do {
-                            Collision_DropOnTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position,
+                            Collision_DropOnTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
                                           &player_state.position);
                             if (COLLISION_RESULT->hit != 0
                                 && COLLISION_RESULT->point[1] <= player_state.position.y + player_state.fall_speed
@@ -196,12 +196,12 @@ int Player_CollideWithMap(void) {
                     continue;
                 }
                 strips_left = mesh->floor_strip_count;
-                strip = mesh->floor_strips;
+                strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
                 while (--strips_left != -1) {
                     strip_point = strip->points;
                     points_left = strip->point_count - 2;
                     do {
-                        Collision_DropOnTriangleWithin(strip_point[0].position, strip_point[1].position, strip_point[2].position,
+                        Collision_DropOnTriangleWithin(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
                                       &COLLISION_SCRATCH->point, reach);
                         if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->point[1] < floor_height) {
                             found = TRUE;
@@ -295,16 +295,16 @@ void Player_PushOutOfWalls(void) {
                     || record->highest[2] + 100.0f < player_state.position.z) {
                     continue;
                 }
-                Collision_TransformMeshPoints(record->model);
-                mesh = (CollisionMesh *)record->model->strips;
+                Collision_TransformMeshPoints(MAP_RECORD_MODEL(record));
+                mesh = (CollisionMesh *)MAP_RECORD_MODEL(record)->strips;
                 strips_left = mesh->wall_strip_count;
-                strip = mesh->wall_strips;
+                strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
                 while (--strips_left != -1) {
                     strip_point = strip->points;
                     points_left = strip->point_count - 2;
                     do {
-                        Collision_CapsuleTriangle((f32 *)strip_point[0].position, (f32 *)strip_point[1].position,
-                                      (f32 *)strip_point[2].position, (f32 *)&COLLISION_SCRATCH->point, 100.0f, 230.0f);
+                        Collision_CapsuleTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position),
+                                      EE_PTR(f32 *, strip_point[2].position), (f32 *)&COLLISION_SCRATCH->point, 100.0f, 230.0f);
                         if (COLLISION_RESULT->hit != 0) {
                             COLLISION_SCRATCH->push.x = COLLISION_SCRATCH->point.x - COLLISION_RESULT->point[0];
                             COLLISION_SCRATCH->push.y = 0.0f;
@@ -360,15 +360,15 @@ void Player_FindFloorMaterial(void) {
                     || record->highest[2] + 100.0f < player_state.position.z) {
                     continue;
                 }
-                Collision_TransformMeshPoints(record->model);
-                mesh = (CollisionMesh *)record->model->strips;
+                Collision_TransformMeshPoints(MAP_RECORD_MODEL(record));
+                mesh = (CollisionMesh *)MAP_RECORD_MODEL(record)->strips;
                 strips_left = mesh->floor_strip_count;
-                strip = mesh->floor_strips;
+                strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
                 while (--strips_left != -1) {
                     strip_point = strip->points;
                     points_left = strip->point_count - 2;
                     do {
-                        Collision_DropOnTriangleWithin(strip_point[0].position, strip_point[1].position, strip_point[2].position,
+                        Collision_DropOnTriangleWithin(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
                                       &COLLISION_SCRATCH->point, 10.0f);
                         if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->point[1] < lowest) {
                             lowest = COLLISION_RESULT->point[1];

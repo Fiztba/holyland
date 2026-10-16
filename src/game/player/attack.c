@@ -263,7 +263,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
                     request->position[2] < record->lowest[2] - reach || record->highest[2] + reach < request->position[2]) {
                     continue;
                 }
-                result = swing_hit_checks[kind](record->model, request, reach);
+                result = swing_hit_checks[kind](MAP_RECORD_MODEL(record), request, reach);
                 if (COLLISION_RESULT->hit != 0) {
                     Attack_HitMap(request, extra);
                     switch (result) {
@@ -499,7 +499,7 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
     }
     Vu0_LoadMatrix(model->model_matrix);
     count = ((CollisionMesh *)mesh)->point_count;
-    local = (Vector4 *)((CollisionMesh *)mesh)->points;
+    local = EE_PTR(Vector4 *, ((CollisionMesh *)mesh)->points);
     i = count / 3;
     do {
         Attack_ApplyVu0Matrix(world, local);
@@ -514,13 +514,13 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
         world++;
     }
     for (list = 0; list < 4; list++) {
-        strip = mesh->strip_lists[lists.lists[list]];
+        strip = EE_PTR(CollisionStrip *, mesh->strip_lists[lists.lists[list]]);
         i = mesh->strip_counts[lists.lists[list]];
         while (--i != -1) {
             strip_point = strip->points;
             points_left = strip->point_count - 2;
             do {
-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (f32 *)request, reach);
+                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
                 if (COLLISION_RESULT->hit != 0) {
                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
                     return lists.lists[list];
@@ -559,7 +559,7 @@ int Attack_TestMapModelFloors(ModelInstance *model, void *request, f32 reach) {
     }
     Vu0_LoadMatrix(model->model_matrix);
     count = ((CollisionMesh *)mesh)->point_count;
-    local = (Vector4 *)((CollisionMesh *)mesh)->points;
+    local = EE_PTR(Vector4 *, ((CollisionMesh *)mesh)->points);
     i = count / 3;
     do {
         Attack_ApplyVu0Matrix(world, local);
@@ -574,13 +574,13 @@ int Attack_TestMapModelFloors(ModelInstance *model, void *request, f32 reach) {
         world++;
     }
     for (list = 0; list < 2; list++) {
-        strip = mesh->strip_lists[lists.lists[list]];
+        strip = EE_PTR(CollisionStrip *, mesh->strip_lists[lists.lists[list]]);
         i = mesh->strip_counts[lists.lists[list]];
         while (--i != -1) {
             strip_point = strip->points;
             points_left = strip->point_count - 2;
             do {
-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (f32 *)request, reach);
+                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
                 if (COLLISION_RESULT->hit != 0) {
                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
                     return 1;
@@ -619,7 +619,7 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
     }
     Vu0_LoadMatrix(model->model_matrix);
     count = ((CollisionMesh *)mesh)->point_count;
-    local = (Vector4 *)((CollisionMesh *)mesh)->points;
+    local = EE_PTR(Vector4 *, ((CollisionMesh *)mesh)->points);
     i = count / 3;
     do {
         Attack_ApplyVu0Matrix(world, local);
@@ -634,13 +634,13 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
         world++;
     }
     for (list = 0; list < 2; list++) {
-        strip = mesh->strip_lists[lists.lists[list]];
+        strip = EE_PTR(CollisionStrip *, mesh->strip_lists[lists.lists[list]]);
         i = mesh->strip_counts[lists.lists[list]];
         while (--i != -1) {
             strip_point = strip->points;
             points_left = strip->point_count - 2;
             do {
-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (f32 *)request, reach);
+                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
                 if (COLLISION_RESULT->hit != 0) {
                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
                     return 0;
