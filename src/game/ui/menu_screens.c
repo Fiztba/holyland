@@ -323,7 +323,7 @@ extern s8 system_screen_state;
 extern ColorBytes panel_text_color;
 extern ColorBytes model_draw_color;
 extern s32 menu_file_block_count;
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern u8 brightness_before;
 void func_001095D0(void);
 void func_001095D8(void);

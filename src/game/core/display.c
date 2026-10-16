@@ -21,7 +21,7 @@ extern char empty_module_args[];        /* "": no module arguments */
 extern char vector4_print_format[];     /* "(%f,%f,%f,%f)\n" */
 static char menu_heap_area[0x200000];   /* 0x1BFAF80 the area the menus' heap (menu_heap) lies in */
 extern ClockControl D_00432820;
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern GsDoubleBuffer game_dbuff;           /* the game's frame buffers, drawn through GS context 1 */
 extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn through GS context 2 */
 extern int context1_buffer_half;              /* the half of the first double buffer in use; each swap flips it */

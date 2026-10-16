@@ -97,11 +97,11 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
 void Message_ShowNotice(int x, int y, int font, int kind, int frames, int message_id, ...);
 void Message_DebugPrintf(char *format, ...);
 void Message_DebugSetColor(char colour);
-s32 Message_GetFontTexture(s32 font_base);
-s32 Message_GetFontText(s32 font_base);
+sptr Message_GetFontTexture(sptr font_base);
+sptr Message_GetFontText(sptr font_base);
 char *Message_GetColor(s32 colour);
 void Message_ClearNotices(void);
 void Message_CloseBox(void);
-int Message_GetText(int message_id);
+sptr Message_GetText(int message_id);
 
 #endif

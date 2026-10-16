@@ -1,13 +1,10 @@
+#include <stdarg.h>
+#include <stdio.h>
 #include "ui/message.h"
 #include "core/file.h"
 #include "gfx/gs.h"
 #include "core/memory.h"
 #include "gfx/texture.h"
-
-/* EE EABI varargs: the argument registers after the named ones are saved just below the stack arguments */
-typedef char *va_list;
-#define VA_START(ap, last, named_count) ((ap) = (char *)__builtin_next_arg(last) - 8 * (8 - (named_count)))
-#define va_arg(ap, type) ((ap) += 8, *(type *)((ap) - 8))
 
 #define NOTICE_COUNT 6
 #define DEBUG_LOG_LINES 0x80
@@ -30,9 +27,8 @@ u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
 int Message_SplitDigits(int, u8 *);
 void *memset(void *, int, u32);
-int vsprintf(char *, const char *, char *);
 
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern u16 pad_pressed[];
 extern u16 action_button;
 
@@ -109,9 +105,9 @@ void Message_Init(void) {
     notices[NOTICE_COUNT - 1].next = notices;
     // match: the callee returns a value here; $2 is then taken when the table address is formed
     ((int (*)(void *, u32))Memory_ClearWords)(glyph_alphas, 0x200);
-    font_tex0[0].first = 0x4007FC0665423B40L;
+    font_tex0[0].first = 0x4007FC0665423B40LL;
     font_tex0[0].second = GS_REG_TEX0_1;
-    font_tex0[1].first = 0x4007FC2665423B40L;
+    font_tex0[1].first = 0x4007FC2665423B40LL;
     font_tex0[1].second = GS_REG_TEX0_1;
 }
 
@@ -242,7 +238,7 @@ static void Message_Draw(void) {
             texture = (u64 *)words;
             texture[0] = 0;
             texture[1] = 0; /* PRIM */
-            texture[4] = 0x4007FC0665423B40L;
+            texture[4] = 0x4007FC0665423B40LL;
             texture[5] = GS_REG_TEX0_1;
             texture[2] = 0;
             texture[3] = GS_REG_TEX1_1;
@@ -280,10 +276,10 @@ int Message_IsBoxOpen(void) {
    It types out a glyph every `delay` frames; `centred` centres each line. */
 void Message_OpenBox(int x, int y, int font, int centred, int delay, int message_id, ...) {
     va_list args;
-    int format;
+    sptr format;
 
     format = Message_GetText(message_id);
-    VA_START(args, message_id, 6);
+    va_start(args, message_id);
     if (box_open == 0) {
         box_open = 1;
         Message_Format((u16 *)format, (u16 *)box_text, args);
@@ -302,6 +298,7 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
         message_box.closing = 0;
         message_box.end = Message_LayoutPage(box_text, font);
     }
+    va_end(args);
 }
 
 /* Formats message `message_id` into a notice of the ring for `frames` frames, centred on (x + 320, y + 400).
@@ -309,7 +306,7 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
    ring is full. */
 void Message_ShowNotice(int x, int y, int font, int kind, int frames, int message_id, ...) {
     va_list args;
-    int format;
+    sptr format;
     int width;
 
     format = Message_GetText(message_id);
@@ -317,8 +314,9 @@ void Message_ShowNotice(int x, int y, int font, int kind, int frames, int messag
         int left; // match: the two branches have their own left and top
         int top;
 
-        VA_START(args, message_id, 6);
+        va_start(args, message_id);
         notice_shown->length = Message_Format((u16 *)format, (u16 *)notice_shown->text, args);
+        va_end(args);
         width = Message_GetTextWidth(notice_shown->text, font);
         left = x + 0x140;
         top = y + 0x190;
@@ -335,8 +333,9 @@ void Message_ShowNotice(int x, int y, int font, int kind, int frames, int messag
         if (notice_free->next == notice_shown) {
             return;
         }
-        VA_START(args, message_id, 6);
+        va_start(args, message_id);
         notice_free->length = Message_Format((u16 *)format, (u16 *)notice_free->text, args);
+        va_end(args);
         width = Message_GetTextWidth(notice_free->text, font);
         left = x + 0x140;
         top = y + 0x190;
@@ -356,8 +355,9 @@ void Message_DebugPrintf(char *format, ...) {
     va_list args;
     int length;
 
-    VA_START(args, format, 1);
+    va_start(args, format);
     length = vsprintf((char *)debug_log[debug_line_count], format, args);
+    va_end(args);
     glyph_count += length;
     debug_line_count++;
 }
@@ -369,12 +369,12 @@ void Message_DebugSetColor(char colour) {
 }
 
 /* Where font.tmr, the font texture, is loaded in the font buffer. */
-s32 Message_GetFontTexture(s32 font_base) {
+sptr Message_GetFontTexture(sptr font_base) {
     return font_base + 0x180000;
 }
 
 /* Where font.txc, the message texts, is loaded in the font buffer. */
-s32 Message_GetFontText(s32 font_base) {
+sptr Message_GetFontText(sptr font_base) {
     return font_base + 0x1A0400;
 }
 
@@ -586,9 +586,11 @@ static void Message_DrawGlyph(int pos_x, int pos_y, int glyph, int colour, int a
     *glyph_packet++ = 0;
     *glyph_packet++ = 0;
     if (first_page && kind == 0) {
-        *((GsRegisterPair *)glyph_packet)++ = font_tex0[0];
+        *(GsRegisterPair *)glyph_packet = font_tex0[0];
+        glyph_packet = (u32 *)((GsRegisterPair *)glyph_packet + 1);
     } else {
-        *((GsRegisterPair *)glyph_packet)++ = font_tex0[1];
+        *(GsRegisterPair *)glyph_packet = font_tex0[1];
+        glyph_packet = (u32 *)((GsRegisterPair *)glyph_packet + 1);
     }
     rgb = &text_colours[colour];
     *glyph_packet++ = rgb->red;
@@ -682,7 +684,7 @@ int Message_SplitDigits(int value, u8 *digits) {
 }
 
 /* Address of message message_id: the offset table entry after the table's first word, then the text it points to. */
-int Message_GetText(int message_id) {
+sptr Message_GetText(int message_id) {
     s32 *offset = (s32 *)Message_GetFontText(menu_heap + (message_id + 1) * 4);
 
     return Message_GetFontText(menu_heap + *offset);
