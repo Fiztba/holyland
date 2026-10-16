@@ -5,6 +5,7 @@
 #include "gfx/gs.h"
 #include "core/memory.h"
 #include "gfx/texture.h"
+#include "core/game.h"
 
 #define NOTICE_COUNT 6
 #define DEBUG_LOG_LINES 0x80
@@ -28,7 +29,8 @@ void Packet_AppendToChain(u32 *, u32 *);
 int Message_SplitDigits(int, u8 *);
 
 extern sptr menu_heap;
-extern u16 pad_pressed[];
+extern PadState pad_state;
+#define pad_pressed (&pad_state.pressed)
 extern u16 action_button;
 
 static TextColor text_colours[10] = {     /* 0x420B40 */

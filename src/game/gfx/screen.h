@@ -40,18 +40,24 @@ typedef struct {
     f32 phase;                      /* 0x0C */
 } WaveOscillator;
 
-/* what held_item_model_ptr points at */
+/* what held_item_model_ptr points at: a view of ModelInstance (model/model.h) and of the ModelChannel its
+   level_tables points at, with the padding worked out from those structs (their pointers move the fields on
+   the PC) */
 typedef struct {
-    char pad00[0x82];
-    u16 unk82;                      /* 0x82 */
+    char pad00[offsetof(ModelChannel, param)];
+    u16 unk82;                      /* 0x82 ModelChannel.param */
 } DisplaySettings;
 
 typedef struct {
-    char pad00[0xFC];
-    DisplaySettings *settings;      /* 0xFC */
+    char pad00[offsetof(ModelInstance, level_tables)];
+    DisplaySettings *settings;      /* 0xFC ModelInstance.level_tables */
 } DisplayContext;
 
+_Static_assert(offsetof(DisplaySettings, unk82) == offsetof(ModelChannel, param), "DisplaySettings is not ModelChannel");
+_Static_assert(offsetof(DisplayContext, settings) == offsetof(ModelInstance, level_tables), "DisplayContext is not ModelInstance");
+
 /* the nodes Map_InsertRecordBySize sorts into the lists record_boxes and backdrop_record_boxes by box area */
+/* overlay: the start of a 0x80-byte map record of the map file (map/map.h MapRecordBox) */
 typedef struct AreaNode {
     char pad00[0x3C];
     s32 flags;                      /* 0x3C bit 25 skips insertion, bit 31 picks the second list */
@@ -62,8 +68,11 @@ typedef struct AreaNode {
     f32 right;                      /* 0x50 */
     f32 unk54;                      /* 0x54 the box's highest y */
     f32 bottom;                     /* 0x58 */
-    struct AreaNode *next;          /* 0x5C */
+    EEWord next;                    /* 0x5C (AreaNode *) the next box of its list: MapRecordBox.next (map/map.h) */
 } AreaNode;
+LAYOUT_SIZE(AreaNode, 0x60);
+LAYOUT_OFFSET(AreaNode, flags, 0x3C);
+LAYOUT_OFFSET(AreaNode, next, 0x5C);
 
 /* an AreaNode with the doubleword its flags are the high half of; bit 27 is the map slot it belongs to */
 typedef struct {

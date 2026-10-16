@@ -114,11 +114,6 @@ typedef struct {
     void *facing_item;              /* 0x58 the ItemNode (model/model.h) in front of the player, NULL: none (Interact_FindTarget) */
 } EventRunner;
 
-/* an event MapObject_OpenChestOnSignal hands to MapObject_UpdateClosedChest */
-typedef struct {
-    char pad00[0x10];
-    u32 flags;                      /* 0x10 */
-} GameEvent;
 
 /* the viewers MapViewer_Run runs, indexed by picked_viewer (ui/map_viewer.c), 0xC bytes each */
 typedef struct {
@@ -166,7 +161,9 @@ typedef struct {
 
 /* D_00432820: what decides whether GameClock_Tick advances GameClock.ticks */
 typedef struct {
-    char pad00[0x208];
+    char pad00[0x100];
+    char script_error_flags[0x0C];  /* 0x100 one flag per SCRIPT_ERROR_ (script/script.c) */
+    char pad10C[0xFC];
     char unk208;                    /* 0x208 System_InitMemory clears it */
     char unk209;                    /* 0x209 System_InitMemory clears it */
     char unk20A;                    /* 0x20A System_InitMemory clears it */
@@ -280,12 +277,6 @@ typedef struct {
     int points[8][11][2];
 } __attribute__((aligned(16))) RippleGrid;
 
-/* a node of the doubly linked list at lying_items */
-typedef struct ListNode {
-    char pad00[0x20];
-    struct ListNode *prev;          /* 0x20 */
-    struct ListNode *next;          /* 0x24 */
-} ListNode;
 
 /* pool_slots[32]: a pool of 0x70-byte slots chained into a free list through `next`;
    pool_slot_free_list holds the head */

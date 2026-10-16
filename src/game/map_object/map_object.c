@@ -9,8 +9,8 @@
 #include "player/player.h"
 #include "gfx/scroll_texture.h"
 #include "model/model.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 float sinf(float);
 float sqrtf(float);
 float atan2f(float, float);
@@ -53,7 +53,8 @@ void Vector_Copy(void *, void *);
 void Vector_Add(void *, void *, void *);
 
 extern MapDrawState map_draw_state;
-extern int suspended_updates[3];
+extern GameStatus game_status;
+#define suspended_updates (&game_status.update_hold_flags)
 extern MapSlot map_slots[];
 extern Vector4 map_object_glow_colors[4];
 extern u8 item_counts[];
@@ -741,8 +742,9 @@ int MapObject_StepAnim(MapObject *object) {
                     Sound_PlayCommonAt(range, anim->sound, &model->position);
                     break;
                 case 1:
-                    // match: the range is evaluated before the position
-                    ((int (*)(u8, u8, f32, f32 *))Sound_PlayMapAtRange)(anim->sound, object->definition->sound_falloff_mode, range, &model->position.x);
+                    /* retail passes the range before the position; the EE puts them in separate registers, so this
+                       is the definition's order */
+                    Sound_PlayMapAtRange(anim->sound, object->definition->sound_falloff_mode, &model->position.x, range);
                     break;
                 case 2:
                     Sound_StartTaggedAt((u8)next_sound_channel + 0x20, anim->sound, object->definition->sound_falloff_mode, range, (Vector4Arg *)&model->position);

@@ -50,7 +50,8 @@ extern f32 identity_matrix[16];
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 // match: the size is unknown; a complete small type would be read through $gp
-extern u8 dark_sorcerer_fight_started[];
+extern u8 map_script_flags[];
+#define dark_sorcerer_fight_started (map_script_flags + 0x1B8C)
 int EntityAi_CheckMeleeHit(Entity *, void *, s32, s32, s32);
 void EntityAi_SetAttackDelay(Entity *, s32);
 int EntityShot_LaunchAimed(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *, f32, f32);

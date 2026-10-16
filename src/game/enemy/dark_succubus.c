@@ -24,7 +24,8 @@ int Motion_BlendToPose(EntityModel *, f32);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 extern u32 frame_counter;
 extern PlayerData player_state;
-extern u8 dark_succubus_fight_started[];
+extern u8 map_script_flags[];
+#define dark_succubus_fight_started (map_script_flags + 0x988)
 // match: the size is unknown; a complete small type would be read through $gp
 extern f32 D_0044681C[];
 int rand(void);

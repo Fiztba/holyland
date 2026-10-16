@@ -4,6 +4,7 @@
 
 #include "common.h"
 #include "model/model.h"
+#include "player/player.h"
 
 #define ENTITY_DESPAWN_MARGIN           300.0f
 #define ENTITY_VERTICAL_DESPAWN_MARGIN  150.0f
@@ -244,6 +245,16 @@ typedef struct {
     char pad28[0x08];
 } Unk1B1470Extra;
 
+/* a shot slot (effect/shot.c) is filled as a PlayerShot (player/player.h) and read as an Unk1B1470Extra */
+_Static_assert(sizeof(Unk1B1470Extra) == sizeof(PlayerShot), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, strength_gauge) == offsetof(PlayerShot, strength_gauge), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, attack_request) == offsetof(PlayerShot, attack_request), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, player_power) == offsetof(PlayerShot, player_power), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, player_magic) == offsetof(PlayerShot, player_magic), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, weapon_index) == offsetof(PlayerShot, weapon_index), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, magic_id) == offsetof(PlayerShot, magic_id), "Unk1B1470Extra is not PlayerShot");
+_Static_assert(offsetof(Unk1B1470Extra, pad28) == offsetof(PlayerShot, pad28), "Unk1B1470Extra is not PlayerShot");
+
 /* Unk1B1470Request with the bits at 0x4C as byte-sized fields: Attack_HitEntity reads unk4C_3 as a u8.
    The owner is there so that on the PC the bits follow it as they do in Unk1B1470Request. */
 typedef struct {
@@ -281,15 +292,21 @@ typedef struct {
     s64 value;
 } __attribute__((packed)) EntityUnaligned64;
 
-/* what Shot_Alloc returns: something an entity launches */
+/* what Shot_Alloc returns: something an entity launches, read back as an Unk1B1470Extra; that struct's pointer
+   moves the later fields on the PC, so the padding follows it */
 typedef struct {
-    char unk00;                     /* 0x00 */
-    char pad01[0x1F];
-    u16 unk20;                      /* 0x20 */
-    s16 unk22;                      /* 0x22 */
-    char pad24[0x04];
+    char unk00;                     /* 0x00 Unk1B1470Extra.is_magic_shot */
+    char pad01[offsetof(Unk1B1470Extra, player_power) - 1];
+    u16 unk20;                      /* 0x20 Unk1B1470Extra.player_power */
+    s16 unk22;                      /* 0x22 Unk1B1470Extra.player_magic */
+    char pad24[offsetof(Unk1B1470Extra, pad28) - offsetof(Unk1B1470Extra, player_magic) - sizeof(s16)];
     EntityUnaligned64 unk28;        /* 0x28 copy of EntityParams.unk238 */
 } EntityUnk1B1390;
+
+_Static_assert(offsetof(EntityUnk1B1390, unk20) == offsetof(Unk1B1470Extra, player_power), "EntityUnk1B1390 is not Unk1B1470Extra");
+_Static_assert(offsetof(EntityUnk1B1390, unk22) == offsetof(Unk1B1470Extra, player_magic), "EntityUnk1B1390 is not Unk1B1470Extra");
+_Static_assert(offsetof(EntityUnk1B1390, unk28) == offsetof(Unk1B1470Extra, pad28), "EntityUnk1B1390 is not Unk1B1470Extra");
+_Static_assert(sizeof(EntityUnk1B1390) <= sizeof(Unk1B1470Extra), "EntityUnk1B1390 is not Unk1B1470Extra");
 
 /* one launch of a record at EntityParams+0x3D8 */
 typedef struct {
@@ -1007,19 +1024,32 @@ typedef union {
 
 #define ENTITY_FLAG_WORD(flags) (((EntityFlagWord *)&(flags))->word)
 
-/* the block at player_state: the player (position first). Files declare
-   `extern PlayerData player_state;` themselves: older files still use an array. */
+/* the block at player_state: the player (position first), a view of PlayerState (player/player.h) with the
+   entity code's names. Files declare `extern PlayerData player_state;` themselves: older files still use an
+   array. PlayerState's pointer fields from 0x204 on move the later fields on the PC, so the padding is worked
+   out from PlayerState. */
 typedef struct {
     f32 position[4];                /* 0x00 */
-    char pad10[0x04];
+    char pad10[offsetof(PlayerState, rotation.y) - 0x10];
     f32 heading;                    /* 0x14 the player's heading angle, PlayerState.rotation.y */
-    char pad18[0x1EC];
+    char pad18[offsetof(PlayerState, stepped_on_entity) - offsetof(PlayerState, rotation.y) - sizeof(f32)];
     Entity *stood_on_entity;        /* 0x204 the entity the player was put on top of when climbing */
-    char pad208[0x4A];
+    char pad208[offsetof(PlayerState, record_flag_block) - offsetof(PlayerState, stepped_on_entity) - sizeof(Entity *)];
+    u8 record_flag_block;           /* 0x250 PlayerState.record_flag_block */
+    char pad251[offsetof(PlayerState, map_index) - offsetof(PlayerState, record_flag_block) - sizeof(u8)];
     u16 map_record_index;           /* 0x252 picks the MapSlot record the player is in */
-    char pad254[0x05];
+    char pad254[offsetof(PlayerState, item_action_step) - offsetof(PlayerState, map_index) - sizeof(u16)];
+    u8 item_action_step;            /* 0x258 PlayerState.item_action_step */
     u8 magic_shot_launched;         /* 0x259 set when a cast magic launches a shot, cleared each frame */
 } PlayerData;
+
+_Static_assert(offsetof(PlayerData, heading) == offsetof(PlayerState, rotation.y), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, stood_on_entity) == offsetof(PlayerState, stepped_on_entity), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, record_flag_block) == offsetof(PlayerState, record_flag_block), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, map_record_index) == offsetof(PlayerState, map_index), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, item_action_step) == offsetof(PlayerState, item_action_step), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, magic_shot_launched) == offsetof(PlayerState, cast_launched_shot), "PlayerData is not PlayerState");
+_Static_assert(sizeof(PlayerData) <= sizeof(PlayerState), "PlayerData is not PlayerState");
 
 /* four animation frame numbers: a local table that a function copies whole
    from read-only data (in the game: `s32 frames[4] = { ... };`) */

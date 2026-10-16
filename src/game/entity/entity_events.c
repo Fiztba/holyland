@@ -17,8 +17,9 @@ void Vector_Copy(void *, void *);
 int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
 extern char *entity_params;
 extern PlayerState player_state;
-// match: Sound_PlayFalloff.c has not been given its real arguments yet
-void Sound_PlayFalloff(float, int, int, char, float, float);
+/* the EE passes floats and integers in separate registers, so retail's calls (sound_id first, as a float, then
+   the integers) reach the definition as (unk00, unk01, bank, (float)sound_id, distance, angle): written in that order */
+void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle);
 extern EntitySpawnInfo *map_spawn_infos[2];
 extern MapSlot map_slots[];
 extern int current_map_slot;
@@ -281,7 +282,7 @@ void EntityEvent_StartFrameCues(Entity *entity, s32 animation, s32 frame_from, s
             if (entity->ailment_4_frames != 0 && record->unk04 != 0) {
                 continue;
             }
-            Sound_PlayFalloff(entity->params->sound_id, record->unk00, record->unk01, entity->sound_bank, entity->distance_to_player_3d, angle);
+            Sound_PlayFalloff(record->unk00, record->unk01, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, angle);
         }
     }
 }
@@ -301,7 +302,7 @@ void EntityEvent_StartCue(Entity *entity, s32 unknown1, s32 unknown2, s32 skip_i
     if (entity->ailment_4_frames != 0 && skip_if_unk2A != 0) {
         return;
     }
-    Sound_PlayFalloff(entity->params->sound_id, (u8)unknown1, (u8)unknown2, entity->sound_bank, entity->distance_to_player_3d, angle);
+    Sound_PlayFalloff((u8)unknown1, (u8)unknown2, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, angle);
 }
 
 /* As EntityEvent_StartCue, without the unk2A test. */
@@ -317,7 +318,7 @@ void EntityEvent_StartCueAlways(Entity *entity, s32 unknown1, s32 unknown2) {
     } else if (wrapped < -3.1415927f) {
         wrapped += 6.2831855f;
     }
-    Sound_PlayFalloff(entity->params->sound_id, (u8)unknown1, (u8)unknown2, entity->sound_bank, entity->distance_to_player_3d, wrapped);
+    Sound_PlayFalloff((u8)unknown1, (u8)unknown2, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, wrapped);
 }
 
 /* Puts the entity back at its spawn point (Entity_ResetToSpawn), sets flag bits 1 and 8 and clears bits 2-3,

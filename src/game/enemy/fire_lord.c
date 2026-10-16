@@ -5,6 +5,7 @@
 #include "entity/entity.h"
 #include "common.h"
 #include "effect/effect.h"
+#include "player/player.h"
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
@@ -54,7 +55,7 @@ int EntityAi_CheckMeleeHit(Entity *, void *, s32, s32, s32);
 void EntityAi_SetAttackDelay(Entity *, s32);
 float EntityMath_AngleXZ(float *, char *);
 s32 EntityAi_CanUseMelee(Entity *, s32);
-extern u8 player_weapon_step[];
+#define player_weapon_step (&player_state.item_action_step)
 extern EntityModel *held_item_model_ptr;
 void DrawList_Add(ModelInstance *, s32, s32);
 

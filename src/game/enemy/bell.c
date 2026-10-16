@@ -16,7 +16,7 @@ int Motion_Step(void *, int);
 extern PlayerData player_state;
 float EntityMath_AngleXZ(float *, char *);
 float EntityMath_WrapAngle(float);
-void Sound_PlayFalloff(s32, s32, s32, f32, f32, f32);
+void Sound_PlayFalloff(int, int, int, float, float, float);
 
 static void Bell_Animate(Entity *entity);
 static void Bell_Think(Entity *entity);

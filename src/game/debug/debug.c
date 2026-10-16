@@ -3,6 +3,7 @@
 #include "input/pad.h"
 #include "ui/message.h"
 #include <stdio.h>
+#include "gfx/gs.h"
 
 static PadReport *debug_pad; /* 0x447108 the controller report the editors read; nothing in the retail game sets it */
 
@@ -27,8 +28,10 @@ extern DebugStartMenuSpacer debug_start_menu_spacer;
 extern DebugStartMenuPrompt debug_start_menu_prompt;
 extern DebugStartMenuItems debug_start_menu_items;
 extern u16 pad_state[];
-extern s64 game_dbuff_clear_color[];
-extern s64 game_dbuff_context2_clear_color[];
+extern GsDoubleBuffer game_dbuff;
+#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
+extern GsDoubleBuffer game_dbuff_context2;
+#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
 extern char debug_map_format[];
 extern char debug_ini_prompt[];
 extern char debug_ini_digit_format[];

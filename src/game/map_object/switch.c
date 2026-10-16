@@ -4,8 +4,8 @@
 
 void MapObject_UpdateOffSwitch(void *);
 void MapObject_UpdateOnSwitch(void *);
-extern u32 game_status_flags[];
-extern void *faced_object[];
+#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
+#define faced_object (&view_ray_status.current)
 extern GameStatus game_status;
 extern EventRunner view_ray_status;
 

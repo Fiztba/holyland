@@ -4,12 +4,15 @@
 #include "gfx/gs.h"
 
 #include <string.h>
+#include "sound/sound.h"
 int sprintf(char *, const char *, ...);
 
 extern GameStatus game_status;
-extern int bgm_load_pending[3];
-extern int suspended_updates[3];
-extern u16 pad_pressed[];
+extern SoundLoadQueue sound_load_queue;
+#define bgm_load_pending (&sound_load_queue.bgm_load_pending)
+#define suspended_updates (&game_status.update_hold_flags)
+extern PadState pad_state;
+#define pad_pressed (&pad_state.pressed)
 extern u16 action_button;
 extern u32 *splash_image_packet;
 
@@ -266,17 +269,17 @@ void Splash_BuildSprite(void) {
     int width;
     u64 tex0;
 
-    width = 1 << ((file_load_buffer.tex0 >> 26) & 0xF);
-    height = 1 << ((file_load_buffer.tex0 >> 30) & 0xF);
+    width = 1 << ((SPLASH_IMAGE->tex0 >> 26) & 0xF);
+    height = 1 << ((SPLASH_IMAGE->tex0 >> 30) & 0xF);
 
     memset(&splash_sprite, 0, sizeof(splash_sprite));
-    tex0 = file_load_buffer.tex0;
+    tex0 = SPLASH_IMAGE->tex0;
     tex0 &= 0xFFFFFFFFFFFFC000ULL;
     tex0 |= 0x2E40;
     tex0 &= 0xFFF8001FFFFFFFFFULL;
     tex0 |= 0xF500ULL << 35;
     splash_sprite.tex0 = tex0;
-    splash_sprite.unk08 = file_load_buffer.unk18;
+    splash_sprite.unk08 = SPLASH_IMAGE->unk18;
     splash_sprite.gif_reg = 0x156;
     splash_sprite.red = 0x80;
     splash_sprite.green = 0x80;

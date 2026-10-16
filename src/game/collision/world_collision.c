@@ -112,7 +112,7 @@ extern const f32 D_0044698C[];
 extern s32 strip_list_indices[4];
 extern const f32 D_00446990[];
 extern const f32 D_00446994[];
-extern ModelInstanceBlock *map_slot_record_models[];
+extern MapSlotMemory map_slot_memory[2];
 extern s32 segment_strip_lists[2];
 extern const f32 D_004469A0[];
 extern s32 map_objects_started[2];
@@ -611,7 +611,7 @@ void Collision_CastSegmentAtMap(f32 *position, f32 *target) {
         if (slot->loaded != 0) {
             record_count = slot->header->record_count;
             record = (MapRecordBounds *)slot->records;
-            model = map_slot_record_models[current_map_slot == map ? 0 : 22];
+            model = (ModelInstanceBlock *)map_slot_memory[current_map_slot == map ? 0 : 1].record_models;
             for (i = 0; i < record_count; i++, model++, record++) {
                 if (model->model.strips == NULL) {
                     continue;

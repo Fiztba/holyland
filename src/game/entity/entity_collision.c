@@ -34,7 +34,7 @@ void Collision_CylinderEdge(void *, void *, f32, void *, f32, f32);
 void Collision_CylinderCylinder(void *, f32, f32, void *, f32, f32);
 void Collision_BallEdge(void *, void *, f32, void *, f32);
 void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
-extern ModelInstanceBlock *map_slot_record_models[];
+extern MapSlotMemory map_slot_memory[2];
 
 /* tests the entity's upright capsule against the triangle at `point` and pushes `position`
    sideways out of it */
@@ -2252,13 +2252,13 @@ f32 EntityCollision_DistanceToPropFloor(void *prop_arg, void *position_arg) {
     s32 j;
 
     result = lowest = 3.4028235e38f;
-    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == NULL || prop->model->strips == NULL) {
+    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == 0 || MAP_RECORD_MODEL(prop)->strips == NULL) {
         return lowest;
     }
     found = FALSE;
     // match: called as if it returned nothing (other files declare it int)
-    ((void (*)(void *))Collision_TransformMeshPoints)(prop->model);
-    mesh = (CollisionMesh *)prop->model->strips;
+    ((void (*)(void *))Collision_TransformMeshPoints)(MAP_RECORD_MODEL(prop));
+    mesh = (CollisionMesh *)MAP_RECORD_MODEL(prop)->strips;
     strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
     i = mesh->floor_strip_count;
     while (--i != -1) {
@@ -2296,13 +2296,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
     s32 i;
     s32 j;
 
-    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == NULL || prop->model->strips == NULL) {
+    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == 0 || MAP_RECORD_MODEL(prop)->strips == NULL) {
         return 0;
     }
     kind = 0;
     // match: called as if it returned nothing (other files declare it int)
-    ((void (*)(void *))Collision_TransformMeshPoints)(prop->model);
-    mesh = (CollisionMesh *)prop->model->strips;
+    ((void (*)(void *))Collision_TransformMeshPoints)(MAP_RECORD_MODEL(prop));
+    mesh = (CollisionMesh *)MAP_RECORD_MODEL(prop)->strips;
     nearest = 3.4028235e38f;
     strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
     i = mesh->floor_strip_count;
@@ -2433,7 +2433,7 @@ s32 EntityCollision_RayProps(f32 *origin, f32 *direction, void *out_point, f32 l
                 if (record->collision_mesh_index == 0xFFFF) {
                     continue;
                 }
-                if (((MapProp *)record)->model->strips == NULL) {
+                if (MAP_RECORD_MODEL((MapProp *)record)->strips == NULL) {
                     continue;
                 }
                 if (highest[0] < record->lowest[0] || record->highest[0] < lowest[0]) {
@@ -2505,8 +2505,8 @@ s32 EntityCollision_RayHitsPropWall(f32 *origin, f32 *direction, f32 length, f32
                     continue;
                 }
                 // match: called as void, or the model pointer does not take $2
-                ((void (*)(void *))Collision_TransformMeshPoints)(((MapProp *)record)->model);
-                mesh = (CollisionMesh *)((MapProp *)record)->model->strips;
+                ((void (*)(void *))Collision_TransformMeshPoints)(MAP_RECORD_MODEL((MapProp *)record));
+                mesh = (CollisionMesh *)MAP_RECORD_MODEL((MapProp *)record)->strips;
                 strips_left = mesh->wall_strip_count;
                 strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
                 while (--strips_left != -1) {
@@ -2577,7 +2577,7 @@ f32 EntityCollision_DistanceToGround(f32 *point) {
         if (slot->loaded != 0) {
             record = (MapRecord *)slot->records;
             record_count = slot->header->record_count;
-            model = map_slot_record_models[current_map_slot == map ? 0 : 22];
+            model = (ModelInstanceBlock *)map_slot_memory[current_map_slot == map ? 0 : 1].record_models;
             for (i = 0; i < record_count; i++, model++, record++) {
                 if (record->collision_mesh_index == 0xFFFF) {
                     continue;

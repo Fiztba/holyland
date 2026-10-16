@@ -14,10 +14,10 @@ int rand(void);
 s32 EntitySight_PropInWay(Entity *entity);
 s32 EntitySight_ObjectInWay(Entity *entity);
 #include "gfx/gs.h"
+#include <string.h>
 
 extern float camera_state[];
 s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_height, f32 max_distance, f32 heading);
-void *memset(void *, int, u32);
 void Vector_Copy(void *, void *);
 s32 Attack_Run(Unk1B1470Request *, Unk1B1470Extra *);
 /* EntityMath_WrapAngle, which the game inlines here: wraps an angle to +-pi */

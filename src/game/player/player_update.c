@@ -1023,7 +1023,8 @@ void Player_HolsterWeapon(void) {
     }
 }
 
-extern float view_ray_direction[];
+extern EventRunner view_ray_status;
+#define view_ray_direction (view_ray_status.view_direction)
 
 int Player_CanFireAtAim(void) {
     float vec[4];

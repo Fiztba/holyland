@@ -1,6 +1,7 @@
 #include "map_object/map_object.h"
 #include "model/model.h"
 #include "ui/message.h"
+#include "core/game.h"
 
 void Vector_Copy(void *, void *);
 void MapObject_UpdateOpeningDoor(MapObject *);
@@ -15,8 +16,10 @@ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void Model_MultiplyChildMatrices(ModelPart *);
 void sceVu0CopyMatrix(void *, void *);
-extern void *faced_object[];
-extern u32 game_status_flags[];
+extern EventRunner view_ray_status;
+#define faced_object (&view_ray_status.current)
+extern GameStatus game_status;
+#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
 extern u8 item_counts[];
 extern float player_state[];
 

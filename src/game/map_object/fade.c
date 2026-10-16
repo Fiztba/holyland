@@ -1,9 +1,9 @@
 #include "map_object/map_object.h"
 #include "model/model.h"
+#include <string.h>
 
 void Vector_Subtract(void *, void *, void *);
 float sqrtf(float);
-void *memset(void *, int, u32);
 void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void Model_MultiplyChildMatrices(ModelPart *);

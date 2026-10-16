@@ -43,7 +43,9 @@ LAYOUT_OFFSET(SplashSprite, gif_reg, 0x10);
 LAYOUT_OFFSET(SplashSprite, vertex0_x, 0x20);
 LAYOUT_OFFSET(SplashSprite, vertex1_x, 0x30);
 
-extern SplashImage file_load_buffer;
+extern char file_load_buffer[0x100000]; /* core/load_buffer.c */
+/* the splash image file read into file_load_buffer */
+#define SPLASH_IMAGE ((SplashImage *)file_load_buffer)
 
 /* the GS TEX0 register as bit-fields */
 typedef struct {

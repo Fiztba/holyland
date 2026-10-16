@@ -2,13 +2,17 @@
 #define KF_PLAYER_UPDATE_H
 
 #include "common.h"
+#include "model/model.h"
 
-/* Held weapon model vtable layout for Player_UpdateWeaponAim. */
+/* Held weapon model vtable layout for Player_UpdateWeaponAim: a view of ModelInstance, whose pointers move the
+   fields on the PC, so the padding follows that struct */
 struct PlayerWeaponModel {
-    char pad0[0x1B4];
-    void *(*update_aim)(void *);
-    void *(*get_point)(void *, int);
+    char pad0[offsetof(ModelInstance, update_bone_points)];
+    void *(*update_aim)(void *);    /* 0x1B4 ModelInstance.update_bone_points */
+    void *(*get_point)(void *, int); /* 0x1B8 ModelInstance.get_point */
 };
+_Static_assert(offsetof(struct PlayerWeaponModel, update_aim) == offsetof(ModelInstance, update_bone_points), "PlayerWeaponModel is not ModelInstance");
+_Static_assert(offsetof(struct PlayerWeaponModel, get_point) == offsetof(ModelInstance, get_point), "PlayerWeaponModel is not ModelInstance");
 
 void Player_Update(void);
 void Player_DrawScreenTints(void);

@@ -3,6 +3,7 @@
 #define KF_LINK_H
 
 #include "common.h"
+#include "core/load.h"
 
 typedef struct LinkNode {
     s64 unk00;                      /* 0x00 */
@@ -17,6 +18,16 @@ typedef struct LinkNode {
     char pad25[0x03];
     char name[0x28];                /* 0x28 file name built with sprintf */
 } LinkNode;
+
+/* the same nodes are viewed as ChunkUploads (core/load.h): the fields both name must line up on the PC too */
+_Static_assert(offsetof(LinkNode, unk08) == offsetof(ChunkUpload, unk08), "LinkNode is not ChunkUpload");
+_Static_assert(offsetof(LinkNode, pool_node) == offsetof(ChunkUpload, pool_node), "LinkNode is not ChunkUpload");
+_Static_assert(offsetof(LinkNode, unk10) == offsetof(ChunkUpload, pad10), "LinkNode is not ChunkUpload");
+_Static_assert(offsetof(LinkNode, callback) == offsetof(ChunkUpload, callback), "LinkNode is not ChunkUpload");
+_Static_assert(offsetof(LinkNode, unk1C) == offsetof(ChunkUpload, stage), "LinkNode is not ChunkUpload");
+_Static_assert(offsetof(LinkNode, unk20) == offsetof(ChunkUpload, done), "LinkNode is not ChunkUpload");
+_Static_assert(offsetof(LinkNode, name) == offsetof(ChunkUpload, name), "LinkNode is not ChunkUpload");
+_Static_assert(sizeof(LinkNode) == sizeof(ChunkUpload), "LinkNode is not ChunkUpload");
 
 /* the head of a file a link node loads: two parts, placed by their offsets from the start */
 typedef struct {

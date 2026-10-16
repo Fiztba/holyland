@@ -15,8 +15,9 @@
 #include "player/player.h"
 #include "sound/sound.h"
 #include "ui/splash.h"
+#include "core/game.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void Sound_SetBgmVolume(int level);
 void Sound_SetBankVolumes(int level);
 void Player_Kill(void);
@@ -24,7 +25,8 @@ int Game_GetSpawnDeathCount(int map, int entry);
 void Game_MoveRecollectionPage(u32 source_page, u32 dest_page);
 void Game_MarkMessageHeard(int flag);
 
-extern char script_error_flags[];
+extern ClockControl D_00432820;
+#define script_error_flags (D_00432820.script_error_flags)
 extern u8 *script_game_var_blocks[];
 extern ScriptCommandHandler script_general_command_handlers[];
 extern ScriptCommandHandler script_world_command_handlers[];

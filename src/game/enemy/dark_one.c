@@ -5,6 +5,7 @@
    each weapon hit counts dark_one_hits_left down and throws the player back, magic does nothing, and the hit
    that takes the count to 0 kills him; Prima's official guide (2004) describes the same fight. */
 #include "entity/entity.h"
+#include "player/player.h"
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
@@ -26,7 +27,8 @@ void EntityAi_SensePlayer(void *, int);
 void EntityAi_StepState(void *);
 void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkCombat(Entity *, s32);
-extern u8 player_weapon[];
+extern PlayerState player_state;
+#define player_weapon (&player_state.weapon)
 int Motion_Start(void *, int, int, u32, int);
 void EntityEvent_OnDeath(Entity *);
 

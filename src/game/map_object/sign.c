@@ -1,9 +1,12 @@
 #include "model/model.h"
 #include "ui/splash.h"
 #include "ui/message.h"
+#include "core/game.h"
 
-extern u32 game_status_flags[];
-extern void *faced_object[];
+extern GameStatus game_status;
+#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
+extern EventRunner view_ray_status;
+#define faced_object (&view_ray_status.current)
 
 /* Step 0 of the things that are only examined (kind 0xB): takes the message (the definition's name when the
    source gives none) and, from the source, whether a sign picture goes with it; step 1. */

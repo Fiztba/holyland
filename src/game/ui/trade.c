@@ -88,7 +88,9 @@ extern s32 modal_even_field;       /* what Menu_EndFrame returned (the field); n
 extern s32 trade_pad_change_frames; /* counts 20 frames without buttons after the pad type changed */
 extern u16 menu_buttons;
 extern s32 trade_run_step;          /* which of trade_run_steps runs */
-extern u64 menu_first_draw_env[47];             /* the frame register of the first buffer ([0]) and of the second ([46]) */
+extern GsDoubleBufferDc menu_frame_buffers;
+#define menu_first_draw_env (menu_frame_buffers.draw01) /* inside menu_frame_buffers: [0] is the first buffer's frame register */
+#define menu_second_draw_env (menu_frame_buffers.draw11) /* [0] is the second buffer's frame register */
 extern int context1_buffer_half;
 extern int trade_step;              /* which of trade_steps runs */
 extern HandlerContext trade_context; /* what the trade steps and handlers get */
@@ -136,7 +138,7 @@ void MenuSprite_Draw(sptr, int, int, int);
 #define SELECT_PART(part) ((void (*)(s32))Menu_SetBlendMode)(part)
 extern LevelRecordDef worn_defs[];
 extern PlayerItemDef weapon_defs[];
-extern u8 player_weapon[];
+#define player_weapon (&player_state.weapon)
 /* the three kind words table 4's stock list shows: "Bones", "Scales", "Claws" in half-width glyph codes
    (0x800 | character - 0x20; MenuText_DrawWrapped draws code 0x800 + n as half-width cell n) */
 extern TradeValue bones_label[4];
@@ -217,11 +219,11 @@ extern f32 trade_owned_list_model_angle;
 extern f32 trade_give_amount_model_position[4];
 extern f32 trade_give_amount_model_angle;
 void Menu_ClearEquipSlot(s8);
-extern char model_name_shown[];           /* the names of the five link nodes at model_load_shown */
-extern char model_name_up[];
-extern char model_name_down[];
-extern char model_name_left[];
-extern char model_name_right[];
+#define model_name_shown (model_load_shown.name) /* the names of the five link nodes at model_load_shown */
+#define model_name_up (model_load_up.name)
+#define model_name_down (model_load_down.name)
+#define model_name_left (model_load_left.name)
+#define model_name_right (model_load_right.name)
 #define PAGE_ROWS 7
 /* Scrolls the window and the cursor up one row; FALSE once the window is at the top of the list. */
 static inline s32 func_001ED738_ScrollUp(void) {
@@ -282,7 +284,8 @@ extern s32 smith_step;              /* which of smith_steps runs */
 extern HandlerContext smith_context; /* what the smith steps and handlers get */
 extern u32 pretune_part_count;              /* how many parts the screen has */
 extern u32 tune_mess_part_count;
-extern s32 detail_panel_open; // match: this file reads and writes it as a word
+extern u8 detail_panel_open; /* PORT: retail reads and writes it as a word here, which takes in equipped_list_open
+                               (0x446AD5) and two pad bytes; on the PC the byte alone is read and written */
 extern SpritePacket *pretune_parts;
 extern SpritePacket *tune_mess_parts;
 extern s8 smith_choices_active;     /* nonzero once the cursor is on the three lines */
@@ -353,8 +356,8 @@ static inline s32 func_001F67C8_ScrollDown(void) {
 extern s32 save_screen_run_step;    /* which of save_screen_run_steps runs */
 extern int save_screen_step;        /* which of save_screen_steps runs */
 extern int save_screen_pad_change_frames; /* counts 20 frames without buttons after the pad type changed */
-extern u8 menu_draw_color_alpha;    /* the alpha byte of menu_draw_color */
-extern u8 model_draw_color_alpha;   /* the alpha byte of model_draw_color */
+#define menu_draw_color_alpha (menu_draw_color.alpha) /* the alpha byte of menu_draw_color */
+#define model_draw_color_alpha (model_draw_color.alpha) /* the alpha byte of model_draw_color */
 extern HandlerContext save_screen_context; /* what the save screen steps get */
 extern int (*save_screen_handler)(); /* the screen SaveScreen_RunHandler runs */
 extern float pulse_sprite_alpha;
@@ -689,7 +692,7 @@ static s32 Trade_CopyFrameToTexture(void) {
     packet[69] = 0;
     packet[70] = 0x5;
     packet[71] = 0;
-    *(u64 *)&packet[72] = menu_first_draw_env[46];
+    *(u64 *)&packet[72] = menu_second_draw_env[0];
     packet[74] = 0x4C;
     packet[75] = 0;
     packet[76] = 0;
@@ -3021,7 +3024,7 @@ static s32 Smith_CopyFrameToTexture(void) {
     packet[69] = 0;
     packet[70] = 0x5;
     packet[71] = 0;
-    *(u64 *)&packet[72] = menu_first_draw_env[46];
+    *(u64 *)&packet[72] = menu_second_draw_env[0];
     packet[74] = 0x4C;
     packet[75] = 0;
     packet[76] = 0;
@@ -5397,7 +5400,7 @@ static s32 SaveScreen_DrawBackground(void) {
     packet->first_frame_z_corner1 = 0;
     packet->first_frame_xy_corner1_register = 5;
     packet->first_frame_xy_corner1_pad = 0;
-    packet->second_frame = menu_first_draw_env[0x2E];
+    packet->second_frame = menu_second_draw_env[0];
     packet->second_frame_register = 0x4C;
     packet->second_frame_pad = 0;
     packet->second_frame_st_corner0_s = 0;

@@ -54,7 +54,8 @@ extern f32 world_screen_matrix[16];      /* world to screen */
 extern int cut_triangle_count;  /* triangles cut up this way */
 
 extern int screen_uv_frame;         /* 0..59, stepped by ModelScreen_SetUvsFromScreen */
-extern int screen_uv_frame_copy;    /* the same value; nothing reads it */
+extern int D_00447050[2];
+#define screen_uv_frame_copy (D_00447050[1]) /* the same value; nothing reads it */
 
 /* Looks for the triangles of a model that the GS could not draw as they are (a corner out of its
    range) but that are partly on the screen, and queues each cut up into smaller ones. */

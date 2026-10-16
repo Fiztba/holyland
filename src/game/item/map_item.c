@@ -7,6 +7,7 @@
 #include "model/linked_point.h"
 #include "ui/message.h"
 #include "map_object/map_object.h"
+#include <string.h>
 
 void MapItem_ClearMap(int);
 s32 MapItem_Drop(s32, s32, s32, f32 *, f32, f32 *, f32 *, f32 *, u32);
@@ -62,7 +63,6 @@ void Vector_Subtract(void *, void *, void *);
 int Angle_EaseToward(float, float *, int);
 int Player_CannotCarryItem(int);
 void Player_AddItem(int);
-void *memset(void *, int, u32);
 int rand(void);
 
 extern GameDefinition item_name_defs[380];
@@ -82,7 +82,7 @@ extern int current_map_slot;
 extern u8 map_item_pickup_counts[0x80][0x40];
 extern const Vector4Arg enemy_drop_scale;
 extern MapLoadState map_load_state;
-extern int suspended_updates[3];
+#define suspended_updates (&game_status.update_hold_flags)
 extern MapDrawState map_draw_state;
 extern f32 identity_matrix[16];
 extern GameStatus game_status;
@@ -91,8 +91,9 @@ extern EventRunner view_ray_status;
 extern f32 pickup_view_pitch;
 extern int pickup_move_frames;
 extern int pickup_frames_left;
-extern float player_rotation[];
-extern u16 pad_pressed[];
+#define player_rotation ((f32 *)&player_state.rotation)
+extern PadState pad_state;
+#define pad_pressed (&pad_state.pressed)
 extern u8 item_counts[];
 extern u8 trade_stock_1[];
 extern u8 trade_stock_2[];

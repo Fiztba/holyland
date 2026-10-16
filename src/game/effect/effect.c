@@ -195,7 +195,7 @@ void Effect_DebugFreeAllButPlayer(void) {
 
     for (i = 0; i < EFFECT_SLOT_COUNT; i++, slot++) {
         if (slot->flags & EFFECT_SLOT_LIVE) {
-            printf("SFXGEN[%d] OWNER[0x%x]\n", i, slot->owner_entity);
+            printf("SFXGEN[%d] OWNER[0x%x]\n", i, (u32)(uptr)slot->owner_entity);
             if (!(slot->flags & EFFECT_SLOT_LIVE)) {
                 continue;
             }
@@ -211,7 +211,7 @@ void Effect_DebugFreeAllButPlayer(void) {
 
     for (i = 0; i < EFFECT_COUNT; i++, effect = (EffectActor *)((char *)effect + sizeof(EffectActor))) {
         if (effect->flags & EFFECT_FLAG_LIVE) {
-            printf("SFX[%d] OWNER[0x%x]\n", i, effect->owner_entity);
+            printf("SFX[%d] OWNER[0x%x]\n", i, (u32)(uptr)effect->owner_entity);
             if (!(effect->flags & EFFECT_FLAG_LIVE)) {
                 continue;
             }

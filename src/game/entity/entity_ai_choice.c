@@ -11,7 +11,7 @@ float cosf(float);
 double acos(double);
 void Vector_Normalize(void *dst, void *src);
 void Vector_Cross(void *, void *, void *);
-extern u8 player_weapon_step[];
+#define player_weapon_step (&player_state.item_action_step)
 extern EntityModel *held_item_model_ptr;
 int rand(void);
 extern PlayerState player_state;

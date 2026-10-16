@@ -24,6 +24,7 @@
 #include <string.h>
 #include <libgraph.h>
 #include <libvu0.h>
+#include "gfx/gs.h"
 
 void Game_ResetProgress(void);
 void Player_ResetForNewGame(void);
@@ -154,8 +155,10 @@ extern MapSlot map_slots[];
 extern MapLoadState map_load_state;
 extern u16 pad_state[];
 extern f32 world_screen_matrix[16];
-extern s64 game_dbuff_clear_color[];
-extern s64 game_dbuff_context2_clear_color[];
+extern GsDoubleBuffer game_dbuff;
+#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
+extern GsDoubleBuffer game_dbuff_context2;
+#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
 extern u32 frame_counter;
 extern u8 map_script_flags[0x2000];
 #define guardians_room_water_purified (map_script_flags + 0x8C6) /* map 035 [6] */

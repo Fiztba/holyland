@@ -325,12 +325,10 @@ void ItemEffect_StepFadeOut(void) {
     int brightness;
 
     if (MODEL_CHANNEL(item_effect_model)->param <= 0 && item_effect_brightness <= 0) {
-        int *status_words = (int *)&game_status; // match: field stores get scheduled in the other order
-
         item_effect_active = 0;
         item_effect_step = 0;
-        status_words[0x30 / 4] = 0; /* unk30 */
-        status_words[0x40 / 4] = 0; /* unk40 */
+        game_status.update_hold_flags = 0;
+        game_status.effect_owner = NULL;
         item_effect_model = NULL;
         item_effect_load_pad = 0;
         item_effect_def = NULL;

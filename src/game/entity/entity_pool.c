@@ -5,10 +5,9 @@
 #include "model/model.h"
 #include "sound/sound.h"
 #include "effect/effect.h"
+#include <stdio.h>
+#include <string.h>
 
-void *memset(void *, int, u32);
-void *memcpy(void *, const void *, u32);
-int sprintf(char *, char *, ...);
 
 #define ENTITY_POOL_BLOCK_SIZE  0x80000
 

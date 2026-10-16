@@ -207,7 +207,7 @@ MenuItem *item_list_top[4] __attribute__((aligned(16)));
 /* 0x00426130 */
 MenuItem *item_list_page_mark[4] __attribute__((aligned(16)));
 
-/* 0x00426140. The decomp's labels menu_first_draw_env, menu_first_draw_env2, menu_second_draw_env, menu_second_draw_env2 lie inside it (menu_frame_buffers.pad000[96], menu_frame_buffers.pad000[224], menu_frame_buffers.pad188[72], menu_frame_buffers.pad188[200]): the code that names them must use these
+/* 0x00426140. The decomp's labels menu_first_draw_env, menu_first_draw_env2, menu_second_draw_env, menu_second_draw_env2 lie inside it (menu_frame_buffers.draw01, menu_frame_buffers.draw02, menu_frame_buffers.draw11, menu_frame_buffers.draw12): the code that names them must use these
    fields, so they are not defined on their own */
 GsDoubleBufferDc menu_frame_buffers __attribute__((aligned(16)));
 

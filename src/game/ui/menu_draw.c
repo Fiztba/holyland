@@ -87,13 +87,13 @@ extern LevelRecord worn_item_level_records[];    /* the worn items' records */
 extern LevelRecordDef worn_defs[];
 extern FxTableEntry fx_table[];   /* the magic table */
 extern u8 game_options[];             /* the options block, a byte per setting */
-extern u8 music_volume[];
-extern u8 sfx_volume[];
-extern u8 D_00349683[];
-extern s8 head_bob_option[];
-extern s8 rumble_option[];
-extern s8 menu_backdrop_option[];
-extern s8 hud_option[];
+#define music_volume (game_options + 1)
+#define sfx_volume (game_options + 2)
+#define D_00349683 (game_options + 3)
+#define head_bob_option ((s8 *)game_options + 5)
+#define rumble_option ((s8 *)game_options + 6)
+#define menu_backdrop_option ((s8 *)game_options + 8)
+#define hud_option ((s8 *)game_options + 9)
 extern f32 pulse_sprite_alpha;              /* the alpha of the pulsing sprite, 80 to 128 */
 extern s8 pulse_sprite_falling;               /* TRUE while that alpha falls */
 
@@ -3303,9 +3303,11 @@ static void MenuTexture_UploadInStrips(TextureHeader *header) {
     int clut_width;
     int clut_height;
 
-    // match: menu_font_page_tex0 is a table of pointers; its address is never NULL and the store overwrites two of them
+    /* menu_font_page_tex0 is a table of pointers; its address is never NULL, and retail stores the 64-bit TEX0 over
+       both 32-bit entries: the low word becomes the first, the high word the second. Nothing calls this function. */
     if (menu_font_page_tex0 != NULL) {
-        *(u64 *)menu_font_page_tex0 = header->tex0;
+        menu_font_page_tex0[0] = (u64 *)(uptr)(u32)header->tex0;
+        menu_font_page_tex0[1] = (u64 *)(uptr)(u32)(header->tex0 >> 32);
     }
     image = (char *)header + sizeof(TextureHeader);
     strip_rows = 131068.0f / (((f32)(u32)header->data_offset - 16.0f) / width);
