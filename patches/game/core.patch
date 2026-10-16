@@ -1123,7 +1123,7 @@ index 87d9fcc2e8e56dd151bd6ddcf536c673f930537d..1dc5fded58df11232978094805f663b1
      trade_menu_arena = packet_area;
      effect_area = next_area;
 diff --git a/src/game/core/play_time.c b/src/game/core/play_time.c
-index 608506cc622493703936bd88ef11da2034bd713b..d2fa6ffd3cd51c9c049b9ef7a512267ee785bd39 100644
+index 608506cc622493703936bd88ef11da2034bd713b..a609b448fd8abef996a5fc7af38eea53dac673fd 100644
 --- a/src/game/core/play_time.c
 +++ b/src/game/core/play_time.c
 @@ -1,4 +1,5 @@
@@ -1132,8 +1132,12 @@ index 608506cc622493703936bd88ef11da2034bd713b..d2fa6ffd3cd51c9c049b9ef7a512267e
  
  #define BCD2DEC(x) (((x) & 0xF) + ((x) >> 4) * 10)
  
-@@ -12,7 +13,6 @@ int PlayTime_ToMinutes(ClockTime);
- int mktime(void *);
+@@ -9,10 +10,9 @@ int PlayTime_ClockSecondsBetween(ClockTime, ClockTime);
+ int PlayTime_ClockMinutesBetween(ClockTime, ClockTime);
+ int PlayTime_ToSeconds(ClockTime);
+ int PlayTime_ToMinutes(ClockTime);
+-int mktime(void *);
++#include "port/libc_ps2.h" /* PC: newlib's mktime on the game's struct tm */
  int PlayTime_ClockSecondsSinceStart(void);
  int PlayTime_DayOfYear(ClockTime);
 -int sceCdReadClock(ClockTime *);
