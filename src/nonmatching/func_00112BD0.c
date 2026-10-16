@@ -150,7 +150,7 @@ extern int current_map_slot;
 
 #define DRAW_STATE (*(MapDrawStateBlend *)&map_draw_state)
 
-void *memset(void *, int, u32);
+#include <string.h>
 float cosf(float);
 float sinf(float);
 void MapScroll_PrepareCopy(void);
