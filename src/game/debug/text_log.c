@@ -1064,11 +1064,13 @@ void TextLog_LoadFont(int font_base, int palette_base) {
     sceGsSetDefLoadImage(&image, text_log.font_base, text_log.font_buffer_width, 0x14, 0, 0, 0x100, 0x80);
     FlushCache(0);
     sceGsExecLoadImage(&image, text_log_font);
+    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT APATH (bits 10-11) to clear");
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
     }
     sceGsSetDefLoadImage(&image, text_log.palette_base, 1, 0, 0, 0, 8, 2);
     FlushCache(0);
     sceGsExecLoadImage(&image, text_log_font_palette);
+    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT APATH (bits 10-11) to clear");
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
     }
     packet = UNCACHED(font_flush_packet);
@@ -1080,6 +1082,7 @@ void TextLog_LoadFont(int font_base, int palette_base) {
     *packet++ = 0;
     *packet++ = 3;
     *packet = 0;
+    PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = 2;
@@ -1173,6 +1176,7 @@ void TextLog_SendGsRegs(void) {
     packet += 2;
     *(u64 *)packet = 1;
     ((u64 *)packet)[1] = 0x1C;
+    PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
     while (*D2_CHCR & 0x100) {
     }
     *D2_QWC = 6;
@@ -1245,6 +1249,7 @@ void TextLog_Flush(void) {
         packet->tag[2] = 0x413;
         packet->tag[3] = 0;
         FlushCache(0);
+        PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
         while (*D2_CHCR & 0x100) {
         }
         *D2_QWC = (s32)((u8 *)text_log.packet - (u8 *)&text_log_packet) >> 4;
