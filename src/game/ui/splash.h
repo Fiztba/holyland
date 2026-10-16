@@ -6,14 +6,18 @@
 #include "gfx/texture.h"
 
 /* the image file as loaded, at file_load_buffer */
+/* overlay: the header of a splash image file (msg/mNNNN.tm2) */
 typedef struct {
     u64 unk00;                      /* 0x00 */
     u64 unk08;                      /* 0x08 */
     u64 tex0;                       /* 0x10 GS TEX0 of the image */
     u64 unk18;                      /* 0x18 */
 } SplashImage;
+LAYOUT_SIZE(SplashImage, 0x20);
+LAYOUT_OFFSET(SplashImage, tex0, 0x10);
 
 /* the 0x40-byte GS sprite packet for the splash image */
+/* overlay: a ScreenSprite (gfx/packet.h), which GsDraw_QueueTexturedSprite reads */
 typedef struct {
     u64 tex0;                       /* 0x00 GS TEX0 */
     u64 unk08;                      /* 0x08 */
@@ -34,6 +38,10 @@ typedef struct {
     int vertex1_s;                  /* 0x38 texture width << 4 */
     int vertex1_t;                  /* 0x3C texture height << 4 */
 } SplashSprite;
+LAYOUT_SIZE(SplashSprite, 0x40);
+LAYOUT_OFFSET(SplashSprite, gif_reg, 0x10);
+LAYOUT_OFFSET(SplashSprite, vertex0_x, 0x20);
+LAYOUT_OFFSET(SplashSprite, vertex1_x, 0x30);
 
 extern SplashImage file_load_buffer;
 
@@ -54,6 +62,7 @@ typedef struct {
 } BootTex0;
 
 /* SplashImage (a TextureHeader) with its TEX0 as bit-fields */
+/* overlay: the header of a splash image file */
 typedef struct {
     int data_offset;                /* 0x00 */
     int image_size;                 /* 0x04 bytes of pixels; the palette follows them */
@@ -61,8 +70,11 @@ typedef struct {
     BootTex0 tex0;                  /* 0x10 */
     u64 unk18;                      /* 0x18 */
 } SplashImageBits;
+LAYOUT_SIZE(SplashImageBits, 0x20);
+LAYOUT_OFFSET(SplashImageBits, tex0, 0x10);
 
 /* the 0x70 bytes Splash_BuildImagePacket puts in front of image data it sends to GS memory: five registers, then the tag of the data */
+/* overlay: a GIF packet */
 typedef struct {
     u64 tag[2];                     /* 0x00 GIF tag: five address+data pairs */
     u32 texflush[2];                /* 0x10 */
@@ -78,6 +90,9 @@ typedef struct {
     u64 image_tag;                  /* 0x60 GIF tag of the data that follows, in quadwords */
     u32 image_tag_high[2];          /* 0x68 */
 } SplashLoadPacket;
+LAYOUT_SIZE(SplashLoadPacket, 0x70);
+LAYOUT_OFFSET(SplashLoadPacket, bitbltbuf, 0x20);
+LAYOUT_OFFSET(SplashLoadPacket, image_tag, 0x60);
 
 /* the effect shown when item `kind` is used (files item_ms/...), item_effect_defs_by_kind[kind] (kinds 0x46 to 0x52 are used) */
 typedef struct {

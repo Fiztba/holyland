@@ -47,6 +47,7 @@ typedef struct {
 } BootTexture;
 
 /* the GS packet Title_DrawSprite writes to the start of sprite_packet */
+/* overlay: a GIF packet */
 typedef struct {
     u32 tag[4];                     /* 0x00 GIF tag: two address+data pairs */
     u64 alpha;                      /* 0x10 from sprite_blend_alpha by blend mode */
@@ -68,6 +69,9 @@ typedef struct {
     u32 second_z;                   /* 0x74 */
     u32 nop[2];                     /* 0x78 */
 } BootSpritePacket;
+LAYOUT_SIZE(BootSpritePacket, 0x80);
+LAYOUT_OFFSET(BootSpritePacket, tex0, 0x48);
+LAYOUT_OFFSET(BootSpritePacket, second_xy, 0x70);
 
 int Title_Run(int screen);
 int Title_Init(void);

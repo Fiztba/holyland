@@ -26,7 +26,7 @@ static ScreenSprite pause_sprite;               /* 0x5CE098 the pause label */
 void Hud_InitSprite(ScreenSprite *sprite, s64 prim, u64 tex0, u64 tex1, u8 red, u8 green, u8 blue, u8 alpha,
                    s32 pos_x, s32 pos_y, u32 depth, s32 width, s32 height, s32 first_s, s32 first_t, s32 second_s,
                    s32 second_t) {
-    sprite->prim = prim;
+    sprite->prim = (s32)prim;
     sprite->tex0 = tex0;
     sprite->tex1 = tex1;
     sprite->rgba[0] = red;
@@ -50,8 +50,8 @@ void Hud_InitSprite(ScreenSprite *sprite, s64 prim, u64 tex0, u64 tex1, u8 red, 
 }
 
 static inline char *align16(char *address) {
-    if ((int)address & 0xF) {
-        address -= ((int)address & 0xF) - 0x10;
+    if ((sptr)address & 0xF) {
+        address -= ((sptr)address & 0xF) - 0x10;
     }
     return address;
 }
@@ -99,6 +99,7 @@ void Hud_Load(void) {
 
 /* Per-frame HUD update; empty in retail. */
 int Hud_Update(void) { // match: callers read $2 after it, so it is declared to return a value
+    return 0; /* the PS2 returned whatever was in $2; no caller uses it */
 }
 
 /* Draws the HUD: the frame, the two bars that fill from the left, the one that fills from the bottom, and the

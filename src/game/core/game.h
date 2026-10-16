@@ -308,41 +308,46 @@ typedef struct {
     u64 unk08;                      /* 0x08 */
 } PoolSlotRegisters;
 
-/* a PoolSlot with unk58 and unk60 as the one member they are copied as */
-typedef struct {
-    char pad00[0x58];
-    PoolSlotRegisters registers;    /* 0x58 */
-    char pad68[0x08];
-} PoolSlotRegistersView;
-
-#define POOL_SLOT_REGISTERS(slot) (((PoolSlotRegistersView *)(slot))->registers)
-
 /* one 0x10-byte record of a RelocEntry, with two file offsets that PoolNodeFile_Relocate turns into pointers */
+/* overlay: a layer record of a node file */
 typedef struct {
     char pad00[0x08];
-    void *unk08;                    /* 0x08 */
-    void *unk0C;                    /* 0x0C */
+    EEWord unk08;                   /* 0x08 (void *) */
+    EEWord unk0C;                   /* 0x0C (void *) */
 } RelocLayer;
+LAYOUT_SIZE(RelocLayer, 0x10);
+LAYOUT_OFFSET(RelocLayer, unk08, 0x08);
+LAYOUT_OFFSET(RelocLayer, unk0C, 0x0C);
 
 /* one 0x40-byte entry of a RelocFile */
+/* overlay: an entry of a node file */
 typedef struct {
     u16 key_count;                  /* 0x00 */
     u16 layer_count;                /* 0x02 */
     u16 slot;                       /* 0x04 the PoolSlot the node poses (PoolNode_Pose) */
     char pad06[0x2A];
-    void *unk30;                    /* 0x30 a file offset until PoolNodeFile_Relocate has run, like the next three */
-    RelocLayer *layers;             /* 0x34 */
-    void *unk38;                    /* 0x38 */
-    void *unk3C;                    /* 0x3C */
+    EEWord unk30;                   /* 0x30 (PoolNodeKey *) a file offset until PoolNodeFile_Relocate has run, like the next three */
+    EEWord layers;                  /* 0x34 (RelocLayer *) */
+    EEWord unk38;                   /* 0x38 (RelocEntry *) the first child */
+    EEWord unk3C;                   /* 0x3C (RelocEntry *) the next sibling */
 } RelocEntry;
+LAYOUT_SIZE(RelocEntry, 0x40);
+LAYOUT_OFFSET(RelocEntry, slot, 0x04);
+LAYOUT_OFFSET(RelocEntry, unk30, 0x30);
+LAYOUT_OFFSET(RelocEntry, layers, 0x34);
+LAYOUT_OFFSET(RelocEntry, unk38, 0x38);
+LAYOUT_OFFSET(RelocEntry, unk3C, 0x3C);
 
 /* a file whose offsets PoolNodeFile_Relocate turns into pointers: a 0x10-byte header, then the entries */
+/* overlay: a node file */
 typedef struct {
     char pad00[0x08];
     u32 entry_count;                /* 0x08 */
     char pad0C[0x04];
     RelocEntry entries[1];          /* 0x10 */
 } RelocFile;
+LAYOUT_OFFSET(RelocFile, entry_count, 0x08);
+LAYOUT_OFFSET(RelocFile, entries, 0x10);
 
 /* lists of pool slot numbers that PoolSlot_SetGroupParts and PoolSlot_LoadGroup copy whole from read-only data, and
    their tables of counts */
@@ -439,18 +444,7 @@ typedef struct {
     u32 normal_index;               /* 0x1C4 */
 } PoolDrawScratch;
 
-#define POOL_DRAW_SCRATCH ((PoolDrawScratch *)0x70000000)
-
-/* PoolDrawScratch.cursor as a union (PoolPart_DrawTinted advances it through this view once per point) */
-typedef struct {
-    char pad000[0x18C];
-    union {
-        u32 *words;                 /* 0x18C */
-        u8 *bytes;
-    } cursor;
-} PoolDrawScratchCursorView;
-
-#define POOL_DRAW_SCRATCH_CURSOR(scratch) (((PoolDrawScratchCursorView *)(scratch))->cursor)
+#define POOL_DRAW_SCRATCH SPR(PoolDrawScratch *, 0)
 
 /* the two places in GS memory that MenuModel_DrawTinted and MenuModel_Draw pick a palette's from (their local clut_pages) */
 typedef struct {
@@ -472,21 +466,27 @@ typedef struct {
 } PoolNodeKey;
 
 /* one 0x50-byte part of a PoolPartFile */
+/* overlay: a part of a part file (or of PoolPartFile_Expand's copy of one) */
 typedef struct PoolPart {
     f32 position[4];                /* 0x00 */
     f32 rotation[4];                /* 0x10 angles about x, y and z */
     f32 scale[4];                   /* 0x20 */
     u16 strip_count;                /* 0x30 */
     char pad32[0x02];
-    PoolPartMaterial *material;     /* 0x34 */
+    EEWord material;                /* 0x34 (PoolPartMaterial *) */
     u16 point_count;                /* 0x38 */
     char pad3A[0x02];
-    f32 (*points)[4];               /* 0x3C */
+    EEWord points;                  /* 0x3C (f32 (*)[4]) */
     u16 normal_count;               /* 0x40 */
     char pad42[0x02];
-    f32 (*normals)[4];              /* 0x44 */
+    EEWord normals;                 /* 0x44 (f32 (*)[4]) */
     char pad48[0x08];
 } PoolPart;
+LAYOUT_SIZE(PoolPart, 0x50);
+LAYOUT_OFFSET(PoolPart, strip_count, 0x30);
+LAYOUT_OFFSET(PoolPart, material, 0x34);
+LAYOUT_OFFSET(PoolPart, points, 0x3C);
+LAYOUT_OFFSET(PoolPart, normals, 0x44);
 
 /* one 0x10-byte record of a PoolPartFile; the records end records_end_offset bytes into the file, the
    last one belonging to the last part */
@@ -498,21 +498,26 @@ typedef struct PoolPartRecord {
 } PoolPartRecord;
 
 /* a part file as loaded: a 0x10-byte header, then the parts */
+/* overlay: a part file */
 typedef struct {
-    PoolPartRecord *records_end;    /* 0x00 the end of its PoolPartRecord array, as an offset from the file's start */
+    s32 records_end;                /* 0x00 the end of its PoolPartRecord array, as an offset from the file's start */
     char pad04[0x04];
     u32 part_count;                 /* 0x08 */
     char pad0C[0x04];
     PoolPart parts[1];              /* 0x10 */
 } PoolPartFile;
+LAYOUT_OFFSET(PoolPartFile, part_count, 0x08);
+LAYOUT_OFFSET(PoolPartFile, parts, 0x10);
 
 /* the 0x10 bytes in front of a PoolPartFile's parts, copied as one (PoolPartFile_Expand) */
+/* overlay: the header of a part file */
 typedef struct {
-    PoolPartRecord *records_end;    /* 0x00 */
+    s32 records_end;                /* 0x00 */
     char pad04[0x04];
     u32 part_count;                 /* 0x08 */
     char pad0C[0x04];
 } PoolPartFileHeader;
+LAYOUT_SIZE(PoolPartFileHeader, 0x10);
 
 /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
 typedef union {

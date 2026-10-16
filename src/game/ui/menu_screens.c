@@ -169,10 +169,10 @@ extern LinkNode amulet_model_load;
 extern LinkNode key_item_model_loads[12];
 extern sptr packet_area;
 extern ChunkUpload npc_package_load;
-int MenuArena_Init(int); // match: this file only matches with an int result
+int MenuArena_Init(sptr); // match: this file only matches with an int result
 void *MenuArena_Alloc(s32, s32);
 void *MenuHeap_Alloc(int);
-int MenuFile_Load(char *, void *);
+sptr MenuFile_Load(char *, void *);
 extern u32 main_part_count;
 extern u32 item_part_count;
 extern u32 magic_part_count;
@@ -286,7 +286,7 @@ extern int pad_mode_before;
 extern MenuScreenState card_screen_state;
 extern ColorBytes menu_draw_color;
 extern f32 menu_view_screen_matrix[16];
-void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slot_arg);
+void MenuModel_DrawTinted(ChunkUpload *upload, f32 *draw_param, RenderSlotArg slot_arg);
 // match: called with the node, a matrix and the colour, not as the definition has it (the colour is loaded unaligned)
 #define DRAW_NODE_MODEL(node, matrix, colour) ((void (*)(LinkNode *, f32 *, ColorBytes))MenuModel_DrawTinted)(node, matrix, colour)
 void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
@@ -310,7 +310,7 @@ int sceGsSwapDBuffDc(GsDoubleBufferDc *, int);
 
 extern ColorBytes backdrop_shade_color[]; // match: the initialiser of the local below ({ 0x10, 0x10, 0x10 }); an array so it is not reached through $gp
 int Menu_SetBlendMode(u8);
-void MenuSprite_DrawPlain(int owner, int index, int param);
+void MenuSprite_DrawPlain(sptr owner, int index, int param);
 extern s32 menu_step;
 extern char D_005CE0E0[];
 extern u8 brightness_option[];
@@ -323,7 +323,7 @@ extern s8 system_screen_state;
 extern ColorBytes panel_text_color;
 extern ColorBytes model_draw_color;
 extern s32 menu_file_block_count;
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern u8 brightness_before;
 void func_001095D0(void);
 void func_001095D8(void);
@@ -345,7 +345,7 @@ extern s8 recollection_cursor;
 s32 Sound_PlayMenu(s32);
 int Menu_OwnsAnyItem(void);
 int Menu_KnowsCastableSpell(void);
-void MenuSprite_Draw(int, int, int, int);
+void MenuSprite_Draw(sptr, int, int, int);
 extern u8 D_00446B39;
 extern GameStatus game_status;
 extern f32 use_item_model_position[4];

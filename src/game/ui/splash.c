@@ -239,14 +239,14 @@ void Splash_Draw(void) {
         GsDraw_FillScreen(0, 0, 0, splash_brightness / 2, 0x44);
         Packet_BeginGsRegisters();
         Packet_AddGsRegister(GS_REG_TEST_1, 0x3000D);
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
         Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
         Packet_AddGsRegister(8, 5);
         Packet_EndGsRegisters();
 
         packet = cursor = Packet_Alloc(2);
         *cursor++ = *splash_image_packet | 0x30000000;
-        *cursor++ = (u32)(splash_image_packet + 4);
+        *cursor++ = EE_WORD(splash_image_packet + 4);
         *cursor++ = 0;
         *cursor++ = 0;
         Packet_AppendToChain(packet, cursor);
@@ -255,7 +255,7 @@ void Splash_Draw(void) {
         splash_sprite.alpha = splash_brightness;
         GsDraw_QueueTexturedSprite(&splash_sprite);
         Packet_BeginGsRegisters();
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
         Packet_AddGsRegister(8, 0);
         Packet_EndGsRegisters();
     }
@@ -272,10 +272,10 @@ void Splash_BuildSprite(void) {
 
     memset(&splash_sprite, 0, sizeof(splash_sprite));
     tex0 = file_load_buffer.tex0;
-    tex0 &= 0xFFFFFFFFFFFFC000UL;
+    tex0 &= 0xFFFFFFFFFFFFC000ULL;
     tex0 |= 0x2E40;
-    tex0 &= 0xFFF8001FFFFFFFFFUL;
-    tex0 |= 0xF500UL << 35;
+    tex0 &= 0xFFF8001FFFFFFFFFULL;
+    tex0 |= 0xF500ULL << 35;
     splash_sprite.tex0 = tex0;
     splash_sprite.unk08 = file_load_buffer.unk18;
     splash_sprite.gif_reg = 0x156;
@@ -295,8 +295,8 @@ void Splash_BuildSprite(void) {
 }
 
 static inline char *align16(char *address) {
-    if ((int)address & 0xF) {
-        address -= ((int)address & 0xF) - 0x10;
+    if ((sptr)address & 0xF) {
+        address -= ((sptr)address & 0xF) - 0x10;
     }
     return address;
 }
@@ -363,7 +363,7 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
     *cursor++ = 0;
     *cursor++ = 0;
     *cursor++ = total | 0x51000000;
-    *((u64 *)cursor)++ = 0x1000000000000005;
+    *(u64 *)cursor = 0x1000000000000005; cursor += 2;
     *cursor++ = 0xE;
     *cursor++ = 0;
     *cursor++ = 0xFFFFFFFF;
@@ -371,22 +371,22 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
     *cursor++ = 0x3F;
     *cursor++ = 0;
     format = image->tex0.psm;
-    *((u64 *)cursor)++ = ((u64)tbp << 32) | ((u64)image->tex0.tbw << 48) | (format << 56);
+    *(u64 *)cursor = ((u64)tbp << 32) | ((u64)image->tex0.tbw << 48) | (format << 56); cursor += 2;
     *cursor++ = 0x50;
     *cursor++ = 0;
-    *((u64 *)cursor)++ = 0;
+    *(u64 *)cursor = 0; cursor += 2;
     *cursor++ = 0x51;
     *cursor++ = 0;
-    *((u64 *)cursor)++ = width | ((u64)height << 32);
+    *(u64 *)cursor = width | ((u64)height << 32); cursor += 2;
     *cursor++ = 0x52;
     *cursor++ = 0;
-    *((u64 *)cursor)++ = 0;
+    *(u64 *)cursor = 0; cursor += 2;
     *cursor++ = 0x53;
     *cursor++ = 0;
     if (has_palette) {
-        *((u64 *)cursor)++ = qwords | 0x800000000000000;
+        *(u64 *)cursor = qwords | 0x800000000000000; cursor += 2;
     } else {
-        *((u64 *)cursor)++ = (qwords | 0x8000) | 0x800000000000000;
+        *(u64 *)cursor = (qwords | 0x8000) | 0x800000000000000; cursor += 2;
     }
     *cursor++ = 0;
     *cursor++ = 0;

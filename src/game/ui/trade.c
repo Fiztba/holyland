@@ -104,7 +104,7 @@ extern MenuItem *item_list_last_page;
 extern s32 item_list_count;
 extern void (*trade_handler)(HandlerContext *); /* the screen Trade_RunHandler runs */
 extern s32 menu_file_block_count;
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern sptr trade_menu_arena;
 void *memset(void *, int, u32);
 void func_001095D0(void);
@@ -114,7 +114,7 @@ void Packet_SendChain(void);
 void Packet_WaitForSend(void);
 void GsDraw_QueueTexFlush(void);
 void TextureTable_QueueAll(TextureTableHeader *);
-s32 MenuArena_Init(s32 value);
+s32 MenuArena_Init(sptr value);
 void MenuTexture_Upload(void *, LoadedBlockRef *);
 extern LinkNode *model_load_chain;
 /* the loads of the model shown and of the four the cursor brings on with up (0x10), down (0x40), left (0x80) and
@@ -130,7 +130,7 @@ extern s8 trade_screen_state;       /* 0: fading in, 1: open, 2 and up: fading o
 s32 Sound_PlayMenu(s32);
 int Menu_SetBlendMode(u8 mode);
 void MenuDraw_Bar(MenuCursorBar *);
-void MenuSprite_Draw(int, int, int, int);
+void MenuSprite_Draw(sptr, int, int, int);
 /* match: the part number is passed sign-extended and no result is kept (the definition takes a u8 and returns int) */
 #define SELECT_PART(part) ((void (*)(s32))Menu_SetBlendMode)(part)
 extern LevelRecordDef worn_defs[];
@@ -290,7 +290,7 @@ extern SpritePacket *pretune_parts;
 extern SpritePacket *tune_mess_parts;
 extern s8 smith_choices_active;     /* nonzero once the cursor is on the three lines */
 extern s8 smith_screen_state;       /* 0: fading in, 1: open, 2 to 4: fading out to a list, 5: fading out to leave */
-void MenuSprite_DrawPlain(int, int, int);
+void MenuSprite_DrawPlain(sptr, int, int);
 extern f32 smith_upgrade_list_model_position[4];
 extern u32 tune_part_count;              /* how many parts the screen has */
 extern SpritePacket *tune_parts;
