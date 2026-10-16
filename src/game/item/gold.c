@@ -57,8 +57,8 @@ static MapActor map_actors[2][MAP_ACTOR_COUNT]; /* 0x5B6100 sixteen piles per lo
 static ModelInstance map_actor_models[2][MAP_ACTOR_COUNT]; /* 0x5B6680 */
 static char map_gold_texture[0x2000];           /* 0x5B9E80 item/i0000.tx2 */
 static char map_gold_model[0x2000];             /* 0x5BBE80 item/i0000.om2 */
-static char map_actor_matrices[2][MAP_ACTOR_COUNT][0x80]; /* 0x5BDE80 the work Model_SetUpSkinned lays each pile's part out in (a 0x80-byte ModelPart, 0x90 on the PC: too big for its 0x80);
-                                                            PORT: holds runtime structs, may need more room on the PC */
+/* 0x5BDE80 the work Model_SetUpSkinned lays each pile's one part out in: a ModelPart each (0x80 bytes on the PS2) */
+static char map_actor_matrices[2][MAP_ACTOR_COUNT][sizeof(ModelPart)] __attribute__((aligned(16)));
 
 /* Clears the map actors and loads their model (item/i0000.om2) and texture (item/i0000.tx2). */
 void Gold_Init(void) {
@@ -116,7 +116,7 @@ void Gold_InitMap(int map) {
     actor = map_actors[map];
     model = map_actor_models[map];
     matrix = map_actor_matrices[map][0];
-    for (i = 0; i < MAP_ACTOR_COUNT; i++, actor++, model++, matrix += 0x80) {
+    for (i = 0; i < MAP_ACTOR_COUNT; i++, actor++, model++, matrix += sizeof(ModelPart)) {
         actor->body = model;
         work = matrix;
         source = map_gold_model;

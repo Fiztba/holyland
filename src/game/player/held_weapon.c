@@ -70,11 +70,12 @@ PlayerArmPoints held_item_arm_points_prev = { 0 }; /* 0x4147A0 the same for the 
 
 ModelInstance held_item_model __attribute__((section(".bss"))); /* 0x57B6A0 the held item; held_item_model_ptr in asm .sdata points here */
 static ModelInstance arm_model;         /* 0x57B860 */
-/* PORT: these four hold runtime structs (ModelChannel, ModelPart), may need more room on the PC */
-static char held_item_channels[0x90];   /* 0x57BA20 */
-static char held_item_setup[0x1000];    /* 0x57BAB0 */
-static char arm_channels[0x90];         /* 0x57CAB0 */
-static char arm_setup[0x1000];          /* 0x57CB40 */
+/* the held item's and the arm's ModelChannel (0x90 bytes on the PS2) and the parts Model_SetUpSkinned lays out
+   (0x1000 bytes on the PS2) */
+static char held_item_channels[sizeof(ModelChannel)] __attribute__((aligned(16)));   /* 0x57BA20 */
+static char held_item_setup[MODEL_PART_AREA_SIZE(0x1000)] __attribute__((aligned(16)));    /* 0x57BAB0 */
+static char arm_channels[sizeof(ModelChannel)] __attribute__((aligned(16)));         /* 0x57CAB0 */
+static char arm_setup[MODEL_PART_AREA_SIZE(0x1000)] __attribute__((aligned(16)));          /* 0x57CB40 */
 static Vector4 trail_points[64];        /* 0x57DB40 screen positions of the weapon trail */
 static s32 trail_lives[64];             /* 0x57DF40 frames each trail point has left */
 
@@ -110,8 +111,8 @@ void HeldWeapon_Init(void) {
     memset(&held_item_model, 0, sizeof(ModelInstance));
     memset((void *)arm_file, 0, 0x50000);
     memset((void *)held_item_file, 0, 0x30000);
-    memset(arm_setup, 0, 0x1000);
-    memset(held_item_setup, 0, 0x1000);
+    memset(arm_setup, 0, sizeof(arm_setup));
+    memset(held_item_setup, 0, sizeof(held_item_setup));
     memset(&held_item_arm_points, 0, 0x20);
     memset(&held_item_arm_points_prev, 0, 0x20);
     loaded_arm_gauntlet = -1;
@@ -143,8 +144,8 @@ void Player_LoadArmModels(void) {
         }
         memset((void *)held_item_file, 0, 0x30000);
         memset(&held_item_model, 0, sizeof(ModelInstance));
-        memset(held_item_setup, 0, 0x1000);
-        memset(held_item_channels, 0, 0x90);
+        memset(held_item_setup, 0, sizeof(held_item_setup));
+        memset(held_item_channels, 0, sizeof(held_item_channels));
         held_item_textures = 0;
         sprintf(path, item_arm_path_format, item->model_file_number);
         handle = File_Open(path, 0, 1);
@@ -192,8 +193,8 @@ void Player_LoadArmModels(void) {
         loaded_arm_gauntlet = player_state.equipment[EQUIP_GAUNTLET];
         memset((void *)arm_file, 0, 0x50000);
         memset(&arm_model, 0, sizeof(ModelInstance));
-        memset(arm_setup, 0, 0x1000);
-        memset(arm_channels, 0, 0x90);
+        memset(arm_setup, 0, sizeof(arm_setup));
+        memset(arm_channels, 0, sizeof(arm_channels));
         arm_textures = 0;
         sprintf(path, item_arm_path_format, arm->model_file_number);
         handle = File_Open(path, 0, 1);

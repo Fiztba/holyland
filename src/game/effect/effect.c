@@ -58,7 +58,7 @@ static int effect_count = 0;        /* 0x4468D0 live effects */
 
 static u32 *effect_texture_packet;  /* 0x4470F8 DMA packet holding the effect textures read back from the GS */
 static char *effect_model_file;     /* 0x4470FC sfx/sfx.dat */
-static char *effect_model_memory;   /* 0x447100 0x800 bytes of model memory per effect */
+static char *effect_model_memory;   /* 0x447100 0x800 bytes of model memory per effect (EFFECT_MODEL_MEMORY_SIZE on the PC) */
 static EEWord *effect_model_table; /* 0x447104 (char *) the model of each EffectDef.model_index, inside effect_model_file */
 
 /* 0x502260 param/sfx.prm; entries is the view whose bit-field tests stay array reads */
@@ -96,7 +96,7 @@ void Effect_Init(void) {
     effect_texture_packet = (u32 *)buffer;
     buffer += 0x70400;
     effect_model_memory = buffer;
-    buffer += 0xC0000;
+    buffer += EFFECT_COUNT * EFFECT_MODEL_MEMORY_SIZE; /* 0xC0000 on the PS2 */
     effect_model_file = buffer;
     buffer += 0x9FC00;
     effect_model_table = (EEWord *)effect_model_file;
@@ -297,7 +297,7 @@ int Effect_StartSpawner(int effect_id, void *position, void *rotation, void *own
     EFFECT_SLOT_FLAG_PARTS(slot)->level = def->max_level;
     EFFECT_SLOT_FLAG_PARTS(slot)->unk27 = def->spawn_start_delay;
     slot->owner_entity = owner_entity;
-    EFFECT_SLOT_FLAG_PARTS(slot)->def = def;
+    EFFECT_SLOT_FLAG_PARTS(slot)->def = EE_WORD(def);
     EFFECT_SLOT_FLAG_PARTS(slot)->unk26 = 0;
     slot->owner_effect = NULL;
     slot->unk30 = NULL;
@@ -356,8 +356,8 @@ void Effect_UpdateAll(void) {
         slot = effect_slots;
         for (i = 0; i < EFFECT_SLOT_COUNT; i++, slot++) {
             if (slot->flags & EFFECT_SLOT_LIVE) {
-                if (only_owner == NULL || only_owner == slot->owner_entity || EFFECT_SLOT_FLAG_PARTS(slot)->def == kind_280 ||
-                    EFFECT_SLOT_FLAG_PARTS(slot)->def == kind_282 || EFFECT_SLOT_FLAG_PARTS(slot)->def == kind_284) {
+                if (only_owner == NULL || only_owner == slot->owner_entity || EFFECT_SLOT_DEF(slot) == kind_280 ||
+                    EFFECT_SLOT_DEF(slot) == kind_282 || EFFECT_SLOT_DEF(slot) == kind_284) {
                     Effect_RunSpawner(slot);
                     if (!effect_slots) { // match: tests the pool's address, which is never null
                         break;
@@ -511,7 +511,7 @@ static void Effect_RunSpawner(EffectSlot *slot) {
         EFFECT_SLOT_VIEW(slot)->unk27--;
         return;
     }
-    def = EFFECT_SLOT_VIEW(slot)->def;
+    def = EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def);
     if (def->spawn_interval != 0) {
         u8 timer = EFFECT_SLOT_VIEW(slot)->unk26--;
 
@@ -542,7 +542,7 @@ static void Effect_RunSpawner(EffectSlot *slot) {
         effect->frame = 0;
         effect->start_position = slot->unk30;
         effect->model = &effect_models[index];
-        effect->def = EFFECT_SLOT_VIEW(slot)->def;
+        effect->def = EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def);
         effect->owner_entity = slot->owner_entity;
         effect->target = slot->owner_effect;
         effect->effect_param = slot->effect_param;
@@ -566,7 +566,7 @@ static void Effect_RunSpawner(EffectSlot *slot) {
         if (placement == 0 || placement == 0x600000) {
             effect->unk58 = (char *)Map_FindRecordAt((f32 *)&effect->model->position, 0.0f);
         }
-        def = EFFECT_SLOT_VIEW(slot)->def;
+        def = EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def);
     }
     if (--EFFECT_SLOT_VIEW(slot)->level == 0) {
         Effect_FreeSpawner(slot);
@@ -697,7 +697,7 @@ static void Effect_SetupModel(int index) {
     }
     model->model_flags |= 0x1800;
     file_cursor = EE_PTR(char *, effect_model_table[def->model_index]);
-    memory = effect_model_memory + (index << 11);
+    memory = effect_model_memory + index * EFFECT_MODEL_MEMORY_SIZE;
     Model_SetUpPosed(model, &file_cursor, &memory);
     model->draw = effect_draw_hooks[((EffectTableEntry *)effect->def)->placement][effect->def->draw_hook_index];
     model->model_flags |= 0x800;
@@ -765,7 +765,7 @@ void Effect_OffsetAll(void *offset) {
     if (effect_slot_count > 0) {
         for (i = 0; i < EFFECT_SLOT_COUNT; i++, slot++) {
             if (slot->flags & EFFECT_SLOT_LIVE) {
-                if (!(EFFECT_DEF_FLAGS(EFFECT_SLOT_VIEW(slot)->def) & 0x600000)) {
+                if (!(EFFECT_DEF_FLAGS(EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def)) & 0x600000)) {
                     Vector_Add(&slot->position, &slot->position, offset);
                 }
             }
@@ -905,8 +905,8 @@ void Effect_FreePlayerWeaponKinds(void) {
     effect = effect_pool;
     for (i = 0; i < EFFECT_SLOT_COUNT && effect_slot_count > 0; i++, slot++) {
         if ((slot->flags & EFFECT_SLOT_LIVE) &&
-            (EFFECT_SLOT_FLAG_PARTS(slot)->def == &effect_table.defs[0x280] || EFFECT_SLOT_FLAG_PARTS(slot)->def == &effect_table.defs[0x282] ||
-             EFFECT_SLOT_FLAG_PARTS(slot)->def == &effect_table.defs[0x284]) &&
+            (EFFECT_SLOT_DEF(slot) == &effect_table.defs[0x280] || EFFECT_SLOT_DEF(slot) == &effect_table.defs[0x282] ||
+             EFFECT_SLOT_DEF(slot) == &effect_table.defs[0x284]) &&
             slot->owner_entity == (Entity *)&player_state) {
             Effect_FreeSpawner(slot);
         }
@@ -930,8 +930,8 @@ void Effect_FreePlayerMagic(void) {
     effect = effect_pool;
     for (i = 0; i < EFFECT_SLOT_COUNT && effect_slot_count > 0; i++, slot++) {
         if ((slot->flags & EFFECT_SLOT_LIVE) && slot->owner_entity == (Entity *)&player_state && slot->effect_param != 0 &&
-            fx_table[slot->effect_param].item_menu_magic == 0 && EFFECT_SLOT_FLAG_PARTS(slot)->def != &effect_table.defs[0x280] &&
-            EFFECT_SLOT_FLAG_PARTS(slot)->def != &effect_table.defs[0x282] && EFFECT_SLOT_FLAG_PARTS(slot)->def != &effect_table.defs[0x284]) {
+            fx_table[slot->effect_param].item_menu_magic == 0 && EFFECT_SLOT_DEF(slot) != &effect_table.defs[0x280] &&
+            EFFECT_SLOT_DEF(slot) != &effect_table.defs[0x282] && EFFECT_SLOT_DEF(slot) != &effect_table.defs[0x284]) {
             Effect_FreeSpawner(slot);
         }
     }
@@ -973,7 +973,7 @@ int Effect_IsDefRangeInUse(int first_def, int last_def) {
     slot = effect_slots;
     for (i = 0; i < EFFECT_SLOT_COUNT && effect_slot_count > 0; i++, slot++) {
         if (slot->flags & EFFECT_SLOT_LIVE) {
-            if (EFFECT_SLOT_FLAG_PARTS(slot)->def >= first && EFFECT_SLOT_FLAG_PARTS(slot)->def <= last) {
+            if (EFFECT_SLOT_DEF(slot) >= first && EFFECT_SLOT_DEF(slot) <= last) {
                 return 1;
             }
         }

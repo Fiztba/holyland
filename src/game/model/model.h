@@ -880,6 +880,15 @@ typedef struct {
     u8 unk8F;                       /* 0x8F nonzero: a blend moves 255/unk8F of the way each frame (ModelMotion_StepBlend) */
 } ModelChannel;
 
+/* PC sizes of areas the PS2 sized for its own structs. ModelPart is 0x80 bytes there (0x90 here), ModelChannel
+   0x90 (0x110 here), ModelInstance 0x1C0 (larger here): an area of ps2_size bytes that held them needs this many
+   bytes on the PC (each assumes the area held nothing but that struct, so it never comes up short). */
+#define PS2_MODEL_PART_SIZE     0x80
+#define PS2_MODEL_CHANNEL_SIZE  0x90
+#define PS2_MODEL_INSTANCE_SIZE 0x1C0
+#define MODEL_PART_AREA_SIZE(ps2_size) ((ps2_size) + (ps2_size) / PS2_MODEL_PART_SIZE * (sizeof(ModelPart) - PS2_MODEL_PART_SIZE))
+#define MODEL_INSTANCE_AREA_SIZE(ps2_size)     (((ps2_size) / PS2_MODEL_INSTANCE_SIZE + 1) * sizeof(ModelInstance) + 0xF & ~(size_t)0xF)
+
 /* ModelInstance.level_tables points at the model's ModelChannel, whose first 0x80 bytes are the tables */
 #define MODEL_CHANNEL(model) (*(ModelChannel **)&(model)->level_tables)
 

@@ -30,8 +30,8 @@ extern s64 entity_work_area[];
 extern ModelInstance entity_models[ENTITY_POOL_SLOT_COUNT];
 
 static EntityTypeFileHeader entity_type_file_header;                            /* 0x474B70 the loaded type file's first 0x20 bytes */
-/* PORT: holds runtime structs, may need more room on the PC (the slot model's parts, Model_SetUpPosed) */
-static char entity_pool_slot_buffers[ENTITY_POOL_SLOT_COUNT][0x2000];            /* 0x474B90 the type data of each slot */
+/* 0x474B90 the type data of each slot: the slot model's parts (Model_SetUpPosed), 0x2000 bytes each on the PS2 */
+static char entity_pool_slot_buffers[ENTITY_POOL_SLOT_COUNT][MODEL_PART_AREA_SIZE(0x2000)] __attribute__((aligned(16)));
 char character_params[0x80000] __attribute__((section(".bss")));         /* 0x47EB90 param/chr.prm, read whole */
 
 int File_Sync(int, int);
@@ -942,14 +942,12 @@ static int Entity_FindFreeWorkArea(void) {
 }
 
 /* Marks work area `index` in use, clears it, and returns its address. */
-/* PORT: holds runtime structs, may need more room on the PC (a work area takes the model's ModelParts
-   and its ModelChannel, Model_SetUpSkinned and ModelMotion_LoadFile) */
 static char *Entity_ClaimWorkArea(int index) {
     char *work_area;
 
     entity_work_areas_used[index / 8] |= 1 << (index % 8);
-    work_area = entity_work_areas_base + index * 0x2200;
-    memset(work_area, 0, 0x2200);
+    work_area = entity_work_areas_base + index * ENTITY_MODEL_WORK_AREA_SIZE;
+    memset(work_area, 0, ENTITY_MODEL_WORK_AREA_SIZE);
     return work_area;
 }
 
@@ -960,8 +958,8 @@ static void Entity_FreeWorkArea(int index) {
 
     bit = 1 << (index % 8);
     entity_work_areas_used[index / 8] &= ~bit;
-    work_area = entity_work_areas_base + index * 0x2200;
-    memset(work_area, 0, 0x2200);
+    work_area = entity_work_areas_base + index * ENTITY_MODEL_WORK_AREA_SIZE;
+    memset(work_area, 0, ENTITY_MODEL_WORK_AREA_SIZE);
 }
 
 /* Before an entity model is drawn (ModelInstance.draw): sets the GS Z buffer, test and alpha registers by the

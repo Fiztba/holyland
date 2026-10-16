@@ -700,16 +700,19 @@ typedef struct {
     char pad7D[0x23];
 } __attribute__((aligned(8))) EntityUnkE0Kind168160;
 
-/* an 8-byte slot of the work area as the bit-fields the init functions set */
+/* an 8-byte slot of the work area as the bit-fields the init functions set. The bits are u8 (u64 on the PS2,
+   where the slot is 8-byte aligned in the work area): a u64 bit-field would make the slot 8-byte aligned, and
+   on the PC the work area's slots are not. */
 typedef struct {
     u8 index : 5;                   /* what EntityAi_StartSlotMotion looks up */
-    u64 bit5 : 1;
-    u64 bit6 : 1;
-    u64 pad7 : 1;
+    u8 bit5 : 1;
+    u8 bit6 : 1;
+    u8 pad7 : 1;
     u8 unk01;                       /* 0x01 */
     s16 unk02;                      /* 0x02 */
     s32 unk04;                      /* 0x04 */
 } EntityUnkE0SlotBits;
+LAYOUT_SIZE(EntityUnkE0SlotBits, 8);
 
 /* Entity+0xE0 as the kinds set up by func_00151D30 and its neighbours use it */
 typedef struct {
@@ -920,6 +923,112 @@ typedef struct {
 } EntityWorkBytes;
 
 #define ENTITY_WORK_BYTES(entity) (((EntityWorkBytes *)(entity))->work_bytes)
+
+/* The EntityUnkE0Kind* views lie over Entity.unkE0. Their offset comments are the PS2's; on the PC the seven
+   handlers are 8 bytes each, so a PS2 offset below 0x1C is a handler (index * pointer size) and one from 0x1C on
+   lies (offsetof(EntityUnkE0, turn_rate) - 0x1C) further on. Every named field of a view sits where
+   EntityUnkE0 has that PS2 offset. */
+#define ENTITY_UNKE0_PC_OFFSET(ps2_offset)     ((ps2_offset) < 0x1C ? (ps2_offset) / 4 * sizeof(void *) : (ps2_offset) - 0x1C + offsetof(EntityUnkE0, turn_rate))
+#define ENTITY_UNKE0_VIEW_OFFSET(T, field, ps2_offset)     _Static_assert(offsetof(T, field) == ENTITY_UNKE0_PC_OFFSET(ps2_offset), #T "." #field " is not at EntityUnkE0's " #ps2_offset)
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, move, 0x18);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, pause_timer, 0x68);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, move_choice, 0x78);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, motion_slot_0, 0x80);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, motion_slot_1, 0x88);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, think, 0x00);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, move, 0x18);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, turn_rate, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, target_point, 0x30);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_x, 0x48);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_y, 0x4C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_z, 0x50);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, action_frames, 0x68);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, steer_to_target, 0x78);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, climb_command, 0x79);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, think_flag, 0x7A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, unk80, 0x80);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, unk88, 0x88);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, think, 0x00);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, move, 0x18);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, turn_rate, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, side_speed, 0x44);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, forward_speed, 0x48);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, pitch_speed, 0x4C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk78, 0x78);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, climb_command, 0x79);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk80, 0x80);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk88, 0x88);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, think, 0x00);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, move, 0x18);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, turn_rate, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, unk20, 0x20);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, target_point, 0x30);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_42_state, 0x7A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_43_state, 0x7B);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_to_operate_id, 0x7C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind150588, unk1C, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, think, 0x00);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, animate, 0x04);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, on_hit, 0x08);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, dormant, 0x10);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, death, 0x14);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, move, 0x18);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk1C, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk20, 0x20);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk40, 0x40);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk44, 0x44);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6A, 0x6A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6C, 0x6C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6E, 0x6E);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk78, 0x78);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk79, 0x79);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7A, 0x7A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7B, 0x7B);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7C, 0x7C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind151D30, unk80, 0x80);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind151D30, unk88, 0x88);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk1C, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk44, 0x44);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk48, 0x48);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk4C, 0x4C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk68, 0x68);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk6A, 0x6A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk6C, 0x6C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk78, 0x78);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk79, 0x79);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7A, 0x7A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7B, 0x7B);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7C, 0x7C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7D, 0x7D);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7E, 0x7E);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk30, 0x30);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk6E, 0x6E);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk80, 0x80);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk90, 0x90);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind17FC60, unk68, 0x68);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, think, 0x00);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, move, 0x18);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, turn_rate, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, player_cast_timer, 0x6A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, unk7A, 0x7A);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, alternate_anim_flag, 0x7B);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, distance_band, 0x7C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, distance_band_timer, 0x7D);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, afterimage_active, 0x7E);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind12ACA0, unk1C, 0x1C);
+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind12ACA0, unk40, 0x40);
+_Static_assert(sizeof(EntityUnkE0Kind12ACA0) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind12ACA0 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind131390) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind131390 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind150588) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind150588 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind151D30) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind151D30 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind15F8C0) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind15F8C0 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind162BC8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind162BC8 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind168160) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind168160 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind16BF98) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind16BF98 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind1719F8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind1719F8 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind1740A8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind1740A8 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind178358) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind178358 is larger than the work area");
+_Static_assert(sizeof(EntityUnkE0Kind17FC60) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind17FC60 is larger than the work area");
 
 /* Entity.flags as bit-fields. The game sets the flags through bit-fields:
    several changed in a row only match when written this way. */
@@ -1164,6 +1273,12 @@ typedef struct {
 } EntityGroupRecord;
 
 #define ENTITY_POOL_SLOT_COUNT  5
+
+/* The entity work areas (Entity_ClaimWorkArea), 60 of them after the pool blocks: 0x2200 bytes each on the PS2,
+   holding a model's ModelParts (at most 62 fit there), its 32 bone positions and its ModelChannel. Both structs
+   are larger on the PC, so each area grows by what the most parts that fit there and the channel need. */
+#define ENTITY_MODEL_WORK_AREA_COUNT  60
+#define ENTITY_MODEL_WORK_AREA_SIZE   (0x2200 + 62 * (sizeof(ModelPart) - PS2_MODEL_PART_SIZE) + (sizeof(ModelChannel) - PS2_MODEL_CHANNEL_SIZE))
 
 /* EntityPoolSlot.head.fields.kind */
 #define ENTITY_POOL_FREE        0

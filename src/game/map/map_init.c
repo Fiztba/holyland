@@ -90,7 +90,7 @@ void Map_LoadParamFiles(void) {
 
 /* Resets the game status, the map draw state and the camera. */
 void Map_ResetGameState(void) {
-    memset(&game_status, 0, 0x48);
+    memset(&game_status, 0, sizeof(GameStatus)); /* 0x48 bytes on the PS2: all of it */
     game_status.movement_input_enabled = 1;
     game_status.player_control = 1;
     game_status.unk01 = 1;
@@ -129,7 +129,7 @@ void Map_LoadAtOnce(int map) {
     int size;
     MapFogColor *fog;
 
-    ((int (*)(void *, int))Memory_ClearWords)(slot, 0x18); // match: the callee returns a value here, which keeps $2 busy
+    Memory_ClearWords(slot, sizeof(MapSlot) / 4); /* 0x18 words on the PS2: all of it */
     memory->file_read_cursor = memory->file_base = map_file_area;
     memory->work_cursor = memory->work_base = map_work_area;
     Memory_ClearWords(memory->file_base, (u32)map_file_area_size / 4);

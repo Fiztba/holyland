@@ -8,6 +8,8 @@
 
 #define EFFECT_SLOT_COUNT 0x60      /* spawner slots */
 #define EFFECT_COUNT 0x180          /* effects (EffectActor) */
+/* an effect's model memory: 0x800 bytes on the PS2, room for 16 0x80-byte ModelParts (sfx.dat has 16-part models) */
+#define EFFECT_MODEL_MEMORY_SIZE MODEL_PART_AREA_SIZE(0x800)
 #define EFFECT_DEF_COUNT 0x400      /* entries of the definition table param/sfx.prm */
 
 /* the effect's definition, EffectActor.def: one 0x120-byte entry of effect_table.
@@ -991,31 +993,39 @@ typedef struct {
 
 #define EFFECT_SLOT_FLAG_BITS(slot) ((EffectSlotFlagBits *)&(slot)->flags)
 
-/* EffectSlot.flags as the bytes some functions read */
+/* EffectSlot.flags as the bytes some functions read. The EffectDef is the flag word's low 32 bits, so on the
+   PC it is kept as its EE address (EFFECT_SLOT_DEF reads it back). */
 typedef struct {
-    EffectDef *def;                 /* 0x20 */
-    u8 unk24;                       /* 0x24 */
+    EEWord def;                     /* 0x20 (EffectDef *) */
+    u8 unk24;                       /* 0x24 bit 0: EFFECT_SLOT_LIVE */
     u8 level;                       /* 0x25 the spawner's level, from EffectDef.max_level */
     u8 unk26;                       /* 0x26 */
     u8 unk27;                       /* 0x27 */
 } EffectSlotFlagParts;
+LAYOUT_SIZE(EffectSlotFlagParts, 8);
+_Static_assert(sizeof(EffectSlotFlagParts) == sizeof(((EffectSlot *)0)->flags), "EffectSlotFlagParts is EffectSlot.flags");
 
 #define EFFECT_SLOT_FLAG_PARTS(slot) ((EffectSlotFlagParts *)&(slot)->flags)
+#define EFFECT_SLOT_DEF(slot) EE_PTR(EffectDef *, EFFECT_SLOT_FLAG_PARTS(slot)->def)
 
 /* the whole EffectSlot as Effect_RunSpawner reads it: the bytes of the flag word as members of
    the slot itself (no address is taken, so gcc keeps no pointer to the word), and unk34 as
    the vector pointer it is */
 typedef struct {
-    char pad00[0x20];
-    EffectDef *def;                 /* 0x20 */
+    char pad00[offsetof(EffectSlot, flags)];
+    EEWord def;                     /* 0x20 (EffectDef *), as in EffectSlotFlagParts */
     u8 unk24;                       /* 0x24 */
     u8 level;                       /* 0x25 the firings left */
     u8 unk26;                       /* 0x26 frames to the next firing */
     u8 unk27;                       /* 0x27 frames before the first firing, from EffectDef.spawn_start_delay */
-    char pad28[0x0C];
+    char pad28[offsetof(EffectSlot, unk34) - offsetof(EffectSlot, flags) - 8];
     Vector4 *start_rotation;        /* 0x34 EffectSlot.unk34 */
-    char pad38[0x18];
+    char pad38[sizeof(EffectSlot) - offsetof(EffectSlot, unk34) - sizeof(Vector4 *)];
 } EffectSlotView;
+_Static_assert(offsetof(EffectSlotView, def) == offsetof(EffectSlot, flags), "EffectSlotView is not EffectSlot");
+_Static_assert(offsetof(EffectSlotView, level) == offsetof(EffectSlot, flags) + offsetof(EffectSlotFlagParts, level), "EffectSlotView is not EffectSlot");
+_Static_assert(offsetof(EffectSlotView, start_rotation) == offsetof(EffectSlot, unk34), "EffectSlotView is not EffectSlot");
+_Static_assert(sizeof(EffectSlotView) == sizeof(EffectSlot), "EffectSlotView is not EffectSlot");
 
 #define EFFECT_SLOT_VIEW(slot) ((EffectSlotView *)(slot))
 

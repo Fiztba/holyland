@@ -110,12 +110,12 @@ static ItemNode object_items[2][32];          /* 0x5807C0 the items the player m
 static ModelInstance fixed_item_models[2][64];     /* 0x5816C0 the models of the fixed items */
 static ModelInstance dropped_item_models[2][16];     /* 0x58F6C0 the models of the dropped items */
 static ModelInstance object_item_models[2][32];     /* 0x592EC0 the models of the pickup items */
-static char fixed_item_model_data[2][64][0x200];       /* 0x599EC0 the model data of the fixed items (the parts Model_SetUpPosed
-                                                            lays out) PORT: holds runtime structs, may need more room on the PC */
-static char dropped_item_model_data[2][16][0x200];       /* 0x5A9EC0 the model data of the dropped items (the parts Model_SetUpPosed
-                                                            lays out) PORT: holds runtime structs, may need more room on the PC */
-static char object_item_model_data[2][32][0x200];       /* 0x5ADEC0 the model data of the pickup items (the parts Model_SetUpPosed
-                                                            lays out) PORT: holds runtime structs, may need more room on the PC */
+static char fixed_item_model_data[2][64][MODEL_PART_AREA_SIZE(0x200)];       /* 0x599EC0 the model data of the fixed items (the parts Model_SetUpPosed
+                                                            lays out) (0x200 bytes each on the PS2) */
+static char dropped_item_model_data[2][16][MODEL_PART_AREA_SIZE(0x200)];       /* 0x5A9EC0 the model data of the dropped items (the parts Model_SetUpPosed
+                                                            lays out) (0x200 bytes each on the PS2) */
+static char object_item_model_data[2][32][MODEL_PART_AREA_SIZE(0x200)];       /* 0x5ADEC0 the model data of the pickup items (the parts Model_SetUpPosed
+                                                            lays out) (0x200 bytes each on the PS2) */
 static s8 fixed_item_by_id[2][0x100];             /* 0x5B5EC0 the node of each item slot, -1 for none */
 static f32 pickup_start_position[4];                   /* 0x5B60C0 where the item being picked up is */
 static f32 pickup_start_rotation[4];                   /* 0x5B60D0 its rotation */

@@ -1,7 +1,9 @@
 #include "core/memory.h"
 #include "map/map.h"
+#include "entity/entity.h"
+#include "effect/effect.h"
 
-#define MEMORY_ARENA_SIZE 0x1600000
+#define MEMORY_ARENA_SIZE 0x1700000 /* 0x1600000 on the PS2; the PC's areas below are larger */
 
 /* the sizes of the areas, in bytes */
 extern int packet_area_size;        /* the packet buffers' area */
@@ -36,11 +38,13 @@ extern char *sound_bank_area;
 void Memory_Init(void) {
     Memory_ClearWords(memory_arena, MEMORY_ARENA_SIZE / 4);
     packet_area_size = 0x280000;
-    effect_area_size = 0x1D0000;
+    /* the effects' model memory, the entity work areas and the map models hold structs that are larger on the PC:
+       those areas grow by what they need (0x1D0000, 0x300000 and 0x200000 on the PS2) */
+    effect_area_size = (int)(0x1D0000 + EFFECT_COUNT * (EFFECT_MODEL_MEMORY_SIZE - 0x800));
     held_weapon_area_size = 0xA0000;
-    map_work_area_size = 0x200000;
+    map_work_area_size = (int)(2 * MODEL_INSTANCE_AREA_SIZE(0x100000)); /* two halves, one per map slot */
     map_file_area_size = 0xA80000;
-    entity_pool_area_size = 0x300000;
+    entity_pool_area_size = (int)(0x280000 + ENTITY_MODEL_WORK_AREA_COUNT * ENTITY_MODEL_WORK_AREA_SIZE);
     hud_area_size = 0x20000;
     item_effect_area_size = 0x80000;
     D_00446F2C = 0x60000;

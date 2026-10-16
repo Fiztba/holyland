@@ -347,8 +347,8 @@ void Map_ParseFile(int map) {
     /* the working memory: the models, then the two tables of the slot */
     // match: stored as a model pointer (it is room for models); as a char * it is scheduled earlier
     *(ModelInstance **)&memory->record_models = (ModelInstance *)work;
-    /* PORT: the models (and the ModelParts Model_SetUpPosed/Skinned carve from the work area below, 0x90 bytes on
-       the PC for 0x80) are runtime structs, larger on the PC: the work area may need more room */
+    /* the models (and the ModelParts Model_SetUpPosed/Skinned carve from the work area below) are larger on the PC;
+       map_work_area_size (core/memory.c) grows to match */
     work += header->record_count * sizeof(ModelInstance);
     memory->object_models = work;
     work += header->object_count * sizeof(ModelInstance);
@@ -357,7 +357,7 @@ void Map_ParseFile(int map) {
     memory->extra_models = work;
     work += header->extra_model_count * sizeof(ModelInstance);
     slot->record_model_table = work;
-    work += header->record_model_count * 4;
+    work += header->record_model_count * sizeof(ModelInstance *);
     slot->record_model_spare_bytes = work;
     work += header->record_model_count;
     // match: stored as a u8 *; as a char * the read of header->unk4C below comes one instruction late
