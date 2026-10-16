@@ -719,6 +719,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
     channel->param = 0;
     channel->param_shifted = 0;
     MapObject_StepAnim(object);
+    return 0; /* retail returns whatever $2 held; no caller reads it */
 }
 
 /* Advances a map object's animation one frame, starting the sounds tied to the
@@ -787,7 +788,7 @@ void MapObject_MarkEmptied(MapObject *object) {
     u8 kind = object->definition->kind;
 
     if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
-        ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
+        ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
         object->state_flags |= 0x40000;
     }
 }
@@ -800,7 +801,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
     if (object != NULL) {
         kind = object->definition->kind;
         if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
-            ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
+            ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
             object->state_flags |= 0x40000;
         }
     }

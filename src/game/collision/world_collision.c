@@ -118,7 +118,7 @@ extern const f32 D_004469A0[];
 extern s32 map_objects_started[2];
 extern s32 map_object_counts[2];
 extern MapObject map_slot_objects[];
-extern MapObject map_slot1_objects[];
+extern MapObject *const map_slot1_objects;
 extern PlayerState player_state;
 extern char hit_sphere_pitfall_message[];
 extern f32 D_004469AC[];    /* the largest float; an array so that it is not read through $gp */

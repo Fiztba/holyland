@@ -56,7 +56,8 @@ static MapActor map_actors[2][MAP_ACTOR_COUNT]; /* 0x5B6100 sixteen piles per lo
 static ModelInstance map_actor_models[2][MAP_ACTOR_COUNT]; /* 0x5B6680 */
 static char map_gold_texture[0x2000];           /* 0x5B9E80 item/i0000.tx2 */
 static char map_gold_model[0x2000];             /* 0x5BBE80 item/i0000.om2 */
-static char map_actor_matrices[2][MAP_ACTOR_COUNT][0x80]; /* 0x5BDE80 */
+static char map_actor_matrices[2][MAP_ACTOR_COUNT][0x80]; /* 0x5BDE80 the work Model_SetUpSkinned lays each pile's parts out in;
+                                                            PORT: holds runtime structs, may need more room on the PC */
 
 /* Clears the map actors and loads their model (item/i0000.om2) and texture (item/i0000.tx2). */
 void Gold_Init(void) {

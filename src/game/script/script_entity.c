@@ -280,6 +280,7 @@ int ScriptCmd_BlendEntityMotion(ScriptMotionBlendCommand *command) {
         }
     }
     command->active = 0;
+    return 0; /* retail returns whatever $2 held; the handler table calls it as void */
 }
 
 /* Command 238: turns the entity `target_id` to face the player (state 4, EntityAi_SetState: on the spot for

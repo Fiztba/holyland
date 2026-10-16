@@ -837,7 +837,7 @@ void ScriptCmd_SetPropColor(ScriptObjectValuesCommand *command) {
 
     prop = Map_GetRecordById(current_map_slot, command->target_id.value);
     if (prop != NULL) {
-        Model_SetVertexColour(prop->model, command->values[0].value, command->values[1].value, command->values[2].value,
+        Model_SetVertexColour(MAP_RECORD_MODEL(prop), command->values[0].value, command->values[1].value, command->values[2].value,
                       command->values[3].value);
     }
     command->active = 0;
@@ -902,8 +902,8 @@ void ScriptCmd_MovePropTo(ScriptMoveCommand *command) {
         command->active = 0;
         return;
     }
-    model = prop->model;
-    if (command->x.value == prop->model->position.x && command->y.value == prop->model->position.y &&
+    model = MAP_RECORD_MODEL(prop);
+    if (command->x.value == MAP_RECORD_MODEL(prop)->position.x && command->y.value == MAP_RECORD_MODEL(prop)->position.y &&
         command->z.value == model->position.z) {
         command->active = 0;
         return;
@@ -914,9 +914,9 @@ void ScriptCmd_MovePropTo(ScriptMoveCommand *command) {
         frames = 1;
     }
     divisor = (f32)frames;
-    offset[0] = (command->x.value - prop->model->position.x) / divisor;
-    offset[1] = (command->y.value - prop->model->position.y) / divisor;
-    offset[2] = (command->z.value - prop->model->position.z) / divisor;
+    offset[0] = (command->x.value - MAP_RECORD_MODEL(prop)->position.x) / divisor;
+    offset[1] = (command->y.value - MAP_RECORD_MODEL(prop)->position.y) / divisor;
+    offset[2] = (command->z.value - MAP_RECORD_MODEL(prop)->position.z) / divisor;
     offset[3] = 0.0f;
     Map_OffsetRecord(prop, offset);
     if (--command->frames.value == 0) {
@@ -933,17 +933,17 @@ void ScriptCmd_TurnPropTo(ScriptMoveCommand *command) {
         command->active = 0;
         return;
     }
-    if (command->x.value == prop->model->rotation.x && command->y.value == prop->model->rotation.y &&
-        command->z.value == prop->model->rotation.z) {
+    if (command->x.value == MAP_RECORD_MODEL(prop)->rotation.x && command->y.value == MAP_RECORD_MODEL(prop)->rotation.y &&
+        command->z.value == MAP_RECORD_MODEL(prop)->rotation.z) {
         command->active = 0;
         return;
     }
     if (command->frames.value == 0) {
         command->frames.value = 1;
     }
-    Angle_EaseToward(command->x.value, &prop->model->rotation.x, command->frames.value);
-    Angle_EaseToward(command->y.value, &prop->model->rotation.y, command->frames.value);
-    Angle_EaseToward(command->z.value, &prop->model->rotation.z, command->frames.value);
+    Angle_EaseToward(command->x.value, &MAP_RECORD_MODEL(prop)->rotation.x, command->frames.value);
+    Angle_EaseToward(command->y.value, &MAP_RECORD_MODEL(prop)->rotation.y, command->frames.value);
+    Angle_EaseToward(command->z.value, &MAP_RECORD_MODEL(prop)->rotation.z, command->frames.value);
     if (--command->frames.value == 0) {
         command->active = 0;
     }
@@ -974,9 +974,9 @@ void ScriptCmd_TurnPropBy(ScriptMoveCommand *command) {
         command->active = 0;
         return;
     }
-    prop->model->rotation.x = Angle_Wrap(prop->model->rotation.x + command->x.value);
-    prop->model->rotation.y = Angle_Wrap(prop->model->rotation.y + command->y.value);
-    prop->model->rotation.z = Angle_Wrap(prop->model->rotation.z + command->z.value);
+    MAP_RECORD_MODEL(prop)->rotation.x = Angle_Wrap(MAP_RECORD_MODEL(prop)->rotation.x + command->x.value);
+    MAP_RECORD_MODEL(prop)->rotation.y = Angle_Wrap(MAP_RECORD_MODEL(prop)->rotation.y + command->y.value);
+    MAP_RECORD_MODEL(prop)->rotation.z = Angle_Wrap(MAP_RECORD_MODEL(prop)->rotation.z + command->z.value);
     steps_left = command->frames.value - 1;
     command->frames.value = steps_left;
     if (steps_left < 0) {
@@ -991,9 +991,9 @@ void ScriptCmd_GetPropPosition(ScriptPointCommand *command) {
 
     prop = Map_GetRecordById(current_map_slot, command->object_id.value);
     if (prop != NULL) {
-        Script_StoreFloatResult((ScriptArg *)&command->from_x, prop->model->position.x);
-        Script_StoreFloatResult((ScriptArg *)&command->from_y, prop->model->position.y);
-        Script_StoreFloatResult((ScriptArg *)&command->from_z, prop->model->position.z);
+        Script_StoreFloatResult((ScriptArg *)&command->from_x, MAP_RECORD_MODEL(prop)->position.x);
+        Script_StoreFloatResult((ScriptArg *)&command->from_y, MAP_RECORD_MODEL(prop)->position.y);
+        Script_StoreFloatResult((ScriptArg *)&command->from_z, MAP_RECORD_MODEL(prop)->position.z);
     }
     command->active = 0;
 }
@@ -1005,9 +1005,9 @@ void ScriptCmd_GetPropRotation(ScriptMoveCommand *command) {
 
     prop = Map_GetRecordById(current_map_slot, command->target_id.value);
     if (prop != NULL) {
-        Script_StoreFloatResult((ScriptArg *)&command->x, prop->model->rotation.x);
-        Script_StoreFloatResult((ScriptArg *)&command->y, prop->model->rotation.y);
-        Script_StoreFloatResult((ScriptArg *)&command->z, prop->model->rotation.z);
+        Script_StoreFloatResult((ScriptArg *)&command->x, MAP_RECORD_MODEL(prop)->rotation.x);
+        Script_StoreFloatResult((ScriptArg *)&command->y, MAP_RECORD_MODEL(prop)->rotation.y);
+        Script_StoreFloatResult((ScriptArg *)&command->z, MAP_RECORD_MODEL(prop)->rotation.z);
     }
     command->active = 0;
 }
@@ -1039,8 +1039,7 @@ void ScriptCmd_SetMapFog(ScriptFogCommand *command) {
     blue = command->blue.value;
     if (block_index < 0x20) {
         span = far - near;
-        // match: the block's offset is added to the address as a number
-        block = (MapSlotUnk0CValues *)((block_index << 5) + (u32)slot->fog_blocks);
+        block = (MapSlotUnk0CValues *)((char *)slot->fog_blocks + (block_index << 5));
         block->unk10 = (s64)((blue << 16) + (green << 8) + red);
         block->unk00 = block->unk04 = 0.0f;
         block->unk0C = far * near * (far_value - near_value) / span;
@@ -1057,8 +1056,7 @@ void ScriptCmd_SetMapLight(ScriptLightCommand *command) {
     MapSlotUnk10Lights *lights;
 
     if ((u32)command->block.value < 0x20 && command->light.value >= 0 && command->light.value < 3) {
-        // match: the block's offset is added to the address as a number; indexing the blocks swaps two registers
-        lights = (MapSlotUnk10Lights *)(command->block.value * sizeof(MapSlotUnk10Lights) + (u32)slot->light_blocks);
+        lights = (MapSlotUnk10Lights *)((char *)slot->light_blocks + command->block.value * sizeof(MapSlotUnk10Lights));
         lights->directions[0][command->light.value] = command->dir_x.value;
         lights->directions[1][command->light.value] = command->dir_y.value;
         lights->directions[2][command->light.value] = command->dir_z.value;
@@ -1079,8 +1077,7 @@ void ScriptCmd_SetMapAmbientLight(ScriptColorCommand *command) {
     slot = &map_slots[current_map_slot];
     block_index = command->block.value;
     if (block_index < 0x20) {
-        // match: the block's offset is added to the address as a number
-        lights = (MapSlotUnk10Lights *)((block_index << 7) + (u32)slot->light_blocks);
+        lights = (MapSlotUnk10Lights *)((char *)slot->light_blocks + (block_index << 7));
         lights->colors[3].x = (f32)command->red.value / 255.0f;
         lights->colors[3].y = (f32)command->green.value / 255.0f;
         lights->colors[3].z = (f32)command->blue.value / 255.0f;

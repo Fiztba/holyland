@@ -76,7 +76,7 @@ void Script_FillWords(void *dest, int count, int value) {
 
 /* Gets the interpreter ready for a map's script (MapSlot.script, its address as a word): every thread is
    freed and set at the top of it, and the shared variables are cleared. */
-void Script_Init(s32 script_data) {
+void Script_Init(sptr script_data) {
     ScriptThread *thread;
     u8 *first_command;
     u8 *end;
@@ -93,7 +93,7 @@ void Script_Init(s32 script_data) {
         thread->script_id = 0;
         thread++;
         first_command += sizeof(ScriptThread);
-    } while ((s32)thread < (s32)end);
+    } while ((u8 *)thread < end);
 }
 
 /* Starts the script `script_id` in a free thread unless it is running already: looks its label (word
@@ -120,7 +120,7 @@ int Script_Start(int script_id, int argument) {
         script_error_flags[SCRIPT_ERROR_NO_FREE_THREAD] = 1;
         return 0;
     }
-    *(void **)&thread->argument = (void *)argument; // match: stored as a pointer, so the word read below does not wait for it
+    thread->argument = argument;
     thread->script_id = script_id;
     thread->cursor = script_top;
     while (TRUE) {
@@ -164,7 +164,7 @@ static int Script_StartAlways(int script_id, int argument) {
         script_error_flags[SCRIPT_ERROR_NO_FREE_THREAD] = 1;
         return 0;
     }
-    *(void **)&thread->argument = (void *)argument; // match: stored as a pointer, so the word read below does not wait for it
+    thread->argument = argument;
     thread->script_id = script_id;
     thread->cursor = script_top;
     while (TRUE) { // match: no end-label test here; an unknown id reads past the script
@@ -199,7 +199,7 @@ int Script_IsRunning(int script_id) {
             return TRUE;
         }
         thread++;
-    } while ((s32)thread < (s32)end);
+    } while (thread < end);
     return FALSE;
 }
 
@@ -216,7 +216,7 @@ static int Script_FindFreeCommand(ScriptThread *thread) {
         script_error_flags[SCRIPT_ERROR_NO_FREE_COMMAND] = 1;
         return 0;
     }
-    // match: no return here (never reached: the loop only ends with i == 16)
+    return 0; /* never reached: the loop only ends with i == 16 */
 }
 
 /* Steps over one word of a script and its operands; returns where the next word is. */
@@ -398,8 +398,8 @@ static int Script_Advance(ScriptThread *thread) {
             cursor = Script_EvalSet(thread, cursor);
             break;
         case SCRIPT_WORD_HALT:
-            // match: Script_HaltCursor is a stub that takes nothing and returns 0, so the cursor becomes NULL
-            cursor = (u32 *)((int (*)(u32 *))Script_HaltCursor)(cursor);
+            /* Script_HaltCursor is a stub that takes nothing and returns 0, so the cursor becomes NULL */
+            cursor = (u32 *)(sptr)Script_HaltCursor();
             running = no_wait;
             started = TRUE;
             thread->commands[Script_FindFreeCommand(thread)].active = 4;
@@ -919,6 +919,7 @@ int Script_StoreResult(ScriptArg *target, int value) {
     default:
         script_error_flags[SCRIPT_ERROR_BAD_INT_TARGET] = 1;
     }
+    return 0; /* retail returns whatever $2 held; no caller reads it */
 }
 
 /* The float form of Script_StoreResult: writes the bits of `value` to the variable `target` names. */

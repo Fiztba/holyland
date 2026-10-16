@@ -115,7 +115,7 @@ void Attack_WearWornItem(int idx, int amount);
 
 extern u8 spell_levels[6][5];
 extern u64 player_status_bits[];            /* player_previous.unk1C8 */
-extern GameDefinition weapon_name_defs[70];
+extern GameDefinition *const weapon_name_defs;
 extern LevelRecord weapon_level_records[70];
 extern LevelDef item_name_defs[0x17C];
 
@@ -921,7 +921,7 @@ void Player_FireProjectile(u16 held, u16 pressed) {
     }
 }
 
-extern GameDefinition weapon_name_defs[];
+extern GameDefinition *const weapon_name_defs;
 static u8 D_0057A348[8] __attribute__((section(".bss")));  /* 0x57A348 the eight bytes before the requests */
 static Unk1B1470Request bow_shot_requests[32];                     /* 0x57A350 the bow's requests, one per shot */
 

@@ -33,7 +33,7 @@ extern int current_map_slot;
 extern s32 map_objects_started[2];
 extern s32 map_object_counts[2];
 extern MapObject map_slot_objects[];
-extern MapObject map_slot1_objects[];
+extern MapObject *const map_slot1_objects;
 void Vector_Copy(void *, void *);
 void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
 extern MapSlot map_slots[];

@@ -1,6 +1,7 @@
 #include "model/model.h"
 #include "model/linked_point.h"
 
+int rand(void);
 extern f32 sine_table[];
 
 /* Start handler of the light kind: makes a light of the colour in its source at

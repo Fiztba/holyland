@@ -31,7 +31,7 @@ ItemNode *MapItem_Unlink(ItemNode *);
 void Vector_Add(void *, void *, void *);
 int MapItem_GetFixedIndex(int, int);
 void Vector_Copy(void *, void *);
-void MapItem_Link(ListNode *);
+void MapItem_Link(ItemNode *);
 int Collision_FindFloorBelow(f32, void *);
 float Angle_Wrap(float);
 int MapItem_UniqueNotCarried(int);
@@ -63,6 +63,7 @@ int Angle_EaseToward(float, float *, int);
 int Player_CannotCarryItem(int);
 void Player_AddItem(int);
 void *memset(void *, int, u32);
+int rand(void);
 
 extern GameDefinition item_name_defs[380];
 extern s32 item_drop_counter;
@@ -108,9 +109,12 @@ static ItemNode object_items[2][32];          /* 0x5807C0 the items the player m
 static ModelInstance fixed_item_models[2][64];     /* 0x5816C0 the models of the fixed items */
 static ModelInstance dropped_item_models[2][16];     /* 0x58F6C0 the models of the dropped items */
 static ModelInstance object_item_models[2][32];     /* 0x592EC0 the models of the pickup items */
-static char fixed_item_model_data[2][64][0x200];       /* 0x599EC0 the model data of the fixed items */
-static char dropped_item_model_data[2][16][0x200];       /* 0x5A9EC0 the model data of the dropped items */
-static char object_item_model_data[2][32][0x200];       /* 0x5ADEC0 the model data of the pickup items */
+static char fixed_item_model_data[2][64][0x200];       /* 0x599EC0 the model data of the fixed items (the parts Model_SetUpPosed
+                                                            lays out) PORT: holds runtime structs, may need more room on the PC */
+static char dropped_item_model_data[2][16][0x200];       /* 0x5A9EC0 the model data of the dropped items (the parts Model_SetUpPosed
+                                                            lays out) PORT: holds runtime structs, may need more room on the PC */
+static char object_item_model_data[2][32][0x200];       /* 0x5ADEC0 the model data of the pickup items (the parts Model_SetUpPosed
+                                                            lays out) PORT: holds runtime structs, may need more room on the PC */
 static s8 fixed_item_by_id[2][0x100];             /* 0x5B5EC0 the node of each item slot, -1 for none */
 static f32 pickup_start_position[4];                   /* 0x5B60C0 where the item being picked up is */
 static f32 pickup_start_rotation[4];                   /* 0x5B60D0 its rotation */
@@ -312,7 +316,8 @@ int MapItem_PlaceFixed(int map, int index) {
     Vector_Copy(&node->model->position, &node->def->position);
     Vector_Copy(&node->model->rotation, &node->def->rotation);
     Vector_Copy(&node->model->scale_x, &node->def->scale);
-    MapItem_Link((ListNode *)node);
+    MapItem_Link(node);
+    return 1; /* retail returns whatever MapItem_Link left in $2; no caller reads it */
 }
 
 /* Puts the fixed item with this id of a map in place (MapItem_PlaceFixed). */
@@ -469,7 +474,7 @@ s32 MapItem_Drop(s32 map, s32 item, s32 priority, f32 *position, f32 floor_y, f3
     node->record->priority = priority;
     node->record->used = TRUE;
     node->record->order = order;
-    MapItem_Link((ListNode *)node);
+    MapItem_Link(node);
     return TRUE;
 }
 
@@ -524,16 +529,16 @@ ItemNode *MapItem_PutOutForObject(int map, int item, void *position, void *rotat
     node->model->texture_slot = 2;
     node->model->texture_data = (int)source->texture;
     TextureTable_SetBasePointers(source->texture, 0x3B40, 0x3EC0);
-    MapItem_Link((ListNode *)node);
+    MapItem_Link(node);
     return node;
 }
 
 /* Returns the item lying about that a map object put out (MapItem_PutOutForObject), or NULL. */
-ItemNode *MapItem_FindForObject(int object) {
+ItemNode *MapItem_FindForObject(void *object) {
     ItemNode *node;
 
     for (node = lying_items; node != NULL; node = node->next) {
-        if (node->unk08 == object) {
+        if ((void *)node->unk08 == object) {
             return node;
         }
     }
@@ -893,16 +898,17 @@ void *MapItem_FindModelSource(int slot, int key) {
     return NULL;
 }
 
-/* Puts an item on the front of the list of items lying about (lying_items). */
-void MapItem_Link(ListNode *node) {
-    ListNode *head = (ListNode *)lying_items;
+/* Puts an item on the front of the list of items lying about (lying_items). (Retail reads the nodes as ListNodes,
+   whose links lie where an ItemNode's do only on the PS2.) */
+void MapItem_Link(ItemNode *node) {
+    ItemNode *head = lying_items;
 
     node->prev = NULL;
     node->next = head;
     if (head != NULL) {
         head->prev = node;
     }
-    lying_items = (ItemNode *)node;
+    lying_items = node;
 }
 
 /* Takes an item off the list of items lying about, frees its object and drop record links, and returns
@@ -982,7 +988,7 @@ int MapItem_UniqueNotDropped(int item) {
 
     common = item_common_defs + item;
     for (i = 0; i < 0x80; i++) {
-        for (j = 0, record = (DroppedItemRecord *)(i * 0x140 + (int)base); j < 0x10; j++) {
+        for (j = 0, record = (DroppedItemRecord *)(base + i * 0x140); j < 0x10; j++) {
             if (record->used != 0 && record->item == item) {
                 if (item >= 0x96 || (common->flags >> 1 & 1)) {
                     return 0;
