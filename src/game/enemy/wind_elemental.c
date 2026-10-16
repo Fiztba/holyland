@@ -90,7 +90,7 @@ void WindElemental_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags &= ~0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -334,7 +334,7 @@ static void WindElemental_Dodge(Entity *entity) {
             entity->move_command = 0;
             entity->action_timer = 0;
             if (!(rand() & 1) && ABS(EntityMath_WrapAngle(entity->heading_to_player - entity->model->rotation[1])) < 0.5235988f) {
-                ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~(3L << 58)) | (1L << 58);
+                ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~(3LL << 58)) | (1LL << 58);
                 EntityAi_StartAction(entity, EntityAi_RangedAttack, 1);
             } else if ((s32)(ENTITY_FLAGS(entity) >> 5) & 1) {
                 unkE0->think(entity, 1);

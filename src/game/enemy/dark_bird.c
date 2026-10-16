@@ -116,7 +116,7 @@ void DarkBird_Init(Entity *entity) {
     }
     entity->flags |= 0x10000000;
     entity->target = NULL;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -404,7 +404,7 @@ static void DarkBird_ThinkIdle(Entity *entity, s32 unknown) {
 /* The move handler: keeps animation 3 on both motion slots, flag bits 11 to 13 at 0. DarkBird_ApplyMoveCommand
    does the turning and the moving. */
 static void DarkBird_Move(Entity *entity) {
-    entity->flags &= ~0x3800UL;
+    entity->flags &= ~0x3800ULL;
     EntityAi_StartSlotMotion(entity, entity->unkE0.motion_slot_0, 0, 3, 0, entity->params->motion_blend_frames, 0);
     EntityAi_StartSlotMotion(entity, entity->unkE0.motion_slot_1, 1, 3, 0, entity->params->motion_blend_frames, 0);
 }

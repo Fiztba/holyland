@@ -117,7 +117,7 @@ void Entity_InitFromMapSpawns(int map) {
         entity->pool_slot_index = -1;
         entity->spawn_info = spawn_info;
         entity_by_spawn_id[map][SPAWN_FLAGS(spawn_info)->bytes[4]] = entity;
-        if ((SPAWN_FLAGS(spawn_info)->word & (0xC000L << 45)) == (0x8000L << 45)) {
+        if ((SPAWN_FLAGS(spawn_info)->word & (0xC000LL << 45)) == (0x8000LL << 45)) {
             ENTITY_FLAG_BITS(entity)->bit7 = FALSE;
         } else {
             ENTITY_FLAG_BITS(entity)->bit7 = TRUE;
@@ -340,7 +340,7 @@ void Entity_UpdateAll(void) {
         if (entity->ailment_1_frames != 0) {
             if (entity->ailment_1_frames % 30 == 0) {
                 entity->hit_points = (entity->hit_points < 3) ? 0 : entity->hit_points - 3;
-                entity->flags &= ~(3L << 38);
+                entity->flags &= ~(3LL << 38);
             }
             entity->ailment_1_frames--;
         }

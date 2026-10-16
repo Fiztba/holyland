@@ -88,7 +88,7 @@ void ExpeditionArcher_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -173,9 +173,9 @@ static void ExpeditionArcher_PitchPartToPlayer(Entity *actor) {
 static void ExpeditionArcher_Think(Entity *entity, s32 unknown) {
     if (((u8)entity->animation_index == 0x17 || (u8)entity->animation_index == 0x18) && entity->model->level_tables->unk88 == 0 &&
         entity->model->level_tables->unk82 >= 9 && entity->model->level_tables->unk82 < 0x2F) {
-        entity->model->parts[5].unk68 &= ~(0x8000L << 25);
+        entity->model->parts[5].unk68 &= ~(0x8000LL << 25);
     } else {
-        entity->model->parts[5].unk68 |= 0x8000L << 25;
+        entity->model->parts[5].unk68 |= 0x8000LL << 25;
     }
     if (frame_counter % 10U == entity->spawn_index % 10U) {
         EntityAi_SensePlayer(entity, 1);

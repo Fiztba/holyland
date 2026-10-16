@@ -55,7 +55,7 @@ void Stool_Init(Entity *entity) {
         entity->attack_weights[i] = 0x80;
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -77,7 +77,7 @@ static void Stool_OnHit(Entity *entity) {
     EntityAi_LowerWeightsAfterHit((char *)entity);
     flags = entity->flags;
     if ((s32)(flags >> 38) & 3) {
-        entity->flags = (flags & ~(3UL << 58)) | (1UL << 57);
+        entity->flags = (flags & ~(3ULL << 58)) | (1ULL << 57);
         EntityAi_StartAction(entity, EntityAi_RangedAttack, 1);
         return;
     }

@@ -49,7 +49,7 @@ void Bell_Init(Entity *entity) {
     ENTITY_FLAG_BITS(entity)->bit21 = 1;
     ENTITY_FLAG_BITS(entity)->bit16 = 1;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);

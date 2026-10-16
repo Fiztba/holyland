@@ -95,7 +95,7 @@ void WiddaArcher_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -223,9 +223,9 @@ static void WiddaArcher_Think(Entity *entity, s32 unknown) {
     if (entity->model->level_tables->unk88 == 0 &&
         ((entity->animation_index == 0x17 && entity->model->level_tables->unk82 >= 7 && entity->model->level_tables->unk82 < 0x24) ||
          (entity->animation_index == 0x18 && entity->model->level_tables->unk82 >= 0x19 && entity->model->level_tables->unk82 < 0x32))) {
-        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000L << 25;
+        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000LL << 25;
     } else {
-        ((EntityModelPart80 *)entity->model->parts)[29].unk68 &= ~(0x8000L << 25);
+        ((EntityModelPart80 *)entity->model->parts)[29].unk68 &= ~(0x8000LL << 25);
     }
     if (frame_counter % 10U == entity->spawn_index % 10U) {
         EntityAi_SensePlayer(entity, 1);
@@ -395,9 +395,9 @@ static void WiddaArcher_ThinkUseMapObject(Entity *entity, s32 unknown) {
     if (entity->model->level_tables->unk88 == 0 &&
         ((entity->animation_index == 0x17 && entity->model->level_tables->unk82 >= 7 && entity->model->level_tables->unk82 < 0x24) ||
          (entity->animation_index == 0x18 && entity->model->level_tables->unk82 >= 0x19 && entity->model->level_tables->unk82 < 0x32))) {
-        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000L << 25;
+        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000LL << 25;
     } else {
-        ((EntityModelPart80 *)entity->model->parts)[29].unk68 &= ~(0x8000L << 25);
+        ((EntityModelPart80 *)entity->model->parts)[29].unk68 &= ~(0x8000LL << 25);
     }
     if (frame_counter % 10U == entity->spawn_index % 10U) {
         EntityAi_SensePlayer(entity, 1);

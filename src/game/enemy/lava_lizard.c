@@ -82,7 +82,7 @@ void LavaLizard_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -103,7 +103,7 @@ void LavaLizard_Init(Entity *entity) {
 static void LavaLizard_Think(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
 
-    if (entity->flags & (0xD000L << 33)) {
+    if (entity->flags & (0xD000LL << 33)) {
         unkE0->step_index = entity->params->far_distance;
     }
     if (frame_counter % 10U == entity->spawn_index % 10U) {

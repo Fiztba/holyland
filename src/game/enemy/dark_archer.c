@@ -131,7 +131,7 @@ void DarkArcher_Init(Entity *entity) {
         unkE0->death = (void (*)(void))EntityAi_Death;
         unkE0->dormant = (void (*)(void))EntityAi_Dormant;
         unkE0->move = (void (*)(void))EntityAi_Move;
-        if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+        if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
             EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
         } else {
             EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -437,7 +437,7 @@ static void DarkArcher_Think(Entity *entity, s32 unknown) {
             }
         }
     }
-    if ((s16)entity->params->action_frames != 0 && (entity->flags & (0x8200L << 35))) {
+    if ((s16)entity->params->action_frames != 0 && (entity->flags & (0x8200LL << 35))) {
         unkE0->step_index = 1;
     } else {
         unkE0->step_index = 0;
@@ -649,7 +649,7 @@ static void DarkArcher_MoveAlongArc(Entity *entity) {
     case 4:
         unkE0->keep_min_distance = EntityMath_Approach(unkE0->keep_min_distance, entity->params->max_speed, entity->params->speed_step_per_frame);
         unkE0->heading_speed = EntityMath_Approach(unkE0->heading_speed, entity->params->unk43C, entity->params->unk43A);
-        if (ENTITY_FLAGS(entity) & (0x8200L << 35)) {
+        if (ENTITY_FLAGS(entity) & (0x8200LL << 35)) {
             Motion_Start(entity, 9, 0, 0, 1);
             unkE0->heading_speed = 0.0f;
             unkE0->keep_min_distance = 0.0f;

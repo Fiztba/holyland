@@ -536,7 +536,7 @@ void EntityCollision_ApplySurfaceEffect(Entity *entity, s32 unknown_a, s32 unkno
                 amount = chance;
             }
             entity->hit_points -= amount;
-            entity->flags &= ~0xC000000000L;
+            entity->flags &= ~0xC000000000LL;
             entity->hit_flash_frames = 3;
         }
         break;
@@ -544,7 +544,7 @@ void EntityCollision_ApplySurfaceEffect(Entity *entity, s32 unknown_a, s32 unkno
         if (entity->hit_points != 0) {
             entity->hit_points = (entity->hit_points > 30) ? entity->hit_points - 30 : 0;
             entity->hit_flash_frames = 3;
-            entity->flags &= ~0xC000000000L;
+            entity->flags &= ~0xC000000000LL;
         }
         break;
     }
@@ -642,7 +642,7 @@ walls:
             }
         }
     }
-    if (!(entity->flags & 0x4000000400000L)) {
+    if (!(entity->flags & 0x4000000400000LL)) {
         strip = mesh->floor_strips;
         i = mesh->floor_strip_count;
         while (--i != -1) {
@@ -1031,7 +1031,7 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
             do {
                 EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
-                    entity->flags |= 0x8000L << 30;
+                    entity->flags |= 0x8000LL << 30;
                     Vector_Subtract(offset, position, COLLISION_RESULT);
                     sceVu0Normalize(offset, offset);
                     Vector_Add(normal_sum, normal_sum, offset);
@@ -1052,7 +1052,7 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
             do {
                 EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
-                    entity->flags |= 0x8000L << 30;
+                    entity->flags |= 0x8000LL << 30;
                     Vector_Subtract(offset, position, COLLISION_RESULT);
                     sceVu0Normalize(offset, offset);
                     Vector_Add(normal_sum, normal_sum, offset);
@@ -1073,7 +1073,7 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
             do {
                 EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
-                    entity->flags |= 0x8000L << 30;
+                    entity->flags |= 0x8000LL << 30;
                     Vector_Subtract(offset, position, COLLISION_RESULT);
                     sceVu0Normalize(offset, offset);
                     Vector_Add(normal_sum, normal_sum, offset);
@@ -1087,7 +1087,7 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
             strip = (CollisionStrip *)(point + strip->point_count);
         }
     }
-    if (!(entity->flags & 0x4000000400000L)) {
+    if (!(entity->flags & 0x4000000400000LL)) {
         strip = mesh->floor_strips;
         i = mesh->floor_strip_count;
         while (--i != -1) {
@@ -1097,7 +1097,7 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
                 EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
                     hit_floor = TRUE;
-                    entity->flags |= 0x8000L << 29;
+                    entity->flags |= 0x8000LL << 29;
                     Vector_Subtract(offset, position, COLLISION_RESULT);
                     sceVu0Normalize(offset, offset);
                     Vector_Scale(offset, offset, entity->collision_radius);
@@ -1128,7 +1128,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
     Vector_Copy(position, entity->model->position);
     normal_sum[0] = normal_sum[1] = normal_sum[2] = normal_sum[3] = 0.0f;
     if (!((s32)(entity->flags >> 28) & 1)) {
-        entity->flags &= ~(1L << 51);
+        entity->flags &= ~(1LL << 51);
         position[1] += 0.1f;
         lift = entity->floor_lift;
     }

@@ -108,7 +108,7 @@ void GreaterDemon_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags &= ~0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -724,14 +724,14 @@ static void GreaterDemon_Guard(Entity *entity) {
     case 1:
         if (entity->model->level_tables->unk88 == 0) {
             entity->action_timer = entity->params->guard_frames;
-            entity->flags |= 0x8000L << 20;
+            entity->flags |= 0x8000LL << 20;
             entity->flags &= ~0x4000;
             entity->action_step++;
         }
         break;
     case 2:
         if (ENTITY_FLAG_BITS(entity)->bit43 && ENTITY_FLAG_BITS(entity)->bit39 && !ENTITY_FLAG_BITS(entity)->bit38) {
-            entity->flags &= ~(0x8000L << 28);
+            entity->flags &= ~(0x8000LL << 28);
             entity->action_timer = entity->params->guard_frames;
         }
         EntityEvent_StartEffectAtPoint((char **)entity, 0x32F, 0, entity->model->rotation);

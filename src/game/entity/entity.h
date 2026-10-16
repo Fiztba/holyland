@@ -115,7 +115,8 @@ typedef struct {
 
 /* what Entity.model points at. ModelInstance (model/model.h) is a second view of the same block,
    see ENTITY_MODEL; the two are to be unified. ModelInstance holds pointers, so on the PC the padding
-   follows its layout; aim_part and look_at_part are MODEL_SLOT_PARTS(model)[1] and [2]. */
+   follows its layout; aim_part and look_at_part are ModelInstance.pad134[0] and [1] (MODEL_SLOT_PARTS(model)[1]
+   and [2]). */
 typedef struct {
     char pad00[0xC0];
     f32 position[4];                /* 0xC0 */
@@ -126,10 +127,10 @@ typedef struct {
     EntityModelUnkFC *level_tables; /* 0xFC the model's animation channel (ModelInstance.level_tables) */
     char pad100[offsetof(ModelInstance, draw_flags) - offsetof(ModelInstance, level_tables) - sizeof(void *)];
     u16 draw_flags;                 /* 0x102 0x800: drawn with its own texture (same word as ModelInstance) */
-    char pad104[offsetof(ModelInstanceSlots, parts[1]) - offsetof(ModelInstance, draw_flags) - sizeof(u16)];
+    char pad104[offsetof(ModelInstance, pad134) - offsetof(ModelInstance, draw_flags) - sizeof(u16)];
     ModelPart *aim_part;            /* 0x134 the part the model file marks 2; turned towards a target */
     void *look_at_part;             /* 0x138 the part look-at turns (the third the model file marks) */
-    char pad13C[offsetof(ModelInstance, radius) - offsetof(ModelInstanceSlots, parts[3])];
+    char pad13C[offsetof(ModelInstance, radius) - offsetof(ModelInstance, pad134) - 2 * sizeof(ModelPart *)];
     f32 radius;                     /* 0x13C the larger of Entity.collision_radius and unk34 */
     char pad140[offsetof(ModelInstance, alpha) - offsetof(ModelInstance, radius) - sizeof(f32)];
     f32 alpha;                      /* 0x15C the model's alpha, 0x80 is opaque */
@@ -138,7 +139,8 @@ _Static_assert(offsetof(EntityModel, position) == offsetof(ModelInstance, positi
 _Static_assert(offsetof(EntityModel, parts) == offsetof(ModelInstance, parts), "EntityModel is not ModelInstance");
 _Static_assert(offsetof(EntityModel, level_tables) == offsetof(ModelInstance, level_tables), "EntityModel is not ModelInstance");
 _Static_assert(offsetof(EntityModel, draw_flags) == offsetof(ModelInstance, draw_flags), "EntityModel is not ModelInstance");
-_Static_assert(offsetof(EntityModel, aim_part) == offsetof(ModelInstanceSlots, parts[1]), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, aim_part) == offsetof(ModelInstance, pad134), "EntityModel is not ModelInstance");
+_Static_assert(sizeof(((ModelInstance *)0)->pad134) == 2 * sizeof(ModelPart *), "EntityModel is not ModelInstance");
 _Static_assert(offsetof(EntityModel, radius) == offsetof(ModelInstance, radius), "EntityModel is not ModelInstance");
 _Static_assert(offsetof(EntityModel, alpha) == offsetof(ModelInstance, alpha), "EntityModel is not ModelInstance");
 

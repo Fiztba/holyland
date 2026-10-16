@@ -90,7 +90,7 @@ void Spider_Init(Entity *entity) {
     EntityAi_SetUpdate((char *)entity, entity_type_handlers[entity->params->entity_type][1]);
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         unkE0->think = Spider_Think;
         unkE0->animate = (void (*)(void))Spider_Animate;
         unkE0->on_hit = (void (*)(void))EntityAi_OnHit;
@@ -552,7 +552,7 @@ static void Spider_LevelOut(Entity *entity) {
     entity->busy_flags = 0x2000;
     pitch_left = EntityMath_EaseAngleToward(&entity->model->rotation[0], 0.0f, 6.0f);
     roll_left = EntityMath_EaseAngleToward(&entity->model->rotation[2], 0.0f, 6.0f);
-    if (entity->flags & (0x8200L << 35)) {
+    if (entity->flags & (0x8200LL << 35)) {
         pitch_left = ABS(pitch_left);
         roll_left = ABS(roll_left);
         if (ABS(pitch_left) < 0.01f && ABS(roll_left) < 0.01f) {

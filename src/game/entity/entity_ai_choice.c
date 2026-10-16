@@ -212,7 +212,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
     f32 angle;
 
     *(f32 *)heading_out = 0.0f;
-    if (!(entity->flags & (0xB000L << 33))) {
+    if (!(entity->flags & (0xB000LL << 33))) {
         return 0;
     }
     angle = entity->model->rotation[1];
@@ -221,7 +221,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
     facing[2] = -cosf(angle);
     facing[3] = 1.0f;
     push[0] = push[1] = push[2] = push[3] = 0.0f;
-    if (entity->flags & (0xC000L << 31)) {
+    if (entity->flags & (0xC000LL << 31)) {
         push[0] += entity->wall_push[0];
         push[2] += entity->wall_push[2];
     }
@@ -253,7 +253,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
 
     // match: the early return and the second `return FALSE` below leave a label in front of the body
     // until jump2 merges the two, which keeps `heading` copied back into $f12 for sinf
-    if (!(entity->flags & (0xB000L << 33))) {
+    if (!(entity->flags & (0xB000LL << 33))) {
         return FALSE;
     }
     facing[0] = -sinf(heading);
@@ -261,7 +261,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
     facing[2] = -cosf(heading);
     facing[3] = 1.0f;
     push[0] = push[1] = push[2] = push[3] = 0.0f;
-    if (entity->flags & (0xC000L << 31)) {
+    if (entity->flags & (0xC000LL << 31)) {
         push[0] += entity->wall_push[0];
         push[2] += entity->wall_push[2];
     }
@@ -940,7 +940,7 @@ int EntityAi_PushTurnCommand3D(Entity *entity, int turn) {
     int code = 0;
 
     push[0] = push[1] = push[2] = push[3] = 0.0f;
-    if (entity->flags & (0xC000L << 31)) {
+    if (entity->flags & (0xC000LL << 31)) {
         push[0] += entity->wall_push[0];
         push[1] += entity->wall_push[1];
         push[2] += entity->wall_push[2];

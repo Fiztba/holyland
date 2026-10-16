@@ -73,7 +73,7 @@ void Snake_Init(Entity *entity) {
     }
     ENTITY_UNK5C(entity)->as_s32 = 0;
     ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
+    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
         if (entity->spawn_info->spawn_mode == 0) {
             unkE0->dormant = (void (*)(void))Snake_DormantHoldAnim2;
         } else if (entity->spawn_info->spawn_mode == 1) {

@@ -970,13 +970,13 @@ static void Entity_FreeWorkArea(int index) {
 static void Entity_PrepareModelDraw(ModelInstance *model) {
     Packet_BeginGsRegisters();
     if (model->alpha >= 128.0f) {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118LL);
         Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
         Packet_AddGsRegister(GS_REG_TEST_2, 0x5000D);
     } else {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
         Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
         Packet_AddGsRegister(GS_REG_TEST_2, 0x30001);
     }
@@ -990,7 +990,7 @@ static void Entity_PrepareModelDraw(ModelInstance *model) {
    Nothing calls it. */
 void Entity_PrepareAdditiveDraw(ModelInstance *model) {
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x50000);
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
     Packet_EndGsRegisters();
@@ -1002,7 +1002,7 @@ void Entity_PrepareAdditiveDraw(ModelInstance *model) {
    coordinates back; then sets the GS registers by the model's alpha. */
 static void Entity_PrepareScreenTexturedDraw(ModelInstance *model) {
     if (model->draw_flags & MODEL_FLAG_800) {
-        Model_SetBlockGsWords(model, 0x220013540L, 0x60, -1, -1);
+        Model_SetBlockGsWords(model, 0x220013540LL, 0x60, -1, -1);
         Model_SetUvsFromScreen(model);
         GsDraw_CopyFrameToTexture(0x3540, 0, 0x100, 0x100);
         GsDraw_ResetDrawTarget();
@@ -1014,19 +1014,19 @@ static void Entity_PrepareScreenTexturedDraw(ModelInstance *model) {
     Packet_BeginGsRegisters();
 
     if (128.0f <= model->alpha) {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
-        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DL);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118LL);
+        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DLL);
         if (model->draw_flags & MODEL_FLAG_800) {
-            Packet_AddGsRegister(GS_REG_TEST_2, 0x30001L);
+            Packet_AddGsRegister(GS_REG_TEST_2, 0x30001LL);
         } else {
-            Packet_AddGsRegister(GS_REG_TEST_2, 0x5000DL);
+            Packet_AddGsRegister(GS_REG_TEST_2, 0x5000DLL);
         }
     } else {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
-        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DL);
-        Packet_AddGsRegister(GS_REG_TEST_2, 0x30001L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DLL);
+        Packet_AddGsRegister(GS_REG_TEST_2, 0x30001LL);
     }
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
     Packet_AddGsRegister(GS_REG_ALPHA_2, 0x9);

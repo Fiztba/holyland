@@ -97,7 +97,7 @@ void FireElemental_Init(Entity *entity) {
     }
     ENTITY_FLAG_BITS(entity)->bit28 = 0;
     entity->target = NULL;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -440,7 +440,7 @@ static void FireElemental_Dodge(Entity *entity) {
             entity->move_command = 0;
             entity->action_timer = 0;
             if (!(rand() & 1) && ABS(EntityMath_WrapAngle(entity->heading_to_player - entity->model->rotation[1])) < 0.5235988f) {
-                ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~(3L << 58)) | (1L << 58);
+                ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~(3LL << 58)) | (1LL << 58);
                 EntityAi_StartAction(entity, FireElemental_RangedAttack1, 1);
             } else if ((s32)(ENTITY_FLAGS(entity) >> 5) & 1) {
                 unkE0->think(entity, 1);
@@ -783,7 +783,7 @@ static void FireElemental_ThinkReturn(Entity *entity, s32 unknown) {
         entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
     } else {
         push[0] = push[1] = push[2] = push[3] = 0.0f;
-        if (entity->flags & (0xC000L << 31)) {
+        if (entity->flags & (0xC000LL << 31)) {
             push[0] += entity->wall_push[0];
             push[2] += entity->wall_push[2];
         }

@@ -419,7 +419,7 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
     if (!ENTITY_FLAG_BITS(entity)->bit7) {
         return FALSE;
     }
-    if (ENTITY_FLAG_BITS(entity)->bit4 && (entity->spawn_info->spawn_flags & (0x8000L << 46))) {
+    if (ENTITY_FLAG_BITS(entity)->bit4 && (entity->spawn_info->spawn_flags & (0x8000LL << 46))) {
         return FALSE;
     }
     death_count = Game_GetSpawnDeathCount(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
@@ -430,7 +430,7 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
     /* EntityMath_DistanceXZ inlined (one VU0 block) */
     distance[0] = EntityMath_DistanceXZ(&spawn_info->spawn_x, (f32 *)&player_state.position);
     if (distance[0] <= (f32)spawn_info->respawn_distance) {
-        if ((entity->spawn_info->spawn_flags & (0xC000L << 45)) == (0x8000L << 44)) {
+        if ((entity->spawn_info->spawn_flags & (0xC000LL << 45)) == (0x8000LL << 44)) {
             return TRUE;
         }
         if (ENTITY_FLAG_BITS(entity)->pad8) {
@@ -597,10 +597,10 @@ void EntityAi_CheckFarFromSpawn3D(Entity *entity) {
     limit = spawn_info->wander_radius;
     delta_z = model->position[2] - spawn_info->spawn_z;
     if ((float)(limit * limit) < (delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z)) {
-        entity->flags |= (0x8000UL << 38);
+        entity->flags |= (0x8000ULL << 38);
         return;
     }
-    entity->flags &= 0xFFDFFFFFFFFFFFFFUL;
+    entity->flags &= 0xFFDFFFFFFFFFFFFFULL;
 }
 
 /* Sets flag 53 while the model is farther from its spawn point than EntitySpawnInfo.wander_radius (in x and z),
@@ -618,10 +618,10 @@ void EntityAi_CheckFarFromSpawn(Entity *entity) {
     limit = spawn_info->wander_radius;
     delta_z = model->position[2] - spawn_info->spawn_z;
     if ((float)(limit * limit) < (delta_x * delta_x) + (delta_z * delta_z)) {
-        entity->flags |= (0x8000UL << 38);
+        entity->flags |= (0x8000ULL << 38);
         return;
     }
-    entity->flags &= 0xFFDFFFFFFFFFFFFFUL;
+    entity->flags &= 0xFFDFFFFFFFFFFFFFULL;
 }
 
 /* Clears flag bit 31. The think functions call it when closing in and test the bit right after: set, they
@@ -1847,8 +1847,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
 u16 Motion_FrameCount(ModelInstance *model, int index) {
     ModelPartLevels *levels;
 
-    /* match: indexing level_tables as an array swaps the addu operands */
-    levels = *(ModelPartLevels **)((char *)model->level_tables + (index << 2));
+    levels = model->level_tables[index];
     return *(u16 *)((char *)levels - 4);
 }
 

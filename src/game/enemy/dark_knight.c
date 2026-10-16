@@ -103,7 +103,7 @@ void DarkKnight_Init(Entity *entity) {
     }
     entity->target = NULL;
     entity->flags &= ~0x10000000;
-    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
+    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
     } else {
         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
@@ -217,10 +217,10 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
         if (frame_counter % 3U == 0) {
             EntityEvent_StartEffectAtPoint((char **)entity, 0x25C, 0, entity->model->rotation);
         }
-        ENTITY_FLAGS(entity) |= 0x8000L << 20;
+        ENTITY_FLAGS(entity) |= 0x8000LL << 20;
         unkE0->sub_timer--;
     } else {
-        ENTITY_FLAGS(entity) &= ~(0x8000L << 20);
+        ENTITY_FLAGS(entity) &= ~(0x8000LL << 20);
     }
     if (entity->busy_flags == 0) {
         EntityAi_CheckFarFromSpawn(entity);
