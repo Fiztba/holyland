@@ -693,9 +693,9 @@ static void Menu_DrawBackdropPlain(void);
 static void Menu_DrawBackdropItemSelParts(void);
 static void Menu_DrawBackdropPreshopParts(void);
 static int Menu_RunStep(void);
-static s32 Menu_Start(void);
-static s32 Menu_RunHandler(void);
-static s32 Menu_CutModelChain(void);
+static s32 Menu_Start(char *context);
+static s32 Menu_RunHandler(char *context);
+static s32 Menu_CutModelChain(char *context);
 static void Menu_OpenMain(void);
 static void Menu_UpdateMain(HandlerContext *context);
 static void Menu_OpenChosenScreen(HandlerContext *context);
@@ -703,7 +703,7 @@ static void Menu_StepBlink(void);
 static void Menu_MoveItemAfter(MenuItem *item, MenuItem *after);
 static f32 Menu_PulseValue(f32 value, s32 start, s32 target);
 static void Menu_UpdateUseItem(HandlerContext *context);
-static void Menu_UpdateCastSpell(s32 context);
+static void Menu_UpdateCastSpell(char *context);
 static void Menu_UpdateEquip(void);
 static void Menu_UpdateStatus(void);
 static void Menu_UpdateKeyItems(void);
@@ -2301,8 +2301,8 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
 }
 
 extern char equip_screen_name[8];
-/* the steps of a menu's start, run by Menu_RunStep until one gives 0 */
-static int (*const menu_steps[4])(void) = {
+/* the steps of a menu's start, run by Menu_RunStep until one gives 0; each is handed D_005CE0E0 */
+static int (*const menu_steps[4])(char *context) = {
     Menu_Start,
     Menu_RunHandler,
     Menu_CutModelChain,
@@ -2809,7 +2809,7 @@ static int Menu_RunStep(void) {
     int (*step)(char *);
 
     Menu_StepModelLoads(0);
-    step = (int (*)(char *))menu_steps[menu_step]; // match: the steps take nothing, yet D_005CE0E0 is passed
+    step = menu_steps[menu_step];
     if (step != NULL) {
         return step(D_005CE0E0);
     }
@@ -2817,7 +2817,7 @@ static int Menu_RunStep(void) {
 }
 
 /* Start-up step of a menu screen: loads its textures and blocks, then picks the handler for the screen menu_mode names. */
-static s32 Menu_Start(void) {
+static s32 Menu_Start(char *context) {
     s32 i = 0;
     u32 *packet;
     LoadedBlockRef *block;
@@ -2894,15 +2894,16 @@ static s32 Menu_Start(void) {
     return TRUE;
 }
 
-/* Runs the current screen handler and reports that it ran. */
-static s32 Menu_RunHandler(void) {
-    ((void (*)(void))menu_screen_handler)();
+/* Runs the current screen handler and reports that it ran. The handler is handed the context Menu_RunStep
+   passed (on the PS2 it was left in $a0); each handler takes it as its own pointer type, or not at all. */
+static s32 Menu_RunHandler(char *context) {
+    ((void (*)(char *))menu_screen_handler)(context);
     return TRUE;
 }
 
 /* Last step of a menu: in the game's menu waits for the model load in progress with the chain cut behind it, then
    takes the lists' cursors back as they were, closes the load's file and ends the menu (step 0, returns FALSE). */
-static s32 Menu_CutModelChain(void) {
+static s32 Menu_CutModelChain(char *context) {
     LinkNode *node;
 
     switch (menu_mode) {
@@ -3318,7 +3319,7 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
 
 /* The Cast a Spell screen (main menu line 1): its parts, the list of seven spells and the cursor bar, the spell's
    text and model; fades in and out. */
-static void Menu_UpdateCastSpell(s32 context) {
+static void Menu_UpdateCastSpell(char *context) {
     f32 view[16];
     f32 local[16];
     MenuCursorBar bar;
@@ -3346,7 +3347,7 @@ static void Menu_UpdateCastSpell(s32 context) {
         return;
     }
     if (cast_spell_state < 2) {
-        ((void (*)(s32))Menu_MoveSpellCursor)(context); // match: the callee takes nothing
+        Menu_MoveSpellCursor();
     }
     item = castable_spell_top[0];
     word.raw = 0x0C0AAE607C307080;

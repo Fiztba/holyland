@@ -86,13 +86,13 @@ int (*const bgm_load_steps[14])(LoadJob *, s32) = {
 };
 
 /* 0x0043ED88 */
-int (*entity_bank_load_steps[2])(void) = { (int (*)(void))Sound_EntityBankLoadVoice, (int (*)(void))Sound_EntityBankFreeSampleBuffer };
+int (*entity_bank_load_steps[2])(SoundJob *job) = { Sound_EntityBankLoadVoice, Sound_EntityBankFreeSampleBuffer };
 
 /* 0x0043ED90 */
-int (*map_bank_load_steps[6])(void) = {
+int (*map_bank_load_steps[6])(SoundJob *job) = {
     Sound_MapBankNoOp,
-    (int (*)(void))Sound_MapBankLoadVoice,
-    (int (*)(void))Sound_MapBankFreeSampleBuffer,
+    Sound_MapBankLoadVoice,
+    Sound_MapBankFreeSampleBuffer,
     Sound_MapBankFinishUnlessFirst,
     Sound_MapBankAddReverb,
     Sound_MapBankApplyReverb,
