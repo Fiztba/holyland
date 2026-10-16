@@ -58,7 +58,7 @@ compiles just `src/game/ui`.
 
 The steps, in order: [PLAN.md](PLAN.md).
 
-**Step 0** (in progress): the game code compiles and links as a 64-bit program on Windows and Linux,
+**Step 0** (done): the game code compiles and links as a 64-bit program on Windows and Linux,
 and `main` runs until it needs something the stand-ins do not do yet.
 
 - `tools/port_census.py` counts, per folder, the errors and the inline asm still standing between
