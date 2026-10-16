@@ -1,0 +1,1781 @@
+diff --git a/src/game/gfx/draw_env.c b/src/game/gfx/draw_env.c
+index 2366513dbc4cd516fbbd51c4f03a15002050487d..78d55b70b6fa42641af8a6e734dd85e25668da60 100644
+--- a/src/game/gfx/draw_env.c
++++ b/src/game/gfx/draw_env.c
+@@ -1,13 +1,15 @@
+ /* A 256x256 draw environment the game can switch to and back. */
+ #include "gfx/packet.h"
+ #include "gfx/draw_env.h"
++#include <eekernel.h>
++#include <string.h>
++#include "gfx/gs.h"
+ 
+-void *memset(void *, int, u32);
+-int FlushCache(int);
+ extern GsDataBlock offscreen_square_corners; /* two corners of a 256x256 square around (2048, 2048), 12.4 fixed point */
+ extern int context1_buffer_half;
+-extern GsDrawEnv game_dbuff_draw0;          /* game_dbuff.draw0 */
+-extern GsDrawEnv game_dbuff_draw1;          /* game_dbuff.draw1 */
++extern GsDoubleBuffer game_dbuff;
++#define game_dbuff_draw0 (*(GsDrawEnv *)&game_dbuff.draw0) /* game_dbuff.draw0 */
++#define game_dbuff_draw1 (*(GsDrawEnv *)&game_dbuff.draw1) /* game_dbuff.draw1 */
+ 
+ static void func_0019B4A0(void);
+ static void func_0019B4A8(void);
+diff --git a/src/game/gfx/draw_list.c b/src/game/gfx/draw_list.c
+index 5bc75d8d049dfcc5589abe1734fb50485638a320..ef000786ebdf15322c9a4e4fc498efe195490493 100644
+--- a/src/game/gfx/draw_list.c
++++ b/src/game/gfx/draw_list.c
+@@ -1,7 +1,7 @@
+ #include "common.h"
+ #include "model/model.h"
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+ void Vector_Subtract(void *, void *, void *);
+ float sqrtf(float);
+ 
+@@ -30,7 +30,7 @@ void DrawList_Add(ModelInstance *model, s32 layer, s32 list) {
+         } else if (depth >= 1000) {
+             depth = 999;
+         }
+-        bucket = (ModelInstance **)((char *)draw_buckets + (depth * 4 + list * 0xFA0 + layer * 0x1F40));
++        bucket = &draw_buckets[layer][list][depth];
+         next = *bucket;
+         *bucket = model;
+         model->draw_next[list] = next;
+@@ -45,7 +45,7 @@ void DrawList_Draw(u32 layer, u32 list) {
+ 
+     if (layer < 5U && list < 2U) {
+         for (depth = 999; depth >= 0; depth--) {
+-            bucket = (ModelInstance **)((char *)draw_buckets + (depth * 4 + list * 0xFA0 + layer * 0x1F40));
++            bucket = &draw_buckets[layer][list][depth];
+             model = *bucket;
+             if (model != 0) {
+                 do {
+diff --git a/src/game/gfx/gs.h b/src/game/gfx/gs.h
+index 4ead55f255a6669ffe51f159be117c1d77377464..fc4168c1ebd6be8921d7b722a1da30c81b9cb730 100644
+--- a/src/game/gfx/gs.h
++++ b/src/game/gfx/gs.h
+@@ -68,16 +68,33 @@ typedef union {
+     } f;
+ } GsPackedWord;
+ 
+-/* menu_frame_buffers: the menus' two frame buffers, a libgraph sceGsDBuffDc of which the game only names
+-   the colour each frame is cleared to */
++/* menu_frame_buffers: the menus' two frame buffers, a libgraph sceGsDBuffDc (two frame buffers, each with a
++   draw environment for both contexts). All 64-bit GS words, so the layout is the same on the PC. The game names
++   the draw environments (as menu_first_draw_env, menu_first_draw_env2, menu_second_draw_env,
++   menu_second_draw_env2) and the colour each frame is cleared to */
+ typedef struct {
+-    char pad000[0x180];
++    u64 disp[10];                   /* 0x000 two sceGsDispEnv */
++    u64 giftag0[2];                 /* 0x050 */
++    u64 draw01[16];                 /* 0x060 sceGsDrawEnv1 of the first frame; [0] is its FRAME_1 */
++    u64 draw02[16];                 /* 0x0E0 sceGsDrawEnv2 of the first frame */
++    u64 clear0[4];                  /* 0x160 sceGsClear of the first frame */
+     u64 clear0_rgbaq;               /* 0x180 sceGsClear.rgbaq of the first frame */
+-    char pad188[0x168];
++    u64 clear0_tail[7];             /* 0x188 */
++    u64 giftag1[2];                 /* 0x1C0 */
++    u64 draw11[16];                 /* 0x1D0 sceGsDrawEnv1 of the second frame; [0] is its FRAME_1 */
++    u64 draw12[16];                 /* 0x250 sceGsDrawEnv2 of the second frame */
++    u64 clear1[4];                  /* 0x2D0 sceGsClear of the second frame */
+     u64 clear1_rgbaq;               /* 0x2F0 of the second frame */
+-    char pad2F8[0x38];
++    u64 clear1_tail[7];             /* 0x2F8 */
+ } GsDoubleBufferDc;
+ 
++LAYOUT_SIZE(GsDoubleBufferDc, 0x330);
++LAYOUT_OFFSET(GsDoubleBufferDc, draw02, 0xE0);
++LAYOUT_OFFSET(GsDoubleBufferDc, clear0_rgbaq, 0x180);
++LAYOUT_OFFSET(GsDoubleBufferDc, draw11, 0x1D0);
++LAYOUT_OFFSET(GsDoubleBufferDc, draw12, 0x250);
++LAYOUT_OFFSET(GsDoubleBufferDc, clear1_rgbaq, 0x2F0);
++
+ /* GS registers as the bit-fields the game writes when it patches a double buffer (Display_Init) */
+ typedef struct {
+     u64 fbp : 9;
+@@ -172,6 +189,13 @@ typedef struct {
+     GsClearBits clear1;             /* 0x1D0 */
+ } GsDoubleBuffer;
+ 
++/* all 64-bit words, the layout the SDK's sceGsDBuff has on both machines; game_dbuff_clear_color[30] is clear1's */
++LAYOUT_SIZE(GsDoubleBuffer, 0x230);
++LAYOUT_OFFSET(GsDoubleBuffer, draw0, 0x60);
++LAYOUT_OFFSET(GsDoubleBuffer, clear0.rgbaq, 0x100);
++LAYOUT_OFFSET(GsDoubleBuffer, draw1, 0x150);
++LAYOUT_OFFSET(GsDoubleBuffer, clear1.rgbaq, 0x100 + 30 * 8);
++
+ /* frame_dispfb_regs and frame_display_regs: the DISPFB and DISPLAY values of the two frames, kept by Display_Init */
+ typedef struct {
+     u64 first;
+diff --git a/src/game/gfx/gs_draw.c b/src/game/gfx/gs_draw.c
+index 9632089b07a8631adfbaad8c3b7755ccc0d01f47..3709bacd447fef6c0e297ef5d02c945ad8e084bf 100644
+--- a/src/game/gfx/gs_draw.c
++++ b/src/game/gfx/gs_draw.c
+@@ -3,6 +3,7 @@
+ #include "gfx/gs.h"
+ #include "gfx/packet.h"
+ #include "gfx/texture.h"
++#include "math/vu0.h"
+ 
+ u32 *Packet_Alloc(int);
+ void Packet_AppendToChain(u32 *, u32 *);
+@@ -77,7 +78,7 @@ void GsDraw_QueueFlush(void) {
+ /* Queues a GS TEXFLUSH write. */
+ void GsDraw_QueueTexFlush(void) {
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xFFFFFFFFL);
++    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xFFFFFFFFLL);
+     Packet_EndGsRegisters();
+ }
+ 
+@@ -96,8 +97,8 @@ void GsDraw_DisableDepthTest(void) {
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+     Packet_AddGsRegister(GS_REG_TEST_2, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+-    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
++    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+     Packet_EndGsRegisters();
+ }
+ 
+@@ -120,7 +121,7 @@ void GsDraw_ResetDrawTarget(void) {
+     if (context1_buffer_half != 0) {
+         frame_base = 0;
+     }
+-    GsDraw_SetDrawTarget((frame_base >> 5) | 0xA0000, 0x1BF0000027F0000L, 0x720000006C00L);
++    GsDraw_SetDrawTarget((frame_base >> 5) | 0xA0000, 0x1BF0000027F0000LL, 0x720000006C00LL);
+ }
+ 
+ /* Queues a copy of the 640x448 frame being drawn to dest_base in GS memory. */
+@@ -151,7 +152,7 @@ void GsDraw_QueueTexturedSprite(void *sprite_arg) {
+     *packet++ = 0;
+     *packet++ = 0;
+     *packet++ = 0x6C09C000;
+-    *(u64 *)packet = ((s64)(prim | 6) << 47) | 0x8000400000008001L;
++    *(u64 *)packet = ((s64)(prim | 6) << 47) | 0x8000400000008001LL;
+     packet += 2;
+     *(u64 *)packet = 0x513513EE;
+     packet += 2;
+@@ -215,7 +216,7 @@ void GsDraw_QueueFlatSprite(void *sprite_arg) {
+     *packet++ = 0;
+     *packet++ = 0;
+     *packet++ = 0x6C05C000;
+-    *(u64 *)packet = ((s64)prim << 47) | 0x4000400000008001L;
++    *(u64 *)packet = ((s64)prim << 47) | 0x4000400000008001LL;
+     packet += 2;
+     *(u64 *)packet = 0x5151;
+     packet += 2;
+@@ -245,7 +246,7 @@ void GsDraw_QueueFlatSprite(void *sprite_arg) {
+ }
+ 
+ /* Cover the screen with a blended flat colour, in ten vertical strips. */
+-void GsDraw_FillScreen(int red, int green, int blue, int alpha, int blend) {
++void GsDraw_FillScreen(int red, int green, int blue, int alpha, s64 blend) { /* blend: the whole 64-bit GS ALPHA value */
+     ScreenSprite sprite;
+     int strips_left;
+ 
+@@ -280,7 +281,7 @@ void GsDraw_ClearFrame(void) {
+ 
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(0x47, 0x30000);
+-    Packet_AddGsRegister(0x4E, 0x10A000118UL);
++    Packet_AddGsRegister(0x4E, 0x10A000118ULL);
+     Packet_EndGsRegisters();
+     sprite.prim = 6;
+     sprite.vertex[0].x = 0x6C00;
+@@ -366,16 +367,14 @@ void GsDraw_QueueVu1Matrix(void *matrix) {
+     *packet++ = 0;
+     *packet++ = 0;
+     *packet++ = 0x6C040000;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0x0(%0)\n"
+-        "lqc2 $vf17, 0x10(%0)\n"
+-        "lqc2 $vf18, 0x20(%0)\n"
+-        "lqc2 $vf19, 0x30(%0)\n"
+-        "sqc2 $vf16, 0x0(%1)\n"
+-        "sqc2 $vf17, 0x10(%1)\n"
+-        "sqc2 $vf18, 0x20(%1)\n"
+-        "sqc2 $vf19, 0x30(%1)\n"
+-        : : "r"(matrix), "r"(packet));
++    Vu_Lqc2(16, (u8 *)matrix + 0x0); /* copied through vf16..vf19 */
++    Vu_Lqc2(17, (u8 *)matrix + 0x10);
++    Vu_Lqc2(18, (u8 *)matrix + 0x20);
++    Vu_Lqc2(19, (u8 *)matrix + 0x30);
++    Vu_Sqc2((u8 *)packet + 0x0, 16);
++    Vu_Sqc2((u8 *)packet + 0x10, 17);
++    Vu_Sqc2((u8 *)packet + 0x20, 18);
++    Vu_Sqc2((u8 *)packet + 0x30, 19);
+     packet += 0x10;
+     Packet_AppendToChain(packet_start, packet);
+ }
+@@ -440,7 +439,7 @@ void GsDraw_DrawScrollingTexture(void *texture_arg, void *offset_arg) {
+     // match: the half width is read before TEX0 is built (it decides the registers of the TEX0 terms)
+     half = texture->target_width >> 1;
+     sprite.tex0 = (u64)texture->tbp | ((u64)(texture->width >> 6) << 14) | ((u64)texture->psm << 20) | ((u64)width_log2 << 26) |
+-                  ((u64)height_log2 << 30) | (1L << 34) | ((u64)texture->cbp << 37) | ((u64)texture->cpsm << 51) | (4L << 61);
++                  ((u64)height_log2 << 30) | (1LL << 34) | ((u64)texture->cbp << 37) | ((u64)texture->cpsm << 51) | (4LL << 61);
+     sprite.tex1 = 0x60;
+     sprite.prim = 0x156;
+     sprite.rgba[0] = texture->rgba[0];
+@@ -480,12 +479,12 @@ void GsDraw_CopyFrameToTexture(int fbp, int psm, int width, int height) {
+                   ((u64)(width - 1) << 16) | ((u64)(height - 1) << 48),
+                   ((0x800 - (width >> 1)) << 4) | ((u64)((0x800 - (height >> 1)) << 4) << 32));
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8L);
++    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8LL);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
+     Packet_AddGsRegister(8, 5);
+     Packet_EndGsRegisters();
+     GsDraw_QueueFlush();
+-    sprite.tex0 = frame_base | 0x28028000L | (0xC800L << 19);
++    sprite.tex0 = frame_base | 0x28028000LL | (0xC800LL << 19);
+     sprite.tex1 = 0x60;
+     sprite.prim = 0x156;
+     sprite.rgba[3] = sprite.rgba[2] = sprite.rgba[1] = sprite.rgba[0] = 0x80;
+diff --git a/src/game/gfx/movie.c b/src/game/gfx/movie.c
+index 57c7f41d2a163b886f4d6a5c47b00d9b8da447ad..1d16987f0a09aa9730c528e9245e02a9605236f6 100644
+--- a/src/game/gfx/movie.c
++++ b/src/game/gfx/movie.c
+@@ -5,36 +5,25 @@
+    ring (MovieOut) for the vblank handler, which sends the GS packets that show them one field at a time. */
+ #include "gfx/movie.h"
+ #include "gfx/gs.h"
+-#include "core/file.h"
++#include <stdio.h>
+ #include <libmpeg.h>
+ #include <eekernel.h>
+ #include <eeregs.h>
+ #include <libgraph.h>
+ 
+-void *memcpy(void *, const void *, u32);
+-void *memset(void *, int, u32);
+-char *index(const char *, int);
+-char *strncpy(char *, const char *, u32);
+-int strcmp(const char *, const char *);
+-u32 strlen(const char *);
+-int toupper(int);
+-int sprintf(char *, char *, ...);
+-s32 sceSdRemote(s32, ...);
+-int sceSifAllocIopHeap(int);
+-int sceSifFreeIopHeap(int);
+-int sceSifSetDma(void *, int);
+-int sceSifDmaStat(int);
+-int sceSifLoadModule(const char *, int, const char *);
+-int sceCdDiskReady(int);
+-int sceCdStInit(u32, u32, u32);
+-int sceCdStStop(void);
+-int sceCdStStart(u32, sceCdRMode *);
+-int sceCdStRead(u32, u32 *, u32, u32 *);
+-int sceCdStSeek(u32);
+-int sceOpen(const char *, int);
+-int sceRead(int, void *, int);
+-int sceLseek(int, int, int);
+-int sceClose(int);
++#include <libcdvd.h>
++#include <libsdr.h>
++#include <sifdev.h>
++#include <sifrpc.h>
++#include <ctype.h>
++#include <string.h>
++
++/* PORT: not in port/include/eekernel.h yet */
++int TerminateThread(int thread_id);
++void Exit(int status);
++
++/* the address the DMA controller sees for p: (u32)p & 0x0FFFFFFF on the EE (PHYS); its EE address */
++#define MOVIE_DMA_ADDRESS(p) EE_WORD(PHYS(p))
+ 
+ /* The movie player's .data: the flags the vblank handler shares, the picture ring and the decoder state. */
+ #define MOVIE_DATA4 __attribute__((section(".data"), aligned(4)))
+@@ -55,14 +44,12 @@ s32 movie_idle_vblanks MOVIE_DATA4 = { 0 };         /* 0x437A4C vblanks with no
+ static char movie_audio_zero_buffer[0x800];               /* 0x1E4F7C0 0x800 zero bytes for the IOP */
+ static u32 movie_init_display_packet[0x50];                /* 0x1E4FFC0 GS packet of Movie_InitDisplay */
+ static u32 movie_clear_packet[0x70];                /* 0x1E50100 GS packet of MovieDisplay_Clear */
+-extern char _gp[];
+ 
+ /* an object of 8 bytes or less kept in .rodata, as the game keeps them, not in .sdata */
+ #define IN_RODATA __attribute__((section(".rodata")))
+ 
+-void sceMpegSetDecodeMode(void); // match: called with no arguments, the caller's own pass through
+ 
+-static void Movie_HeapInit(u32 start, u32 size);
++static void Movie_HeapInit(uptr start, u32 size);
+ static void *Movie_HeapAlloc(u32 size, u32 alignment);
+ static int Movie_PlayFile(char *path, int (*skip_requested)(void));
+ static int Movie_PlayLoop(MovieVideoDecoder *decoder, MovieReadBuffer *read_buffer, MovieFile *file,
+@@ -93,9 +80,9 @@ static s32 MovieAudio_IsPreset(MovieAudio *audio);
+ static int MovieAudio_SendToIop(MovieAudio *audio);
+ static void MovieAudio_GetIopSpace(int *first, int *first_size, int *second, int *second_size, MovieAudio *audio,
+                                    int play_pos);
+-static int MovieAudio_SendTwoAreas(u8 *first_dest, int first_dest_size, u8 *second_dest, int second_dest_size,
++static int MovieAudio_SendTwoAreas(u32 first_dest, int first_dest_size, u32 second_dest, int second_dest_size,
+                                    u8 *first_src, int first_src_size, u8 *second_src, int second_src_size);
+-static int Movie_SendToIop(void *dest, void *src, int size);
++static int Movie_SendToIop(u32 dest, void *src, int size);
+ static void MovieAudio_SetMasterVolume(int volume);
+ static void MovieAudio_SetInputVolume(int volume);
+ static int MovieStream_GetBlockIndex(MovieStreamBuffer *stream, u32 address);
+@@ -157,35 +144,35 @@ static void MovieOut_DropOldest(MovieOutBuffer *buffer);
+ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y, s32 width, s32 height,
+                               s32 picture_width, s32 picture_height);
+ static void MovieDisplay_Delete(MovieDisplay *display);
+-static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_start, u32 picture, s32 field);
++static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, sptr packet_start, u32 picture, s32 field);
+ static void MovieDisplay_ShowField(MovieDisplay *display, s32 second);
+ static void MovieDisplay_Clear(MovieDisplay *display, u32 color);
+-static int GsPacket_AddTexturedSprite(int packet, s32 *screen_rect, s32 *texture_rect);
+-static int GsPacket_AddColorSprite(int packet, s32 *rect, u32 color);
+-static int GsPacket_AddDmaTag(int packet, u32 spr, u32 addr, u32 irq, u32 tag_id, u32 pce, u32 qwc);
+-static int GsPacket_AddGifTag(int packet, s64 regs, s32 nreg, s32 flg, s32 prim, s32 pre, s32 eop, s32 nloop);
+-static int GsPacket_AddReg(int packet, s32 reg, s64 value);
+-static int GsPacket_AddTexflush(int packet);
+-static int GsPacket_AddTex1(s64 packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u32 mtba, u32 lod_l, u64 lod_k);
+-static int GsPacket_AddTex0(s64 packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_width_log2, u32 tex_height_log2,
++static sptr GsPacket_AddTexturedSprite(sptr packet, s32 *screen_rect, s32 *texture_rect);
++static sptr GsPacket_AddColorSprite(sptr packet, s32 *rect, u32 color);
++static sptr GsPacket_AddDmaTag(sptr packet, u32 spr, u32 addr, u32 irq, u32 tag_id, u32 pce, u32 qwc);
++static sptr GsPacket_AddGifTag(sptr packet, s64 regs, s32 nreg, s32 flg, s32 prim, s32 pre, s32 eop, s32 nloop);
++static sptr GsPacket_AddReg(sptr packet, s32 reg, s64 value);
++static sptr GsPacket_AddTexflush(sptr packet);
++static sptr GsPacket_AddTex1(sptr packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u32 mtba, u32 lod_l, u64 lod_k);
++static sptr GsPacket_AddTex0(sptr packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_width_log2, u32 tex_height_log2,
+                             u32 tcc, u32 tfx, u32 cbp, u32 cpsm, u32 csm, u32 csa, u32 cld);
+-static int GsPacket_AddPrim(int packet, u32 prim, u32 iip, u32 tme, u32 fge, u32 abe, u32 aa1, u32 fst, u32 ctxt,
++static sptr GsPacket_AddPrim(sptr packet, u32 prim, u32 iip, u32 tme, u32 fge, u32 abe, u32 aa1, u32 fst, u32 ctxt,
+                             u32 fix);
+-static int GsPacket_AddUv(int packet, u32 tex_u, u32 tex_v);
+-static int GsPacket_AddRgbaq(s64 packet, u32 red, u32 green, u32 blue, u32 alpha, u64 q_value);
+-static int GsPacket_AddXyz2(int packet, u32 pos_x, u32 pos_y, u32 depth);
+-static int GsPacket_AddFrame(s64 packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk);
+-static int GsPacket_AddTest(int packet, u32 ate, u32 atst, u32 aref, u32 afail, u32 date, u32 datm, u32 zte,
++static sptr GsPacket_AddUv(sptr packet, u32 tex_u, u32 tex_v);
++static sptr GsPacket_AddRgbaq(sptr packet, u32 red, u32 green, u32 blue, u32 alpha, u64 q_value);
++static sptr GsPacket_AddXyz2(sptr packet, u32 pos_x, u32 pos_y, u32 depth);
++static sptr GsPacket_AddFrame(sptr packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk);
++static sptr GsPacket_AddTest(sptr packet, u32 ate, u32 atst, u32 aref, u32 afail, u32 date, u32 datm, u32 zte,
+                             u32 ztst);
+-static int GsPacket_AddScissor(s64 packet, u32 scax0, u32 scax1, u32 scay0, u64 scay1);
+-static int GsPacket_AddXyOffset(int packet, u32 offset_x, u32 offset_y);
+-static int GsPacket_AddPrmodecont(int packet, u32 use_prim);
+-static int GsPacket_AddClamp(s64 packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u64 minv, u64 maxv);
+-static int GsPacket_AddBitbltbuf(int packet, u32 dest_base, u32 dest_width, u32 dest_format);
+-static int GsPacket_AddTrxpos(int packet, u32 direction, u32 dest_x, u32 dest_y);
+-static int GsPacket_AddTrxreg(int packet, u32 width, u32 height);
+-static int GsPacket_AddTrxdir(int packet, u32 direction);
+-static void Movie_SendGifChain(u32 chain);
++static sptr GsPacket_AddScissor(sptr packet, u32 scax0, u32 scax1, u32 scay0, u64 scay1);
++static sptr GsPacket_AddXyOffset(sptr packet, u32 offset_x, u32 offset_y);
++static sptr GsPacket_AddPrmodecont(sptr packet, u32 use_prim);
++static sptr GsPacket_AddClamp(sptr packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u64 minv, u64 maxv);
++static sptr GsPacket_AddBitbltbuf(sptr packet, u32 dest_base, u32 dest_width, u32 dest_format);
++static sptr GsPacket_AddTrxpos(sptr packet, u32 direction, u32 dest_x, u32 dest_y);
++static sptr GsPacket_AddTrxreg(sptr packet, u32 width, u32 height);
++static sptr GsPacket_AddTrxdir(sptr packet, u32 direction);
++static void Movie_SendGifChain(void *chain);
+ static int Movie_VblankHandler(int cause);
+ static int Movie_GifDmaHandler(void);
+ static void Movie_StartDisplay(s32 field);
+@@ -194,14 +181,11 @@ static s32 MovieFile_Open(MovieFile *file, char *path);
+ static s32 MovieFile_Close(MovieFile *file);
+ static s32 MovieFile_Read(MovieFile *file, u32 *buffer, s32 size, s32 lsn);
+ 
+-/* GsPacket_AddReg as the register writers that take the packet as an s64 call it */
+-#define GS_PACKET_ADD_REG_64 ((int (*)(s64, s64, s64))GsPacket_AddReg) // match: no truncation of the packet
+-
+-/* GsPacket_AddScissor as MovieDisplay_Clear calls it */
+-#define GS_PACKET_ADD_SCISSOR_32 ((int (*)(s64, u32, u32, u32, u32))GsPacket_AddScissor) // match: a 64-bit last parameter adds a move at each call
++#define GS_PACKET_ADD_REG_64 GsPacket_AddReg
++#define GS_PACKET_ADD_SCISSOR_32 GsPacket_AddScissor
+ 
+ /* Gives the movie player the block of memory it allocates its buffers from. */
+-static void Movie_HeapInit(u32 start, u32 size) {
++static void Movie_HeapInit(uptr start, u32 size) {
+     movie_thread.heap_start = start;
+     movie_thread.heap_next = start;
+     movie_thread.heap_end = start + size - 1;
+@@ -209,8 +193,8 @@ static void Movie_HeapInit(u32 start, u32 size) {
+ 
+ /* Takes size bytes at the next multiple of alignment from the movie player's block; NULL when it is full. */
+ static void *Movie_HeapAlloc(u32 size, u32 alignment) {
+-    u32 start = (movie_thread.heap_next + alignment - 1) / alignment * alignment;
+-    u32 end = start + size;
++    uptr start = (movie_thread.heap_next + alignment - 1) / alignment * alignment;
++    uptr end = start + size;
+ 
+     if (movie_thread.heap_end < end) {
+         return NULL;
+@@ -221,9 +205,9 @@ static void *Movie_HeapAlloc(u32 size, u32 alignment) {
+ 
+ /* Plays a movie file: carves the player's buffers out of the block given, sets up the display and runs the
+    movie to its end. Returns -1 when the block is too small. */
+-int Movie_Play(char *path, u32 heap, u32 heap_size, int (*skip_requested)(void), u32 volume, s16 video_mode,
++int Movie_Play(char *path, char *heap, u32 heap_size, int (*skip_requested)(void), u32 volume, s16 video_mode,
+                s16 display_x, s16 display_y) {
+-    Movie_HeapInit(heap, heap_size);
++    Movie_HeapInit((uptr)heap, heap_size);
+     if ((movie_thread.idle_stack = Movie_HeapAlloc(0x800, 0x40)) == NULL ||
+         (movie_thread.decode_stack = Movie_HeapAlloc(0x4000, 0x40)) == NULL ||
+         (movie_thread.mpeg_work = Movie_HeapAlloc(0x13B800, 0x40)) == NULL ||
+@@ -234,7 +218,7 @@ int Movie_Play(char *path, u32 heap, u32 heap_size, int (*skip_requested)(void),
+         (movie_thread.out_tags = Movie_HeapAlloc(0x10AF40, 0x40)) == NULL ||
+         (movie_thread.time_stamps = Movie_HeapAlloc(0x3C00, 0x40)) == NULL ||
+         (movie_thread.unk34 = Movie_HeapAlloc(0x100, 0x40)) == NULL ||
+-        (movie_thread.read_buffer = (s32)Movie_HeapAlloc(0x5000C, 0x40)) == 0) {
++        (movie_thread.read_buffer = Movie_HeapAlloc(0x5000C, 0x40)) == NULL) {
+         return -1;
+     }
+     movie_thread.video_mode = video_mode;
+@@ -295,7 +279,7 @@ static int Movie_PlayLoop(MovieVideoDecoder *decoder, MovieReadBuffer *read_buff
+         get_size = MovieReadBuf_BeginGet(read_buffer, &get_src);
+         if (get_size > 0) {
+             proceeded =
+-                sceMpegDemuxPssRing((sceMpeg *)decoder, get_src, get_size, (int)read_buffer, read_buffer->size);
++                sceMpegDemuxPssRing((sceMpeg *)decoder, get_src, get_size, read_buffer, read_buffer->size);
+             MovieReadBuf_EndGet(read_buffer, proceeded);
+             write_rest -= proceeded;
+         }
+@@ -348,18 +332,17 @@ static void Movie_Setup(char *path) {
+         MovieVideo_SetStream(&movie_decoder, 2, 0, (sceMpegCallback)Movie_AudioCallback,
+                              MOVIE_READ_BUFFER(&movie_thread));
+     }
+-    MovieOut_Init(&movie_out_buffer, (MovieOutPicture *)(((u32)movie_thread.out_pictures & 0x0FFFFFFF) | 0x20000000),
+-                  movie_thread.out_tags, 5);
++    MovieOut_Init(&movie_out_buffer, (MovieOutPicture *)UNCACHED(movie_thread.out_pictures), movie_thread.out_tags, 5);
+     for (i = 0; i < movie_out_buffer.size; i++) {
+-        MovieDisplay_BuildFieldPackets(&movie_thread.display, (u32)&movie_out_buffer.tag[i] + 0x40, (u32)&movie_out_buffer.data[i], 0);
+-        MovieDisplay_BuildFieldPackets(&movie_thread.display, (u32)&movie_out_buffer.tag[i] + 0x1AB40, (u32)&movie_out_buffer.data[i],
++        MovieDisplay_BuildFieldPackets(&movie_thread.display, (sptr)&movie_out_buffer.tag[i] + 0x40, EE_WORD(&movie_out_buffer.data[i]), 0);
++        MovieDisplay_BuildFieldPackets(&movie_thread.display, (sptr)&movie_out_buffer.tag[i] + 0x1AB40, EE_WORD(&movie_out_buffer.data[i]),
+                                        1);
+     }
+     thread_param.entry = Movie_IdleThread;
+     thread_param.stack = movie_thread.idle_stack;
+     thread_param.stackSize = 0x800;
+     thread_param.initPriority = 1;
+-    thread_param.gpReg = _gp;
++    thread_param.gpReg = NULL; /* PORT: _gp, the EE's small data base, has no meaning on the PC */
+     thread_param.option = 0;
+     movie_thread.idle_thread = CreateThread(&thread_param);
+     StartThread(movie_thread.idle_thread, NULL);
+@@ -367,7 +350,7 @@ static void Movie_Setup(char *path) {
+     thread_param.stack = movie_thread.decode_stack;
+     thread_param.stackSize = 0x4000;
+     thread_param.initPriority = 1;
+-    thread_param.gpReg = _gp;
++    thread_param.gpReg = NULL; /* PORT: as above */
+     thread_param.option = 0;
+     movie_thread.decode_thread = CreateThread(&thread_param);
+     StartThread(movie_thread.decode_thread, &movie_decoder);
+@@ -382,7 +365,7 @@ static void Movie_Setup(char *path) {
+ 
+ /* Frees what Movie_Setup set up: the threads, the handlers, the decoder, the sound buffers and the file. */
+ static void Movie_Shutdown(void) {
+-    MovieReadBuf_Delete((MovieReadBuffer *)movie_thread.read_buffer);
++    MovieReadBuf_Delete(movie_thread.read_buffer);
+     MovieOut_Delete(&movie_out_buffer);
+     TerminateThread(movie_thread.decode_thread);
+     DeleteThread(movie_thread.decode_thread);
+@@ -413,7 +396,7 @@ static void Movie_DebugPrint(char *message) {
+ static int Movie_VideoCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_data, MovieReadBuffer *read_buffer) {
+     u8 *first_src = stream_data->data;
+     u8 *second_src = read_buffer->data;
+-    u32 first_src_size = read_buffer->data + read_buffer->size - stream_data->data;
++    u32 first_src_size = (u32)(read_buffer->data + read_buffer->size - stream_data->data);
+     int second_src_size;
+     u8 *first_dest;
+     int first_dest_size;
+@@ -426,8 +409,8 @@ static int Movie_VideoCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_da
+     }
+     second_src_size = stream_data->len - first_src_size;
+     MovieVideo_BeginPut(&movie_decoder, &first_dest, &first_dest_size, &second_dest, &second_dest_size);
+-    copied = Movie_CopyTwoAreas((u8 *)(((u32)first_dest & 0x0FFFFFFF) | 0x20000000), first_dest_size,
+-                                (u8 *)(((u32)second_dest & 0x0FFFFFFF) | 0x20000000), second_dest_size, first_src,
++    copied = Movie_CopyTwoAreas(UNCACHED(first_dest), first_dest_size,
++                                UNCACHED(second_dest), second_dest_size, first_src,
+                                 first_src_size, second_src, second_src_size);
+     if (copied > 0) {
+         if (!MovieVideo_PutStamp(&movie_decoder, stream_data->pts, stream_data->dts, first_dest, copied)) {
+@@ -460,7 +443,7 @@ static int Movie_AudioCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_da
+     if (first_src >= end) {
+         first_src -= ring_size;
+     }
+-    first_src_size = end - first_src;
++    first_src_size = (int)(end - first_src);
+     first_src_size = (remaining < first_src_size) ? remaining : first_src_size;
+     second_src_size = remaining - first_src_size;
+     MovieAudio_BeginPut(&movie_audio, &first_dest, &first_dest_size, &second_dest, &second_dest_size);
+@@ -572,7 +555,7 @@ static int MovieAudio_Init(MovieAudio *audio, u8 *data, int size, int iop_buffer
+         return 0;
+     }
+     memset(movie_audio_zero_buffer, 0, 0x800);
+-    Movie_SendToIop((void *)audio->iop_zero_buffer, movie_audio_zero_buffer, 0x800);
++    Movie_SendToIop(audio->iop_zero_buffer, movie_audio_zero_buffer, 0x800);
+     MovieAudio_SetMasterVolume(movie_thread.volume);
+     return 1;
+ }
+@@ -742,13 +725,13 @@ static int MovieAudio_SendToIop(MovieAudio *audio) {
+     first_src = audio->data + (audio->put - audio->count + audio->size) % audio->size;
+     second_src = audio->data;
+     whole_count = (audio->count / 1024) * 1024;
+-    first_src_size = audio->data + audio->size - first_src;
++    first_src_size = (int)(audio->data + audio->size - first_src);
+     if (whole_count < first_src_size) {
+         first_src_size = whole_count;
+     }
+     second_src_size = whole_count - first_src_size;
+     if (first_dest_size + second_dest_size >= 1024 && first_src_size + second_src_size >= 1024) {
+-        sent = MovieAudio_SendTwoAreas((u8 *)first_dest, first_dest_size, (u8 *)second_dest, second_dest_size,
++        sent = MovieAudio_SendTwoAreas(first_dest, first_dest_size, second_dest, second_dest_size,
+                                        first_src, first_src_size, second_src, second_src_size);
+     }
+     audio->count -= sent;
+@@ -783,7 +766,7 @@ static void MovieAudio_GetIopSpace(int *first, int *first_size, int *second, int
+ 
+ /* Sends two source stretches to two stretches of IOP memory, as one stream, dropping what does not fit; returns
+    the bytes sent (the SDK sample's sendToIOP2area). */
+-static int MovieAudio_SendTwoAreas(u8 *first_dest, int first_dest_size, u8 *second_dest, int second_dest_size,
++static int MovieAudio_SendTwoAreas(u32 first_dest, int first_dest_size, u32 second_dest, int second_dest_size,
+                                    u8 *first_src, int first_src_size, u8 *second_src, int second_src_size) {
+     if (first_dest_size + second_dest_size < first_src_size + second_src_size) {
+         int excess = (first_src_size + second_src_size) - (first_dest_size + second_dest_size);
+@@ -813,8 +796,8 @@ static int MovieAudio_SendTwoAreas(u8 *first_dest, int first_dest_size, u8 *seco
+ 
+ /* Copies size bytes to IOP memory with sceSifSetDma and waits for the transfer (the SDK sample's sendToIOP);
+    returns size. */
+-static int Movie_SendToIop(void *dest, void *src, int size) {
+-    MovieSifDmaData dma;
++static int Movie_SendToIop(u32 dest, void *src, int size) {
++    sceSifDmaData dma;
+     int dma_id;
+ 
+     if (size <= 0) {
+@@ -823,7 +806,7 @@ static int Movie_SendToIop(void *dest, void *src, int size) {
+     dma.data = src;
+     dma.addr = dest;
+     dma.size = size;
+-    dma.attr = 0;
++    dma.mode = 0;
+     FlushCache(0);
+     dma_id = sceSifSetDma(&dma, 1);
+     do {
+@@ -849,10 +832,10 @@ static void MovieAudio_SetInputVolume(int volume) {
+ 
+ /* Block index of a DMA address in the stream ring; the tag after the last block counts as 0 (getFIFOindex). */
+ static int MovieStream_GetBlockIndex(MovieStreamBuffer *stream, u32 address) {
+-    if (address == ((u32)(stream->block_count * sizeof(MovieDmaTag) + (u32)stream->tags + sizeof(MovieDmaTag)) & 0x0FFFFFFF)) {
++    if (address == ((u32)(stream->block_count * sizeof(MovieDmaTag) + EE_WORD(stream->tags) + sizeof(MovieDmaTag)) & 0x0FFFFFFF)) {
+         return 0;
+     }
+-    return (address - (u32)stream->data) / 0x800;
++    return (address - EE_WORD(stream->data)) / 0x800;
+ }
+ 
+ /* Writes D3_CHCR with the DMA controller held (setD3_CHCR). */
+@@ -886,7 +869,7 @@ static int MovieStream_Init(MovieStreamBuffer *stream, u8 *data, MovieDmaTag *ta
+     int i;
+ 
+     stream->data = data;
+-    stream->tags = (void *)(((u32)tags & 0x0FFFFFFF) | 0x20000000);
++    stream->tags = UNCACHED(tags);
+     stream->block_count = block_count;
+     stream->data_size = block_count * 0x800;
+     stream->dma_start = 0;
+@@ -908,12 +891,12 @@ static int MovieStream_Init(MovieStreamBuffer *stream, u8 *data, MovieDmaTag *ta
+     sema_param.maxCount = 1;
+     stream->sema = CreateSema(&sema_param);
+     for (i = 0; i < stream->block_count; i++) {
+-        Movie_SetDmaTag(&tags[i], (u32)(data + i * 0x800), 3, 0x80);
++        Movie_SetDmaTag(&tags[i], EE_WORD(data + i * 0x800), 3, 0x80);
+     }
+-    Movie_SetDmaTag(&tags[i], (u32)tags & 0x0FFFFFFF, 2, 0);
++    Movie_SetDmaTag(&tags[i], EE_WORD(tags) & 0x0FFFFFFF, 2, 0);
+     *D4_QWC = 0;
+-    *D4_MADR = (u32)stream->data & 0x0FFFFFFF;
+-    *D4_TADR = (u32)stream->tags & 0x0FFFFFFF;
++    *D4_MADR = EE_WORD(stream->data) & 0x0FFFFFFF;
++    *D4_TADR = EE_WORD(stream->tags) & 0x0FFFFFFF;
+     Movie_SetD4Chcr(5);
+     return TRUE;
+ }
+@@ -932,12 +915,12 @@ static int MovieStream_Reset(MovieStreamBuffer *stream) {
+     stream->saved.d4_qwc = 0;
+     stream->saved.d4_chcr = 0;
+     for (i = 0; i < stream->block_count; i++) {
+-        Movie_SetDmaTag((MovieDmaTag *)stream->tags + i, (u32)(stream->data + i * 0x800), 3, 0x80);
++        Movie_SetDmaTag((MovieDmaTag *)stream->tags + i, EE_WORD(stream->data + i * 0x800), 3, 0x80);
+     }
+-    Movie_SetDmaTag((MovieDmaTag *)stream->tags + i, (u32)stream->tags & 0x0FFFFFFF, 2, 0);
++    Movie_SetDmaTag((MovieDmaTag *)stream->tags + i, EE_WORD(stream->tags) & 0x0FFFFFFF, 2, 0);
+     *D4_QWC = 0;
+-    *D4_MADR = (u32)stream->data & 0x0FFFFFFF;
+-    *D4_TADR = (u32)stream->tags & 0x0FFFFFFF;
++    *D4_MADR = EE_WORD(stream->data) & 0x0FFFFFFF;
++    *D4_TADR = EE_WORD(stream->tags) & 0x0FFFFFFF;
+     Movie_SetD4Chcr(5);
+     return TRUE;
+ }
+@@ -1007,13 +990,13 @@ static int MovieStream_AddDma(MovieStreamBuffer *stream) {
+     if (read_count > 0) {
+         /* the tag that ended the chain becomes an ordinary one */
+         last = (stream->dma_start + stream->dma_count - 1 + stream->block_count) % stream->block_count;
+-        Movie_SetDmaTag((MovieDmaTag *)stream->tags + last, (u32)(stream->data + last * 0x800), 3, 0x80);
++        Movie_SetDmaTag((MovieDmaTag *)stream->tags + last, EE_WORD(stream->data + last * 0x800), 3, 0x80);
+         is_new_data = TRUE;
+     }
+     index = read_start;
+     for (i = 0; i < read_count; i++) {
+         tag_id = (i == read_count - 1) ? 0 : 3;
+-        Movie_SetDmaTag((MovieDmaTag *)stream->tags + index, (u32)(stream->data + index * 0x800), tag_id, 0x80);
++        Movie_SetDmaTag((MovieDmaTag *)stream->tags + index, EE_WORD(stream->data + index * 0x800), tag_id, 0x80);
+         index = (index + 1) % stream->block_count;
+     }
+     stream->dma_count += read_count;
+@@ -1065,12 +1048,12 @@ static int MovieStream_RestartDma(MovieStreamBuffer *stream) {
+     s32 index_next;
+ 
+     WaitSema(stream->sema);
+-    if (d4_madr_next < (u32)stream->data) {
+-        d4_qwc_next = ((u32)stream->data - d4_madr_next) >> 4;
++    if (d4_madr_next < EE_WORD(stream->data)) {
++        d4_qwc_next = (EE_WORD(stream->data) - d4_madr_next) >> 4;
+         d4_madr_next += stream->block_count << 11;
+-        d4_tadr_next = (u32)stream->tags & 0x0FFFFFFF;
+-        tag_id = (stream->saved.d4_madr == (u32)stream->data ||
+-                  stream->saved.d4_madr == (u32)stream->data + (stream->block_count << 11))
++        d4_tadr_next = EE_WORD(stream->tags) & 0x0FFFFFFF;
++        tag_id = (stream->saved.d4_madr == EE_WORD(stream->data) ||
++                  stream->saved.d4_madr == EE_WORD(stream->data) + (stream->block_count << 11))
+                      ? 0
+                      : 3;
+         d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | 0x100;
+@@ -1082,10 +1065,10 @@ static int MovieStream_RestartDma(MovieStreamBuffer *stream) {
+         index = MovieStream_GetBlockIndex(stream, stream->saved.d4_madr);
+         index_next = MovieStream_GetBlockIndex(stream, d4_madr_next);
+         if (index != index_next) {
+-            d4_qwc_next = ((u32)stream->data + (index << 11) - d4_madr_next) >> 4;
+-            d4_tadr_next = ((index << 4) + (u32)stream->tags) & 0x0FFFFFFF;
+-            tag_id = ((u32)stream->data + (stream->saved.d4_madr - (u32)stream->data) % (stream->block_count << 11) ==
+-                      (u32)stream->data + (((stream->dma_start + stream->dma_count) % stream->block_count) << 11))
++            d4_qwc_next = (EE_WORD(stream->data) + (index << 11) - d4_madr_next) >> 4;
++            d4_tadr_next = ((index << 4) + EE_WORD(stream->tags)) & 0x0FFFFFFF;
++            tag_id = (EE_WORD(stream->data) + (stream->saved.d4_madr - EE_WORD(stream->data)) % (stream->block_count << 11) ==
++                      EE_WORD(stream->data) + (((stream->dma_start + stream->dma_count) % stream->block_count) << 11))
+                          ? 0
+                          : 3;
+             d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | 0x100;
+@@ -1234,7 +1217,7 @@ static int MovieStream_PutStamp(MovieStreamBuffer *stream, MovieTimeStamp *stamp
+     if (stream->stamp_count < stream->stamp_capacity) {
+         MovieStream_TrimStamps(stream, stamp);
+         is_queued = TRUE;
+-        slot = (MovieTimeStamp *)(stream->stamp_write * sizeof(MovieTimeStamp) + (int)stream->stamps);
++        slot = &stream->stamps[stream->stamp_write];
+         slot->pos = stamp->pos;
+         slot->pts = stamp->pts;
+         stream->stamps[stream->stamp_write].len = stamp->len;
+@@ -1265,7 +1248,7 @@ static int MovieStream_GetStamp(MovieStreamBuffer *stream, MovieTimeStamp *stamp
+     WaitSema(stream->sema);
+     stamp_out->pts = -1;
+     stamp_out->dts = -1;
+-    stop = (d4_madr_next + (bit_position >> 3) + data_size - (u32)stream->data) % data_size;
++    stop = (d4_madr_next + (bit_position >> 3) + data_size - EE_WORD(stream->data)) % data_size;
+     stamp_count = stream->stamp_count;
+     stamp_write = stream->stamp_write;
+     if (stamp_count > 0) {
+@@ -1308,7 +1291,8 @@ static int MovieVideo_Init(MovieVideoDecoder *decoder, u8 *work_area, int work_a
+ 
+ /* Calls sceMpegSetDecodeMode with whatever the argument registers hold (videoDecSetDecodeMode); nothing calls it. */
+ void MovieVideo_SetDecodeMode(void) {
+-    sceMpegSetDecodeMode();
++    PORT_TODO("MovieVideo_SetDecodeMode: retail passes whatever the argument registers hold");
++    sceMpegSetDecodeMode(NULL, 0, 0, 0);
+ }
+ 
+ /* Registers the callback that receives one elementary stream of the movie (videoDecSetStream). */
+@@ -1368,7 +1352,7 @@ static int MovieVideo_PutStamp(MovieVideoDecoder *decoder, s64 pts, s64 dts, u8
+ 
+     stamp.pts = pts;
+     stamp.dts = dts;
+-    stamp.pos = start - decoder->stream.data;
++    stamp.pos = (s32)(start - decoder->stream.data);
+     stamp.len = len;
+     return MovieStream_PutStamp(&movie_decoder.stream, &stamp); // match: the global buffer, not the decoder's own (the same one)
+ }
+@@ -1406,8 +1390,8 @@ static int MovieVideo_Flush(MovieVideoDecoder *decoder) {
+     if (first_size + second_size < 4) {
+         return 0;
+     }
+-    copied = MovieVideo_CopyTwoAreas((u8 *)(((u32)first & 0x0FFFFFFF) | 0x20000000), first_size,
+-                                     (u8 *)(((u32)second & 0x0FFFFFFF) | 0x20000000), second_size, end_code.bytes, 4,
++    copied = MovieVideo_CopyTwoAreas(UNCACHED(first), first_size,
++                                     UNCACHED(second), second_size, end_code.bytes, 4,
+                                      NULL, 0);
+     MovieVideo_EndPut(&movie_decoder, copied);
+     MovieStream_Flush(&decoder->stream);
+@@ -1447,7 +1431,7 @@ static int MovieVideo_DecodeAll(MovieVideoDecoder *decoder) {
+         while ((picture = MovieOut_GetWriteSlot(&movie_out_buffer)) == NULL) {
+             Movie_Yield();
+         }
+-        if (sceMpegGetPicture((sceMpeg *)decoder, (u32)picture, 0x460) < 0) {
++        if (sceMpegGetPicture((sceMpeg *)decoder, picture, 0x460) < 0) {
+             Movie_DebugPrint("sceMpegGetPicture() decode error");
+         }
+         MovieOut_Commit(&movie_out_buffer);
+@@ -1597,7 +1581,7 @@ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y,
+     s32 field_height = height / 2;
+     s32 buffer_width = (width + 63) / 64;
+     s32 packet_start;
+-    s32 packet;
++    sptr packet;
+ 
+     movie_pictures_enabled = 0;
+     movie_picture_vblanks = 0;
+@@ -1617,8 +1601,8 @@ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y,
+     display->dispfb = (display->dispfb & ~0x7E00) | ((buffer_width & 0x3F) << 9);
+     FlushCache(0);
+     sceGsPutDispEnv(display);
+-    packet_start = (u32)movie_init_display_packet & 0x0FFFFFFF;
+-    packet = GsPacket_AddGifTag(packet_start | 0x20000000, 0xE, 1, 0, 0, 0, 1, 6);
++    packet_start = MOVIE_DMA_ADDRESS(movie_init_display_packet);
++    packet = GsPacket_AddGifTag((sptr)UNCACHED(movie_init_display_packet), 0xE, 1, 0, 0, 0, 1, 6);
+     packet = GsPacket_AddPrmodecont(packet, 1);
+     packet = GsPacket_AddFrame(packet, display->frame_base[0], ROUND_UP(display->width, 64) / 64, 0, 0);
+     packet = GsPacket_AddTest(packet, 0, 0, 0, 0, 0, 0, 0, 0);
+@@ -1637,7 +1621,7 @@ static void MovieDisplay_Delete(MovieDisplay *display) {
+ 
+ /* Builds the GIF chain that shows a decoded picture on one field: for the first field it uploads the picture as
+    a texture, one 16x16 macroblock at a time, and for both it draws the texture over the field's frame buffer. */
+-static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_start, u32 picture, s32 field) {
++static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, sptr packet_start, u32 picture, s32 field) {
+     s32 screen_rect[4];
+     s32 texture_rect[4];
+     s32 picture_width = display->picture_width;
+@@ -1646,7 +1630,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+     s32 field_height = display->height / 2;
+     s32 rows = picture_height >> 4;
+     s32 columns = picture_width >> 4;
+-    s32 packet = (packet_start & 0x0FFFFFFF) | 0x20000000;
++    sptr packet = (sptr)UNCACHED((u8 *)packet_start);
+     s32 field_pages = (field_height + 31) / 32;      /* a field's frame buffer, in rows of GS pages */
+     s32 buffer_width = ROUND_UP(width, 64) / 64;
+     s32 buffer_pixels = buffer_width * 64;
+@@ -1713,14 +1697,14 @@ static void MovieDisplay_ShowField(MovieDisplay *display, s32 second) {
+ /* Fills both fields' frame buffers with one color. */
+ static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
+     s32 rect[4];
+-    s32 packet_start = (u32)movie_clear_packet & 0x0FFFFFFF;
+-    s32 packet;
++    s32 packet_start = MOVIE_DMA_ADDRESS(movie_clear_packet);
++    sptr packet;
+ 
+     rect[0] = 0;
+     rect[1] = 0;
+     rect[2] = display->width << 4;
+     rect[3] = (((display->height + 15) / 16) * 16 * 2) << 4;
+-    packet = GsPacket_AddGifTag(packet_start | 0x20000000, 0xE, 1, 0, 0, 0, 1, 6);
++    packet = GsPacket_AddGifTag((sptr)UNCACHED(movie_clear_packet), 0xE, 1, 0, 0, 0, 1, 6);
+     packet = GS_PACKET_ADD_SCISSOR_32(packet, 0, display->width, 0, display->height << 1);
+     packet = GsPacket_AddColorSprite(packet, rect, color);
+     GS_PACKET_ADD_SCISSOR_32(packet, 0, display->width - 1, 0, display->height - 1);
+@@ -1731,7 +1715,7 @@ static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
+ }
+ 
+ /* Adds a textured sprite: screen_rect and texture_rect are x, y, width, height. */
+-static int GsPacket_AddTexturedSprite(int packet, s32 *screen_rect, s32 *texture_rect) {
++static sptr GsPacket_AddTexturedSprite(sptr packet, s32 *screen_rect, s32 *texture_rect) {
+     return GsPacket_AddXyz2(
+         GsPacket_AddUv(
+             GsPacket_AddXyz2(GsPacket_AddUv(GsPacket_AddPrim(packet, 6, 0, 1, 0, 0, 0, 1, 0, 0), texture_rect[0],
+@@ -1742,7 +1726,7 @@ static int GsPacket_AddTexturedSprite(int packet, s32 *screen_rect, s32 *texture
+ }
+ 
+ /* Adds a sprite of one color over rect (x, y, width, height), color as RGBA bytes. */
+-static int GsPacket_AddColorSprite(int packet, s32 *rect, u32 color) {
++static sptr GsPacket_AddColorSprite(sptr packet, s32 *rect, u32 color) {
+     return GsPacket_AddXyz2(
+         GsPacket_AddRgbaq(GsPacket_AddXyz2(GsPacket_AddPrim(packet, 6, 0, 0, 0, 0, 0, 1, 0, 0), rect[0], rect[1], 0),
+                           color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF, color >> 24, 0),
+@@ -1751,44 +1735,44 @@ static int GsPacket_AddColorSprite(int packet, s32 *rect, u32 color) {
+ 
+ /* Writes a DMA tag at address packet (one doubleword; the other half of its quadword is left alone). Returns the
+    address after the quadword. */
+-static int GsPacket_AddDmaTag(int packet, u32 spr, u32 addr, u32 irq, u32 tag_id, u32 pce, u32 qwc) {
++static sptr GsPacket_AddDmaTag(sptr packet, u32 spr, u32 addr, u32 irq, u32 tag_id, u32 pce, u32 qwc) {
+     u64 *tag = (u64 *)packet;
+ 
+     *tag = ((u64)spr << 63) | ((u64)(addr & ~0xF) << 32) | ((u64)irq << 31) | ((u64)tag_id << 28) | ((u64)pce << 26) | qwc;
+-    return (int)(tag + 2);
++    return (sptr)(tag + 2);
+ }
+ 
+ /* Writes a GIF tag at address packet: the register list, then NLOOP, EOP, PRE, PRIM, FLG and NREG. Returns the
+    address after it. */
+-static int GsPacket_AddGifTag(int packet, s64 regs, s32 nreg, s32 flg, s32 prim, s32 pre, s32 eop, s32 nloop) {
++static sptr GsPacket_AddGifTag(sptr packet, s64 regs, s32 nreg, s32 flg, s32 prim, s32 pre, s32 eop, s32 nloop) {
+     u32 *words = (u32 *)packet;
+ 
+     words[0] = (eop << 15) | nloop;
+     words[1] = (pre << 14) | (prim << 15) | (flg << 26) | (nreg << 28);
+     words[2] = regs & 0xFFFFFFFF;
+     words[3] = regs >> 32;
+-    return (int)(words + 4);
++    return (sptr)(words + 4);
+ }
+ 
+ /* Writes one GS register setting at address packet (64-bit value, then register number, as four words) and
+    returns the address for the next one. */
+-static int GsPacket_AddReg(int packet, s32 reg, s64 value) {
++static sptr GsPacket_AddReg(sptr packet, s32 reg, s64 value) {
+     u32 *words = (u32 *)packet;
+ 
+     words[0] = value & 0xFFFFFFFF;
+     words[1] = value >> 32;
+     words[2] = reg;
+     words[3] = 0;
+-    return (int)(words + 4);
++    return (sptr)(words + 4);
+ }
+ 
+ /* Adds a TEXFLUSH. */
+-static int GsPacket_AddTexflush(int packet) {
++static sptr GsPacket_AddTexflush(sptr packet) {
+     return GsPacket_AddReg(packet, GS_REG_TEXFLUSH, 0);
+ }
+ 
+ /* Adds a TEX1_1: texture filtering and mipmap settings. */
+-static int GsPacket_AddTex1(s64 packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u32 mtba, u32 lod_l, u64 lod_k) {
++static sptr GsPacket_AddTex1(sptr packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u32 mtba, u32 lod_l, u64 lod_k) {
+     u64 low = ((u64)lcm) | (lod_k << 32);
+     u64 middle = (((u64)mxl) << 2) | (((u64)mtba) << 9);
+     u64 high = ((((u64)mmin) << 6) | (((u64)mmag) << 5)) | (((u64)lod_l) << 19);
+@@ -1797,7 +1781,7 @@ static int GsPacket_AddTex1(s64 packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u3
+ }
+ 
+ /* Adds a TEX0_1: the texture's place, size and format. */
+-static int GsPacket_AddTex0(s64 packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_width_log2, u32 tex_height_log2,
++static sptr GsPacket_AddTex0(sptr packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_width_log2, u32 tex_height_log2,
+                             u32 tcc, u32 tfx, u32 cbp, u32 cpsm, u32 csm, u32 csa, u32 cld) {
+     u64 value;
+ 
+@@ -1806,18 +1790,18 @@ static int GsPacket_AddTex0(s64 packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_widt
+ }
+ 
+ /* Adds a PRIM. */
+-static int GsPacket_AddPrim(int packet, u32 prim, u32 iip, u32 tme, u32 fge, u32 abe, u32 aa1, u32 fst, u32 ctxt,
++static sptr GsPacket_AddPrim(sptr packet, u32 prim, u32 iip, u32 tme, u32 fge, u32 abe, u32 aa1, u32 fst, u32 ctxt,
+                             u32 fix) {
+     return GsPacket_AddReg(packet, GS_REG_PRIM, prim | ((u64)iip << 3) | ((u64)tme << 4) | ((u64)fge << 5) | ((u64)abe << 6) | ((u64)aa1 << 7) | ((u64)fst << 8) | ((u64)ctxt << 9) | ((u64)fix << 10));
+ }
+ 
+ /* Adds a UV: texel coordinates. */
+-static int GsPacket_AddUv(int packet, u32 tex_u, u32 tex_v) {
++static sptr GsPacket_AddUv(sptr packet, u32 tex_u, u32 tex_v) {
+     return GsPacket_AddReg(packet, GS_REG_UV, tex_u | ((u64)tex_v << 16));
+ }
+ 
+ /* Adds an RGBAQ: the vertex color and q. */
+-static int GsPacket_AddRgbaq(s64 packet, u32 red, u32 green, u32 blue, u32 alpha, u64 q_value) {
++static sptr GsPacket_AddRgbaq(sptr packet, u32 red, u32 green, u32 blue, u32 alpha, u64 q_value) {
+     u64 low = ((u64)blue << 16) | ((u64)green << 8);
+     u64 high = red | (q_value << 32);
+ 
+@@ -1825,12 +1809,12 @@ static int GsPacket_AddRgbaq(s64 packet, u32 red, u32 green, u32 blue, u32 alpha
+ }
+ 
+ /* Adds an XYZ2: a vertex, which draws. */
+-static int GsPacket_AddXyz2(int packet, u32 pos_x, u32 pos_y, u32 depth) {
++static sptr GsPacket_AddXyz2(sptr packet, u32 pos_x, u32 pos_y, u32 depth) {
+     return GsPacket_AddReg(packet, GS_REG_XYZ2, pos_x | ((u64)pos_y << 16) | ((u64)depth << 32));
+ }
+ 
+ /* Adds a FRAME_1: the frame buffer's base, width, format and write mask. */
+-static int GsPacket_AddFrame(s64 packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk) {
++static sptr GsPacket_AddFrame(sptr packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk) {
+     u64 low = fbp | (fbmsk << 32);
+     u64 high = ((u64)psm << 24) | ((u64)fbw << 16);
+ 
+@@ -1838,13 +1822,13 @@ static int GsPacket_AddFrame(s64 packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk) {
+ }
+ 
+ /* Adds a TEST_1: alpha, destination alpha and depth tests. */
+-static int GsPacket_AddTest(int packet, u32 ate, u32 atst, u32 aref, u32 afail, u32 date, u32 datm, u32 zte,
++static sptr GsPacket_AddTest(sptr packet, u32 ate, u32 atst, u32 aref, u32 afail, u32 date, u32 datm, u32 zte,
+                             u32 ztst) {
+     return GsPacket_AddReg(packet, GS_REG_TEST_1, ate | ((u64)atst << 1) | ((u64)aref << 4) | ((u64)afail << 12) | ((u64)date << 14) | ((u64)datm << 15) | ((u64)zte << 16) | ((u64)ztst << 17));
+ }
+ 
+ /* Adds a SCISSOR_1: the drawing area, x from scax0 to scax1 and y from scay0 to scay1. */
+-static int GsPacket_AddScissor(s64 packet, u32 scax0, u32 scax1, u32 scay0, u64 scay1) {
++static sptr GsPacket_AddScissor(sptr packet, u32 scax0, u32 scax1, u32 scay0, u64 scay1) {
+     u64 low = scax0 | (scay1 << 48);
+     u64 high = ((u64)scay0 << 32) | ((u64)scax1 << 16);
+ 
+@@ -1852,22 +1836,22 @@ static int GsPacket_AddScissor(s64 packet, u32 scax0, u32 scax1, u32 scay0, u64
+ }
+ 
+ /* Adds an XYOFFSET_1. */
+-static int GsPacket_AddXyOffset(int packet, u32 offset_x, u32 offset_y) {
++static sptr GsPacket_AddXyOffset(sptr packet, u32 offset_x, u32 offset_y) {
+     return GsPacket_AddReg(packet, GS_REG_XYOFFSET_1, offset_x | ((u64)offset_y << 32));
+ }
+ 
+ /* Adds a PRMODECONT. */
+-static int GsPacket_AddPrmodecont(int packet, u32 use_prim) {
++static sptr GsPacket_AddPrmodecont(sptr packet, u32 use_prim) {
+     return GsPacket_AddReg(packet, GS_REG_PRMODECONT, (u64)use_prim);
+ }
+ 
+ /* Adds a PRMODE; nothing calls it. */
+-int GsPacket_AddPrmode(int packet, u32 iip, u32 tme, u32 fge, u32 abe, u32 aa1, u32 fst, u32 ctxt, u32 fix) {
++sptr GsPacket_AddPrmode(sptr packet, u32 iip, u32 tme, u32 fge, u32 abe, u32 aa1, u32 fst, u32 ctxt, u32 fix) {
+     return GsPacket_AddReg(packet, GS_REG_PRMODE, ((u64)iip << 3) | ((u64)tme << 4) | ((u64)fge << 5) | ((u64)abe << 6) | ((u64)aa1 << 7) | ((u64)fst << 8) | ((u64)ctxt << 9) | ((u64)fix << 10));
+ }
+ 
+ /* Adds a CLAMP_1: the texture wrap modes and the clamp area. */
+-static int GsPacket_AddClamp(s64 packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u64 minv, u64 maxv) {
++static sptr GsPacket_AddClamp(sptr packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u64 minv, u64 maxv) {
+     u64 low = ((wms << 32) >> 32) | (maxv << 34);
+     u64 middle = ((maxu << 32) >> 18) | ((minu << 32) >> 28);
+     u64 high = ((wmt << 32) >> 30) | ((minv << 32) >> 8);
+@@ -1876,22 +1860,22 @@ static int GsPacket_AddClamp(s64 packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u
+ }
+ 
+ /* Adds a BITBLTBUF: destination buffer of a transfer. */
+-static int GsPacket_AddBitbltbuf(int packet, u32 dest_base, u32 dest_width, u32 dest_format) {
++static sptr GsPacket_AddBitbltbuf(sptr packet, u32 dest_base, u32 dest_width, u32 dest_format) {
+     return GsPacket_AddReg(packet, GS_REG_BITBLTBUF, ((u64)dest_format << 56) | ((u64)dest_width << 48) | ((u64)dest_base << 32));
+ }
+ 
+ /* Adds a TRXPOS: destination corner of a transfer. */
+-static int GsPacket_AddTrxpos(int packet, u32 direction, u32 dest_x, u32 dest_y) {
++static sptr GsPacket_AddTrxpos(sptr packet, u32 direction, u32 dest_x, u32 dest_y) {
+     return GsPacket_AddReg(packet, GS_REG_TRXPOS, ((u64)direction << 59) | ((u64)dest_y << 48) | ((u64)dest_x << 32));
+ }
+ 
+ /* Adds a TRXREG: size of the rectangle to transfer. */
+-static int GsPacket_AddTrxreg(int packet, u32 width, u32 height) {
++static sptr GsPacket_AddTrxreg(sptr packet, u32 width, u32 height) {
+     return GsPacket_AddReg(packet, GS_REG_TRXREG, ((u64)height << 32) | width);
+ }
+ 
+ /* Adds a TRXDIR: starts a transfer. */
+-static int GsPacket_AddTrxdir(int packet, u32 direction) {
++static sptr GsPacket_AddTrxdir(sptr packet, u32 direction) {
+     return GsPacket_AddReg(packet, GS_REG_TRXDIR, (u64)direction);
+ }
+ 
+@@ -1900,8 +1884,8 @@ static const char field_names[] = "EVEN\0ODD ";
+ static const char vblank_format[] = "GS_CSR=%s vbct=%d isvb%d\n";
+ 
+ /* Starts the GIF DMA channel on a chain of packets. */
+-static void Movie_SendGifChain(u32 chain) {
+-    *D2_TADR = chain & 0x0FFFFFFF;
++static void Movie_SendGifChain(void *chain) {
++    *D2_TADR = MOVIE_DMA_ADDRESS(chain);
+     *D2_QWC = 0;
+     *D2_CHCR = 0x105;
+ }
+@@ -1919,24 +1903,20 @@ static int Movie_VblankHandler(int cause) {
+             tag = MovieOut_GetOldestTag(&movie_out_buffer);
+             if (tag == NULL) {
+                 movie_idle_vblanks++;
+-                __asm__ volatile("sync");
+-                __asm__ volatile("ei");
+                 return 0;
+             }
+             if (movie_start_field == 0 && tag->status == MOVIE_OUT_STATUS_FULL) {
+                 MovieDisplay_ShowField(&movie_thread.display, 1);
+-                Movie_SendGifChain((u32)tag->field_packets[0]);
++                Movie_SendGifChain(tag->field_packets[0]);
+                 tag->status = MOVIE_OUT_STATUS_SHOWN_EVEN;
+             } else if (movie_start_field != 0 && tag->status == MOVIE_OUT_STATUS_SHOWN_EVEN) {
+                 MovieDisplay_ShowField(&movie_thread.display, 0);
+-                Movie_SendGifChain((u32)tag->field_packets[1]);
++                Movie_SendGifChain(tag->field_packets[1]);
+                 tag->status = MOVIE_OUT_STATUS_EMPTY;
+                 movie_picture_shown = 1;
+             }
+         }
+     }
+-    __asm__ volatile("sync");
+-    __asm__ volatile("ei");
+     return 0;
+ }
+ 
+@@ -1946,8 +1926,6 @@ static int Movie_GifDmaHandler(void) {
+         MovieOut_DropOldest(&movie_out_buffer);
+         movie_picture_shown = 0;
+     }
+-    __asm__ volatile("sync");
+-    __asm__ volatile("ei");
+     return 0;
+ }
+ 
+@@ -2021,14 +1999,14 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+     s32 i;
+     char *suffix;
+ 
+-    name = index(path, ':');
++    name = strchr(path, ':');
+     if (name != NULL) {
+-        device_length = name - path;
++        device_length = (s32)(name - path);
+         strncpy(device, path, device_length);
+         name++;
+         device[device_length] = '\0';
+         if (strcmp(device, cdrom_device) == 0) {
+-            name_length = strlen(name);
++            name_length = (s32)strlen(name);
+             file->is_cd_stream = TRUE;
+             for (i = 0; i < name_length; i++) {
+                 if (name[i] == '/') {
+@@ -2036,7 +2014,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+                 }
+                 name[i] = toupper(name[i]);
+             }
+-            suffix = index(path, ';') ? (char *)empty_string : (char *)cd_version_suffix;
++            suffix = strchr(path, ';') ? (char *)empty_string : (char *)cd_version_suffix;
+             sprintf(full_path, (char *)cd_path_format, name, suffix);
+         } else {
+             file->is_cd_stream = FALSE;
+@@ -2054,7 +2032,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+             printf("SifAllocIopHeap Error\n");
+             return 0;
+         }
+-        if (sceCdStInit(0x50, 5, ((u32)(file->iop_buffer + 0xF) >> 4) << 4) != 1) {
++        if (sceCdStInit(0x50, 5, (void *)(uptr)(((u32)(file->iop_buffer + 0xF) >> 4) << 4)) != 1) { /* an IOP address */
+             printf("sceCdStInit Error \n");
+             if (sceSifFreeIopHeap(file->iop_buffer) < 0) {
+                 printf("sceSifFreeIopHeap Error %s %d\n", "fslibmpg.c", 0xE5B);
+diff --git a/src/game/gfx/movie.h b/src/game/gfx/movie.h
+index 0a6ab82bd1a7e883f95b6c4b8a99f1fb42c3cdf8..674db8cab8d1031fae67842203944c26484a201d 100644
+--- a/src/game/gfx/movie.h
++++ b/src/game/gfx/movie.h
+@@ -33,14 +33,6 @@ typedef struct {
+     u8 bytes[4];                    /* 0x00 */
+ } MovieEndCode;
+ 
+-/* a block of data handed to the IOP with sceSifSetDma (the SDK's sceSifDmaData) */
+-typedef struct {
+-    void *data;                     /* 0x00 */
+-    void *addr;                     /* 0x04 IOP address */
+-    int size;                       /* 0x08 */
+-    int attr;                       /* 0x0C */
+-} MovieSifDmaData;
+-
+ /* the ring the movie file is read into before it is demultiplexed (the SDK sample's ReadBuf) */
+ typedef struct {
+     u8 data[0x50000];               /* 0x00000 */
+@@ -50,10 +42,12 @@ typedef struct {
+ } MovieReadBuffer;
+ 
+ /* a source-chain DMA tag in the low half of a quadword */
++/* overlay: a DMA tag */
+ typedef struct {
+     u64 tag;                        /* 0x00 address << 32 | id << 28 | qwc */
+     u64 unk08;                      /* 0x08 */
+ } MovieDmaTag;
++LAYOUT_SIZE(MovieDmaTag, 0x10);
+ 
+ /* the movie file being played: streamed from the disc when its path starts with "cdrom0:", read with sceRead
+    otherwise */
+@@ -86,9 +80,9 @@ typedef struct {
+ 
+ /* movie_thread: the movie player's buffers, threads, file and display */
+ typedef struct {
+-    u32 heap_start;                 /* 0x00 the block Movie_Play is given to allocate from */
+-    u32 heap_next;                  /* 0x04 first free byte (Movie_HeapAlloc) */
+-    u32 heap_end;                   /* 0x08 last byte */
++    uptr heap_start;                /* 0x00 the block Movie_Play is given to allocate from */
++    uptr heap_next;                 /* 0x04 first free byte (Movie_HeapAlloc) */
++    uptr heap_end;                  /* 0x08 last byte */
+     char pad0C[0x04];
+     void *idle_stack;               /* 0x10 0x800 bytes */
+     void *decode_stack;             /* 0x14 0x4000 bytes */
+@@ -100,7 +94,7 @@ typedef struct {
+     void *out_tags;                 /* 0x2C five MovieOutTag */
+     void *time_stamps;              /* 0x30 0x3C00 bytes, 0x280 MovieTimeStamp */
+     void *unk34;                    /* 0x34 0x100 bytes, not used */
+-    s32 read_buffer;                /* 0x38 the MovieReadBuffer (MOVIE_READ_BUFFER) */
++    MovieReadBuffer *read_buffer;   /* 0x38 the MovieReadBuffer (MOVIE_READ_BUFFER) */
+     char pad3C[0x04];
+     s32 decode_thread;              /* 0x40 thread id */
+     s32 idle_thread;                /* 0x44 thread id */
+@@ -114,14 +108,7 @@ typedef struct {
+     s16 display_y;                  /* 0xD8 */
+ } MovieThreadState;
+ 
+-/* MovieThreadState.read_buffer as the pointer it holds: Movie_Setup only matches when the load has a pointer
+-   type (it then moves ahead of the stores to the DMA registers) */
+-typedef struct {
+-    char pad00[0x38];
+-    MovieReadBuffer *read_buffer;   /* 0x38 */
+-} MovieThreadStatePointers;
+-
+-#define MOVIE_READ_BUFFER(state) (((MovieThreadStatePointers *)(state))->read_buffer)
++#define MOVIE_READ_BUFFER(state) ((state)->read_buffer)
+ 
+ /* one decoded picture as the IPU delivers it (RGBA32 macroblocks) */
+ typedef struct {
+@@ -189,9 +176,8 @@ typedef struct {
+     s32 stamp_write;                /* 0x5C next slot written */
+ } MovieStreamBuffer;
+ 
+-/* `data` read as an integer, so that the compiler keeps the load behind a store through an `int *`
+-   (MovieStream_BeginPut only matches this way) */
+-#define MOVIE_STREAM_DATA_ADDRESS(stream) (*(s32 *)&(stream)->data)
++/* `data` read as an integer (MovieStream_BeginPut) */
++#define MOVIE_STREAM_DATA_ADDRESS(stream) ((sptr)(stream)->data)
+ 
+ /* movie_decoder: the libmpeg handle, its stream buffer and the decoder state (the SDK sample's VideoDec) */
+ typedef struct {
+@@ -229,7 +215,7 @@ typedef struct {
+ /* Plays a movie file to its end (or until skip_requested, polled from the eleventh picture on, returns
+    nonzero), with the player's buffers carved out of the heap_size bytes at heap. volume is the sound's master
+    volume, video_mode, display_x and display_y set up the display. Returns -1 when the block is too small. */
+-int Movie_Play(char *path, u32 heap, u32 heap_size, int (*skip_requested)(void), u32 volume, s16 video_mode,
++int Movie_Play(char *path, char *heap, u32 heap_size, int (*skip_requested)(void), u32 volume, s16 video_mode,
+                s16 display_x, s16 display_y);
+ 
+ #endif
+diff --git a/src/game/gfx/packet.h b/src/game/gfx/packet.h
+index e091e37d8fd623a828026544ade84bf5c4834017..88b9aff944d306bd987d40ef68f1b4c4500b8795 100644
+--- a/src/game/gfx/packet.h
++++ b/src/game/gfx/packet.h
+@@ -62,12 +62,14 @@ typedef struct {
+ #define SPRITE_PACKET_COLOR_VIEW(packet) ((SpritePacketColorView *)(packet))
+ 
+ /* one quadword DMA tag at the head of a packet chain */
++/* overlay: a DMA tag */
+ typedef struct {
+     s32 id_and_qwc;                 /* 0x00 the DMA tag ID (bits 28-30) and quadword count */
+-    s32 address;                    /* 0x04 the next packet, or 0 */
++    EEWord address;                 /* 0x04 (u32 *) the next packet, or 0 */
+     s32 unk08;                      /* 0x08 */
+     s32 unk0C;                      /* 0x0C */
+ } DmaTag;
++LAYOUT_SIZE(DmaTag, 0x10);
+ 
+ /* one corner of a ScreenSprite */
+ typedef struct {
+@@ -305,10 +307,6 @@ typedef struct {
+     u32 colours_important;          /* 0x24 */
+ } BmpInfoHeader;
+ 
+-#ifndef SCE_LIBGRAPH_LIBGRAPH_H /* a file that includes <libgraph.h> first uses its prototypes */
+-int sceGsPutDrawEnv(GsDrawPacket *);
+-int sceGsSetDefDrawEnv(GsDrawEnv *, s16, s16, s16, s16, s16);
+-int sceGsSyncPath(int, int);
+-#endif
++#include <libgraph.h> /* sceGsPutDrawEnv, sceGsSetDefDrawEnv, sceGsSyncPath */
+ 
+ #endif
+diff --git a/src/game/gfx/packet_buffer.c b/src/game/gfx/packet_buffer.c
+index 25a41bdd90f766755bcf2373e5057f621daa8e12..4cd431e159b22492b69d53e994948f1299e277a1 100644
+--- a/src/game/gfx/packet_buffer.c
++++ b/src/game/gfx/packet_buffer.c
+@@ -3,26 +3,27 @@
+ #include "common.h"
+ #include <eeregs.h>
+ #include <libdma.h>
++#include <eekernel.h>
+ #include "gfx/gs.h"
+ #include "gfx/packet.h"
++#include <string.h>
+ 
+ /* sends a packet to VIF1 and waits for the transfer to end */
+ #define SEND_TO_VIF1(packet)                    \
+     channel = sceDmaGetChan(1);                 \
+     channel->chcr |= 0x40;                      \
+-    sceDmaSend(channel, (u32)(packet));         \
++    sceDmaSend(channel, (packet));              \
++    PORT_TODO("waits for D1_CHCR STR (bit 8)"); \
+     while (*D1_CHCR & 0x100) {                  \
+     }
+ 
+-void *memset(void *, int, u32);
+ int puts(char *);
+-void FlushCache(int); // match: void, the return value is unused and int changes the code
+ 
+ /* the game's own data and functions, outside this file */
+ extern int packet_fill_index;       /* which of the two packet buffers is being filled */
+ extern int packet_quadwords_used;   /* quadwords handed out */
+ extern int packet_buffers_size;     /* bytes in both buffers together */
+-extern int packet_area;              /* start of the packet area */
++extern sptr packet_area;             /* start of the packet area */
+ extern char packet_overflow_message[];   /* a line of 70 '!', printed when a packet overruns the buffer */
+ extern u32 *gs_register_list;       /* the register list being built, NULL: none */
+ extern int gs_register_count;       /* registers in it */
+@@ -47,7 +48,7 @@ static int gs_send_pending[2];       /* 0x447028 [0] set while the GS reads a bu
+ static void *packet_buffer[2];        /* 0x447030 start of each buffer */
+ static void *packet_next;             /* 0x447038 next free quadword */
+ static int packet_overflowed;        /* 0x44703C the buffer overflowed: everything after goes to its start */
+-static int spare_area_addr;          /* 0x447040 the area past both buffers */
++static sptr spare_area_addr;         /* 0x447040 the area past both buffers */
+ static int spare_area_size;          /* 0x447044 its size */
+ 
+ /* Lays out the largest packet buffers and uploads the VU1 microprograms. */
+@@ -93,7 +94,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
+     packet_head = &packet_chain_head[packet_fill_index];
+     packet_tail = &packet_chain_tail[packet_fill_index];
+     if (packet_overflowed == 0) {
+-        if ((u32)packet_end >= (u32)packet_next) {
++        if ((u8 *)packet_end >= (u8 *)packet_next) {
+             puts(packet_overflow_message);
+             while (1) {
+             }
+@@ -101,7 +102,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
+             if (*packet_head != 0) {
+                 DmaTag *tail_tag = *packet_tail;
+                 tail_tag->id_and_qwc = 0x20000000;
+-                tail_tag->address = (int)packet;
++                tail_tag->address = EE_WORD(packet);
+                 tail_tag->unk0C = tail_tag->unk08 = 0;
+             } else {
+                 *packet_head = packet;
+@@ -122,7 +123,7 @@ void Packet_SendChain(void) {
+         if (packet_overflowed == 0) {
+             gs_send_pending[0] = 1;
+             Packet_BeginGsRegisters();
+-            Packet_AddGsRegister(GS_REG_FINISH, 0xFFFFFFFFUL);
++            Packet_AddGsRegister(GS_REG_FINISH, 0xFFFFFFFFULL);
+             Packet_EndGsRegisters();
+             end_tag = packet_chain_tail[packet_fill_index];
+             end_tag->id_and_qwc = 0x70000000;
+@@ -130,13 +131,14 @@ void Packet_SendChain(void) {
+             end_tag->unk08 = 0;
+             end_tag->unk0C = 0;
+             FlushCache(0);
++            PORT_TODO("waits for D1_CHCR STR (bit 8)");
+             do {
+             } while (*D1_CHCR & 0x100);
+             *GS_CSR |= 2;
+             FlushCache(0);
+             *D1_QWC = 0;
+             *D1_MADR = 0;
+-            *D1_TADR = (u32)*chain_head;
++            *D1_TADR = (int)EE_WORD(*chain_head);
+             *D1_CHCR = 0x105;
+         }
+     }
+@@ -146,6 +148,7 @@ void Packet_SendChain(void) {
+ void Packet_WaitForSend(void) {
+     if (gs_send_pending[0] != 0) {
+         gs_send_pending[0] = 0;
++        PORT_TODO("waits for D1_CHCR STR (bit 8)");
+         do {
+         } while (*D1_CHCR & 0x100);
+         sceGsSyncPath(0, 0);
+@@ -157,7 +160,7 @@ void Packet_WaitForSend(void) {
+ /* Lays out the packet buffers in the packet area for the given size (0 = largest). */
+ void Packet_LayOutBuffers(int size_index) {
+     u32 size;
+-    int base;
++    sptr base;
+     int half;
+ 
+     packet_fill_index = 0;
+@@ -218,8 +221,8 @@ u32 *Packet_Alloc(int quadwords) {
+ }
+ 
+ /* Returns the spare area's address and size. */
+-void Packet_GetSpareArea(int *addr, int *size) {
+-    int spare_addr = spare_area_addr;
++void Packet_GetSpareArea(sptr *addr, int *size) {
++    sptr spare_addr = spare_area_addr;
+     int spare_size = spare_area_size;
+     *addr = spare_addr;
+     *size = spare_size;
+diff --git a/src/game/gfx/screen.h b/src/game/gfx/screen.h
+index a407dc5e36ce6360b1e463a9cbffad38bb851bf2..a023932b5b6ab2f1b47c0a14319094a039931edb 100644
+--- a/src/game/gfx/screen.h
++++ b/src/game/gfx/screen.h
+@@ -8,12 +8,10 @@
+ /* the model ModelTexture_SendForModel draws; the older name for ModelInstance */
+ typedef ModelInstance OverlaySprite;
+ 
+-/* one 0x70-byte element PoolSlot_Draw draws (PoolSlot_DrawAll, PoolSlot_DrawAllBut15 and
+-   PoolSlot_DrawFirst20But15 run it over an array of them) */
+-typedef struct {
+-    Vector4 rows[4];                /* 0x00 a matrix, loaded whole */
+-    char pad40[0x30];
+-} RenderSlot;
++/* one element PoolSlot_Draw draws (PoolSlot_DrawAll, PoolSlot_DrawAllBut15 and PoolSlot_DrawFirst20But15 run it
++   over an array of them): a pool slot (PoolSlot, core/game.h), whose first 0x40 bytes are a matrix loaded whole.
++   On the PC it is the PoolSlot itself, so that the arrays step by the slot's PC size. */
++typedef struct PoolSlot RenderSlot;
+ 
+ /* PoolSlot_Draw's second argument: eight bytes passed in one register, only spilled */
+ typedef struct {
+@@ -42,18 +40,24 @@ typedef struct {
+     f32 phase;                      /* 0x0C */
+ } WaveOscillator;
+ 
+-/* what held_item_model_ptr points at */
++/* what held_item_model_ptr points at: a view of ModelInstance (model/model.h) and of the ModelChannel its
++   level_tables points at, with the padding worked out from those structs (their pointers move the fields on
++   the PC) */
+ typedef struct {
+-    char pad00[0x82];
+-    u16 unk82;                      /* 0x82 */
++    char pad00[offsetof(ModelChannel, param)];
++    u16 unk82;                      /* 0x82 ModelChannel.param */
+ } DisplaySettings;
+ 
+ typedef struct {
+-    char pad00[0xFC];
+-    DisplaySettings *settings;      /* 0xFC */
++    char pad00[offsetof(ModelInstance, level_tables)];
++    DisplaySettings *settings;      /* 0xFC ModelInstance.level_tables */
+ } DisplayContext;
+ 
++_Static_assert(offsetof(DisplaySettings, unk82) == offsetof(ModelChannel, param), "DisplaySettings is not ModelChannel");
++_Static_assert(offsetof(DisplayContext, settings) == offsetof(ModelInstance, level_tables), "DisplayContext is not ModelInstance");
++
+ /* the nodes Map_InsertRecordBySize sorts into the lists record_boxes and backdrop_record_boxes by box area */
++/* overlay: the start of a 0x80-byte map record of the map file (map/map.h MapRecordBox) */
+ typedef struct AreaNode {
+     char pad00[0x3C];
+     s32 flags;                      /* 0x3C bit 25 skips insertion, bit 31 picks the second list */
+@@ -64,8 +68,11 @@ typedef struct AreaNode {
+     f32 right;                      /* 0x50 */
+     f32 unk54;                      /* 0x54 the box's highest y */
+     f32 bottom;                     /* 0x58 */
+-    struct AreaNode *next;          /* 0x5C */
++    EEWord next;                    /* 0x5C (AreaNode *) the next box of its list: MapRecordBox.next (map/map.h) */
+ } AreaNode;
++LAYOUT_SIZE(AreaNode, 0x60);
++LAYOUT_OFFSET(AreaNode, flags, 0x3C);
++LAYOUT_OFFSET(AreaNode, next, 0x5C);
+ 
+ /* an AreaNode with the doubleword its flags are the high half of; bit 27 is the map slot it belongs to */
+ typedef struct {
+diff --git a/src/game/gfx/scroll_texture.c b/src/game/gfx/scroll_texture.c
+index 16789bc413ac35a3e547da88c20cfa1eb65577eb..1fedc5812663b24cc10de00ed8326e2d5983f330 100644
+--- a/src/game/gfx/scroll_texture.c
++++ b/src/game/gfx/scroll_texture.c
+@@ -1,8 +1,8 @@
+ #include "gfx/scroll_texture.h"
+ #include "gfx/gs.h"
+ #include "gfx/texture.h"
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+ void GsDraw_DrawScrollingTexture(void *, void *);
+ void GsDraw_ResetDrawTarget(void);
+ void GsDraw_QueueTexFlush(void);
+diff --git a/src/game/gfx/texture.h b/src/game/gfx/texture.h
+index 1039e2718b9c36aa08f0cdf8298d6d01420911bb..8846e0d7fb0c45d64839a1224336f77800bb0cff 100644
+--- a/src/game/gfx/texture.h
++++ b/src/game/gfx/texture.h
+@@ -5,6 +5,7 @@
+ #include "common.h"
+ 
+ /* a 0x20-byte image header; the image (and then its CLUT) follows it */
++/* overlay: a texture file */
+ typedef struct {
+     int data_offset;                /* 0x00 from this header */
+     int image_size;                 /* 0x04 bytes */
+@@ -13,6 +14,7 @@ typedef struct {
+     u64 tex0;                       /* 0x10 GS TEX0: TBP0 at bit 0, CBP at bit 37 */
+     u64 unk18;                      /* 0x18 copied to PoolSlot.unk60 with tex0 (Menu_UpdateKeyItems) */
+ } TextureHeader;
++LAYOUT_SIZE(TextureHeader, 0x20);
+ 
+ /* the fields of a GS TEX0 value (TextureHeader.tex0), as Texture_BuildPacket reads them */
+ typedef struct {
+@@ -58,12 +60,14 @@ typedef struct {
+ } LoadedTexture;
+ 
+ /* a chunk table: this header, then entry_count TextureTableEntry */
++/* overlay: a texture chunk table file */
+ typedef struct {
+     int unk00;                      /* 0x00 */
+     u32 entry_count;                /* 0x04 */
+     int unk08;                      /* 0x08 Texture_BuildPacketTable clears it */
+     int unk0C;                      /* 0x0C Texture_BuildPacketTable clears it */
+ } TextureTableHeader;
++LAYOUT_SIZE(TextureTableHeader, 0x10);
+ 
+ /* a texture GsDraw_DrawScrollingTexture redraws into another one every frame, scrolled (scroll_textures in gfx/scroll_texture.c) */
+ typedef struct {
+@@ -97,12 +101,14 @@ typedef struct {
+     s16 y;                          /* 0x02 */
+ } ScrollOffset;
+ 
++/* overlay: a texture chunk table file */
+ typedef struct {
+     int offset;                     /* 0x00 from the table base, to a chunk: its size in quadwords, 12 bytes, the data */
+     int unk04;                      /* 0x04 Texture_BuildPacketTable clears it */
+     int unk08;                      /* 0x08 Texture_BuildPacketTable clears it */
+     int unk0C;                      /* 0x0C not 0: TextureTable_QueueEnabled skips it (set by TextureTable_SetChunkEnabled) */
+ } TextureTableEntry;
++LAYOUT_SIZE(TextureTableEntry, 0x10);
+ 
+ /* Sends the GS a TEXFLUSH through DMA channel 2 (gfx/texture_upload.c). */
+ void Texture_SendTexFlush(void);
+diff --git a/src/game/gfx/texture_table.c b/src/game/gfx/texture_table.c
+index 1ab36856868f0ff18db114b65c0eb97a1dfc6deb..52bba061f732bb9b578b6b8645e8e672889ec81c 100644
+--- a/src/game/gfx/texture_table.c
++++ b/src/game/gfx/texture_table.c
+@@ -27,7 +27,7 @@ void TextureTable_QueueAll(TextureTableHeader *table) {
+     for (i = 0; i < table->entry_count; i++) {
+         chunk = (u32 *)((char *)table + entries[i].offset);
+         *packet++ = (*chunk & 0x8FFFFFFF) | 0x30000000;
+-        *packet++ = (u32)(chunk + 4);
++        *packet++ = EE_WORD(chunk + 4);
+         *packet++ = 0;
+         *packet++ = 0;
+     }
+@@ -53,7 +53,7 @@ void TextureTable_QueueEnabled(TextureTableHeader *table_arg, s32 skip_mask) {
+             }
+             chunk = (u32 *)((char *)table + entries[i].offset);
+             *packet++ = (*chunk & 0x8FFFFFFF) | 0x30000000;
+-            *packet++ = (u32)(chunk + 4);
++            *packet++ = EE_WORD(chunk + 4);
+             *packet++ = 0;
+             *packet++ = 0;
+         }
+@@ -75,7 +75,7 @@ void TextureTable_QueueOne(TextureTableHeader *table, s32 index) {
+         packet_start = packet = Packet_Alloc(2);
+         chunk = (u32 *)((char *)table + entries[index].offset);
+         *packet++ = (*chunk & 0x8FFFFFFF) | 0x30000000;
+-        *packet++ = (u32)(chunk + 4);
++        *packet++ = EE_WORD(chunk + 4);
+         *packet++ = 0;
+         *packet++ = 0;
+         Packet_AppendToChain(packet_start, packet);
+diff --git a/src/game/gfx/texture_upload.c b/src/game/gfx/texture_upload.c
+index 2c8774abe2528088c95ac3425c6fee1a309885ee..a339b168637fc1e1e238cb8bdb784b303e1dd42a 100644
+--- a/src/game/gfx/texture_upload.c
++++ b/src/game/gfx/texture_upload.c
+@@ -3,7 +3,9 @@
+    pointers of a table of them, and a TEXFLUSH. */
+ #include "gfx/texture.h"
+ #include <eeregs.h>
++#include <eekernel.h>
+ #include <libgraph.h>
++#include <string.h>
+ 
+ #define TEX0_BITS(header) ((TextureTex0Bits *)&(header)->tex0)
+ #define DMA_TAG_ID_END (7 << 28)    /* a DMA tag of id 7: end the chain after its data */
+@@ -27,8 +29,6 @@ static u32 texflush_packet[0xC];    /* 0x1DFAF80 where Texture_SendTexFlush buil
+ 
+ int puts(char *);
+ int printf(const char *, ...);
+-int FlushCache(int);
+-void *memcpy(void *, const void *, u32);
+ 
+ static void Texture_LoadTm2(TextureHeader *header);
+ static void Texture_BuildPacket(char **texture, char **packet);
+@@ -64,6 +64,7 @@ static void Texture_LoadTm2(TextureHeader *header) {
+     sceGsSetDefLoadImage(&load_image, (u16)(header->tex0 & 0x3FFF), buffer_width, image_format, 0, 0, width, height);
+     FlushCache(0);
+     sceGsExecLoadImage(&load_image, (char *)header + sizeof(TextureHeader));
++    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
+     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+     }
+     pixel_format = (header->tex0 >> 20) & 0x3F;
+@@ -71,13 +72,15 @@ static void Texture_LoadTm2(TextureHeader *header) {
+         sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 16, 16);
+         FlushCache(0);
+         sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
+-        while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
++        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
++    while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+         }
+     } else if (pixel_format == 0x14 || pixel_format == 0x24 || pixel_format == 0x2C) {
+         sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 8, 2);
+         FlushCache(0);
+         sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
+-        while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
++        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
++    while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+         }
+     }
+ }
+@@ -110,13 +113,13 @@ static void Texture_BuildPacketTable(char **textures, char **packets) {
+     target_cursor += target->entry_count * sizeof(TextureTableEntry);
+     for (i = 0; i < source->entry_count; i++) {
+         source_cursor = *textures + source_entry[i].offset;
+-        target_entry[i].offset = target_cursor - *packets;
++        target_entry[i].offset = (int)(target_cursor - *packets);
+         target_entry[i].unk0C = 0;
+         target_entry[i].unk08 = 0;
+         target_entry[i].unk04 = 0;
+         Texture_BuildPacket(&source_cursor, &target_cursor);
+     }
+-    target->unk00 = target_cursor - *packets;
++    target->unk00 = (int)(target_cursor - *packets);
+     *packets = target_cursor;
+ }
+ 
+@@ -207,34 +210,54 @@ static void Texture_BuildPacket(char **texture, char **packet) {
+     } else {
+         total = quadwords + 6;
+     }
+-    // match: one cursor stepped through casts gives the separate increments; the CLUT part below is indexed
+-    *((u32 *)cursor)++ = (total + 1) | 0x70000000;
+-    *((u32 *)cursor)++ = 0;
+-    *((u32 *)cursor)++ = 0;
+-    *((u32 *)cursor)++ = 0;
+-    *((u32 *)cursor)++ = 0;
+-    *((u32 *)cursor)++ = 0;
+-    *((u32 *)cursor)++ = 0;
+-    *((u32 *)cursor)++ = total | 0x51000000;
+-    *((u64 *)cursor)++ = 0x1000000000000004;
+-    *((u64 *)cursor)++ = 0xE;
++    *(u32 *)cursor = (total + 1) | 0x70000000;
++    cursor += 4;
++    *(u32 *)cursor = 0;
++    cursor += 4;
++    *(u32 *)cursor = 0;
++    cursor += 4;
++    *(u32 *)cursor = 0;
++    cursor += 4;
++    *(u32 *)cursor = 0;
++    cursor += 4;
++    *(u32 *)cursor = 0;
++    cursor += 4;
++    *(u32 *)cursor = 0;
++    cursor += 4;
++    *(u32 *)cursor = total | 0x51000000;
++    cursor += 4;
++    *(u64 *)cursor = 0x1000000000000004;
++    cursor += 8;
++    *(u64 *)cursor = 0xE;
++    cursor += 8;
+     base_pointer = TEX0_BITS(header)->base_pointer;
+     buffer_width = TEX0_BITS(header)->buffer_width;
+     image_format = TEX0_BITS(header)->pixel_format;
+-    *((u64 *)cursor)++ = ((u64)base_pointer << 32) | ((u64)buffer_width << 48) | ((u64)image_format << 56);
+-    *((u64 *)cursor)++ = 0x50;
+-    *((u64 *)cursor)++ = 0;
+-    *((u64 *)cursor)++ = 0x51;
+-    *((u64 *)cursor)++ = width | ((u64)height << 32);
+-    *((u64 *)cursor)++ = 0x52;
+-    *((u64 *)cursor)++ = 0;
+-    *((u64 *)cursor)++ = 0x53;
++    *(u64 *)cursor = ((u64)base_pointer << 32) | ((u64)buffer_width << 48) | ((u64)image_format << 56);
++    cursor += 8;
++    *(u64 *)cursor = 0x50;
++    cursor += 8;
++    *(u64 *)cursor = 0;
++    cursor += 8;
++    *(u64 *)cursor = 0x51;
++    cursor += 8;
++    *(u64 *)cursor = width | ((u64)height << 32);
++    cursor += 8;
++    *(u64 *)cursor = 0x52;
++    cursor += 8;
++    *(u64 *)cursor = 0;
++    cursor += 8;
++    *(u64 *)cursor = 0x53;
++    cursor += 8;
+     if (has_clut) {
+-        *((u64 *)cursor)++ = quadwords | (0x8000L << 44);
++        *(u64 *)cursor = quadwords | (0x8000LL << 44);
++        cursor += 8;
+     } else {
+-        *((u64 *)cursor)++ = (quadwords | 0x8000) | (0x8000L << 44);
++        *(u64 *)cursor = (quadwords | 0x8000) | (0x8000LL << 44);
++        cursor += 8;
+     }
+-    *((u64 *)cursor)++ = 0;
++    *(u64 *)cursor = 0;
++    cursor += 8;
+     bytes = cursor;
+     memcpy(bytes, (char *)header + sizeof(TextureHeader), size);
+     bytes += size;
+@@ -245,7 +268,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
+         tags = (u64 *)bytes;
+         tags[0] = 0x1000000000000004;
+         tags[1] = 0xE;
+-        tags[2] = ((u64)(int)TEX0_BITS(header)->clut_pointer << 32) | (0x8000L << 33) | ((u64)(int)TEX0_BITS(header)->clut_format << 56);
++        tags[2] = ((u64)(int)TEX0_BITS(header)->clut_pointer << 32) | (0x8000LL << 33) | ((u64)(int)TEX0_BITS(header)->clut_format << 56);
+         tags[3] = 0x50;
+         tags[4] = 0;
+         tags[5] = 0x51;
+@@ -253,7 +276,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
+         tags[7] = 0x52;
+         tags[8] = 0;
+         tags[9] = 0x53;
+-        tags[10] = (clut_quadwords | 0x8000) | (0x8000L << 44);
++        tags[10] = (clut_quadwords | 0x8000) | (0x8000LL << 44);
+         tags[11] = 0;
+         bytes += 12 * sizeof(u64);
+         clut_offset = header->image_size + sizeof(TextureHeader);   // match: its own variable, as above
+@@ -299,10 +322,11 @@ void Texture_SendTexFlush(void) {
+     *cursor++ = 0x3F;
+     *cursor = 0;
+     FlushCache(0);
++    PORT_TODO("waits for D2_CHCR STR (bit 8)");
+     while (*D2_CHCR & 0x100) {
+     }
+     *D2_MADR = 0;
+-    *D2_TADR = (int)texflush_packet;
++    *D2_TADR = (int)EE_WORD(texflush_packet);
+     *D2_CHCR = 0x105;
+ }
+ 
+@@ -325,7 +349,7 @@ char *Texture_UploadTable(char *base, int upload) {
+     entry = (TextureTableEntry *)cursor;
+     cursor += header->entry_count * sizeof(TextureTableEntry);
+     for (i = 0; i < header->entry_count; i++) {
+-        cursor = Texture_UploadChunk((char *)(entry[i].offset + (int)base), upload);
++        cursor = Texture_UploadChunk(base + entry[i].offset, upload);
+     }
+     return cursor;
+ }
+@@ -338,10 +362,10 @@ static void *Texture_MoveBasePointers(TextureHeader *header, int tbp_delta, int
+     int cbp;
+ 
+     tbp = ((int) (bits & 0x3FFF) + tbp_delta) & 0x3FFF;
+-    bits &= ~0x3FFFUL;
++    bits &= ~0x3FFFULL;
+     bits |= tbp;
+     cbp = (int) ((bits >> 37) & 0x3FFF);
+-    bits &= 0xFFF8001FFFFFFFFFUL;
++    bits &= 0xFFF8001FFFFFFFFFULL;
+     bits |= (u64) ((cbp + cbp_delta) & 0x3FFF) << 37;
+     header->tex0 = bits;
+     return (char *) header + header->data_offset;
+@@ -361,7 +385,7 @@ static char *Texture_MoveTableBasePointers(char *base, int tbp_delta, int cbp_de
+     entry = (TextureTableEntry *)cursor;
+     cursor += header->entry_count * sizeof(TextureTableEntry);
+     for (i = 0; i < header->entry_count; i++) {
+-        cursor = Texture_MoveBasePointers((TextureHeader *)(entry[i].offset + (int)base), tbp_delta, cbp_delta);
++        cursor = Texture_MoveBasePointers((TextureHeader *)(base + entry[i].offset), tbp_delta, cbp_delta);
+     }
+     return cursor;
+ }
+diff --git a/src/game/gfx/wobble.c b/src/game/gfx/wobble.c
+index fd193aa6e7b8b47428e8038a87938f515f7e4871..af287ac25bb20d7d8289de10fabb53afc1b77c20 100644
+--- a/src/game/gfx/wobble.c
++++ b/src/game/gfx/wobble.c
+@@ -2,16 +2,11 @@
+ #include "model/model.h"
+ #include "gfx/packet.h"
+ #include "gfx/screen.h"
++#include "math/vu0.h"
++#include <string.h>
+ 
+-double sin(double);
+-void *memset(void *, int, u32);
+ u32 *Packet_Alloc(int);
+ void Packet_AppendToChain(u32 *, u32 *);
+-void Matrix_Multiply(void *, void *, void *);
+-void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
+-void Vu0_LoadMatrix(void *);
+-void Vu0_ProjectToScreen(int *, void *);
+-float sinf(float);
+ int rand(void);
+ void srand(u32);
+ 
+@@ -128,7 +123,7 @@ void Wobble_DrawRippledModel(ModelInstance *model, int unk1, int unk2, int unk3,
+             Matrix_Multiply(matrix, world_screen_matrix, matrix);
+             Vu0_LoadMatrix(matrix);
+             data_count = part->data_count;
+-            next = (ModelPartData *)(int)part->data_addr;
++            next = EE_PTR(ModelPartData *, part->data_addr);
+             for (j = 0; j < data_count; j++) {
+                 flags = 0;
+                 length = next->length;
+@@ -266,7 +261,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
+     part = model->parts;
+     for (i = 0; i < part_count; i++, part++) {
+         count = part->data_count;
+-        data = (ModelPartData *)(int)part->data_addr;
++        data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             texture = data->tex0 & 0x3FFF;
+             length = data->length;
+@@ -276,6 +271,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
+             data = (ModelPartData *)((char *)data + (length + 1) * 0x10);
+         }
+     }
++    return FALSE; /* PORT: retail falls off the end here and returns whatever $v0 held */
+ }
+ 
+ /* Resets the 16 screen wobble oscillators, spreading their phases over one turn. */
+@@ -311,9 +307,9 @@ void Wobble_StepOscillators(void) {
+ }
+ 
+ /* the address rounded up to a multiple of 16 */
+-static inline u32 align_16(u32 address) {
+-    u32 remainder = address & 0xF;
+-    u32 aligned = address;
++static inline uptr align_16(uptr address) {
++    uptr remainder = address & 0xF;
++    uptr aligned = address;
+ 
+     if (remainder != 0) {
+         aligned = remainder - 0x10;
+@@ -324,7 +320,7 @@ static inline u32 align_16(u32 address) {
+ 
+ /* Builds the model's table of wave texture coordinates at *alloc (16-byte aligned) and moves *alloc
+    past it. Each vertex keeps its own coordinates and gets a wave picked from where it is. */
+-void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
++void Wobble_BuildWaveUvs(ModelInstance *model, char **alloc) {
+     ModelPart *part;
+     ModelPartData *next_data;
+     ModelPartData *data;
+@@ -337,17 +333,17 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
+     int part_count;
+     int vertex_count;
+     u16 length;
+-    u32 address;
+-    u32 remainder;
++    uptr address;
++    uptr remainder;
+ 
+-    address = align_16(*alloc);
++    address = align_16((uptr)*alloc);
+     model->wave_uvs = (ModelWaveUv *)address;
+     part = model->parts;
+     part_count = model->part_count;
+     wave_uv = (ModelWaveUv *)address;
+     for (i = 0; i < part_count; i++, part++) {
+         count = part->data_count;
+-        next_data = (ModelPartData *)(int)part->data_addr;
++        next_data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             data = next_data;
+             next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices
+@@ -366,13 +362,13 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
+             next_data = (ModelPartData *)((char *)data + (length + 1) * 0x10);
+         }
+     }
+-    address = (u32)wave_uv;
++    address = (uptr)wave_uv;
+     remainder = address & 0xF;
+     if (remainder != 0) {
+         remainder -= 0x10;
+         address -= remainder;
+     }
+-    *alloc = address;
++    *alloc = (char *)address;
+ }
+ 
+ /* Moves every vertex's texture coordinates by its wave. */
+@@ -395,7 +391,7 @@ void Wobble_ApplyWaveUvs(ModelInstance *model) {
+     wave_uv = model->wave_uvs;
+     for (i = 0; i < part_count; i++, part++) {
+         count = part->data_count;
+-        next_data = (ModelPartData *)(int)part->data_addr;
++        next_data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             data = next_data;
+             next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices
+@@ -443,7 +439,7 @@ void Wobble_SetUvsFromJitteredScreen(ModelInstance *model) {
+     for (i = 0; i < part_count; i++, part++) {
+         Vu0_LoadMatrix(scratch->matrices[i]);
+         count = part->data_count;
+-        next_data = (ModelPartData *)(int)part->data_addr;
++        next_data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             data = next_data;
+             next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices

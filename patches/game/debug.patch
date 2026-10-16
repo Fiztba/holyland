@@ -1,0 +1,267 @@
+diff --git a/src/game/debug/debug.c b/src/game/debug/debug.c
+index ce9b24db175bc5afa819b952c4d3c3807ce70aee..17d8735e8d19d61062e02df37b8fbe011262035b 100644
+--- a/src/game/debug/debug.c
++++ b/src/game/debug/debug.c
+@@ -2,10 +2,11 @@
+ #include "core/game.h"
+ #include "input/pad.h"
+ #include "ui/message.h"
++#include <stdio.h>
++#include "gfx/gs.h"
+ 
+ static PadReport *debug_pad; /* 0x447108 the controller report the editors read; nothing in the retail game sets it */
+ 
+-int sprintf(char *, const char *, ...);
+ extern char debug_cursor_mark[];
+ extern char debug_cursor_blank[];
+ static char debug_cursor_marks[0x68]; /* 0x5742E0 the strings the debug menus draw, four bytes apart */
+@@ -20,15 +21,17 @@ void func_001095D8(void);
+ void Packet_SwapBuffers(void);
+ void Packet_SendChain(void);
+ void Packet_WaitForSend(void);
+-void GsDraw_FillScreen(int, int, int, int, int);
++void GsDraw_FillScreen(int, int, int, int, s64);
+ void Input_Update(void);
+ void Display_SwapBuffers(int);
+ extern DebugStartMenuSpacer debug_start_menu_spacer;
+ extern DebugStartMenuPrompt debug_start_menu_prompt;
+ extern DebugStartMenuItems debug_start_menu_items;
+ extern u16 pad_state[];
+-extern s64 game_dbuff_clear_color[];
+-extern s64 game_dbuff_context2_clear_color[];
++extern GsDoubleBuffer game_dbuff;
++#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
++extern GsDoubleBuffer game_dbuff_context2;
++#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
+ extern char debug_map_format[];
+ extern char debug_ini_prompt[];
+ extern char debug_ini_digit_format[];
+@@ -307,10 +310,10 @@ int Debug_PickMap(int *map_id) {
+     saved_colours[1] = game_dbuff_clear_color[30];
+     saved_colours[2] = game_dbuff_context2_clear_color[0];
+     saved_colours[3] = game_dbuff_context2_clear_color[30];
+-    game_dbuff_clear_color[0] = 0xC000L << 17;
+-    game_dbuff_clear_color[30] = 0xC000L << 17;
+-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
+-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
++    game_dbuff_clear_color[0] = 0xC000LL << 17;
++    game_dbuff_clear_color[30] = 0xC000LL << 17;
++    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
++    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
+     do {
+         Display_SwapBuffers(0);
+         Pad_Update();
+@@ -385,10 +388,10 @@ void Debug_EditIniNumber(int *value) {
+     saved_colours[1] = game_dbuff_clear_color[30];
+     saved_colours[2] = game_dbuff_context2_clear_color[0];
+     saved_colours[3] = game_dbuff_context2_clear_color[30];
+-    game_dbuff_clear_color[0] = 0xC000L << 17;
+-    game_dbuff_clear_color[30] = 0xC000L << 17;
+-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
+-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
++    game_dbuff_clear_color[0] = 0xC000LL << 17;
++    game_dbuff_clear_color[30] = 0xC000LL << 17;
++    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
++    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
+     do {
+         Display_SwapBuffers(0);
+         Pad_Update();
+diff --git a/src/game/debug/screen_dump.c b/src/game/debug/screen_dump.c
+index 0dd4b5d966eb4393055ee7e0e73918552420ac51..d27d172e6b96059f6d0f6b61c85c044ebea689f5 100644
+--- a/src/game/debug/screen_dump.c
++++ b/src/game/debug/screen_dump.c
+@@ -2,24 +2,18 @@
+ #include "common.h"
+ #include "gfx/packet.h"
+ #include "debug/screen_dump.h"
++#include <stdio.h>
++#include <string.h>
++#include <eekernel.h>
++#include <libgraph.h>
++#include <sifdev.h>
+ 
+-void *memset(void *, int, u32);
+-int FlushCache(int);
+-int sceClose(int);
+-int sceOpen(const char *, int);
+-int sceWrite(int, const void *, int);
+-int sceGsSyncPath(int, int);
+-void sceGsSetDefStoreImage(void *, s16, s16, s16, s16, s16, s16, s16);
+-void sceGsExecStoreImage(void *, void *);
+ extern char clut_dump_path[];
+ extern char vram_dump_path[];
+ void Texture_SendTexFlush(void);
+-extern int sceGsExecLoadImage(int *, int *);
+-extern int sceGsSetDefLoadImage(int *, int, int, int, int, int, int, int);
+ #define SCREEN_WIDTH 0x280
+ #define SCREEN_HEIGHT 0x1C0
+ #define SCREEN_BYTES (SCREEN_WIDTH * SCREEN_HEIGHT * 3)
+-int sprintf(char *, const char *, ...);
+ extern int context1_buffer_half;
+ extern char screenshot_bmp_path_format[];
+ extern char screenshot_raw_path_format[];
+@@ -152,9 +146,9 @@ void ScreenDump_Bmp(u8 *buffer) {
+     } while (TRUE);
+     if (in_range) {
+         aligned = buffer;
+-        misalign = (u32)aligned & 0xF;
++        misalign = (u32)((uptr)aligned & 0xF);
+         if (misalign != 0) {
+-            aligned -= misalign - 0x10;
++            aligned += 0x10 - misalign; /* retail: aligned -= misalign - 0x10, which wraps the same way on the EE */
+         }
+         sceGsSetDefStoreImage(store_image, base, 0xA, 1, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+         FlushCache(0);
+@@ -215,9 +209,9 @@ static void ScreenDump_Raw(u8 *buffer) {
+     } while (TRUE);
+     if (in_range) {
+         aligned = buffer;
+-        misalign = (u32)aligned & 0xF;
++        misalign = (u32)((uptr)aligned & 0xF);
+         if (misalign != 0) {
+-            aligned -= misalign - 0x10;
++            aligned += 0x10 - misalign; /* retail: aligned -= misalign - 0x10, which wraps the same way on the EE */
+         }
+         sceGsSetDefStoreImage(store_image, base, 0xA, 1, 0, 0, 0x280, 0x1C0);
+         FlushCache(0);
+diff --git a/src/game/debug/text_log.c b/src/game/debug/text_log.c
+index 3159df3e644673e10f7e125d03acd78ad50a7d22..e2cd6e76740c3757d311e29a9dbbdc4a1372542e 100644
+--- a/src/game/debug/text_log.c
++++ b/src/game/debug/text_log.c
+@@ -3,11 +3,11 @@
+ #include <eeregs.h>
+ #include <libdma.h>
+ #include <libgraph.h>
++#include <stdio.h>
++#include <string.h>
++#include <eekernel.h>
++#include <stdarg.h>
+ 
+-int FlushCache(int);
+-int vsprintf(char *, const char *, char *);
+-u32 strlen(char *);
+-void *memcpy(void *, const void *, u32);
+ 
+ char text_log_font_palette[0x40] = {
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+@@ -1048,10 +1048,6 @@ static int gs_regs_packet[0x18] __attribute__((aligned(16)));     /* 0x1E0E960 D
+ static TextLog text_log;                                           /* 0x1E0E9C0 */
+ static TextLogPacket text_log_packet;                              /* 0x1E0F210 */
+ 
+-/* EE EABI varargs: the register save area a1..a7 is spilled to, as in libsdr.c */
+-typedef char *va_list;
+-#define va_start(ap, last) ((ap) = (char *)__builtin_next_arg(last) - 0x38)
+-
+ void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z);
+ void TextLog_SendGsRegs(void);
+ 
+@@ -1068,14 +1064,16 @@ void TextLog_LoadFont(int font_base, int palette_base) {
+     sceGsSetDefLoadImage(&image, text_log.font_base, text_log.font_buffer_width, 0x14, 0, 0, 0x100, 0x80);
+     FlushCache(0);
+     sceGsExecLoadImage(&image, text_log_font);
++    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT APATH (bits 10-11) to clear");
+     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+     }
+     sceGsSetDefLoadImage(&image, text_log.palette_base, 1, 0, 0, 0, 8, 2);
+     FlushCache(0);
+     sceGsExecLoadImage(&image, text_log_font_palette);
++    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT APATH (bits 10-11) to clear");
+     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+     }
+-    packet = (u32 *)((u32)font_flush_packet | 0x20000000);
++    packet = UNCACHED(font_flush_packet);
+     *packet++ = 0x8001;
+     *packet++ = 0x10004000;
+     *packet++ = 0xE;
+@@ -1084,10 +1082,11 @@ void TextLog_LoadFont(int font_base, int palette_base) {
+     *packet++ = 0;
+     *packet++ = 3;
+     *packet = 0;
++    PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
+     while (*D2_CHCR & 0x100) {
+     }
+     *D2_QWC = 2;
+-    *D2_MADR = (int)font_flush_packet;
++    *D2_MADR = EE_WORD(font_flush_packet);
+     *D2_CHCR = 0x100;
+ }
+ 
+@@ -1151,7 +1150,7 @@ void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z) {
+ void TextLog_SendGsRegs(void) {
+     int *packet;
+ 
+-    packet = (int *)((u32)gs_regs_packet | 0x20000000);
++    packet = UNCACHED(gs_regs_packet);
+     *packet++ = 0x8005;
+     *packet++ = 0x10004000;
+     *packet++ = 0xE;
+@@ -1177,15 +1176,16 @@ void TextLog_SendGsRegs(void) {
+     packet += 2;
+     *(u64 *)packet = 1;
+     ((u64 *)packet)[1] = 0x1C;
++    PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
+     while (*D2_CHCR & 0x100) {
+     }
+     *D2_QWC = 6;
+-    *D2_MADR = (int)gs_regs_packet;
++    *D2_MADR = EE_WORD(gs_regs_packet);
+     *D2_CHCR = 0x100;
+ }
+ 
+ /* printf-style append to the text log, cut off at its 0x800 bytes. */
+-void TextLog_AppendV(char *format, char *args) {
++void TextLog_AppendV(char *format, va_list args) {
+     char line[0x400];
+     TextLog *log;
+     char *text;
+@@ -1193,7 +1193,7 @@ void TextLog_AppendV(char *format, char *args) {
+     int used;
+ 
+     vsprintf(line, format, args);
+-    length = strlen(line);
++    length = (int)strlen(line);
+     log = &text_log;
+     used = log->used;
+     if (length + used >= 0x801) {
+@@ -1210,6 +1210,7 @@ void TextLog_Printf(char *format, ...) {
+ 
+     va_start(args, format);
+     TextLog_AppendV(format, args);
++    va_end(args);
+ }
+ 
+ /* Draws the text log in its window, wrapping at the right edge and stopping at the bottom, then empties it. */
+@@ -1249,10 +1250,11 @@ void TextLog_Flush(void) {
+         packet->tag[2] = 0x413;
+         packet->tag[3] = 0;
+         FlushCache(0);
++        PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
+         while (*D2_CHCR & 0x100) {
+         }
+-        *D2_QWC = ((int)text_log.packet - (int)&text_log_packet) >> 4;
+-        *D2_MADR = (u32)&text_log_packet & 0x7FFFFFFF;
++        *D2_QWC = (s32)((u8 *)text_log.packet - (u8 *)&text_log_packet) >> 4;
++        *D2_MADR = EE_WORD(&text_log_packet) & 0x7FFFFFFF;
+         *D2_CHCR = 0x100;
+     }
+     text_log.used = 0;
+diff --git a/src/game/debug/text_log.h b/src/game/debug/text_log.h
+index 87f4096d48b94845723a220c3ad56620774158b1..3159b388f286536ae51f22b50196262fa947a679 100644
+--- a/src/game/debug/text_log.h
++++ b/src/game/debug/text_log.h
+@@ -2,13 +2,14 @@
+ #define KF_TEXT_LOG_H
+ 
+ #include "common.h"
++#include <stdarg.h>
+ 
+ void TextLog_LoadFont(int font_base, int palette_base);
+ void TextLog_SetWindow(int window_x, int window_y, int width, int height, int offset_x, int offset_y,
+                           int screen_width, int screen_height, int depth);
+ void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z);
+ void TextLog_SendGsRegs(void);
+-void TextLog_AppendV(char *format, char *args);
++void TextLog_AppendV(char *format, va_list args);
+ void TextLog_Printf(char *format, ...);
+ void TextLog_Flush(void);
+ void TextLog_SetColor(int *colour);

@@ -1,0 +1,215 @@
+diff --git a/src/game/save/mc.c b/src/game/save/mc.c
+index d1c8f5075405aa97947d724a7cda174553e8ce1c..273a88f7b6247e9cee8e02ab3e71cc566f3e12cc 100644
+--- a/src/game/save/mc.c
++++ b/src/game/save/mc.c
+@@ -2,14 +2,9 @@
+    state machine once a frame. Every library call is retried up to three times before the request fails; the
+    outcome is left in mc_state.status. */
+ #include "save/mc.h"
++#include <string.h>
++#include <sifdev.h>
+ 
+-void *memset(void *, int, u32);
+-void *memcpy(void *, const void *, u32);
+-char *strcpy(char *, const char *);
+-int sceOpen(const char *, int);
+-int sceRead(int, void *, int);
+-int sceLseek(int, int, int);
+-int sceClose(int);
+ 
+ /* The module's .bss: a work area and the file state, packed at four bytes. */
+ #define MC_4BYTE __attribute__((section(".bss"), aligned(4)))
+diff --git a/src/game/save/mc.h b/src/game/save/mc.h
+index 509d00ec2a5943d4f418292543b48c3d69df8ea8..8413ede676e7ea1bb07063004e4c993cbbfa84f4 100644
+--- a/src/game/save/mc.h
++++ b/src/game/save/mc.h
+@@ -69,6 +69,7 @@ typedef struct {
+ } McState;
+ 
+ /* the PS2 memory card icon.sys header, built by SaveCard_BuildIconSys */
++/* save: icon.sys in the game's memory card directory */
+ typedef struct {
+     char head[4];                   /* 0x00 "PS2D" */
+     char pad04[0x02];
+@@ -85,6 +86,10 @@ typedef struct {
+     char delete_name[64];           /* 0x184 */
+     char pad1C4[0x200];
+ } McIconSys;
++LAYOUT_SIZE(McIconSys, 0x3C4);
++LAYOUT_OFFSET(McIconSys, bg_color, 0x10);
++LAYOUT_OFFSET(McIconSys, title, 0xC0);
++LAYOUT_OFFSET(McIconSys, delete_name, 0x184);
+ 
+ /* progress of the file being written in 0x400-byte blocks */
+ typedef struct {
+diff --git a/src/game/save/save_card.c b/src/game/save/save_card.c
+index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8d1a8c9e1 100644
+--- a/src/game/save/save_card.c
++++ b/src/game/save/save_card.c
+@@ -5,19 +5,16 @@
+ #include "core/file.h"
+ #include "save/mc.h"
+ #include <libmc.h>
++#include <stdio.h>
++#include <string.h>
++#include <eekernel.h>
+ 
+-void *memset(void *, int, u32);
+-int sprintf(char *, const char *, ...);
+-void *memcpy(void *, const void *, u32);
+-int strcmp(const char *, const char *);
+-void SyncDCache(void *start, void *end);
+ 
+ void *MenuHeap_Alloc(int);
+ int File_OpenUnflagged(char *, int, int);
+ 
+-extern GameStatus game_status;
+ extern int save_loaded;
+-extern s32 save_area_name_id[];
++extern GameStatus game_status;
+ extern s32 player_state[];
+ extern PlayTime current_play_time;
+ 
+@@ -69,8 +66,8 @@ s32 SaveCard_Init(void) {
+ s32 SaveCard_Open(void) {
+     CardRecord *card;
+     s32 file_handle;
+-    s32 base;
+-    s32 addr;
++    sptr base;
++    sptr addr;
+ 
+     if (Mc_Update() > 0) {
+         return -1;
+@@ -80,7 +77,7 @@ s32 SaveCard_Open(void) {
+     card_check.retries = 0;
+     card_check.kind = CARD_TASK_CHECK;
+     card_check.keep_open = 1;
+-    base = (s32)MenuHeap_Alloc(0x800);
++    base = (sptr)MenuHeap_Alloc(0x800);
+     addr = (base & 0x3F) == 0 ? base : base + (base & 0x3F);
+     save_infos = (SaveInfo *)addr;
+     addr += 0x480;
+@@ -105,7 +102,7 @@ s32 SaveCard_Open(void) {
+     do {
+         SaveCard_ResetRecord(card);
+         card++;
+-    } while ((s32)card < (s32)(card_records + 2));
++    } while (card < card_records + 2);
+     SaveCard_ClearSaveInfos();
+     return 0;
+ }
+@@ -634,7 +631,7 @@ static s32 SaveCard_StepSave(void) {
+         }
+         break;
+     case 10:
+-        SaveCard_FillSaveInfo((void *)task->card_index, file);
++        SaveCard_FillSaveInfo((void *)(sptr)task->card_index, file);
+         sprintf(save_path, "%s%s%s%s", "/BASLUS-20318", "S", "/BASLUS-20318", "S");
+         task->step++;
+     case 11:
+@@ -1337,7 +1334,7 @@ static void SaveCard_FillSaveInfo(void *unused_arg0, s32 index) {
+     info = save_infos + index;
+     info->exists = 1;
+     info->damaged = 0;
+-    info->numbers[0] = save_area_name_id[0];
++    info->numbers[0] = game_status.save_area;
+     info->numbers[1] = player_state[20];
+     info->numbers[2] = player_state[21];
+     info->numbers[3] = player_state[45];
+@@ -1529,7 +1526,7 @@ s32 SaveCard_GetSavesState(void) {
+             return -1;
+         }
+         info++;
+-    } while ((s32)info < (s32)end);
++    } while (info < end);
+     return 0;
+ }
+ 
+@@ -1545,6 +1542,6 @@ s32 SaveCard_HasAnySave(void) {
+             return 1;
+         }
+         info++;
+-    } while ((s32)info < (s32)end);
++    } while (info < end);
+     return 0;
+ }
+diff --git a/src/game/save/save_card.h b/src/game/save/save_card.h
+index 2cc1a97e562d71a6ad1ad96c98fffa4e393db04f..1f8d850cd02783e45f5c76072c063c65d54e1c03 100644
+--- a/src/game/save/save_card.h
++++ b/src/game/save/save_card.h
+@@ -67,6 +67,7 @@ typedef struct {
+ 
+ /* one record of the list file, which holds three (0x180 bytes each): what the save list shows of a save.
+    CardSaveInfo in ui/menu.h is the menu's view of the same record. */
++/* save: a record of the list file on the memory card */
+ typedef struct {
+     char exists;                    /* 0x00 */
+     char damaged;                   /* 0x01 the list names the save but its file is gone, or writing it failed */
+@@ -75,6 +76,9 @@ typedef struct {
+     char pad2C[0x14C];
+     PlayTime play_time;             /* 0x178 */
+ } SaveInfo;
++LAYOUT_SIZE(SaveInfo, 0x180);
++LAYOUT_OFFSET(SaveInfo, numbers, 0x04);
++LAYOUT_OFFSET(SaveInfo, play_time, 0x178);
+ 
+ /* Starts the memory card library and clears both task records. Returns -1 when the library does not start. */
+ s32 SaveCard_Init(void);
+diff --git a/src/game/save/save_state.c b/src/game/save/save_state.c
+index 00e03a400f8d732528b8f3699a51eb9cf2e5d7cb..f952145c60302b0d29f2228f0191b749ef5ae188 100644
+--- a/src/game/save/save_state.c
++++ b/src/game/save/save_state.c
+@@ -9,14 +9,6 @@
+    but has no line for, [5] head_bob_option, [6] rumble_option, [7] the picture option of a menu screen,
+    [8] menu_backdrop_option (0 to 2), [9] hud_option, [0xA] brightness_option */
+ u8 game_options[0x10] = { 0 };
+-asm(".globl music_volume\nmusic_volume = game_options + 1\n"
+-    ".globl sfx_volume\nsfx_volume = game_options + 2\n"
+-    ".globl D_00349683\nD_00349683 = game_options + 3\n"
+-    ".globl head_bob_option\nhead_bob_option = game_options + 5\n"
+-    ".globl rumble_option\nrumble_option = game_options + 6\n"
+-    ".globl menu_backdrop_option\nmenu_backdrop_option = game_options + 8\n"
+-    ".globl hud_option\nhud_option = game_options + 9\n"
+-    ".globl brightness_option\nbrightness_option = game_options + 0xA\n");
+ 
+ /* 0x349690 a 0x80-by-0x40 byte grid the map scripts, NPCs and set-ups record their state in: one row of 0x40
+    per map number, byte 0 of a row counting the visits. The single bytes the code names, each set by its
+@@ -36,24 +28,12 @@ asm(".globl music_volume\nmusic_volume = game_options + 1\n"
+    - dark_sorcerer_fight_started (map 110 [0xC]): set when the player comes through the door to the Dark
+      Sorcerer, which wakes him */
+ u8 map_script_flags[0x2000] = { 0 };
+-asm(".globl ocean_shore_icon_of_fire_placed\nocean_shore_icon_of_fire_placed = map_script_flags + 0x6C5\n"
+-    ".globl guardians_room_water_purified\nguardians_room_water_purified = map_script_flags + 0x8C6\n"
+-    ".globl dark_sanctuary_fog_lifted\ndark_sanctuary_fog_lifted = map_script_flags + 0x987\n"
+-    ".globl dark_succubus_fight_started\ndark_succubus_fight_started = map_script_flags + 0x988\n"
+-    ".globl dark_sanctuary_idol_of_sorrow_placed\ndark_sanctuary_idol_of_sorrow_placed = map_script_flags + 0x989\n"
+-    ".globl D_0034A0D5\nD_0034A0D5 = map_script_flags + 0xA45\n"
+-    ".globl D_0034AFD6\nD_0034AFD6 = map_script_flags + 0x1946\n"
+-    ".globl craftsmans_room_door_unlocked\ncraftsmans_room_door_unlocked = map_script_flags + 0x1A08\n"
+-    ".globl master_fadin_killed\nmaster_fadin_killed = map_script_flags + 0x1B87\n"
+-    ".globl dark_sorcerer_fight_started\ndark_sorcerer_fight_started = map_script_flags + 0x1B8C\n");
+ 
+ /* 0x34B690 0x40 story bytes a new game clears and a save keeps (block 11 of the script variables):
+    [6] forge_stage, which of the Forge maps 017-019 is in use (0-2; the set-ups of the Earth Folks' Village,
+    the Cavern of Lava and the Fire Lord's Domain follow it too), [0xC] forge_door_open (door 0x65 of the Forge
+    starts open), [0xD] set when the player kills an NPC */
+ u8 story_flags[0x40] = { 0 };
+-asm(".globl forge_stage\nforge_stage = story_flags + 6\n"
+-    ".globl forge_door_open\nforge_door_open = story_flags + 0xC\n");
+ 
+ /* 0x34B6D0 the state a group of entities shares (EntityController.entity_group_index picks one) */
+ EntityGroupRecord entity_group_state[0x32] = { { 0 } };
+@@ -67,7 +47,6 @@ u8 recollection_pages[50] = { 0 };
+ /* 0x34C518 0x400 bytes of story values a save keeps whole (block 15 of the script variables); the f32
+    map_record_height at +0xC is a record's height */
+ u8 story_values[0x400] = { 0 };
+-asm(".globl map_record_height\nmap_record_height = story_values + 0xC\n");
+ 
+ /* 0x34C918 a bit per map tag: the maps visited (Game_IsMapVisited, Game_MarkMapVisited) */
+ u8 map_visited_flags[0x10] = { 0 };
+@@ -114,4 +93,3 @@ DefinitionByteSet trade_stock_5 = { { 0 } };
+ 
+ /* 0x36A130 the save image; the play time save_play_time is at +8 */
+ u8 save_image[0x20000] = { 0 };
+-asm(".globl save_play_time\nsave_play_time = save_image + 8\n");

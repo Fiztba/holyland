@@ -23,7 +23,7 @@ What changed:
   - inline asm and VU0 macro code are rewritten in C;
   - SDK calls go through PC headers.
 - About 680 data symbols that only existed in the asm data files are now defined in C, in
-  `src/game/data/`.
+  `game/data/`.
 - Four independent reviews of the whole conversion found about 35 bugs the compiler cannot see.
   All are fixed. The worst were:
   - calls that only worked because the EE leaves unused arguments in registers;
@@ -114,8 +114,13 @@ the GS path (maps and models first).
 
 ## Working together
 
-- This repository is a fork of kfiv-decomp. It is updated with
-  `git fetch decomp && git merge decomp/main`; never squash those merges.
-- Fixes to the reconstruction itself (names, types, structs) go to the decomp first.
-- Struct-field renames in the decomp will conflict with the PC edits here. Merging them often keeps
-  the conflicts small.
+- The game code comes from kfiv-decomp, a git submodule in `decomp/`, pinned to one commit. It is
+  never edited here. Clone with `--recurse-submodules`, or run `git submodule update --init`.
+- The PC edits are patches against the decomp in `patches/`. To change game code, run
+  `python3 tools/patches.py apply`, edit in `work/src/game`, then `python3 tools/patches.py save` and
+  commit `patches/`. PC-only game code, such as `game/data/`, is edited in place.
+- Fixes to the reconstruction itself (names, types, structs) go to kfiv-decomp first.
+- To move the pin, run `python3 tools/patches.py upgrade <commit>`. It follows file, function and
+  global renames (not struct-field or type renames) and re-applies the patches. Commit `decomp` and
+  `patches/` if it is clean, or resolve the conflicts in the scratch copy and run
+  `patches.py save --from <that dir>`.

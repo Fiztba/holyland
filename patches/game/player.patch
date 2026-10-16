@@ -1,0 +1,1407 @@
+diff --git a/src/game/player/attack.c b/src/game/player/attack.c
+index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201fd95da9f 100644
+--- a/src/game/player/attack.c
++++ b/src/game/player/attack.c
+@@ -6,6 +6,10 @@
+ #include "player/magic_ladder.h"
+ #include "map_object/map_object.h"
+ #include "effect/effect.h"
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+ #define IS_PLAYER(owner) ((owner) == (Entity *)&player_state)
+ #define LARGER(first, second) ((first) < (second) ? (second) : (first))
+@@ -24,7 +28,7 @@
+     if (strength - whole > 0.001f) { \
+         (dest) = whole + 1; \
+     }
+-#define SHOT_REQUEST ((Unk1B1470Request *)shot->attack_request)
++#define SHOT_REQUEST ((Unk1B1470Request *)(sptr)shot->attack_request)
+ 
+ s32 Attack_RunSphere(Unk1B1470Request *, Unk1B1470Extra *);
+ int func_001B1B80(void);
+@@ -33,10 +37,9 @@ s32 Attack_RunSwept(Unk1B1470Request *, Unk1B1470Extra *);
+ void Attack_HitPlayer(Unk1B1470Request *, Unk1B1470Extra *);
+ void Attack_HitEntity(Unk1B1470Request *, Unk1B1470Extra *, Entity *, f32);
+ void Attack_HitMapObject(Unk1B1470Request *, Unk1B1470Extra *, MapObject *);
+-int Attack_HitMap(Unk1B1470Request *, Unk1B1470Extra *);
++void Attack_HitMap(Unk1B1470Request *, Unk1B1470Extra *);
+ void Collision_HitSphereObj(MapObject *, f32 *, f32);
+ void Collision_SphereCylinder(void *, void *, f32, f32, f32);
+-float sqrtf(float);
+ void Vector_Scale(float *, float *, float);
+ void Vector_Subtract(void *, void *, void *);
+ void Vector_Copy(void *, void *);
+@@ -53,9 +56,6 @@ void Attack_WearArmorFromHit(int, Unk1B1470Request *);
+ void Player_TakeDamage(int);
+ void Player_KnockBackFromHit(void *, int);
+ void Player_TiltViewFromHit(int);
+-int rand(void);
+-int printf(const char *, ...);
+-float atan2f(float, float);
+ int Attack_StrengthDamage(int, int, int, int);
+ void Attack_RollEntityAilments(Entity *, EntityParamsUnk240PartUnk12 *);
+ void Attack_WearWeapon(int, int);
+@@ -70,7 +70,6 @@ void Attack_WearWornItem(int idx, int amount);
+ int File_Open(char *, int, int);
+ int File_Read(int, void *, int);
+ int File_Close(int);
+-void *memset(void *, int, u32);
+ s32 Attack_Run(Unk1B1470Request *, Unk1B1470Extra *);
+ 
+ // match: declared without a size, so it is not addressed through $gp
+@@ -89,15 +88,14 @@ extern const VuVector4 y_axis_vector;
+ extern GameStatus game_status;
+ extern Entity entity_pool[][0x80];
+ extern u32 frame_counter;
+-extern Entity entity_pool_last;           /* the last entity of entity_pool */
+ extern char last_boss_hits_format[];           /* "g_dmgLassBossCnt[%d]\n" */
+ extern char hp_halved_format[];           /* "HP halved!! %d / 2 = %d" in Japanese */
+ extern s32 dark_one_hits_left;              /* g_dmgLassBossCnt: weapon hits the last boss still takes */
+ extern PlayerItemDef weapon_defs[];
+-extern LevelDef weapon_name_defs[];
++extern LevelDef *const weapon_name_defs;
+ extern LevelRecord weapon_level_records[];
+ extern LevelRecord worn_item_level_records[];
+-extern LevelDef worn_name_defs[];
++extern LevelDef *const worn_name_defs;
+ extern char magic_param_path[];
+ 
+ int Attack_TestMapModel(ModelInstance *, void *, f32);
+@@ -220,7 +218,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+                     if (!(body->unk00.flags & ENTITY_BODY_USED)) {
+                         continue;
+                     }
+-                    point = (void *)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
++                    point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
+                     if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
+                         Collision_SphereCylinder(point, request, body->unk04 * scale, body->unk06 * ENTITY_MODEL(entity)->scale_y,
+                                       request->radius);
+@@ -235,7 +233,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+             }
+         }
+     }
+-    if ((UNK1B1470_REQUEST_UNIT(request) & (0xC000L << 29)) == (0xC000L << 29)) {
++    if ((UNK1B1470_REQUEST_UNIT(request) & (0xC000LL << 29)) == (0xC000LL << 29)) {
+         kind = 0;
+     } else if (request->target_mask & 8) {
+         kind = 1;
+@@ -265,10 +263,9 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+                     request->position[2] < record->lowest[2] - reach || record->highest[2] + reach < request->position[2]) {
+                     continue;
+                 }
+-                result = swing_hit_checks[kind](record->model, request, reach);
++                result = swing_hit_checks[kind](MAP_RECORD_MODEL(record), request, reach);
+                 if (COLLISION_RESULT->hit != 0) {
+-                    // match: called as void, retail reuses $2 at once
+-                    ((void (*)(Unk1B1470Request *, Unk1B1470Extra *))Attack_HitMap)(request, extra);
++                    Attack_HitMap(request, extra);
+                     switch (result) {
+                     case 1:
+                         result = 8;
+@@ -381,7 +378,7 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+                     if (!(body->unk00.flags & ENTITY_BODY_USED)) {
+                         continue;
+                     }
+-                    point = (void *)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
++                    point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
+                     if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
+                         if (IS_PLAYER(request->owner)) {
+                             Collision_CylinderArcPitch(point, request, body->unk04 * width_scale, body->unk06 * ENTITY_MODEL(entity)->scale_y,
+@@ -456,6 +453,26 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+     return 0;
+ }
+ 
++/* vmulax/vmadday/vmaddaz/vmaddw with the matrix Vu0_LoadMatrix left in vf1-vf4: one point of a map model
++   into world space (the VU0 blocks of the three map-model tests) */
++static void Attack_ApplyVu0Matrix(Vector4 *world, Vector4 *local) {
++    f32 *in = (f32 *)local;
++    f32 *out = (f32 *)world;
++    f32 acc;
++    int c;
++
++    for (c = 0; c < 4; c++) {
++        acc = ee_vu0.vf[1][c] * in[0];
++        acc = acc + ee_vu0.vf[2][c] * in[1];
++        acc = acc + ee_vu0.vf[3][c] * in[2];
++        ee_vu0.vf[16][c] = acc + ee_vu0.vf[4][c] * in[3];
++    }
++    out[0] = ee_vu0.vf[16][0];
++    out[1] = ee_vu0.vf[16][1];
++    out[2] = ee_vu0.vf[16][2];
++    out[3] = ee_vu0.vf[16][3];
++}
++
+ /* Tests a hit's sphere against four of a map model's strip lists (0, 1, 2 and 5). When it
+    touches a triangle the result is left in the scratchpad and the list's number returned. */
+ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
+@@ -475,69 +492,35 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
+     mesh = (CollisionMeshLists *)model->strips;
+     COLLISION_RESULT->hit = 0;
+     if (mesh == NULL) {
+-        return;
++        return 0;
+     }
+     if (((CollisionMesh *)mesh)->point_count < 4) {
+-        return;
++        return 0;
+     }
+     Vu0_LoadMatrix(model->model_matrix);
+     count = ((CollisionMesh *)mesh)->point_count;
+-    local = (Vector4 *)((CollisionMesh *)mesh)->points;
++    local = EE_PTR(Vector4 *, ((CollisionMesh *)mesh)->points);
+     i = count / 3;
+     do {
+-        __asm__ volatile("pref 0, 0x30(%0)\n" : : "r"(local));
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%3)\n"
+-            "lqc2 $vf17, 0x0(%4)\n"
+-            "lqc2 $vf18, 0x0(%5)\n"
+-            "vnop\n"
+-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
+-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
+-            "vmulax.xyzw ACC, $vf1, $vf17x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf17y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf17z\n"
+-            "vmaddw.xyzw $vf17, $vf4, $vf17w\n"
+-            "vmulax.xyzw ACC, $vf1, $vf18x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf18y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf18z\n"
+-            "vmaddw.xyzw $vf18, $vf4, $vf18w\n"
+-            "sqc2 $vf16, 0x0(%0)\n"
+-            "sqc2 $vf17, 0x0(%1)\n"
+-            "vnop\n"
+-            "sqc2 $vf18, 0x0(%2)\n"
+-            : : "r"(world), "r"(world + 1), "r"(world + 2), "r"(local), "r"(local + 1), "r"(local + 2));
++        Attack_ApplyVu0Matrix(world, local);
++        Attack_ApplyVu0Matrix(world + 1, local + 1);
++        Attack_ApplyVu0Matrix(world + 2, local + 2);
+         local += 3;
+         world += 3;
+     } while (--i != 0);
+     for (i = count % 3 - 1; i != -1; i--) {
+-        __asm__ volatile("pref 0, 0x10(%0)\n" : : "r"(local));
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%0)\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
+-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "sqc2 $vf16, 0x0(%1)\n"
+-            : : "r"(local), "r"(world));
++        Attack_ApplyVu0Matrix(world, local);
+         local++;
+         world++;
+     }
+     for (list = 0; list < 4; list++) {
+-        strip = mesh->strip_lists[lists.lists[list]];
++        strip = EE_PTR(CollisionStrip *, mesh->strip_lists[lists.lists[list]]);
+         i = mesh->strip_counts[lists.lists[list]];
+         while (--i != -1) {
+             strip_point = strip->points;
+             points_left = strip->point_count - 2;
+             do {
+-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
++                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
+                 if (COLLISION_RESULT->hit != 0) {
+                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
+                     return lists.lists[list];
+@@ -547,6 +530,7 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
+             strip = (CollisionStrip *)&strip_point[2];
+         }
+     }
++    return 0; /* retail leaves v0 as it was; with no hit the caller does not read it */
+ }
+ 
+ /* Attack_TestMapModel for strip lists 1 and 5 only: returns 1 when the sphere touches a triangle
+@@ -568,69 +552,35 @@ int Attack_TestMapModelFloors(ModelInstance *model, void *request, f32 reach) {
+     mesh = (CollisionMeshLists *)model->strips;
+     COLLISION_RESULT->hit = 0;
+     if (mesh == NULL) {
+-        return;
++        return 0;
+     }
+     if (((CollisionMesh *)mesh)->point_count < 4) {
+-        return;
++        return 0;
+     }
+     Vu0_LoadMatrix(model->model_matrix);
+     count = ((CollisionMesh *)mesh)->point_count;
+-    local = (Vector4 *)((CollisionMesh *)mesh)->points;
++    local = EE_PTR(Vector4 *, ((CollisionMesh *)mesh)->points);
+     i = count / 3;
+     do {
+-        __asm__ volatile("pref 0, 0x30(%0)\n" : : "r"(local));
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%3)\n"
+-            "lqc2 $vf17, 0x0(%4)\n"
+-            "lqc2 $vf18, 0x0(%5)\n"
+-            "vnop\n"
+-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
+-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
+-            "vmulax.xyzw ACC, $vf1, $vf17x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf17y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf17z\n"
+-            "vmaddw.xyzw $vf17, $vf4, $vf17w\n"
+-            "vmulax.xyzw ACC, $vf1, $vf18x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf18y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf18z\n"
+-            "vmaddw.xyzw $vf18, $vf4, $vf18w\n"
+-            "sqc2 $vf16, 0x0(%0)\n"
+-            "sqc2 $vf17, 0x0(%1)\n"
+-            "vnop\n"
+-            "sqc2 $vf18, 0x0(%2)\n"
+-            : : "r"(world), "r"(world + 1), "r"(world + 2), "r"(local), "r"(local + 1), "r"(local + 2));
++        Attack_ApplyVu0Matrix(world, local);
++        Attack_ApplyVu0Matrix(world + 1, local + 1);
++        Attack_ApplyVu0Matrix(world + 2, local + 2);
+         local += 3;
+         world += 3;
+     } while (--i != 0);
+     for (i = count % 3 - 1; i != -1; i--) {
+-        __asm__ volatile("pref 0, 0x10(%0)\n" : : "r"(local));
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%0)\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
+-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "sqc2 $vf16, 0x0(%1)\n"
+-            : : "r"(local), "r"(world));
++        Attack_ApplyVu0Matrix(world, local);
+         local++;
+         world++;
+     }
+     for (list = 0; list < 2; list++) {
+-        strip = mesh->strip_lists[lists.lists[list]];
++        strip = EE_PTR(CollisionStrip *, mesh->strip_lists[lists.lists[list]]);
+         i = mesh->strip_counts[lists.lists[list]];
+         while (--i != -1) {
+             strip_point = strip->points;
+             points_left = strip->point_count - 2;
+             do {
+-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
++                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
+                 if (COLLISION_RESULT->hit != 0) {
+                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
+                     return 1;
+@@ -662,69 +612,35 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
+     mesh = (CollisionMeshLists *)model->strips;
+     COLLISION_RESULT->hit = 0;
+     if (mesh == NULL) {
+-        return;
++        return 0;
+     }
+     if (((CollisionMesh *)mesh)->point_count < 4) {
+-        return;
++        return 0;
+     }
+     Vu0_LoadMatrix(model->model_matrix);
+     count = ((CollisionMesh *)mesh)->point_count;
+-    local = (Vector4 *)((CollisionMesh *)mesh)->points;
++    local = EE_PTR(Vector4 *, ((CollisionMesh *)mesh)->points);
+     i = count / 3;
+     do {
+-        __asm__ volatile("pref 0, 0x30(%0)\n" : : "r"(local));
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%3)\n"
+-            "lqc2 $vf17, 0x0(%4)\n"
+-            "lqc2 $vf18, 0x0(%5)\n"
+-            "vnop\n"
+-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
+-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
+-            "vmulax.xyzw ACC, $vf1, $vf17x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf17y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf17z\n"
+-            "vmaddw.xyzw $vf17, $vf4, $vf17w\n"
+-            "vmulax.xyzw ACC, $vf1, $vf18x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf18y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf18z\n"
+-            "vmaddw.xyzw $vf18, $vf4, $vf18w\n"
+-            "sqc2 $vf16, 0x0(%0)\n"
+-            "sqc2 $vf17, 0x0(%1)\n"
+-            "vnop\n"
+-            "sqc2 $vf18, 0x0(%2)\n"
+-            : : "r"(world), "r"(world + 1), "r"(world + 2), "r"(local), "r"(local + 1), "r"(local + 2));
++        Attack_ApplyVu0Matrix(world, local);
++        Attack_ApplyVu0Matrix(world + 1, local + 1);
++        Attack_ApplyVu0Matrix(world + 2, local + 2);
+         local += 3;
+         world += 3;
+     } while (--i != 0);
+     for (i = count % 3 - 1; i != -1; i--) {
+-        __asm__ volatile("pref 0, 0x10(%0)\n" : : "r"(local));
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%0)\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vmulax.xyzw ACC, $vf1, $vf16x\n"
+-            "vmadday.xyzw ACC, $vf2, $vf16y\n"
+-            "vmaddaz.xyzw ACC, $vf3, $vf16z\n"
+-            "vmaddw.xyzw $vf16, $vf4, $vf16w\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "vnop\n"
+-            "sqc2 $vf16, 0x0(%1)\n"
+-            : : "r"(local), "r"(world));
++        Attack_ApplyVu0Matrix(world, local);
+         local++;
+         world++;
+     }
+     for (list = 0; list < 2; list++) {
+-        strip = mesh->strip_lists[lists.lists[list]];
++        strip = EE_PTR(CollisionStrip *, mesh->strip_lists[lists.lists[list]]);
+         i = mesh->strip_counts[lists.lists[list]];
+         while (--i != -1) {
+             strip_point = strip->points;
+             points_left = strip->point_count - 2;
+             do {
+-                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
++                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
+                 if (COLLISION_RESULT->hit != 0) {
+                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
+                     return 0;
+@@ -734,6 +650,7 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
+             strip = (CollisionStrip *)&strip_point[2];
+         }
+     }
++    return 0; /* retail leaves v0 as it was; with no hit the caller does not read it */
+ }
+ 
+ /* A hit lands on the player: marks the attacking entity, works out the damage from the
+@@ -746,11 +663,11 @@ void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+     s32 percent;
+     s32 damage;
+ 
+-    if (owner >= entity_pool[0] && owner < (Entity *)entity_pool_slots) {
++    if (owner >= entity_pool[0] && owner <= &entity_pool[1][0x7F]) {
+         if (extra->is_magic_shot == 0) {
+-            owner->flags |= 0x8000L << 26;
++            owner->flags |= 0x8000LL << 26;
+         } else {
+-            owner->flags |= 0x8000L << 27;
++            owner->flags |= 0x8000LL << 27;
+         }
+     }
+     if (player_state.hp_now == 0) {
+@@ -881,7 +798,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
+         if (entity->hit_cooldown_frames != 0) {
+             return;
+         }
+-        entity->flags |= 0x8000L << 28;
++        entity->flags |= 0x8000LL << 28;
+         entity->hit_cooldown_frames = 15;
+         printf(last_boss_hits_format, dark_one_hits_left);
+         if (!by_weapon) {
+@@ -913,8 +830,8 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
+     }
+ 
+     // match: the range test (not one of the entities) is always true for the player
+-    if (IS_PLAYER(owner) && (owner < entity_pool[0] || owner > &entity_pool_last)) {
+-        entity->flags |= 0x8000L << 28;
++    if (IS_PLAYER(owner) && (owner < entity_pool[0] || owner > &entity_pool[1][0x7F])) {
++        entity->flags |= 0x8000LL << 28;
+     }
+     if (extra->is_magic_shot == 1) {
+         entity->stun_frames = request->stun_frames;
+@@ -1210,12 +1127,12 @@ void Attack_HitMapObject(Unk1B1470Request *request, Unk1B1470Extra *extra, MapOb
+ }
+ 
+ /* An attack struck the map: the player's weapon wears and bounces off. */
+-int Attack_HitMap(Unk1B1470Request *request, Unk1B1470Extra *extra) {
++void Attack_HitMap(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+     if (IS_PLAYER(request->owner)) {
+         if (extra->is_magic_shot == 0) {
+             Attack_WearWeapon(extra->weapon_index, 4);
+             if (extra->attack_request == 0) {
+-                return ((int (*)(void))Player_BounceWeapon)(); // match: a tail call, as if it returned int
++                Player_BounceWeapon();
+             }
+         }
+     }
+@@ -1252,7 +1169,7 @@ void Attack_GetEffectiveStrengths(EntityParamsUnk240PartUnk00 *out, Unk1B1470Req
+             STORE_ROUNDED_UP(out->unk00[7], request->unk50.unk00[7] + (f32)extra->player_magic * request->unk50.unk00[7] / 50.0f + extra->worn_magic_bonus[4] / 50.0f);
+             STORE_ROUNDED_UP(out->unk00[8], request->unk50.unk00[8] + (f32)extra->player_magic * request->unk50.unk00[8] / 50.0f + extra->worn_magic_bonus[5] / 50.0f);
+         }
+-    } else if (request->owner >= entity_pool[0] && request->owner <= &entity_pool_last) {
++    } else if (request->owner >= entity_pool[0] && request->owner <= &entity_pool[1][0x7F]) {
+         if (extra->is_magic_shot == 0) {
+             *out = request->unk50;
+         } else {
+diff --git a/src/game/player/held_weapon.c b/src/game/player/held_weapon.c
+index dffc4d319f9d60b030d597ec691376bbfd8a3ccb..791ea9f33c8b601c4baf1b7d49694bab32df5923 100644
+--- a/src/game/player/held_weapon.c
++++ b/src/game/player/held_weapon.c
+@@ -6,14 +6,14 @@
+ #include "player/player.h"
+ #include "gfx/texture.h"
+ #include "effect/effect.h"
++#include <stdio.h>
++#include <string.h>
++#include <libvu0.h>
+ 
+-void *memset(void *, int, u32);
+-void *memcpy(void *, const void *, u32);
+-int sprintf(char *, char *, ...);
+ int File_Open(char *, int, int);
+ int File_Read(int, void *, int);
+ int File_Close(int);
+-void Model_SetUpSkinned(ModelInstance *, int *, int *);
++void Model_SetUpSkinned(ModelInstance *, char **, char **);
+ void TextureTable_QueueAll(TextureTableHeader *);
+ MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
+ void GsDraw_QueueTexFlush(void);
+@@ -24,10 +24,6 @@ u32 *Packet_Alloc(int);
+ void Packet_AppendToChain(u32 *, u32 *);
+ void Model_MultiplyChildMatrices(ModelPart *);
+ void Sound_LoadSwBank(int);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0TransMatrix(float *, float *, float *);
+-void sceVu0MulMatrix(void *, void *, void *);
+ void Vector_Copy(void *, void *);
+ void Vector_CopyQuadword(void *, void *);
+ void Vector_Add(void *, void *, void *);
+@@ -37,15 +33,14 @@ void Vu0_ProjectToScreen(int *, void *);
+ 
+ extern char *held_weapon_area;
+ extern PlayerState player_state;
+-extern GameDefinition weapon_name_defs[70];
++extern GameDefinition *const weapon_name_defs;
+ extern PlayerItemDef weapon_defs[];
+-extern MapSlotUnk0C current_fog_block;
+ extern char file_load_buffer[0x80000];
+ extern char arm_phong_texture_path[];
+ extern char item_arm_path_format[];
+ extern char default_held_item_path[];
+ extern char default_arm_path[];
+-extern MapSlotUnk10Half current_light_block;
++extern MapDrawState map_draw_state;
+ extern CameraState camera_state;
+ extern f32 identity_matrix[16];
+ extern f32 world_screen_matrix[16];
+@@ -75,18 +70,20 @@ PlayerArmPoints held_item_arm_points_prev = { 0 }; /* 0x4147A0 the same for the
+ 
+ ModelInstance held_item_model __attribute__((section(".bss"))); /* 0x57B6A0 the held item; held_item_model_ptr in asm .sdata points here */
+ static ModelInstance arm_model;         /* 0x57B860 */
+-static char held_item_channels[0x90];   /* 0x57BA20 */
+-static char held_item_setup[0x1000];    /* 0x57BAB0 */
+-static char arm_channels[0x90];         /* 0x57CAB0 */
+-static char arm_setup[0x1000];          /* 0x57CB40 */
++/* the held item's and the arm's ModelChannel (0x90 bytes on the PS2) and the parts Model_SetUpSkinned lays out
++   (0x1000 bytes on the PS2) */
++static char held_item_channels[sizeof(ModelChannel)] __attribute__((aligned(16)));   /* 0x57BA20 */
++static char held_item_setup[MODEL_PART_AREA_SIZE(0x1000)] __attribute__((aligned(16)));    /* 0x57BAB0 */
++static char arm_channels[sizeof(ModelChannel)] __attribute__((aligned(16)));         /* 0x57CAB0 */
++static char arm_setup[MODEL_PART_AREA_SIZE(0x1000)] __attribute__((aligned(16)));          /* 0x57CB40 */
+ static Vector4 trail_points[64];        /* 0x57DB40 screen positions of the weapon trail */
+ static s32 trail_lives[64];             /* 0x57DF40 frames each trail point has left */
+ 
+-static u32 shared_texture_table;        /* 0x447164 */
+-static u32 held_item_file;              /* 0x447168 */
+-static u32 held_item_textures;          /* 0x44716C */
+-static u32 arm_file;                    /* 0x447170 */
+-static u32 arm_textures;                /* 0x447174 */
++static char *shared_texture_table;      /* 0x447164 */
++static char *held_item_file;            /* 0x447168 */
++static char *held_item_textures;        /* 0x44716C */
++static char *arm_file;                  /* 0x447170 */
++static char *arm_textures;              /* 0x447174 */
+ static s32 trail_min_life;              /* 0x447178 */
+ static s32 trail_count;                 /* 0x44717C */
+ static s32 trail_write_index;           /* 0x447180 */
+@@ -103,25 +100,25 @@ int WeaponTrail_GetCount(void);
+ 
+ void HeldWeapon_Init(void) {
+     int file_handle;
+-    u32 heap_cursor;
+-    heap_cursor = (u32)held_weapon_area; // match: retail treats the heap cursor as a plain address
++    char *heap_cursor;
++    heap_cursor = held_weapon_area;
+     shared_texture_table = heap_cursor;
+     heap_cursor += 0x20000;
+     arm_file = heap_cursor;
+     heap_cursor += 0x50000;
+     held_item_file = heap_cursor;
+-    memset(&arm_model, 0, 0x1C0);
+-    memset(&held_item_model, 0, 0x1C0);
++    memset(&arm_model, 0, sizeof(ModelInstance));
++    memset(&held_item_model, 0, sizeof(ModelInstance));
+     memset((void *)arm_file, 0, 0x50000);
+     memset((void *)held_item_file, 0, 0x30000);
+-    memset(arm_setup, 0, 0x1000);
+-    memset(held_item_setup, 0, 0x1000);
++    memset(arm_setup, 0, sizeof(arm_setup));
++    memset(held_item_setup, 0, sizeof(held_item_setup));
+     memset(&held_item_arm_points, 0, 0x20);
+     memset(&held_item_arm_points_prev, 0, 0x20);
+     loaded_arm_gauntlet = -1;
+     loaded_held_weapon = -1;
+     file_handle = File_Open(arm_phong_texture_path, 0, 1);
+-    File_Read(file_handle, (int)shared_texture_table, -1);
++    File_Read(file_handle, shared_texture_table, -1);
+     File_Close(file_handle);
+     Player_LoadArmModels();
+ }
+@@ -131,8 +128,8 @@ void HeldWeapon_Init(void) {
+    the model, its motions and its textures from the parts the file has. */
+ void Player_LoadArmModels(void) {
+     char path[0x100];
+-    int data;
+-    int buffer;
++    char *data;
++    char *buffer;
+     GameDefinition *item = &weapon_name_defs[player_state.weapon];
+     GameDefinition *arm = &weapon_name_defs[player_state.equipment[EQUIP_GAUNTLET] + 70];
+     PlayerArmFile *file;
+@@ -146,9 +143,9 @@ void Player_LoadArmModels(void) {
+             Effect_FreePlayerWeaponKinds();
+         }
+         memset((void *)held_item_file, 0, 0x30000);
+-        memset(&held_item_model, 0, 0x1C0);
+-        memset(held_item_setup, 0, 0x1000);
+-        memset(held_item_channels, 0, 0x90);
++        memset(&held_item_model, 0, sizeof(ModelInstance));
++        memset(held_item_setup, 0, sizeof(held_item_setup));
++        memset(held_item_channels, 0, sizeof(held_item_channels));
+         held_item_textures = 0;
+         sprintf(path, item_arm_path_format, item->model_file_number);
+         handle = File_Open(path, 0, 1);
+@@ -170,20 +167,20 @@ void Player_LoadArmModels(void) {
+         memcpy((void *)held_item_file, file_load_buffer, size);
+         file = (PlayerArmFile *)held_item_file;
+         if (file->model_size != 0) {
+-            data = (int)file + file->model_offset;
+-            buffer = (int)held_item_setup;
++            data = (char *)file + file->model_offset;
++            buffer = held_item_setup;
+             Model_SetUpSkinned(&held_item_model, &data, &buffer);
+         }
+         if (file->motion_size != 0) {
+             data = held_item_file + file->motion_offset;
+-            buffer = (int)held_item_channels;
+-            ModelMotion_LoadFile(data, &buffer, &held_item_model, 1);
++            buffer = held_item_channels;
++            ModelMotion_LoadFile((MotionFile *)data, (ModelChannel **)&buffer, &held_item_model, 1);
+         }
+         if (file->texture_size != 0) {
+             held_item_textures = held_item_file + file->texture_offset;
+         }
+-        held_item_model.light_block = (s32)held_item_light_blocks;
+-        held_item_model.fog_block = &current_fog_block;
++        held_item_model.light_block = (sptr)held_item_light_blocks;
++        held_item_model.fog_block = &map_draw_state.unkA0;
+         MODEL_CHANNEL(&held_item_model)->unk8F = 0x80;
+         Sound_LoadSwBank(player_state.weapon);
+         WeaponTrail_Reset();
+@@ -195,9 +192,9 @@ void Player_LoadArmModels(void) {
+     if (loaded_arm_gauntlet != player_state.equipment[EQUIP_GAUNTLET]) {
+         loaded_arm_gauntlet = player_state.equipment[EQUIP_GAUNTLET];
+         memset((void *)arm_file, 0, 0x50000);
+-        memset(&arm_model, 0, 0x1C0);
+-        memset(arm_setup, 0, 0x1000);
+-        memset(arm_channels, 0, 0x90);
++        memset(&arm_model, 0, sizeof(ModelInstance));
++        memset(arm_setup, 0, sizeof(arm_setup));
++        memset(arm_channels, 0, sizeof(arm_channels));
+         arm_textures = 0;
+         sprintf(path, item_arm_path_format, arm->model_file_number);
+         handle = File_Open(path, 0, 1);
+@@ -217,15 +214,15 @@ void Player_LoadArmModels(void) {
+         memcpy((void *)arm_file, file_load_buffer, size);
+         file = (PlayerArmFile *)arm_file;
+         if (file->model_size != 0) {
+-            data = (int)file + file->model_offset;
+-            buffer = (int)arm_setup;
++            data = (char *)file + file->model_offset;
++            buffer = arm_setup;
+             Model_SetUpSkinned(&arm_model, &data, &buffer);
+         }
+         if (file->texture_size != 0) {
+             arm_textures = arm_file + file->texture_offset;
+         }
+-        arm_model.light_block = (s32)held_item_light_blocks;
+-        arm_model.fog_block = &current_fog_block;
++        arm_model.light_block = (sptr)held_item_light_blocks;
++        arm_model.fog_block = &map_draw_state.unkA0;
+     }
+ }
+ 
+@@ -285,10 +282,10 @@ void Player_UpdateArmModels(void) {
+             *(ModelMatrix *)arm_part->matrix = *(ModelMatrix *)part->matrix;
+         }
+         held_item_model.update_bone_points(&held_item_model);
+-        Vector_Copy(&held_item_arm_points.points[0], (void *)held_item_model.get_point(&held_item_model, 30));
+-        Vector_Copy(&held_item_arm_points.points[1], (void *)held_item_model.get_point(&held_item_model, 31));
++        Vector_Copy(&held_item_arm_points.points[0], (void *)(sptr)held_item_model.get_point(&held_item_model, 30));
++        Vector_Copy(&held_item_arm_points.points[1], (void *)(sptr)held_item_model.get_point(&held_item_model, 31));
+     }
+-    held_item_light_blocks[0] = current_light_block;
++    held_item_light_blocks[0] = *(MapSlotUnk10Half *)&map_draw_state.unkC0; /* its first half */
+ }
+ 
+ /* each frame: ages the weapon trail and queues the two ends of the held weapon, in screen space */
+@@ -315,8 +312,8 @@ void WeaponTrail_Update(void) {
+         if (item == 0x98) {
+             return;
+         }
+-        blade_base = (void *)weapon->get_point(weapon, 0);
+-        blade_tip = (void *)weapon->get_point(weapon, 1);
++        blade_base = (void *)(sptr)weapon->get_point(weapon, 0);
++        blade_tip = (void *)(sptr)weapon->get_point(weapon, 1);
+         sceVu0MulMatrix(world_screen, world_screen_matrix, identity_matrix);
+         Vu0_LoadMatrix(world_screen);
+         Vu0_ProjectToScreen((int *)&point, blade_base);
+@@ -387,7 +384,7 @@ void Player_DrawArm(void) {
+         Packet_BeginGsRegisters();
+         Packet_AddGsRegister(GS_REG_ALPHA_1, weapon_trail_kinds[trail_kind].blend);
+         Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+         Packet_EndGsRegisters();
+         clipped = 6;
+         size = count * 2 + 1;
+@@ -396,8 +393,8 @@ void Player_DrawArm(void) {
+         packet += 7;
+         *packet++ = size | 0x51000000;
+         /* GIF tag: count vertices of two registers each, a shaded, blended triangle strip */
+-        tag = count | 0x8000 | (0x8000L << 46);
+-        tag |= 0x9900L << 38; // match: a second statement, or the two constants fold into one
++        tag = count | 0x8000 | (0x8000LL << 46);
++        tag |= 0x9900LL << 38; // match: a second statement, or the two constants fold into one
+         *(u64 *)packet = tag;
+         packet += 2;
+         *(u64 *)packet = 0x51; /* the registers: RGBAQ, XYZ2 */
+diff --git a/src/game/player/interact.c b/src/game/player/interact.c
+index c9500141aa91693cf1e548120dde25ff22bc26b6..02a1ae261ea526b4638f6f37cdba05b0d4ef401d 100644
+--- a/src/game/player/interact.c
++++ b/src/game/player/interact.c
+@@ -5,21 +5,17 @@
+ #include "map_object/map_object.h"
+ #include "collision/collision.h"
+ #include "math/vu0.h"
++#include <math.h>
++#include <libvu0.h>
+ 
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+ int Timer_GetTicks(void);
+ void Interact_UpdateViewRay(void);
+ void Collision_CastRayAtMapLists(f32, void *, void *, s32);
+ float Interact_GetDistanceWithin(float, float *, float *);
+ void Collision_RayCylinder(f32, f32, f32, void *, void *, void *);
+ void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
+-void sceVu0SubVector(void *, void *, void *);
+-void sceVu0Normalize(float *, float *);
+-float sceVu0InnerProduct(float *, float *);
+-float sqrtf(float);
+ int MapItem_IsPickable(void *);
+-int ModelMotion_GetLastFrame(char *); // match: its u16 is halved as an int
++u16 ModelMotion_GetLastFrame(char *);
+ int Script_Start(int, int);
+ int Script_IsRunning(int);
+ int MapItem_StartPickup(ItemNode *);
+diff --git a/src/game/player/magic_ladder.c b/src/game/player/magic_ladder.c
+index 91d3c311409eeb9f83d0cd41ea76e60c129896ce..4f41106176f1fafdf0c54014a334d8d1591c458e 100644
+--- a/src/game/player/magic_ladder.c
++++ b/src/game/player/magic_ladder.c
+@@ -3,10 +3,9 @@
+ #include "effect/effect.h"
+ #include "effect/shot.h"
+ #include "entity/entity.h"
++#include <math.h>
++#include <string.h>
+ 
+-void *memset(void *, s32, u32);
+-float sqrtf(float);
+-float sinf(float);
+ 
+ extern PlayerState player_state;
+ extern PlayerState player_previous;
+@@ -17,7 +16,8 @@ extern PlayerShot *channeled_shot;
+ extern u32 frame_counter;
+ /* 0x4145C8 the ladder's state handlers, one per LadderState (Ladder_DispatchPad picks one) */
+ void (*ladder_state_handlers[6])(u16, u16) = {
+-    (void (*)(u16, u16))Ladder_WalkToFoot, Ladder_WaitOnRung, Ladder_ClimbRungUp, Ladder_ClimbRungDown,
++    (void (*)(u16, u16))Ladder_WalkToFoot, (void (*)(u16, u16))Ladder_WaitOnRung, (void (*)(u16, u16))Ladder_ClimbRungUp,
++    (void (*)(u16, u16))Ladder_ClimbRungDown,
+ };
+ extern u16 forward_button;
+ extern u16 back_button;
+@@ -429,8 +429,8 @@ void Ladder_Start(ObjectReference *object, int from_far_end) {
+     if ((s32)(player_state.status_bits >> 34) & 1) {
+         return;
+     }
+-    Vector_Copy(&ladder_top_point, (void *)object->model->get_point(object->model, 1));
+-    Vector_Copy(&ladder_bottom_point, (void *)object->model->get_point(object->model, 0));
++    Vector_Copy(&ladder_top_point, (void *)(sptr)object->model->get_point(object->model, 1));
++    Vector_Copy(&ladder_bottom_point, (void *)(sptr)object->model->get_point(object->model, 0));
+     Vector_Subtract(&ladder_span, &ladder_top_point, &ladder_bottom_point);
+     PLAYER_STATUS_BITS(&player_state)->bit36 = TRUE;
+     PLAYER_STATUS_BITS(&player_state)->bit34 = FALSE;
+@@ -470,7 +470,7 @@ void Ladder_Start(ObjectReference *object, int from_far_end) {
+ /* Clears ladder approach state when the player is knocked off during a climb. */
+ void Ladder_CancelApproach(void) {
+     ladder_state_index = 0;
+-    player_state.status_bits &= ~(1L << 36);
++    player_state.status_bits &= ~(1LL << 36);
+ }
+ 
+ /* Dispatches pad input to the ladder state handler when the player is on a ladder. */
+@@ -501,13 +501,13 @@ void Ladder_WalkToFoot(void) {
+ /* Waits on a rung; up/down input starts climbing or leaves the ladder. */
+ void Ladder_WaitOnRung(u16 buttons) {
+     if (!(ladder_object->unk10 & 0x10000)) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     if (buttons & (step_right_button | step_left_button)) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     if ((buttons & (turn_right_button | turn_left_button)) && !(buttons & (forward_button | back_button))) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     if (forward_button & buttons) {
+         ladder_current_rung++;
+@@ -527,7 +527,7 @@ void Ladder_WaitOnRung(u16 buttons) {
+             return;
+         }
+     }
+-    player_state.status_bits &= ~(1L << 36);
++    player_state.status_bits &= ~(1LL << 36);
+ }
+ 
+ /* Moves the player one rung up along a sine ease and plays a step sound. */
+@@ -537,13 +537,13 @@ void Ladder_ClimbRungUp(u16 buttons) {
+     f32 fraction;
+ 
+     if (!(ladder_object->unk10 & 0x10000)) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     if (buttons & (step_right_button | step_left_button)) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     if ((buttons & (turn_right_button | turn_left_button)) && !(buttons & (forward_button | back_button))) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     ladder_rung_anim_frame++;
+     angle = 1.9198622f;
+@@ -567,13 +567,13 @@ void Ladder_ClimbRungDown(u16 buttons) {
+     f32 fraction;
+ 
+     if (!(ladder_object->unk10 & 0x10000)) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     if (buttons & (step_right_button | step_left_button)) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     if ((buttons & (turn_right_button | turn_left_button)) && !(buttons & (forward_button | back_button))) {
+-        player_state.status_bits &= ~(1L << 36);
++        player_state.status_bits &= ~(1LL << 36);
+     }
+     ladder_rung_anim_frame--;
+     angle = 1.6580628f;
+@@ -607,4 +607,5 @@ int Ladder_PlayStepSound(void) {
+             break;
+         }
+     }
++    return 0; /* retail leaves v0 as it was; the callers do not read it */
+ }
+diff --git a/src/game/player/player.h b/src/game/player/player.h
+index 17a77d9fdc8e3141ae5bab898c515b144c68561c..53a8d4f99cf8a59af2bb60cf5658b9a58395c619 100644
+--- a/src/game/player/player.h
++++ b/src/game/player/player.h
+@@ -144,9 +144,9 @@ typedef struct {
+     s32 landing_dip_frames;         /* 0x1F8 how many frames the dip takes */
+     s32 landing_dip_frame;          /* 0x1FC the frame of the dip; unk1F0 follows half a sine wave */
+     s32 landing_slow_timer;         /* 0x200 frames left of half speed after a hard landing */
+-    s32 stepped_on_entity;          /* 0x204 the entity the player was put on top of */
+-    s32 floor_map_object;           /* 0x208 the map object the player stands on */
+-    s32 touched_map_object;         /* 0x20C the map object mesh wall the player touched */
++    struct Entity *stepped_on_entity; /* 0x204 the entity the player was put on top of */
++    MapObject *floor_map_object;    /* 0x208 the map object the player stands on */
++    MapObject *touched_map_object;  /* 0x20C the map object mesh wall the player touched */
+     u8 floor_material;              /* 0x210 3: the second row of the movement tables is used; 6: see Player_FindFloorMaterial */
+     u8 unk211;                      /* 0x211 set to 6 with unk210 before the floors are looked for (Player_CollideWithMap) */
+     char pad212[0x02];
+@@ -204,6 +204,20 @@ typedef struct {
+     s32 rage_power_bonus;           /* 0x2F0 10, 20 or 30 for magic 0x52, 0x53, 0x54 */
+     char pad2F4[0x0C];              /* the block is 0x300 bytes (Player_ResetForNewGame clears and copies that many) */
+ } PlayerState;
++/* Game_WriteSaveImage and Game_ReadSaveImage copy the fields up to 0xDC by these PS2 offsets */
++LAYOUT_OFFSET(PlayerState, rotation, 0x10);
++LAYOUT_OFFSET(PlayerState, hp_base, 0x20);
++LAYOUT_OFFSET(PlayerState, magic_base, 0x2C);
++LAYOUT_OFFSET(PlayerState, timed_flags, 0x30);
++LAYOUT_OFFSET(PlayerState, weapon, 0x3C);
++LAYOUT_OFFSET(PlayerState, gold, 0x4C);
++LAYOUT_OFFSET(PlayerState, experience, 0x50);
++LAYOUT_OFFSET(PlayerState, level, 0x54);
++LAYOUT_OFFSET(PlayerState, hp_now, 0xB4);
++LAYOUT_OFFSET(PlayerState, mp_now, 0xB8);
++LAYOUT_OFFSET(PlayerState, weapon_use_count, 0xD4);
++LAYOUT_OFFSET(PlayerState, magic_use_count, 0xD8);
++LAYOUT_OFFSET(PlayerState, ailment_defence, 0xDC);
+ 
+ /* weapon_trail_kinds[7]: colour and life of the weapon trail, one per kind (trail_kind picks one) */
+ typedef struct {
+@@ -358,6 +372,7 @@ typedef struct {
+ } PlayerArmPoints;
+ 
+ /* an item_arm file (the model the player holds): up to three parts, each present when its size is not 0 */
++/* overlay: the header of an item_arm file */
+ typedef struct {
+     s32 texture_size;               /* 0x00 */
+     s32 model_size;                 /* 0x04 */
+@@ -367,6 +382,8 @@ typedef struct {
+     s32 model_offset;               /* 0x18 */
+     s32 motion_offset;              /* 0x1C */
+ } PlayerArmFile;
++LAYOUT_SIZE(PlayerArmFile, 0x20);
++LAYOUT_OFFSET(PlayerArmFile, texture_offset, 0x14);
+ 
+ /* item_name_defs[ITEM_COUNT]: param/item_nam.prm, 0x40 bytes per item, starting with its name. worn_name_defs is
+    the run of them from ITEM_WORN_FIRST on (the items Attack_WearWornItem reads). */
+diff --git a/src/game/player/player_collision.c b/src/game/player/player_collision.c
+index 6e0792379deddc2909c9227f3192a5a9ec39e140..ee8ddac5e2b497978f25cc783e2032ecd9ee5c21 100644
+--- a/src/game/player/player_collision.c
++++ b/src/game/player/player_collision.c
+@@ -4,6 +4,7 @@
+ #include "entity/entity.h"
+ #include "effect/effect.h"
+ #include "math/vu0.h"
++#include <math.h>
+ 
+ /* moves the player out of the body just hit: to `push` from it, but by no more than 50 a frame */
+ #define PUSH_PLAYER_OUT()                                                                          \
+@@ -26,7 +27,6 @@ void Collision_DropOnTriangleWithin(void *, void *, void *, void *, f32);
+ u32 Collision_GetFloorMaterial(int, u32, u32);
+ u32 Collision_GetSurfaceEffect(u32, u32, int);
+ void Map_MakeCurrent(int);
+-float sqrtf(float);
+ void Collision_CylinderCylinder(void *, f32, f32, void *, f32, f32);
+ void Collision_PushOutOfObjects(f32 *, s32, f32, f32);
+ s32 Collision_StandOnObjects(f32 *, s32, f32, f32);
+@@ -77,7 +77,7 @@ int Player_CollideWithMap(void) {
+     if (step_bit) {
+         if (player_state.step_remainder <= player_state.step_per_frame) {
+             player_state.position.y -= player_state.step_remainder;
+-            player_state.status_bits &= ~(0x8000L << 18);
++            player_state.status_bits &= ~(0x8000LL << 18);
+             player_state.step_per_frame = 0.0f;
+             player_state.step_remainder = 0.0f;
+         } else {
+@@ -120,12 +120,12 @@ int Player_CollideWithMap(void) {
+                 ((void (*)(void *))Collision_TransformMeshPoints)(model); // match: called as if it returned nothing
+                 if (player_state.ground_effect_active == 0) {
+                     strips_left = mesh->hazard_strip_count;
+-                    strip = mesh->hazard_strips;
++                    strip = EE_PTR(CollisionStrip *, mesh->hazard_strips);
+                     while (--strips_left != -1) {
+                         strip_point = strip->points;
+                         points_left = strip->point_count - 2;
+                         do {
+-                            Collision_DropOnTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position,
++                            Collision_DropOnTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
+                                           &player_state.position);
+                             if (COLLISION_RESULT->hit != 0 && player_state.position.y - 230.0f <= COLLISION_RESULT->point[1]
+                                 && COLLISION_RESULT->point[1] <= player_state.position.y) {
+@@ -143,13 +143,13 @@ int Player_CollideWithMap(void) {
+                     }
+                 }
+                 strips_left = mesh->wall_strip_count;
+-                strip = mesh->wall_strips;
++                strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+                 while (--strips_left != -1) {
+                     strip_point = strip->points;
+                     points_left = strip->point_count - 2;
+                     do {
+-                        Collision_CapsuleTriangle((f32 *)strip_point[0].position, (f32 *)strip_point[1].position,
+-                                      (f32 *)strip_point[2].position, (f32 *)&COLLISION_SCRATCH->unk90, 100.0f, 230.0f);
++                        Collision_CapsuleTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position),
++                                      EE_PTR(f32 *, strip_point[2].position), (f32 *)&COLLISION_SCRATCH->unk90, 100.0f, 230.0f);
+                         if (COLLISION_RESULT->hit != 0) {
+                             COLLISION_SCRATCH->push.x = COLLISION_SCRATCH->unk90.x - COLLISION_RESULT->point[0];
+                             COLLISION_SCRATCH->push.y = 0.0f;
+@@ -165,22 +165,22 @@ int Player_CollideWithMap(void) {
+                 }
+                 if (map == 0) {
+                     strips_left = mesh->water_strip_count;
+-                    strip = mesh->water_strips;
++                    strip = EE_PTR(CollisionStrip *, mesh->water_strips);
+                     while (--strips_left != -1) {
+                         strip_point = strip->points;
+                         points_left = strip->point_count - 2;
+                         do {
+-                            Collision_DropOnTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position,
++                            Collision_DropOnTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
+                                           &player_state.position);
+                             if (COLLISION_RESULT->hit != 0
+                                 && COLLISION_RESULT->point[1] <= player_state.position.y + player_state.fall_speed
+                                 && (!((s32)(player_state.status_bits >> 38) & 1) || COLLISION_RESULT->point[1] < player_state.water_surface_y)) {
+                                 player_state.water_surface_y = COLLISION_RESULT->point[1];
+-                                player_state.status_bits |= 0x8000L << 23;
++                                player_state.status_bits |= 0x8000LL << 23;
+                                 if (COLLISION_RESULT->point[1] <= player_state.position.y - 220.0f) {
+-                                    player_state.status_bits |= 0x8000L << 24;
++                                    player_state.status_bits |= 0x8000LL << 24;
+                                 } else {
+-                                    player_state.status_bits &= ~(0x8000L << 24);
++                                    player_state.status_bits &= ~(0x8000LL << 24);
+                                 }
+                             }
+                             strip_point++;
+@@ -196,12 +196,12 @@ int Player_CollideWithMap(void) {
+                     continue;
+                 }
+                 strips_left = mesh->floor_strip_count;
+-                strip = mesh->floor_strips;
++                strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+                 while (--strips_left != -1) {
+                     strip_point = strip->points;
+                     points_left = strip->point_count - 2;
+                     do {
+-                        Collision_DropOnTriangleWithin(strip_point[0].position, strip_point[1].position, strip_point[2].position,
++                        Collision_DropOnTriangleWithin(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
+                                       &COLLISION_SCRATCH->point, reach);
+                         if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->point[1] < floor_height) {
+                             found = TRUE;
+@@ -226,7 +226,7 @@ int Player_CollideWithMap(void) {
+             if (drop < 16.666666f) {
+                 player_state.position.y = floor_height;
+             } else {
+-                player_state.status_bits |= 0x8000L << 18;
++                player_state.status_bits |= 0x8000LL << 18;
+                 player_state.step_per_frame = 16.666666f;
+                 player_state.position.y -= 16.666666f;
+                 player_state.step_remainder = drop - 16.666666f + 5.0f;
+@@ -239,15 +239,15 @@ int Player_CollideWithMap(void) {
+         }
+     }
+     if (((s32)(player_state.status_bits >> 33) & 1) || found) {
+-        player_state.status_bits &= ~(0x8000L << 19);
++        player_state.status_bits &= ~(0x8000LL << 19);
+     }
+     if (!((s32)(player_previous.status_bits >> 38) & 1) && ((s32)(player_state.status_bits >> 38) & 1)) {
+         player_state.fall_speed = 0.0f;
+-        player_state.status_bits &= ~(0x8000L << 19);
++        player_state.status_bits &= ~(0x8000LL << 19);
+     }
+     if (player_previous.ground_effect_kind != 4 && player_state.ground_effect_kind == 4) {
+         player_state.fall_speed = 0.0f;
+-        player_state.status_bits &= ~(0x8000L << 19);
++        player_state.status_bits &= ~(0x8000LL << 19);
+     }
+     if (player_state.ground_effect_active == 0) {
+         player_state.ground_effect_frames = 0;
+@@ -295,16 +295,16 @@ void Player_PushOutOfWalls(void) {
+                     || record->highest[2] + 100.0f < player_state.position.z) {
+                     continue;
+                 }
+-                Collision_TransformMeshPoints(record->model);
+-                mesh = (CollisionMesh *)record->model->strips;
++                Collision_TransformMeshPoints(MAP_RECORD_MODEL(record));
++                mesh = (CollisionMesh *)MAP_RECORD_MODEL(record)->strips;
+                 strips_left = mesh->wall_strip_count;
+-                strip = mesh->wall_strips;
++                strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+                 while (--strips_left != -1) {
+                     strip_point = strip->points;
+                     points_left = strip->point_count - 2;
+                     do {
+-                        Collision_CapsuleTriangle((f32 *)strip_point[0].position, (f32 *)strip_point[1].position,
+-                                      (f32 *)strip_point[2].position, (f32 *)&COLLISION_SCRATCH->point, 100.0f, 230.0f);
++                        Collision_CapsuleTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position),
++                                      EE_PTR(f32 *, strip_point[2].position), (f32 *)&COLLISION_SCRATCH->point, 100.0f, 230.0f);
+                         if (COLLISION_RESULT->hit != 0) {
+                             COLLISION_SCRATCH->push.x = COLLISION_SCRATCH->point.x - COLLISION_RESULT->point[0];
+                             COLLISION_SCRATCH->push.y = 0.0f;
+@@ -360,15 +360,15 @@ void Player_FindFloorMaterial(void) {
+                     || record->highest[2] + 100.0f < player_state.position.z) {
+                     continue;
+                 }
+-                Collision_TransformMeshPoints(record->model);
+-                mesh = (CollisionMesh *)record->model->strips;
++                Collision_TransformMeshPoints(MAP_RECORD_MODEL(record));
++                mesh = (CollisionMesh *)MAP_RECORD_MODEL(record)->strips;
+                 strips_left = mesh->floor_strip_count;
+-                strip = mesh->floor_strips;
++                strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+                 while (--strips_left != -1) {
+                     strip_point = strip->points;
+                     points_left = strip->point_count - 2;
+                     do {
+-                        Collision_DropOnTriangleWithin(strip_point[0].position, strip_point[1].position, strip_point[2].position,
++                        Collision_DropOnTriangleWithin(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position),
+                                       &COLLISION_SCRATCH->point, 10.0f);
+                         if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->point[1] < lowest) {
+                             lowest = COLLISION_RESULT->point[1];
+@@ -459,7 +459,7 @@ void Player_CollideWithEntities(int climb) {
+                 }
+                 player_state.position.y = top;
+                 stepped = TRUE;
+-                player_state.stepped_on_entity = (s32)entity;
++                player_state.stepped_on_entity = entity;
+             }
+         }
+         player_state.position.y -= 1.0f;
+@@ -470,10 +470,10 @@ void Player_CollideWithEntities(int climb) {
+                 player_state.position.y = old_position[1] - step;
+                 player_state.step_remainder = rise - step + 5.0f;
+                 player_state.step_per_frame = step;
+-                player_state.status_bits |= 1L << 33;
++                player_state.status_bits |= 1LL << 33;
+             }
+             player_state.fall_speed = 0.0f;
+-            player_state.status_bits &= ~(1L << 34);
++            player_state.status_bits &= ~(1LL << 34);
+         }
+     }
+     for (entity = active_entities_head; entity != NULL; entity = entity->next) {
+@@ -504,7 +504,7 @@ void Player_CollideWithEntities(int climb) {
+                 if (entity->spawn_info->type_id == 0x9B && i != 3) {
+                     continue;
+                 }
+-                point = (void *)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
++                point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
+                 Vector_Copy(position, point);
+                 if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
+                     radius = body->unk04 * ENTITY_MODEL(entity)->scale_x;
+@@ -563,10 +563,10 @@ void Player_CollideWithMapObjects(s32 climb) {
+                 player_state.position.y = old_position[1] - step;
+                 player_state.step_remainder = rise - step + 5.0f;
+                 player_state.step_per_frame = step;
+-                player_state.status_bits |= 1L << 33;
++                player_state.status_bits |= 1LL << 33;
+             }
+             player_state.fall_speed = 0.0f;
+-            player_state.status_bits &= ~(1L << 34);
++            player_state.status_bits &= ~(1LL << 34);
+         } else {
+             Vector_Copy(&player_state, old_position);
+         }
+diff --git a/src/game/player/player_items.c b/src/game/player/player_items.c
+index bd6d790aa86d44459f040915079f450bc2915a43..148a941719ed8c13e4cbd36a1ffe5c9234ae23bc 100644
+--- a/src/game/player/player_items.c
++++ b/src/game/player/player_items.c
+@@ -22,7 +22,6 @@ extern ItemCommonDef item_common_defs[];
+ extern GameStatus game_status;
+ extern EventRunner view_ray_status;
+ extern PlayerState player_state;
+-extern void *object_under_player[];
+ extern int current_map_slot;
+ extern u32 frame_counter;
+ extern u8 spell_levels[6][5];
+@@ -168,7 +167,7 @@ void Player_UseItem(void) {
+                 }
+                 break;
+             case 2:
+-                stood_on = object_under_player[0];
++                stood_on = player_state.floor_map_object;
+                 if (stood_on == NULL || stood_on->definition->kind != MAP_OBJECT_KIND_SYMBOL_OF_PASSAGE || !MapChange_StartPassage(item)) {
+                     Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_NOTHING_HAPPENED);
+                     return;
+diff --git a/src/game/player/player_state.c b/src/game/player/player_state.c
+index 5d7b592236ec782dfff1b3375821df250562c110..5891f8d9a776cd0b4b6885acea7595a7beedf86c 100644
+--- a/src/game/player/player_state.c
++++ b/src/game/player/player_state.c
+@@ -4,14 +4,3 @@
+ 
+ PlayerState player_state = { 0 }; /* 0x413F80 Player_ResetForNewGame clears and copies all 0x300 bytes of it */
+ PlayerState player_previous = { 0 }; /* 0x414280 the player as of the frame before, which Player_Move reads */
+-
+-/* Fields several files still read by their old splat names. */
+-asm(".globl player_rotation\nplayer_rotation = player_state + 0x10\n");   /* rotation */
+-asm(".globl player_weapon\nplayer_weapon = player_state + 0x3C\n");   /* weapon */
+-asm(".globl player_hp_max\nplayer_hp_max = player_state + 0x58\n");   /* hp_max */
+-asm(".globl entity_under_player\nentity_under_player = player_state + 0x204\n");  /* unk204 the entity the player stands on */
+-asm(".globl object_under_player\nobject_under_player = player_state + 0x208\n");  /* unk208 the map object the player stands on */
+-asm(".globl player_floor_block\nplayer_floor_block = player_state + 0x250\n");  /* unk250 the flag block of the floor record under the player */
+-asm(".globl player_weapon_step\nplayer_weapon_step = player_state + 0x258\n");  /* unk258 the step of the weapon's action, 0 while idle */
+-asm(".globl player_status_bits\nplayer_status_bits = player_previous + 0x1C8\n");  /* unk1C8 status bits */
+-asm(".globl player_previous_fade_level\nplayer_previous_fade_level = player_previous + 0x2A4\n");  /* pad2A4: the map record byte 0x4C under the player, the frame before */
+diff --git a/src/game/player/player_status.c b/src/game/player/player_status.c
+index 732ad7613c8305f653e5272256b87e147cb6e258..0f72445cfc0dfa53d3d032179477951665665ee7 100644
+--- a/src/game/player/player_status.c
++++ b/src/game/player/player_status.c
+@@ -21,13 +21,12 @@ int ModelMotion_BlendInto(ModelInstance *model, u8 index, u16 speed);
+ void Packet_BeginGsRegisters(void);
+ void Packet_AddGsRegister(int, s64);
+ void Packet_EndGsRegisters(void);
+-void GsDraw_FillScreen(int, int, int, int, int);
+-int Sound_PlaySw(int); // match: an int return (the definition is void) keeps $2 busy in Player_BounceWeapon
++void GsDraw_FillScreen(int, int, int, int, s64);
++void Sound_PlaySw(int);
+ int Sound_PlayCommon(int);
+ 
+ extern PlayerState player_state;
+-extern int player_hp_max[];            /* player_state.hp_max */
+-extern int player_previous_fade_level[];            /* player_previous + 0x2A4 */
++extern PlayerState player_previous;
+ /* 0x414580 the tint the damage and the statuses fade the screen with (Player_DrawScreenTints draws it) */
+ PlayerScreenTint player_screen_tint = { 0 };
+ extern PlayerItemDef weapon_defs[];
+@@ -175,7 +174,7 @@ void Player_TakeDamage(int damage)
+ 
+     if (Player_LoseHp(damage) != 0) {
+         Player_FlashDamage();
+-        tint = ((damage << 7) / (player_hp_max[0] / 2)) + 0x7F;
++        tint = ((damage << 7) / (player_state.hp_max / 2)) + 0x7F;
+         if (tint >= 0x100)
+             tint = 0xFF;
+         Input_StartRumble(tint, 4, 0);
+@@ -253,7 +252,10 @@ void Player_TiltViewFromHit(int damage) {
+     if (game_status.player_control != 0 && !(game_status.update_hold_flags & 1)) {
+         player = &player_state;
+         if (!((float)damage * 100.0f / (float)player->hp_max < 10.0f)) {
+-            frames = (damage * 500 / (player->hp_max + 50)) / player->power;
++            frames = damage * 500 / (player->hp_max + 50);
++            /* retail divides by power with no zero test; the EE does not trap and gives -1 (1 for a negative
++               dividend) where x86 would stop the program */
++            frames = player->power != 0 ? frames / player->power : (frames < 0 ? 1 : -1);
+             if (player->view_tilt_frames < frames) {
+                 float angle = player->view_tilt_pitch;
+ 
+@@ -265,7 +267,7 @@ void Player_TiltViewFromHit(int damage) {
+     }
+ }
+ 
+-int Sound_StopVoice(int); // match: an int return (the definition is void) keeps -1 in $3
++void Sound_StopVoice(s8 slot);
+ 
+ /* Stops the last footstep sound (footstep_voice), if one plays. */
+ void Player_StopFootstepSound(void) {
+@@ -368,9 +370,9 @@ void Player_UpdateScreenFade(void) {
+ 
+     slot = &map_slots[current_map_slot];
+     player = &player_state;
+-    area = *(char *)((player->map_index << 7) + (int)slot->records + 0x4C); // match: summed as integers, index first
++    area = *(char *)(slot->records + (player->map_index << 7) + 0x4C);
+     *(s32 *)player->pad2A4 = area;
+-    if (area - player_previous_fade_level[0] < 0) {
++    if (area - *(s32 *)player_previous.pad2A4 < 0) {
+         *(s32 *)player->pad2AC = -0x30;
+     }
+     step = *(s32 *)player->pad2AC;
+@@ -401,7 +403,7 @@ void Player_DrawScreenFade(void) {
+     if (player_state.screen_fade != 0.0f) {
+         Packet_BeginGsRegisters();
+         Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+         Packet_EndGsRegisters();
+         if (player_state.screen_fade > 0.0f) {
+             GsDraw_FillScreen(0xFF, 0xFF, 0xFF, (int)player_state.screen_fade, 0x48);
+@@ -409,7 +411,7 @@ void Player_DrawScreenFade(void) {
+             GsDraw_FillScreen(0, 0, 0, (int)-player_state.screen_fade, 0x44);
+         }
+         Packet_BeginGsRegisters();
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+         Packet_EndGsRegisters();
+     }
+ }
+diff --git a/src/game/player/player_update.c b/src/game/player/player_update.c
+index b7fced28da5c3a3f71fda51ec46a7fb0b2e335b5..ad454cc3165c8f72bb5a6c56ccc5ae30e0c58301 100644
+--- a/src/game/player/player_update.c
++++ b/src/game/player/player_update.c
+@@ -11,6 +11,10 @@
+ #include "effect/shot.h"
+ #include "sound/sound.h"
+ #include "math/vu0.h"
++#include <math.h>
++#include <stdlib.h>
++#include <string.h>
++#include <libvu0.h>
+ 
+ static s32 swing_magic_frames;                    /* 0x447114 frames the swing-cast magic still runs */
+ static s32 swing_magic_id;                        /* 0x447118 magic id cast from the swing */
+@@ -35,7 +39,8 @@ extern SoundLoadQueue sound_load_queue;
+ extern u16 pad_state[];
+ extern u8 item_counts[];
+ extern s8 game_options[];
+-extern u8 guardians_room_water_purified[];
++extern u8 map_script_flags[0x2000];
++#define guardians_room_water_purified (map_script_flags + 0x8C6) /* map 035 [6] */
+ extern int current_map_slot;
+ extern u32 frame_counter;
+ extern int sacrificial_mask_cooldown;              /* frames until the item 0x32 may launch its effect again */
+@@ -86,9 +91,6 @@ void (*item_step_handlers[8])(u16, u16) = {
+     (void (*)(u16, u16))Player_HolsterWeapon, 0, 0, 0,
+ };
+ 
+-void *memset(void *, int, u32);
+-float sinf(float);
+-int rand(void);
+ int Sound_PlayFootstep(int);
+ int Sound_PlayCommon(int);
+ int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
+@@ -114,8 +116,7 @@ void Attack_WearWeapon(int, int);
+ void Attack_WearWornItem(int idx, int amount);
+ 
+ extern u8 spell_levels[6][5];
+-extern u64 player_status_bits[];            /* player_previous.unk1C8 */
+-extern GameDefinition weapon_name_defs[70];
++extern GameDefinition *const weapon_name_defs;
+ extern LevelRecord weapon_level_records[70];
+ extern LevelDef item_name_defs[0x17C];
+ 
+@@ -515,7 +516,7 @@ void Player_Update(void) {
+     game_status.movement_input_enabled = 1;
+ }
+ 
+-void GsDraw_FillScreen(int, int, int, int, int);
++void GsDraw_FillScreen(int, int, int, int, s64);
+ 
+ /* Draws the colours that lie over the screen (PlayerScreenTint). */
+ void Player_DrawScreenTints(void) {
+@@ -890,11 +891,10 @@ void Player_SwingWeapon(u16 held, u16 pressed) {
+     }
+ }
+ 
+-extern u8 player_weapon_step[];
+ 
+ void Player_InvokeTargetHandler(u16 target_id, u16 command) {
+     Player_UpdateWeaponAim();
+-    item_step_handlers[player_weapon_step[0]](target_id, command);
++    item_step_handlers[player_state.item_action_step](target_id, command);
+ }
+ 
+ /* Handler of an item that shoots: on the button, starts the motion and launches the item's shot. */
+@@ -921,7 +921,7 @@ void Player_FireProjectile(u16 held, u16 pressed) {
+     }
+ }
+ 
+-extern GameDefinition weapon_name_defs[];
++extern GameDefinition *const weapon_name_defs;
+ static u8 D_0057A348[8] __attribute__((section(".bss")));  /* 0x57A348 the eight bytes before the requests */
+ static Unk1B1470Request bow_shot_requests[32];                     /* 0x57A350 the bow's requests, one per shot */
+ 
+@@ -1019,11 +1019,12 @@ void Player_HolsterWeapon(void) {
+     ModelMotion_Step(WEAPON_MODEL);
+     if (MODEL_CHANNEL(WEAPON_MODEL)->value == 0) {
+         Effect_FreePlayerWeaponKinds();
+-        player_weapon_step[0] = 0;
++        player_state.item_action_step = 0;
+     }
+ }
+ 
+-extern float view_ray_direction[];
++extern EventRunner view_ray_status;
++#define view_ray_direction (view_ray_status.view_direction)
+ 
+ int Player_CanFireAtAim(void) {
+     float vec[4];
+@@ -1039,8 +1040,6 @@ int Player_CanFireAtAim(void) {
+     return result;
+ }
+ 
+-float atan2f(float, float);
+-float sqrtf(float);
+ 
+ void Player_UpdateWeaponAim(void) {
+     float vec[4];
+@@ -1060,11 +1059,6 @@ extern f32 identity_matrix[16];
+ 
+ /* the pad bits of each control */
+ 
+-float cosf(float);
+-double sin(double);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0RotMatrixZ(float *, float *, float);
+ float Angle_Wrap(float);
+ int Angle_Approach(float *, float, float);
+ int Sound_PlayMap(int);
+@@ -1074,8 +1068,8 @@ void Player_FindFloorMaterial(void);
+ void Player_CollideWithEntities(int);
+ void Player_CollideWithMapObjects(int);
+ 
+-#define PLAYER_FLAG_32 0x100000000L /* the view is levelling out */
+-#define PLAYER_FLAG_37 0x2000000000L /* the view dips after a landing */
++#define PLAYER_FLAG_32 0x100000000LL /* the view is levelling out */
++#define PLAYER_FLAG_37 0x2000000000LL /* the view dips after a landing */
+ 
+ #define STEP_LENGTH 25.0f
+ 
+@@ -1575,7 +1569,7 @@ void Player_TakeFallDamage(float speed) {
+     if (player_state.stepped_on_entity != 0) {
+         amount = amount * 60 / 100;
+     } else if ((player_state.status_bits >> 38 & 1) == 1) {
+-        if (!(player_status_bits[0] >> 38 & 1)) {
++        if (!(player_previous.status_bits >> 38 & 1)) {
+             amount = amount * 80 / 100;
+         }
+     }
+@@ -1608,7 +1602,7 @@ void Player_StopWalking(void) {
+     player_state.look_speed = 0.0f;
+     player_state.turn_speed = 0.0f;
+     player_state.stride_phase = 0;
+-    player_state.status_bits &= ~0x100000000L;
++    player_state.status_bits &= ~0x100000000LL;
+ }
+ 
+ /* The breath bar under water (status bit 39, which Player_CollideWithMap sets while the water surface, strip
+@@ -1623,7 +1617,7 @@ void Player_UpdateBreath(void) {
+     int filled;
+ 
+     player = &player_state;
+-    was_set = (player_status_bits[0] >> 39) & 1;
++    was_set = (player_previous.status_bits >> 39) & 1;
+     is_set = (player->status_bits >> 39) & 1;
+     if (is_set != was_set) {
+         if (is_set != 0) {
+diff --git a/src/game/player/player_update.h b/src/game/player/player_update.h
+index 73e24e465c9ff6ffbbe7229f91801d6ea623b9a8..17e64c7ccde30b2d17c485ca4dd8daa944a15a91 100644
+--- a/src/game/player/player_update.h
++++ b/src/game/player/player_update.h
+@@ -2,13 +2,17 @@
+ #define KF_PLAYER_UPDATE_H
+ 
+ #include "common.h"
++#include "model/model.h"
+ 
+-/* Held weapon model vtable layout for Player_UpdateWeaponAim. */
++/* Held weapon model vtable layout for Player_UpdateWeaponAim: a view of ModelInstance, whose pointers move the
++   fields on the PC, so the padding follows that struct */
+ struct PlayerWeaponModel {
+-    char pad0[0x1B4];
+-    void *(*update_aim)(void *);
+-    void *(*get_point)(void *, int);
++    char pad0[offsetof(ModelInstance, update_bone_points)];
++    void *(*update_aim)(void *);    /* 0x1B4 ModelInstance.update_bone_points */
++    void *(*get_point)(void *, int); /* 0x1B8 ModelInstance.get_point */
+ };
++_Static_assert(offsetof(struct PlayerWeaponModel, update_aim) == offsetof(ModelInstance, update_bone_points), "PlayerWeaponModel is not ModelInstance");
++_Static_assert(offsetof(struct PlayerWeaponModel, get_point) == offsetof(ModelInstance, get_point), "PlayerWeaponModel is not ModelInstance");
+ 
+ void Player_Update(void);
+ void Player_DrawScreenTints(void);

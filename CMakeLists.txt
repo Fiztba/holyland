@@ -1,6 +1,15 @@
-# The PC port of King's Field IV: the decomp's game code (src/game) compiled for the PC, with the PS2
-# side (port/) under it. See docs/port/README.md. The PS2 build of the decomp (build.sh) is separate.
-cmake_minimum_required(VERSION 3.20)
+# The PC port of King's Field IV: the decomp's game code compiled for the PC, with the PS2 side
+# (port/) under it. See docs/port/README.md.
+#
+# Layout:
+#   decomp/          git submodule of kfiv-decomp, pinned at 90dad42. Never edited here.
+#   patches/         the PC edits to the decomp, as git diffs with paths relative to the decomp root
+#                    (patches/game/<folder>.patch, patches/game/_top.patch, patches/nonmatching.patch).
+#   port/            the PS2 side: libraries, SDK stubs and the host's main.
+#   game/            PC-only game code (the data sections in C), compiled with the patched decomp.
+# At configure time the decomp's src/game and src/nonmatching are copied, the patches are applied to
+# the copy, and the copy (out/<preset>/decomp_src/src/) is compiled.
+cmake_minimum_required(VERSION 3.21)
 project(kf4 C)
 
 set(CMAKE_C_STANDARD 99)
@@ -54,30 +63,119 @@ if(NOT WIN32)
     target_link_libraries(kf4_port PUBLIC m)
 endif()
 
+# ---- The decomp's game code, patched --------------------------------------------------------------
+# Everything below compiles the copy in decomp_src/, never decomp/ itself. Each configure builds the
+# patched decomp in a staging directory, then copies into decomp_src/ only the files whose content
+# changed, so a patch edit recompiles the files it touches and nothing else.
+set(KF4_DECOMP ${CMAKE_SOURCE_DIR}/decomp)
+set(KF4_STAGE ${CMAKE_BINARY_DIR}/decomp_stage)
+set(KF4_SRC ${CMAKE_BINARY_DIR}/decomp_src)
+if(NOT EXISTS ${KF4_DECOMP}/src/game)
+    message(FATAL_ERROR "decomp/src/game is missing: run git submodule update --init")
+endif()
+find_package(Git REQUIRED)
+
+file(GLOB_RECURSE KF4_PATCHES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/patches/*.patch)
+list(SORT KF4_PATCHES)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${KF4_PATCHES})
+# moving the decomp pin re-runs configure: git's HEAD file of the submodule changes with it
+execute_process(COMMAND ${GIT_EXECUTABLE} -C ${KF4_DECOMP} rev-parse --git-path HEAD
+    OUTPUT_VARIABLE KF4_DECOMP_HEAD OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
+if(rc EQUAL 0)
+    get_filename_component(KF4_DECOMP_HEAD ${KF4_DECOMP_HEAD} ABSOLUTE BASE_DIR ${KF4_DECOMP})
+    if(EXISTS ${KF4_DECOMP_HEAD})
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${KF4_DECOMP_HEAD})
+    endif()
+endif()
+
+# decomp/ must be at its pin, unedited: an edit there would be compiled without being in a patch
+execute_process(COMMAND ${GIT_EXECUTABLE} -C ${KF4_DECOMP} status --porcelain -- src/game src/nonmatching
+    OUTPUT_VARIABLE KF4_DECOMP_EDITS OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE out RESULT_VARIABLE rc)
+if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "git status failed in ${KF4_DECOMP}:\n${out}")
+endif()
+if(NOT "${KF4_DECOMP_EDITS}" STREQUAL "")
+    message(FATAL_ERROR "decomp/ has local changes:\n${KF4_DECOMP_EDITS}\n"
+        "decomp/ must stay at its pin, unedited. PC edits go in patches/ (tools/patches.py).")
+endif()
+
+# the staging copy: the pinned decomp with the patches applied, rebuilt from scratch every configure
+file(REMOVE_RECURSE ${KF4_STAGE})
+file(MAKE_DIRECTORY ${KF4_STAGE}/src)
+file(COPY ${KF4_DECOMP}/src/game ${KF4_DECOMP}/src/nonmatching DESTINATION ${KF4_STAGE}/src)
+# its own repo, so that git apply works on paths relative to the copy's root (not holyland's)
+execute_process(COMMAND ${GIT_EXECUTABLE} init -q WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc
+    OUTPUT_VARIABLE out ERROR_VARIABLE out)
+if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "git init failed in ${KF4_STAGE}:\n${out}")
+endif()
+foreach(patch ${KF4_PATCHES})
+    execute_process(COMMAND ${GIT_EXECUTABLE} apply --whitespace=nowarn ${patch}
+        WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR "patch ${patch} does not apply to decomp/ at its pin:\n${out}")
+    endif()
+endforeach()
+
+# sync the staging copy into decomp_src/. COPY_FILE leaves a file alone when it is already the same,
+# so its timestamp, and the object built from it, survive. (The .git is at the staging root, not under src.)
+# decomp_src/ is kept read-only between configures (see below), so make it writable for the sync.
+if(EXISTS ${KF4_SRC}/src)
+    file(CHMOD_RECURSE ${KF4_SRC}/src
+        FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
+        DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+endif()
+file(GLOB_RECURSE KF4_STAGED LIST_DIRECTORIES false RELATIVE ${KF4_STAGE} ${KF4_STAGE}/src/*)
+foreach(rel ${KF4_STAGED})
+    get_filename_component(dir ${KF4_SRC}/${rel} DIRECTORY)
+    file(MAKE_DIRECTORY ${dir})
+    file(COPY_FILE ${KF4_STAGE}/${rel} ${KF4_SRC}/${rel} ONLY_IF_DIFFERENT)
+endforeach()
+# what decomp_src/ has and the staging copy does not (a patch's removed file, an old folder, the old
+# layout's .git) goes
+file(REMOVE_RECURSE ${KF4_SRC}/.git)
+file(GLOB_RECURSE KF4_OLD LIST_DIRECTORIES true RELATIVE ${KF4_SRC} ${KF4_SRC}/src/*)
+foreach(rel ${KF4_OLD})
+    if(NOT EXISTS ${KF4_STAGE}/${rel})
+        file(REMOVE_RECURSE ${KF4_SRC}/${rel})
+    endif()
+endforeach()
+file(REMOVE_RECURSE ${KF4_STAGE})
+# decomp_src/ is generated: compiler errors point into it, but an edit there is lost at the next
+# configure. Its files are read-only so that the edit fails instead; edit work/ (tools/patches.py).
+file(CHMOD_RECURSE ${KF4_SRC}/src
+    FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ
+    DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+
 # ---- The game, one object library per folder of src/game ------------------------------------------
 # The libdev members the decomp keeps as src/game/func_0022*.c are PS2 debugging code: not built.
-file(GLOB KF4_GAME_FOLDERS LIST_DIRECTORIES true RELATIVE ${CMAKE_SOURCE_DIR}/src/game
-     ${CMAKE_SOURCE_DIR}/src/game/*)
+file(GLOB KF4_GAME_FOLDERS LIST_DIRECTORIES true RELATIVE ${KF4_SRC}/src/game
+     ${KF4_SRC}/src/game/*)
 set(KF4_GAME_TARGETS)
 foreach(folder ${KF4_GAME_FOLDERS})
-    if(IS_DIRECTORY ${CMAKE_SOURCE_DIR}/src/game/${folder})
-        file(GLOB sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/game/${folder}/*.c)
+    if(IS_DIRECTORY ${KF4_SRC}/src/game/${folder})
+        file(GLOB sources CONFIGURE_DEPENDS ${KF4_SRC}/src/game/${folder}/*.c)
         set(target game_${folder})
         add_library(${target} OBJECT ${sources})
         list(APPEND KF4_GAME_TARGETS ${target})
     endif()
 endforeach()
-target_sources(game_map PRIVATE ${CMAKE_SOURCE_DIR}/src/nonmatching/func_00112BD0.c) # the map draw at 0x112BD0, asm on the PS2
-file(GLOB top_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/game/*.c)
+target_sources(game_map PRIVATE ${KF4_SRC}/src/nonmatching/func_00112BD0.c) # the map draw at 0x112BD0, asm on the PS2
+file(GLOB top_sources CONFIGURE_DEPENDS ${KF4_SRC}/src/game/*.c)
 list(FILTER top_sources EXCLUDE REGEX "/func_0022[0-9A-F]+\\.c$")
 add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
+# the PC-only data sections (game/data/), built with the decomp's game code
+file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
+add_library(game_data OBJECT ${game_data_sources})
+list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/src/game/main.c PROPERTIES
+set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")
 
 foreach(target ${KF4_GAME_TARGETS})
-    target_include_directories(${target} PRIVATE src/game port/include)
+    target_include_directories(${target} PRIVATE ${KF4_SRC}/src/game port/include)
     target_compile_options(${target} PRIVATE ${KF4_GAME_FLAGS} ${KF4_GAME_ERRORS})
 endforeach()
 add_custom_target(game DEPENDS ${KF4_GAME_TARGETS})

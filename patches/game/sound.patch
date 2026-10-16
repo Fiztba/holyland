@@ -1,0 +1,1447 @@
+diff --git a/src/game/sound/sound.c b/src/game/sound/sound.c
+index 99c21f2e1f4bb161e6f48f979767738c9d35a90c..49cbf729ff48a1666f2efe591526f52f7c78e115 100644
+--- a/src/game/sound/sound.c
++++ b/src/game/sound/sound.c
+@@ -4,31 +4,18 @@
+    once a frame, streams, reverb settings. */
+ #include "core/load.h"
+ #include "sound/sound.h"
+-
+-/* EE EABI varargs: the register save area a1..a7 is spilled to, as in libsdr.c */
+-typedef char *va_list;
+-#define va_start(ap, last) ((ap) = (char *)__builtin_next_arg(last) - 0x38)
+-#define va_arg(ap, type) (*(type *)((ap += 8) - 8))
++#include <stdio.h>
++#include <string.h>
++#include <eekernel.h>
++#include <libmpeg.h>
++#include <sifdev.h>
++#include <sifrpc.h>
++#include <stdarg.h>
+ 
+ static void SoundDriver_DisableOutput(void);
+-void FlushCache(int); // match: void as in eekernel.h; an int result changes SoundDriver_Init's registers
+-int sceSifBindRpc(int *, int, int);
+-int sceSifCheckStatRpc(int *);
+-int printf(const char *, ...);
+-int sceSifCallRpc(int *, int, int, char *, int, int *, int, int, int);
+-int sceSifSetDma(int *, int);
+-int sceSifDmaStat(int);
+ static int SoundDriver_GetFileSize(const char *);
+-static int SoundDriver_LoadIopFile(char *, void *);
+-int sceSifAllocIopHeap(int);
+-int sceSifFreeIopHeap(int);
+-int puts(char *);
+-char *strcpy(char *, const char *);
+-int sceClose(int);
+-int sceLseek(int, int, int);
+-int sceOpen(const char *, int);
++static int SoundDriver_LoadIopFile(char *, int);
+ /* SDK: loads an IOP heap file, returns below zero until the IOP is ready */
+-int sceSifLoadIopHeap(char *name, void *addr);
+ extern char rpc_timeout_message[];
+ extern char voice_load_waiting_message[];
+ extern int voice_load_step;
+@@ -54,7 +41,7 @@ static SoundRpcRequest sound_rpc_buffer;        /* 0x5BF280 */
+ static SoundState sound_state_storage;          /* 0x5BF380 */
+ static SoundDmaRequest sound_dma;               /* 0x5BF860 */
+ static SoundUpload sound_upload;                /* 0x5BF870 */
+-static int sound_rpc_client[10];                /* 0x5BF890 sceSifClientData of the driver's RPC service */
++static sceSifClientData sound_rpc_client;      /* 0x5BF890 the driver's RPC service */
+ static SoundDmaRequest sound_command_dma;       /* 0x5BF8B8 sends sound_command_list */
+ 
+ /* Starts the sound driver: binds its RPC service on the IOP, then resets the driver state,
+@@ -67,25 +54,23 @@ int SoundDriver_Init(void) {
+     int i;
+ 
+     do {
+-        if (sceSifBindRpc(sound_rpc_client, 0x1010, 0) < 0) {
++        if (sceSifBindRpc(&sound_rpc_client, 0x1010, 0) < 0) {
+             while (TRUE) {
+             }
+         }
+         for (i = 10000; i != -1; i--) {
+         }
+-    } while (sound_rpc_client[9] == 0);
++    } while (sound_rpc_client.server == NULL);
+     FlushCache(0);
+     sound_state = &sound_state_storage;
+     sound_state->dma_src = SoundDriver_Remote(1, 0x10);
+     *(int *)sound_state->unk4D0 = 0x3FFF; // match: the int at 0x4D0; the header has six chars there
+     SoundDriver_Remote(1, 0x30, 0x3FFF, 0x3FFF);
+-    sound_state->load_addr = NULL;
++    sound_state->load_addr = 0;
+     sound_state->unk4C8 = SoundDriver_Remote(1, 0xA0);
+-    // match: retail stores these three as pointers (the header has them as integers)
+-    *(int **)&sound_state->dma_dest = sound_command_list;
++    sound_state->dma_dest = sound_command_list;
+     sound_command_list[0] = 0;
+-    // match: as above
+-    *(char **)&sound_state->unk4BC = *(char **)&sound_state->unk4C0 = (char *)0x5010;
++    sound_state->unk4BC = sound_state->unk4C0 = 0x5010;
+     *(u16 *)&sound_state->unk4D0[4] = 1; // match: the u16 at 0x4D4
+     sound_state->active = 0;
+     voice = sound_state->voices;
+@@ -150,7 +135,7 @@ void SoundDriver_ReleaseAll(void) {
+ static int SoundDriver_WaitRpc(void) {
+     int retries = 0x989680;
+ 
+-    while (sceSifCheckStatRpc(sound_rpc_client) == 1) {
++    while (sceSifCheckStatRpc(&sound_rpc_client) == 1) {
+         if (retries < 0) {
+             printf(rpc_timeout_message);
+             return -1;
+@@ -162,7 +147,7 @@ static int SoundDriver_WaitRpc(void) {
+ 
+ /* The state of the sound driver's RPC client: 1 while a call is still running. */
+ int SoundDriver_IsBusy(void) {
+-    return sceSifCheckStatRpc(sound_rpc_client);
++    return sceSifCheckStatRpc(&sound_rpc_client);
+ }
+ 
+ /* Sends a command and its arguments to the sound driver on the IOP (the game's own sceSdRemote;
+@@ -176,7 +161,7 @@ int SoundDriver_Remote(int blocking, ...) {
+     int i;
+ 
+     va_start(ap, blocking);
+-    sound_rpc_buffer.self = &sound_rpc_buffer;
++    sound_rpc_buffer.self = EE_WORD(&sound_rpc_buffer);
+     command = va_arg(ap, int);
+     // match: copies eight words although the save area only holds six more
+     for (i = 0; i < 8; i++) {
+@@ -191,15 +176,15 @@ int SoundDriver_Remote(int blocking, ...) {
+         return result;
+     }
+     if (command & 0x80000) {
+-        sceSifCallRpc(sound_rpc_client, command, no_wait, (char *)&sound_rpc_buffer, 0xA0, (int *)sound_rpc_buffer.args[0], 0xA0, 0,
+-                      sound_rpc_buffer.args[0]);
++        sceSifCallRpc(&sound_rpc_client, command, no_wait, &sound_rpc_buffer, 0xA0, EE_PTR(void *, sound_rpc_buffer.args[0]), 0xA0, 0,
++                      EE_PTR(void *, sound_rpc_buffer.args[0]));
+     } else if (command & 0x40000) {
+-        sceSifCallRpc(sound_rpc_client, command, no_wait, (char *)sound_rpc_buffer.args[0], 0x40, (int *)&sound_rpc_buffer, 0x10, 0,
+-                      (int)sound_rpc_buffer.self);
++        sceSifCallRpc(&sound_rpc_client, command, no_wait, EE_PTR(void *, sound_rpc_buffer.args[0]), 0x40, &sound_rpc_buffer, 0x10, 0,
++                      EE_PTR(void *, sound_rpc_buffer.self));
+         result = (int)sound_rpc_buffer.self;
+     } else {
+-        sceSifCallRpc(sound_rpc_client, command, no_wait, (char *)&sound_rpc_buffer, 0x40, (int *)&sound_rpc_buffer, 0x10, 0,
+-                      (int)&sound_rpc_buffer);
++        sceSifCallRpc(&sound_rpc_client, command, no_wait, &sound_rpc_buffer, 0x40, &sound_rpc_buffer, 0x10, 0,
++                      &sound_rpc_buffer);
+         result = (int)sound_rpc_buffer.self;
+     }
+     return result;
+@@ -229,12 +214,12 @@ static int SoundDriver_StartUpload(int dest, int src, u32 size) {
+     }
+     dma = &sound_dma;
+     iop_buffer = sound_state->unk4C8;
+-    dma->src = sound_upload.src;
++    dma->src = EE_PTR(void *, sound_upload.src);
+     dma->dest = iop_buffer;
+     dma->size = sound_upload.padded_size;
+     dma->mode = 0;
+     FlushCache(0);
+-    dma_id = sceSifSetDma((int *)dma, 1);
++    dma_id = sceSifSetDma((sceSifDmaData *)dma, 1);
+     sound_upload.dma_id = dma_id;
+     return (dma_id != 0) ? 0 : -1;
+ }
+@@ -273,12 +258,12 @@ int SoundDriver_StepUpload(void) {
+     }
+     dma = &sound_dma;
+     iop_buffer = sound_state->unk4C8;
+-    dma->src = sound_upload.src;
++    dma->src = EE_PTR(void *, sound_upload.src);
+     dma->dest = iop_buffer;
+     dma->size = sound_upload.padded_size;
+     dma->mode = 0;
+     FlushCache(0);
+-    dma_id = sceSifSetDma((int *)dma, 1);
++    dma_id = sceSifSetDma((sceSifDmaData *)dma, 1);
+     sound_upload.dma_id = dma_id;
+     return 0;
+ }
+@@ -444,7 +429,7 @@ int SoundDriver_LoadVoiceFiles(int voice_id, char *header_name, char *sample_nam
+         SoundDriver_FreeVoice(voice_index);
+         return -1;
+     }
+-    if (SoundDriver_LoadIopFile(header_name, (void *)voice->stereo_header_block) != 0) {
++    if (SoundDriver_LoadIopFile(header_name, voice->stereo_header_block) != 0) {
+         return -1; // match: the voice is not released here (the other loaders call SoundDriver_FreeVoice first)
+     }
+     SoundDriver_Remote(1, 0x1070, voice->mono_header_block, voice->stereo_header_block, size);
+@@ -468,7 +453,7 @@ int SoundDriver_LoadVoiceFiles(int voice_id, char *header_name, char *sample_nam
+         SoundDriver_FreeVoice(voice_index);
+         return -1;
+     }
+-    if (SoundDriver_LoadIopFile(sample_name, (void *)voice->iop_heap) != 0) {
++    if (SoundDriver_LoadIopFile(sample_name, voice->iop_heap) != 0) {
+         SoundDriver_FreeVoice(voice_index);
+         return -1;
+     }
+@@ -716,11 +701,11 @@ int SoundDriver_LoadVoiceBuffered(int voice_id, int header_data, int header_size
+             } else {
+                 sound_dma.size = remaining;
+             }
+-            sound_dma.src = sample_data;
++            sound_dma.src = EE_PTR(void *, sample_data);
+             sound_dma.dest = heap;
+             sound_dma.mode = 0;
+             SoundDriver_Remote(1, 0x80, voice->dma_channel, 1);
+-            i = sceSifSetDma((int *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
++            i = sceSifSetDma((sceSifDmaData *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
+             if (i == 0) {
+                 sceSifFreeIopHeap(heap);
+                 SoundDriver_FreeVoice(voice_index);
+@@ -766,11 +751,11 @@ int SoundDriver_VoiceLoadSendHeader(SoundLoadArgs *args, SoundReloadRequest *req
+     SoundVoice *voice;
+     int voice_index;
+ 
+-    request->voice = NULL;
++    request->voice = 0;
+     request->unk04 = 0;
+     request->unk08 = 0;
+-    *(void **)&request->unk0C = NULL; // match: unk0C and heap_addr are stored as pointers here
+-    *(void **)&request->heap_addr = NULL; // match: as above
++    request->unk0C = 0;
++    request->heap_addr = 0;
+     request->unk14 = 0;
+     request->unk18 = 0;
+     request->unk1C = 0;
+@@ -793,7 +778,7 @@ int SoundDriver_VoiceLoadSendHeader(SoundLoadArgs *args, SoundReloadRequest *req
+     while (SoundDriver_StepUpload() == 0) {
+     }
+     SoundDriver_Remote(1, 0x1070, voice->mono_header_block, voice->stereo_header_block, voice->header_size);
+-    request->voice = voice;
++    request->voice = EE_WORD(voice);
+     request->unk14 = voice_index;
+     return 1;
+ }
+@@ -806,7 +791,7 @@ int SoundDriver_VoiceLoadAllocBuffer(IopLoadRequest *request, IopLoadContext *co
+     s32 unk18;
+     s32 aligned;
+ 
+-    buffer = context->buffer;
++    buffer = EE_PTR(IopLoadBuffer *, context->buffer);
+     aligned = ((u32)(request->size + 0xF) >> 4) << 4;
+     request->size = aligned;
+     context->size = aligned;
+@@ -837,14 +822,14 @@ int SoundDriver_VoiceLoadSendPiece(SoundLoadArgs *args, SoundReloadRequest *requ
+         sound_dma.size = remaining;
+     }
+     heap_addr = request->heap_addr;
+-    sound_dma.src = (int)args->unk0C;
++    sound_dma.src = EE_PTR(void *, args->unk0C);
+     sound_dma.dest = heap_addr;
+     sound_dma.mode = 0;
+-    if (SoundDriver_Remote(1, 0x80, request->voice->dma_channel, 0) == 0) {
++    if (SoundDriver_Remote(1, 0x80, EE_PTR(SoundVoice *, request->voice)->dma_channel, 0) == 0) {
+         printf(voice_load_waiting_message);
+         return 0;
+     }
+-    dma_id = sceSifSetDma((int *)&sound_dma, 1);
++    dma_id = sceSifSetDma((sceSifDmaData *)&sound_dma, 1);
+     if (dma_id == 0) {
+         sceSifFreeIopHeap(request->heap_addr);
+         SoundDriver_FreeVoice(request->unk14);
+@@ -862,7 +847,7 @@ int SoundDriver_VoiceLoadWritePiece(SoundLoadArgs *args, SoundReloadRequest *req
+     if (sceSifDmaStat(request->unk1C) >= 0) {
+         return 0;
+     }
+-    if (SoundDriver_Remote(1, 0x90, request->voice->dma_channel, 0, request->heap_addr, request->unk0C, sound_dma.size) < 0) {
++    if (SoundDriver_Remote(1, 0x90, EE_PTR(SoundVoice *, request->voice)->dma_channel, 0, request->heap_addr, request->unk0C, sound_dma.size) < 0) {
+         sceSifFreeIopHeap(request->heap_addr);
+         SoundDriver_FreeVoice(request->unk14);
+         return -1;
+@@ -880,7 +865,7 @@ int SoundDriver_VoiceLoadBind(s32 unused, SoundReloadRequest *request) {
+     SoundVoice *desc;
+     s32 heap_src;
+ 
+-    desc = request->voice;
++    desc = EE_PTR(SoundVoice *, request->voice);
+     if (SoundDriver_Remote(1, 0x80, desc->dma_channel, 0) != 0) {
+         sceSifFreeIopHeap(request->heap_addr);
+         if (desc->stereo_selected != 0) {
+@@ -987,11 +972,11 @@ int SoundDriver_LoadVoiceAt(int voice_index, int header_data, int header_size, i
+             } else {
+                 sound_dma.size = remaining;
+             }
+-            sound_dma.src = sample_data;
++            sound_dma.src = EE_PTR(void *, sample_data);
+             sound_dma.dest = heap;
+             sound_dma.mode = 0;
+             SoundDriver_Remote(1, 0x80, voice->dma_channel, 1);
+-            i = sceSifSetDma((int *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
++            i = sceSifSetDma((sceSifDmaData *)&sound_dma, 1); // match: the loop counter doubles as the DMA id
+             if (i == 0) {
+                 sceSifFreeIopHeap(heap);
+                 SoundDriver_FreeVoice(voice_index);
+@@ -1452,7 +1437,7 @@ int SoundDriver_LoadSequenceFile(int bank_id, int voice_index, char *name) {
+     if ((u32)(bank->iop_heap + bank->unk04) > 0x1FFFFF) {
+         return -1;
+     }
+-    if (SoundDriver_LoadIopFile(name, (void *)bank->iop_heap) != 0) {
++    if (SoundDriver_LoadIopFile(name, bank->iop_heap) != 0) {
+         return -1;
+     }
+     if (voice->stereo_selected != 0) {
+@@ -1768,7 +1753,7 @@ int SoundDriver_NoteOn(u32 slot, int voice_index, char channel, char program, ch
+     if (state->active == 0) {
+         return -1;
+     }
+-    queue_size = (int *)(state->dma_dest | 0x20000000);
++    queue_size = (int *)UNCACHED(state->dma_dest);
+     length = 0x19;
+     if (program != -1) {
+         length = 0x1B;
+@@ -1778,7 +1763,7 @@ int SoundDriver_NoteOn(u32 slot, int voice_index, char channel, char program, ch
+         return -2;
+     }
+     offset = queued + 4;
+-    out = (u8 *)(((int)queue_size + offset) | 0x20000000);
++    out = (u8 *)UNCACHED((u8 *)queue_size + offset);
+     voice = &state->voices[voice_index];
+     if (slot >= 0x7E) {
+         return -1;
+@@ -1840,13 +1825,13 @@ int SoundDriver_NoteOff(u32 key_index) {
+     if (key_index >= 0x7E) {
+         return -1;
+     }
+-    command_list = (int *)(sound_state->dma_dest | 0x20000000);
++    command_list = (int *)UNCACHED(sound_state->dma_dest);
+     list_used = *command_list;
+     if ((u32)(list_used + 0xA) >= 0x3FC) {
+         return -2;
+     }
+     write_offset = list_used + 4;
+-    write_ptr = (u8 *)(((int)command_list + write_offset) | 0x20000000);
++    write_ptr = (u8 *)UNCACHED((u8 *)command_list + write_offset);
+     key = (SoundKey *)sound_state->unk240[key_index];
+     *write_ptr++ = 0xFF;
+     // match: byte 0x18 of the voice (low byte of unk18), read as a byte
+@@ -1880,13 +1865,13 @@ int SoundDriver_SetNoteControl(int kind, u32 slot, int value) {
+     if (slot >= 0x7E) {
+         return -1;
+     }
+-    queue_size = (int *)(state->dma_dest | 0x20000000);
++    queue_size = (int *)UNCACHED(state->dma_dest);
+     queued = *queue_size;
+     if ((u32)(queued + 0xA) >= 0x3FC) {
+         return -2;
+     }
+     offset = queued + 4;
+-    out = (u8 *)(((int)queue_size + offset) | 0x20000000);
++    out = (u8 *)UNCACHED((u8 *)queue_size + offset);
+     key = (SoundKey *)state->unk240[slot];
+     voice = &state->voices[key->voice];
+     *out++ = 0xFF;
+@@ -1940,13 +1925,13 @@ int SoundDriver_ProgramChange(int voice_index, char first_value, char second_val
+     if (sound_state->active == 0) {
+         return -1;
+     }
+-    command_list = (int *)(sound_state->dma_dest | 0x20000000);
++    command_list = (int *)UNCACHED(sound_state->dma_dest);
+     list_used = *command_list;
+     if ((u32)(list_used + 5) >= 0x3FC) {
+         return -2;
+     }
+     write_offset = list_used + 4;
+-    write_ptr = (u8 *)(((int)command_list + write_offset) | 0x20000000);
++    write_ptr = (u8 *)UNCACHED((u8 *)command_list + write_offset);
+     *write_ptr++ = 0xFF;
+     *write_ptr++ = (u8)sound_state->voices[voice_index].driver_voice_id;
+     *write_ptr++ = 2;
+@@ -1963,12 +1948,12 @@ int SoundDriver_FlushCommands(void) {
+     int *flag;
+     int size;
+     int transfer_id;
+-    int dest;
++    int *dest;
+ 
+     if (sound_state->active == 0) {
+         return -1;
+     }
+-    flag = (int *)(sound_state->dma_dest | 0x20000000);
++    flag = (int *)UNCACHED(sound_state->dma_dest);
+     size = *flag + 4;
+     while (size & 0xF) {
+         size++;
+@@ -1978,7 +1963,7 @@ int SoundDriver_FlushCommands(void) {
+     sound_command_dma.src = dest;
+     sound_command_dma.size = size;
+     sound_command_dma.mode = 0;
+-    transfer_id = sceSifSetDma((int *)&sound_command_dma, 1);
++    transfer_id = sceSifSetDma((sceSifDmaData *)&sound_command_dma, 1);
+     if (transfer_id == 0) {
+         return -1;
+     }
+@@ -1995,7 +1980,7 @@ int SoundDriver_FlushCommands(void) {
+ int SoundDriver_OpenStreamFile(int stream, char *file_name, int value) {
+     strcpy(sound_rpc_file_name, file_name);
+     stream &= 1;
+-    sceSifCallRpc(sound_rpc_client, stream | 0x3000, 0, sound_rpc_file_name, 0x100, (int *)&sound_rpc_buffer, 1, 0, 0);
++    sceSifCallRpc(&sound_rpc_client, stream | 0x3000, 0, sound_rpc_file_name, 0x100, &sound_rpc_buffer, 1, NULL, NULL);
+     if (sound_rpc_buffer.self == 0) {
+         if (SoundDriver_Remote(1, 0x3040, stream, value) != 0) {
+             SoundDriver_Remote(1, 0x3030, stream);
+@@ -2014,7 +1999,7 @@ int SoundDriver_PlayStreamFile(int stream, char *file_name, int value) {
+         return -1;
+     }
+     strcpy(sound_rpc_file_name, file_name);
+-    sceSifCallRpc(sound_rpc_client, stream | 0x30A0, 0, sound_rpc_file_name, 0x100, (int *)&sound_rpc_buffer, 1, 0, 0);
++    sceSifCallRpc(&sound_rpc_client, stream | 0x30A0, 0, sound_rpc_file_name, 0x100, &sound_rpc_buffer, 1, NULL, NULL);
+     if (sound_rpc_buffer.self != 0) {
+         SoundDriver_Remote(1, 0x3030, stream);
+         return -1;
+@@ -2078,7 +2063,7 @@ int SoundDriver_FreeReverb(u32 effect_index) {
+ void SoundDriver_ApplyReverb(u32 effect_index) {
+     if (effect_index < 5) {
+         sound_state->effect = sound_state->effects[effect_index];
+-        SoundDriver_Remote(1, 0x40070, &sound_state->effect);
++        SoundDriver_Remote(1, 0x40070, EE_WORD(&sound_state->effect));
+     }
+ }
+ 
+@@ -2086,7 +2071,7 @@ void SoundDriver_ApplyReverb(u32 effect_index) {
+ void SoundDriver_ApplyReverbNoWait(u32 index) {
+     if (index < 5) {
+         sound_state->effect = sound_state->effects[index];
+-        SoundDriver_Remote(0, 0x40070, &sound_state->effect);
++        SoundDriver_Remote(0, 0x40070, EE_WORD(&sound_state->effect));
+     }
+ }
+ 
+@@ -2112,8 +2097,8 @@ static int SoundDriver_GetFileSize(const char *name) {
+ 
+ /* Loads a file into IOP memory at addr (sceSifLoadIopHeap, retried until it works) and remembers the
+    first address it loaded to. Returns 0. */
+-static int SoundDriver_LoadIopFile(char *name, void *addr) {
+-    if (sound_state->load_addr == NULL) {
++static int SoundDriver_LoadIopFile(char *name, int addr) {
++    if (sound_state->load_addr == 0) {
+         sound_state->load_addr = addr;
+     }
+     while (sceSifLoadIopHeap(name, addr) < 0) {
+diff --git a/src/game/sound/sound.h b/src/game/sound/sound.h
+index d10c69b7bf9ab1d9ec12fa9a91d3770ed4def847..63b9d12c7e15f739f4ad7b1f7bc5f033e4242e3b 100644
+--- a/src/game/sound/sound.h
++++ b/src/game/sound/sound.h
+@@ -6,6 +6,7 @@
+ 
+ #include "common.h"
+ #include "model/model.h"
++#include <sifrpc.h>
+ 
+ /* one of the 16 voices, SoundState.voices[n]: a header (two copies on the IOP) and its sample data
+    (an IOP copy at iop_heap, sent on to sound memory at unk0C) */
+@@ -30,9 +31,10 @@ typedef struct {
+     int unk0C;                      /* 0x0C the driver's id for the sequence */
+ } SoundBank;
+ 
+-/* the request SoundDriver_VoiceLoadBind reads: the voice to reload and the heap to free */
++/* the request SoundDriver_VoiceLoadBind reads: the voice to reload and the heap to free. It lies over the int
++   array sound_rpc_args (read as [5] too) and IopLoadContext views it, so its words stay 32-bit. */
+ typedef struct {
+-    SoundVoice *voice;              /* 0x00 */
++    EEWord voice;                   /* 0x00 (SoundVoice *) */
+     int unk04;                      /* 0x04 */
+     int unk08;                      /* 0x08 bytes still to send */
+     int unk0C;                      /* 0x0C where the next piece goes */
+@@ -41,17 +43,20 @@ typedef struct {
+     int unk18;                      /* 0x18 */
+     int unk1C;                      /* 0x1C the running DMA transfer */
+ } SoundReloadRequest;
++LAYOUT_SIZE(SoundReloadRequest, 0x20);
+ 
+-/* the arguments of SoundDriver_LoadVoiceStep as its step functions get them */
++/* the arguments of SoundDriver_LoadVoiceStep as its step functions get them: its int args[7] (IopLoadRequest is
++   another view), so the addresses in it are EE words */
+ typedef struct {
+     int unk00;                      /* 0x00 the voice */
+-    int unk04;                      /* 0x04 the voice's first data */
++    EEWord unk04;                   /* 0x04 (char *) the voice's first data */
+     int unk08;                      /* 0x08 its size */
+-    char *unk0C;                    /* 0x0C where the next piece is read from */
++    EEWord unk0C;                   /* 0x0C (char *) where the next piece is read from */
+     int unk10;                      /* 0x10 */
+     int unk14;                      /* 0x14 */
+     int unk18;                      /* 0x18 */
+ } SoundLoadArgs;
++LAYOUT_SIZE(SoundLoadArgs, 0x1C);
+ 
+ /* 0x18 bytes of reverb settings, copied whole (byte-aligned) */
+ typedef struct {
+@@ -72,10 +77,12 @@ typedef struct {
+ } SoundEffectFields;
+ 
+ /* sound_rpc_buffer: the record SoundDriver_Remote sends the sound driver; the reply lands on it */
++/* overlay: the RPC record the IOP sound driver reads and answers in */
+ typedef struct {
+-    void *self;                     /* 0x00 the record itself, then the driver's answer */
++    EEWord self;                    /* 0x00 (void *) the record itself, then the driver's answer */
+     int args[63];                   /* 0x04 */
+ } SoundRpcRequest;
++LAYOUT_SIZE(SoundRpcRequest, 0x100);
+ 
+ /* sound_upload: a block being sent to the IOP in pieces of 0x4000 bytes (SoundDriver_StartUpload, SoundDriver_StepUpload) */
+ typedef struct {
+@@ -88,13 +95,15 @@ typedef struct {
+     int active;                     /* 0x18 */
+ } SoundUpload;
+ 
+-/* sound_dma, sound_command_dma: the DMA descriptor handed to sceSifSetDma */
++/* sound_dma, sound_command_dma: the DMA descriptor handed to sceSifSetDma (sceSifDmaData) */
+ typedef struct {
+-    int src;                        /* 0x00 */
+-    int dest;                       /* 0x04 */
++    void *src;                      /* 0x00 */
++    int dest;                       /* 0x04 an IOP address */
+     int size;                       /* 0x08 */
+     int mode;                       /* 0x0C */
+ } SoundDmaRequest;
++_Static_assert(sizeof(SoundDmaRequest) == sizeof(sceSifDmaData) && offsetof(SoundDmaRequest, dest) == offsetof(sceSifDmaData, addr),
++               "SoundDmaRequest is not sceSifDmaData");
+ 
+ /* SoundState.unk240[n] with its signs: the note sounding in slot n (SoundDriver_NoteOn fills it) */
+ typedef struct {
+@@ -112,12 +121,12 @@ typedef struct {
+     char pad438[0x08];
+     SoundEffectParams effects[4];   /* 0x440 stored reverb settings */
+     SoundEffectParams effect;       /* 0x4A0 the one sent to the driver last */
+-    void *load_addr;                /* 0x4B8 first IOP heap load's address */
++    int load_addr;                  /* 0x4B8 first IOP heap load's address */
+     int unk4BC;                     /* 0x4BC */
+     u32 unk4C0;                     /* 0x4C0 end of the used sound memory */
+     int dma_src;                    /* 0x4C4 */
+     int unk4C8;                     /* 0x4C8 */
+-    int dma_dest;                   /* 0x4CC */
++    int *dma_dest;                  /* 0x4CC the command list (sound_command_list) */
+     char unk4D0[0x06];              /* 0x4D0 u16 at 0x4D4: 1 stereo output, 0 mono */
+     u16 active;                     /* 0x4D6 */
+     char pad4D8[0x08];              /* the block in .bss is 0x4E0 bytes */
+@@ -133,9 +142,9 @@ typedef struct {
+     struct MapSlot *pending_map_slot; /* 0x10 the map slot whose sound bank the step 1 load loads */
+     struct MapSlot *next_map_slot;  /* 0x14 the next pending_map_slot, taken once unk10 is NULL */
+     int entity_bank_load_pending;   /* 0x18 nonzero: a step 2 load is wanted; Sound_LoadEntityBankStep clears it */
+-    int entity_bank_args;           /* 0x1C arguments of Sound_LoadEntityBankStep */
++    sptr entity_bank_args;          /* 0x1C arguments of Sound_LoadEntityBankStep (an EntityTypeFileHeader) */
+     int entity_slot_index;          /* 0x20 entity pool slot the step 2 load binds its voice to */
+-    int entity_slot_voice_out;      /* 0x24 pool slot whose voice byte takes the loaded voice index */
++    sptr entity_slot_voice_out;     /* 0x24 pool slot whose voice byte takes the loaded voice index */
+ } SoundLoadQueue;
+ 
+ /* a voice's envelope as SoundDriver_GetAdsr unpacks it: the two SPU2 ADSR registers (ADSR1 in the upper
+@@ -166,21 +175,25 @@ typedef struct {
+ /* the data a SoundJob loads or plays: two buffers and their sizes. The two
+    buffers have different pointer types in retail (the copies into a spec are
+    scheduled as if they cannot alias), so they stay u8 * and void *. */
++/* overlay: words of a sound bank slot or job (EE words; also viewed as int arrays) */
+ typedef struct {
+-    u8 *buffer_a;                   /* 0x00 */
+-    void *buffer_b;                 /* 0x04 */
++    EEWord buffer_a;                /* 0x00 (u8 *) */
++    EEWord buffer_b;                /* 0x04 (void *) */
+     int unk08;                      /* 0x08 */
+     int size_a;                     /* 0x0C */
+     int size_b;                     /* 0x10 */
+ } SoundJobSpec;
++LAYOUT_SIZE(SoundJobSpec, 0x14);
+ 
+ /* four words that fill a SoundJobSpec: what MapSlot.sound_bank points at */
++/* overlay: part of a map file (MapSlot.sound_bank), its two buffers relocated to EE words */
+ typedef struct SoundSpecSource {
+     int size_b;                     /* 0x00 */
+-    void *buffer_b;                 /* 0x04 */
++    EEWord buffer_b;                /* 0x04 (void *) */
+     int size_a;                     /* 0x08 */
+-    u8 *buffer_a;                   /* 0x0C */
++    EEWord buffer_a;                /* 0x0C (char *) */
+ } SoundSpecSource;
++LAYOUT_SIZE(SoundSpecSource, 0x10);
+ 
+ /* a sound job (Sound_EntityBankLoadVoice to Sound_LoadJob): its data, two file names, the
+    driver's result and two more arguments for the driver call */
+@@ -196,48 +209,56 @@ typedef struct {
+ } SoundJob;
+ 
+ /* the start arguments Sound_LoadEntityBankStep copies into a SoundJobSpec */
++/* overlay: the header of an entity type file (EntityTypeFileHeader, entity/entity.h) */
+ typedef struct {
+     int size_b;                     /* 0x00 */
+     char pad04[0x10];
+-    int buffer_b;                   /* 0x14 match: an address, read as an int */
+-    int buffer_a;                   /* 0x18 match: an address, read as an int */
++    EEWord buffer_b;                /* 0x14 (void *) */
++    EEWord buffer_a;                /* 0x18 (char *) */
+     int size_a;                     /* 0x1C */
+ } SoundStartArgs;
++LAYOUT_SIZE(SoundStartArgs, 0x20);
+ 
+ /* SoundJobSpec as Sound_LoadEntityBankStep, Sound_LoadMapBankStep and Sound_LoadMapBank fill it in: the two buffers
+    are pointers of two different types in the game, which is what lets gcc reorder the copies */
++/* overlay: words of a sound bank slot or job (EE words; also viewed as int arrays) */
+ typedef struct {
+-    char *buffer_a;                 /* 0x00 */
+-    void *buffer_b;                 /* 0x04 */
++    EEWord buffer_a;                /* 0x00 (u8 *) */
++    EEWord buffer_b;                /* 0x04 (void *) */
+     int unk08;                      /* 0x08 */
+     int size_a;                     /* 0x0C */
+     int size_b;                     /* 0x10 */
+ } SoundBankSpec;
++LAYOUT_SIZE(SoundBankSpec, 0x14);
+ 
+ /* SoundJobSpec as Sound_LoadEntityBankStep fills it in: there the two buffers are pointers of one type
+    and the sizes are ints, which fixes the order of its loads and stores */
++/* overlay: words of a sound bank slot or job (EE words; also viewed as int arrays) */
+ typedef struct {
+-    void *buffer_a;                 /* 0x00 */
+-    void *buffer_b;                 /* 0x04 */
++    EEWord buffer_a;                /* 0x00 (u8 *) */
++    EEWord buffer_b;                /* 0x04 (void *) */
+     int unk08;                      /* 0x08 */
+     int size_a;                     /* 0x0C */
+     int size_b;                     /* 0x10 */
+ } SoundStartSpec;
++LAYOUT_SIZE(SoundStartSpec, 0x14);
+ 
+ /* what MapSlot.sound_bank points at: the sound bank of a map, two buffers and their sizes */
++/* overlay: part of a map file (MapSlot.sound_bank), its two buffers relocated to EE words */
+ typedef struct {
+     int size_b;                     /* 0x00 */
+-    void *buffer_b;                 /* 0x04 */
++    EEWord buffer_b;                /* 0x04 (void *) */
+     int size_a;                     /* 0x08 */
+-    char *buffer_a;                 /* 0x0C */
++    EEWord buffer_a;                /* 0x0C (char *) */
+ } SoundBankInfo;
++LAYOUT_SIZE(SoundBankInfo, 0x10);
+ 
+ /* SoundStartArgs with the buffers as the pointers they are (Sound_LoadEntityBankStep) */
+ typedef struct {
+     int size_b;                     /* 0x00 */
+     char pad04[0x10];
+-    void *buffer_b;                 /* 0x14 */
+-    char *buffer_a;                 /* 0x18 */
++    EEWord buffer_b;                /* 0x14 (void *) */
++    EEWord buffer_a;                /* 0x18 (char *) */
+     int size_a;                     /* 0x1C */
+ } SoundStartInfo;
+ 
+diff --git a/src/game/sound/sound_game.c b/src/game/sound/sound_game.c
+index 84b8f95003476df8f8d1555001ab2c10dc84a1d0..e837ed5bd8ef49cb94dcaafbdfc18071fe9c6895 100644
+--- a/src/game/sound/sound_game.c
++++ b/src/game/sound/sound_game.c
+@@ -10,6 +10,13 @@
+ #include "map/map.h"
+ #include "effect/effect.h"
+ #include "sound/sound_game.h"
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <eekernel.h>
++#include <libcdvd.h>
++#include <libmpeg.h>
+ 
+ int File_IsLocked(void);
+ int File_Sync(int, int);
+@@ -20,7 +27,9 @@ extern SoundJob sfx_com_job;
+ extern SoundFileBuffer se_com_bank;
+ extern SoundFileBuffer sfx_com_bank;
+ extern SoundChannel sound_channels[];
+-extern char sound_heap_base[];
++extern char file_load_buffer[];
++/* the sound heap's base byte: rounded down to 64 bytes it is file_load_buffer's first 64-byte boundary */
++#define sound_heap_base (file_load_buffer + 0x3F)
+ extern int D_004468BC;
+ extern float D_004468C0;
+ extern int D_004468C4;
+@@ -32,7 +41,6 @@ extern u8 loaded_bgm;
+ extern u8 bgm_load_running;
+ extern s8 positional_sounds_muted;
+ extern u8 loading_bgm;
+-void *memset(void *, int, u32);
+ extern u8 game_options[];
+ extern f32 sound_cos_polynomial[4];
+ extern u8 voice_ranges[][2];
+@@ -40,14 +48,11 @@ extern u8 voice_range_cursors[8];
+ extern SoundJob map_bank_job;
+ extern SoundJob sw_bank_job;
+ extern SoundJob mg_bank_job;
+-extern u8 music_volume[];
++#define music_volume (game_options + 1) /* the music volume option */
+ extern int bgm_fade_level;
+ extern void *tracked_sound_players[];
+ extern PlayerState player_state;
+-extern u8 sfx_volume[];
+-double sqrt(double);
+-int rand(void);
+-float atan2f(float, float);
++#define sfx_volume (game_options + 2)   /* the sound volume option */
+ extern int tagged_bend;
+ extern int tagged_bend_high;
+ extern int tagged_bend_low;
+@@ -59,13 +64,11 @@ extern int bgm_bd_size;
+ extern int sound_heap_next;
+ void File_Lock(void);
+ int File_GetSize(int);
+-int sprintf(char *, char *, ...);
+ void File_Unlock(void);
+-extern int bgm_header_buffer[];
++extern SoundFileBuffer bgm_buffers;    /* the BGM's buffers; limit and used are its header and sequence buffers */
+ extern int bgm_hd_size;
+ int File_Open(char *name, int nowait, int pack);
+ int File_Read(int file, void *buf, int size);
+-extern int bgm_sequence_buffer[];
+ extern int bgm_sq_size;
+ extern u8 bgm_reverb_slot;
+ extern int heap_file_read_step;
+@@ -73,26 +76,23 @@ extern int heap_file_handle;
+ int File_Close(int file);
+ extern s32 map_bank_file_read_step;
+ extern s32 map_bank_file_handle;
+-extern MapHeader *map_slot0_header[];
+-int FlushCache(int);
+-int sceCdBreak(void);
+ extern int (*const bgm_load_steps[])(LoadJob *, s32);
+ extern char rev_para_path[];
+ extern s32 sound_file_load_step;
+ extern s32 (*const sound_file_load_steps[])(void);
+ extern int entity_bank_load_step;
+-extern int (*entity_bank_load_steps[])(void);
++extern int (*entity_bank_load_steps[])(SoundJob *job);
+ /* the falloff players Sound_PlayFalloff picks from (the Sfx and Map ones take no bank) */
+-extern int (*falloff_sound_players[])(int, int); // match: an int result, though the players are void
++extern void (*falloff_sound_players[])(u8, int, float, float, float); /* entries 6 on: (u8, float, float, float) */
+ extern int map_bank_load_step;
+ extern SoundScriptState map_reverb_cue_indices;
+ extern u8 map_reverb_slot;
+ extern int D_004468B4;
+-extern int (*map_bank_load_steps[])(void);
++extern int (*map_bank_load_steps[])(SoundJob *job);
+ extern SoundBankSpec map_bank_files;
+ extern SoundFileBuffer sw_bank;
+ extern SoundFileBuffer mg_bank;
+-extern int sound_load_queue[0x28 / 4];
++extern SoundLoadQueue sound_load_queue;
+ extern MapSlot map_slots[];
+ extern int current_map_slot;
+ 
+@@ -127,8 +127,8 @@ static void Sound_CancelBgmLoad(LoadJob *job);
+ static int Sound_StepBgmLoad(LoadJob *job, s32 state);
+ static int Sound_LoadReverbParams(void);
+ static s32 Sound_RunFileLoad(void);
+-static int Sound_RunEntityBankLoad(void *sequence, int index);
+-static int Sound_RunMapBankLoad(void *sequence, int kind);
++static int Sound_RunEntityBankLoad(SoundJob *job, int index);
++static int Sound_RunMapBankLoad(SoundJob *job, int kind);
+ static int Sound_LoadFilePair(char *name_a, char *name_b, SoundJobSpec *spec, int first_arg, int second_arg);
+ static int Sound_StepUpload(void);
+ static int Sound_UpdateMapReverbVolume(void);
+@@ -155,7 +155,7 @@ void Sound_Init(void) {
+     SoundDriver_Remote(1, 0x100, 0xA, 0x800);
+     SoundDriver_EnableOutput();
+     se_com_bank.used = 0;
+-    se_com_bank.base = heap_start = ((u32)sound_heap_base >> 6) << 6;
++    se_com_bank.base = heap_start = (EE_WORD(sound_heap_base) >> 6) << 6;
+     se_com_bank.limit = heap_start + 0xA0000;
+     Sound_LoadJob(&se_com_job);
+     sfx_com_bank.base = se_com_bank.base;
+@@ -216,75 +216,98 @@ void Sound_Update(void) {
+    |angle|, the sine its square root complement, negated for a negative angle). The first output is the
+    cosine. */
+ static void Sound_CosSin(f32 angle, f32 *cos_out, f32 *sin_out) {
+-    __asm__ volatile(
+-        "mtc1 $0, $f0\n"
+-        "c.lt.s %0, $f0\n"
+-        "li.s $f0, 1.5707964\n"
+-        "bc1f 0f\n"
+-        "add.s %0, $f0, %0\n"
+-        "li $7, 1\n"
+-        "j 1f\n"
+-        "0:\n"
+-        "sub.s %0, $f0, %0\n"
+-        "move $7, $0\n"
+-        "1:\n"
+-        "mfc1 $8, %0\n"
+-        "qmtc2 $8, $vf6\n"
+-        "la $8, sound_cos_polynomial\n"
+-        "lqc2 $vf5, 0($8)\n"
+-        "vmr32.w $vf6, $vf6\n"
+-        "vaddx.x $vf4, $vf0, $vf6x\n"
+-        "vmul.x $vf6, $vf6, $vf6\n"
+-        "vmulx.yzw $vf4, $vf4, $vf0x\n"
+-        "vmulw.xyzw $vf8, $vf5, $vf6w\n"
+-        "vsub.xyzw $vf5, $vf0, $vf0\n"
+-        "vmulx.xyzw $vf8, $vf8, $vf6x\n"
+-        "vmulx.xyz $vf8, $vf8, $vf6x\n"
+-        "vaddw.x $vf4, $vf4, $vf8w\n"
+-        "vmulx.xy $vf8, $vf8, $vf6x\n"
+-        "vaddz.x $vf4, $vf4, $vf8z\n"
+-        "vmulx.x $vf8, $vf8, $vf6x\n"
+-        "vaddy.x $vf4, $vf4, $vf8y\n"
+-        "vaddx.x $vf4, $vf4, $vf8x\n"
+-        "vaddx.xy $vf4, $vf5, $vf4x\n"
+-        "sqc2 $vf4, 0(%2)\n"
+-        "vmul.x $vf7, $vf4, $vf4\n"
+-        "vsubx.w $vf7, $vf0, $vf7x\n"
+-        "vsqrt Q, $vf7w\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf7, $vf0, Q\n"
+-        "bnez $7, 2f\n"
+-        "vaddx.x $vf4, $vf5, $vf7x\n"
+-        "b 3f\n"
+-        "2:\n"
+-        "vsubx.x $vf4, $vf5, $vf7x\n"
+-        "3:\n"
+-        "sqc2 $vf4, 0(%3)\n"
+-        : "=f"(angle)
+-        : "0"(angle), "r"(cos_out), "r"(sin_out)
+-        : "$f0", "$7", "$8", "memory");
++    /* the VU0 code in C on ee_vu0's registers, which it leaves as the PS2 did (vf4-vf8 and Q) */
++    f32 *vf4 = ee_vu0.vf[4];
++    f32 *vf5 = ee_vu0.vf[5];
++    f32 *vf6 = ee_vu0.vf[6];
++    f32 *vf7 = ee_vu0.vf[7];
++    f32 *vf8 = ee_vu0.vf[8];
++    int negative;
++    int i;
++
++    if (angle < 0.0f) {
++        angle = 1.5707964f + angle;
++        negative = 1;
++    } else {
++        angle = 1.5707964f - angle;
++        negative = 0;
++    }
++    vf6[0] = angle; /* qmtc2: y, z and w get the rest of the GPR, which nothing reads */
++    for (i = 0; i < 4; i++) {
++        vf5[i] = sound_cos_polynomial[i];
++    }
++    vf6[3] = vf6[0];                        /* vmr32.w */
++    vf4[0] = 0.0f + vf6[0];                 /* vaddx.x */
++    vf6[0] = vf6[0] * vf6[0];               /* vmul.x */
++    vf4[1] = vf4[1] * 0.0f;                 /* vmulx.yzw by vf0x */
++    vf4[2] = vf4[2] * 0.0f;
++    vf4[3] = vf4[3] * 0.0f;
++    for (i = 0; i < 4; i++) {
++        vf8[i] = vf5[i] * vf6[3];           /* vmulw.xyzw */
++    }
++    for (i = 0; i < 4; i++) {
++        vf5[i] = 0.0f;                      /* vsub vf0 - vf0 (vf0.w - vf0.w is 0 as well) */
++    }
++    for (i = 0; i < 4; i++) {
++        vf8[i] = vf8[i] * vf6[0];           /* vmulx.xyzw */
++    }
++    for (i = 0; i < 3; i++) {
++        vf8[i] = vf8[i] * vf6[0];           /* vmulx.xyz */
++    }
++    vf4[0] = vf4[0] + vf8[3];               /* vaddw.x */
++    vf8[0] = vf8[0] * vf6[0];               /* vmulx.xy */
++    vf8[1] = vf8[1] * vf6[0];
++    vf4[0] = vf4[0] + vf8[2];               /* vaddz.x */
++    vf8[0] = vf8[0] * vf6[0];               /* vmulx.x */
++    vf4[0] = vf4[0] + vf8[1];               /* vaddy.x */
++    vf4[0] = vf4[0] + vf8[0];               /* vaddx.x */
++    vf4[1] = vf5[1] + vf4[0];               /* vaddx.xy */
++    vf4[0] = vf5[0] + vf4[0];
++    for (i = 0; i < 4; i++) {
++        cos_out[i] = vf4[i];
++    }
++    vf7[0] = vf4[0] * vf4[0];               /* vmul.x */
++    vf7[3] = 1.0f - vf7[0];                 /* vsubx.w from vf0 */
++    ee_vu0.q = sqrtf(fabsf(vf7[3]));        /* vsqrt: VU0 takes the root of the absolute value */
++    vf7[0] = 0.0f + ee_vu0.q;               /* vaddq.x */
++    if (negative) {
++        vf4[0] = vf5[0] - vf7[0];
++    } else {
++        vf4[0] = vf5[0] + vf7[0];
++    }
++    for (i = 0; i < 4; i++) {
++        sin_out[i] = vf4[i];
++    }
+ }
+ 
+ /* Writes point_a - point_b to out and returns its length (VU0 macro code). */
+ static float Sound_Delta(f32 *out, f32 *point_a, f32 *point_b) {
+-    f32 length[4];
+-
+-    __asm__ volatile(
+-        "vaddw.xyz $vf31, $vf0, $vf0w\n"
+-        "lqc2 $vf1, 0(%1)\n"
+-        "lqc2 $vf2, 0(%2)\n"
+-        "vsub.xyzw $vf3, $vf1, $vf2\n"
+-        "vmul.xyzw $vf4, $vf3, $vf3\n"
+-        "vmulax.x ACC, $vf3, $vf3x\n"
+-        "vmadday.x ACC, $vf31, $vf4y\n"
+-        "vmaddz.x $vf5, $vf31, $vf4z\n"
+-        "vsqrt Q, $vf5x\n"
+-        "vwaitq\n"
+-        "vmulq.x $vf6, $vf31, Q\n"
+-        "sqc2 $vf3, 0(%0)\n"
+-        "sqc2 $vf6, 0(%3)\n"
+-        : : "r"(out), "r"(point_a), "r"(point_b), "r"(length) : "memory");
+-    return length[0];
++    /* the VU0 code in C on ee_vu0's registers, which it leaves as the PS2 did (vf1-vf6, vf31, ACC.x and Q) */
++    f32 (*vf)[4] = ee_vu0.vf;
++    int i;
++
++    for (i = 0; i < 3; i++) {
++        vf[31][i] = 0.0f + 1.0f;            /* vaddw.xyz vf0 + vf0w */
++    }
++    for (i = 0; i < 4; i++) {
++        vf[1][i] = point_a[i];
++        vf[2][i] = point_b[i];
++    }
++    for (i = 0; i < 4; i++) {
++        vf[3][i] = vf[1][i] - vf[2][i];
++    }
++    for (i = 0; i < 4; i++) {
++        vf[4][i] = vf[3][i] * vf[3][i];
++    }
++    ee_vu0.acc[0] = vf[3][0] * vf[3][0];
++    ee_vu0.acc[0] = ee_vu0.acc[0] + vf[31][0] * vf[4][1];
++    vf[5][0] = ee_vu0.acc[0] + vf[31][0] * vf[4][2];
++    ee_vu0.q = sqrtf(vf[5][0]);
++    vf[6][0] = vf[31][0] * ee_vu0.q;
++    for (i = 0; i < 4; i++) {
++        out[i] = vf[3][i];
++    }
++    return vf[6][0];
+ }
+ 
+ /* Steps the cursor of voice group `group` round its range (voice_ranges) and returns the next voice. */
+@@ -311,6 +334,7 @@ static s8 Sound_ClaimTaggedVoice(void) {
+             return i + 0x54;
+         }
+     }
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Sets up the SPU2 mixer: command 0x100 (0xA, 0x800) as Sound_Init sends it, then through command 0xD0
+@@ -368,8 +392,8 @@ void Sound_SyncBgmLevel(void) {
+ 
+ /* Starts a tracked sound with the player of `kind` in tracked_sound_players (0 Sound_PlayTracked, 1
+    Sound_PlayTrackedAt). */
+-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth) {
+-    int (*handler)(int, int, int, char);
++char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth) {
++    int (*handler)(int, int, float *, char);
+ 
+     handler = tracked_sound_players[index];
+     return handler(first, second, third, (char)fourth);
+@@ -508,7 +532,7 @@ s32 Sound_PlayMenu(s32 sound) {
+     if (sound != 0xFF) {
+         SoundDriver_NoteOn(1, se_com_job.result, 0, (char)sound, 0x3C, sfx_volume[0], 0, 0x3F);
+     }
+-    /* match: no return; an s32 function, so $2 stays live and the beq delay slot takes the second lui */
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Plays a sound of the sw bank on voice 2. */
+@@ -548,7 +572,7 @@ int Sound_PlayMapAt(u8 sound, void *position) {
+         volume = 0x7F;
+     }
+     pan = ((diff[0] * direction[0] + diff[1] * direction[1] + diff[2] * direction[2]) / distance + 1.0f) * 63.0f;
+-    detune = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++    detune = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+     SoundDriver_NoteOn(Sound_NextVoice(3), map_bank_job.result, 0, sound, 0x3C, volume, detune, (char) pan);
+     return 1;
+ }
+@@ -568,7 +592,7 @@ int Sound_PlayFootstep(int sound) {
+         return -1;
+     }
+     slot = Sound_NextVoice(1);
+-    bend = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++    bend = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+     SoundDriver_NoteOn(slot, bank->result, 0, sound, 0x3C, sfx_volume[0], bend, 0x3F);
+     return slot;
+ }
+@@ -625,6 +649,7 @@ int Sound_PlayCommonAt(float range, int sound, float *position) {
+             return slot;
+         }
+     }
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Plays a map bank sound at volume (scaled by the sound option) with a random bend; -1 while map_sounds_enabled is
+@@ -643,7 +668,7 @@ int Sound_PlayMapVolume(u8 sound, int volume) {
+     if (volume >= 128) {
+         volume = 127;
+     }
+-    bend = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++    bend = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+     slot = Sound_NextVoice(3);
+     if (volume != 0) {
+         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, bend, 0x3F);
+@@ -705,7 +730,7 @@ int Sound_PlayMapAtRange(u8 sound, u8 mode, float *position, float range) {
+     Sound_CosSin(angle, origin, offset);
+     pan = (offset[0] + 1.0f) * 63.0f;
+     if (mode < 3) {
+-        detune = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        detune = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+     } else {
+         detune = 0;
+     }
+@@ -752,6 +777,7 @@ int Sound_StartTagged(s8 sound, u8 voice, int volume) {
+     channel->unk30 = volume;
+     voice_id = channel->unk3B = Sound_ClaimTaggedVoice();
+     SoundDriver_NoteOn(voice_id, map_bank_job.result, 0, voice, 0x3C, volume, 0, 0x3F);
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Starts a tagged sound at a point, heard within range (SoundChannel.volume); queued in tagged_requests while
+@@ -792,7 +818,7 @@ s32 Sound_StartTaggedAt(s8 sound_id, u8 voice, u8 mode, f32 volume, Vector4Arg *
+     channel->unk39 = mode;
+     channel->unk3C = 1;
+     channel->volume = volume;
+-    /* match: no return; "return channel" adds a $2 copy retail lacks (implicit-int style fall-off) */
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* As Sound_StartTaggedAt for a sound along the segment origin..target. */
+@@ -839,7 +865,7 @@ s32 Sound_StartTaggedAlong(s8 sound_id, u8 voice, u8 mode, Vector4Arg *origin, V
+     channel->unk39 = mode;
+     channel->unk3C = 2;
+     channel->volume = volume;
+-    /* match: no return; "return channel" adds a $2 copy retail lacks (implicit-int style fall-off) */
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Each frame, updates the voice of every positioned tagged sound: stops it out of range, else sets its
+@@ -1003,6 +1029,7 @@ static int Sound_TaggedNearestPoint(s32 index, Vector4 *nearest) {
+     case 3:
+         break;
+     }
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Finds the point on the segment start..end nearest the player (x/z only) and returns its distance; the
+@@ -1117,6 +1144,7 @@ int Sound_StopTagged(char sound) {
+     } else {
+         (sound_channels + i)->unk3A = -1;
+     }
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Silences every sound voice and marks all channels (and optionally all queued requests) free. */
+@@ -1161,7 +1189,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
+     if (SoundDriver_StepUpload() == 0) {
+         return -1;
+     }
+-    load_addr = ((u32)(sound_bank_area + 0x3F) >> 6) << 6;
++    load_addr = (EE_WORD(sound_bank_area + 0x3F) >> 6) << 6;
+     job->buffers[0] = sound_heap_next = load_addr;
+     sound_heap_next = load_addr + 0x80000;
+     sprintf(name, job->name, index);
+@@ -1169,7 +1197,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
+     job->file_handle = handle;
+     bgm_bd_size = File_GetSize(handle);
+     File_Lock();
+-    File_Read(job->file_handle, (void *)job->buffers[0], -1);
++    File_Read(job->file_handle, EE_PTR(void *, job->buffers[0]), -1);
+     bgm_load_step += 1;
+     return 0;
+ }
+@@ -1256,7 +1284,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
+         return -1;
+     }
+     heap_top = sound_heap_next;
+-    bgm_header_buffer[0] = heap_top;
++    bgm_buffers.limit = heap_top;
+     sound_heap_next = ((u32)(heap_top + 0x2003F) >> 6) << 6;
+     sprintf(name, job->unk08, index);
+     file = File_Open(name, 1, 1);
+@@ -1264,7 +1292,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
+     bgm_hd_size = File_GetSize(file);
+     File_Lock();
+     buffers = job->buffers;
+-    File_Read(job->file_handle, (void *)buffers[1], -1);
++    File_Read(job->file_handle, EE_PTR(void *, buffers[1]), -1);
+     bgm_load_step += 1;
+     return 0;
+ }
+@@ -1297,7 +1325,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
+         return -1;
+     }
+     heap_top = sound_heap_next;
+-    bgm_sequence_buffer[0] = heap_top;
++    bgm_buffers.used = heap_top;
+     sound_heap_next = ((u32)(heap_top + 0x2003F) >> 6) << 6;
+     sprintf(name, job->name_format, index);
+     handle = File_Open(name, TRUE, TRUE);
+@@ -1305,7 +1333,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
+     bgm_sq_size = File_GetSize(handle);
+     File_Lock();
+     buffers = job->buffers;
+-    File_Read(job->file_handle, (void *)buffers[2], -1);
++    File_Read(job->file_handle, EE_PTR(void *, buffers[2]), -1);
+     bgm_load_step += 1;
+     return 0;
+ }
+@@ -1403,14 +1431,14 @@ static int Sound_ReadHeapFileStep(LoadJob *job, int index) {
+     if (SoundDriver_StepUpload() != 0) {
+         switch (heap_file_read_step) {
+         case 0:
+-            heap_start = ((u32)&sound_heap_base >> 6) << 6;
++            heap_start = (EE_WORD(sound_heap_base) >> 6) << 6;
+             sound_heap_next = heap_start;
+             *job->buffers = heap_start;
+             sound_heap_next = heap_start + 0xA0000;
+             sprintf(sound_file_path, job->name, index);
+             file = File_Open(sound_file_path, 1, 1);
+             heap_file_handle = file;
+-            File_Read(file, (void *)*job->buffers, -1);
++            File_Read(file, EE_PTR(void *, *job->buffers), -1);
+             heap_file_read_step += 1;
+             break;
+         case 1:
+@@ -1435,9 +1463,9 @@ s32 Sound_ReadMapBankFileStep(LoadRequest *request) {
+         switch (map_bank_file_read_step) {
+         case 0:
+             buffer = sound_heap_next;
+-            request->target->buffer = (void *)buffer;
++            request->target->buffer = EE_PTR(void *, buffer);
+             sound_heap_next = (((buffer + 0x2003F) >> 6) << 6);
+-            sprintf(map_bank_file_path, request->name, map_slot0_header[0]->unk70);
++            sprintf(map_bank_file_path, request->name, map_slots[0].header->unk70);
+             map_bank_file_handle = File_Open(map_bank_file_path, TRUE, TRUE);
+             File_Read(map_bank_file_handle, request->target->buffer, -1);
+             map_bank_file_read_step += 1;
+@@ -1546,7 +1574,7 @@ int Sound_ReadJobFile(LoadJob *job) {
+         return -1;
+     }
+     file_handle = File_Open(job->name, 0, 1);
+-    File_Read(file_handle, (void *)*job->buffers, -1);
++    File_Read(file_handle, EE_PTR(void *, *job->buffers), -1);
+     File_Close(file_handle);
+     return 1;
+ }
+@@ -1637,7 +1665,7 @@ void Sound_PlayLinear(u8 sound, int bank, float range, float distance, float ang
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         SoundDriver_NoteOn(Sound_NextVoice(2), bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+ }
+@@ -1660,7 +1688,7 @@ void Sound_PlaySteep(u8 sound, int bank, float range, float distance, float angl
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         slot = Sound_NextVoice(2);
+         SoundDriver_NoteOn(slot, bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+@@ -1683,7 +1711,7 @@ void Sound_PlayRound(u8 sound, int bank, float range, float distance, float angl
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         slot = Sound_NextVoice(2);
+         SoundDriver_NoteOn(slot, bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+@@ -1769,7 +1797,7 @@ void Sound_PlaySfxLinear(u8 sound, float range, float distance, float angle) {
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         SoundDriver_NoteOn(Sound_NextVoice(2), sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+ }
+@@ -1793,7 +1821,7 @@ void Sound_PlaySfxSteep(u8 sound, float range, float distance, float angle) {
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         SoundDriver_NoteOn(Sound_NextVoice(2), sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+ }
+@@ -1815,7 +1843,7 @@ void Sound_PlaySfxRound(u8 sound, float range, float distance, float angle) {
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         slot = Sound_NextVoice(2);
+         SoundDriver_NoteOn(slot, sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+@@ -1838,7 +1866,7 @@ void Sound_PlayMapLinear(u8 sound, float range, float distance, float angle) {
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         slot = Sound_NextVoice(2);
+         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+@@ -1864,7 +1892,7 @@ void Sound_PlayMapSteep(u8 sound, float range, float distance, float angle) {
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         slot = Sound_NextVoice(2);
+         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+@@ -1887,7 +1915,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
+         if (volume >= 128) {
+             volume = 127;
+         }
+-        pan = ((u64) rand() << 11) / 0x7FFFFFFF - 0x400;
++        pan = (int)(((u64)rand() << 11) / 0x7FFFFFFF - 0x400);
+         slot = Sound_NextVoice(2);
+         SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
+     }
+@@ -1897,7 +1925,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
+    the job; moves on once it is loaded. */
+ int Sound_EntityBankLoadVoice(SoundJob *job) {
+     SoundJobSpec *spec = job->spec;
+-    int result = SoundDriver_LoadVoiceStep(job->unk18, (int)spec->buffer_b, spec->size_b, (int)spec->buffer_a, spec->size_a, 0, job->unk1C);
++    int result = SoundDriver_LoadVoiceStep(job->unk18, spec->buffer_b, spec->size_b, spec->buffer_a, spec->size_a, 0, job->unk1C);
+ 
+     job->result = result;
+     if (result >= 0) {
+@@ -1922,8 +1950,8 @@ int Sound_EntityBankFreeSampleBuffer(SoundJob *job) {
+ }
+ 
+ /* Runs the current step of the entity bank load (entity_bank_load_steps); 0 when it reports done, else 1. */
+-static int Sound_RunEntityBankLoad(void *sequence, int index) {
+-    if (entity_bank_load_steps[entity_bank_load_step]() > 0) {
++static int Sound_RunEntityBankLoad(SoundJob *job, int index) {
++    if (entity_bank_load_steps[entity_bank_load_step](job) > 0) {
+         entity_bank_load_step = 0;
+         return 0;
+     }
+@@ -1933,14 +1961,14 @@ static int Sound_RunEntityBankLoad(void *sequence, int index) {
+ /* Loads the sound bank of the entity type file just read (args: its header, the two buffers and their
+    sizes) into voice index + 6 (index: the entity pool slot), at 0x138810 + index * 0x11800 in sound
+    memory, a step a call; 0 and the voice in *voice_out once done, else 1. */
+-int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out) {
++int Sound_LoadEntityBankStep(sptr args_addr, int index, sptr voice_out) {
+     SoundStartArgs *args = (SoundStartArgs *)args_addr;
+     int pending = 1;
+ 
+     sound_load_job.unk18 = index + 6;
+     sound_load_job.unk1C = index * 0x11800 + 0x138810;
+-    sound_load_spec.buffer_a = (void *)args->buffer_a;
+-    sound_load_spec.buffer_b = (void *)args->buffer_b;
++    sound_load_spec.buffer_a = args->buffer_a;
++    sound_load_spec.buffer_b = args->buffer_b;
+     sound_load_spec.size_a = args->size_a;
+     sound_load_spec.size_b = args->size_b;
+     sound_load_job.spec = (SoundJobSpec *)&sound_load_spec;
+@@ -1953,14 +1981,19 @@ int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out) {
+ }
+ 
+ /* Plays sound from bank with the falloff player kind of falloff_sound_players while distance is within range, panned by
+-   angle (EntityEvent_StartCueAlways calls it for the sounds of an entity's animation). Range, distance and angle pass through in
+-   $f12..$f14; match: declared without them, which keeps the registers retail uses. */
+-void Sound_PlayFalloff(int sound, int kind, int bank) {
+-    falloff_sound_players[kind & 0xFF](sound & 0xFF, bank);
++   angle (EntityEvent_StartCueAlways calls it for the sounds of an entity's animation). On the PS2 range, distance and angle
++   pass through in $f12..$f14 to the player, which reads them from there whether or not it takes the bank. */
++void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle) {
++    if ((kind & 0xFF) >= 6) {
++        /* the Sfx and Map players take no bank */
++        ((void (*)(u8, float, float, float))falloff_sound_players[kind & 0xFF])(sound & 0xFF, range, distance, angle);
++    } else {
++        falloff_sound_players[kind & 0xFF](sound & 0xFF, bank, range, distance, angle);
++    }
+ }
+ 
+ /* Map bank load step: does nothing but move on. */
+-s32 Sound_MapBankNoOp(void) {
++s32 Sound_MapBankNoOp(SoundJob *job) {
+     map_bank_load_step += 1;
+     return 0;
+ }
+@@ -1978,7 +2011,7 @@ int Sound_MapBankLoadVoice(SoundJob *job) {
+         reverb_change_pending = 0;
+     }
+     spec = job->spec;
+-    result = SoundDriver_LoadVoiceStep(job->unk18, (int)spec->buffer_b, spec->size_b, (int)spec->buffer_a, spec->size_a, 0, job->unk1C);
++    result = SoundDriver_LoadVoiceStep(job->unk18, spec->buffer_b, spec->size_b, spec->buffer_a, spec->size_a, 0, job->unk1C);
+     job->result = result;
+     if (result >= 0) {
+         map_bank_load_step += 1;
+@@ -2003,7 +2036,7 @@ int Sound_MapBankFreeSampleBuffer(SoundJob *job) {
+ 
+ /* Map bank load step: frees the reverb slot of the last map and stores the map's reverb settings (the
+    entry map_reverb_cue_indices names in map_bank_cues) for core 1. */
+-int Sound_MapBankAddReverb(void) {
++int Sound_MapBankAddReverb(SoundJob *job) {
+     SoundScriptState state;
+     SoundCue *cue;
+ 
+@@ -2019,7 +2052,7 @@ int Sound_MapBankAddReverb(void) {
+ 
+ /* Map bank load step: once the upload is done, sends the map's reverb settings (SoundDriver_ApplyReverb)
+    and sets map_sounds_enabled (map sounds may start); 1 (done). */
+-int Sound_MapBankApplyReverb(void) {
++int Sound_MapBankApplyReverb(SoundJob *job) {
+     if (SoundDriver_StepUpload() == 0) {
+         return 0;
+     }
+@@ -2034,7 +2067,7 @@ int Sound_MapBankApplyReverb(void) {
+ 
+ /* Map bank load step: the first time after Sound_Init sets map_reverb_set and moves on to the reverb steps;
+    after that sets map_sounds_enabled (map sounds may start) and ends the load (1), so the reverb stays. */
+-int Sound_MapBankFinishUnlessFirst(void) {
++int Sound_MapBankFinishUnlessFirst(SoundJob *job) {
+     map_bank_load_step += 1;
+     D_004468B4 = 0;
+     if (map_reverb_set != 0) {
+@@ -2046,8 +2079,8 @@ int Sound_MapBankFinishUnlessFirst(void) {
+ }
+ 
+ /* Runs the current step of the map bank load (map_bank_load_steps); 0 when it reports done, else 1. */
+-static int Sound_RunMapBankLoad(void *sequence, int kind) {
+-    if (map_bank_load_steps[map_bank_load_step]() > 0) {
++static int Sound_RunMapBankLoad(SoundJob *job, int kind) {
++    if (map_bank_load_steps[map_bank_load_step](job) > 0) {
+         map_bank_load_step = 0;
+         return 0;
+     }
+@@ -2055,8 +2088,7 @@ static int Sound_RunMapBankLoad(void *sequence, int kind) {
+ }
+ 
+ /* Loads the sound bank of a map slot (MapSlot.sound_bank) a step a call while pending; returns 0 once it is done. */
+-int Sound_LoadMapBankStep(int slot_addr, int pending) {
+-    MapSlot *slot = (MapSlot *)slot_addr;
++int Sound_LoadMapBankStep(MapSlot *slot, int pending) {
+     SoundBankInfo *bank;
+ 
+     if (pending == 0) {
+@@ -2105,7 +2137,7 @@ void Sound_LoadSwBank(int file_id) {
+     file_number = file_id + 0x96;
+     sprintf(path_a, sw_bank_job.name_a, file_number);
+     sprintf(path_b, sw_bank_job.name_b, file_number);
+-    buffer_base = ((u32)sound_heap_base >> 6) << 6;
++    buffer_base = (EE_WORD(sound_heap_base) >> 6) << 6;
+     sw_bank.base = buffer_base;
+     buffer_limit = buffer_base + 0x20000;
+     sw_bank.limit = buffer_limit;
+@@ -2132,7 +2164,7 @@ void Sound_LoadMgBank(int file_number) {
+ 
+     sprintf(path_a, mg_bank_job.name_a, file_number);
+     sprintf(path_b, mg_bank_job.name_b, file_number);
+-    heap_start = ((u32)sound_heap_base >> 6) << 6;
++    heap_start = (EE_WORD(sound_heap_base) >> 6) << 6;
+     mg_bank.base = heap_start;
+     buffer_end = heap_start + 0x10000;
+     mg_bank.limit = buffer_end;
+@@ -2156,16 +2188,16 @@ static int Sound_LoadFilePair(char *name_a, char *name_b, SoundJobSpec *spec, in
+         File_Close(handle);
+         return 0;
+     }
+-    File_Read(handle, spec->buffer_a, spec->size_a);
++    File_Read(handle, EE_PTR(void *, spec->buffer_a), spec->size_a);
+     File_Close(handle);
+     handle = File_Open(name_b, 0, 1);
+     if (handle < 0) {
+         File_Close(handle);
+         return 0;
+     }
+-    File_Read(handle, spec->buffer_b, spec->size_b);
++    File_Read(handle, EE_PTR(void *, spec->buffer_b), spec->size_b);
+     File_Close(handle);
+-    return SoundDriver_LoadVoiceAt(first_arg, (int)spec->buffer_b, spec->size_b, (int)spec->buffer_a, spec->size_a, 0, second_arg);
++    return SoundDriver_LoadVoiceAt(first_arg, spec->buffer_b, spec->size_b, spec->buffer_a, spec->size_a, 0, second_arg);
+ }
+ 
+ /* Keeps the driver's upload going (SoundDriver_StepUpload); 1 once it is done. */
+@@ -2191,7 +2223,7 @@ static int Sound_UpdateMapReverbVolume(void) {
+     int cached;
+     int wanted;
+ 
+-    if (sound_load_queue[3] == 0 && sound_load_queue[6] == 0 && sound_load_queue[1] == 0) {
++    if (sound_load_queue.map_bank_load_pending == 0 && sound_load_queue.entity_bank_load_pending == 0 && sound_load_queue.bgm_load_pending == 0) {
+         slot = &map_slots[current_map_slot];
+         cached = map_reverb_volume;
+         if ((u8)slot->records[(player_state.map_index << 7) + 0x4D] != cached) {
+@@ -2206,6 +2238,7 @@ static int Sound_UpdateMapReverbVolume(void) {
+             return SoundDriver_Remote(1, 0xD0, 0xC81, map_reverb_volume << 8);
+         }
+     }
++    return 0; /* retail falls off the end here and leaves v0 as it was */
+ }
+ 
+ /* Lets Sound_UpdateTagged give positioned tagged sounds their volume again. */
+diff --git a/src/game/sound/sound_game.h b/src/game/sound/sound_game.h
+index 223c63d170ab5cb10e3b46eeba9321ea9ad1a175..0f135ef0be05ec9bd709eeb3da6b49d7cc5b2512 100644
+--- a/src/game/sound/sound_game.h
++++ b/src/game/sound/sound_game.h
+@@ -26,7 +26,7 @@ void Sound_SetBankVolumes(int level);
+ void Sound_SyncBgmLevel(void);
+ /* Starts a tracked sound with the player of `kind` in tracked_sound_players (0 Sound_PlayTracked, 1
+    Sound_PlayTrackedAt) */
+-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
++char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
+ /* Starts a sound on the next tracked voice (0x64..0x7D) whose tracked_voices slot is free, from the mg bank
+    (sound below 8) or the sfx_com bank, at the sound volume option; returns the voice, -1 if 11 tries find
+    none */
+@@ -161,25 +161,25 @@ int Sound_EntityBankLoadVoice(SoundJob *job);
+ int Sound_EntityBankFreeSampleBuffer(SoundJob *job);
+ /* Loads the sound bank of the entity type file just read into voice index + 6, a step a call; 0 and the
+    voice in *voice_out once done, else 1 */
+-int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out);
++int Sound_LoadEntityBankStep(sptr args_addr, int index, sptr voice_out);
+ /* Plays sound from bank with the falloff player kind of falloff_sound_players */
+-void Sound_PlayFalloff(int sound, int kind, int bank);
++void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle);
+ /* Map bank load step: does nothing but move on */
+-s32 Sound_MapBankNoOp(void);
++s32 Sound_MapBankNoOp(SoundJob *job);
+ /* Map bank load step: waits for a pending reverb change, then loads the map's voice (SoundDriver_LoadVoiceStep) */
+ int Sound_MapBankLoadVoice(SoundJob *job);
+ /* Map bank load step: once the transfer to sound memory is done, frees the IOP copy of the samples */
+ int Sound_MapBankFreeSampleBuffer(SoundJob *job);
+ /* Map bank load step: frees the last map's reverb slot and stores the map's reverb settings (map_reverb_cue_indices) */
+-int Sound_MapBankAddReverb(void);
++int Sound_MapBankAddReverb(SoundJob *job);
+ /* Map bank load step: once the upload is done, sends the map's reverb settings and sets map_sounds_enabled (map
+    sounds may start) */
+-int Sound_MapBankApplyReverb(void);
++int Sound_MapBankApplyReverb(SoundJob *job);
+ /* Map bank load step: the first time after Sound_Init moves on to the reverb steps; after that lets map
+    sounds start (map_sounds_enabled) and ends the load */
+-int Sound_MapBankFinishUnlessFirst(void);
++int Sound_MapBankFinishUnlessFirst(SoundJob *job);
+ /* Loads the sound bank of a map slot (MapSlot.sound_bank) a step a call while pending; returns 0 once it is done */
+-int Sound_LoadMapBankStep(int slot_addr, int pending);
++int Sound_LoadMapBankStep(MapSlot *slot, int pending);
+ /* Loads the sound bank of a map slot (MapSlot.sound_bank), waiting until it is done */
+ int Sound_LoadMapBank(MapSlot *slot);
+ /* Loads the sw bank file_id (sw%03d with 0x96 added) into the sound heap and hands it to the driver, waiting
+diff --git a/src/game/sound/sound_load_queue.c b/src/game/sound/sound_load_queue.c
+index 93c53945f1e52eab6aea6bc16150712f18e2598a..26e3b7185dd118429680dc377c11d1dc85de3caf 100644
+--- a/src/game/sound/sound_load_queue.c
++++ b/src/game/sound/sound_load_queue.c
+@@ -1,6 +1,5 @@
+ /* The sound loads waiting to run, one at a time (sound/sound.h's SoundLoadQueue). */
+ #include "sound/sound.h"
+ 
+-/* 0x38A130 the queue; its unk04 is also read as int bgm_load_pending[3] by ui/splash.c */
++/* 0x38A130 the queue */
+ SoundLoadQueue sound_load_queue = { 0 };
+-asm(".globl bgm_load_pending\nbgm_load_pending = sound_load_queue + 4\n");
+diff --git a/src/game/sound/sound_tables.c b/src/game/sound/sound_tables.c
+index 6adbbe582f28ed73261d396ee9232184607b3aa8..fdc078b322059ee810d9292ad2a924a74a1d6e25 100644
+--- a/src/game/sound/sound_tables.c
++++ b/src/game/sound/sound_tables.c
+@@ -42,8 +42,6 @@ SoundBankSlot sfx_com_bank = { /* 0x3EF520 the sfx_com bank */
+ SoundBankSlot bgm_buffers = { /* 0x3EF540 the BGM's buffers (bgm_load_job's) */
+     .size_a = 0x4B000, .size_b = 0x1400, .unk14 = 0x5000,
+ };
+-asm(".globl bgm_header_buffer\nbgm_header_buffer = bgm_buffers + 0x4");  /* 0x3EF544 the BGM's second buffer (Sound_BgmReadHeader) */
+-asm(".globl bgm_sequence_buffer\nbgm_sequence_buffer = bgm_buffers + 0x8");  /* 0x3EF548 the BGM's third buffer (Sound_BgmReadSequence) */
+ 
+ SoundBankSlot sw_bank = { /* 0x3EF560 the sw bank (Sound_LoadSwBank) */
+     .size_a = 0x1A400, .size_b = 0x1400,

@@ -1,0 +1,528 @@
+diff --git a/src/game/map_object/chest.c b/src/game/map_object/chest.c
+index 930f00687e1ac305367af673e509390d1473c295..5260f63104b97a163d94d04e7d4b230db6c494b9 100644
+--- a/src/game/map_object/chest.c
++++ b/src/game/map_object/chest.c
+@@ -3,22 +3,22 @@
+ #include "map_object/map_object.h"
+ #include "item/gold.h"
+ #include "core/game.h"
++#include <string.h>
+ 
+ ItemNode *MapItem_PutOutForObject(int, int, void *, void *, void *, void *);
+-int MapItem_StartPickup(ModelNode *);
++int MapItem_StartPickup(ItemNode *);
+ void MapObject_SpawnHeldItem(MapObject *);
+ void MapObject_UpdateBreaking(MapObject *);
+-void *memset(void *, int, u32);
+ void MapObject_ShowKeyUsed(int);
+ int Sound_PlayMapAtRange(u8, u8, float *, float);
+ void MapObject_UpdateOpenChest(MapObject *);
+-ModelNode *MapItem_FindForObject(int);
++ItemNode *MapItem_FindForObject(void *);
+ void MapObject_UpdateClosedChest(void *, int);
+ void MapObject_SetupItemHolder(MapObject *);
+ extern void (*map_object_update_hooks[])(MapObject *);
+ extern Qword object_item_scale;
+-extern u32 game_status_flags[];
+-extern void *faced_object[];
++#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
++#define faced_object (&view_ray_status.current)
+ extern u8 item_counts[];
+ extern GameStatus game_status;
+ extern EventRunner view_ray_status;
+@@ -36,7 +36,7 @@ void MapObject_UpdateItemHolder(MapObject *object) {
+     if (((game_status_flags[0] >> 1) & 1) && faced_object[0] == object) {
+         if (object->source->kind_param_0 != 0 && !(object->state_flags & 0x40000)) {
+             object->model->update_bone_points(object->model);
+-            MapItem_StartPickup((ModelNode *)MapItem_PutOutForObject(
++            MapItem_StartPickup(MapItem_PutOutForObject(
+                 MAP_OBJECT_BYTES(object)->unk00 & 1, object->source->kind_param_0, (void *)object->model->get_point(object->model, 0),
+                 &object->model->rotation, &unk_value, object));
+         } else if (work[0] <= 0) {
+@@ -186,7 +186,7 @@ void MapObject_UpdateOpeningChest(MapObject *object) {
+ void MapObject_UpdateOpenChest(MapObject *object) {
+     s32 *work = object->work;
+     MapObjectUnk08Words *source;
+-    ModelNode *pickup;
++    ItemNode *pickup;
+ 
+     if (work[1] > 0) {
+         work[1]--;
+@@ -194,7 +194,7 @@ void MapObject_UpdateOpenChest(MapObject *object) {
+     if (((game_status_flags[0] >> 1) & 1) && faced_object[0] == object) {
+         if (!(object->state_flags & 0x40000) &&
+             ((source = MAP_OBJECT_WORDS(object))->kind_param_0 != 0 || source->kind_param_2 != 0)) {
+-            pickup = MapItem_FindForObject((int)object);
++            pickup = MapItem_FindForObject(object);
+             if (pickup != NULL) {
+                 MapItem_StartPickup(pickup);
+             }
+@@ -215,11 +215,12 @@ void func_00120128(void) {
+ /* Signal hook of the chests: opens a closed chest (step 1) as if the player had used it, by running
+    MapObject_UpdateClosedChest with the use bit (GameStatus.bit1) set and the chest as the thing in front of
+    the player. */
+-void MapObject_OpenChestOnSignal(GameEvent *event, int mode) {
++/* (Retail reads the object as a GameEvent, core/game.h, whose flags lie at MapObject.state_flags only on the PS2.) */
++void MapObject_OpenChestOnSignal(MapObject *event, int mode) {
+     void *saved;
+     int bit;
+ 
+-    if ((event->flags & 0x2FF00) == 0x100 && mode != 0) {
++    if ((event->state_flags & 0x2FF00) == 0x100 && mode != 0) {
+         saved = view_ray_status.current;
+         bit = game_status.bit1;
+         game_status.bit1 = 1;
+diff --git a/src/game/map_object/door.c b/src/game/map_object/door.c
+index 1e85b210fca8ac942cb10e092a0bc45a357f7d3e..85c8d585f698a99ae59eaa255a7eeee2f5a99140 100644
+--- a/src/game/map_object/door.c
++++ b/src/game/map_object/door.c
+@@ -1,6 +1,7 @@
+ #include "map_object/map_object.h"
+ #include "model/model.h"
+ #include "ui/message.h"
++#include "core/game.h"
+ 
+ void Vector_Copy(void *, void *);
+ void MapObject_UpdateOpeningDoor(MapObject *);
+@@ -15,8 +16,10 @@ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+ void Model_MultiplyChildMatrices(ModelPart *);
+ void sceVu0CopyMatrix(void *, void *);
+-extern void *faced_object[];
+-extern u32 game_status_flags[];
++extern EventRunner view_ray_status;
++#define faced_object (&view_ray_status.current)
++extern GameStatus game_status;
++#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
+ extern u8 item_counts[];
+ extern float player_state[];
+ 
+diff --git a/src/game/map_object/fade.c b/src/game/map_object/fade.c
+index b05ea38ab06a70cba70cd70a8d9079ef2c902800..8c7a16a37718d992e72f114cb25b030b1b96abe1 100644
+--- a/src/game/map_object/fade.c
++++ b/src/game/map_object/fade.c
+@@ -1,9 +1,10 @@
+ #include "map_object/map_object.h"
+ #include "model/model.h"
++#include "core/game.h"
++#include <string.h>
+ 
+ void Vector_Subtract(void *, void *, void *);
+ float sqrtf(float);
+-void *memset(void *, int, u32);
+ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+ void Model_MultiplyChildMatrices(ModelPart *);
+@@ -13,7 +14,7 @@ void Vector_ApplyMatrix(void *, void *, void *);
+ float atan2f(float, float);
+ void Vector_MultiplyComponents(float *, float *, float *);
+ extern float player_state[];
+-extern float camera_state[];
++extern CameraState camera_state;
+ extern f32 scale_matrices[4][4];
+ 
+ /* Start handler of the kind that fades with the distance to the player: takes
+@@ -100,7 +101,7 @@ void MapObject_RebuildBillboardMatrices(MapObject *object) {
+     for (; i < part_count; i++) {
+         Matrix_Multiply(matrix, object->model->model_matrix, part);
+         Vector_ApplyMatrix(&world, matrix, &unit);
+-        Vector_Subtract(&delta, camera_state, &world);
++        Vector_Subtract(&delta, camera_state.position, &world);
+         pitch = atan2f(delta.y, sqrtf(delta.x * delta.x + delta.z * delta.z));
+         yaw = atan2f(-delta.x, -delta.z);
+         part->position[0] = world.x;
+diff --git a/src/game/map_object/light.c b/src/game/map_object/light.c
+index be50307a738177dcf808089b98180ac3bc25d06c..bfff1f815106452ab4333297479967286b2276d5 100644
+--- a/src/game/map_object/light.c
++++ b/src/game/map_object/light.c
+@@ -1,6 +1,7 @@
+ #include "model/model.h"
+ #include "model/linked_point.h"
+ 
++int rand(void);
+ extern f32 sine_table[];
+ 
+ /* Start handler of the light kind: makes a light of the colour in its source at
+diff --git a/src/game/map_object/map_object.c b/src/game/map_object/map_object.c
+index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227142755a7 100644
+--- a/src/game/map_object/map_object.c
++++ b/src/game/map_object/map_object.c
+@@ -9,8 +9,8 @@
+ #include "player/player.h"
+ #include "gfx/scroll_texture.h"
+ #include "model/model.h"
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+ float sinf(float);
+ float sqrtf(float);
+ float atan2f(float, float);
+@@ -53,7 +53,8 @@ void Vector_Copy(void *, void *);
+ void Vector_Add(void *, void *, void *);
+ 
+ extern MapDrawState map_draw_state;
+-extern int suspended_updates[3];
++extern GameStatus game_status;
++#define suspended_updates (&game_status.update_hold_flags)
+ extern MapSlot map_slots[];
+ extern Vector4 map_object_glow_colors[4];
+ extern u8 item_counts[];
+@@ -71,7 +72,7 @@ extern int current_map_slot;
+ static s32 sway_frame = 0;                      /* 0x4467A0 counts 0 to 59 */
+ static s32 next_sound_channel = 0;              /* 0x4467A4 0 to 31, the next of the channels 0x20 to 0x3F */
+ s32 map_objects_started[2] = { 0, 0 };         /* the objects of each map have been started */
+-int map_object_placements[2] = { 0, 0 };                   /* the MapObjectUnk08 array of each map */
++sptr map_object_placements[2] = { 0, 0 };                  /* the MapObjectUnk08 array of each map */
+ s32 map_object_counts[2] = { 0, 0 };           /* how many objects each map has */
+ 
+ static s32 glow_item_worn;                      /* 0x447078 Myu's Necklace is worn */
+@@ -105,7 +106,7 @@ void MapObject_InitMap(int map) {
+     for (; i < count; i++, object++) {
+         MAP_OBJECT_BYTES(object)->step = 0;
+         if (object->definition->model_index == 0xFFFF) {
+-            object->model->get_point = (int (*)(void *, int))MapObject_GetPositionAsPoint;
++            object->model->get_point = (void *(*)(void *, int))MapObject_GetPositionAsPoint;
+             object->model->update_bone_points = (void (*)(ModelInstance *))MapObject_UpdateNoBonePoints;
+         }
+         if (object->source->spawn_flags.bytes[2] != 0) {
+@@ -232,7 +233,7 @@ void MapObject_StartMap(int map) {
+         if (Game_GetTriggerItem(tag, object->source->spawn_flags.bytes[2])) {
+             flag = 1;
+         }
+-        object->map_record = (s32)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
++        object->map_record = (sptr)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
+         if (in_use) {
+             MapObject_Activate(object);
+         } else {
+@@ -535,19 +536,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+             }
+             if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
+                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
+-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                 } else if (RECORD_FLAGS(object) & 0x10) {
+-                    object->model->light_block = (s32)&glow_lights_shared;
++                    object->model->light_block = (sptr)&glow_lights_shared;
+                 } else {
+-                    object->model->light_block = (s32)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
++                    object->model->light_block = (sptr)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                 }
+             } else {
+                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
+-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                 } else if (RECORD_FLAGS(object) & 0x10) {
+-                    object->model->light_block = (s32)&map_draw_state.unkC0;
++                    object->model->light_block = (sptr)&map_draw_state.unkC0;
+                 } else {
+-                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
++                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                 }
+             }
+             if ((s8)object->source->spawn_flags.bytes[4] != -1) {
+@@ -564,7 +565,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+             } else {
+                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
+             }
+-            if ((object->source->spawn_flags.flags & 0x1000000000000L) || (object->model->alpha < 128.0f && !(object->definition->definition_flags & 0x10000))) {
++            if ((object->source->spawn_flags.flags & 0x1000000000000LL) || (object->model->alpha < 128.0f && !(object->definition->definition_flags & 0x10000))) {
+                 DrawList_Add(object->model, 0, mode);
+             } else {
+                 ModelTexture_SendForModel(object->model);
+@@ -594,19 +595,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+             }
+             if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
+                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
+-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                 } else if (RECORD_FLAGS(object) & 0x10) {
+-                    object->model->light_block = (s32)&glow_lights_shared;
++                    object->model->light_block = (sptr)&glow_lights_shared;
+                 } else {
+-                    object->model->light_block = (s32)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
++                    object->model->light_block = (sptr)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                 }
+             } else {
+                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
+-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                 } else if (RECORD_FLAGS(object) & 0x10) {
+-                    object->model->light_block = (s32)&map_draw_state.unkC0;
++                    object->model->light_block = (sptr)&map_draw_state.unkC0;
+                 } else {
+-                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
++                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                 }
+             }
+             if ((s8)object->source->spawn_flags.bytes[4] == -1) {
+@@ -625,7 +626,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+             } else {
+                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
+             }
+-            if ((object->source->spawn_flags.flags & 0x1000000000000L) || (object->model->fade_enabled != 0 && (s16)object->model->fade_alpha < 0x80 && !(object->definition->definition_flags & 0x10000))) {
++            if ((object->source->spawn_flags.flags & 0x1000000000000LL) || (object->model->fade_enabled != 0 && (s16)object->model->fade_alpha < 0x80 && !(object->definition->definition_flags & 0x10000))) {
+                 DrawList_Add(object->model, 0, mode);
+             } else {
+                 ModelTexture_SendForModel(object->model);
+@@ -719,6 +720,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
+     channel->param = 0;
+     channel->param_shifted = 0;
+     MapObject_StepAnim(object);
++    return 0; /* retail returns whatever $2 held; no caller reads it */
+ }
+ 
+ /* Advances a map object's animation one frame, starting the sounds tied to the
+@@ -740,8 +742,9 @@ int MapObject_StepAnim(MapObject *object) {
+                     Sound_PlayCommonAt(range, anim->sound, &model->position);
+                     break;
+                 case 1:
+-                    // match: the range is evaluated before the position
+-                    ((int (*)(u8, u8, f32, f32 *))Sound_PlayMapAtRange)(anim->sound, object->definition->sound_falloff_mode, range, &model->position.x);
++                    /* retail passes the range before the position; the EE puts them in separate registers, so this
++                       is the definition's order */
++                    Sound_PlayMapAtRange(anim->sound, object->definition->sound_falloff_mode, &model->position.x, range);
+                     break;
+                 case 2:
+                     Sound_StartTaggedAt((u8)next_sound_channel + 0x20, anim->sound, object->definition->sound_falloff_mode, range, (Vector4Arg *)&model->position);
+@@ -787,7 +790,7 @@ void MapObject_MarkEmptied(MapObject *object) {
+     u8 kind = object->definition->kind;
+ 
+     if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
+-        ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
++        ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
+         object->state_flags |= 0x40000;
+     }
+ }
+@@ -800,7 +803,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
+     if (object != NULL) {
+         kind = object->definition->kind;
+         if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
+-            ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
++            ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
+             object->state_flags |= 0x40000;
+         }
+     }
+@@ -862,11 +865,11 @@ void MapObject_DrawModel(int *model) {
+ void MapObject_DrawModelWithAlpha(ModelInstance *model) {
+     Packet_BeginGsRegisters();
+     if (model->alpha < 128.0f) {
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+     } else {
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118LL);
+     }
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+     Packet_AddGsRegister(GS_REG_ALPHA_2, 9);
+diff --git a/src/game/map_object/map_object.h b/src/game/map_object/map_object.h
+index 873b079802537adf9d3e31bf712f41171c33faa8..2d99d1ead089e568535875f00c9f1c7477b3e606 100644
+--- a/src/game/map_object/map_object.h
++++ b/src/game/map_object/map_object.h
+@@ -12,7 +12,7 @@
+ #define MAP_OBJECT_KIND_CONTAINER           21      /* barrels, pots and wooden boxes */
+ 
+ extern s32 map_objects_started[2];
+-extern int map_object_placements[2];
++extern sptr map_object_placements[2];
+ extern s32 map_object_counts[2];
+ 
+ void MapObject_InitMap(int map);
+diff --git a/src/game/map_object/map_object_common.c b/src/game/map_object/map_object_common.c
+index 73e8261e1c1540fb8d1f2d5b6f6c6a00d01504ca..d5b83b886a42706d085fe4f16afeb608e4dc407e 100644
+--- a/src/game/map_object/map_object_common.c
++++ b/src/game/map_object/map_object_common.c
+@@ -1,6 +1,7 @@
+ #include "model/model.h"
+ #include "map_object/map_object.h"
+ #include "map/map.h"
++#include "sound/sound.h"
+ 
+ void Vector_Add(void *, void *, void *);
+ s32 Sound_StartTaggedAt(s8, u8, u8, f32, Vector4Arg *);
+@@ -11,7 +12,7 @@ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+ void Model_MultiplyChildMatrices(ModelPart *);
+ void sceVu0CopyMatrix(void *, void *);
+ extern int current_map_slot;
+-extern int sound_load_queue[0x28 / 4];
++extern SoundLoadQueue sound_load_queue;
+ 
+ /* Offset hook of every kind: moves the model and the object's source position by offset. */
+ void MapObject_MoveByOffset(MapObject *object, void *offset) {
+@@ -45,7 +46,7 @@ void MapObject_UpdateScenery(MapObject *object) {
+                 if ((MAP_OBJECT_BYTES(object)->unk00 & 1) != current_map_slot) {
+                     object->work[0] = 0;
+                 }
+-            } else if ((MAP_OBJECT_BYTES(object)->unk00 & 1) == current_map_slot && sound_load_queue[4] == 0 && sound_load_queue[5] == 0) {
++            } else if ((MAP_OBJECT_BYTES(object)->unk00 & 1) == current_map_slot && sound_load_queue.pending_map_slot == NULL && sound_load_queue.next_map_slot == NULL) {
+                 Sound_StartTaggedAt(source->kind_param_0, source->kind_param_2, source->kind_param_1, source->kind_param_3, (Vector4Arg *)&object->model->position);
+                 object->work[0] = 1;
+             }
+@@ -58,7 +59,7 @@ void MapObject_UpdateScenery(MapObject *object) {
+                     MapObject_StepAnim(object);
+                 }
+             }
+-        } else if (object->source->spawn_flags.flags & (0x8000L << 35)) {
++        } else if (object->source->spawn_flags.flags & (0x8000LL << 35)) {
+             MapObject_StepAnim(object);
+         }
+     }
+diff --git a/src/game/map_object/map_object_tables.c b/src/game/map_object/map_object_tables.c
+index 69f416903456d037993d03a5cf47383ebfeb5376..714ec9a286bb33a4d3798d677a250f5cf8e96a21 100644
+--- a/src/game/map_object/map_object_tables.c
++++ b/src/game/map_object/map_object_tables.c
+@@ -30,7 +30,7 @@ void MapObject_SetupItemHolder(MapObject *object);
+ void MapObject_StartChest(MapObject *object);
+ void MapObject_UpdateOpeningChest(MapObject *object);
+ void func_00120128();
+-void MapObject_OpenChestOnSignal(GameEvent *event, int mode);
++void MapObject_OpenChestOnSignal(MapObject *event, int mode);
+ void MapObject_SetupChest(MapObject *object);
+ void MapObject_StartDistanceFade(MapObject *object);
+ void MapObject_UpdateDistanceFade(MapObject *object);
+@@ -111,8 +111,9 @@ int MapObject_UpdatePulse(MapTrigger *trigger);
+ char map_object_defs[0x14000] = { 0 }; /* 0x38DA30 the param/obj.prm row of every object */
+ 
+ MapObject map_slot_objects[2][0x200] = { 0 }; /* 0x3A1A30 the objects of both map slots, a row each */
+-/* its second row, which other files name on its own */
+-asm(".globl map_slot1_objects\nmap_slot1_objects = map_slot_objects + 0xE000");  /* 0x3AFA30 the objects of map slot 1 */
++/* its second row, which other files name on its own: retail names it as a symbol at 0x3AFA30 (0xE000 bytes in);
++   C cannot, so it is a constant pointer */
++MapObject *const map_slot1_objects = map_slot_objects[1];
+ 
+ void (*map_object_step_handlers[0x20][16])(MapObject *) = { /* 0x3BDA30 the step handler of each object kind */
+     MapObject_StartScenery, MapObject_UpdateScenery, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, MapObject_UpdateBreaking,
+diff --git a/src/game/map_object/map_trigger.c b/src/game/map_object/map_trigger.c
+index 490389f889c18499c10d8c89e364f07606519790..e6ea2ff56aecd9ca35668ddadebb9b6d1ab7a014 100644
+--- a/src/game/map_object/map_trigger.c
++++ b/src/game/map_object/map_trigger.c
+@@ -4,6 +4,7 @@
+ #include "map_object/map_object.h"
+ #include "map/map.h"
+ #include "item/item.h"
++#include <string.h>
+ 
+ void MapObject_UpdateBreakingItemHolder(MapObject *);
+ void MapObject_SetupItemHolder(MapObject *);
+@@ -20,12 +21,12 @@ void Vector_Scale(float *, float *, float);
+ void Model_SetPrimBits(ModelInstance *, s64, s64);
+ void Model_SetAlphaBlend(ModelInstance *, s64);
+ void Model_SetVertexColour(void *, int, int, int, int);
+-int Model_FadeVertexColoursNear(int, void *, int *, int *, float);
+-void *memset(void *, int, u32);
++int Model_FadeVertexColoursNear(void *, void *, int *, int *, float);
+ int rand(void);
+ extern GameStatus game_status;
+-extern void *faced_object[];
+-extern u32 game_status_flags[];
++extern EventRunner view_ray_status;
++#define faced_object (&view_ray_status.current)
++#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
+ extern f32 identity_matrix[16];
+ 
+ /* Start handler of the save point: step 1. */
+@@ -239,7 +240,7 @@ void MapObject_FadeInObject(MapTrigger *trigger) {
+     if (shot->unk10 < 100000.0f) {
+         shot->unk10 += 6.6666f;
+     }
+-    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->unk10) == 0) {
++    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->unk10) == 0) {
+         trigger->type = 3;
+         shot->unk10 = 0.0f;
+     }
+@@ -264,7 +265,7 @@ void MapObject_FadeOutObject(MapTrigger *trigger) {
+     if (shot->unk10 < 2000.0f) {
+         shot->unk10 += 4.0f;
+     }
+-    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->unk10) == 0) {
++    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->unk10) == 0) {
+         trigger->type = 1;
+         shot->unk10 = 0.0f;
+     }
+diff --git a/src/game/map_object/mechanism.c b/src/game/map_object/mechanism.c
+index d7d76f2aef4bcffe6796154b3639f49c5cfb6744..3ce10a74865b94e4167235628ab2ff218192b4f4 100644
+--- a/src/game/map_object/mechanism.c
++++ b/src/game/map_object/mechanism.c
+@@ -5,14 +5,16 @@
+ #include "effect/shot.h"
+ #include "model/model.h"
+ #include "map_object/map_object.h"
++#include "core/game.h"
+ 
+ void Vector_Subtract(void *, void *, void *);
+ float atan2f(float, float);
+ float Angle_Wrap(float);
+ float sqrtf(float);
+ int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
+-extern void *object_under_player[];
+-extern u32 game_status_flags[];
++#define object_under_player ((void **)&player_state.floor_map_object)
++extern GameStatus game_status;
++#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
+ extern PlayerState player_state;
+ extern u32 frame_counter;
+ 
+diff --git a/src/game/map_object/pedestal.c b/src/game/map_object/pedestal.c
+index 34abccd4d4ce19fb8333128b5a4453ffeacc4084..126a52c12bab554cbf70ca3e29bf5f3cf1123bd6 100644
+--- a/src/game/map_object/pedestal.c
++++ b/src/game/map_object/pedestal.c
+@@ -23,7 +23,7 @@ void sceVu0RotMatrixY(float *, float *, float);
+ int Game_AddTriggerItem(int, int, int);
+ extern MapSlot map_slots[];
+ extern GameStatus game_status;
+-extern void *faced_object[];
++#define faced_object (&view_ray_status.current)
+ extern float player_state[];
+ extern EventRunner view_ray_status;
+ extern f32 identity_matrix[16];
+diff --git a/src/game/map_object/sign.c b/src/game/map_object/sign.c
+index a893434f21df17435f4f6a42f7dc3b527a373b4b..8e01b4f8a6de8e48b946716264d06058ef98354d 100644
+--- a/src/game/map_object/sign.c
++++ b/src/game/map_object/sign.c
+@@ -1,9 +1,12 @@
+ #include "model/model.h"
+ #include "ui/splash.h"
+ #include "ui/message.h"
++#include "core/game.h"
+ 
+-extern u32 game_status_flags[];
+-extern void *faced_object[];
++extern GameStatus game_status;
++#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
++extern EventRunner view_ray_status;
++#define faced_object (&view_ray_status.current)
+ 
+ /* Step 0 of the things that are only examined (kind 0xB): takes the message (the definition's name when the
+    source gives none) and, from the source, whether a sign picture goes with it; step 1. */
+diff --git a/src/game/map_object/socket.c b/src/game/map_object/socket.c
+index 992e2e51d131f93d32ae9edcfb15fa8db5cc1b3d..915a691f7e86bc8ff1fb4b7a797321a7d89cdb35 100644
+--- a/src/game/map_object/socket.c
++++ b/src/game/map_object/socket.c
+@@ -15,7 +15,8 @@ void Vector_Scale(float *, float *, float);
+ void Vector_Add(void *, void *, void *);
+ void Player_AddItem(int);
+ extern GameStatus game_status;
+-extern void *faced_object[];
++extern EventRunner view_ray_status;
++#define faced_object (&view_ray_status.current)
+ extern float player_state[];
+ extern f32 identity_matrix[16];
+ extern ItemCommonDef item_common_defs[];
+diff --git a/src/game/map_object/switch.c b/src/game/map_object/switch.c
+index 9e2ee906da9f9e7146f4ddf5cb2c93616305d3cd..1f725d5824f5c02fb3943e42dea95812d82e2aed 100644
+--- a/src/game/map_object/switch.c
++++ b/src/game/map_object/switch.c
+@@ -4,8 +4,8 @@
+ 
+ void MapObject_UpdateOffSwitch(void *);
+ void MapObject_UpdateOnSwitch(void *);
+-extern u32 game_status_flags[];
+-extern void *faced_object[];
++#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
++#define faced_object (&view_ray_status.current)
+ extern GameStatus game_status;
+ extern EventRunner view_ray_status;
+ 

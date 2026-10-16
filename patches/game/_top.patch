@@ -1,0 +1,63 @@
+diff --git a/src/game/common.h b/src/game/common.h
+index 19a0849cff5caa66c35a874b66837e6edf51cbd3..e08d71208b309dbd90d96fe0423a038f4b43c69c 100644
+--- a/src/game/common.h
++++ b/src/game/common.h
+@@ -2,17 +2,20 @@
+ #ifndef COMMON_H
+ #define COMMON_H
+ 
+-typedef signed char s8;
+-typedef unsigned char u8;
+-typedef short s16;
+-typedef unsigned short u16;
+-typedef int s32;
+-typedef unsigned int u32;
+-typedef long s64;               /* long is 64-bit on the EE */
+-typedef unsigned long u64;
++#include <stdint.h>
++#include "port/host.h"
++
++typedef int8_t s8;
++typedef uint8_t u8;
++typedef int16_t s16;
++typedef uint16_t u16;
++typedef int32_t s32;
++typedef uint32_t u32;
++typedef int64_t s64;            /* a long on the EE, where long is 64-bit; the PC port spells it out */
++typedef uint64_t u64;
+ typedef float f32;
+ typedef double f64;
+-typedef u32 Uint128 __attribute__((mode(TI))); /* a 128-bit integer, moved with one lq/sq */
++typedef unsigned __int128 Uint128; /* a 128-bit integer, moved with one lq/sq on the EE */
+ 
+ #ifndef NULL
+ #define NULL ((void *)0)
+diff --git a/src/game/main.c b/src/game/main.c
+index 3f0568a1aceb94838d92be7376359d6377be4c3a..31e681e951171d941593a2d78feb7a51b461e134 100644
+--- a/src/game/main.c
++++ b/src/game/main.c
+@@ -6,6 +6,8 @@
+ #include "ui/title.h"
+ #include "ui/menu_screens.h"
+ #include "core/timer.h"
++#include <stdlib.h>
++#include <libgraph.h>
+ 
+ extern GameStatus game_status;
+ extern PlayerState player_state;
+@@ -15,7 +17,6 @@ extern u32 frame_counter;          /* the frame counter */
+ 
+ void System_Init(void);
+ void Display_Init(void);
+-int sceGsSyncV(int);
+ void Vram_Clear(int, int);
+ int SoundDriver_Init(void);
+ void SoundDriver_ReleaseAll(void);
+@@ -37,7 +38,6 @@ void Packet_Init(void);
+ void Wobble_ResetOscillators(void);
+ void Game_ProjectHazeLayers(void);
+ int Timer_GetTicks(void);
+-void srand(u32);
+ int TitleMenu_Run(void);
+ void Movie_PlayOpening(void);
+ void GameLoop_ResetSystems(int);
