@@ -7,6 +7,7 @@
 #include "model/linked_point.h"
 #include "ui/message.h"
 #include "map_object/map_object.h"
+#include <string.h>
 
 void MapItem_ClearMap(int);
 s32 MapItem_Drop(s32, s32, s32, f32 *, f32, f32 *, f32 *, f32 *, u32);
@@ -62,7 +63,6 @@ void Vector_Subtract(void *, void *, void *);
 int Angle_EaseToward(float, float *, int);
 int Player_CannotCarryItem(int);
 void Player_AddItem(int);
-void *memset(void *, int, u32);
 int rand(void);
 
 extern GameDefinition item_name_defs[380];

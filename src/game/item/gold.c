@@ -7,8 +7,8 @@
 #include "gfx/screen.h"
 #include "ui/message.h"
 #include "gfx/gs.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 int File_Close(int);

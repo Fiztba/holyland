@@ -16,8 +16,8 @@
 #include "sound/sound.h"
 #include "ui/splash.h"
 #include "core/game.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void Sound_SetBgmVolume(int level);
 void Sound_SetBankVolumes(int level);
 void Player_Kill(void);

@@ -4,6 +4,7 @@
 #include "map_object/map_object.h"
 #include "map/map.h"
 #include "item/item.h"
+#include <string.h>
 
 void MapObject_UpdateBreakingItemHolder(MapObject *);
 void MapObject_SetupItemHolder(MapObject *);
@@ -21,7 +22,6 @@ void Model_SetPrimBits(ModelInstance *, s64, s64);
 void Model_SetAlphaBlend(ModelInstance *, s64);
 void Model_SetVertexColour(void *, int, int, int, int);
 int Model_FadeVertexColoursNear(void *, void *, int *, int *, float);
-void *memset(void *, int, u32);
 int rand(void);
 extern GameStatus game_status;
 extern EventRunner view_ray_status;

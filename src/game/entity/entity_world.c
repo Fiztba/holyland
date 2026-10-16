@@ -7,8 +7,8 @@
 #include <libvu0.h>
 #include "core/game.h"
 #include "player/player.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 int rand(void);
 
 extern MapSlot map_slots[];

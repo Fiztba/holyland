@@ -16,6 +16,7 @@
 #include "ui/message.h"
 #include "gfx/packet.h"
 #include "gfx/texture.h"
+#include <string.h>
 
 #define FOG_COLOR() \
     ((u64)map_draw_state.unk280.red | ((u64)map_draw_state.unk280.green << 8) | ((u64)map_draw_state.unk280.blue << 16) | \
@@ -49,7 +50,6 @@ void Wobble_DrawRippledModel(ModelInstance *, int, int, int, int);
 void Map_SetOffscreenTarget(void);
 void Map_QueueSlotPacket(int, int);
 int Map_ClassifyRecordOnScreen(MapDrawRecord *, ModelInstance *);
-void *memset(void *, int, u32);
 void Map_InsertRecordBySize(AreaNode *);
 void Model_SetUpPosed(ModelInstance *, char **, char **);
 void Model_SetUpSkinned(ModelInstance *, char **, char **);

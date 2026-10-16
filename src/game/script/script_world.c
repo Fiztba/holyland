@@ -13,8 +13,8 @@
 #include "model/model.h"
 #include "player/player.h"
 #include "effect/shot.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 int Script_StoreFloatResult(ScriptArg *target, double value); // match: the definition takes a float, but retail converts the argument to double here (fptodp): there was no prototype in scope
 int MapItem_PlaceFixedById(int map, int item_id);
 int MapItem_StartPickupById(int item_id, int value);

@@ -9,8 +9,8 @@
 #include "player/player.h"
 #include "gfx/scroll_texture.h"
 #include "model/model.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 float sinf(float);
 float sqrtf(float);
 float atan2f(float, float);
@@ -742,8 +742,9 @@ int MapObject_StepAnim(MapObject *object) {
                     Sound_PlayCommonAt(range, anim->sound, &model->position);
                     break;
                 case 1:
-                    // match: the range is evaluated before the position
-                    ((int (*)(u8, u8, f32, f32 *))Sound_PlayMapAtRange)(anim->sound, object->definition->sound_falloff_mode, range, &model->position.x);
+                    /* retail passes the range before the position; the EE puts them in separate registers, so this
+                       is the definition's order */
+                    Sound_PlayMapAtRange(anim->sound, object->definition->sound_falloff_mode, &model->position.x, range);
                     break;
                 case 2:
                     Sound_StartTaggedAt((u8)next_sound_channel + 0x20, anim->sound, object->definition->sound_falloff_mode, range, (Vector4Arg *)&model->position);
