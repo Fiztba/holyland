@@ -167,7 +167,7 @@ extern LinkNode ring_model_load;
 extern LinkNode bracelet_model_load;
 extern LinkNode amulet_model_load;
 extern LinkNode key_item_model_loads[12];
-extern s32 packet_area;
+extern sptr packet_area;
 extern ChunkUpload npc_package_load;
 int MenuArena_Init(int); // match: this file only matches with an int result
 void *MenuArena_Alloc(s32, s32);

@@ -22,7 +22,7 @@ void FlushCache(int); // match: void, the return value is unused and int changes
 extern int packet_fill_index;       /* which of the two packet buffers is being filled */
 extern int packet_quadwords_used;   /* quadwords handed out */
 extern int packet_buffers_size;     /* bytes in both buffers together */
-extern int packet_area;              /* start of the packet area */
+extern sptr packet_area;             /* start of the packet area */
 extern char packet_overflow_message[];   /* a line of 70 '!', printed when a packet overruns the buffer */
 extern u32 *gs_register_list;       /* the register list being built, NULL: none */
 extern int gs_register_count;       /* registers in it */

@@ -19,20 +19,22 @@ extern MapSlotMemory map_slot_memory[2];
 extern MapSlotMemory *map_slot_area;  /* the two map slots' memory, the array above */
 extern char *map_file_area;
 extern char *map_work_area;
-extern int packet_area;              /* the packet area */
+extern sptr packet_area;             /* the packet area */
 extern char *effect_area;
 extern char *entity_pool_area;      /* the entity pool blocks and work areas (entity/entity_pool.c) */
 extern char *held_weapon_area;
-extern int trade_menu_arena;
+extern sptr trade_menu_arena;
 extern char *hud_area;              /* the HUD textures (ui/hud.c) */
 extern char *item_effect_area;
 extern char *sound_bank_area;
 
-static char memory_arena[MEMORY_ARENA_SIZE]; /* 0x5FAF80 every area lies in it */
+/* 0x5FAF80 every area lies in it; on the PC it is in game RAM at the same EE address, so the files
+   loaded into its areas can hold EE addresses (port/host.h) */
+#define memory_arena EE_RAM_AT(char *, 0x5FAF80)
 
 /* Clears the arena, sets the size of each area and lays them out. */
 void Memory_Init(void) {
-    Memory_ClearWords(memory_arena, sizeof(memory_arena) / 4);
+    Memory_ClearWords(memory_arena, MEMORY_ARENA_SIZE / 4);
     packet_area_size = 0x280000;
     effect_area_size = 0x1D0000;
     held_weapon_area_size = 0xA0000;
@@ -95,7 +97,7 @@ void Memory_PlaceAreas(void) {
     char *next_area = memory_arena;
 
     map_slot_area = map_slot_memory;
-    packet_area = (int)next_area;
+    packet_area = (sptr)next_area;
     next_area += packet_area_size;
     trade_menu_arena = packet_area;
     effect_area = next_area;

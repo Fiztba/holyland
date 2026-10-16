@@ -1,0 +1,107 @@
+/* The PC port's view of the PlayStation 2: the types and macros the game code uses where it relied on
+   the EE (32-bit pointers, game RAM, the scratchpad, the hardware registers). common.h includes this;
+   docs/port/RULES.md says when to use each one. */
+#ifndef PORT_HOST_H
+#define PORT_HOST_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+/* ---- Integers that hold an address ----------------------------------------------------------
+   On the EE a pointer fits in an int, so the game keeps addresses in s32/u32/int variables and
+   fields. On the PC an address is 64 bits. A variable, parameter or runtime-struct field that holds
+   an address becomes sptr (signed) or uptr (unsigned), which are pointer-sized. */
+typedef intptr_t sptr;
+typedef uintptr_t uptr;
+
+/* ---- Game RAM and EE addresses --------------------------------------------------------------
+   One block standing in for the EE's 32 MB of RAM (plus room for host growth). Its offsets are EE
+   addresses: ee_ram + 0x5FAF80 is where the PS2 had the game's memory arena. Everything the game
+   loads from disc lives in it, so a 32-bit word in a file can hold an address in it. The game's
+   globals (in the program's image, not in game RAM) get EE addresses from 0x40000000 up
+   (port/platform/ee_address.c), so a 32-bit word can point at them as well. Only the stack and the
+   C heap have no EE address. */
+#define EE_RAM_SIZE 0x4000000u /* 64 MB: the PS2's 32 MB, and as much again for host growth */
+extern unsigned char *ee_ram;
+
+/* An EE address, kept in 32 bits: the field type of an "overlay" or "save" struct (one
+   whose layout is fixed because it is read from disc or written to a save) where the PS2 kept a
+   pointer. 0 is NULL. Write the pointed-to type in a comment: EEWord parts; (ModelPart *) */
+typedef uint32_t EEWord;
+
+/* The pointer an EEWord holds, as type T (a pointer type): EE_PTR(ModelPart *, header->parts). */
+#define EE_PTR(T, word) ((T)ee_ptr_of((EEWord)(word)))
+/* The EEWord for a pointer into game RAM or the game's globals (traps for any other pointer). */
+#define EE_WORD(ptr) ee_word_of((const void *)(ptr), __FILE__, __LINE__)
+/* A pointer at a fixed EE address in game RAM: EE_RAM_AT(char *, 0x5FAF80). */
+#define EE_RAM_AT(T, ee_address) ((T)(ee_ram + (uint32_t)(ee_address)))
+
+void *ee_static_ptr_of(EEWord word);
+static inline void *ee_ptr_of(EEWord word) {
+    if (word == 0) {
+        return (void *)0;
+    }
+    return word < EE_RAM_SIZE ? (void *)(ee_ram + word) : ee_static_ptr_of(word);
+}
+EEWord ee_word_of(const void *ptr, const char *file, int line);
+
+/* ---- The scratchpad -------------------------------------------------------------------------
+   The EE's 16 KB of fast RAM at 0x70000000. SPR(T, offset) is a pointer into it:
+   ((f32 *)0x70000000) becomes SPR(f32 *, 0). */
+extern unsigned char ee_scratchpad[0x4000];
+#define SPR(T, offset) ((T)(ee_scratchpad + (offset)))
+
+/* ---- Hardware registers ---------------------------------------------------------------------
+   The EE's I/O registers (0x10000000..0x1000FFFF), the VU memories (0x11000000..0x1100FFFF) and the
+   GS privileged registers (0x12000000..0x12001FFF) are plain memory on the PC: writes are kept,
+   nothing reacts, and the host sets the few values the game waits on. EE_HW(T, address) is the
+   register as a pointer: *(volatile int *)0x10003020 becomes *EE_HW(volatile int *, 0x10003020).
+   The named registers are in eeregs.h. */
+#define EE_HW(T, ee_address) ((T)ee_hw_ptr((uint32_t)(ee_address)))
+void *ee_hw_ptr(uint32_t ee_address);
+
+/* ---- Address spaces the PC does not have ----------------------------------------------------
+   The EE reaches RAM uncached through 0x20000000|address and uncached-accelerated through
+   0x30000000|address. On the PC both are the address itself. Use these instead of or-ing the bits
+   into a pointer; PHYS() undoes them. */
+#define UNCACHED(p) (p)
+#define UNCACHED_ACCEL(p) (p)
+#define PHYS(p) (p)
+
+/* ---- VU0 macro mode -------------------------------------------------------------------------
+   Inline asm that used VU0's registers is C on the PC. Where the game keeps values in VU0
+   registers between calls (math/vu0_macro.c keeps matrices in vf1..vf14), they live here, so the
+   converted code reads and writes the same "registers" in the same order. */
+typedef struct {
+    float vf[32][4] __attribute__((aligned(16))); /* vf0 is (0, 0, 0, 1) */
+    int32_t vi[16];
+    float acc[4]; /* ACC */
+    float q;      /* Q, the result of div/sqrt/rsqrt */
+    float i;      /* I */
+} EeVu0;
+extern EeVu0 ee_vu0;
+
+/* ---- Not done yet ---------------------------------------------------------------------------
+   PORT_TODO("...") logs once (with the place) that a PS2-only path was reached on the PC. Stubs
+   and converted code use it where step 1 or later has to fill something in. */
+void port_todo(const char *what, const char *file, int line);
+#define PORT_TODO(what)                                                                            \
+    do {                                                                                           \
+        static int port_todo_seen_;                                                                \
+        if (!port_todo_seen_) {                                                                    \
+            port_todo_seen_ = 1;                                                                   \
+            port_todo((what), __FILE__, __LINE__);                                                 \
+        }                                                                                          \
+    } while (0)
+
+/* Stops the game with a message: for states the PC port cannot go on from. */
+void port_fatal(const char *file, int line, const char *fmt, ...) __attribute__((noreturn, format(printf, 3, 4)));
+#define PORT_FATAL(...) port_fatal(__FILE__, __LINE__, __VA_ARGS__)
+
+/* Checks a struct's size and a field's offset against the PS2 layout written in its comments, for
+   overlay and save structs: LAYOUT_SIZE(ModelHeader, 0x40); LAYOUT_OFFSET(ModelHeader, parts, 0x10); */
+#define LAYOUT_SIZE(T, size) _Static_assert(sizeof(T) == (size), #T " is not its PS2 size")
+#define LAYOUT_OFFSET(T, field, offset)                                                            \
+    _Static_assert(offsetof(T, field) == (offset), #T "." #field " is not at its PS2 offset")
+
+#endif /* PORT_HOST_H */
