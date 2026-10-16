@@ -620,7 +620,7 @@ static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity) {
                 if (record->collision_mesh_index == 0xFFFF) {
                     continue;
                 }
-                if (record->model->strips == NULL) {
+                if (EE_PTR(ModelInstance *, record->model)->strips == NULL) {
                     continue;
                 }
                 if (entity->model->position[0] < record->lowest[0] - reach) {

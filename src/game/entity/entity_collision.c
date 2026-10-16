@@ -39,7 +39,7 @@ extern ModelInstanceBlock *map_slot_record_models[];
 /* tests the entity's upright capsule against the triangle at `point` and pushes `position`
    sideways out of it */
 #define PUSH_OUT_OF_WALL()                                                                         \
-    Collision_CapsuleTriangle(point[0].position, point[1].position, point[2].position, position,   \
+    Collision_CapsuleTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position,   \
                               entity->collision_radius, entity->collision_height);                 \
     if (COLLISION_RESULT->hit != 0) {                                                              \
         ENTITY_FLAG_BITS(entity)->bit45 = TRUE;                                                    \
@@ -568,13 +568,13 @@ s32 EntityCollision_WalkAgainstMesh(Entity *entity, ModelInstance *model, f32 *p
     period = 30;
     mesh = (CollisionMesh *)model->strips;
     if (frame_counter % period == entity->spawn_index % 10U) {
-        strip = mesh->hazard_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->hazard_strips);
         i = mesh->hazard_strip_count;
         while (--i != -1) {
             point = strip->points;
             j = strip->point_count - 2;
             do {
-                Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, entity->model->position);
+                Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
                 if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->point[1] <= entity->model->position[1]
                     && entity->model->position[1] - entity->collision_height <= COLLISION_RESULT->point[1]) {
                     EntityCollision_ApplySurfaceEffect(entity, point->unk04, point->unk08, point->unk0C);
@@ -587,7 +587,7 @@ s32 EntityCollision_WalkAgainstMesh(Entity *entity, ModelInstance *model, f32 *p
     }
 walls:
     if (!((s32)(entity->flags >> 23) & 1)) {
-        strip = mesh->wall_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
         i = mesh->wall_strip_count;
         while (--i != -1) {
             point = strip->points;
@@ -600,7 +600,7 @@ walls:
         }
     }
     if (!((s32)(entity->flags >> 24) & 1)) {
-        strip = mesh->second_wall_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
         i = mesh->second_wall_strip_count;
         while (--i != -1) {
             point = strip->points;
@@ -613,7 +613,7 @@ walls:
         }
     }
     if (entity->spawn_info->type_id != 0x12) {
-        strip = mesh->barrier_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->barrier_strips);
         i = mesh->barrier_strip_count;
         while (--i != -1) {
             point = strip->points;
@@ -621,7 +621,7 @@ walls:
             if (Collision_GetBarrierLevel(point->unk04, point->unk08, point->unk0C) >= entity->spawn_info->barrier_level) {
                 if (Collision_IsBarrierFloor(point->unk04, point->unk08, point->unk0C)) {
                     do {
-                        Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, entity->model->position);
+                        Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
                         if (COLLISION_RESULT->hit != 0
                             && entity->model->position[1] - entity->params->floor_probe_depth <= COLLISION_RESULT->point[1]
                             && COLLISION_RESULT->point[1] <= *floor_y) {
@@ -643,13 +643,13 @@ walls:
         }
     }
     if (!(entity->flags & 0x4000000400000LL)) {
-        strip = mesh->floor_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
         i = mesh->floor_strip_count;
         while (--i != -1) {
             point = strip->points;
             j = strip->point_count - 2;
             do {
-                Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, entity->model->position);
+                Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
                 if (COLLISION_RESULT->hit != 0
                     && entity->model->position[1] - entity->params->floor_probe_depth <= COLLISION_RESULT->point[1]
                     && COLLISION_RESULT->point[1] <= *floor_y) {
@@ -702,7 +702,7 @@ void EntityCollision_WalkAgainstMap(Entity *entity) {
                 if (record->collision_mesh_index == 0xFFFF) {
                     continue;
                 }
-                if (record->model->strips == NULL) {
+                if (EE_PTR(ModelInstance *, record->model)->strips == NULL) {
                     continue;
                 }
                 if (record->lowest[0] - entity->collision_radius > entity->model->position[0]) {
@@ -723,7 +723,7 @@ void EntityCollision_WalkAgainstMap(Entity *entity) {
                 if (record->highest[2] + entity->collision_radius < entity->model->position[2]) {
                     continue;
                 }
-                if (EntityCollision_WalkAgainstMesh(entity, record->model, position, normal_sum, &floor_y)) {
+                if (EntityCollision_WalkAgainstMesh(entity, EE_PTR(ModelInstance *, record->model), position, normal_sum, &floor_y)) {
                     entity->map_record = record;
                     hit_floor = TRUE;
                 }
@@ -1023,13 +1023,13 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
     Collision_TransformMeshPoints(model);
     mesh = (CollisionMesh *)model->strips;
     if (!((s32)(entity->flags >> 23) & 1)) {
-        strip = mesh->wall_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
         i = mesh->wall_strip_count;
         while (--i != -1) {
             point = strip->points;
             j = strip->point_count - 2;
             do {
-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
+                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
                     entity->flags |= 0x8000LL << 30;
                     Vector_Subtract(offset, position, COLLISION_RESULT);
@@ -1044,13 +1044,13 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
         }
     }
     if (!((s32)(entity->flags >> 24) & 1)) {
-        strip = mesh->second_wall_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
         i = mesh->second_wall_strip_count;
         while (--i != -1) {
             point = strip->points;
             j = strip->point_count - 2;
             do {
-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
+                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
                     entity->flags |= 0x8000LL << 30;
                     Vector_Subtract(offset, position, COLLISION_RESULT);
@@ -1064,14 +1064,14 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
             strip = (CollisionStrip *)(point + 2);
         }
     }
-    strip = mesh->barrier_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->barrier_strips);
     i = mesh->barrier_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         if (Collision_GetBarrierLevel(point->unk04, point->unk08, point->unk0C) >= entity->spawn_info->barrier_level) {
             do {
-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
+                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
                     entity->flags |= 0x8000LL << 30;
                     Vector_Subtract(offset, position, COLLISION_RESULT);
@@ -1088,13 +1088,13 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32 
         }
     }
     if (!(entity->flags & 0x4000000400000LL)) {
-        strip = mesh->floor_strips;
+        strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
         i = mesh->floor_strip_count;
         while (--i != -1) {
             point = strip->points;
             j = strip->point_count - 2;
             do {
-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
+                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                 if (COLLISION_RESULT->hit != 0) {
                     hit_floor = TRUE;
                     entity->flags |= 0x8000LL << 29;
@@ -1144,7 +1144,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
                 if (record->collision_mesh_index == 0xFFFF) {
                     continue;
                 }
-                if (record->model->strips == NULL) {
+                if (EE_PTR(ModelInstance *, record->model)->strips == NULL) {
                     continue;
                 }
                 if (record->lowest[0] - entity->collision_radius > entity->model->position[0]) {
@@ -1165,7 +1165,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
                 if (record->highest[2] + entity->collision_radius < entity->model->position[2]) {
                     continue;
                 }
-                if (EntityCollision_SphereAgainstMesh(entity, record->model, position, normal_sum)) {
+                if (EntityCollision_SphereAgainstMesh(entity, EE_PTR(ModelInstance *, record->model), position, normal_sum)) {
                     entity->map_record = record;
                     hit_floor = TRUE;
                 }
@@ -1859,13 +1859,13 @@ static void EntityCollision_MoveOnMesh(CollisionOwner *owner, f32 *centre, f32 s
     floor_y = 3.4028235e38f; // match: FLT_MAX as a literal (the compiler keeps it in .sdata, at 0x446840)
     normal_sum[0] = normal_sum[1] = normal_sum[2] = normal_sum[3] = 0.0f;
     Vector_Copy(position, centre);
-    strip = mesh->floor_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
     i = mesh->floor_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, centre);
+            Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), centre);
             if (COLLISION_RESULT->hit != 0) {
                 if (centre[1] - step <= COLLISION_RESULT->point[1] && COLLISION_RESULT->point[1] <= centre[1] + 10.0f
                     && COLLISION_RESULT->point[1] < floor_y) {
@@ -1881,13 +1881,13 @@ static void EntityCollision_MoveOnMesh(CollisionOwner *owner, f32 *centre, f32 s
         position[1] = floor_y;
     }
     position[1] -= 0.1f;
-    strip = mesh->wall_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
     i = mesh->wall_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            Collision_CapsuleTriangle(point[0].position, point[1].position, point[2].position, position, radius, step);
+            Collision_CapsuleTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius, step);
             if (COLLISION_RESULT->hit != 0) {
                 hit_wall = 1;
                 offset[0] = position[0] - COLLISION_RESULT->point[0];
@@ -2162,13 +2162,13 @@ static void EntityCollision_SphereMesh(CollisionOwner *owner, void *centre, f32 
     mesh = (CollisionMesh *)owner->model->strips;
     normal_sum[0] = normal_sum[1] = normal_sum[2] = normal_sum[3] = 0.0f;
     Vector_Copy(position, centre);
-    strip = mesh->floor_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
     i = mesh->floor_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, radius);
+            EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius);
             if (COLLISION_RESULT->hit != 0) {
                 hit_floor = TRUE;
                 Vector_Subtract(offset, position, COLLISION_RESULT);
@@ -2181,13 +2181,13 @@ static void EntityCollision_SphereMesh(CollisionOwner *owner, void *centre, f32 
         } while (--j != 0);
         strip = (CollisionStrip *)(point + 2);
     }
-    strip = mesh->wall_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
     i = mesh->wall_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, radius);
+            EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius);
             if (COLLISION_RESULT->hit != 0) {
                 hit_unk18 = TRUE;
                 Vector_Subtract(offset, position, COLLISION_RESULT);
@@ -2200,13 +2200,13 @@ static void EntityCollision_SphereMesh(CollisionOwner *owner, void *centre, f32 
         } while (--j != 0);
         strip = (CollisionStrip *)(point + 2);
     }
-    strip = mesh->second_wall_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
     i = mesh->second_wall_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, radius);
+            EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius);
             if (COLLISION_RESULT->hit != 0) {
                 hit_unk20 = TRUE;
                 Vector_Subtract(offset, position, COLLISION_RESULT);
@@ -2259,13 +2259,13 @@ f32 EntityCollision_DistanceToPropFloor(void *prop_arg, void *position_arg) {
     // match: called as if it returned nothing (other files declare it int)
     ((void (*)(void *))Collision_TransformMeshPoints)(prop->model);
     mesh = (CollisionMesh *)prop->model->strips;
-    strip = mesh->floor_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
     i = mesh->floor_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, position);
+            Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position);
             if (COLLISION_RESULT->hit != 0) {
                 f32 y = COLLISION_RESULT->point[1];
 
@@ -2304,13 +2304,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
     ((void (*)(void *))Collision_TransformMeshPoints)(prop->model);
     mesh = (CollisionMesh *)prop->model->strips;
     nearest = 3.4028235e38f;
-    strip = mesh->floor_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
     i = mesh->floor_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
+            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
                 nearest = COLLISION_RESULT->distance;
                 kind = 1;
@@ -2322,13 +2322,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
         } while (--j != 0);
         strip = (CollisionStrip *)(point + 2);
     }
-    strip = mesh->wall_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
     i = mesh->wall_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
+            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
                 nearest = COLLISION_RESULT->distance;
                 kind = 2;
@@ -2340,13 +2340,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
         } while (--j != 0);
         strip = (CollisionStrip *)(point + 2);
     }
-    strip = mesh->second_wall_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
     i = mesh->second_wall_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
+            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
                 nearest = COLLISION_RESULT->distance;
                 kind = 3;
@@ -2358,13 +2358,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
         } while (--j != 0);
         strip = (CollisionStrip *)(point + 2);
     }
-    strip = mesh->barrier_strips;
+    strip = EE_PTR(CollisionStrip *, mesh->barrier_strips);
     i = mesh->barrier_strip_count;
     while (--i != -1) {
         point = strip->points;
         j = strip->point_count - 2;
         do {
-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
+            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
                 nearest = COLLISION_RESULT->distance;
                 kind = 4;
@@ -2508,12 +2508,12 @@ s32 EntityCollision_RayHitsPropWall(f32 *origin, f32 *direction, f32 length, f32
                 ((void (*)(void *))Collision_TransformMeshPoints)(((MapProp *)record)->model);
                 mesh = (CollisionMesh *)((MapProp *)record)->model->strips;
                 strips_left = mesh->wall_strip_count;
-                strip = mesh->wall_strips;
+                strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
                 while (--strips_left != -1) {
                     point = strip->points;
                     points_left = strip->point_count - 2;
                     do {
-                        EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
+                        EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
                         if (COLLISION_RESULT->hit != 0) {
                             return TRUE;
                         }
@@ -2590,12 +2590,12 @@ f32 EntityCollision_DistanceToGround(f32 *point) {
                 ((void (*)(void *))Collision_TransformMeshPoints)(model);
                 mesh = (CollisionMesh *)model->model.strips;
                 strips_left = mesh->water_strip_count;
-                strip = mesh->water_strips;
+                strip = EE_PTR(CollisionStrip *, mesh->water_strips);
                 while (--strips_left != -1) {
                     strip_point = strip->points;
                     points_left = strip->point_count - 2;
                     do {
-                        Collision_DropOnTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, point);
+                        Collision_DropOnTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), point);
                         if (COLLISION_RESULT->hit != 0) {
                             return COLLISION_RESULT->point[1] - point[1];
                         }

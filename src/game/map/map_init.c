@@ -10,7 +10,6 @@
 #include "gfx/screen.h"
 
 int File_GetSize(int);
-int sprintf(char *, char *, ...);
 void Map_ParseFile(int);
 void Map_BuildModels(int);
 int Sound_LoadMapBank(MapSlot *);

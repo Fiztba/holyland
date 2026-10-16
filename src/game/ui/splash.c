@@ -3,8 +3,7 @@
 #include "core/game.h"
 #include "gfx/gs.h"
 
-void *memset(void *, int, u32);
-void *memcpy(void *, const void *, u32);
+#include <string.h>
 int sprintf(char *, const char *, ...);
 
 extern GameStatus game_status;

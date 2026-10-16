@@ -29,7 +29,6 @@ void func_001A15F8(void);
 void MapItem_UnloadMap(int);
 void File_Lock(void);
 int File_GetSize(int);
-int sprintf(char *, char *, ...);
 void Map_ParseFile(int);
 void Map_BuildModels(int);
 void Map_OffsetRecords(int, f32 *);

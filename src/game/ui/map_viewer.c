@@ -806,16 +806,16 @@ static void MapViewer_DrawKingsMap(void) {
                             continue;
                         }
                         if (flags & 0x10) {
-                            record->model->light_block = (sptr)&map_draw_state.unkC0;
-                            record->model->fog_block = &map_draw_state.unkA0;
+                            EE_PTR(ModelInstance *, record->model)->light_block = (sptr)&map_draw_state.unkC0;
+                            EE_PTR(ModelInstance *, record->model)->fog_block = &map_draw_state.unkA0;
                         } else {
-                            record->model->light_block = (sptr)&map_draw_state.light_blocks[map][record->light_block_index];
-                            record->model->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
+                            EE_PTR(ModelInstance *, record->model)->light_block = (sptr)&map_draw_state.light_blocks[map][record->light_block_index];
+                            EE_PTR(ModelInstance *, record->model)->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
                         }
-                        record->model->hit_count = 0;
-                        record->model->light_block = (sptr)&viewer_default_lights;
-                        record->model->fog_block = &map_draw_state.unkA0;
-                        Model_DrawPosed(record->model);
+                        EE_PTR(ModelInstance *, record->model)->hit_count = 0;
+                        EE_PTR(ModelInstance *, record->model)->light_block = (sptr)&viewer_default_lights;
+                        EE_PTR(ModelInstance *, record->model)->fog_block = &map_draw_state.unkA0;
+                        Model_DrawPosed(EE_PTR(ModelInstance *, record->model));
                     }
                     break;
             }

@@ -855,7 +855,7 @@ typedef struct {
 typedef struct ItemNode {
     MapItemDef *def;                /* 0x00 NULL on a dropped item */
     DroppedItemRecord *record;      /* 0x04 NULL on a fixed item */
-    s32 unk08;                      /* 0x08 */
+    MapObject *unk08;               /* 0x08 the map object (a chest) the item lies in */
     u32 flags;                      /* 0x0C ItemNodeBits */
     char pad10[0x04];
     void *map_record;               /* 0x14 the MapRecordInfo (map/map.h) it lies in, looked up before it is drawn */
@@ -880,7 +880,6 @@ typedef struct {
 
 /* ItemNode with all of its flags as bit-fields (MapItem_Drop) */
 typedef struct {
-    char pad00[0x0C];
     u32 map : 1;                    /* 0x0C which of the two loaded maps it lies in */
     u32 bit1 : 1;
     u32 bit2 : 1;                   /* set on a dropped item */
@@ -888,7 +887,7 @@ typedef struct {
     u32 bits7 : 25;
 } ItemNodeBits;
 
-#define ITEM_NODE_BITS(node) ((ItemNodeBits *)(node))
+#define ITEM_NODE_BITS(node) ((ItemNodeBits *)&(node)->flags)
 
 /* item_model_sources[map][32]: what is loaded for each kind of item a map holds (MapItem_FindModelSource finds one) */
 typedef struct {

@@ -26,7 +26,6 @@ void GsDraw_QueueTexFlush(void);
 u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
 int Message_SplitDigits(int, u8 *);
-void *memset(void *, int, u32);
 
 extern sptr menu_heap;
 extern u16 pad_pressed[];

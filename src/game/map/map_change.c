@@ -48,7 +48,6 @@ void MapItem_UnloadMap(int);
 void File_Lock(void);
 void File_Unlock(void);
 int File_GetSize(int);
-int sprintf(char *, char *, ...);
 float cosf(float);
 float sinf(float);
 void Game_MarkMapVisited(int);

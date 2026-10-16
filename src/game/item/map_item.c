@@ -516,7 +516,7 @@ ItemNode *MapItem_PutOutForObject(int map, int item, void *position, void *rotat
     model = &object_item_models[map][i];
     ITEM_NODE_MAP_BIT(node)->map = map;
     node->item = item;
-    node->unk08 = (s32)object;
+    node->unk08 = object;
     node->model = model;
     Vector_Copy(&model->position, position);
     Vector_Copy(&node->model->rotation, rotation);
@@ -694,7 +694,7 @@ int MapItem_IsPickable(ItemNode *node) {
     if ((head != node) && (node->prev == 0) && (node->next == 0)) {
         return 0;
     }
-    object = (MapObject *)node->unk08;
+    object = node->unk08;
     result = 1;
     if (object != 0) {
         result = MAP_OBJECT_DEF_KIND(object->definition) != 4;
@@ -823,7 +823,7 @@ void MapItem_PickupTake(void) {
     if (node->def != NULL && node->def->required_flag != 0) {
         map_item_pickup_counts[map_slots[node->flags & 1].tag][node->index]++;
     } else if (node->unk08 != 0) {
-        MapObject_MarkEmptied((MapObject *)node->unk08);
+        MapObject_MarkEmptied(node->unk08);
     } else if (node->record != NULL) {
         memset(node->record, 0, sizeof(DroppedItemRecord));
     }
@@ -849,7 +849,7 @@ void MapItem_PickupPutBack(void) {
     }
     Vector_Copy(&pickup_item->model->position, pickup_start_position);
     Vector_Copy(&pickup_item->model->rotation, pickup_start_rotation);
-    object = (MapObject *)pickup_item->unk08;
+    object = pickup_item->unk08;
     if (object != NULL && (object->state_flags & 0x10000) && object->definition->kind == 3) {
         MapItem_Unlink(pickup_item);
     }
