@@ -572,7 +572,7 @@ void MapSetup_CentralTowerLevel2(int map) {
 /* Set-up of map 251, which is not on the disc: puts fixed item 0x37 out (MapItem_PlaceFixedById) and lowers
    its model by 400. */
 void MapSetup_PlaceItemLowered(int map) {
-    ModelNode *node;
+    ItemNode *node; /* a ModelNode in retail's view; ModelNode no longer lies over an ItemNode on the PC */
     Vector4 unused;
 
     MapItem_PlaceFixedById(map, 0x37);

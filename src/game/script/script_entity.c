@@ -828,7 +828,7 @@ void ScriptCmd_TrySetEntityFlag18(ScriptQueryCommand *command) {
     entity = Entity_GetBySpawnId(command->input.value);
     if (entity != NULL) {
         flags = entity->flags;
-        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30L << 32) | 0xC)) == 0)) {
+        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30LL << 32) | 0xC)) == 0)) {
             entity->flags = flags | 0x40000;
             Script_StoreResult(&command->result, TRUE);
             command->active = 0;
@@ -848,7 +848,7 @@ void ScriptCmd_ClearEntityFlag18(ScriptObjectCommand *command) {
     entity = Entity_GetBySpawnId(command->object_id.value);
     if (entity != NULL) {
         flags = entity->flags;
-        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30L << 32) | 0xC)) == 0)) {
+        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30LL << 32) | 0xC)) == 0)) {
             entity->flags = flags & ~0x40000;
         }
     }

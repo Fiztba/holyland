@@ -58,7 +58,7 @@ void MapObject_UpdateScenery(MapObject *object) {
                     MapObject_StepAnim(object);
                 }
             }
-        } else if (object->source->spawn_flags.flags & (0x8000L << 35)) {
+        } else if (object->source->spawn_flags.flags & (0x8000LL << 35)) {
             MapObject_StepAnim(object);
         }
     }

@@ -336,7 +336,7 @@ s32 MapItem_DropFromEnemy(Entity *entity) {
     memset(rotation, 0, sizeof(rotation));
     rotation[3] = 1.0f;
     scale = enemy_drop_scale;
-    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 47)) {
+    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 47)) {
         // match: the low 16 bits of the 64-bit field, copied before the test
         item = value = *(u16 *)&entity->spawn_info->spawn_flags;
         if (value == 0xFFFF) {

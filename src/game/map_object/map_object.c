@@ -71,7 +71,7 @@ extern int current_map_slot;
 static s32 sway_frame = 0;                      /* 0x4467A0 counts 0 to 59 */
 static s32 next_sound_channel = 0;              /* 0x4467A4 0 to 31, the next of the channels 0x20 to 0x3F */
 s32 map_objects_started[2] = { 0, 0 };         /* the objects of each map have been started */
-int map_object_placements[2] = { 0, 0 };                   /* the MapObjectUnk08 array of each map */
+sptr map_object_placements[2] = { 0, 0 };                  /* the MapObjectUnk08 array of each map */
 s32 map_object_counts[2] = { 0, 0 };           /* how many objects each map has */
 
 static s32 glow_item_worn;                      /* 0x447078 Myu's Necklace is worn */
@@ -564,7 +564,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             } else {
                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
             }
-            if ((object->source->spawn_flags.flags & 0x1000000000000L) || (object->model->alpha < 128.0f && !(object->definition->definition_flags & 0x10000))) {
+            if ((object->source->spawn_flags.flags & 0x1000000000000LL) || (object->model->alpha < 128.0f && !(object->definition->definition_flags & 0x10000))) {
                 DrawList_Add(object->model, 0, mode);
             } else {
                 ModelTexture_SendForModel(object->model);
@@ -625,7 +625,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             } else {
                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
             }
-            if ((object->source->spawn_flags.flags & 0x1000000000000L) || (object->model->fade_enabled != 0 && (s16)object->model->fade_alpha < 0x80 && !(object->definition->definition_flags & 0x10000))) {
+            if ((object->source->spawn_flags.flags & 0x1000000000000LL) || (object->model->fade_enabled != 0 && (s16)object->model->fade_alpha < 0x80 && !(object->definition->definition_flags & 0x10000))) {
                 DrawList_Add(object->model, 0, mode);
             } else {
                 ModelTexture_SendForModel(object->model);
@@ -862,11 +862,11 @@ void MapObject_DrawModel(int *model) {
 void MapObject_DrawModelWithAlpha(ModelInstance *model) {
     Packet_BeginGsRegisters();
     if (model->alpha < 128.0f) {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
     } else {
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118LL);
     }
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
     Packet_AddGsRegister(GS_REG_ALPHA_2, 9);

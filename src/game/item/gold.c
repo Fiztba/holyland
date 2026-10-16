@@ -320,7 +320,7 @@ int Gold_DropFromEntity(Entity *entity) {
     f32 angle;
 
     if (entity->params->gold == 0) {
-        return; // match: no value, though the function returns what Gold_Drop does (retail keeps $2 live here)
+        return FALSE; /* retail returns no value here, whatever $2 held; no caller reads it */
     }
     amount = 1;
     if (entity->params->gold >= 2) {
@@ -431,7 +431,7 @@ void Gold_ClearMark(MapActor *actor) {
 
     map_slot = (actor->flags >> 2) & 1;
     entry = &map_slots[map_slot];
-    slot = ((char *)actor - (char *)map_actors[map_slot]) / sizeof(MapActor);
+    slot = (u32)(((char *)actor - (char *)map_actors[map_slot]) / sizeof(MapActor));
     // match: retail adds the tag row and the slot before the table base
     mark = (ObjectMark *)((u8 *)map_object_marks + (entry->tag * sizeof(map_object_marks[0]) + slot * sizeof(ObjectMark)));
     memset(mark, 0, sizeof(ObjectMark));

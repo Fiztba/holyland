@@ -12,7 +12,7 @@
 #define MAP_OBJECT_KIND_CONTAINER           21      /* barrels, pots and wooden boxes */
 
 extern s32 map_objects_started[2];
-extern int map_object_placements[2];
+extern sptr map_object_placements[2];
 extern s32 map_object_counts[2];
 
 void MapObject_InitMap(int map);

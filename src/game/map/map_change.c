@@ -62,7 +62,7 @@ void Sound_StopAll(int);
 void func_001A15F0(void);
 void MapItem_InitMap(int);
 void MapItem_RollFixedItems(int);
-void Script_Init(int);
+void Script_Init(sptr);
 int Script_Start(int, int);
 void Vector_Copy(void *, void *);
 extern int current_map_slot;
@@ -188,11 +188,11 @@ void MapChange_FadeOutCapture(void) {
 
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x88);
     Packet_EndGsRegisters();
     total = 30;
-    quad.tag = 0x26802ABC0L;
+    quad.tag = 0x26802ABC0LL;
     quad.unk10 = 0x156;
     quad.first_x = 0x6BF8;
     quad.first_y = 0x71F8;
@@ -226,7 +226,7 @@ void MapChange_FadeOutCapture(void) {
 void MapChange_DrawBlack(void) {
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_EndGsRegisters();
     GsDraw_FillScreen(0, 0, 0, 0x80, 0x88);
     Packet_BeginGsRegisters();
@@ -240,7 +240,7 @@ void MapChange_FadeMapToBlack(void) {
     Map_DrawRecords(0);
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x88);
     Packet_EndGsRegisters();
     {
@@ -372,7 +372,7 @@ void MapChange_SetUpMap(void) {
             break;
         }
     case 0:
-        header = slot->header;
+        header = (MapSlotUnk08 *)slot->header;
         player_state.position.x = header->player_start_x;
         player_state.position.y = header->player_start_y;
         player_state.position.z = header->player_start_z;
