@@ -15,7 +15,7 @@ float Interact_GetDistanceWithin(float, float *, float *);
 void Collision_RayCylinder(f32, f32, f32, void *, void *, void *);
 void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
 int MapItem_IsPickable(void *);
-int ModelMotion_GetLastFrame(char *); // match: its u16 is halved as an int
+u16 ModelMotion_GetLastFrame(char *);
 int Script_Start(int, int);
 int Script_IsRunning(int);
 int MapItem_StartPickup(ItemNode *);

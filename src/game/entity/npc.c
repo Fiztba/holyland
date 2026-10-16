@@ -31,8 +31,7 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(Entity *, s32);
 void EntityAi_CheckFarFromSpawn(char *);
 
-/* Motion_BlendToPose as if it returned a value.
-   match: the callee is void, but retail keeps what it leaves in $2 */
+/* Motion_BlendToPose, which returns the blend frames left. */
 #define MOTION_BLEND_TO_POSE ((int (*)(EntityModel *, f32))Motion_BlendToPose)
 
 static void Npc_Animate(Entity *entity);

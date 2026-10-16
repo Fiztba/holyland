@@ -35,7 +35,7 @@ float EntityMath_AngleXZ(float *, char *);
 float EntityMath_AngleDifference(float, float);
 int EntityAi_TurnCommand(Entity *);
 int EntityAi_TurnFromPush(void *, void *);
-s16 EntityAi_MoveCommand(float, void *, int); // match: this file only matches with this type; EntityAi_MoveCommand.c defines it differently
+s32 EntityAi_MoveCommand(Entity *, s32, f32);
 void EntityAi_Guard(Entity *);
 void EntityAi_MeleeAttack(Entity *);
 void EntityAi_RangedAttack(Entity *);
@@ -275,7 +275,7 @@ static void DarkSoldier_ThinkCombat(Entity *entity, s32 unknown) {
             } else if (turn < 0) {
                 entity->move_command = 0x141;
             } else {
-                entity->move_command = EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 1);
+                entity->move_command = EntityAi_MoveCommand(entity, 1, entity->radius + 100.0f + 30.0f);
             }
             entity->move_command |= 0x400;
         }

@@ -968,6 +968,13 @@ typedef struct {
     char pad3E[0x12];
 } EffectSlot;
 
+/* A row of effect_kind_handlers: the kind's start handler, called with the slot the effect is spawned from,
+   and its update handler, called every frame. */
+typedef struct {
+    void (*start)(EffectActor *effect, EffectSlot *spawn_slot);
+    void (*update)(EffectActor *effect);
+} EffectKindHandlers;
+
 /* EffectSlot.flags bit 32: the slot is in use */
 #define EFFECT_SLOT_LIVE (0x8000LL << 17)
 

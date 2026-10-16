@@ -37,8 +37,7 @@ void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 float EntityAi_Accelerate(Entity *, float);
 
-/* Motion_BlendToPose as if it returned a value.
-   match: the callee is void, but retail keeps what it leaves in $2 */
+/* Motion_BlendToPose, which returns the blend frames left. */
 #define MOTION_BLEND_TO_POSE ((int (*)(EntityModel *, f32))Motion_BlendToPose)
 
 /* An action that starts no motion of its own: it waits until the current motion has blended in and played to

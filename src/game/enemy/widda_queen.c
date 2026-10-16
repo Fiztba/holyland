@@ -32,9 +32,8 @@ void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 int EntityShot_LaunchAimed(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *, f32, f32);
 extern PlayerData player_state;
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
-// match: the definitions take the float last, but retail sets it up before the index
-int EntityAi_CanUseMeleeFacing(Entity *, f32, s32);
-int EntityAi_CanUseRangedFacing(Entity *, f32, s32); // match: as EntityAi_CanUseMeleeFacing
+int EntityAi_CanUseMeleeFacing(Entity *, s32, f32);
+int EntityAi_CanUseRangedFacing(Entity *, s32, f32);
 int rand(void);
 void EntityAi_LowerAttackWeight(Entity *);
 void EntityEvent_OnDeath(Entity *);
@@ -439,22 +438,22 @@ static void WiddaQueen_Move(Entity *entity) {
 static s32 WiddaQueen_CanAttack(Entity *entity) {
     f32 heading = EntityMath_WrapAngle(entity->model->rotation[1] + entity->unkE0.part_angle_x);
 
-    if (EntityAi_CanUseMeleeFacing(entity, heading, 0)) {
+    if (EntityAi_CanUseMeleeFacing(entity, 0, heading)) {
         return TRUE;
     }
-    if (EntityAi_CanUseMeleeFacing(entity, entity->model->rotation[1], 1)) {
+    if (EntityAi_CanUseMeleeFacing(entity, 1, entity->model->rotation[1])) {
         return TRUE;
     }
-    if (EntityAi_CanUseMeleeFacing(entity, heading, 2)) {
+    if (EntityAi_CanUseMeleeFacing(entity, 2, heading)) {
         return TRUE;
     }
-    if (EntityAi_CanUseRangedFacing(entity, heading, 0)) {
+    if (EntityAi_CanUseRangedFacing(entity, 0, heading)) {
         return TRUE;
     }
-    if (EntityAi_CanUseRangedFacing(entity, heading, 1)) {
+    if (EntityAi_CanUseRangedFacing(entity, 1, heading)) {
         return TRUE;
     }
-    return EntityAi_CanUseRangedFacing(entity, heading, 2) != 0;
+    return EntityAi_CanUseRangedFacing(entity, 2, heading) != 0;
 }
 
 /* Draws one of the six attacks by weight among those that reach the player, sets flag bits 57 to 59
@@ -471,22 +470,22 @@ static s32 WiddaQueen_PickAttack(Entity *entity) {
     f32 angle;
 
     angle = EntityMath_WrapAngle(entity->model->rotation[1] + entity->unkE0.part_angle_x);
-    chance = EntityAi_CanUseMeleeFacing(entity, angle, 0) ? (entity->attack_weights[0] * entity->params->melee_attacks[0].attack_weight) >> 6 : 0;
+    chance = EntityAi_CanUseMeleeFacing(entity, 0, angle) ? (entity->attack_weights[0] * entity->params->melee_attacks[0].attack_weight) >> 6 : 0;
     chances[0] = chance;
     total += chance;
-    chance = EntityAi_CanUseMeleeFacing(entity, entity->model->rotation[1], 1) ? (entity->attack_weights[1] * entity->params->melee_attacks[1].attack_weight) >> 6 : 0;
+    chance = EntityAi_CanUseMeleeFacing(entity, 1, entity->model->rotation[1]) ? (entity->attack_weights[1] * entity->params->melee_attacks[1].attack_weight) >> 6 : 0;
     chances[1] = chance;
     total += chance;
-    chance = EntityAi_CanUseMeleeFacing(entity, angle, 2) ? (entity->attack_weights[2] * ((EntityParamsUnk240 *)entity->params->melee_attack_third)->attack_weight) >> 6 : 0;
+    chance = EntityAi_CanUseMeleeFacing(entity, 2, angle) ? (entity->attack_weights[2] * ((EntityParamsUnk240 *)entity->params->melee_attack_third)->attack_weight) >> 6 : 0;
     chances[2] = chance;
     total += chance;
-    chance = EntityAi_CanUseRangedFacing(entity, angle, 0) ? (entity->attack_weights[3] * ENTITY_PARAMS_UNK3D8(entity->params, 0)->unk00) >> 6 : 0;
+    chance = EntityAi_CanUseRangedFacing(entity, 0, angle) ? (entity->attack_weights[3] * ENTITY_PARAMS_UNK3D8(entity->params, 0)->unk00) >> 6 : 0;
     chances[3] = chance;
     total += chance;
-    chance = EntityAi_CanUseRangedFacing(entity, angle, 1) ? (entity->attack_weights[4] * ENTITY_PARAMS_UNK3D8(entity->params, 1)->unk00) >> 6 : 0;
+    chance = EntityAi_CanUseRangedFacing(entity, 1, angle) ? (entity->attack_weights[4] * ENTITY_PARAMS_UNK3D8(entity->params, 1)->unk00) >> 6 : 0;
     chances[4] = chance;
     total += chance;
-    chance = EntityAi_CanUseRangedFacing(entity, angle, 2) ? (entity->attack_weights[5] * ENTITY_PARAMS_UNK3D8(entity->params, 2)->unk00) >> 6 : 0;
+    chance = EntityAi_CanUseRangedFacing(entity, 2, angle) ? (entity->attack_weights[5] * ENTITY_PARAMS_UNK3D8(entity->params, 2)->unk00) >> 6 : 0;
     chances[5] = chance;
     total += chance;
     if (total == 0) {

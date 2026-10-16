@@ -22,7 +22,7 @@ void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int, s64);
 void Packet_EndGsRegisters(void);
 void GsDraw_FillScreen(int, int, int, int, int);
-int Sound_PlaySw(int); // match: an int return (the definition is void) keeps $2 busy in Player_BounceWeapon
+void Sound_PlaySw(int);
 int Sound_PlayCommon(int);
 
 extern PlayerState player_state;
@@ -264,7 +264,7 @@ void Player_TiltViewFromHit(int damage) {
     }
 }
 
-int Sound_StopVoice(int); // match: an int return (the definition is void) keeps -1 in $3
+void Sound_StopVoice(s8 slot);
 
 /* Stops the last footstep sound (footstep_voice), if one plays. */
 void Player_StopFootstepSound(void) {

@@ -9,7 +9,7 @@
 #include "ui/message.h"
 #include "player/player.h"
 
-int Script_StoreFloatResult(ScriptArg *target, double value); // match: the definition takes a float, but retail converts the argument to double here (fptodp): there was no prototype in scope
+int Script_StoreFloatResult(ScriptArg *target, f32 value);
 int rand(void);
 float atan2f(float, float);
 double sqrt(double);
@@ -20,7 +20,7 @@ void Vector_Add(void *dest, void *a, void *b);
 void Game_MarkMessageHeard(int flag);
 int Motion_Start(void *, int, int, u32, int);
 int Motion_Step(void *, int);
-int Motion_BlendToPose(f32, void *); // match: retail leaves a value in $2
+int Motion_BlendToPose(EntityModel *, f32);
 float EntityMath_HeadingTo(float *from, float *to);
 float EntityMath_AngleDifference(float angle, float heading);
 void EntityAi_SetState(char *, u8);
@@ -276,7 +276,7 @@ int ScriptCmd_BlendEntityMotion(ScriptMotionBlendCommand *command) {
     if (entity != NULL && (entity->flags & 0xF) == 3 && entity->hit_points != 0) {
         entity_model = entity->model;
         if (entity_model->level_tables->unk88 != 0) {
-            return Motion_BlendToPose(command->weight.value, entity_model);
+            return Motion_BlendToPose(entity_model, command->weight.value);
         }
     }
     command->active = 0;

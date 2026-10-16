@@ -41,7 +41,7 @@ extern int ground_fan_index;
 int Collision_FindFloorBelow(f32, void *);
 typedef float Mat[4][4] __attribute__((aligned(16)));
 void Vector_Normalize(void *, void *);
-extern void (*effect_kind_handlers[][2])();
+extern EffectKindHandlers effect_kind_handlers[];
 extern int bolt_start_count;
 void Model_UpdateSkinnedBonePoints(ModelInstance *);
 char *Model_GetSkinnedBonePoint(char *, u32);
@@ -87,7 +87,7 @@ void EffectBolt_StartBySurface(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectBolt_StartWithTargeters(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectBolt_StartCounted(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectBolt_Update(EffectActor *actor);
-void EffectFollowPose_Start(EffectActor *effect);
+void EffectFollowPose_Start(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectFollowPose_Update(EffectActor *effect);
 void EffectFollowPosition_Start(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectFollowPosition_Update(EffectActor *effect);
@@ -149,7 +149,7 @@ void EffectLight_Start(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectLight_Update(EffectActor *effect);
 void EffectSpiral_Start(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectSpiral_Update(EffectActor *effect);
-void EffectScatterAroundPlayer_Start(EffectActor *effect);
+void EffectScatterAroundPlayer_Start(EffectActor *effect, EffectSlot *spawn_slot);
 void EffectScatterAroundPlayer_Update(EffectActor *effect);
 void EffectDrop_Start(EffectActor *actor, EffectSlot *spawn_slot);
 void EffectDrop_Update(EffectActor *effect);
@@ -552,7 +552,7 @@ void EffectHandover_Update(EffectActor *effect) {
             }
             EffectHandover_StartNext(effect, &effect->model->position, effect_id);
         } else if (hits & 4) {
-            if (effect_kind_handlers[effect->def->kind_index][0] == EffectHandover_StartBySurface && (COLLISION_RESULT->unk18 == 3 || COLLISION_RESULT->unk18 == 5)) {
+            if (effect_kind_handlers[effect->def->kind_index].start == EffectHandover_StartBySurface && (COLLISION_RESULT->unk18 == 3 || COLLISION_RESULT->unk18 == 5)) {
                 EffectHandover_StartNext(effect, &effect->model->position, effect->def->child_effect_id);
             } else {
                 EffectHandover_StartNext(effect, &effect->model->position, effect->def->end_effect);
@@ -689,7 +689,7 @@ void EffectBolt_Update(EffectActor *actor) {
         if (hit != 0 && actor->def->end_effect != 0xFFFF) {
             if (hit & 2) {
                 Effect_Spawn(actor->def->end_effect, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
-            } else if ((effect_kind_handlers[actor->def->kind_index][0] == EffectBolt_StartBySurface || effect_kind_handlers[actor->def->kind_index][0] == EffectBolt_StartWithTargeters) && (COLLISION_RESULT->unk18 == 3 || COLLISION_RESULT->unk18 == 5)) {
+            } else if ((effect_kind_handlers[actor->def->kind_index].start == EffectBolt_StartBySurface || effect_kind_handlers[actor->def->kind_index].start == EffectBolt_StartWithTargeters) && (COLLISION_RESULT->unk18 == 3 || COLLISION_RESULT->unk18 == 5)) {
                 Effect_Spawn(actor->def->interval, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
             } else {
                 Effect_Spawn(motion->effect_id, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
@@ -701,7 +701,7 @@ void EffectBolt_Update(EffectActor *actor) {
 }
 
 /* Kind 40 start: keeps the target's position and rotation; the model is not placed. */
-void EffectFollowPose_Start(EffectActor *effect) {
+void EffectFollowPose_Start(EffectActor *effect, EffectSlot *spawn_slot) {
     Vector_Copy(&effect->motion, &effect->target->model->position);
     Vector_Copy(&effect->motion.unk10, &effect->target->model->rotation);
 }
@@ -2016,7 +2016,7 @@ void EffectSpiral_Update(EffectActor *effect) {
 /* Kind 86 start: at def->offset_base turned by the player's heading, plus a random spread, randomly turned,
    def->radius_half off the floor found within 1500 of it; ends where there is none. Velocity.y is
    def->speed. */
-void EffectScatterAroundPlayer_Start(EffectActor *effect) {
+void EffectScatterAroundPlayer_Start(EffectActor *effect, EffectSlot *spawn_slot) {
     Vector4 offset;
     f32 matrix[16];
     EffectMotion *motion;

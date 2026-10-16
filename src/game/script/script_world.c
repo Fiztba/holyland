@@ -15,7 +15,7 @@
 #include "effect/shot.h"
 #include <string.h>
 
-int Script_StoreFloatResult(ScriptArg *target, double value); // match: the definition takes a float, but retail converts the argument to double here (fptodp): there was no prototype in scope
+int Script_StoreFloatResult(ScriptArg *target, f32 value);
 int MapItem_PlaceFixedById(int map, int item_id);
 int MapItem_StartPickupById(int item_id, int value);
 ItemNode *MapItem_GetFixedById(int item_id);
@@ -30,14 +30,14 @@ int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
 void MapChange_StartToMap(int map_tag);
 int Sound_PlayCommonAt(float range, int sound, float *position);
 int Sound_PlayMapAtRange(u8 sound, u8 mode, float *position, float range);
-void Sound_StartTaggedAt(s8 sound_id, u8 voice, u8 mode, f32 volume, Vector4Arg position); // match: retail passes the position as a struct; the definition takes a pointer
+s32 Sound_StartTaggedAt(s8 sound_id, u8 voice, u8 mode, f32 volume, Vector4Arg *position);
 int Sound_StopTagged(char tag);
 s32 Sound_StartTaggedAlong(s8 sound_id, u8 voice, u8 mode, Vector4Arg *origin, Vector4Arg *target, f32 volume);
 int Sound_PlayMapVolume(u8 sound, int volume);
 int Sound_StartTagged(s8 sound, u8 voice, int volume);
 void Sound_StopVoice(s8 slot);
 void Input_StartRumble(u8 strength, u8 duration, u8 delay);
-void Menu_AddKeyItem(u32, u32, int); // match: three arguments are passed; the definition takes the first alone
+void Menu_AddKeyItem(s32 key);
 
 extern int current_map_slot;
 extern int map_load_committed;
@@ -625,7 +625,7 @@ void ScriptCmd_AddItem(ScriptPairCommand *command) {
                 }
             }
             if (((u8 *)item_common_defs)[def_offset] == 3) {
-                Menu_AddKeyItem(item, item, def_offset);
+                Menu_AddKeyItem(item);
             }
         } else {
             if (item_counts[item] >= 2) {
@@ -1117,7 +1117,7 @@ void ScriptCmd_PlaySoundAtPoint(ScriptPointSoundCommand *command) {
 void ScriptCmd_PlayVoiceSoundAt(ScriptVoiceSoundCommand *command) {
     Vector4Arg position = { command->x.value, command->y.value, command->z.value, 1.0f };
 
-    Sound_StartTaggedAt(command->sound.value, command->voice.value, 0, command->volume.value, position);
+    Sound_StartTaggedAt(command->sound.value, command->voice.value, 0, command->volume.value, &position);
     command->active = 0;
 }
 
@@ -1126,7 +1126,7 @@ void ScriptCmd_PlayVoiceSoundAt(ScriptVoiceSoundCommand *command) {
 void ScriptCmd_PlayVoiceSoundAtWithMode(ScriptVoiceSoundModeCommand *command) {
     Vector4Arg position = { command->x.value, command->y.value, command->z.value, 1.0f };
 
-    Sound_StartTaggedAt(command->sound.value, command->voice.value, command->mode.value, command->volume.value, position);
+    Sound_StartTaggedAt(command->sound.value, command->voice.value, command->mode.value, command->volume.value, &position);
     command->active = 0;
 }
 

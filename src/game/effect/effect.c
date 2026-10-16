@@ -42,7 +42,7 @@ extern char map_draw_slot_blocks[];
 extern MapObject map_slot_objects[][0x200];
 extern Entity entity_pool[][0x80];
 extern void (*effect_draw_hooks[4][4])(ModelInstance *);
-extern void (*effect_kind_handlers[][2])();
+extern EffectKindHandlers effect_kind_handlers[];
 extern FxTableEntry fx_table[];
 extern PlayerState player_state;
 extern Vector4 origin_point;
@@ -389,7 +389,7 @@ void Effect_UpdateAll(void) {
                         Effect_SpawnFromEffect(effect->def->frame_spawn_effects[key], effect);
                     }
                 }
-                effect_kind_handlers[effect->def->kind_index][1](effect);
+                effect_kind_handlers[effect->def->kind_index].update(effect);
             }
         }
     }
@@ -552,7 +552,7 @@ static void Effect_RunSpawner(EffectSlot *slot) {
         effect->unk90 = 4; /* frames the actor stays reserved once it is freed */
         effect->unk6C = 0;
         Effect_SetupModel(index);
-        effect_kind_handlers[effect->def->kind_index][0](effect, slot);
+        effect_kind_handlers[effect->def->kind_index].start(effect, slot);
         EFFECT_FLAG_BITS(effect)->bit59 = effect->def->sound_id != 0;
         if (fx_table[effect->effect_param].item_menu_magic != 0) {
             EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
