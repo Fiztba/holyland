@@ -35,9 +35,9 @@ extern s32 D_004467B8[2];
 extern MapObject map_slot_objects[];
 extern MapObject D_003AFA30[];
 void Vector_Copy(void *, void *);
-void func_001C2128(MapObject *, f32 *, f32 *, f32);
+void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
 extern MapSlot map_slots[];
-void func_001B2C48(void *);
+void Attack_RollPlayerAilments(void *);
 
 /* EntityMath_WrapAngle, which the game inlines here: wraps an angle to +-pi */
 static inline f32 wrap_angle(f32 angle) {
@@ -170,9 +170,9 @@ void EntityPoint_PickNearFromDistance(f32 *point, f32 *centre, f32 distance, f32
     Vector_Add(point, point, centre);
 }
 
-/* A point `distance` away from the player along the player's vector (unk1B0, unk1AC, unk1B4) turned by the
-   player's heading. Nothing calls it. */
-void func_0018BC78(f32 *point, s32 distance) {
+/* Where the player will be after `frames` frames at his present speed: his position plus his sideways,
+   falling and walking speeds (unk1B0, unk1AC, unk1B4), turned by his heading, times frames. Nothing calls it. */
+void EntityAim_PredictPlayerPosition(f32 *point, s32 frames) {
     f32 offset[4];
 
     offset[0] = player_state.unk1B0;
@@ -181,7 +181,7 @@ void func_0018BC78(f32 *point, s32 distance) {
     offset[3] = 0.0f;
     sceVu0RotMatrixY(MODEL_MATRIX_SCRATCH, D_00431AF0, player_state.rotation.y);
     sceVu0ApplyMatrix(offset, (int *)MODEL_MATRIX_SCRATCH, offset);
-    Vector_Scale(offset, offset, distance);
+    Vector_Scale(offset, offset, frames);
     Vector_Add(point, &player_state, offset);
 }
 
@@ -458,7 +458,7 @@ s32 EntitySight_ObjectInWay(Entity *entity) {
                 if (highest[2] < object->model->position.z - reach) {
                     continue;
                 }
-                func_001C2128(object, position, direction, distance);
+                Collision_HitRayObj(object, position, direction, distance);
                 if (COLLISION_RESULT->hit != 0) {
                     return TRUE;
                 }
@@ -559,7 +559,7 @@ s32 EntitySight_WallInWay(Entity *entity) {
 }
 
 /* When the player is within `max_distance` of `point` (flat), in its height band and within `max_angle` of
-   `heading`, gives the attack's ailment chances to the player (func_001B2C48) and returns TRUE. */
+   `heading`, gives the attack's ailment chances to the player (Attack_RollPlayerAilments) and returns TRUE. */
 s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_height, f32 max_distance, f32 heading) {
     f32 distance_out[4];
     f32 angle;
@@ -594,6 +594,6 @@ s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_he
     if (ABS(angle) > max_angle) {
         return FALSE;
     }
-    func_001B2C48(target);
+    Attack_RollPlayerAilments(target);
     return TRUE;
 }

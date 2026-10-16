@@ -12,9 +12,9 @@
 float sqrtf(float);
 float atan2f(float, float);
 double atan2(double, double);
-char *func_0010CAB8(char *, u32);
+char *Model_GetSkinnedBonePoint(char *, u32);
 void Vector_Copy(void *, void *);
-int func_001B4F30(u16, void *, void *, void *, void *);
+int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
 extern char *D_004467C0;
 extern PlayerState player_state;
 // match: Sound_PlayFalloff.c has not been given its real arguments yet
@@ -22,9 +22,9 @@ void Sound_PlayFalloff(float, int, int, char, float, float);
 extern EntitySpawnInfo *D_004467D0[2];
 extern MapSlot map_slots[];
 extern int D_00446770;
-s32 func_001C8CB0(Entity *);
+s32 MapItem_DropFromEnemy(Entity *);
 void Player_AddExperience(s32);
-void func_001035A8(u32, int);
+void Game_CountSpawnDeath(u32, int);
 int Script_Start(int, int);
 
 /* EntityMath_WrapAngle, which the game inlines here: wraps an angle to +-pi */
@@ -137,8 +137,8 @@ int EntityShot_LaunchAimed(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame
             shot->unk22 = shot->unk20 = 0;
             shot->unk00 = 1;
             shot->unk28 = entity->params->unk238;
-            from = (f32 *)func_0010CAB8((char *)entity->model, record->unk10[i].unk01);
-            tip = (f32 *)func_0010CAB8((char *)entity->model, record->unk10[i].unk01 + 1);
+            from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, record->unk10[i].unk01);
+            tip = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, record->unk10[i].unk01 + 1);
             if (from != NULL && tip != NULL) {
                 if (record->unk10[i].unk01 != 0xFF) {
                     delta_x = tip[0] - from[0];
@@ -157,7 +157,7 @@ int EntityShot_LaunchAimed(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame
                     angles[0] = approach_angle(angles[0], pitch, pitch_rate);
                     angles[1] = approach_angle(angles[1], yaw, yaw_rate);
                 }
-                func_001B4F30(record->unk10[i].unk00, shot, from, angles, entity);
+                Attack_LaunchMagicEffect(record->unk10[i].unk00, shot, from, angles, entity);
             }
         }
     }
@@ -182,9 +182,9 @@ int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from
             shot->unk20 = 0;
             shot->unk22 = 0;
             shot->unk28 = entity->params->unk238;
-            origin = func_0010CAB8((char *)entity->model, record->unk10[i].unk01);
+            origin = Model_GetSkinnedBonePoint((char *)entity->model, record->unk10[i].unk01);
             if (origin != NULL) {
-                func_001B4F30(record->unk10[i].unk00, shot, origin, direction, entity);
+                Attack_LaunchMagicEffect(record->unk10[i].unk00, shot, origin, direction, entity);
             }
         }
     }
@@ -195,7 +195,7 @@ int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from
 void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, int rotation) {
     char *point;
 
-    point = func_0010CAB8(*entity, point_id);
+    point = Model_GetSkinnedBonePoint(*entity, point_id);
     if (point != 0) {
         Effect_StartSpawner(effect_id, point, (void *)rotation, entity);
     }
@@ -231,8 +231,8 @@ void EntityEvent_StartFrameEffects(Entity *entity, s32 animation, s32 frame_from
         return;
     }
     for (i = 0; i < count; i++, record++) {
-        from = (f32 *)func_0010CAB8((char *)entity->model, record->unk04);
-        tip = (f32 *)func_0010CAB8((char *)entity->model, record->unk04 + 1);
+        from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, record->unk04);
+        tip = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, record->unk04 + 1);
         if (from != NULL && tip != NULL) {
             delta_x = tip[0] - from[0];
             delta_y = tip[1] - from[1];
@@ -335,22 +335,22 @@ void EntityEvent_Respawn(Entity *entity) {
     Effect_FreeForOwner(entity);
     if (entity->params->unkC6 != 0) {
         if (entity->params->unkC6 != 0xFFFF) {
-            bone = func_0010CAB8((char *)entity->model, entity->params->unkC5);
+            bone = Model_GetSkinnedBonePoint((char *)entity->model, entity->params->unkC5);
             Effect_StartSpawner(entity->params->unkC6, bone, (char *)entity->model + 0xD0, entity);
         }
     }
 }
 
 /* What every type does when its entity dies: drops its item and gold, gives the player its experience when
-   the player killed it (flag bits 38-39), passes the map tag and spawn index to func_001035A8, frees its
+   the player killed it (flag bits 38-39), passes the map tag and spawn index to Game_CountSpawnDeath, frees its
    effects and starts the spawn's script. */
 void EntityEvent_OnDeath(Entity *entity) {
-    func_001C8CB0(entity);
+    MapItem_DropFromEnemy(entity);
     Gold_DropFromEntity(entity);
     if ((s32)(entity->flags >> 38) & 3) {
         Player_AddExperience(entity->params->unk0E);
     }
-    func_001035A8(map_slots[entity->group_id].tag, entity->spawn_info - D_004467D0[entity->group_id]);
+    Game_CountSpawnDeath(map_slots[entity->group_id].tag, entity->spawn_info - D_004467D0[entity->group_id]);
     Effect_FreeForOwner(entity);
     if (entity->spawn_info->unk36 != 0 && entity->group_id == D_00446770) {
         Script_Start(entity->spawn_info->unk36, 0);

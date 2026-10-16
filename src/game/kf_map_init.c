@@ -9,18 +9,18 @@
 #include "kf_memory.h"
 #include "kf_screen.h"
 
-int func_00102900(int);
+int File_GetSize(int);
 int sprintf(char *, char *, ...);
-void func_00114840(int);
-void func_00114AA8(int);
+void Map_ParseFile(int);
+void Map_BuildModels(int);
 int Sound_LoadMapBank(MapSlot *);
-void func_001155F8(int);
+void Map_PlaceRecordModels(int);
 void func_001A15F0(void);
-void func_001C82C0(int);
-void func_00123158(int);
-void func_001C87D8(int);
-void func_00119360(int);
-void func_001034F8(int);
+void MapItem_InitMap(int);
+void Entity_AddGroupToWaiting(int);
+void MapItem_RollFixedItems(int);
+void MapSetup_RunForMap(int);
+void Game_MarkMapVisited(int);
 void Script_Init(int);
 int Script_Start(int, int);
 extern char map_object_defs[];
@@ -53,30 +53,31 @@ extern int D_00446F20;
 extern char *D_00446F50;
 extern char *D_00446F54;
 
-/* Reads the six game data files, then works out each definition's scaled value. */
-void func_00112648(void) {
+/* Reads the six parameter files (param/obj.prm, chr.prm, item_nam.prm, item_cmn.prm, item_wpn.prm and
+   item_pct.prm), then turns each item's weight from kilograms into pounds. */
+void Map_LoadParamFiles(void) {
     GameDefinition *definition;
     int handle;
     int i;
 
-    handle = func_00102238(D_0043E4E8, 0, 1);
-    func_001025C0(handle, map_object_defs, -1);
-    func_001024B0(handle);
-    handle = func_00102238(D_0043E4F8, 0, 1);
-    func_001025C0(handle, D_004467C0, -1);
-    func_001024B0(handle);
-    handle = func_00102238(D_0043E508, 0, 1);
-    func_001025C0(handle, item_name_defs, -1);
-    func_001024B0(handle);
-    handle = func_00102238(D_0043E520, 0, 1);
-    func_001025C0(handle, item_common_defs, -1);
-    func_001024B0(handle);
-    handle = func_00102238(D_0043E538, 0, 1);
-    func_001025C0(handle, weapon_defs, -1);
-    func_001024B0(handle);
-    handle = func_00102238(D_0043E550, 0, 1);
-    func_001025C0(handle, worn_defs, -1);
-    func_001024B0(handle);
+    handle = File_Open(D_0043E4E8, 0, 1);
+    File_Read(handle, map_object_defs, -1);
+    File_Close(handle);
+    handle = File_Open(D_0043E4F8, 0, 1);
+    File_Read(handle, D_004467C0, -1);
+    File_Close(handle);
+    handle = File_Open(D_0043E508, 0, 1);
+    File_Read(handle, item_name_defs, -1);
+    File_Close(handle);
+    handle = File_Open(D_0043E520, 0, 1);
+    File_Read(handle, item_common_defs, -1);
+    File_Close(handle);
+    handle = File_Open(D_0043E538, 0, 1);
+    File_Read(handle, weapon_defs, -1);
+    File_Close(handle);
+    handle = File_Open(D_0043E550, 0, 1);
+    File_Read(handle, worn_defs, -1);
+    File_Close(handle);
     definition = item_name_defs;
     for (i = 379; i >= 0; i--) {
         if (definition->unk33 != 0) {
@@ -89,7 +90,7 @@ void func_00112648(void) {
 }
 
 /* Resets the game status, the map draw state and the camera. */
-void func_001127F8(void) {
+void Map_ResetGameState(void) {
     memset(&game_status, 0, 0x48);
     game_status.unk07 = 1;
     game_status.unk00 = 1;
@@ -109,8 +110,8 @@ void func_001127F8(void) {
     D_004325A0.unk48 = 512.0f;
 }
 
-/* Empties the map slots, the map draw lists, the prop table and the area node lists. */
-void func_001128E0(void) {
+/* Empties the map slots, the map draw lists, the records-by-id table and the two lists of record boxes. */
+void Map_ClearSlots(void) {
     D_00446770 = 0;
     memset(map_slots, 0, 2 * sizeof(MapSlot));
     memset(D_00446778, 0, sizeof(D_00446778));
@@ -121,7 +122,7 @@ void func_001128E0(void) {
 }
 
 /* Loads a map into slot 0 in one go, sets everything in it up and makes it the current map. */
-void func_00112948(int map) {
+void Map_LoadAtOnce(int map) {
     char name[0x100];
     MapSlot *slot = &map_slots[0];
     MapSlotMemory *memory = &D_004321F0[0];
@@ -135,20 +136,20 @@ void func_00112948(int map) {
     Memory_ClearWords(memory->unk1C, (u32)D_00446F20 / 4);
     Memory_ClearWords(memory->unk20, D_00446F1C / 4);
     sprintf(name, D_0043E570, map);
-    handle = func_00102238(name, 0, 1);
-    size = func_00102900(handle);
-    func_001025C0(handle, memory->unk14, -1);
-    func_001024B0(handle);
+    handle = File_Open(name, 0, 1);
+    size = File_GetSize(handle);
+    File_Read(handle, memory->unk14, -1);
+    File_Close(handle);
     slot->tag = map;
     slot->unk04 = (size + 0x3FFFF) / 0x40000 * 0x40000;
-    func_00114840(0);
-    func_00114AA8(0);
+    Map_ParseFile(0);
+    Map_BuildModels(0);
     Sound_LoadMapBank(slot);
-    func_001155F8(0);
+    Map_PlaceRecordModels(0);
     MapScroll_ClearPairs(0);
     func_001A15F0();
     MapObject_InitMap(0);
-    func_001C82C0(0);
+    MapItem_InitMap(0);
     Gold_InitMap(0);
     map_slots[0].unk00 = 1;
     D_00446770 = 0;
@@ -161,11 +162,11 @@ void func_00112948(int map) {
     map_draw_state.unk9C = 0;
     MapObject_StartMap(0);
     Entity_InitFromMapSpawns(0);
-    func_00123158(0);
-    func_001C87D8(0);
+    Entity_AddGroupToWaiting(0);
+    MapItem_RollFixedItems(0);
     Entity_ClearFlag10InSlot(0);
-    func_00119360(0);
-    func_001034F8(map_slots[0].tag);
+    MapSetup_RunForMap(0);
+    Game_MarkMapVisited(map_slots[0].tag);
     Script_Init(map_slots[0].unk5C);
     Script_Start(0x7FFF, 0);
     sound_load_queue.unk00 = ((MapSlotUnk08 *)map_slots[0].header)->unk70;

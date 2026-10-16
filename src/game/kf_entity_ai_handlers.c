@@ -30,7 +30,7 @@ void Vector_Cross(void *, void *, void *);
 void Vector_Subtract(void *, void *, void *);
 int rand(void);
 extern PlayerData player_state;
-void func_00196D48(Entity *);
+void EntityAi_ClearTurnInPlace(Entity *);
 extern f32 D_00431AF0[16];
 void sceVu0RotMatrixX(float *, float *, float);
 void sceVu0RotMatrixY(float *, float *, float);
@@ -397,7 +397,7 @@ void EntityAi_Dodge(Entity *entity) {
 }
 
 /* The default guard action (busy bit 0x10): blends into animation 13 and holds it for
-   EntityParams.unkCE frames with flag bit 35 set, which adds to the defence (func_001B2F70) and
+   EntityParams.unkCE frames with flag bit 35 set, which adds to the defence (Attack_HitEntity) and
    keeps a hit from starting a reaction. */
 void EntityAi_Guard(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
@@ -937,7 +937,7 @@ void EntityAi_ThinkCombat(Entity *entity, s32 unknown) {
         }
     }
     if (unkE0->unk78 == 0) {
-        func_00196D48(entity);
+        EntityAi_ClearTurnInPlace(entity);
         if (ENTITY_FLAG_BITS(entity)->bit31) {
             angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {

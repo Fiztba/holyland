@@ -4,12 +4,12 @@
 
 #include "common.h"
 
-/* game_status (cleared as 0x48 bytes by func_001127F8). Other files still
+/* game_status (cleared as 0x48 bytes by Map_ResetGameState). Other files still
    declare it as char[]/int[], so the extern stays in each file. */
 typedef struct {
     char unk00;                     /* 0x00 nonzero: script blends are skipped */
     char unk01;                     /* 0x01 */
-    char paused;                    /* 0x02 1 while func_00101F90 holds the game */
+    char paused;                    /* 0x02 1 while GameLoop_UpdatePause holds the game */
     s8 unk03;                       /* 0x03 */
     u8 unk04;                       /* 0x04 0 or 1 */
     s8 unk05;                       /* 0x05 nonzero: the camera moves to CameraState.unk30 */
@@ -22,11 +22,11 @@ typedef struct {
     u32 bit2 : 1;
     u32 bit3 : 1;
     u32 bit4 : 1;
-    u32 save_requested : 1;         /* the save screen runs next (func_001017A8; MapObject_UpdateSavePoint) */
+    u32 save_requested : 1;         /* the save screen runs next (GameLoop_OpenRequestedMenu; MapObject_UpdateSavePoint) */
     u32 bit6 : 1;
     u32 bit7 : 1;
     u32 bit8 : 1;
-    u32 bit9 : 1;                   /* set to leave the main loop (func_001001C0) */
+    u32 bit9 : 1;                   /* set to leave the main loop (GameLoop_Run) */
     u32 bits10 : 2;
     u32 bit12 : 1;                  /* bits 12 and 13 both set: the main loop skips drawing and input */
     u32 bit13 : 1;
@@ -61,12 +61,12 @@ typedef struct {
 
 #define GAME_STATUS_FLAG_WORD(status) (((GameStatusFlagWord *)(status))->flags)
 
-/* D_00446A28: the play time as func_001D22B8 splits it (byte 1 seconds, 2 minutes, 3 and 5 hours), passed by value */
+/* D_00446A28: the play time as PlayTime_ComputeCurrent splits it (byte 1 seconds, 2 minutes, 3 and 5 hours), passed by value */
 typedef struct {
     char bytes[8];
 } PlayTime;
 
-/* the first 8 bytes of the save buffer save_image (func_00103C18 writes them, func_001060C0 checks them) */
+/* the first 8 bytes of the save buffer save_image (Game_WriteSaveImage writes them, Game_CheckSaveImage checks them) */
 typedef struct {
     s32 magic;                      /* 0x00 SAVE_MAGIC */
     s32 size;                       /* 0x04 bytes of state, header included, rounded up to SAVE_BLOCK_SIZE; one checksum
@@ -88,51 +88,51 @@ typedef struct {
     f32 unk30[4];                   /* 0x30 the point to move to (GameStatus.unk05) */
     f32 unk40;                      /* 0x40 how fast it turns to unk20 */
     f32 unk44;                      /* 0x44 how far it moves to unk30 in a frame */
-    f32 unk48;                      /* 0x48 512.0 after func_001127F8 */
+    f32 unk48;                      /* 0x48 512.0 after Map_ResetGameState */
     f32 unk4C;                      /* 0x4C added to the height above the player */
-    f32 unk50[4];                   /* 0x50 the first shake's offset (func_00100D10) */
+    f32 unk50[4];                   /* 0x50 the first shake's offset (GameLoop_UpdateCameraShake) */
     f32 unk60[4];                   /* 0x60 the second shake's offset */
     f32 unk70;                      /* 0x70 how far the first shake reaches */
     s32 unk74;                      /* 0x74 frames of it left */
-    f32 unk78;                      /* 0x78 set with unk7C by func_00195878 */
-    s32 unk7C;                      /* 0x7C */
+    f32 unk78;                      /* 0x78 how far the second shake reaches (EntityAi_ShakeCamera) */
+    s32 unk7C;                      /* 0x7C frames of it left */
 } CameraState;
 
 /* D_00420D00: the event runner */
 typedef struct {
-    f32 unk00[4];                   /* 0x00 a position the camera is put in front of (func_00100FC8) */
+    f32 unk00[4];                   /* 0x00 a position the camera is put in front of (GameLoop_UpdateCamera) */
     f32 unk10[4];                   /* 0x10 a direction from it */
-    f32 unk20[4];                   /* 0x20 unk00 as it was the frame before (func_001D0800) */
+    f32 unk20[4];                   /* 0x20 unk00 as it was the frame before (Interact_UpdateViewRay) */
     f32 unk30[4];                   /* 0x30 unk10 as it was the frame before */
     f32 unk40;                      /* 0x40 how far along unk10 */
     f32 unk44;                      /* 0x44 unk40 as it was the frame before */
-    f32 unk48;                      /* 0x48 distance to the nearest entity around the player (func_001D0970) */
+    f32 unk48;                      /* 0x48 distance to the nearest entity around the player (Interact_FindTarget) */
     f32 unk4C;                      /* 0x4C distance to what `current`, unk54 or unk58 names */
     void *current;                  /* 0x50 the event being run */
     void *unk54;                    /* 0x54 an Entity whose spawn info can answer the use of an item (Player_UseItem) */
-    void *unk58;                    /* 0x58 the ItemNode (kf_model.h) in front of the player, NULL: none (func_001D0970) */
+    void *unk58;                    /* 0x58 the ItemNode (kf_model.h) in front of the player, NULL: none (Interact_FindTarget) */
 } EventRunner;
 
-/* an event func_00120130 hands to MapObject_UpdateClosedChest */
+/* an event MapObject_OpenChestOnSignal hands to MapObject_UpdateClosedChest */
 typedef struct {
     char pad00[0x10];
     u32 flags;                      /* 0x10 */
 } GameEvent;
 
-/* the viewers func_0011A500 runs, indexed by picked_viewer (kf_map_viewer.c), 0xC bytes each */
+/* the viewers MapViewer_Run runs, indexed by picked_viewer (kf_map_viewer.c), 0xC bytes each */
 typedef struct {
     void (*run)(void);              /* 0x00 loops until the viewer is left */
     int unk04;                      /* 0x04 */
     int count;                      /* 0x08 the number of pictures; viewer_picture stays below it */
 } ViewerEntry;
 
-/* four texture coordinates, one per corner of the viewer's player marker: a local table func_0011AAE8
+/* four texture coordinates, one per corner of the viewer's player marker: a local table MapViewer_DrawPictureMap
    copies whole from read-only data (D_0043E760, D_0043E770) */
 typedef struct {
     s32 values[4];                  /* 0x00 */
 } ViewerCornerTable;
 
-/* an 8-byte wall-clock time passed by value (func_001D2390, func_001D23F0, func_001D24A8) */
+/* an 8-byte wall-clock time passed by value (PlayTime_DayOfYear, PlayTime_ClockSecondsBetween, PlayTime_ClockMinutesBetween) */
 typedef struct {
     char unk0;                      /* 0x00 */
     u8 sec;                         /* 0x01 */
@@ -144,7 +144,7 @@ typedef struct {
     u8 year;                        /* 0x07 years since 2000 */
 } ClockTime;
 
-/* the C library's struct tm, which mktime fills in (func_001D2200) */
+/* the C library's struct tm, which mktime fills in (PlayTime_GetWeekday) */
 typedef struct {
     int tm_sec;                     /* 0x00 */
     int tm_min;                     /* 0x04 */
@@ -224,7 +224,7 @@ typedef struct {
     char text[0x800];               /* 0x50 */
 } TextLog;
 
-/* item_name_defs[ITEM_COUNT]: param/item_nam.prm, read by func_00112648: a row per item, starting with its
+/* item_name_defs[ITEM_COUNT]: param/item_nam.prm, read by Map_LoadParamFiles: a row per item, starting with its
    name (the items carried, then 70 weapons from ITEM_WEAPON_FIRST, then 160 worn ones from ITEM_WORN_FIRST) */
 typedef struct {
     char pad00[0x30];
@@ -246,7 +246,7 @@ typedef struct {
     char pad34[0x0C];
 } GameDefinitionWords;
 
-/* a GameDefinition as the save code reads it (func_00103C18, func_00104EC8): unk33 is the top byte of flags */
+/* a GameDefinition as the save code reads it (Game_WriteSaveImage, Game_ReadSaveImage): unk33 is the top byte of flags */
 typedef struct {
     char pad00[0x30];
     u32 flags;                      /* 0x30 bits 18 and 19 are a state; below 2 it is saved as one bit */
@@ -269,12 +269,12 @@ typedef struct {
     int value;
 } __attribute__((packed)) UnalignedInt;
 
-/* D_0043E460: the x offsets func_001067E0 cycles its sprites through */
+/* D_0043E460: the x offsets Game_DrawHazeLayersShifted cycles its sprites through */
 typedef struct {
     int x[3];
 } LayerOffsets;
 
-/* wobble_grid_origin, wobble_grid_points, wobble_grid_previous: an 8 x 11 grid of points func_00108020 wobbles */
+/* wobble_grid_origin, wobble_grid_points, wobble_grid_previous: an 8 x 11 grid of points Game_DrawWobblingScreen wobbles */
 typedef struct {
     int points[8][11][2];
 } __attribute__((aligned(16))) RippleGrid;
@@ -544,7 +544,7 @@ typedef struct {
     void *texture;                  /* 0x04 a TextureHeader (kf_texture.h) */
 } PoolPartSource;
 
-/* pad_states[2]: a controller as the game reads it, one per port (func_001B5590). pad_state is the copy
+/* pad_states[2]: a controller as the game reads it, one per port (Input_ReadPort). pad_state is the copy
    of port 0 that the game tests. */
 typedef struct {
     u16 held;                       /* 0x00 buttons held, the stick directions among them */
@@ -556,7 +556,7 @@ typedef struct {
     u16 prev_move_buttons;          /* 0x0E */
 } PadState;
 
-/* the texts of the debug start menu (func_001B0A78), local arrays it copies whole from
+/* the texts of the debug start menu (Debug_RunStartMenu), local arrays it copies whole from
    read-only data: blank lines above the text, the PUSH START line, the four menu lines */
 typedef struct {
     char text[0x1A];
@@ -570,7 +570,7 @@ typedef struct {
     char text[4][0x80];
 } DebugStartMenuItems;
 
-/* what func_0020D008 is given; nothing calls that function, so what this is stays unknown */
+/* what Geometry_IndexOfLargestOfSeven is given; nothing calls that function, so what this is stays unknown */
 typedef struct {
     char pad00[0x70];
     s16 *unk70;                     /* 0x70 seven values */

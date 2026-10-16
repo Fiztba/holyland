@@ -38,7 +38,7 @@ s32 EntityAi_ShouldDodge(Entity *, f32, f32);
 s32 EntityAi_PickCombatChoice(Entity *, s32);
 void EntityAi_LowerChoiceWeight(Entity *, s32);
 int EntityAi_PickAttack(char *);
-void func_00196D48(Entity *);
+void EntityAi_ClearTurnInPlace(Entity *);
 float EntityMath_AngleDifference(float, float);
 int EntityAi_TurnCommand(Entity *);
 int EntityAi_TurnFromPush(void *, void *);
@@ -55,7 +55,7 @@ void EntityAi_LowerWeightsAfterHit(char *);
 void EntityAi_SetState(char *, u8);
 int EntityAi_SetReaction(char *, void (*)(void), int);
 void EntityAi_ReactionHeavy(Entity *);
-void func_001B4EC8(s32);
+void Attack_DrainPlayerMp(s32);
 s32 EntityAi_TurnToHeading(Entity *, f32 *, f32);
 s32 EntityAi_CheckMeleeHit(Entity *, void *, s32, s32, s32);
 s32 EntityAi_SendMeleeHit(Entity *, void *, s32, f32);
@@ -278,7 +278,7 @@ static void GiantLeader_ThinkCombat(Entity *entity, s32 unknown) {
         }
     }
     if (unkE0->unk78 == 0) {
-        func_00196D48(entity);
+        EntityAi_ClearTurnInPlace(entity);
         if (ENTITY_FLAG_BITS(entity)->bit31) {
             angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {
@@ -523,7 +523,7 @@ static void GiantLeader_OnHit(Entity *entity) {
 }
 
 /* The melee attack with record 1 (busy bit 1): animation 21, as EntityAi_MeleeAttack; the first
-   time part 0 has hit (flag bit 54) it calls func_001B4EC8 with EntityParams.unk43E. */
+   time part 0 has hit (flag bit 54) it calls Attack_DrainPlayerMp with EntityParams.unk43E. */
 static void GiantLeader_MeleeAttack1(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     EntityParamsUnk240 *unk240 = &entity->params->unk240[1];
@@ -570,7 +570,7 @@ static void GiantLeader_MeleeAttack1(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bit19 = 0;
         }
         if (unkE0->unk7C == 0 && ENTITY_FLAG_BITS(entity)->bit54) {
-            func_001B4EC8(entity->params->unk43E);
+            Attack_DrainPlayerMp(entity->params->unk43E);
             unkE0->unk7C = 1;
         }
         if (ENTITY_FLAG_BITS(entity)->bit34) {

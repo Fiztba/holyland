@@ -1,3 +1,6 @@
+/* The map viewer the five map items open (items 1 to 5, in viewer_entries order): the Caretaker's, Zastari's,
+   Earth Folk's and Widda's Maps show pictures with the player's marker, the King's Map a free camera over
+   the map records. The names are the items' own (param/item_nam.prm). */
 #include "common.h"
 #include "kf_collision.h"
 #include "kf_entity.h"
@@ -9,10 +12,10 @@
 #include "kf_texture.h"
 #include "kf_message.h"
 
-int func_0011C678(int);
-void func_0011A598(void);
-static void func_0011A5E0(void);
-static int func_0011A600(void);
+int MapViewer_IsKingsMapUsable(int);
+void MapViewer_Reset(void);
+static void MapViewer_RestorePacketBuffers(void);
+static int MapViewer_Load(void);
 void Sound_MuteTracked(void);
 void Sound_UnmuteTracked(void);
 void Sound_UpdateTagged(void);
@@ -20,41 +23,41 @@ void Sound_MuteTagged(void);
 void Sound_UnmuteTagged(void);
 void Sound_UnmutePositional(void);
 void Sound_MutePositional(void);
-int func_001CEBE0(void);
+int SoundDriver_FlushCommands(void);
 void *memset(void *, int, u32);
-u8 func_00109800(void); // match: u8 here; declared void, the call site is compiled differently
-void func_00109878(int);
+u8 Packet_WaitForSend(void); // match: u8 here; declared void, the call site is compiled differently
+void Packet_LayOutBuffers(int);
 int sprintf(char *, char *, ...);
-int func_00102238(int, int, int);
-int func_001024B0(int);
-int func_001025C0(int, void *, int);
-void func_00109A38(int *, int *);
-void func_0010B510(char *, int, int);
-void func_0010B5D0(ModelPart *);
-void func_0010D018(ModelInstance *, char **, char **);
-void func_0010E6A8(ModelInstance *, s64, s64);
+int File_Open(char *, int, int);
+int File_Close(int);
+int File_Read(int, void *, int);
+void Packet_GetSpareArea(int *, int *);
+void TextureTable_SetBasePointers(char *, int, int);
+void Model_MultiplyChildMatrices(ModelPart *);
+void Model_SetUpPosed(ModelInstance *, char **, char **);
+void Model_SetPrimBits(ModelInstance *, s64, s64);
 void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 void Vector_Copy(void *, void *);
 void Display_SwapBuffers(int);
-void func_001096E8(void);
-void func_001095E0(void);
-void func_0010B000(void);
+void Packet_SendChain(void);
+void Packet_SwapBuffers(void);
+void DrawList_Clear(void);
 void func_001095D0(void);
 void func_001095D8(void);
-void func_001B5460(void);
+void Input_Update(void);
 float cosf(float);
 float sinf(float);
-void func_00107CD8(int);
-void func_00109650(u32 *, u32 *);
-u32 *func_00109990(int);
-void func_00109A50(void);
-void func_00109A80(int, s64);
-void func_00109AD0(void);
-void func_00109E18(void);
-void func_00109E88(void);
-void func_0010A100(void *);
-void func_0010B410(TextureTableHeader *, s32);
+void Game_ApplyBrightness(int);
+void Packet_AppendToChain(u32 *, u32 *);
+u32 *Packet_Alloc(int);
+void Packet_BeginGsRegisters(void);
+void Packet_AddGsRegister(int, s64);
+void Packet_EndGsRegisters(void);
+void GsDraw_QueueFlush(void);
+void GsDraw_QueueTexFlush(void);
+void GsDraw_QueueTexturedSprite(void *);
+void TextureTable_QueueOne(TextureTableHeader *, s32);
 void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
 void sceVu0TransMatrix(float *, float *, float *);
 void sceVu0RotMatrixX(float *, float *, float);
@@ -62,15 +65,15 @@ void sceVu0RotMatrixY(float *, float *, float);
 void sceVu0MulMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 void Vector_Subtract(void *, void *, void *);
-void func_0010A7E0(void *);
-static void func_0011C160(void);
-void func_0011AAE8(void);
+void GsDraw_QueueVu1Matrix(void *);
+static void MapViewer_DrawKingsMap(void);
+void MapViewer_DrawPictureMap(void);
 float Angle_Wrap(float);
 void Vector_Add(void *, void *, void *);
 void Vector_Normalize(void *, void *);
-void func_00106C58(void);
-void func_00107E70(int, int, int);
-void func_0010D308(ModelInstance *);
+void Game_BlendScreenOffsetDown(void);
+void Game_TintScreen(int, int, int);
+void Model_DrawPosed(ModelInstance *);
 
 extern int game_status[];
 extern MapSlot map_slots[];
@@ -109,18 +112,21 @@ static Vector4 bounds_min;                  /* 0x472060 the lowest corner of eve
 static Vector4 bounds_max;                  /* 0x472070 the highest corner */
 static ModelInstance pointer_model;         /* 0x472080 the pointer model, viewer 4 only */
 
-void func_0011A430(void) {
-    func_0011A598();
+/* Clears the map viewer at the start of a game. */
+void MapViewer_Init(void) {
+    MapViewer_Reset();
 }
 
-void func_0011A438(int viewer_number) {
+/* Asks for the map viewer of a map item (items 1 to 5, the viewer's number); the King's Map (5) only where
+   it can be used. The game loop runs it (MapViewer_Run). */
+void MapViewer_OpenForItem(int viewer_number) {
     u32 viewer_index;
     u8 *row;
 
     if (!(((u32)game_status[9] >> 8) & 1) && ((viewer_index = viewer_number - 1) < 5U)) {
         if (viewer_number == 5) {
             row = (u8 *)map_slots + D_00446770 * 0x60;
-            if (func_0011C678(row[1]) == 0) {
+            if (MapViewer_IsKingsMapUsable(row[1]) == 0) {
                 Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_UNABLE_TO_USE_HERE);
                 return;
             }
@@ -133,23 +139,24 @@ void func_0011A438(int viewer_number) {
 }
 
 /* Loads the picked viewer, runs it until it is left and frees what it loaded. */
-void func_0011A500(void) {
-    if (func_0011A600() != 0) {
+void MapViewer_Run(void) {
+    if (MapViewer_Load() != 0) {
         Sound_MuteTagged();
         Sound_MutePositional();
         Sound_UpdateTagged();
         Sound_MuteTracked();
-        func_001CEBE0();
+        SoundDriver_FlushCommands();
         viewer_entries[picked_viewer].run();
         Sound_UnmuteTagged();
         Sound_UnmutePositional();
         Sound_UnmuteTracked();
-        func_0011A5E0();
-        func_0011A598();
+        MapViewer_RestorePacketBuffers();
+        MapViewer_Reset();
     }
 }
 
-void func_0011A598(void) {
+/* Forgets the viewer picked, its picture and pulses, and what it loaded. */
+void MapViewer_Reset(void) {
     int *game_state = (int *)game_status;
 
     picked_viewer = 0;
@@ -162,9 +169,10 @@ void func_0011A598(void) {
     memset(&pointer_model, 0, sizeof(pointer_model));
 }
 
-static void func_0011A5E0(void) {
-    func_00109800();
-    func_00109878(0);
+/* Gives the packet buffers back the room MapViewer_Load took for the viewer's files. */
+static void MapViewer_RestorePacketBuffers(void) {
+    Packet_WaitForSend();
+    Packet_LayOutBuffers(0);
 }
 
 static inline char *align16(char *address) {
@@ -176,7 +184,7 @@ static inline char *align16(char *address) {
 
 /* Loads the picked viewer's textures; for viewer 4 also the pointer model, put where the player is, and
    the box that holds every ordinary map record. FALSE when a file is missing. */
-static int func_0011A600(void) {
+static int MapViewer_Load(void) {
     char name[0x100];
     char *model_data;
     char *buffer;
@@ -188,34 +196,34 @@ static int func_0011A600(void) {
     int count;
 
     sprintf(name, D_0043E730, picked_viewer);
-    file = func_00102238((int)name, 0, 1);
+    file = File_Open(name, 0, 1);
     if (file < 0) {
         return FALSE;
     }
-    func_00109800();
-    func_00109878(2);
+    Packet_WaitForSend();
+    Packet_LayOutBuffers(2);
     viewer_data = NULL;
     viewer_data_size = 0;
-    func_00109A38((int *)&viewer_data, &viewer_data_size);
+    Packet_GetSpareArea((int *)&viewer_data, &viewer_data_size);
     memset(viewer_data, 0, viewer_data_size);
-    size = func_001025C0(file, viewer_data, -1);
-    func_001024B0(file);
-    func_0010B510(viewer_data, 0x2BC0, 0x3FE0);
+    size = File_Read(file, viewer_data, -1);
+    File_Close(file);
+    TextureTable_SetBasePointers(viewer_data, 0x2BC0, 0x3FE0);
     if (picked_viewer != 4) {
         return TRUE;
     }
     model_data = viewer_data + size;
     model_data = align16(model_data);
-    file = func_00102238((int)D_0043E748, 0, 1);
+    file = File_Open(D_0043E748, 0, 1);
     if (file < 0) {
         return FALSE;
     }
-    size = func_001025C0(file, model_data, -1);
-    func_001024B0(file);
+    size = File_Read(file, model_data, -1);
+    File_Close(file);
     buffer = model_data + size;
     buffer = align16(buffer);
-    func_0010D018(&pointer_model, &model_data, &buffer);
-    func_0010E6A8(&pointer_model, 0x260, 0x240);
+    Model_SetUpPosed(&pointer_model, &model_data, &buffer);
+    Model_SetPrimBits(&pointer_model, 0x260, 0x240);
     Vector_Copy(&pointer_model.position, &player_state);
     pointer_model.position.y -= 100.0f;
     pointer_model.rotation.x = 0.0f;
@@ -230,12 +238,12 @@ static int func_0011A600(void) {
         ((int (*)(ModelInstance *, ModelPart *, ModelPart *))ModelMatrix_BuildPartLocal)(&pointer_model, &pointer_model.parts[i], &pointer_model.parts[i]);
     }
     for (i = 0; i < pointer_model.part_count; i++) {
-        func_0010B5D0(&pointer_model.parts[i]);
+        Model_MultiplyChildMatrices(&pointer_model.parts[i]);
     }
     bounds_min.z = bounds_min.y = bounds_min.x = D_00446798[0];
     bounds_max.z = bounds_max.y = bounds_max.x = D_0044679C[0];
     for (i = 0; i < 2; i++) {
-        if (map_slots[i].unk00 != 0 && func_0011C678(map_slots[i].tag) != 0) {
+        if (map_slots[i].unk00 != 0 && MapViewer_IsKingsMapUsable(map_slots[i].tag) != 0) {
             count = ((MapSlotUnk08 *)map_slots[i].header)->record_count;
             record = (MapRecordBounds *)map_slots[i].records;
             for (j = 0; j < count; j++, record++) {
@@ -263,20 +271,21 @@ static int func_0011A600(void) {
     return TRUE;
 }
 
-void func_0011AA08(void) {
+/* Frame loop of the picture maps (items 1 to 4): up and down page through the pictures, 0x2000 leaves. */
+void MapViewer_RunPictureMap(void) {
     int next_picture;
     ViewerEntry *viewer;
 
     viewer = &viewer_entries[picked_viewer];
     do {
         Display_SwapBuffers(0);
-        func_001096E8();
-        func_001095E0();
-        func_0010B000();
+        Packet_SendChain();
+        Packet_SwapBuffers();
+        DrawList_Clear();
         func_001095D0();
-        func_0011AAE8();
+        MapViewer_DrawPictureMap();
         func_001095D8();
-        func_001B5460();
+        Input_Update();
         if ((pad_state[1] & 0x10) && (viewer_picture > 0)) {
             viewer_picture -= 1;
         } else if (pad_state[1] & 0x40) {
@@ -285,14 +294,14 @@ void func_0011AA08(void) {
                 viewer_picture = next_picture;
             }
         }
-        func_00109800();
+        Packet_WaitForSend();
     } while ((pad_state[1] & 0x2000) == 0);
 }
 
 /* Draws the picked viewer's picture and the player's marker on it: a turned, pulsing arrow where the
    position is known, a pulsing square at a fixed spot otherwise; then the picture arrows when the viewer
    has more than one picture. */
-void func_0011AAE8(void) {
+void MapViewer_DrawPictureMap(void) {
     ViewerCornerTable corner_us;
     ViewerCornerTable corner_vs;
     int corner_xs[4];
@@ -308,23 +317,23 @@ void func_0011AAE8(void) {
     u32 *packet_start;
     u32 *packet;
 
-    func_00109A50();
-    func_00109A80(GS_REG_ALPHA_1, 0x44);
-    func_00109A80(GS_REG_TEST_1, 0x30000);
-    func_00109A80(GS_REG_ZBUF_1, 0x10A000118L);
-    func_00109AD0();
-    func_0010B410((TextureTableHeader *)viewer_data, viewer_picture);
-    func_00109E88();
-    func_00109E18();
-    func_0010A100(&viewer_picture_rect);
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_EndGsRegisters();
+    TextureTable_QueueOne((TextureTableHeader *)viewer_data, viewer_picture);
+    GsDraw_QueueTexFlush();
+    GsDraw_QueueFlush();
+    GsDraw_QueueTexturedSprite(&viewer_picture_rect);
     found = ((int (*)(int *, int *))entry->unk04)(&x, &y);
     if (found == 1) {
-        func_00109A50();
-        func_00109A80(GS_REG_ALPHA_1, 0x44);
-        func_00109AD0();
-        func_0010B410((TextureTableHeader *)viewer_data, entry->count);
-        func_00109E88();
-        func_00109E18();
+        Packet_BeginGsRegisters();
+        Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+        Packet_EndGsRegisters();
+        TextureTable_QueueOne((TextureTableHeader *)viewer_data, entry->count);
+        GsDraw_QueueTexFlush();
+        GsDraw_QueueFlush();
         corner_us = D_0043E760;
         corner_vs = D_0043E770;
         if (pulse_frame < 45) {
@@ -343,7 +352,7 @@ void func_0011AAE8(void) {
         corner_ys[2] = y + (int)((sine * -32.0f + cosine * 20.0f) * 0.5f);
         corner_xs[3] = x + (int)((cosine * 32.0f - sine * 20.0f) * 0.5f);
         corner_ys[3] = y + (int)((sine * 32.0f + cosine * 20.0f) * 0.5f);
-        packet_start = packet = func_00109990(0x13);
+        packet_start = packet = Packet_Alloc(0x13);
         *packet++ = 0x10000011;
         *packet++ = 0;
         *packet++ = 0;
@@ -382,7 +391,7 @@ void func_0011AAE8(void) {
         *packet++ = 0;
         *packet++ = 0;
         *packet++ = 0x15000276;
-        func_00109650(packet_start, packet);
+        Packet_AppendToChain(packet_start, packet);
     }
     if (found == -1) {
         if (square_pulse_frame < 45) {
@@ -395,43 +404,43 @@ void func_0011AAE8(void) {
         viewer_marker_rect.first_y = (y + 0x6F0) << 4;
         viewer_marker_rect.second_x = (x + 0x6F0) << 4;
         viewer_marker_rect.second_y = (y + 0x750) << 4;
-        func_00109A50();
-        func_00109A80(GS_REG_ALPHA_1, 0x48);
-        func_00109AD0();
-        func_0010A100(&viewer_marker_rect);
+        Packet_BeginGsRegisters();
+        Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+        Packet_EndGsRegisters();
+        GsDraw_QueueTexturedSprite(&viewer_marker_rect);
     }
     if (entry->count >= 2) {
-        func_0010B410((TextureTableHeader *)viewer_data, entry->count * 2 | 1);
-        func_00109E88();
-        func_00109E18();
-        func_00109A50();
-        func_00109A80(GS_REG_ALPHA_1, 0x44);
-        func_00109AD0();
-        func_0010A100(&D_0038D7F0);
-        func_0010B410((TextureTableHeader *)viewer_data, entry->count * 2 + 2);
-        func_00109E88();
-        func_00109E18();
-        func_00109A50();
-        func_00109A80(GS_REG_ALPHA_1, 0x48);
-        func_00109AD0();
-        func_0010A100(&D_0038D830);
-        func_0010B410((TextureTableHeader *)viewer_data, entry->count + 1 + viewer_picture);
-        func_00109E88();
-        func_00109E18();
-        func_00109A50();
-        func_00109A80(GS_REG_ALPHA_1, 0x48);
-        func_00109AD0();
-        func_0010A100(&D_0038D870);
+        TextureTable_QueueOne((TextureTableHeader *)viewer_data, entry->count * 2 | 1);
+        GsDraw_QueueTexFlush();
+        GsDraw_QueueFlush();
+        Packet_BeginGsRegisters();
+        Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+        Packet_EndGsRegisters();
+        GsDraw_QueueTexturedSprite(&D_0038D7F0);
+        TextureTable_QueueOne((TextureTableHeader *)viewer_data, entry->count * 2 + 2);
+        GsDraw_QueueTexFlush();
+        GsDraw_QueueFlush();
+        Packet_BeginGsRegisters();
+        Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+        Packet_EndGsRegisters();
+        GsDraw_QueueTexturedSprite(&D_0038D830);
+        TextureTable_QueueOne((TextureTableHeader *)viewer_data, entry->count + 1 + viewer_picture);
+        GsDraw_QueueTexFlush();
+        GsDraw_QueueFlush();
+        Packet_BeginGsRegisters();
+        Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+        Packet_EndGsRegisters();
+        GsDraw_QueueTexturedSprite(&D_0038D870);
     }
-    func_00109A50();
-    func_00109A80(GS_REG_ZBUF_1, 0xA000118);
-    func_00109AD0();
-    func_00107CD8(game_options[10]);
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+    Packet_EndGsRegisters();
+    Game_ApplyBrightness(game_options[10]);
 }
 
-/* Where the player's marker goes on the map viewer's picture viewer_picture: -1 for a fixed spot on the
+/* Where the player's marker goes on picture viewer_picture of the Caretaker's Map: -1 for a fixed spot on the
    first picture, TRUE for a spot worked out from the player's position, FALSE for none. */
-int func_0011B1C0(int *screen_x, int *screen_y) {
+int MapViewer_LocateOnCaretakersMap(int *screen_x, int *screen_y) {
     switch (viewer_picture) {
     case 0:
         switch (map_slots[D_00446770].tag) {
@@ -505,9 +514,9 @@ int func_0011B1C0(int *screen_x, int *screen_y) {
     return FALSE;
 }
 
-/* Where the player's marker goes on the map viewer's picture viewer_picture (0 to 2): TRUE with a spot worked
+/* Where the player's marker goes on picture viewer_picture (0 to 2) of Zastari's Map: TRUE with a spot worked
    out from the player's position when the current map is on that picture, FALSE when it is not. */
-int func_0011B4F0(int *screen_x, int *screen_y) {
+int MapViewer_LocateOnZastarisMap(int *screen_x, int *screen_y) {
     switch (viewer_picture) {
     case 0:
         switch (map_slots[D_00446770].tag) {
@@ -578,8 +587,9 @@ int func_0011B4F0(int *screen_x, int *screen_y) {
     return FALSE;
 }
 
-/* Map the player position to map-screen coordinates; FALSE if the area has no such map. */
-int func_0011BAB8(int *map_x, int *map_y) {
+/* Where the player's marker goes on the Earth Folk's Map: TRUE with a spot worked out from the player's
+   position on maps 017 to 019 and 024 to 025, FALSE elsewhere. */
+int MapViewer_LocateOnEarthFolksMap(int *map_x, int *map_y) {
     int area;
     char *entry;
 
@@ -602,8 +612,9 @@ int func_0011BAB8(int *map_x, int *map_y) {
     return FALSE;
 }
 
-/* Turns the player's position into a point on the map picture of maps 0x1A and 0x1B; FALSE on other maps. */
-int func_0011BBC0(int *screen_x, int *screen_y) {
+/* Where the player's marker goes on Widda's Map: a point worked out from the player's position on maps 026
+   and 027, FALSE on other maps. */
+int MapViewer_LocateOnWiddasMap(int *screen_x, int *screen_y) {
     switch (map_slots[D_00446770].tag) {
     case 0x1A:
         *screen_x = (player_state.position.x - -3200.0f) * 21.333334f / 1000.0f + 438.0f;
@@ -619,9 +630,9 @@ int func_0011BBC0(int *screen_x, int *screen_y) {
     return TRUE;
 }
 
-/* The free-camera viewer of func_0011C160's picture: runs its own frame loop, in which the pad turns the
+/* The King's Map, a free camera over the map records: runs its own frame loop, in which the pad turns the
    camera about the player (with 0x4000 held) or moves it, and both 0x400 and 0x800 put it back. */
-void func_0011BCD0(void) {
+void MapViewer_RunKingsMap(void) {
     VuVector4 position;
     VuVector4 rotation;
     int reset_held;
@@ -643,10 +654,10 @@ void func_0011BCD0(void) {
             VuVector4 move;
 
             Display_SwapBuffers(0);
-            func_001096E8();
-            func_001095E0();
-            func_0010B000();
-            func_001B5460();
+            Packet_SendChain();
+            Packet_SwapBuffers();
+            DrawList_Clear();
+            Input_Update();
             held = pad_state[0];
             pressed = pad_state[1];
             move.x = move.y = move.z = move.w = 0.0f;
@@ -728,19 +739,19 @@ void func_0011BCD0(void) {
             Vector_Scale(&move.x, &move.x, -1.0f);
             sceVu0TransMatrix(world_view, world_view, &move.x);
             sceVu0MulMatrix(world_screen, view_screen, world_view);
-            func_0010A7E0(world_screen);
+            GsDraw_QueueVu1Matrix(world_screen);
             func_001095D0();
-            func_0011C160();
+            MapViewer_DrawKingsMap();
             func_001095D8();
             // match: it returns a value here, which keeps $2 busy
-            ((int (*)(void))func_00109800)();
+            ((int (*)(void))Packet_WaitForSend)();
         } while (!(pressed & 0x2000));
     }
 }
 
 /* Draws the map viewer: the pointer model, pulsing, then every record of the
    ordinary maps in one flat colour, then the viewer's four pictures. */
-static void func_0011C160(void) {
+static void MapViewer_DrawKingsMap(void) {
     int alpha = 0x10;
     int period;
     int map;
@@ -758,22 +769,22 @@ static void func_0011C160(void) {
     }
     period = 60; // match: the divisor is a variable
     pulse_frame = (pulse_frame + 1) % period;
-    func_00109A50();
-    func_00109A80(GS_REG_TEST_2, 0x51001);
-    func_00109A80(GS_REG_ALPHA_2, ((s64)alpha << 32) | 0x68);
-    func_00109AD0();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_TEST_2, 0x51001);
+    Packet_AddGsRegister(GS_REG_ALPHA_2, ((s64)alpha << 32) | 0x68);
+    Packet_EndGsRegisters();
     pointer_model.unk148 = (s32)&viewer_default_lights;
     pointer_model.hit_count = 0;
     pointer_model.unk14C = &map_draw_state.unkA0;
-    func_0010D308(&pointer_model);
-    func_00109A50();
-    func_00109A80(0x1A, 0);
-    func_00109A80(0x1B, 0x248);
-    func_00109A80(GS_REG_ALPHA_2, 0x4000000068L);
-    func_00109A80(GS_REG_TEST_2, 0x3080B);
-    func_00109A80(GS_REG_ZBUF_2, 0x10A000118L);
-    func_00109AD0();
-    func_00109E18();
+    Model_DrawPosed(&pointer_model);
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(0x1A, 0);
+    Packet_AddGsRegister(0x1B, 0x248);
+    Packet_AddGsRegister(GS_REG_ALPHA_2, 0x4000000068L);
+    Packet_AddGsRegister(GS_REG_TEST_2, 0x3080B);
+    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
     for (map = 0; map < 2; map++) {
         slot = &map_slots[map];
         record = (MapDrawRecord *)slot->records;
@@ -809,64 +820,65 @@ static void func_0011C160(void) {
                         record->model->hit_count = 0;
                         record->model->unk148 = (s32)&viewer_default_lights;
                         record->model->unk14C = &map_draw_state.unkA0;
-                        func_0010D308(record->model);
+                        Model_DrawPosed(record->model);
                     }
                     break;
             }
         }
     }
-    func_00109A50();
-    func_00109A80(GS_REG_ZBUF_2, 0xA000118);
-    func_00109A80(0x1A, 1);
-    func_00109AD0();
-    func_00109E18();
-    func_00106C58();
-    func_00109E18();
-    func_00107E70(0xEA, 0xB2, 0x46);
-    func_0010B410((TextureTableHeader *)viewer_data, 0);
-    func_00109E88();
-    func_00109E18();
-    func_00109A50();
-    func_00109A80(GS_REG_TEST_1, 0x31001);
-    func_00109A80(GS_REG_ALPHA_1, 0x48);
-    func_00109A80(8, 5);
-    func_00109AD0();
-    func_00109E18();
-    func_0010A100(D_0038D8B0);
-    func_0010B410((TextureTableHeader *)viewer_data, 1);
-    func_00109E88();
-    func_00109E18();
-    func_00109A50();
-    func_00109A80(GS_REG_TEST_1, 0x31001);
-    func_00109A80(GS_REG_ALPHA_1, 0x54);
-    func_00109A80(8, 5);
-    func_00109AD0();
-    func_00109E18();
-    func_0010A100(D_0038D8B0);
-    func_0010B410((TextureTableHeader *)viewer_data, 2);
-    func_00109E88();
-    func_00109E18();
-    func_00109A50();
-    func_00109A80(GS_REG_TEST_1, 0x31001);
-    func_00109A80(GS_REG_ALPHA_1, 0x44);
-    func_00109A80(8, 0);
-    func_00109AD0();
-    func_00109E18();
-    func_0010A100(D_0038D8F0);
-    func_0010B410((TextureTableHeader *)viewer_data, 3);
-    func_00109E88();
-    func_00109E18();
-    func_00109A50();
-    func_00109A80(GS_REG_TEST_1, 0x31001);
-    func_00109A80(GS_REG_ALPHA_1, 0x48);
-    func_00109AD0();
-    func_00109E18();
-    func_0010A100(D_0038D8F0);
-    func_00107CD8(game_options[10]);
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
+    Packet_AddGsRegister(0x1A, 1);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
+    Game_BlendScreenOffsetDown();
+    GsDraw_QueueFlush();
+    Game_TintScreen(0xEA, 0xB2, 0x46);
+    TextureTable_QueueOne((TextureTableHeader *)viewer_data, 0);
+    GsDraw_QueueTexFlush();
+    GsDraw_QueueFlush();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x31001);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+    Packet_AddGsRegister(8, 5);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
+    GsDraw_QueueTexturedSprite(D_0038D8B0);
+    TextureTable_QueueOne((TextureTableHeader *)viewer_data, 1);
+    GsDraw_QueueTexFlush();
+    GsDraw_QueueFlush();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x31001);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x54);
+    Packet_AddGsRegister(8, 5);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
+    GsDraw_QueueTexturedSprite(D_0038D8B0);
+    TextureTable_QueueOne((TextureTableHeader *)viewer_data, 2);
+    GsDraw_QueueTexFlush();
+    GsDraw_QueueFlush();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x31001);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+    Packet_AddGsRegister(8, 0);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
+    GsDraw_QueueTexturedSprite(D_0038D8F0);
+    TextureTable_QueueOne((TextureTableHeader *)viewer_data, 3);
+    GsDraw_QueueTexFlush();
+    GsDraw_QueueFlush();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x31001);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
+    GsDraw_QueueTexturedSprite(D_0038D8F0);
+    Game_ApplyBrightness(game_options[10]);
 }
 
-/* Whether a map object of this kind is one of the ordinary ones. */
-int func_0011C678(int kind) {
+/* Whether the King's Map works on the map with this tag: not on the maps the Caretaker's Map shows (000,
+   002, 004, 008, 009, 098, 099). */
+int MapViewer_IsKingsMapUsable(int kind) {
     switch (kind) {
         case 0:
         case 2:

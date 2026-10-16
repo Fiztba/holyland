@@ -49,11 +49,11 @@ float EntityMath_AngleDifference(float, float);
 float sqrtf(float);
 float atan2f(float, float);
 double atan2(double, double);
-char *func_0010CAB8(char *, u32);
+char *Model_GetSkinnedBonePoint(char *, u32);
 float EntityMath_WrapAngle(float);
 float EntityMath_DistanceXZ(void *, void *);
 f32 EntityMath_Approach(f32, f32, f32);
-int func_001B4F30(u16, void *, void *, void *, void *);
+int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
 void *memset(void *, int, u32);
 void sceVu0TransMatrix(float *, float *, float *);
 void sceVu0RotMatrixX(float *, float *, float);
@@ -74,7 +74,7 @@ static void Minion_ReactionHeavy(Entity *entity);
 static void Minion_Death(Entity *entity);
 static void Minion_Dodge(Entity *entity);
 static s32 Minion_LaunchShots(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from, s32 frame_to, f32 *target, f32 pitch_rate, f32 yaw_rate);
-static void func_00153F60(Entity *entity, f32 *result, f32 *point);
+static void Minion_WorldToLocal(Entity *entity, f32 *result, f32 *point);
 
 /* Set-up of a type 60 entity: clears its work area and installs the type's handlers. */
 void Minion_Init(Entity *entity) {
@@ -756,8 +756,8 @@ static s32 Minion_LaunchShots(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 fr
             shot->unk22 = shot->unk20 = 0;
             shot->unk00 = 1;
             shot->unk28 = entity->params->unk238;
-            from = (f32 *)func_0010CAB8((char *)entity->model, record->unk10[i].unk01);
-            tip = (f32 *)func_0010CAB8((char *)entity->model, record->unk10[i].unk01 + 1);
+            from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, record->unk10[i].unk01);
+            tip = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, record->unk10[i].unk01 + 1);
             if (from != NULL && tip != NULL) {
                 if (record->unk10[i].unk01 != 0xFF) {
                     delta_x = tip[0] - from[0];
@@ -776,15 +776,16 @@ static s32 Minion_LaunchShots(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 fr
                     angles[0] = EntityMath_Approach(angles[0], pitch, pitch_rate);
                     angles[1] = EntityMath_Approach(angles[1], yaw, yaw_rate);
                 }
-                func_001B4F30(record->unk10[i].unk00, shot, from, angles, entity);
+                Attack_LaunchMagicEffect(record->unk10[i].unk00, shot, from, angles, entity);
             }
         }
     }
     return 0;
 }
 
-/* Turns a point from world space into the entity's own space: undoes the model's position, then its rotation. */
-static void func_00153F60(Entity *entity, f32 *result, f32 *point) {
+/* Turns a point from world space into the entity's own space: undoes the model's position, then its rotation.
+   Nothing calls it. */
+static void Minion_WorldToLocal(Entity *entity, f32 *result, f32 *point) {
     f32 matrix[16];
     f32 offset[4];
 

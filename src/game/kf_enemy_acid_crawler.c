@@ -25,7 +25,7 @@ float EntityMath_AngleDifference(float, float);
 float EntityMath_StepToward(float *, float, float);
 extern u32 D_00446ED4;
 int rand(void);
-char *func_0010CAB8(char *, u32);
+char *Model_GetSkinnedBonePoint(char *, u32);
 int EntityAi_LaunchShot(void *, int, void *, void *);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
@@ -37,7 +37,7 @@ s32 EntityAi_ShouldGuard(Entity *, f32, f32);
 s32 EntityAi_ShouldDodge(Entity *, f32, f32);
 s32 EntityAi_CanAttack(Entity *);
 int EntityAi_PickAttack(char *);
-void func_00196D48(Entity *);
+void EntityAi_ClearTurnInPlace(Entity *);
 int EntityAi_TurnCommand(Entity *);
 int EntityAi_TurnFromPush(void *, void *);
 int EntityAi_StartAttack(Entity *, void (*)(Entity *entity), int, int, int);
@@ -221,12 +221,12 @@ static void AcidCrawler_TurnParts30To34ToTarget(void *entity_arg) {
 
 /* The think handler: as EntityAi_Think, with AcidCrawler_ThinkCombat for states 1 and 2; after
    EntityAi_ThinkIdle it sets work byte unk7A to 1. Before that, while Entity.unk2A is 0, it
-   launches shot EntityParams.unk43C from near the point func_0010CAB8 gives for 0, on two timers:
+   launches shot EntityParams.unk43C from near the point Model_GetSkinnedBonePoint gives for 0, on two timers:
    work word unk68 (chance EntityParams.unk434 in 100 a frame, then a pause of unk436 frames) and
    work word unk6A (chance unk438, pause unk43A). */
 static void AcidCrawler_Think(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
-    char *part = func_0010CAB8((char *)entity->model, 0);
+    char *part = Model_GetSkinnedBonePoint((char *)entity->model, 0);
     f32 target[4];
     f32 direction[4];
     f32 offset;
@@ -330,7 +330,7 @@ static void AcidCrawler_ThinkCombat(Entity *entity, s32 unknown) {
     } else {
         unkE0->unk7A = 1;
     }
-    func_00196D48(entity);
+    EntityAi_ClearTurnInPlace(entity);
     if (ENTITY_FLAG_BITS(entity)->bit31) {
         angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
         if (unkE0->unk79 == 0) {

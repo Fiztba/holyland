@@ -32,7 +32,7 @@ typedef struct {
     s8 slot;                        /* 0x3F which slot the packet belongs to */
     char pad40[0x01];
     s8 unk41;                       /* 0x41 */
-    u8 unk42;                       /* 0x42 handed to func_001E5210 before the sprite is drawn */
+    u8 unk42;                       /* 0x42 handed to Menu_SetBlendMode before the sprite is drawn */
     s8 unk43;                       /* 0x43 1: the cursor bar is drawn just before this one (Smith_UpdateSelectScreen) */
     char pad44[0x1C];
 } SpritePacket;
@@ -78,7 +78,7 @@ typedef struct {
     s32 tex_t;                          /* 0x0C */
 } ScreenSpriteVertex;
 
-/* what func_0010A100 (textured) and func_0010A338 (flat) turn into a GS sprite; same layout as SplashSprite */
+/* what GsDraw_QueueTexturedSprite (textured) and GsDraw_QueueFlatSprite (flat) turn into a GS sprite; same layout as SplashSprite */
 typedef struct {
     u64 tex0;                       /* 0x00 GS TEX0 */
     u64 tex1;                       /* 0x08 GS TEX1 */
@@ -88,7 +88,7 @@ typedef struct {
     ScreenSpriteVertex vertex[2];   /* 0x20 */
 } ScreenSprite;
 
-/* a screen rectangle with two corners, as func_0010A100 draws it */
+/* a screen rectangle with two corners, as GsDraw_QueueTexturedSprite draws it */
 typedef struct {
     s64 tag;                        /* 0x00 */
     s64 unk08;                      /* 0x08 */
@@ -110,7 +110,7 @@ typedef struct {
     s32 second_v;                         /* 0x3C */
 } ScreenQuad;
 
-/* one vertex of the textured primitives func_00111368 builds: texture coordinates, then where it is on the screen */
+/* one vertex of the textured primitives Wobble_DrawRippledModel builds: texture coordinates, then where it is on the screen */
 typedef struct {
     f32 tex_s;                          /* 0x00 */
     f32 tex_t;                          /* 0x04 */
@@ -156,7 +156,7 @@ typedef struct {
     s64 unk18;                      /* 0x18 */
 } GsDataBlock;
 
-/* the local frame func_0019B360 and func_0019B4B0 build: a cleared header, a data block, the packet */
+/* the local frame DrawEnv_PutOffscreenAndBack and DrawEnv_PutOffscreen build: a cleared header, a data block, the packet */
 typedef struct {
     char pad00[0x10];
     GsDataBlock block;              /* 0x10 */
@@ -274,7 +274,7 @@ typedef struct {
 /* hands out the next packet buffer to fill; callers use it as whichever packet they build */
 void *MenuDraw_NextPacket(void);
 
-/* one 32-bit word of a packet built in place (func_001E5070), written as an integer or as a float */
+/* one 32-bit word of a packet built in place (Menu_DrawBrightness), written as an integer or as a float */
 typedef union {
     s32 as_int;
     f32 as_float;

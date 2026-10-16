@@ -36,38 +36,38 @@
         best = node;                                                                               \
     }
 #define USABLE_IN_MAP(node) (((u8)(AREA_NODE_WORD(node) >> 27) & 1) == map && USABLE(node))
-void func_00109A50(void);
-void func_00109A80(int, s64);
-void func_00109AD0(void);
-void func_00109E18(void);
-void func_00109E88(void);
-void func_0010A008(void);
-void func_0010EE98(ModelInstance *);
-void func_00111368(ModelInstance *, int, int, int, int);
-void func_00116970(void);
-void func_00116AD8(int, int);
-int func_00116CB0(MapDrawRecord *, ModelInstance *);
+void Packet_BeginGsRegisters(void);
+void Packet_AddGsRegister(int, s64);
+void Packet_EndGsRegisters(void);
+void GsDraw_QueueFlush(void);
+void GsDraw_QueueTexFlush(void);
+void GsDraw_ResetDrawTarget(void);
+void ModelScreen_CutClippedTriangles(ModelInstance *);
+void Wobble_DrawRippledModel(ModelInstance *, int, int, int, int);
+void Map_SetOffscreenTarget(void);
+void Map_QueueSlotPacket(int, int);
+int Map_ClassifyRecordOnScreen(MapDrawRecord *, ModelInstance *);
 void *memset(void *, int, u32);
-void func_001157D8(AreaNode *);
-void func_0010D018(ModelInstance *, char **, char **);
-void func_0010B758(ModelInstance *, int *, int *);
-MotionData *func_00108940(MotionFile *, ModelChannel **, ModelInstance *, int);
-u32 *func_00116BD0(int, int);
-void func_0010E6A8(ModelInstance *, s64, s64);
-void func_0010E820(ModelInstance *, s64);
-MapRecordInfo *func_00115CD0(CameraState *, f32, int);
-void func_00111E28(ModelInstance *, u32 *);
+void Map_InsertRecordBySize(AreaNode *);
+void Model_SetUpPosed(ModelInstance *, char **, char **);
+void Model_SetUpSkinned(ModelInstance *, int *, int *);
+MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
+u32 *Map_GetSlotPacket(int, int);
+void Model_SetPrimBits(ModelInstance *, s64, s64);
+void Model_SetAlphaBlend(ModelInstance *, s64);
+MapRecordInfo *Map_FindRecordAtInSlot(CameraState *, f32, int);
+void Wobble_BuildWaveUvs(ModelInstance *, u32 *);
 void Vector_Copy(void *, void *);
-char *func_00112400(char *, ModelInstance *, int);
-void func_001B93B8(f32 *);
-void func_001D1210(f32 *);
-void func_001154D8(int, f32 *);
-void func_00115550(MapRecordBounds *, f32 *);
-void func_001155F8(int);
-void func_001C8990(int, f32 *);
+char *Collision_RelocateMesh(char *, ModelInstance *, int);
+void Player_MoveByOffset(f32 *);
+void Interact_OffsetViewRay(f32 *);
+void Map_OffsetRecords(int, f32 *);
+void Map_OffsetRecord(MapRecordBounds *, f32 *);
+void Map_PlaceRecordModels(int);
+void MapItem_MoveMap(int, f32 *);
 void Script_Init(int);
 int Script_Start(int, int);
-void func_001BB590(void);
+void Player_StopFootstepSound(void);
 void Sound_StopAll(int);
 void Vector_Add(void *, void *, void *);
 void Matrix_Multiply(void *, void *, void *);
@@ -81,30 +81,30 @@ void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, fl
 void sceVu0MulMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 void Vector_Subtract(void *, void *, void *);
-void func_00101618(void);
+void GameLoop_RunSoundLoads(void);
 void func_001095D0(void);
 void func_001095D8(void);
-void func_001095E0(void);
-void func_001096E8(void);
-void func_00109800(void);
-void func_0010A7E0(void *);
-void func_0010B000(void);
-void func_00116610(void);
+void Packet_SwapBuffers(void);
+void Packet_SendChain(void);
+void Packet_WaitForSend(void);
+void GsDraw_QueueVu1Matrix(void *);
+void DrawList_Clear(void);
+void Map_DrawFreeCameraView(void);
 float Angle_Wrap(float);
-void func_001B5460(void);
+void Input_Update(void);
 void Display_SwapBuffers(int);
 void Vector_Normalize(void *, void *);
-void func_00106C58(void);
-void func_0010A100(void *);
-void func_0010B238(TextureTableHeader *);
-void func_0010D308(ModelInstance *);
-void func_00109F80(s64, s64, s64);
-void func_0010A4E8(int, int, int, int, int);
-u32 *func_00109990(int);
-void func_00109650(u32 *, u32 *);
+void Game_BlendScreenOffsetDown(void);
+void GsDraw_QueueTexturedSprite(void *);
+void TextureTable_QueueAll(TextureTableHeader *);
+void Model_DrawPosed(ModelInstance *);
+void GsDraw_SetDrawTarget(s64, s64, s64);
+void GsDraw_FillScreen(int, int, int, int, int);
+u32 *Packet_Alloc(int);
+void Packet_AppendToChain(u32 *, u32 *);
 void Vu0_LoadMatrix(void *);
 void Vu0_ProjectToScreen(int *, void *);
-int func_00116C08(int, int, int, int);
+int Map_TestFlagBlockBit(int, int, int, int);
 void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
 extern MapSlot map_slots[];
 extern MapDrawState map_draw_state;
@@ -139,9 +139,10 @@ extern MapSlotUnk10Words map_object_default_lights;
 extern TextureTableHeader *D_00446790;
 extern u8 D_004141D0[];
 
-/* Draws the first list of records of both map slots. mode 0 draws every record, the others only
-   some; below 2 the screen is cleared first. */
-void func_00114198(int mode) {
+/* Draws the map records of both map slots whose flag bit 0 is clear (the list func_00112BD0 builds each
+   frame), then each slot's map objects. mode 0 draws every record, the others only some; below 2 the
+   drawing goes to the screen, at 2 to the off-screen buffer (Map_SetOffscreenTarget). */
+void Map_DrawRecords(int mode) {
     MapSlot *slot;
     MapDrawRecord *record;
     MapSlotUnk08 *header;
@@ -166,22 +167,22 @@ void func_00114198(int mode) {
         record = D_00446778[map];
         slot = &map_slots[map];
         if (slot->unk00 != 0) {
-            func_00116AD8(map, 0);
-            func_00116AD8(map, 1);
-            func_00116AD8(map, 5);
-            func_00109E88();
+            Map_QueueSlotPacket(map, 0);
+            Map_QueueSlotPacket(map, 1);
+            Map_QueueSlotPacket(map, 5);
+            GsDraw_QueueTexFlush();
             MapScroll_UpdateDraw(map, 0);
             MapScroll_UpdateCopy(map, 0);
             if (mode < 2) {
-                func_0010A008();
+                GsDraw_ResetDrawTarget();
             } else {
-                func_00116970();
+                Map_SetOffscreenTarget();
             }
-            func_00109A50();
-            func_00109A80(GS_REG_TEST_1, 0x5000D);
-            func_00109A80(8, 0);
-            func_00109AD0();
-            func_00109E18();
+            Packet_BeginGsRegisters();
+            Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+            Packet_AddGsRegister(8, 0);
+            Packet_EndGsRegisters();
+            GsDraw_QueueFlush();
             for (; record != NULL; record = record->next) {
                 flags = record->flags;
                 if ((flags & 2) && mode != 0) {
@@ -206,22 +207,22 @@ void func_00114198(int mode) {
                 LinkedPoint_FindHitsForMapDraw(record, record->model);
                 if (record->flags & 0x200) {
                     header = slot->header;
-                    func_00111368(record->model, header->unk78, header->unk79, header->unk7A, header->unk7B);
+                    Wobble_DrawRippledModel(record->model, header->unk78, header->unk79, header->unk7A, header->unk7B);
                 }
                 record->model->unk1A8(record->model);
-                if (func_00116CB0(record, record->model) == 0) {
-                    func_0010EE98(record->model);
+                if (Map_ClassifyRecordOnScreen(record, record->model) == 0) {
+                    ModelScreen_CutClippedTriangles(record->model);
                 }
-                func_00109E18();
+                GsDraw_QueueFlush();
             }
             MapObject_DrawAll(mode, 1, map);
         }
     }
 }
 
-/* Draws the second list of records of both map slots, switching z writes on and off as the
-   records ask. mode 0 draws every record, the others only some; below 2 the screen is cleared first. */
-void func_00114528(int mode) {
+/* Draws the map records of both map slots whose flag bit 0 is set, after the entities and items, switching
+   z writes on and off as the records ask (flag 0x80). mode as for Map_DrawRecords. */
+void Map_DrawLateRecords(int mode) {
     MapSlot *slot;
     MapDrawRecord *record;
     MapSlotUnk08 *header;
@@ -244,21 +245,21 @@ void func_00114528(int mode) {
         record = D_00446780[map];
         slot = &map_slots[map];
         if (slot->unk00 != 0) {
-            func_00116AD8(map, 2);
-            func_00116AD8(map, 5);
-            func_00109E88();
+            Map_QueueSlotPacket(map, 2);
+            Map_QueueSlotPacket(map, 5);
+            GsDraw_QueueTexFlush();
             MapScroll_UpdateDraw(map, 1);
             MapScroll_UpdateCopy(map, 1);
             if (mode < 2) {
-                func_0010A008();
+                GsDraw_ResetDrawTarget();
             } else {
-                func_00116970();
+                Map_SetOffscreenTarget();
             }
-            func_00109A50();
+            Packet_BeginGsRegisters();
             z_mask = 1;
-            func_00109A80(GS_REG_TEST_1, 0x5000D);
-            func_00109A80(GS_REG_ZBUF_1, 0x10A000118L);
-            func_00109AD0();
+            Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+            Packet_EndGsRegisters();
             for (; record != NULL; record = record->next) {
                 flags = record->flags;
                 if ((flags & 2) && mode != 0) {
@@ -276,9 +277,9 @@ void func_00114528(int mode) {
                 old_z_mask = z_mask;
                 z_mask = !((flags >> 7) & 1);
                 if (z_mask != old_z_mask) {
-                    func_00109A50();
-                    func_00109A80(GS_REG_ZBUF_1, ((s64)z_mask << 32) | 0xA000118);
-                    func_00109AD0();
+                    Packet_BeginGsRegisters();
+                    Packet_AddGsRegister(GS_REG_ZBUF_1, ((s64)z_mask << 32) | 0xA000118);
+                    Packet_EndGsRegisters();
                 }
                 if (record->flags & 0x10) {
                     record->model->unk148 = (s32)&map_draw_state.unkC0;
@@ -290,19 +291,19 @@ void func_00114528(int mode) {
                 LinkedPoint_FindHitsForMapDraw(record, record->model);
                 if (record->flags & 0x200) {
                     header = slot->header;
-                    func_00111368(record->model, header->unk78, header->unk79, header->unk7A, header->unk7B);
+                    Wobble_DrawRippledModel(record->model, header->unk78, header->unk79, header->unk7A, header->unk7B);
                 }
                 record->model->unk1A8(record->model);
-                if (func_00116CB0(record, record->model) == 0) {
-                    func_0010EE98(record->model);
+                if (Map_ClassifyRecordOnScreen(record, record->model) == 0) {
+                    ModelScreen_CutClippedTriangles(record->model);
                 }
-                func_00109E18();
+                GsDraw_QueueFlush();
             }
         }
     }
-    func_00109A50();
-    func_00109A80(GS_REG_ZBUF_1, 0xA000118);
-    func_00109AD0();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+    Packet_EndGsRegisters();
 }
 
 /* the address rounded up to a multiple of 16 */
@@ -319,7 +320,7 @@ static inline u32 align_16(u32 address) {
 
 /* Finds the parts of a map file that was just read into a slot's memory, and shares out the
    slot's working memory. */
-void func_00114840(int map) {
+void Map_ParseFile(int map) {
     MapSlotMemory *memory = &D_004321F0[map];
     // match: set twice, the compiler no longer knows the slot is not the memory block, so the store
     // in the loop below makes it read memory->unk1C again afterwards
@@ -411,7 +412,7 @@ void func_00114840(int map) {
 }
 
 
-/* align_16 written another way; func_00114AA8 only matches with this one */
+/* align_16 written another way; Map_BuildModels only matches with this one */
 static inline u32 round_up_16(u32 address) {
     u32 remainder = address & 0xF;
 
@@ -424,7 +425,7 @@ static inline u32 round_up_16(u32 address) {
 
 /* Builds the models of a map that was just read: one per record, then one per map object, with
    their collision meshes and motions. */
-void func_00114AA8(int map) {
+void Map_BuildModels(int map) {
     int cursor;
     char *work;
     int next;
@@ -449,7 +450,7 @@ void func_00114AA8(int map) {
     work = memory->unk18;
     work = (char *)round_up_16((u32)work);
     for (i = 0; i < record_count; i++, model++, record++) {
-        func_001157D8((AreaNode *)record);
+        Map_InsertRecordBySize((AreaNode *)record);
         MAP_RECORD_BITS(record)->map = (u8)map;
         record->model = model;
         if (record->unk30 != 0xFFFF) {
@@ -458,19 +459,19 @@ void func_00114AA8(int map) {
             while (k-- > 0) {
                 cursor += *(int *)cursor;
             }
-            func_0010D018(model, (char **)&cursor, &work);
+            Model_SetUpPosed(model, (char **)&cursor, &work);
             if (record->unk3C & 0x100) {
                 Vector_Copy(&model->position, record);
                 model->position.w = 1.0f;
-                ((void (*)(ModelInstance *, u32 *, int))func_00111E28)(model, (u32 *)&work, 0); // match: a third argument the callee does not take
+                ((void (*)(ModelInstance *, u32 *, int))Wobble_BuildWaveUvs)(model, (u32 *)&work, 0); // match: a third argument the callee does not take
             }
             if (((ModelInstance **)slot->unk24)[record->unk30] == NULL) {
                 ((ModelInstance **)slot->unk24)[record->unk30] = model;
             }
-            func_0010E6A8(model, 0x20, 0x20);
+            Model_SetPrimBits(model, 0x20, 0x20);
             if (record->unk3C & 0x202) {
-                func_0010E6A8(model, 0x60, 0x60);
-                func_0010E820(model, 0x48);
+                Model_SetPrimBits(model, 0x60, 0x60);
+                Model_SetAlphaBlend(model, 0x48);
             }
         }
         if (record->unk32 != 0xFFFF) {
@@ -486,7 +487,7 @@ void func_00114AA8(int map) {
                 while (k-- > 0) {
                     cursor += (int)((CollisionMesh *)cursor)->unk14;
                 }
-                cursor = (int)func_00112400((char *)cursor, model, 1);
+                cursor = (int)Collision_RelocateMesh((char *)cursor, model, 1);
             } else {
                 model->strips = ((ModelInstance *)memory->unk34)[j].strips;
             }
@@ -515,7 +516,7 @@ void func_00114AA8(int map) {
         object->model = model;
         object->unk08 = info;
         object->unk04 = (MapObjectUnk04 *)&map_object_defs[info->unk30 * 0x80];
-        object->unk0C = (s32)func_00115CD0((CameraState *)info, 0.0f, map);
+        object->unk0C = (s32)Map_FindRecordAtInSlot((CameraState *)info, 0.0f, map);
         MAP_OBJECT_BITS(object)->map = (u8)map;
     }
     cursor = (int)header + header->unk0C;
@@ -524,7 +525,7 @@ void func_00114AA8(int map) {
         for (j = 0; j < header->unk40; j++, object++) {
             if (object->unk04->unk04 != 0xFFFF && !(MAP_OBJECT_DEF_WORD(object) & 0x100) && object->unk08->unk32 == i) {
                 next = cursor; // match: retail bug, only set when an object uses this model (see cursor = next)
-                func_0010D018(object->model, (char **)&next, &work);
+                Model_SetUpPosed(object->model, (char **)&next, &work);
                 object->model->unk190 = 1;
                 object->model->unk194 = next;
                 next += *(int *)next;
@@ -540,12 +541,12 @@ void func_00114AA8(int map) {
         for (j = 0; j < header->unk40; j++, object++) {
             if (object->unk04->unk04 != 0xFFFF && (MAP_OBJECT_DEF_WORD(object) & 0x100) && object->unk08->unk32 == i) {
                 next = cursor; // match: retail bug, as in the loop above
-                func_0010B758(object->model, &next, (int *)&work);
+                Model_SetUpSkinned(object->model, &next, (int *)&work);
                 object->model->unk190 = 1;
                 object->model->unk194 = next;
                 next += *(int *)next;
-                object->model->unk19C = (int)func_00116BD0(map, 3);
-                object->model->unk1A0 = (int)func_00116BD0(map, 5);
+                object->model->unk19C = (int)Map_GetSlotPacket(map, 3);
+                object->model->unk1A0 = (int)Map_GetSlotPacket(map, 5);
             }
         }
         cursor = next; // match: retail bug, as in the loop above
@@ -558,7 +559,7 @@ void func_00114AA8(int map) {
         for (j = 0; j < header->unk40; j++, object++) {
             if (object->unk04->unk06 != 0xFFFF && object->unk08->unk34 == i) {
                 if (first == NULL) {
-                    cursor = (int)func_00112400((char *)next, object->model, 1);
+                    cursor = (int)Collision_RelocateMesh((char *)next, object->model, 1);
                     first = object->model;
                 } else {
                     object->model->strips = first->strips;
@@ -571,7 +572,7 @@ void func_00114AA8(int map) {
         object = map_slot_objects[map];
         for (j = 0; j < header->unk40; j++, object++) {
             if (object->unk04->unk04 != 0xFFFF && (MAP_OBJECT_DEF_WORD(object) & 0x200) && object->unk08->unk36 == i) {
-                next = ((int (*)(int, int *, ModelInstance *, int))func_00108940)(cursor, (int *)&work, object->model, 1); // match: the callee returns where the motion ends
+                next = ((int (*)(int, int *, ModelInstance *, int))ModelMotion_LoadFile)(cursor, (int *)&work, object->model, 1); // match: the callee returns where the motion ends
             }
         }
         cursor = next; // match: retail bug, as above: next is only set when an object uses this motion
@@ -581,7 +582,7 @@ void func_00114AA8(int map) {
 
 /* Makes the other map slot the current one: moves everything by the load's offset and switches
    the sound over. */
-void func_001152B8(int map) {
+void Map_MakeCurrent(int map) {
     MapSlot *slot;
     SoundLoadQueue *queue;
     f32 *offset;
@@ -592,20 +593,20 @@ void func_001152B8(int map) {
         slot = &map_slots[map];
         queue = &sound_load_queue;
         D_00446770 = map;
-        func_001B93B8(offset);
-        func_001D1210(offset);
-        func_001154D8(0, offset);
-        func_001154D8(1, offset);
-        func_001155F8(0);
-        func_001155F8(1);
+        Player_MoveByOffset(offset);
+        Interact_OffsetViewRay(offset);
+        Map_OffsetRecords(0, offset);
+        Map_OffsetRecords(1, offset);
+        Map_PlaceRecordModels(0);
+        Map_PlaceRecordModels(1);
         MapObject_OffsetAll(0, offset);
         MapObject_OffsetAll(1, offset);
         Entity_OffsetAllInSlot(0, offset);
         Entity_OffsetAllInSlot(1, offset);
         Effect_OffsetAll(offset);
         LinkedPoint_TransformFollows(offset);
-        func_001C8990(0, offset);
-        func_001C8990(1, offset);
+        MapItem_MoveMap(0, offset);
+        MapItem_MoveMap(1, offset);
         Gold_MoveMap(0, offset);
         Gold_MoveMap(1, offset);
         map_load_state.position.x = -map_load_state.position.x;
@@ -615,7 +616,7 @@ void func_001152B8(int map) {
         Script_Start(0x7FFF, 0);
         loading = queue->unk10;
         if (loading != slot && queue->unk14 != slot) {
-            func_001BB590();
+            Player_StopFootstepSound();
             Sound_StopAll(1);
             queue->unk14 = slot;
         } else if (loading == slot && sound_load_queue.unk14 != slot) {
@@ -628,7 +629,7 @@ void func_001152B8(int map) {
 }
 
 /* Moves every record of a map and its model by an offset. */
-void func_001154D8(int map, f32 *offset) {
+void Map_OffsetRecords(int map, f32 *offset) {
     MapRecordBounds *record;
     u16 count;
     int remaining;
@@ -641,7 +642,7 @@ void func_001154D8(int map, f32 *offset) {
         if (count != 0) {
             remaining = count;
             do {
-                func_00115550(record, offset);
+                Map_OffsetRecord(record, offset);
                 remaining--;
                 record++;
             } while (remaining != 0);
@@ -650,7 +651,7 @@ void func_001154D8(int map, f32 *offset) {
 }
 
 /* Moves a map record and its model by an offset. */
-void func_00115550(MapRecordBounds *record, f32 *offset) {
+void Map_OffsetRecord(MapRecordBounds *record, f32 *offset) {
     if (record != NULL) {
         Vector_Add(&record->model->position, &record->model->position, offset);
         Vector_Add(record, record, offset);
@@ -662,7 +663,7 @@ void func_00115550(MapRecordBounds *record, f32 *offset) {
 }
 
 /* Puts the model of every record of a map where the record says, and builds its matrices. */
-void func_001155F8(int map) {
+void Map_PlaceRecordModels(int map) {
     MapSlot *slot = &map_slots[map];
     MapRecordBounds *record;
     ModelInstance *model;
@@ -701,8 +702,10 @@ void func_001155F8(int map) {
     }
 }
 
-/* Inserts the node into one of two lists, keeping each sorted by box area. */
-void func_001157D8(AreaNode *node) {
+/* Links a map record into one of the two lists of record boxes (by its flag 0x80000000), keeping each
+   sorted from the smallest box (x by z) up, so that a search finds the smallest box first. Records
+   with flag 0x02000000 are left out. */
+void Map_InsertRecordBySize(AreaNode *node) {
     AreaNode **head;
     AreaNode *prev;
     AreaNode *cur;
@@ -726,8 +729,8 @@ void func_001157D8(AreaNode *node) {
     }
 }
 
-/* Takes the boxes of a map slot out of both lists. */
-void func_00115878(int map) {
+/* Takes the records of a map slot out of both lists of record boxes. */
+void Map_UnlinkSlotRecords(int map) {
     AreaNode *prev;
     AreaNode *node;
 
@@ -768,9 +771,10 @@ void func_00115878(int map) {
     }
 }
 
-/* Finds the box of the first list that holds the point (each side widened by margin). Failing
-   that, the box nearest above or below it, then the nearest in z, then the nearest in x. */
-AreaNode *func_00115950(f32 *point, f32 margin) {
+/* Returns the map record of the first list whose box holds the point (each side widened by margin).
+   Failing that, the box nearest above or below it, then the nearest in z, then the nearest in x; NULL
+   when none lines up with it. */
+AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
     AreaNode *head = D_00446788;
     AreaNode *node;
     AreaNode *best;
@@ -808,9 +812,8 @@ AreaNode *func_00115950(f32 *point, f32 margin) {
     return best;
 }
 
-/* Finds the box of the first list that belongs to the map slot and holds the point (each side widened by margin). Failing
-   that, the box nearest above or below it, then the nearest in z, then the nearest in x. */
-MapRecordInfo *func_00115CD0(CameraState *position, f32 margin, int map) {
+/* Map_FindRecordAt among the records of one map slot. */
+MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map) {
     f32 *point = (f32 *)position;
     AreaNode *head = D_00446788;
     AreaNode *node;
@@ -850,7 +853,7 @@ MapRecordInfo *func_00115CD0(CameraState *position, f32 margin, int map) {
 }
 
 /* Tells whether the point lies inside the node's box grown by margin on every side. */
-int func_001160B0(f32 *point, AreaNode *node, f32 margin) {
+int Map_IsPointInRecord(f32 *point, AreaNode *node, f32 margin) {
     int inside;
 
     if (node != NULL) {
@@ -865,8 +868,9 @@ int func_001160B0(f32 *point, AreaNode *node, f32 margin) {
     return FALSE;
 }
 
-/* Returns prop prop_id of the map in the given slot, NULL when either is out of range. */
-void *func_00116160(int slot, int prop_id) {
+/* Returns the first map record of the slot with id prop_id (MapRecord.unk4E), NULL when there is none or
+   either is out of range. */
+void *Map_GetRecordById(int slot, int prop_id) {
     if ((u32)slot < 2 && prop_id >= 0 && prop_id < 0x100) {
         return map_slot_props[slot][prop_id];
     }
@@ -875,7 +879,7 @@ void *func_00116160(int slot, int prop_id) {
 
 /* The free-camera map viewer: while GameStatus.bit7 is set it runs its own frame loop, in which the pad
    turns the camera about the player (with 0x2000 held) or moves it, and both 0x400 and 0x800 put it back. */
-void func_001161A8(void) {
+void Map_RunFreeCamera(void) {
     VuVector4 position;
     VuVector4 rotation;
     int reset_held;
@@ -895,10 +899,10 @@ void func_001161A8(void) {
             VuVector4 move;
 
             Display_SwapBuffers(0);
-            func_001096E8();
-            func_001095E0();
-            func_0010B000();
-            func_001B5460();
+            Packet_SendChain();
+            Packet_SwapBuffers();
+            DrawList_Clear();
+            Input_Update();
             move.x = move.y = move.z = move.w = 0.0f;
             if (pad_state[0] & 0x2000) {
                 if (pad_state[0] & 0x40) {
@@ -966,41 +970,41 @@ void func_001161A8(void) {
             Vector_Scale(&move.x, &move.x, -1.0f);
             sceVu0TransMatrix(world_view, world_view, &move.x);
             sceVu0MulMatrix(world_screen, view_screen, world_view);
-            func_0010A7E0(world_screen);
+            GsDraw_QueueVu1Matrix(world_screen);
             func_001095D0();
-            func_00116610();
+            Map_DrawFreeCameraView();
             Message_Update();
             func_001095D8();
-            func_00101618();
-            func_00109800();
+            GameLoop_RunSoundLoads();
+            Packet_WaitForSend();
         } while (!(pad_state[1] & 0x2000));
         game_status.bit7 = FALSE;
     }
 }
 
-/* Draws every record of both map slots with the viewer's own block, then four quarter-screen rectangles
-   on top. */
-void func_00116610(void) {
+/* Draws the view of Map_RunFreeCamera: every record of both map slots with one plain light block, then
+   four quarter-screen rectangles on top. */
+void Map_DrawFreeCameraView(void) {
     ScreenQuad quad;
     MapSlot *slot;
     MapDrawRecord *record;
     int map;
     int i;
 
-    func_0010B238(D_00446790);
-    func_00109E88();
+    TextureTable_QueueAll(D_00446790);
+    GsDraw_QueueTexFlush();
     D_00432E20[0] = 0;
     D_00432E20[30] = 0;
     D_00433050[0] = 0;
     D_00433050[30] = 0;
-    func_00109A50();
-    func_00109A80(0x1A, 0);
-    func_00109A80(0x1B, 0x248);
-    func_00109A80(GS_REG_ALPHA_2, 0x4000000068L);
-    func_00109A80(GS_REG_TEST_2, 0x3080B);
-    func_00109A80(GS_REG_ZBUF_2, 0x10A000118L);
-    func_00109AD0();
-    func_00109E18();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(0x1A, 0);
+    Packet_AddGsRegister(0x1B, 0x248);
+    Packet_AddGsRegister(GS_REG_ALPHA_2, 0x4000000068L);
+    Packet_AddGsRegister(GS_REG_TEST_2, 0x3080B);
+    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
     for (map = 0; map < 2; map++) {
         slot = &map_slots[map];
         record = (MapDrawRecord *)slot->records;
@@ -1018,20 +1022,20 @@ void func_00116610(void) {
                     // match: both blocks chosen above are replaced at once by the viewer's own
                     record->model->unk148 = (s32)&map_object_default_lights;
                     record->model->unk14C = &map_draw_state.unkA0;
-                    func_0010D308(record->model);
+                    Model_DrawPosed(record->model);
                 }
             }
         }
     }
-    func_00106C58();
-    func_00109A50();
-    func_00109A80(0x1A, 1);
-    func_00109A80(GS_REG_ZBUF_2, 0xA000118);
-    func_00109A80(GS_REG_TEST_1, 0x31001);
-    func_00109A80(GS_REG_ALPHA_1, 0x48);
-    func_00109A80(8, 5);
-    func_00109AD0();
-    func_00109E18();
+    Game_BlendScreenOffsetDown();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(0x1A, 1);
+    Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x31001);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+    Packet_AddGsRegister(8, 5);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
     memset(&quad, 0, sizeof(quad));
     quad.tag = 0x4007A80621312E40L;
     quad.unk08 = 0x60;
@@ -1050,42 +1054,44 @@ void func_00116610(void) {
     quad.second_z = 0xFFFFFFFF;
     quad.second_u = 0x1000;
     quad.second_v = 0x1000;
-    func_0010A100(&quad);
+    GsDraw_QueueTexturedSprite(&quad);
     quad.first_x = 0x9400;
     quad.first_y = 0x7200;
     quad.second_x = 0x8000;
     quad.second_y = 0x8000;
-    func_0010A100(&quad);
+    GsDraw_QueueTexturedSprite(&quad);
     quad.first_x = 0x6C00;
     quad.first_y = 0x8E00;
     quad.second_x = 0x8000;
     quad.second_y = 0x8000;
-    func_0010A100(&quad);
+    GsDraw_QueueTexturedSprite(&quad);
     quad.first_x = 0x9400;
     quad.first_y = 0x8E00;
     quad.second_x = 0x8000;
     quad.second_y = 0x8000;
-    func_0010A100(&quad);
-    func_00109A50();
-    func_00109A80(8, 0);
-    func_00109AD0();
-    func_00109E18();
+    GsDraw_QueueTexturedSprite(&quad);
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(8, 0);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
 }
 
-/* Points both drawing contexts at the frame buffer with a 256x256 scissor and no offset bias. */
-void func_00116970(void) {
-    func_00109F80(0xA04015E, 0xFF000000FF0000L, 0x780000007800L);
+/* Points both drawing contexts at the 256-pixel-wide 16-bit buffer at GS block 0x2BC0 with a 256x256
+   scissor: draw mode 2 draws its second view there (GameLoop_DrawFrame). */
+void Map_SetOffscreenTarget(void) {
+    GsDraw_SetDrawTarget(0xA04015E, 0xFF000000FF0000L, 0x780000007800L);
 }
 
-/* Fills the 640x448 screen with grey, z writes off and with register 8 set to 5 meanwhile. */
-void func_00116998(void) {
+/* Stretches 320x224 texels of the 16-bit buffer at GS block 0x2BC0 over the whole 640x448 screen, z
+   writes off and with register 8 set to 5 meanwhile. Nothing calls it. */
+void Map_StretchOffscreenToScreen(void) {
     ScreenQuad quad;
 
-    func_00109A50();
-    func_00109A80(GS_REG_TEST_1, 0x30000);
-    func_00109A80(GS_REG_ZBUF_1, 0x10A000118L);
-    func_00109A80(8, 5);
-    func_00109AD0();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(8, 5);
+    Packet_EndGsRegisters();
     quad.tag = 0x624A16BC0L;
     quad.unk08 = 0x60;
     quad.unk10 = 0x116;
@@ -1103,54 +1109,55 @@ void func_00116998(void) {
     quad.first_u = 0;
     quad.first_v = 0;
     quad.second_z = 0;
-    func_0010A100(&quad);
-    func_00109A50();
-    func_00109A80(GS_REG_ZBUF_1, 0xA000118);
-    func_00109A80(8, 0);
-    func_00109AD0();
+    GsDraw_QueueTexturedSprite(&quad);
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+    Packet_AddGsRegister(8, 0);
+    Packet_EndGsRegisters();
 }
 
-/* Fills the screen with the colour in bytes 0x78-0x7B of the current map's header. */
-void func_00116AA0(void) {
+/* Covers the screen with the colour in bytes 0x78-0x7B of the current map's header, blended (draw mode 1
+   does this between its two views). */
+void Map_CoverScreenWithMapTint(void) {
     MapSlot *slot;
     MapSlotUnk08 *header;
 
     slot = &map_slots[D_00446770];
     header = (MapSlotUnk08 *)slot->header;
-    func_0010A4E8(header->unk78, header->unk79, header->unk7A, header->unk7B, 0x44);
+    GsDraw_FillScreen(header->unk78, header->unk79, header->unk7A, header->unk7B, 0x44);
 }
 
-/* Queues packet index of the map slot for sending. */
-void func_00116AD8(int slot, int index) {
+/* Queues prebuilt packet index of the map slot (MapSlot.unk40) for sending. */
+void Map_QueueSlotPacket(int slot, int index) {
     MapSlot *map_slot = &map_slots[slot];
     u32 *packet_start;
     u32 *packet;
 
-    packet_start = packet = func_00109990(3);
+    packet_start = packet = Packet_Alloc(3);
     *packet++ = *map_slot->unk40.items[index] | 0x30000000;
     *packet++ = (u32)map_slot->unk40.items[index] + 0x10;
     *packet++ = 0;
     *packet++ = 0;
-    func_00109650(packet_start, packet);
+    Packet_AppendToChain(packet_start, packet);
 }
 
 /* Queues a packet for sending. */
-void func_00116B60(int *packet) {
+void Map_QueuePacket(int *packet) {
     u32 *packet_start;
     u32 *cursor;
 
     if (packet != 0) {
-        packet_start = cursor = func_00109990(2);
+        packet_start = cursor = Packet_Alloc(2);
         *cursor++ = *packet | 0x30000000;
         *cursor++ = (u32)packet + 0x10;
         *cursor++ = 0;
         *cursor++ = 0;
-        func_00109650(packet_start, cursor);
+        Packet_AppendToChain(packet_start, cursor);
     }
 }
 
 /* Returns packet index of the map slot. */
-u32 *func_00116BD0(int slot, int index) {
+u32 *Map_GetSlotPacket(int slot, int index) {
     MapSlot *map_slot = &map_slots[slot];
     MapSlotPackets *packets = &map_slot->unk40;
 
@@ -1160,8 +1167,9 @@ u32 *func_00116BD0(int slot, int index) {
     return NULL;
 }
 
-/* Tests a flag bit in this slot's block, or looks it up among the 16 entries tagged with another slot. */
-int func_00116C08(int slot, int index, int other_slot, int bit) {
+/* Tests flag bit of flag block index of the slot's map; for a thing of the other map (other_slot) looks for
+   it among the block's 16 pairs of that map's tag and flag instead. Returns 1 when set. */
+int Map_TestFlagBlockBit(int slot, int index, int other_slot, int bit) {
     MapFlagBlock *block = map_slots[slot].flag_blocks + index;
     int other_offset = other_slot * 0x60; /* byte offset: retail multiplies before the branch */
     int i;
@@ -1177,9 +1185,10 @@ int func_00116C08(int slot, int index, int other_slot, int bit) {
     return 0;
 }
 
-/* Tests the corners of a map record's box against the screen: 1 when it has to be drawn whole (or the test is
-   off), -1 when all eight corners are outside, 0 otherwise. The model is not used. */
-int func_00116CB0(MapDrawRecord *draw_record, ModelInstance *model) {
+/* Projects the corners of a map record's box to the screen: 1 when none is out of the GS's range (projected
+   z above 0xFFFF0), when the test is off or the record is exempt, -1 when all eight are, 0 when some are (the
+   callers then cut the clipped triangles up, ModelScreen_CutClippedTriangles). The model is not used. */
+int Map_ClassifyRecordOnScreen(MapDrawRecord *draw_record, ModelInstance *model) {
     MapRecord *record = (MapRecord *)draw_record;
     MapRecordBounds *bounds = (MapRecordBounds *)draw_record;
     f32 matrix[16];
@@ -1200,7 +1209,7 @@ int func_00116CB0(MapDrawRecord *draw_record, ModelInstance *model) {
     if (bounds->unk30 == 0xFFFF) {
         return 1;
     }
-    if (func_00116C08(D_00446770, D_004141D0[0], (u8)(record->unk38 >> 27) & 1, (u8)record->unk38) == 0) {
+    if (Map_TestFlagBlockBit(D_00446770, D_004141D0[0], (u8)(record->unk38 >> 27) & 1, (u8)record->unk38) == 0) {
         return 1;
     }
     sceVu0MulMatrix(matrix, D_004323E0, D_00431AF0);

@@ -266,7 +266,7 @@ typedef struct {
 /* EffectMotion as EffectGroundRun_Start sets it up and EffectGroundRun_Update uses it: runs along the ground */
 typedef struct {
     Vector4 velocity;               /* 0x00 */
-    Vector4 probe;                  /* 0x10 passed to func_001C1430; y is def->unkDC */
+    Vector4 probe;                  /* 0x10 passed to Collision_CastRayAtMap; y is def->unkDC */
     f32 height;                     /* 0x20 def->unkDC: the ground is looked for from half of it down */
     f32 fall_speed;                 /* 0x24 */
     f32 hit_offset;                 /* 0x28 def->unkE0: how far below itself it checks for hits */
@@ -1019,7 +1019,7 @@ typedef struct {
     s16 unk4E;                      /* 0x4E frames per point of the rest */
 } FxTableStats;
 
-/* FxTableEntry+0x34: one of the three hit checks of an effect, EffectDef.unk10B picks it (func_001B4F90) */
+/* FxTableEntry+0x34: one of the three hit checks of an effect, EffectDef.unk10B picks it (Attack_RunEffectHitCheck) */
 typedef struct {
     EntityParamsUnk240PartUnk00 strengths; /* 0x00 goes to Unk1B1470Request.unk50 */
     EntityParamsUnk240PartUnk12 unk12; /* 0x12 goes to Unk1B1470Request.unk62 */
@@ -1033,13 +1033,13 @@ typedef struct {
     u8 unk27;                       /* 0x27 goes to Unk1B1470Request.unk70 */
 } FxTableHitCheck;
 
-/* fx_table[]: a table entry of 0x110 bytes, indexed by effect id (func_001B4F30) */
+/* fx_table[]: a table entry of 0x110 bytes, indexed by effect id (Attack_LaunchMagicEffect) */
 typedef struct {
     char pad00[0x34];
     FxTableHitCheck hit_checks[3];  /* 0x34 */
     FxTableStats unkAC;             /* 0xAC */
     u16 unkFC;                      /* 0xFC taken from PlayerState.mp_now to cast it (Player_CastMagic) */
-    u16 unkFE;                      /* 0xFE divides how fast PlayerState.unkC0 fills (func_001B96C8) */
+    u16 unkFE;                      /* 0xFE divides how fast PlayerState.unkC0 fills (Player_UpdateStatus) */
     u16 unk100;                     /* 0x100 */
     s8 unk102;                      /* 0x102 nonzero: the effect cannot be started */
     char pad103[0x01];

@@ -47,7 +47,7 @@ int EntityAi_TurnFromPush(void *, void *);
 s16 EntityAi_MoveCommand(float, void *, int); // match: this file only matches with this type; EntityAi_MoveCommand.c defines it differently
 void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
-void func_00196D48(Entity *);
+void EntityAi_ClearTurnInPlace(Entity *);
 int Motion_Start(void *, int, int, u32, int);
 extern int D_00414184[];
 extern f32 D_00431AF0[16];
@@ -58,10 +58,10 @@ void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 int EntityAi_CheckMeleeHit(Entity *, void *, s32, s32, s32);
 void EntityAi_SetAttackDelay(Entity *, s32);
-char *func_0010CAB8(char *, u32);
+char *Model_GetSkinnedBonePoint(char *, u32);
 int EntityAi_LaunchShot(void *, int, void *, void *);
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
-int func_0019A3F0(void *, int);
+int EntityAi_AnimationFrameCount(void *, int);
 void EntityEvent_OnDeath(Entity *);
 
 static void DarkPuppet_OnHit(Entity *entity);
@@ -262,7 +262,7 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
         }
     }
     if (entity->unkCD == 1) {
-        func_00196D48(entity);
+        EntityAi_ClearTurnInPlace(entity);
         if (ENTITY_FLAG_BITS(entity)->bit31) {
             angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {
@@ -531,7 +531,7 @@ static void DarkPuppet_MeleeAttack(Entity *entity) {
 }
 
 /* The ranged attack with record 0 (busy bit 1; DarkPuppet_ThinkCombat starts it for index 0
-   only): animation 23; on frame 30 it launches the record's shot unk10 from the point func_0010CAB8
+   only): animation 23; on frame 30 it launches the record's shot unk10 from the point Model_GetSkinnedBonePoint
    gives for the record's unk11, along the model's angles (EntityAi_LaunchShot). Turns and moves as
    DarkPuppet_MeleeAttack does. */
 static void DarkPuppet_RangedAttack0(Entity *entity) {
@@ -565,7 +565,7 @@ static void DarkPuppet_RangedAttack0(Entity *entity) {
         }
         if (((s32)(entity->flags >> 58) & 3) == 0 && entity->model->unkFC->unk82 == 0x1E &&
             (entity->unk2A == 0 || unk3D8->unk0C != 0)) {
-            point = func_0010CAB8((char *)entity->model, unk3D8->unk11);
+            point = Model_GetSkinnedBonePoint((char *)entity->model, unk3D8->unk11);
             if (point != NULL) {
                 EntityAi_LaunchShot(entity, unk3D8->unk10, point, entity->model->unkD0);
             }
@@ -672,7 +672,7 @@ static void DarkPuppet_Death(Entity *entity) {
         break;
     case 2:
         if ((s16)entity->params->unk434 < entity->model->unkFC->unk82) {
-            entity->unkA0 = unkE0->unk68 = func_0019A3F0(entity, entity->unkD1) - entity->model->unkFC->unk82;
+            entity->unkA0 = unkE0->unk68 = EntityAi_AnimationFrameCount(entity, entity->unkD1) - entity->model->unkFC->unk82;
             ENTITY_FLAG_BITS(entity)->bits2 = 2;
             ENTITY_FLAG_BITS(entity)->bit4 = 1;
             EntityEvent_OnDeath(entity);

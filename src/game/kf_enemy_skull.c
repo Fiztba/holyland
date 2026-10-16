@@ -28,7 +28,7 @@ s32 EntityAi_ShouldDodge(Entity *, f32, f32);
 s32 EntityAi_PickCombatChoice(Entity *, s32);
 void EntityAi_LowerChoiceWeight(Entity *, s32);
 int EntityAi_PickAttack(char *);
-void func_00196D48(Entity *);
+void EntityAi_ClearTurnInPlace(Entity *);
 int EntityAi_TurnCommand(Entity *);
 int EntityAi_TurnFromPush(void *, void *);
 s32 EntityAi_MoveCommand(Entity *, s32, f32);
@@ -48,8 +48,8 @@ float EntityMath_WrapAngle(float);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
-char *func_0010CAB8(char *, u32);
-int func_001B4F30(u16, void *, void *, void *, void *);
+char *Model_GetSkinnedBonePoint(char *, u32);
+int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
 void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
 s32 EntityAi_TurnToHeading(Entity *, f32 *, f32);
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
@@ -250,7 +250,7 @@ static void Skull_ThinkCombat(Entity *entity, s32 unknown) {
         }
     }
     if (entity->unkCD == 1) {
-        func_00196D48(entity);
+        EntityAi_ClearTurnInPlace(entity);
         if ((s32)(entity->flags >> 31) & 1) {
             angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {
@@ -498,7 +498,7 @@ static void Skull_SwingPart3(Entity *entity) {
 
 /* The animate handler: as EntityAi_Animate without the head turn. Skull_SwingPart3 swings
    model part 3 while the entity is not busy. Every tenth frame it launches shot 0xD0 from the point
-   func_0010CAB8 gives for 0xFF (func_001B4F30); on the other frames it starts effect 0x39D at model
+   Model_GetSkinnedBonePoint gives for 0xFF (Attack_LaunchMagicEffect); on the other frames it starts effect 0x39D at model
    point 0xFF. */
 static void Skull_Animate(Entity *entity) {
     u32 blend_frames; // match: converted to float as unsigned
@@ -530,7 +530,7 @@ static void Skull_Animate(Entity *entity) {
             shot->unk20 = 0;
             shot->unk22 = 0;
             shot->unk28 = entity->params->unk238;
-            func_001B4F30(0xD0, shot, func_0010CAB8((char *)entity->model, 0xFF), entity->model->unkD0, entity);
+            Attack_LaunchMagicEffect(0xD0, shot, Model_GetSkinnedBonePoint((char *)entity->model, 0xFF), entity->model->unkD0, entity);
         } else {
             EntityEvent_StartEffectAtPoint((char **)entity, 0x39D, 0xFF, (int)entity->model->unkD0);
         }

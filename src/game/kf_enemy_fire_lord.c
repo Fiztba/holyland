@@ -38,7 +38,7 @@ s32 EntityAi_ShouldDodge(Entity *, f32, f32);
 s32 EntityAi_PickCombatChoice(Entity *, s32);
 void EntityAi_LowerChoiceWeight(Entity *, s32);
 int EntityAi_PickAttack(char *);
-void func_00196D48(Entity *);
+void EntityAi_ClearTurnInPlace(Entity *);
 int EntityAi_TurnCommand(Entity *);
 int EntityAi_TurnFromPush(void *, void *);
 void EntityAi_Dodge(Entity *);
@@ -48,7 +48,7 @@ int Motion_Start(void *, int, int, u32, int);
 s32 EntityAi_TurnToHeading(Entity *, f32 *, f32);
 float sqrtf(float);
 float atan2f(float, float);
-char *func_0010CAB8(char *, u32);
+char *Model_GetSkinnedBonePoint(char *, u32);
 float EntityMath_WrapAngle(float);
 void EntityMath_FacingVector(Vector4 *, float);
 void Vector_Scale(float *, float *, float);
@@ -58,7 +58,7 @@ float EntityMath_AngleXZ(float *, char *);
 s32 EntityAi_CanUseMelee(Entity *, s32);
 extern u8 D_004141D8[];
 extern EntityModel *D_00446978;
-void func_0010B018(ModelInstance *, s32, s32);
+void DrawList_Add(ModelInstance *, s32, s32);
 
 static void FireLord_Animate(Entity *entity);
 static void FireLord_Think(Entity *entity, s32 unknown);
@@ -74,8 +74,8 @@ static void FireLord_MeleeAttack0(Entity *entity);
 static void FireLord_MeleeAttack1(Entity *entity);
 static void FireLord_PlayAnim6Or7ThenMelee0(Entity *entity);
 static void FireLord_Move(Entity *entity);
-static s32 func_001335D8(Entity *entity, f32 max_distance, f32 max_angle);
-void func_00133708(Entity *entity, s32 unknown);
+static s32 FireLord_ShouldEvadeSwingOrMagic(Entity *entity, f32 max_distance, f32 max_angle);
+void FireLord_DrawAfterimages(Entity *entity, s32 list);
 
 /* Set-up of a type 24 entity: clears its work area and installs the type's handlers. */
 void FireLord_Init(Entity *entity) {
@@ -308,7 +308,7 @@ static void FireLord_ThinkCombatSideAnimOrApproach(Entity *entity, s32 unknown) 
 
 /* Band 3 of FireLord_ThinkCombat (the player 100 to 500 away): as EntityAi_ThinkCombat, closing
    in on the player with the forward command; but in place of the guard it starts
-   FireLord_PlayAnim6Or7ThenMelee0 when func_001335D8 says so, and melee records 0 and 1 have
+   FireLord_PlayAnim6Or7ThenMelee0 when FireLord_ShouldEvadeSwingOrMagic says so, and melee records 0 and 1 have
    the type's own actions (FireLord_MeleeAttack0, FireLord_MeleeAttack1). */
 static void FireLord_ThinkCombatCloseIn(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
@@ -318,7 +318,7 @@ static void FireLord_ThinkCombatCloseIn(Entity *entity, s32 unknown) {
     s32 turn;
 
     ENTITY_FLAG_BITS(entity)->bits11 = 1;
-    if (func_001335D8(entity, 600.0f, 0.5235988f)) {
+    if (FireLord_ShouldEvadeSwingOrMagic(entity, 600.0f, 0.5235988f)) {
         EntityAi_StartAction(entity, FireLord_PlayAnim6Or7ThenMelee0, 1);
         return;
     }
@@ -362,7 +362,7 @@ static void FireLord_ThinkCombatCloseIn(Entity *entity, s32 unknown) {
         }
     }
     if (unkE0->unk78 == 0) {
-        func_00196D48(entity);
+        EntityAi_ClearTurnInPlace(entity);
         if (ENTITY_FLAG_BITS(entity)->bit31) {
             angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {
@@ -401,7 +401,7 @@ static void FireLord_ThinkCombatBackAway(Entity *entity, s32 unknown) {
     s32 turn;
 
     ENTITY_FLAG_BITS(entity)->bits11 = 1;
-    if (func_001335D8(entity, 600.0f, 0.5235988f)) {
+    if (FireLord_ShouldEvadeSwingOrMagic(entity, 600.0f, 0.5235988f)) {
         EntityAi_StartAction(entity, FireLord_PlayAnim6Or7ThenMelee0, 1);
         return;
     }
@@ -445,7 +445,7 @@ static void FireLord_ThinkCombatBackAway(Entity *entity, s32 unknown) {
         }
     }
     if (unkE0->unk78 == 0) {
-        func_00196D48(entity);
+        EntityAi_ClearTurnInPlace(entity);
         if (ENTITY_FLAG_BITS(entity)->bit31) {
             angle = EntityMath_AngleDifference(entity->model->unkD0[1], entity->unk68);
             if (unkE0->unk79 == 0) {
@@ -523,7 +523,7 @@ static void FireLord_PlayAnim6Or7Alternately(Entity *entity) {
 /* The melee attack with record 0 (busy bit 1): animation 20 to frame 8; then, the motion stopped,
    it moves 30 a frame along the heading for up to 15 frames or until the player is within 200; then
    plays on with the hit checks of EntityAi_MeleeAttack. On frames 20 to 26 it starts effect 0x3A0
-   along the path of the point func_0010CAB8 gives for 8, pointing to the one it gives for 9. */
+   along the path of the point Model_GetSkinnedBonePoint gives for 8, pointing to the one it gives for 9. */
 static void FireLord_MeleeAttack0(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     EntityParamsUnk240 *unk240 = &entity->params->unk240[0];
@@ -586,8 +586,8 @@ static void FireLord_MeleeAttack0(Entity *entity) {
         } else {
             unkE0->unk1C = 0.0f;
         }
-        from = (f32 *)func_0010CAB8((char *)entity->model, 8);
-        tip = (f32 *)func_0010CAB8((char *)entity->model, 9);
+        from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, 8);
+        tip = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, 9);
         if (from != NULL && tip != NULL) {
             if (entity->model->unkFC->unk82 >= 0x14 && entity->model->unkFC->unk82 <= 0x1A) {
                 delta_x = tip[0] - from[0];
@@ -642,7 +642,7 @@ static void FireLord_MeleeAttack0(Entity *entity) {
 }
 
 /* The melee attack with record 1 (busy bit 1): animation 21, as EntityAi_MeleeAttack. On frames 23
-   to 27 it starts effect 0x3A0 along the path of the point func_0010CAB8 gives for 16, pointing to
+   to 27 it starts effect 0x3A0 along the path of the point Model_GetSkinnedBonePoint gives for 16, pointing to
    the one it gives for 17. */
 static void FireLord_MeleeAttack1(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
@@ -682,8 +682,8 @@ static void FireLord_MeleeAttack1(Entity *entity) {
         } else {
             unkE0->unk1C = 0.0f;
         }
-        from = (f32 *)func_0010CAB8((char *)entity->model, 0x10);
-        tip = (f32 *)func_0010CAB8((char *)entity->model, 0x11);
+        from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, 0x10);
+        tip = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, 0x11);
         if (from != NULL && tip != NULL) {
             if (entity->model->unkFC->unk82 >= 0x17 && entity->model->unkFC->unk82 <= 0x1B) {
                 delta_x = tip[0] - from[0];
@@ -834,7 +834,11 @@ static void FireLord_Move(Entity *entity) {
     }
 }
 
-static s32 func_001335D8(Entity *entity, f32 max_distance, f32 max_angle) {
+/* Whether to start FireLord_PlayAnim6Or7ThenMelee0: while the player is early in a swing or work word unk6A
+   runs (FireLord_Think sets it when he casts a magic), the entity is not busy, the player is within
+   max_distance (less the radius and 100) and Entity.unk68 within max_angle of the heading; then
+   EntityParams.unkCA / 5 times in 100. */
+static s32 FireLord_ShouldEvadeSwingOrMagic(Entity *entity, f32 max_distance, f32 max_angle) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 distance;
     f32 angle;
@@ -858,7 +862,10 @@ static s32 func_001335D8(Entity *entity, f32 max_distance, f32 max_angle) {
     return rand() % 100 < entity->params->unkCA / 5;
 }
 
-void func_00133708(Entity *entity, s32 unknown) {
+/* Puts the two older copies of the model that FireLord_Think keeps in fire_lord_model (each at half the alpha
+   of the one before) in draw list `list`, while work byte unk7E is set (an action with animation 6 or 7 ran
+   this frame) and the entity is not dying. Entity_DrawAll calls it for spawn type 0xF. */
+void FireLord_DrawAfterimages(Entity *entity, s32 list) {
     EntityUnkE0Kind131390 *unkE0 = (EntityUnkE0Kind131390 *)&entity->unkE0;
 
     if (unkE0->unk7E != 0 && ENTITY_FLAG_BITS(entity)->bits2 == 0) {
@@ -866,7 +873,7 @@ void func_00133708(Entity *entity, s32 unknown) {
         fire_lord_model[0].model.unk148 = ENTITY_MODEL(entity)->unk148;
         fire_lord_model[1].model.unk14C = ENTITY_MODEL(entity)->unk14C;
         fire_lord_model[1].model.unk148 = ENTITY_MODEL(entity)->unk148;
-        func_0010B018(&fire_lord_model[0].model, 0, unknown);
-        func_0010B018(&fire_lord_model[1].model, 0, unknown);
+        DrawList_Add(&fire_lord_model[0].model, 0, list);
+        DrawList_Add(&fire_lord_model[1].model, 0, list);
     }
 }

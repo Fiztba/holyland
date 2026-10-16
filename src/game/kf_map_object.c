@@ -16,31 +16,31 @@ float sqrtf(float);
 float atan2f(float, float);
 void Vector_Scale(float *, float *, float);
 void Vector_Subtract(void *, void *, void *);
-int func_001034A8(int);
-int func_00103698(int, int);
-int func_001036C8(int, int);
-int func_00103668(int, int, u32);
-int func_00103AE0(int, int);
-void func_001036B8(int, int, int);
-void func_001036E8(int, int, int);
-void func_00103648(int, int, u32, int);
-void func_00108A08(ModelInstance *, int);
-void func_00108AC8(void *);
-void func_00109A50(void);
-void func_00109A80(int, s64);
-void func_00109AD0(void);
-void func_00109EB8(void);
-void func_0010AEB8(void *);
-void func_0010B018(ModelInstance *, s32, s32);
-void func_0010E010(ModelInstance *);
-MapRecordInfo *func_00115CD0(CameraState *, f32, int);
-int func_00116C08(int, int, int, int);
-void func_0011E8E8(int *);
-void func_0011E8F0(ModelInstance *);
-void func_0011E9D0(void *);
+int Game_IsMapVisited(int);
+int Game_GetObjectActive(int, int);
+int Game_GetObjectState(int, int);
+int Game_GetObjectFlag(int, int, u32);
+int Game_GetTriggerItem(int, int);
+void Game_SetObjectActive(int, int, int);
+void Game_SetObjectState(int, int, int);
+void Game_SetObjectFlag(int, int, u32, int);
+void ModelMotion_Select(ModelInstance *, int);
+void ModelMotion_Step(void *);
+void Packet_BeginGsRegisters(void);
+void Packet_AddGsRegister(int, s64);
+void Packet_EndGsRegisters(void);
+void GsDraw_EnableDepthTest(void);
+void ModelTexture_SendForModel(void *);
+void DrawList_Add(ModelInstance *, s32, s32);
+void Model_DrawPosedWithAlpha(ModelInstance *);
+MapRecordInfo *Map_FindRecordAtInSlot(CameraState *, f32, int);
+int Map_TestFlagBlockBit(int, int, int, int);
+void MapObject_DrawModel(int *);
+void MapObject_DrawModelWithAlpha(ModelInstance *);
+void MapObject_DrawModelNoDepthWrite(void *);
 void func_0011EA70(void);
-char *func_0011EA78(char *);
-void func_0011EA80(MapObject *);
+char *MapObject_GetPositionAsPoint(char *);
+void MapObject_StopSound(MapObject *);
 float Angle_Wrap(float);
 int Sound_PlayCommonAt(float, int, void *);
 int Sound_PlayMapAtRange(u8, u8, float *, float);
@@ -59,7 +59,7 @@ extern Vector4 map_object_glow_colors[4];
 extern u8 item_counts[];
 extern MapObject map_slot_objects[][0x200];
 extern void (*map_object_step_handlers[][16])(MapObject *);
-extern void (*map_object_draw_hooks[])(MapObject *);
+extern void (*map_object_end_hooks[])(MapObject *);
 extern int (*map_object_item_hooks[])(MapObject *, int);
 extern void (*map_object_signal_hooks[])(MapObject *, int);
 extern void (*map_object_update_hooks[])(MapObject *);
@@ -85,7 +85,7 @@ static MapSlotUnk10Vectors glow_lights_shared;  /* 0x472A40 map_draw_state.unkC0
 static MapSlotUnk10Vectors glow_lights[2][0x20]; /* 0x472AC0 map_draw_state.unkA90 blended for the glow */
 
 /* Empties the map objects of both maps. */
-void func_0011C6E8(void) {
+void MapObject_ClearAllMaps(void) {
     MapObject_ClearMap(0);
     MapObject_ClearMap(1);
 }
@@ -105,7 +105,7 @@ void MapObject_InitMap(int map) {
     for (; i < count; i++, object++) {
         MAP_OBJECT_BYTES(object)->step = 0;
         if (object->unk04->unk04 == 0xFFFF) {
-            object->model->get_point = (int (*)(void *, int))func_0011EA78;
+            object->model->get_point = (int (*)(void *, int))MapObject_GetPositionAsPoint;
             object->model->unk1B4 = (void (*)(ModelInstance *))func_0011EA70;
         }
         if (object->unk08->unk38.bytes[2] != 0) {
@@ -145,18 +145,18 @@ void MapObject_InitMap(int map) {
         map_object_update_hooks[object->unk04->kind](object);
         switch (object->unk04->bit8) {
             case 0:
-                object->model->draw = (void (*)(ModelInstance *))func_0011E8E8;
-                object->model->unk1A8 = func_0010E010;
+                object->model->draw = (void (*)(ModelInstance *))MapObject_DrawModel;
+                object->model->unk1A8 = Model_DrawPosedWithAlpha;
                 break;
             case 1:
-                object->model->draw = func_0011E8F0;
+                object->model->draw = MapObject_DrawModelWithAlpha;
                 break;
             default:
                 object->model->draw = NULL;
                 break;
         }
         if (object->unk04->kind == 5) {
-            object->model->draw = (void (*)(ModelInstance *))func_0011E9D0;
+            object->model->draw = (void (*)(ModelInstance *))MapObject_DrawModelNoDepthWrite;
         }
         if (object->unk08->unk30 == 0x91) {
             object->model->unk1BC = (void (*)(ModelInstance *))ScrollTexture_DrawAll;
@@ -207,7 +207,7 @@ void MapObject_StartMap(int map) {
     int count = D_004467B8[map];
     MapObject *object = map_slot_objects[map];
     int tag = map_slots[map].tag;
-    int visited = func_001034A8(tag);
+    int visited = Game_IsMapVisited(tag);
     int in_use;
     int flag;
     MapObjectUnk08 *source;
@@ -219,20 +219,20 @@ void MapObject_StartMap(int map) {
         flag = 0;
         in_use = ((s32)(source->unk38.flags >> 49) ^ 1) & 1;
         if (visited) {
-            in_use = func_00103698(tag, i);
-            flag = func_001036C8(tag, i);
-            MAP_OBJECT_BITS(object)->bit18 = func_00103668(tag, i, 0);
-            MAP_OBJECT_BITS(object)->bit19 = func_00103668(tag, i, 1);
+            in_use = Game_GetObjectActive(tag, i);
+            flag = Game_GetObjectState(tag, i);
+            MAP_OBJECT_BITS(object)->bit18 = Game_GetObjectFlag(tag, i, 0);
+            MAP_OBJECT_BITS(object)->bit19 = Game_GetObjectFlag(tag, i, 1);
         } else {
             kind = object->unk04->kind;
             if (kind == 8 || kind == 4 || kind == 0xD || kind == 0x10) {
                 flag = ((MapObjectUnk08Words *)source)->unk52;
             }
         }
-        if (func_00103AE0(tag, object->unk08->unk38.bytes[2])) {
+        if (Game_GetTriggerItem(tag, object->unk08->unk38.bytes[2])) {
             flag = 1;
         }
-        object->unk0C = (s32)func_00115CD0((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
+        object->unk0C = (s32)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
         if (in_use) {
             MapObject_Activate(object);
         } else {
@@ -251,11 +251,11 @@ void MapObject_UnloadMap(int map) {
     int i;
 
     for (i = 0; i < count; i++, object++) {
-        func_001036B8(tag, i, MAP_OBJECT_BITS(object)->bit16);
-        func_001036E8(tag, i, MAP_OBJECT_BITS(object)->bit17);
-        func_00103648(tag, i, 0, MAP_OBJECT_BITS(object)->bit18);
-        func_00103648(tag, i, 1, MAP_OBJECT_BITS(object)->bit19);
-        func_0011EA80(object);
+        Game_SetObjectActive(tag, i, MAP_OBJECT_BITS(object)->bit16);
+        Game_SetObjectState(tag, i, MAP_OBJECT_BITS(object)->bit17);
+        Game_SetObjectFlag(tag, i, 0, MAP_OBJECT_BITS(object)->bit18);
+        Game_SetObjectFlag(tag, i, 1, MAP_OBJECT_BITS(object)->bit19);
+        MapObject_StopSound(object);
     }
     MapObject_ClearMap(map);
 }
@@ -276,10 +276,10 @@ void MapObject_SaveAllFlags(void) {
             for (i = 0; i < count; i++, object++) {
                 // match: each flag is narrowed to a byte first; without these four conversions the outer loop is
                 // small enough for the compiler to hoist the 0xE000 object-table stride out of it
-                func_001036B8(tag, i, (u8)MAP_OBJECT_BITS(object)->bit16);
-                func_001036E8(tag, i, (u8)MAP_OBJECT_BITS(object)->bit17);
-                func_00103648(tag, i, 0, (u8)MAP_OBJECT_BITS(object)->bit18);
-                func_00103648(tag, i, 1, (u8)MAP_OBJECT_BITS(object)->bit19);
+                Game_SetObjectActive(tag, i, (u8)MAP_OBJECT_BITS(object)->bit16);
+                Game_SetObjectState(tag, i, (u8)MAP_OBJECT_BITS(object)->bit17);
+                Game_SetObjectFlag(tag, i, 0, (u8)MAP_OBJECT_BITS(object)->bit18);
+                Game_SetObjectFlag(tag, i, 1, (u8)MAP_OBJECT_BITS(object)->bit19);
             }
         }
     }
@@ -382,7 +382,7 @@ void MapObject_UpdateAll(void) {
                 if ((MapObject *)player_state.unk208 == object) {
                     object->unk10 |= 2;
                 } else if (object->unk08->unk5A != 0 && object->unk08->unk5A != 0xFF) {
-                    if (func_00116C08(D_00446770, player_state.unk250, MAP_OBJECT_BYTES(object)->unk00 & 1, object->unk08->unk5A)) {
+                    if (Map_TestFlagBlockBit(D_00446770, player_state.unk250, MAP_OBJECT_BYTES(object)->unk00 & 1, object->unk08->unk5A)) {
                         object->unk10 |= 2;
                     }
                 } else if (record->unk38 & 0x4000000) {
@@ -507,12 +507,12 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
     Vector_Scale(scaled, &map_object_glow_colors[3].x, blend);
     Vector_Scale(&glow_lights_shared.unk40[3].x, &((MapSlotUnk10Vectors *)&map_draw_state.unkC0)->unk40[3].x, rest);
     Vector_Add(&glow_lights_shared.unk40[3], &glow_lights_shared.unk40[3], scaled);
-    func_00109A50();
-    func_00109A80(GS_REG_ALPHA_1, 0x44);
-    func_00109A80(GS_REG_ALPHA_2, 9);
-    func_00109A80(GS_REG_TEST_1, 0x5000D);
-    func_00109A80(GS_REG_TEST_2, 0x5000D);
-    func_00109AD0();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+    Packet_AddGsRegister(GS_REG_ALPHA_2, 9);
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+    Packet_AddGsRegister(GS_REG_TEST_2, 0x5000D);
+    Packet_EndGsRegisters();
     for (map = 0; map < 2; map++) {
         if (only_one != 0 && which != map) {
             continue;
@@ -565,9 +565,9 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->unk0C)->unk38);
             }
             if ((object->unk08->unk38.flags & 0x1000000000000L) || (object->model->alpha < 128.0f && !(object->unk04->unk68 & 0x10000))) {
-                func_0010B018(object->model, 0, mode);
+                DrawList_Add(object->model, 0, mode);
             } else {
-                func_0010AEB8(object->model);
+                ModelTexture_SendForModel(object->model);
                 object->model->unk1A8(object->model);
             }
         }
@@ -626,14 +626,14 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
                 LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->unk0C)->unk38);
             }
             if ((object->unk08->unk38.flags & 0x1000000000000L) || (object->model->unk145 != 0 && (s16)object->model->unk146 < 0x80 && !(object->unk04->unk68 & 0x10000))) {
-                func_0010B018(object->model, 0, mode);
+                DrawList_Add(object->model, 0, mode);
             } else {
-                func_0010AEB8(object->model);
+                ModelTexture_SendForModel(object->model);
                 object->model->unk1A8(object->model);
             }
         }
     }
-    func_00109EB8();
+    GsDraw_EnableDepthTest();
 }
 
 /* Puts a map object in use: not started, fully opaque. */
@@ -657,9 +657,9 @@ void MapObject_Activate(MapObject *object) {
 void MapObject_Deactivate(MapObject *object) {
     if (object != NULL) {
         if (MAP_OBJECT_BITS(object)->step != 0) {
-            map_object_draw_hooks[object->unk04->kind](object);
+            map_object_end_hooks[object->unk04->kind](object);
         }
-        func_0011EA80(object);
+        MapObject_StopSound(object);
         Effect_FreeForOwner((Entity *)object); // match: shared prototype takes an Entity
         object->unk10 &= ~0x10000;
         MAP_OBJECT_BITS(object)->step = 0;
@@ -713,7 +713,7 @@ void MapObject_Break(MapObject *object) {
 s16 MapObject_StartAnim(MapObject *object, int anim) {
     ModelChannel *channel;
 
-    func_00108A08(object->model, object->unk04->anims[anim].anim);
+    ModelMotion_Select(object->model, object->unk04->anims[anim].anim);
     MAP_OBJECT_BYTES(object)->anim = anim;
     channel = MODEL_CHANNEL(object->model);
     channel->param = 0;
@@ -758,7 +758,7 @@ int MapObject_StepAnim(MapObject *object) {
             if (object->unk04->unk70 > 0.0f) {
                 range = object->unk04->unk70;
             }
-            func_0011EA80(object);
+            MapObject_StopSound(object);
             switch (anim->sound_kind) {
                 case 0:
                     Sound_PlayCommonAt(range, anim->sound, &object->model->position);
@@ -771,12 +771,12 @@ int MapObject_StepAnim(MapObject *object) {
             }
         }
     }
-    func_00108AC8(object->model);
+    ModelMotion_Step(object->model);
     object->model->unk1B4(object->model);
     object->unk10 |= 8;
     model = object->model;
     if (MODEL_CHANNEL(model)->param == 0) {
-        func_0011EA80(object);
+        MapObject_StopSound(object);
         model = object->model; // match: re-read here although the return reads it again; keeps the model in $6
     }
     return MODEL_CHANNEL(object->model)->param != 0;
@@ -852,52 +852,55 @@ void MapObject_ClearMap(int map) {
     memset(objects_by_id[map], 0, sizeof(objects_by_id[map]));
 }
 
-/* Draws the model with the GS state as it is. */
-void func_0011E8E8(int *model) {
-    func_0010AEB8(model);
+/* Draw hook of a map object model drawn with the GS state as it is: draws the model. */
+void MapObject_DrawModel(int *model) {
+    ModelTexture_SendForModel(model);
 }
 
-/* Sets the GS Z-buffer, alpha and test registers for model, then hands it on. */
-void func_0011E8F0(ModelInstance *model) {
-    func_00109A50();
+/* Draw hook of an alpha-blended map object model: sets the GS alpha and test registers and the Z buffer (not
+   written while the model is translucent, alpha below 128), then draws the model. */
+void MapObject_DrawModelWithAlpha(ModelInstance *model) {
+    Packet_BeginGsRegisters();
     if (model->alpha < 128.0f) {
-        func_00109A80(GS_REG_ZBUF_1, 0x10A000118L);
-        func_00109A80(GS_REG_ZBUF_2, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
     } else {
-        func_00109A80(GS_REG_ZBUF_1, 0xA000118L);
-        func_00109A80(GS_REG_ZBUF_2, 0xA000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
     }
-    func_00109A80(GS_REG_ALPHA_1, 0x44);
-    func_00109A80(GS_REG_ALPHA_2, 9);
-    func_00109A80(GS_REG_TEST_1, 0x5000D);
-    func_00109A80(GS_REG_TEST_2, 0x5000D);
-    func_00109AD0();
-    func_0010AEB8(model);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+    Packet_AddGsRegister(GS_REG_ALPHA_2, 9);
+    Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+    Packet_AddGsRegister(GS_REG_TEST_2, 0x5000D);
+    Packet_EndGsRegisters();
+    ModelTexture_SendForModel(model);
 }
 
-/* Sets the GS registers for drawing a map object's model, then draws it. */
-void func_0011E9D0(void *model) {
-    func_00109A50();
-    func_00109A80(0x4E, 0x10A000118);
-    func_00109A80(0x4F, 0x10A000118);
-    func_00109A80(0x42, 0x44);
-    func_00109A80(0x43, 9);
-    func_00109A80(0x47, 0x5000D);
-    func_00109A80(0x48, 0x5000D);
-    func_00109AD0();
-    func_0010AEB8(model);
+/* Draw hook of the distance-fading kind (5): sets the GS registers for alpha blending without Z-buffer
+   writes, then draws the model. */
+void MapObject_DrawModelNoDepthWrite(void *model) {
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(0x4E, 0x10A000118);
+    Packet_AddGsRegister(0x4F, 0x10A000118);
+    Packet_AddGsRegister(0x42, 0x44);
+    Packet_AddGsRegister(0x43, 9);
+    Packet_AddGsRegister(0x47, 0x5000D);
+    Packet_AddGsRegister(0x48, 0x5000D);
+    Packet_EndGsRegisters();
+    ModelTexture_SendForModel(model);
 }
 
+/* Does nothing: the point-update hook (ModelInstance.unk1B4) of a map object model without points. */
 void func_0011EA70(void) {
 }
 
-/* get_point of a model without points: its position, whatever the index. */
-char *func_0011EA78(char *model) {
+/* get_point hook of a map object model without points: returns the model's position, whatever the index. */
+char *MapObject_GetPositionAsPoint(char *model) {
     return (char *)&((ModelInstance *)model)->position;
 }
 
 /* Stops the sound a map object is playing, if any. */
-void func_0011EA80(MapObject *object) {
+void MapObject_StopSound(MapObject *object) {
     if (object->sound != 0) {
         Sound_StopTagged(object->sound);
         object->sound = 0;

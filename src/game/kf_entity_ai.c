@@ -18,7 +18,7 @@ extern float D_004325A0[];
 s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_height, f32 max_distance, f32 heading);
 void *memset(void *, int, u32);
 void Vector_Copy(void *, void *);
-s32 func_001B1470(Unk1B1470Request *, Unk1B1470Extra *);
+s32 Attack_Run(Unk1B1470Request *, Unk1B1470Extra *);
 /* EntityMath_WrapAngle, which the game inlines here: wraps an angle to +-pi */
 static inline f32 wrap_angle(f32 angle) {
     angle = angle - (f32)(s32)(angle / 6.2831855f) * 6.2831855f;
@@ -29,11 +29,11 @@ static inline f32 wrap_angle(f32 angle) {
     }
     return angle;
 }
-int func_001B4F30(u16, void *, void *, void *, void *);
+int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
 int EntityShot_LaunchAimed(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *, f32, f32);
 float sqrtf(float);
 float atan2f(float, float);
-char *func_0010CAB8(char *, u32);
+char *Model_GetSkinnedBonePoint(char *, u32);
 s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits, f32 rate);
 /* match: the call leaves the sixth argument (rate, $f12) unset */
 #define TURN_PART_NO_RATE ((int (*)(void *, f32 *, int, f32 *, f32 *))Bone_TurnPart)
@@ -42,7 +42,7 @@ extern PlayerState player_state;
 #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->unk38)
 extern EntitySpawnInfo *D_004467D0[2];
 extern MapSlot map_slots[];
-int func_00103548(int, int);
+int Game_GetSpawnDeathCount(int, int);
 // match: reading EntityParams word 0 whole; a bit-field in byte 3 would be an lbu
 typedef union {
     u32 word;
@@ -70,25 +70,25 @@ static inline void adjust_level(u8 *level, s32 delta, s32 max) {
 int Motion_SeekSlotKeys(ModelInstance *, int, int, int);
 s32 Motion_BlendSlotToPose(ModelInstance *model, s32 type, s32 table, s16 frame, f32 weight);
 void Vector_WeightedSum4(void *, void *, void *, void *, void *, float *);
-void func_00109A50(void);
-void func_00109A80(int, s64);
-void func_00109AD0(void);
-void func_00109E18(void);
-void func_0010A718(int);
+void Packet_BeginGsRegisters(void);
+void Packet_AddGsRegister(int, s64);
+void Packet_EndGsRegisters(void);
+void GsDraw_QueueFlush(void);
+void GsDraw_SetScreenAlpha(int);
 void Matrix_Multiply(void *, void *, void *);
 extern Entity *D_004467E0;
 extern ModelInstance entity_models[];
 extern char fire_lord_model_matrix[];
 
-static s32 func_00195990(Entity *entity, EntityParamsUnk240 *record, s32 index, s32 frame_min, s32 frame_max);
+static s32 EntityAi_CheckMeleeAilment(Entity *entity, EntityParamsUnk240 *record, s32 index, s32 frame_min, s32 frame_max);
 static void EntityAi_Kill(Entity *entity);
-static int func_00196078(Entity *actor, f32 *out_a, int mode, f32 *out_b, f32 *limit);
+static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b, f32 *limit);
 static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits);
 static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c, int value_d, float scale);
 static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate);
-static int func_00196358(Entity *entity);
-static void func_00196548(Entity *actor);
-static void func_00196718(Entity *actor);
+static int EntityAi_IsPlayerNear(Entity *entity);
+static void EntityAi_SensePlayerInArc(Entity *actor);
+static void EntityAi_RollNoticePlayer(Entity *actor);
 static int EntityAi_HasMeleeAttack(Entity *entity);
 static int EntityAi_HasRangedAttack(Entity *entity);
 static s32 EntityAi_InAttackDistance(Entity *entity);
@@ -109,8 +109,9 @@ float EntityAi_RandomAngle(void) {
     return angle;
 }
 
-/* Sets D_004325A0[30] to float_value and D_004325A0[31] to int_value. */
-void func_00195878(int float_value, int int_value) {
+/* Starts the second camera shake (GameLoop_UpdateCameraShake plays it): its reach (CameraState.unk78) and its frames
+   (unk7C). The Giant Beetle's ranged attack uses it. */
+void EntityAi_ShakeCamera(int float_value, int int_value) {
     D_004325A0[30] = float_value;
     *(int *)&D_004325A0[31] = int_value;
 }
@@ -156,8 +157,8 @@ int EntityAi_StartAttack(Entity *entity, void (*handler)(Entity *entity), int ru
 }
 
 /* As EntityAi_CheckMeleeHit, but hands the part to EntityAim_AilPlayerInArc, which tests the player alone (heading
-   turned round by pi). Nothing calls it. */
-static s32 func_00195990(Entity *entity, EntityParamsUnk240 *record, s32 index, s32 frame_min, s32 frame_max) {
+   turned round by pi) and gives him the part's ailments; returns its result. Nothing calls it. */
+static s32 EntityAi_CheckMeleeAilment(Entity *entity, EntityParamsUnk240 *record, s32 index, s32 frame_min, s32 frame_max) {
     EntityModel *model;
     f32 turn;
     f32 wrapped;
@@ -212,7 +213,7 @@ s32 EntityAi_CheckMeleeHitAt(Entity *entity, EntityParamsUnk240 *unk240, s32 par
 }
 
 /* Builds the attack request of one part of a melee record (reach, height, angle, power) and runs it with
-   func_001B1470; returns its result. */
+   Attack_Run; returns its result. */
 s32 EntityAi_SendMeleeHit(Entity *entity, EntityParamsUnk240 *record, s32 index, f32 angle) {
     Unk1B1470Request request;
     Unk1B1470Extra extra;
@@ -240,11 +241,11 @@ s32 EntityAi_SendMeleeHit(Entity *entity, EntityParamsUnk240 *record, s32 index,
     extra.unk02 = 0;
     extra.unk20 = 0;
     extra.unk22 = 0;
-    return func_001B1470(&request, &extra);
+    return Attack_Run(&request, &extra);
 }
 
 /* Allocates a shot carrying EntityParams.unk238 and launches effect effect_id from origin along angles
-   (func_001B4F30) for the entity. */
+   (Attack_LaunchMagicEffect) for the entity. */
 int EntityAi_LaunchShot(Entity *entity, int effect_id, void *origin, void *angles) {
     EntityUnk1B1390 *shot;
 
@@ -252,7 +253,7 @@ int EntityAi_LaunchShot(Entity *entity, int effect_id, void *origin, void *angle
     shot->unk22 = shot->unk20 = 0;
     shot->unk00 = 1;
     shot->unk28 = entity->params->unk238;
-    return func_001B4F30((u16)effect_id, shot, origin, angles, entity);
+    return Attack_LaunchMagicEffect((u16)effect_id, shot, origin, angles, entity);
 }
 
 /* EntityShot_LaunchAimed with no target: launches the shots of a ranged record whose frame lies in (frame_from,
@@ -272,8 +273,8 @@ void EntityAi_SpawnBoneEffect(char **model, int effect_id, int point) {
     f32 yaw;
     f32 turns;
 
-    from = (f32 *)func_0010CAB8(*model, point);
-    tip = (f32 *)func_0010CAB8(*model, point + 1);
+    from = (f32 *)Model_GetSkinnedBonePoint(*model, point);
+    tip = (f32 *)Model_GetSkinnedBonePoint(*model, point + 1);
     if (from != NULL && tip != NULL) {
         delta_x = tip[0] - from[0];
         delta_y = tip[1] - from[1];
@@ -298,9 +299,9 @@ static void EntityAi_Kill(Entity *entity) {
     entity->unk2C = 0;
 }
 
-/* Bone_TurnPart for the model part at EntityModel.unk138 while params flag 0x2000 is set; FALSE without it.
-   Nothing calls it. */
-static int func_00196078(Entity *actor, f32 *out_a, int mode, f32 *out_b, f32 *limit) {
+/* Bone_TurnPart for the model part EntityAi_LookAtPoint turns (EntityModel.unk138, the third part the model
+   file marks) while params flag 0x2000 is set; FALSE without it. Nothing calls it. */
+static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b, f32 *limit) {
     void *target = actor->model->unk138;
 
     if (target == NULL) {
@@ -339,7 +340,8 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
     return result;
 }
 
-/* Bone_TurnPart for the model part at EntityModel.unk134; FALSE without it. Nothing calls it. */
+/* Bone_TurnPart for the model part at EntityModel.unk134 (the one the model file marks with ModelFilePart.unk06
+   2); FALSE without it. Nothing calls it, and no code that runs uses that part, so its role is not known. */
 static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits) {
     int part = entity->model->unk134;
     int result;
@@ -352,7 +354,8 @@ static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *
     return result;
 }
 
-/* Bone_TurnPartToLook for the model part at EntityModel.unk134; FALSE without it. Nothing calls it. */
+/* As EntityAi_LookAtPoint, for the model part at EntityModel.unk134 (role unknown, see func_001961D0) and
+   without the params flag test; FALSE without the part. Nothing calls it. */
 static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c, int value_d, float scale) {
     EntityModel *model = entity->model;
 
@@ -362,8 +365,8 @@ static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c
     return Bone_TurnPartToLook(model, model->unk134, value_a, value_b, value_c, value_d, scale);
 }
 
-/* Bone_TurnPartToLook for the model part at EntityModel.unk134, aimed 115 above the player's feet; FALSE without
-   it. Nothing calls it. */
+/* As func_00196200, at the player's position 115 above his feet; FALSE without the part.
+   Nothing calls it. */
 static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate) {
     float position[2]; // match: Vector_Copy writes four floats, but retail reserves room for two
     EntityModel *model;
@@ -393,9 +396,9 @@ s32 EntityAi_RemoveIfFallen(Entity *entity) {
     return 0;
 }
 
-/* 1 when the player is within 8000, unless unk14 is set and its spawn flags lack 0x04000000 (0 then).
-   Nothing calls it. */
-static int func_00196358(Entity *entity) {
+/* 1 when the player is within 8000, unless the entity stands in a map record (Entity.unk14) whose flags lack
+   0x04000000 (0 then). Nothing calls it. */
+static int EntityAi_IsPlayerNear(Entity *entity) {
     if (entity->unk14 != NULL && (((EntitySpawnInfo *)entity->unk14)->unk38 & 0x04000000) == 0) {
         return 0;
     }
@@ -418,7 +421,7 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
     if (ENTITY_FLAG_BITS(entity)->bit4 && (entity->spawn_info->unk38 & (0x8000L << 46))) {
         return FALSE;
     }
-    death_count = func_00103548(map_slots[entity->group_id].tag, entity->spawn_info - D_004467D0[entity->group_id]);
+    death_count = Game_GetSpawnDeathCount(map_slots[entity->group_id].tag, entity->spawn_info - D_004467D0[entity->group_id]);
     if ((s8)SPAWN_FLAGS(entity->spawn_info)->bytes[5] != 0 && death_count >= (s8)SPAWN_FLAGS(entity->spawn_info)->bytes[5]) {
         return FALSE;
     }
@@ -451,8 +454,9 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
     return FALSE;
 }
 
-/* The flag-32 half of EntityAi_SensePlayer on its own. Nothing calls it. */
-static void func_00196548(Entity *actor) {
+/* The flag-32 half of EntityAi_SensePlayer on its own: sets flag 32 while the player is within reach, arc
+   and height. Nothing calls it. */
+static void EntityAi_SensePlayerInArc(Entity *actor) {
     EntityController *ctrl = ENTITY_CONTROLLER(actor);
     f32 reach = ctrl->unk18;
     f32 half_height = ctrl->unk1A;
@@ -488,8 +492,9 @@ static void func_00196548(Entity *actor) {
     }
 }
 
-/* The flag-33 half of EntityAi_SensePlayer on its own. Nothing calls it. */
-static void func_00196718(Entity *actor) {
+/* The flag-33 half of EntityAi_SensePlayer on its own: sets flag 33 (noticed) by a chance that grows as the
+   player comes nearer, clears it when he is out of reach. Nothing calls it. */
+static void EntityAi_RollNoticePlayer(Entity *actor) {
     f32 reach = ENTITY_CONTROLLER(actor)->unk18;
     f32 limit;
 
@@ -627,8 +632,9 @@ void EntityAi_CheckFarFromSpawn(Entity *entity) {
     entity->flags &= 0xFFDFFFFFFFFFFFFFUL;
 }
 
-/* Clears flag bit 31. */
-void func_00196D48(Entity *entity) {
+/* Clears flag bit 31. The think functions call it when closing in and test the bit right after: set, they
+   would only turn on the spot to the player. Nothing in the game sets it, so they always walk. */
+void EntityAi_ClearTurnInPlace(Entity *entity) {
     entity->flags &= 0xFFFFFFFF7FFFFFFFULL;
 }
 
@@ -1858,13 +1864,14 @@ void EntityAi_RaiseRangedWeights(Entity *entity) {
     adjust_level(&entity->unkC0[5], 2, 0xC0);
 }
 
-/* func_0019A418 for the motion of animation index (EntityParams.unk60). */
-int func_0019A3F0(Entity *entity, s32 index) {
-    return func_0019A418(ENTITY_MODEL(entity), entity->params->unk60[index]);
+/* The frame count of the motion animation index plays (Motion_FrameCount of EntityParams.unk60[index]). */
+int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
+    return Motion_FrameCount(ENTITY_MODEL(entity), entity->params->unk60[index]);
 }
 
-/* The u16 in the four bytes in front of the block ModelInstance.level_tables[index] points at. */
-u16 func_0019A418(ModelInstance *model, int index) {
+/* The frame count of motion index: MotionData.frame_count, the u16 in the four bytes in front of the part
+   tables ModelInstance.level_tables[index] points at. */
+u16 Motion_FrameCount(ModelInstance *model, int index) {
     ModelPartLevels *levels;
 
     /* match: indexing level_tables as an array swaps the addu operands */
@@ -1872,8 +1879,9 @@ u16 func_0019A418(ModelInstance *model, int index) {
     return *(u16 *)((char *)levels - 4);
 }
 
-/* Sets byte unk6C of model part index. */
-void func_0019A430(ModelInstance *model, int index, u8 value) {
+/* Puts model part index in motion slot value (ModelPart.unk6C), as Motion_SetPartSlots does for a run of
+   parts. Nothing calls it. */
+void Motion_SetPartSlot(ModelInstance *model, int index, u8 value) {
     model->parts[index].unk6C = value;
 }
 
@@ -1940,14 +1948,14 @@ void Entity_DrawPoolModels(void) {
     s32 i;
     s32 count;
 
-    func_0010A718(0);
-    func_00109A50();
-    func_00109A80(0x1A, 0);
-    func_00109A80(0x1B, 0x248);
-    func_00109A80(GS_REG_TEST_2, 0x55001);
-    func_00109A80(0x4B, 1);
-    func_00109AD0();
-    func_00109E18();
+    GsDraw_SetScreenAlpha(0);
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(0x1A, 0);
+    Packet_AddGsRegister(0x1B, 0x248);
+    Packet_AddGsRegister(GS_REG_TEST_2, 0x55001);
+    Packet_AddGsRegister(0x4B, 1);
+    Packet_EndGsRegisters();
+    GsDraw_QueueFlush();
     for (entity = D_004467E0; entity != NULL; entity = entity->next) {
         if (!ENTITY_FLAG_BITS(entity)->bit1 || entity->unk14 == NULL || (f32)entity->params->unk04 <= 0.0f) {
             continue;
@@ -1983,14 +1991,14 @@ void Entity_DrawPoolModels(void) {
         Matrix_Multiply(model->unk40, ENTITY_MODEL(entity)->unk40, fire_lord_model_matrix);
         model->unk148 = ENTITY_MODEL(entity)->unk148;
         model->unk14C = ENTITY_MODEL(entity)->unk14C;
-        func_00109A50();
-        func_00109A80(GS_REG_ALPHA_2, ((s64)(s32)(ENTITY_MODEL(entity)->alpha * 32.0f * 0.0078125f) << 32) | 0x64);
-        func_00109AD0();
+        Packet_BeginGsRegisters();
+        Packet_AddGsRegister(GS_REG_ALPHA_2, ((s64)(s32)(ENTITY_MODEL(entity)->alpha * 32.0f * 0.0078125f) << 32) | 0x64);
+        Packet_EndGsRegisters();
         model->unk1A8(model);
-        func_00109E18();
+        GsDraw_QueueFlush();
     }
-    func_00109A50();
-    func_00109A80(0x1A, 1);
-    func_00109A80(0x4B, 0);
-    func_00109AD0();
+    Packet_BeginGsRegisters();
+    Packet_AddGsRegister(0x1A, 1);
+    Packet_AddGsRegister(0x4B, 0);
+    Packet_EndGsRegisters();
 }

@@ -16,7 +16,7 @@ typedef struct {
 typedef struct {
     char pad00[0x38];
     u64 pad38_0 : 27;
-    u64 map : 1;                    /* which of the two map slots it belongs to (func_00114AA8) */
+    u64 map : 1;                    /* which of the two map slots it belongs to (Map_BuildModels) */
     u64 pad38_28 : 36;
 } MapRecordBits;
 
@@ -36,7 +36,7 @@ typedef struct {
     u64 unk00[4];                   /* 0x00 */
 } MapSlotUnk0C;
 
-/* a MapSlotUnk0C block as the per-map set-up functions (func_00119360) fill it */
+/* a MapSlotUnk0C block as the per-map set-up functions (MapSetup_RunForMap) fill it */
 typedef struct {
     f32 unk00;                      /* 0x00 */
     f32 unk04;                      /* 0x04 */
@@ -71,7 +71,7 @@ typedef struct {
     Vector4 colors[4];              /* 0x40 */
 } MapSlotUnk10Lights;
 
-/* map_draw_state as func_001012D8 reads it: the first word of MapDrawState.unk60 as a float */
+/* map_draw_state as GameLoop_SetCameraMatrices reads it: the first word of MapDrawState.unk60 as a float */
 typedef struct {
     char pad00[0x60];
     f32 mirror_height;              /* 0x60 the mirrored view is flipped about this height */
@@ -109,27 +109,27 @@ typedef struct {
 /* MapDrawState.unk60 as bit-fields */
 typedef struct {
     u64 pad00 : 46;
-    u32 bit46 : 1;                  /* set: func_00116CB0 tests map records against the screen */
+    u32 bit46 : 1;                  /* set: Map_ClassifyRecordOnScreen tests map records against the screen */
     u64 pad47 : 17;
 } MapDrawFlagBits;
 
 #define MAP_DRAW_FLAG_BITS(state) ((MapDrawFlagBits *)&(state)->unk60)
 
-/* map_draw_state as func_001005E8 reads it: MapDrawState.unk60 as bit-fields inside the block, so that
+/* map_draw_state as GameLoop_DrawFrame reads it: MapDrawState.unk60 as bit-fields inside the block, so that
    they are addressed from the block's start like the fields after them */
 typedef struct {
     char pad00[0x60];
     u64 pad60 : 32;
     u32 mode : 8;                   /* 0x64 how the frame is drawn: 0 plain, 1 and 2 with a second view first */
-    u32 bit40 : 1;                  /* set: func_00106FB8(unk88) is drawn */
-    u32 bit41 : 1;                  /* set: func_00106980 is drawn */
-    u32 bit42 : 1;                  /* set: func_00106C58 is drawn */
-    u32 bit43 : 1;                  /* set: func_00106DC8 is drawn */
-    u32 bit44 : 1;                  /* set: func_00106520 is drawn */
-    u32 bit45 : 1;                  /* set: func_00107528 is drawn (only on the main loop's call) */
+    u32 bit40 : 1;                  /* set: Game_BlendPreviousFrame(unk88) is drawn */
+    u32 bit41 : 1;                  /* set: Game_DrawDepthTestSprite is drawn */
+    u32 bit42 : 1;                  /* set: Game_BlendScreenOffsetDown is drawn */
+    u32 bit43 : 1;                  /* set: Game_BlendScreenOffsetUpDown is drawn */
+    u32 bit44 : 1;                  /* set: Game_DrawHazeLayers is drawn */
+    u32 bit45 : 1;                  /* set: Game_ShiftScreenByViewTurn is drawn (only on the main loop's call) */
     u32 pad46 : 18;
     s32 unk68;                      /* 0x68 */
-    s32 unk6C;                      /* 0x6C a colour func_0010A4E8 covers the screen with */
+    s32 unk6C;                      /* 0x6C a colour GsDraw_FillScreen covers the screen with */
     s32 unk70;                      /* 0x70 */
     s32 unk74;                      /* 0x74 */
     s32 unk78;                      /* 0x78 its alpha, above 0: drawn */
@@ -217,7 +217,7 @@ typedef struct {
     u32 *items[7];                  /* 0x00 */
 } MapSlotPackets;
 
-/* what MapSlot.header points at: the loaded map's header, as func_0019F3A0 reads it */
+/* what MapSlot.header points at: the loaded map's header, as Sound_ReadMapBankFileStep reads it */
 typedef struct {
     char pad00[0x20];
     s32 item_models_offset;         /* 0x20 from the header to the item models: sized blocks, a model then its texture per kind */
@@ -261,9 +261,9 @@ typedef struct {
     s32 unk04;                      /* 0x04 offset in the file of the record models (ModelFile, back to back) */
     s32 unk08;                      /* 0x08 offset of the record collision meshes */
     s32 unk0C;                      /* 0x0C offset of the plain object models */
-    s32 unk10;                      /* 0x10 offset of the jointed object models (func_0010B758) */
+    s32 unk10;                      /* 0x10 offset of the jointed object models (Model_SetUpSkinned) */
     s32 unk14;                      /* 0x14 offset of the object collision meshes */
-    s32 unk18;                      /* 0x18 offset of the object motions (func_00108940) */
+    s32 unk18;                      /* 0x18 offset of the object motions (ModelMotion_LoadFile) */
     char pad1C[0x08];
     s32 unk24;                      /* 0x24 offset in the file of what MapSlot.unk30 points at */
     s32 unk28;                      /* 0x28 offset in the file of what MapSlot.unk34 points at */
@@ -289,7 +289,7 @@ typedef struct {
     f32 unk6C;                      /* 0x6C and the heading */
     s8 unk70;                       /* 0x70 becomes SoundLoadQueue.unk00 */
     char pad71[0x07];
-    u8 unk78;                       /* 0x78 passed to func_00111368 with the three after it */
+    u8 unk78;                       /* 0x78 passed to Wobble_DrawRippledModel with the three after it */
     u8 unk79;                       /* 0x79 */
     u8 unk7A;                       /* 0x7A */
     u8 unk7B;                       /* 0x7B */
@@ -360,7 +360,7 @@ typedef struct {
     int fired;                      /* 0x18 the type it fired for, 0 before */
 } MapTriggerShot;
 
-/* MapTrigger.shot as func_00121660 (start) and func_00121680 (update) use it */
+/* MapTrigger.shot as MapObject_StartSinkingPlatform (start) and MapObject_UpdateSinkingPlatform (update) use it */
 typedef struct {
     f32 unk00;                      /* 0x00 a speed, added to the model's y */
     s32 unk04;                      /* 0x04 frames to wait */
@@ -368,17 +368,17 @@ typedef struct {
     s32 unk0C;                      /* 0x0C unk08 of the frame before */
 } MapTriggerShotKind121660;
 
-/* what MapTrigger.unk08 points at, as func_0011F0D8 reads it */
+/* what MapTrigger.unk08 points at, as MapObject_StopAmbientSound reads it */
 typedef struct {
     char pad00[0x44];
     u16 unk44;                      /* 0x44 */
 } TriggerSource;
 
-/* a map event trigger (func_00122538) */
+/* a map event trigger (MapObject_PlaceStoneOnMarker) */
 typedef struct {
     ModelInstance *model;           /* 0x00 */
     u8 *unk04;                      /* 0x04 */
-    char *unk08;                    /* 0x08 TriggerSource; byte 0x3A is passed to func_00103BA8 */
+    char *unk08;                    /* 0x08 TriggerSource; byte 0x3A is passed to Game_AddTriggerItem */
     char pad0C[0x04];
     u8 unk10;                       /* 0x10 bit 0 picks the MapSlot */
     u8 type;                        /* 0x11 */
@@ -403,19 +403,19 @@ typedef union {
 #define MAP_TRIGGER_FLAGS(trigger) ((MapTriggerFlags *)&(trigger)->unk10)
 #define MAP_TRIGGER_FLAG_20000  0x20000
 
-/* MapTrigger.shot as the kind started by func_00122E88 uses it (func_00122F48 steps it) */
+/* MapTrigger.shot as the kind started by MapObject_StartPulse uses it (MapObject_UpdatePulse steps it) */
 typedef struct {
     s32 phase;                      /* 0x00 */
     s32 period;                     /* 0x04 */
 } MapTriggerShotKind122E88;
 
-/* MapTrigger.shot as the kind started by func_00122BE8 uses it */
+/* MapTrigger.shot as the kind started by MapObject_StartFadeObject uses it */
 typedef struct {
-    f32 unk00[4];                   /* 0x00 a vector handed to func_0010EA08 */
+    f32 unk00[4];                   /* 0x00 a vector handed to Model_FadeVertexColoursNear */
     f32 unk10;                      /* 0x10 grows while it moves */
 } MapTriggerShotKind122BE8;
 
-/* trigger_items[5]: which item was placed on which trigger (func_00103BA8 records, func_00103AE0 looks up) */
+/* trigger_items[5]: which item was placed on which trigger (Game_AddTriggerItem records, Game_GetTriggerItem looks up) */
 typedef struct {
     u8 map_tag;                     /* 0x00 MapSlot.tag; 0x11-0x13 are stored as 0x11 */
     u8 trigger_id;                  /* 0x01 byte 0x3A of the trigger's source */
