@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "model/model.h"
+#include <sifrpc.h>
 
 /* one of the 16 voices, SoundState.voices[n]: a header (two copies on the IOP) and its sample data
    (an IOP copy at iop_heap, sent on to sound memory at unk0C) */
@@ -30,9 +31,10 @@ typedef struct {
     int unk0C;                      /* 0x0C the driver's id for the sequence */
 } SoundBank;
 
-/* the request SoundDriver_VoiceLoadBind reads: the voice to reload and the heap to free */
+/* the request SoundDriver_VoiceLoadBind reads: the voice to reload and the heap to free. It lies over the int
+   array sound_rpc_args (read as [5] too) and IopLoadContext views it, so its words stay 32-bit. */
 typedef struct {
-    SoundVoice *voice;              /* 0x00 */
+    EEWord voice;                   /* 0x00 (SoundVoice *) */
     int unk04;                      /* 0x04 */
     int unk08;                      /* 0x08 bytes still to send */
     int unk0C;                      /* 0x0C where the next piece goes */
@@ -41,17 +43,20 @@ typedef struct {
     int unk18;                      /* 0x18 */
     int unk1C;                      /* 0x1C the running DMA transfer */
 } SoundReloadRequest;
+LAYOUT_SIZE(SoundReloadRequest, 0x20);
 
-/* the arguments of SoundDriver_LoadVoiceStep as its step functions get them */
+/* the arguments of SoundDriver_LoadVoiceStep as its step functions get them: its int args[7] (IopLoadRequest is
+   another view), so the addresses in it are EE words */
 typedef struct {
     int unk00;                      /* 0x00 the voice */
-    int unk04;                      /* 0x04 the voice's first data */
+    EEWord unk04;                   /* 0x04 (char *) the voice's first data */
     int unk08;                      /* 0x08 its size */
-    char *unk0C;                    /* 0x0C where the next piece is read from */
+    EEWord unk0C;                   /* 0x0C (char *) where the next piece is read from */
     int unk10;                      /* 0x10 */
     int unk14;                      /* 0x14 */
     int unk18;                      /* 0x18 */
 } SoundLoadArgs;
+LAYOUT_SIZE(SoundLoadArgs, 0x1C);
 
 /* 0x18 bytes of reverb settings, copied whole (byte-aligned) */
 typedef struct {
@@ -72,10 +77,12 @@ typedef struct {
 } SoundEffectFields;
 
 /* sound_rpc_buffer: the record SoundDriver_Remote sends the sound driver; the reply lands on it */
+/* overlay: the RPC record the IOP sound driver reads and answers in */
 typedef struct {
-    void *self;                     /* 0x00 the record itself, then the driver's answer */
+    EEWord self;                    /* 0x00 (void *) the record itself, then the driver's answer */
     int args[63];                   /* 0x04 */
 } SoundRpcRequest;
+LAYOUT_SIZE(SoundRpcRequest, 0x100);
 
 /* sound_upload: a block being sent to the IOP in pieces of 0x4000 bytes (SoundDriver_StartUpload, SoundDriver_StepUpload) */
 typedef struct {
@@ -88,13 +95,15 @@ typedef struct {
     int active;                     /* 0x18 */
 } SoundUpload;
 
-/* sound_dma, sound_command_dma: the DMA descriptor handed to sceSifSetDma */
+/* sound_dma, sound_command_dma: the DMA descriptor handed to sceSifSetDma (sceSifDmaData) */
 typedef struct {
-    int src;                        /* 0x00 */
-    int dest;                       /* 0x04 */
+    void *src;                      /* 0x00 */
+    int dest;                       /* 0x04 an IOP address */
     int size;                       /* 0x08 */
     int mode;                       /* 0x0C */
 } SoundDmaRequest;
+_Static_assert(sizeof(SoundDmaRequest) == sizeof(sceSifDmaData) && offsetof(SoundDmaRequest, dest) == offsetof(sceSifDmaData, addr),
+               "SoundDmaRequest is not sceSifDmaData");
 
 /* SoundState.unk240[n] with its signs: the note sounding in slot n (SoundDriver_NoteOn fills it) */
 typedef struct {
@@ -112,12 +121,12 @@ typedef struct {
     char pad438[0x08];
     SoundEffectParams effects[4];   /* 0x440 stored reverb settings */
     SoundEffectParams effect;       /* 0x4A0 the one sent to the driver last */
-    void *load_addr;                /* 0x4B8 first IOP heap load's address */
+    int load_addr;                  /* 0x4B8 first IOP heap load's address */
     int unk4BC;                     /* 0x4BC */
     u32 unk4C0;                     /* 0x4C0 end of the used sound memory */
     int dma_src;                    /* 0x4C4 */
     int unk4C8;                     /* 0x4C8 */
-    int dma_dest;                   /* 0x4CC */
+    int *dma_dest;                  /* 0x4CC the command list (sound_command_list) */
     char unk4D0[0x06];              /* 0x4D0 u16 at 0x4D4: 1 stereo output, 0 mono */
     u16 active;                     /* 0x4D6 */
     char pad4D8[0x08];              /* the block in .bss is 0x4E0 bytes */
@@ -133,9 +142,9 @@ typedef struct {
     struct MapSlot *pending_map_slot; /* 0x10 the map slot whose sound bank the step 1 load loads */
     struct MapSlot *next_map_slot;  /* 0x14 the next pending_map_slot, taken once unk10 is NULL */
     int entity_bank_load_pending;   /* 0x18 nonzero: a step 2 load is wanted; Sound_LoadEntityBankStep clears it */
-    int entity_bank_args;           /* 0x1C arguments of Sound_LoadEntityBankStep */
+    sptr entity_bank_args;          /* 0x1C arguments of Sound_LoadEntityBankStep (an EntityTypeFileHeader) */
     int entity_slot_index;          /* 0x20 entity pool slot the step 2 load binds its voice to */
-    int entity_slot_voice_out;      /* 0x24 pool slot whose voice byte takes the loaded voice index */
+    sptr entity_slot_voice_out;     /* 0x24 pool slot whose voice byte takes the loaded voice index */
 } SoundLoadQueue;
 
 /* a voice's envelope as SoundDriver_GetAdsr unpacks it: the two SPU2 ADSR registers (ADSR1 in the upper
@@ -166,21 +175,25 @@ typedef struct {
 /* the data a SoundJob loads or plays: two buffers and their sizes. The two
    buffers have different pointer types in retail (the copies into a spec are
    scheduled as if they cannot alias), so they stay u8 * and void *. */
+/* overlay: words of a sound bank slot or job (EE words; also viewed as int arrays) */
 typedef struct {
-    u8 *buffer_a;                   /* 0x00 */
-    void *buffer_b;                 /* 0x04 */
+    EEWord buffer_a;                /* 0x00 (u8 *) */
+    EEWord buffer_b;                /* 0x04 (void *) */
     int unk08;                      /* 0x08 */
     int size_a;                     /* 0x0C */
     int size_b;                     /* 0x10 */
 } SoundJobSpec;
+LAYOUT_SIZE(SoundJobSpec, 0x14);
 
 /* four words that fill a SoundJobSpec: what MapSlot.sound_bank points at */
+/* overlay: part of a map file (MapSlot.sound_bank), its two buffers relocated to EE words */
 typedef struct SoundSpecSource {
     int size_b;                     /* 0x00 */
-    void *buffer_b;                 /* 0x04 */
+    EEWord buffer_b;                /* 0x04 (void *) */
     int size_a;                     /* 0x08 */
-    u8 *buffer_a;                   /* 0x0C */
+    EEWord buffer_a;                /* 0x0C (char *) */
 } SoundSpecSource;
+LAYOUT_SIZE(SoundSpecSource, 0x10);
 
 /* a sound job (Sound_EntityBankLoadVoice to Sound_LoadJob): its data, two file names, the
    driver's result and two more arguments for the driver call */
@@ -196,48 +209,56 @@ typedef struct {
 } SoundJob;
 
 /* the start arguments Sound_LoadEntityBankStep copies into a SoundJobSpec */
+/* overlay: the header of an entity type file (EntityTypeFileHeader, entity/entity.h) */
 typedef struct {
     int size_b;                     /* 0x00 */
     char pad04[0x10];
-    int buffer_b;                   /* 0x14 match: an address, read as an int */
-    int buffer_a;                   /* 0x18 match: an address, read as an int */
+    EEWord buffer_b;                /* 0x14 (void *) */
+    EEWord buffer_a;                /* 0x18 (char *) */
     int size_a;                     /* 0x1C */
 } SoundStartArgs;
+LAYOUT_SIZE(SoundStartArgs, 0x20);
 
 /* SoundJobSpec as Sound_LoadEntityBankStep, Sound_LoadMapBankStep and Sound_LoadMapBank fill it in: the two buffers
    are pointers of two different types in the game, which is what lets gcc reorder the copies */
+/* overlay: words of a sound bank slot or job (EE words; also viewed as int arrays) */
 typedef struct {
-    char *buffer_a;                 /* 0x00 */
-    void *buffer_b;                 /* 0x04 */
+    EEWord buffer_a;                /* 0x00 (u8 *) */
+    EEWord buffer_b;                /* 0x04 (void *) */
     int unk08;                      /* 0x08 */
     int size_a;                     /* 0x0C */
     int size_b;                     /* 0x10 */
 } SoundBankSpec;
+LAYOUT_SIZE(SoundBankSpec, 0x14);
 
 /* SoundJobSpec as Sound_LoadEntityBankStep fills it in: there the two buffers are pointers of one type
    and the sizes are ints, which fixes the order of its loads and stores */
+/* overlay: words of a sound bank slot or job (EE words; also viewed as int arrays) */
 typedef struct {
-    void *buffer_a;                 /* 0x00 */
-    void *buffer_b;                 /* 0x04 */
+    EEWord buffer_a;                /* 0x00 (u8 *) */
+    EEWord buffer_b;                /* 0x04 (void *) */
     int unk08;                      /* 0x08 */
     int size_a;                     /* 0x0C */
     int size_b;                     /* 0x10 */
 } SoundStartSpec;
+LAYOUT_SIZE(SoundStartSpec, 0x14);
 
 /* what MapSlot.sound_bank points at: the sound bank of a map, two buffers and their sizes */
+/* overlay: part of a map file (MapSlot.sound_bank), its two buffers relocated to EE words */
 typedef struct {
     int size_b;                     /* 0x00 */
-    void *buffer_b;                 /* 0x04 */
+    EEWord buffer_b;                /* 0x04 (void *) */
     int size_a;                     /* 0x08 */
-    char *buffer_a;                 /* 0x0C */
+    EEWord buffer_a;                /* 0x0C (char *) */
 } SoundBankInfo;
+LAYOUT_SIZE(SoundBankInfo, 0x10);
 
 /* SoundStartArgs with the buffers as the pointers they are (Sound_LoadEntityBankStep) */
 typedef struct {
     int size_b;                     /* 0x00 */
     char pad04[0x10];
-    void *buffer_b;                 /* 0x14 */
-    char *buffer_a;                 /* 0x18 */
+    EEWord buffer_b;                /* 0x14 (void *) */
+    EEWord buffer_a;                /* 0x18 (char *) */
     int size_a;                     /* 0x1C */
 } SoundStartInfo;
 

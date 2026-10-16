@@ -1,4 +1,5 @@
 #include "core/game.h"
+#include <libcdvd.h>
 
 #define BCD2DEC(x) (((x) & 0xF) + ((x) >> 4) * 10)
 
@@ -12,7 +13,6 @@ int PlayTime_ToMinutes(ClockTime);
 int mktime(void *);
 int PlayTime_ClockSecondsSinceStart(void);
 int PlayTime_DayOfYear(ClockTime);
-int sceCdReadClock(ClockTime *);
 
 extern ClockTime play_clock_start;
 extern ClockTime play_time_base;
@@ -187,7 +187,7 @@ int PlayTime_ToMinutes(ClockTime play_time) {
 int PlayTime_ReadRealTimeClock(ClockTime *time) {
     int result;
 
-    result = sceCdReadClock(time);
+    result = sceCdReadClock((sceCdCLOCK *)time);
     time->sec = BCD2DEC(time->sec);
     time->min = BCD2DEC(time->min);
     time->hour = BCD2DEC(time->hour);

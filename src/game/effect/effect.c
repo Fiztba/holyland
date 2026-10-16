@@ -7,13 +7,12 @@
 #include "core/memory.h"
 #include "player/player.h"
 #include "gfx/screen.h"
+#include <stdio.h>
+#include <string.h>
+#include <eekernel.h>
+#include <libgraph.h>
+#include <sifrpc.h>
 
-void *memset(void *, int, u32);
-int printf(const char *, ...);
-int FlushCache(int);
-int sceGsSyncPath(int, int);
-void sceGsSetDefStoreImage(void *, s16, s16, s16, s16, s16, s16, s16);
-void sceGsExecStoreImage(void *, void *);
 char *Texture_UploadTable(char *base, int upload);
 void Texture_SendTexFlush(void);
 void Vector_Copy(void *dst, void *src);
@@ -31,7 +30,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin);
 void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
 void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void DrawList_Add(ModelInstance *, s32, s32);
-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
+char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
 void Sound_StopTracked(s8 handle);
 void Model_SetUpPosed(ModelInstance *, char **, char **);
 int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last);
@@ -42,7 +41,6 @@ extern MapSlot map_slots[2];
 extern char map_draw_slot_blocks[];
 extern MapObject map_slot_objects[][0x200];
 extern Entity entity_pool[][0x80];
-extern Entity entity_pool_last;           /* the last entity of entity_pool */
 extern void (*effect_draw_hooks[4][4])(ModelInstance *);
 extern void (*effect_kind_handlers[][2])();
 extern FxTableEntry fx_table[];
@@ -61,7 +59,7 @@ static int effect_count = 0;        /* 0x4468D0 live effects */
 static u32 *effect_texture_packet;  /* 0x4470F8 DMA packet holding the effect textures read back from the GS */
 static char *effect_model_file;     /* 0x4470FC sfx/sfx.dat */
 static char *effect_model_memory;   /* 0x447100 0x800 bytes of model memory per effect */
-static char **effect_model_table;   /* 0x447104 the model of each EffectDef.model_index, inside effect_model_file */
+static EEWord *effect_model_table; /* 0x447104 (char *) the model of each EffectDef.model_index, inside effect_model_file */
 
 /* 0x502260 param/sfx.prm; entries is the view whose bit-field tests stay array reads */
 static union {
@@ -82,7 +80,7 @@ void Effect_Init(void) {
     char unused_buffer[0x2C0];
     char *buffer;
     int handle;
-    char **table;
+    EEWord *table;
     int i;
     int key;
     EffectDef *def;
@@ -101,7 +99,7 @@ void Effect_Init(void) {
     buffer += 0xC0000;
     effect_model_file = buffer;
     buffer += 0x9FC00;
-    effect_model_table = (char **)effect_model_file;
+    effect_model_table = (EEWord *)effect_model_file;
     memset(effect_light_block, 0, sizeof(effect_light_block));
     effect_light_block[7].z = 1.0f;
     effect_light_block[7].y = 1.0f;
@@ -120,7 +118,7 @@ void Effect_Init(void) {
     File_Close(handle);
     table = effect_model_table;
     for (i = 0; i < 0x200; i++) {
-        table[i] += (int)table; /* file offsets become pointers */
+        table[i] += EE_WORD(table); /* file offsets become pointers */
     }
     Effect_CaptureTextures();
     scale = 0.017453292f;
@@ -163,7 +161,7 @@ static void Effect_CaptureTextures(void) {
     packet += 2;
     *(u64 *)packet = 0xE;
     packet += 2;
-    *(u64 *)packet = 0x8B90L << 34;
+    *(u64 *)packet = 0x8B90LL << 34;
     packet += 2;
     *packet++ = 0x50;
     *packet++ = 0;
@@ -405,7 +403,7 @@ void Effect_UploadTextures(void) {
     GsDraw_QueueFlush();
     first_word = cursor = Packet_Alloc(2);
     *cursor++ = effect_texture_packet[0] | 0x30000000;
-    *cursor++ = (u32)(effect_texture_packet + 4);
+    *cursor++ = EE_WORD(effect_texture_packet + 4);
     *cursor++ = 0;
     *cursor = 0;
     Packet_AppendToChain(first_word, cursor + 1);
@@ -438,8 +436,7 @@ void Effect_DrawAll(int pass) {
         placement = EFFECT_DEF_FLAGS(effect->def) & 0x600000;
         model = effect->model;
         if (placement == 0 || placement == 0x600000) {
-            // match: the margin is set up before the node, so the call passes it first
-            if (((int (*)(f32 *, f32, AreaNode *))Map_IsPointInRecord)((f32 *)&model->position, 0.0f, (AreaNode *)effect->unk58) == 0) {
+            if (Map_IsPointInRecord((f32 *)&model->position, (AreaNode *)effect->unk58, 0.0f) == 0) {
                 effect->unk58 = (char *)Map_FindRecordAt((f32 *)&effect->model->position, 0.0f);
             }
             if (effect->unk58 == NULL && effect->owner_entity == (Entity *)&player_state && ((PlayerState *)effect->owner_entity)->map_index != 0xFFFF) {
@@ -486,13 +483,13 @@ void Effect_DrawAll(int pass) {
         }
         model->fog_block = map_draw_slot_blocks + (current_map_slot << 10);
         // match: the flag is read through the union so the test stays behind the unk14C store
-        if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000L << 25))) {
-            model->light_block = (s32)effect_light_block;
+        if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000LL << 25))) {
+            model->light_block = (sptr)effect_light_block;
         } else {
-            model->light_block = (s32)(map_draw_slot_blocks - 0x1D0);
+            model->light_block = (sptr)(map_draw_slot_blocks - 0x1D0);
         }
         model->hit_count = 0;
-        if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000L << 26))) {
+        if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000LL << 26))) {
             DrawList_Add(model, ((EffectTableEntry *)effect->def)->placement, pass);
         }
         if (pass == 0 && effect->frame >= effect->def->keyframe_end) {
@@ -558,9 +555,9 @@ static void Effect_RunSpawner(EffectSlot *slot) {
         effect_kind_handlers[effect->def->kind_index][0](effect, slot);
         EFFECT_FLAG_BITS(effect)->bit59 = effect->def->sound_id != 0;
         if (fx_table[effect->effect_param].item_menu_magic != 0) {
-            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (int)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
+            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->unk46);
         } else if (EFFECT_FLAG_BITS(effect)->bit59 || effect->effect_param == player_state.equipped_magic) {
-            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (int)&effect->model->position, EFFECT_FLAG_PARTS(effect)->unk46);
+            EFFECT_FLAG_PARTS(effect)->unk46 = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (float *)&effect->model->position, EFFECT_FLAG_PARTS(effect)->unk46);
         }
         if (EFFECT_FLAG_PARTS(effect)->unk46 > 0) {
             effect_sound_count++;
@@ -699,7 +696,7 @@ static void Effect_SetupModel(int index) {
         }
     }
     model->model_flags |= 0x1800;
-    file_cursor = effect_model_table[def->model_index];
+    file_cursor = EE_PTR(char *, effect_model_table[def->model_index]);
     memory = effect_model_memory + (index << 11);
     Model_SetUpPosed(model, &file_cursor, &memory);
     model->draw = effect_draw_hooks[((EffectTableEntry *)effect->def)->placement][effect->def->draw_hook_index];
@@ -712,15 +709,15 @@ static void Effect_SetupModel(int index) {
             map = 1;
         } else if ((MapObject *)effect->owner_entity >= map_slot_objects[0] && (MapObject *)effect->owner_entity <= &map_slot_objects[1][0x1FF]) {
             map = (u8)((MapObject *)effect->owner_entity)->state_flags & 1;
-        } else if (effect->owner_entity >= entity_pool[0] && effect->owner_entity <= &entity_pool_last) {
+        } else if (effect->owner_entity >= entity_pool[0] && effect->owner_entity <= &entity_pool[1][0x7F]) {
             map = effect->owner_entity->group_id; /* an entity: the map it is in */
         } else {
             map = current_map_slot;
         }
         effect->model->texture_slot = 3;
-        effect->model->texture_data = (int)Map_GetSlotPacket(map, 4);
+        effect->model->texture_data = (sptr)Map_GetSlotPacket(map, 4);
         effect->model->shared_texture_slot = 0;
-        effect->model->shared_texture_packet = (int)Map_GetSlotPacket(map, 5);
+        effect->model->shared_texture_packet = (sptr)Map_GetSlotPacket(map, 5);
     }
 }
 
@@ -739,7 +736,7 @@ static void Effect_FindModelRecord(ModelInstance *model, int unused_arg1, int re
     for (part_index = 0; part_index < part_total; part_index++, part++) {
         int record_count = part->data_count;
 
-        record = (char *)(int)part->data_addr;
+        record = EE_PTR(char *, part->data_addr);
         for (record_index = 0; record_index < record_count; record_index++, record += 0x10) {
             if ((((ModelPartRecord *)record)->id_word & 0x3FFF) == record_id) {
                 *(UnalignedQword *)model->found_record = *(UnalignedQword *)&((ModelPartRecord *)record)->id_word;
@@ -993,12 +990,12 @@ int Effect_IsDefRangeInUse(int first_def, int last_def) {
 }
 
 /* GS values for the model draw hooks below (effect_draw_hooks, picked by Effect_SetupModel) */
-#define EFFECT_ZBUF_NO_WRITE 0x10A000118L       /* ZBUF_1: the depth buffer, masked: no depth writes */
-#define EFFECT_ZBUF_WRITE 0xA000118L            /* ZBUF_1: the depth buffer, written */
+#define EFFECT_ZBUF_NO_WRITE 0x10A000118LL       /* ZBUF_1: the depth buffer, masked: no depth writes */
+#define EFFECT_ZBUF_WRITE 0xA000118LL            /* ZBUF_1: the depth buffer, written */
 #define EFFECT_ALPHA_ADD 0x48                   /* ALPHA_1: Cs * As + Cd */
 #define EFFECT_ALPHA_SUBTRACT 0x42              /* ALPHA_1: Cd - Cs * As */
 #define EFFECT_ALPHA_BLEND 0x44                 /* ALPHA_1: (Cs - Cd) * As + Cd */
-#define EFFECT_ALPHA_OPAQUE 0x80000000A8L       /* ALPHA_1: Cs (FIX 0x80) */
+#define EFFECT_ALPHA_OPAQUE 0x80000000A8LL       /* ALPHA_1: Cs (FIX 0x80) */
 #define EFFECT_TEST_COLOUR_DEPTH 0x53001        /* TEST_1: colour only (alpha test NEVER, AFAIL RGB_ONLY), depth test GEQUAL */
 #define EFFECT_TEST_COLOUR_ON_TOP 0x33001       /* TEST_1: colour only, depth test ALWAYS */
 #define EFFECT_TEST_CUTOUT_DEPTH 0x5000D        /* TEST_1: pixels with alpha above 0, depth test GEQUAL */

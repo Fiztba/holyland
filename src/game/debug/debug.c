@@ -2,10 +2,10 @@
 #include "core/game.h"
 #include "input/pad.h"
 #include "ui/message.h"
+#include <stdio.h>
 
 static PadReport *debug_pad; /* 0x447108 the controller report the editors read; nothing in the retail game sets it */
 
-int sprintf(char *, const char *, ...);
 extern char debug_cursor_mark[];
 extern char debug_cursor_blank[];
 static char debug_cursor_marks[0x68]; /* 0x5742E0 the strings the debug menus draw, four bytes apart */
@@ -307,10 +307,10 @@ int Debug_PickMap(int *map_id) {
     saved_colours[1] = game_dbuff_clear_color[30];
     saved_colours[2] = game_dbuff_context2_clear_color[0];
     saved_colours[3] = game_dbuff_context2_clear_color[30];
-    game_dbuff_clear_color[0] = 0xC000L << 17;
-    game_dbuff_clear_color[30] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
+    game_dbuff_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_clear_color[30] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
     do {
         Display_SwapBuffers(0);
         Pad_Update();
@@ -385,10 +385,10 @@ void Debug_EditIniNumber(int *value) {
     saved_colours[1] = game_dbuff_clear_color[30];
     saved_colours[2] = game_dbuff_context2_clear_color[0];
     saved_colours[3] = game_dbuff_context2_clear_color[30];
-    game_dbuff_clear_color[0] = 0xC000L << 17;
-    game_dbuff_clear_color[30] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
+    game_dbuff_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_clear_color[30] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
     do {
         Display_SwapBuffers(0);
         Pad_Update();

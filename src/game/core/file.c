@@ -1,9 +1,6 @@
 /* The KF4.DAT file layer: one packed archive read through two file slots, or loose files under \DATA\. */
 #include "core/file.h"
 
-int sceCdInit(int);
-int sceCdMmode(int);
-
 // match: core/file.h declares these, so a plain definition would go to COMMON
 static u8 D_004475C8[0x38] __attribute__((section(".bss"))) = { 0 }; /* 0x4475C8 */
 KFFile file_slots[2] __attribute__((section(".bss"))) = { 0 };       /* 0x447600 the two file slots */
@@ -22,8 +19,8 @@ void File_LoadArchiveToc(void) {
     int file;
 
     memset(file_slots, 0, sizeof(file_slots));
-    D_00447000[1] = (int)archive_toc;
-    D_00447000[2] = (int)(archive_toc + 0x40);
+    D_00447000[1] = (sptr)archive_toc;
+    D_00447000[2] = (sptr)(archive_toc + 0x40);
     file = File_Open("KF4.DAT", 0, 0);
     File_Read(file, archive_toc, 0x20000);
     ((KFDirHeader *)D_00447000[1])->lsn = file_slots[file].start;

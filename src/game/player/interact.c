@@ -5,19 +5,15 @@
 #include "map_object/map_object.h"
 #include "collision/collision.h"
 #include "math/vu0.h"
+#include <math.h>
+#include <libvu0.h>
 
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
 int Timer_GetTicks(void);
 void Interact_UpdateViewRay(void);
 void Collision_CastRayAtMapLists(f32, void *, void *, s32);
 float Interact_GetDistanceWithin(float, float *, float *);
 void Collision_RayCylinder(f32, f32, f32, void *, void *, void *);
 void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
-void sceVu0SubVector(void *, void *, void *);
-void sceVu0Normalize(float *, float *);
-float sceVu0InnerProduct(float *, float *);
-float sqrtf(float);
 int MapItem_IsPickable(void *);
 int ModelMotion_GetLastFrame(char *); // match: its u16 is halved as an int
 int Script_Start(int, int);

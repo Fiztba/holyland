@@ -19,6 +19,11 @@
 #include "player/magic_ladder.h"
 #include "ui/menu_screens.h"
 #include "gfx/packet.h"
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libgraph.h>
+#include <libvu0.h>
 
 void Game_ResetProgress(void);
 void Player_ResetForNewGame(void);
@@ -63,7 +68,7 @@ void Game_StepFade(void);
 void GameLoop_UpdateCamera(void);
 void GameLoop_SetCameraMatrices(int, int);
 void GsDraw_QueueVu1Matrix(void *);
-int GameLoop_DrawFrame(int);
+void GameLoop_DrawFrame(int);
 void Packet_WaitForSend(void);
 void MapItem_UpdatePickup(void);
 void Map_RunFreeCamera(void);
@@ -73,7 +78,6 @@ void GameLoop_UpdatePause(void);
 void Input_StopRumble(void);
 void Sound_SetBgmVolume(int);
 void Sound_SetBankVolumes(int);
-int sceGsSyncV(int);
 int Sound_BgmLoadCanYield(void);
 void File_CloseAll(void);
 void Wobble_AdvanceSines(void);
@@ -107,27 +111,15 @@ void Game_DrawFade(void);
 void Game_ApplyBrightness(int);
 void func_001095D8(void);
 MapRecordInfo *Map_FindRecordAtInSlot(CameraState *, f32, int);
-int rand(void);
 float Angle_Wrap(float);
-void sceVu0CopyMatrix(void *, void *);
-void sceVu0RotMatrixZ(float *, float *, float);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0ApplyMatrix(float *, int *, float *);
 void Vector_Copy(void *, void *);
 void Vector_Scale(float *, float *, float);
 void Vector_Subtract(void *, void *, void *);
 void Vector_Add(void *, void *, void *);
 int Angle_Approach(float *, float, float);
-float atan2f(float, float);
-float sqrtf(float);
-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0InversMatrix(void *, void *);
-void sceVu0MulMatrix(void *, void *, void *);
 void Sound_StopAll(int);
-int Sound_LoadMapBankStep(int, int);
-int Sound_LoadEntityBankStep(int, int, int);
+int Sound_LoadMapBankStep(MapSlot *, int);
+int Sound_LoadEntityBankStep(sptr, int, sptr);
 int Sound_LoadBgm(int, int);
 void MapLoad_RequestHold(void);
 int MapLoad_IsHeld(void);
@@ -144,7 +136,6 @@ void MapViewer_Run(void);
 void File_Lock(void);
 void MapLoad_Release(void);
 void GameLoop_ClearBothBuffers(void);
-void *memset(void *, int, u32);
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int, s64);
 void Packet_EndGsRegisters(void);
@@ -155,7 +146,8 @@ void Input_ResumeRumble(void);
 extern PlayerState player_state;
 extern int save_loaded;          /* nonzero: a saved game was loaded */
 extern u8 game_options[0x10];
-extern PlayTime save_play_time[];   /* the play time in the loaded save (save_image + 8) */
+extern u8 save_image[0x20000];
+#define save_play_time ((PlayTime *)(save_image + 8)) /* the play time in the loaded save */
 extern SoundLoadQueue sound_load_queue;
 extern GameStatus game_status;
 extern MapSlot map_slots[];
@@ -165,7 +157,8 @@ extern f32 world_screen_matrix[16];
 extern s64 game_dbuff_clear_color[];
 extern s64 game_dbuff_context2_clear_color[];
 extern u32 frame_counter;
-extern u8 guardians_room_water_purified[];
+extern u8 map_script_flags[0x2000];
+#define guardians_room_water_purified (map_script_flags + 0x8C6) /* map 035 [6] */
 extern MapDrawStateOverlays map_draw_state;
 extern int message_dim_alpha;
 extern int current_map_slot;
@@ -302,10 +295,10 @@ void GameLoop_Run(int arg) {
         MapChange_RunToEnd();
         GameLoop_UpdatePause();
     }
-    game_dbuff_clear_color[0] = 0xC000L << 17;
-    game_dbuff_clear_color[30] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
+    game_dbuff_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_clear_color[30] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
+    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
     Input_StopRumble();
     Message_CloseBox();
     Message_ClearNotices();
@@ -331,7 +324,7 @@ void GameLoop_Run(int arg) {
 
 /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
    tints, the overlays MapDrawState asks for, the fades and the pause shade. */
-int GameLoop_DrawFrame(int arg) {
+void GameLoop_DrawFrame(int arg) {
     int tinted = FALSE;
     f32 tint;
     int red;
@@ -508,9 +501,8 @@ int GameLoop_DrawFrame(int arg) {
     }
     Hud_Draw();
     if (map_draw_state.screen_fill_alpha > 0) {
-        // match: the last argument is passed as the 64-bit word
-        ((void (*)(int, int, int, int, s64))GsDraw_FillScreen)(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
-                                                             map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
+        GsDraw_FillScreen(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
+                          map_draw_state.screen_fill_alpha, (int)map_draw_state.screen_fill_blend);
     }
     Game_DrawFade();
     Splash_Draw();
@@ -728,7 +720,7 @@ void GameLoop_RunSoundLoads(void) {
     }
     switch (sound_load_queue.step) {
     case 1:
-        sound_load_queue.map_bank_load_pending = Sound_LoadMapBankStep((int)sound_load_queue.pending_map_slot, sound_load_queue.map_bank_load_pending);
+        sound_load_queue.map_bank_load_pending = Sound_LoadMapBankStep(sound_load_queue.pending_map_slot, sound_load_queue.map_bank_load_pending);
         if (sound_load_queue.map_bank_load_pending == 0) {
             sound_load_queue.pending_map_slot = NULL;
             sound_load_queue.step = 0;

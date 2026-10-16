@@ -6,6 +6,13 @@
 #include "core/game.h"
 #include "input/pad.h"
 #include "gfx/gs.h"
+#include <libdev.h>
+#include <libdma.h>
+#include <libgraph.h>
+#include <libmc.h>
+#include <libsdr.h>
+#include <libvu0.h>
+#include <sifdev.h>
 
 #define PAD_BUTTON_START 0x0008
 
@@ -15,7 +22,8 @@ extern int map_file_area_size;          /* the size it is given for that heap */
 extern int context1_buffer_half;          /* the half of the first double buffer in use; each swap flips it */
 extern int context2_buffer_half;          /* the same for the second */
 extern int D_00446F80;
-extern u32 game_status_flags[];
+extern GameStatus game_status;
+#define game_status_flags ((u32 *)((u8 *)&game_status + 0x24)) /* the flag word at 0x24 */
 extern s64 game_dbuff_clear_color[];
 extern s64 game_dbuff_context2_clear_color[];
 extern char opening_movie_path[];       /* "cdrom0:\DATA\KF4OP.PSS;1" */
@@ -35,26 +43,15 @@ void Packet_SwapBuffers(void);
 void DrawList_Clear(void);
 void func_001095D0(void);
 void GsDraw_ResetDrawTarget(void);
-void GsDraw_FillScreen(s64, s64, s64, s64, s64); // match: retail passes the last value as a 64-bit constant (0x100000044)
+void GsDraw_FillScreen(int, int, int, int, int);
 void func_001095D8(void);
 void Packet_SendChain(void);
 void Packet_WaitForSend(void);
 void SoundDriver_ReleaseAll(void);
 void Sound_Init(void);
-int sceGsSyncV(int);
 void Vram_Clear(int, int);
 int func_0022B5B8();
 int func_0022B8E8();
-int sceDevVu0Pause();
-int sceDevVu0SetTBit();
-int sceDmaReset(int);
-int sceGsResetGraph(int, int, int, int);
-int sceGsResetPath();
-int sceMcInit();
-int sceSdRemoteInit();
-int sceSifInitIopHeap();
-void sceGsSetDefDBuff(void *, s16, s16, s16, s16, s16, s16);
-void sceVu0CopyMatrix(void *, void *);
 
 /* The opening movie's per-frame callback (given to Movie_Play by Movie_PlayOpening): polls the controller
    and returns TRUE, ending the movie, when START is pressed. */
@@ -74,7 +71,7 @@ void Movie_PlayOpening(void) {
     char buf[0x40]; /* unused, but retail reserves the 0x40 bytes */
 
     opening_movie_skipped = 0;
-    Movie_Play(opening_movie_path, (u32)map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
+    Movie_Play(opening_movie_path, map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
     temp = (s64)0xC000 << 17;
     game_dbuff_clear_color[0] = temp;
     game_dbuff_clear_color[30] = temp;
@@ -87,7 +84,7 @@ void Movie_PlayOpening(void) {
     context1_buffer_half = 0;
     context2_buffer_half = 0;
     GsDraw_ResetDrawTarget();
-    GsDraw_FillScreen(0, 0, 0, 0x80, 0x100000044L);
+    GsDraw_FillScreen(0, 0, 0, 0x80, (int)0x100000044LL); /* retail passes the 64-bit word; the callee takes its int */
     func_001095D8();
     context1_buffer_half = 1;
     context2_buffer_half = 1;
@@ -105,9 +102,9 @@ void Movie_PlayEnding(void) {
 
     opening_movie_skipped = 0;
     if ((game_status_flags[0] >> 11) & 1) {
-        Movie_Play(ending_movie_path, (u32)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+        Movie_Play(ending_movie_path, map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
     } else {
-        Movie_Play(staff_roll_movie_path, (u32)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+        Movie_Play(staff_roll_movie_path, map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
     }
     sceGsSyncV(0);
     sceGsSyncV(0);
@@ -159,7 +156,7 @@ void Display_Init(void) {
     Display_BuildProjection(projection_matrix, 512.0f, 1.0f, 65536.0f);
     context1_buffer_half = 0;
     D_00446F80 = 0;
-    game_dbuff.clear1.rgbaq = game_dbuff.clear0.rgbaq = 0x100000000L;
+    game_dbuff.clear1.rgbaq = game_dbuff.clear0.rgbaq = 0x100000000LL;
     sceGsSetDefDBuff(&game_dbuff_context2, 0, 0x280, 0x1C0, 3, 0x3A, 1);
     game_dbuff_context2.disp[0].dispfb.fbp = 0;
     game_dbuff_context2.disp[1].dispfb.fbp = 0x8C;

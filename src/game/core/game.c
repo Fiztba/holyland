@@ -1,6 +1,7 @@
 /* The game module: new-game state, event flags, the save image, the screen fade and GS screen effects. */
 #include "core/file.h"
 #include "core/game.h"
+#include "sound/sound.h"
 #include "input/pad.h"
 #include "map_object/map_object.h"
 #include "player/player.h"
@@ -10,6 +11,10 @@
 #include "libvu0.h"
 #include "ui/menu_screens.h"
 #include "ui/message.h"
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libvu0.h>
 
 extern u8 game_options[0x10];             /* the options (Game_SetDefaultOptions sets their defaults) */
 extern u8 map_script_flags[0x2000];
@@ -36,7 +41,7 @@ extern DefinitionByteSet trade_stock_3;
 extern DefinitionByteSet trade_stock_4;
 extern DefinitionByteSet trade_stock_5;
 extern u8 save_image[0x20000];          /* the save image */
-extern char sound_load_queue[0x28];
+extern SoundLoadQueue sound_load_queue;
 extern MapSlot map_slots[];
 extern const DefinitionByteSet initial_trade_stock_1;
 extern const DefinitionByteSet initial_trade_stock_2;
@@ -56,7 +61,6 @@ extern char current_play_time[8];
 extern int fade_frames_left;                  /* frames of the fade left */
 extern int fade_frames;                  /* frames the fade takes */
 
-void *memcpy(void *, const void *, u32);
 void GsDraw_FillScreen(int, int, int, int, int);
 extern int haze_layer_depths[8];               /* the screen depth of each haze layer */
 extern u32 haze_layer_distances[8];               /* the distances of the haze layers, nearest last */
@@ -82,11 +86,7 @@ static int wobble_grid_previous[8][11][2];     /* 0x467C00 the points of the fra
 static float wobble_grid_forces[8][11][2];   /* 0x467EC0 the force on each point */
 static int fade_color[3];            /* 0x468180 the fade colour */
 
-float sqrtf(float);
-int rand(void);
 u32 fptoui(float);
-void sceVu0TransMatrix(void *, void *, void *);
-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
 void Vu0_LoadMatrix(void *);
 void Vu0_ProjectToScreen(int *, void *);
 void Vector_MultiplyComponents(float *, float *, float *);
@@ -162,7 +162,7 @@ void Game_ResetProgress(void) {
     memset(spell_experience, 0, sizeof(spell_experience));
     memset(spell_levels, 0, sizeof(spell_levels));
     Menu_ClearKeyItems();
-    memset(sound_load_queue, 0, sizeof(sound_load_queue));
+    memset(&sound_load_queue, 0, sizeof(sound_load_queue));
 }
 
 /* marks what the player has equipped as found and tidies the spell tables */
@@ -659,7 +659,7 @@ void Game_WriteSaveImage(void) {
     memcpy(save_cursor, &bit_byte, 1);
     save_cursor++;
 
-    used = save_cursor - save_image;
+    used = (s32)(save_cursor - save_image);
     size = (u32)(used + 0x7F) / 128 * 128;
     table = save_cursor + (size - used);
     *(int *)(save_image + 4) = size; // match: the header word is stored straight into the buffer
@@ -870,7 +870,7 @@ void Game_DrawFade(void) {
     if (alpha > 0) {
         Packet_BeginGsRegisters();
         Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
         Packet_EndGsRegisters();
         GsDraw_FillScreen(fade_color[0], fade_color[1], fade_color[2], alpha, 0x44);
         Packet_BeginGsRegisters();
@@ -931,7 +931,7 @@ void Game_DrawHazeLayers(void) {
         return;
     }
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8L);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8LL);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
     Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
     Packet_EndGsRegisters();
@@ -946,12 +946,12 @@ void Game_DrawHazeLayers(void) {
         *cursor++ = 0;
         *cursor++ = 0;
         *cursor++ = 0x6C09C000;
-        *(u64 *)cursor = 0x80AF400000008001L;
+        *(u64 *)cursor = 0x80AF400000008001LL;
         cursor += 2;
-        *(u64 *)cursor = 0x513513EEL;
+        *(u64 *)cursor = 0x513513EELL;
         cursor += 2;
         texture_height_log2 = 9;
-        tex0_low = texture_base | 0x28028000L;
+        tex0_low = texture_base | 0x28028000LL;
         *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
         cursor += 2;
         *cursor++ = 6;
@@ -1010,14 +1010,14 @@ void Game_DrawHazeLayersShifted(void) {
         texture_base = 0;
     }
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000a8L);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000a8LL);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
     Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
     Packet_EndGsRegisters();
     texture_height_log2 = 9;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
-    sprite.unk08 = 0x60L;
+    sprite.unk08 = 0x60LL;
     sprite.prim = 0x156;
     sprite.rgba[0] = 0x80;
     sprite.rgba[1] = 0x80;
@@ -1073,7 +1073,7 @@ void Game_DrawDepthTestSprite(void) {
         printf(z_value_format, depth_test_sprite_z);
     }
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8L);
+    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8LL);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
     Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
     Packet_EndGsRegisters();
@@ -1087,12 +1087,12 @@ void Game_DrawDepthTestSprite(void) {
     *cursor++ = 0;
     *cursor++ = 0;
     *cursor++ = 0x6C09C000;
-    *(u64 *)cursor = 0x80AF400000008001L;
+    *(u64 *)cursor = 0x80AF400000008001LL;
     cursor += 2;
-    *(u64 *)cursor = 0x513513EEL;
+    *(u64 *)cursor = 0x513513EELL;
     cursor += 2;
     texture_height_log2 = 9;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
     cursor += 2;
     *cursor++ = 6;
@@ -1150,13 +1150,13 @@ void Game_BlendScreenOffsetDown(void) {
     }
     Packet_BeginGsRegisters();
     remaining = 9;
-    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffL);
+    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffLL);
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118LL);
     Packet_EndGsRegisters();
     texture_height_log2 = 9;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     sprite.unk08 = 0;
     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
     sprite.rgba[0] = 0x80;
@@ -1184,7 +1184,7 @@ void Game_BlendScreenOffsetDown(void) {
     } while (remaining >= 0);
 
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118LL);
     Packet_EndGsRegisters();
 }
 
@@ -1202,14 +1202,14 @@ void Game_BlendScreenOffsetUpDown(void) {
     }
     Packet_BeginGsRegisters();
     remaining = 9;
-    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffL);
+    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffLL);
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118LL);
     Packet_EndGsRegisters();
 
     texture_height_log2 = 9;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     sprite.unk08 = 0;
     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
     sprite.rgba[0] = 0x80;
@@ -1256,7 +1256,7 @@ void Game_BlendScreenOffsetUpDown(void) {
     } while (remaining >= 0);
 
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118LL);
     Packet_EndGsRegisters();
 }
 
@@ -1289,12 +1289,12 @@ void Game_BlendPreviousFrame(int alpha) {
     *cursor++ = 0;
     *cursor++ = 0;
     *cursor++ = 0x6C09C000;
-    *(u64 *)cursor = 0x80AF400000008001L;
+    *(u64 *)cursor = 0x80AF400000008001LL;
     cursor += 2;
-    *(u64 *)cursor = 0x513513EEL;
+    *(u64 *)cursor = 0x513513EELL;
     cursor += 2;
     texture_height_log2 = 9;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
     cursor += 2;
     *cursor++ = 6;
@@ -1364,12 +1364,12 @@ void Game_BlendPreviousFrameZoomed(int alpha) {
     *cursor++ = 0;
     *cursor++ = 0;
     *cursor++ = 0x6C09C000;
-    *(u64 *)cursor = 0x80AF400000008001L;
+    *(u64 *)cursor = 0x80AF400000008001LL;
     cursor += 2;
-    *(u64 *)cursor = 0x513513EEL;
+    *(u64 *)cursor = 0x513513EELL;
     cursor += 2;
     texture_height_log2 = 9;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
     cursor += 2;
     *cursor++ = 6;
@@ -1427,7 +1427,7 @@ void Game_ShiftScreenByViewTurn(void) {
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_AddGsRegister(GS_REG_SCANMSK, 3);
     Packet_EndGsRegisters();
 
@@ -1463,8 +1463,8 @@ void Game_ShiftScreenByViewTurn(void) {
     }
 
     sprite_packet.prim = 0x116;
-    sprite_packet.tex0 = 0x28028000L | texture_base;
-    sprite_packet.tex0 |= 0xA400L << 20;
+    sprite_packet.tex0 = 0x28028000LL | texture_base;
+    sprite_packet.tex0 |= 0xA400LL << 20;
     sprite_packet.unk08 = 0;
     sprite_packet.rgba[0] = 0x80;
     sprite_packet.rgba[1] = 0x80;
@@ -1520,7 +1520,7 @@ void Game_ShiftScreenByViewTurn(void) {
 
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_SCANMSK, 0);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
     Packet_EndGsRegisters();
 }
 
@@ -1578,12 +1578,12 @@ void Game_ShiftScreenByFocusTurn(void) {
 
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_AddGsRegister(GS_REG_SCANMSK, 3);
     Packet_EndGsRegisters();
 
     sprite_packet.prim = 0x116;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     sprite_packet.unk08 = 0;
     sprite_packet.rgba[0] = 0x80;
     sprite_packet.rgba[1] = 0x80;
@@ -1632,7 +1632,7 @@ void Game_ShiftScreenByFocusTurn(void) {
 
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_SCANMSK, 0);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
     Packet_EndGsRegisters();
 }
 
@@ -1653,10 +1653,10 @@ void Game_ApplyBrightness(int brightness) {
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_EndGsRegisters();
     sprite.unk08 = 0;
-    tex0_low = texture_base | 0x28028000L;
+    tex0_low = texture_base | 0x28028000LL;
     texture_height_log2 = 9;
     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
     sprite.prim = 0x116;
@@ -1683,7 +1683,7 @@ void Game_ApplyBrightness(int brightness) {
     } while (remaining >= 0);
 
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
     Packet_EndGsRegisters();
     GsDraw_QueueFlush();
     GsDraw_QueueTexFlush();
@@ -1703,10 +1703,10 @@ void Game_TintScreen(int red, int green, int blue) {
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_EndGsRegisters();
 
-    sprite_packet.tex0 = (0x28028000L | texture_base) | (0x9000L << 18);
+    sprite_packet.tex0 = (0x28028000LL | texture_base) | (0x9000LL << 18);
     sprite_packet.unk08 = 0;
     sprite_packet.prim = 0x116;
     sprite_packet.rgba[0] = red;
@@ -1738,7 +1738,7 @@ void Game_TintScreen(int red, int green, int blue) {
     } while (remaining >= 0);
 
     Packet_BeginGsRegisters();
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
     Packet_EndGsRegisters();
     GsDraw_QueueFlush();
     GsDraw_QueueTexFlush();
@@ -1803,8 +1803,8 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
     Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xFFFFFFFF);
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-    Packet_AddGsRegister(GS_REG_TEX0_1, 0x26802ABC0L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+    Packet_AddGsRegister(GS_REG_TEX0_1, 0x26802ABC0LL);
     Packet_AddGsRegister(GS_REG_TEX1_1, 0);
     Packet_EndGsRegisters();
 
@@ -1818,11 +1818,11 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
             *cursor++ = 0;
             *cursor++ = 0;
             *cursor++ = 0;
-            tex0_low = 0xC0AE400000008001L;
+            tex0_low = 0xC0AE400000008001LL;
             *cursor++ = 0x6C0DC000;
             *(s64 *)cursor = tex0_low;
             cursor += 2;
-            *(s64 *)cursor = 0x513513513513L;
+            *(s64 *)cursor = 0x513513513513LL;
             cursor += 2;
             for (k = 0; k < 2; k++) {
                 for (corner_col = 0; corner_col < 2; corner_col++) {

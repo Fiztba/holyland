@@ -22,7 +22,6 @@ extern ItemCommonDef item_common_defs[];
 extern GameStatus game_status;
 extern EventRunner view_ray_status;
 extern PlayerState player_state;
-extern void *object_under_player[];
 extern int current_map_slot;
 extern u32 frame_counter;
 extern u8 spell_levels[6][5];
@@ -168,7 +167,7 @@ void Player_UseItem(void) {
                 }
                 break;
             case 2:
-                stood_on = object_under_player[0];
+                stood_on = player_state.floor_map_object;
                 if (stood_on == NULL || stood_on->definition->kind != MAP_OBJECT_KIND_SYMBOL_OF_PASSAGE || !MapChange_StartPassage(item)) {
                     Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_NOTHING_HAPPENED);
                     return;

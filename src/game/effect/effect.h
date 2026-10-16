@@ -77,7 +77,8 @@ typedef struct {
 typedef struct {
     Vector4 velocity;               /* 0x00 (EffectActor+0x10) */
     Vector4 unk10;                  /* 0x10 per-kind state */
-    char unk20[0x10];               /* 0x20 */
+    char unk20[0x20];               /* 0x20 PORT: 0x10 on the PS2; the views with pointers (PickedMotion,
+                                       AttachedMotion, SavedArgMotion) need more room on the PC */
 } EffectMotion;
 
 /* EffectMotion as EffectShot_Update uses it */
@@ -138,6 +139,7 @@ typedef struct {
     ModelInstance **anchor;         /* 0x10 the model it is attached to */
     char unk14[0x1C];               /* 0x14 passed by address */
 } AttachedMotion;
+_Static_assert(sizeof(AttachedMotion) <= sizeof(EffectMotion), "AttachedMotion does not fit EffectMotion");
 
 /* EffectMotion as EffectHomeOnEntity_Start uses it: follows EffectActor.target */
 typedef struct {
@@ -562,6 +564,7 @@ typedef struct {
     Entity *owner_entity;           /* 0x10 a copy of EffectActor.owner_entity */
     u8 unk14;                       /* 0x14 cleared on spawn */
 } SavedArgMotion;
+_Static_assert(sizeof(SavedArgMotion) <= sizeof(EffectMotion), "SavedArgMotion does not fit EffectMotion");
 
 /* EffectMotion as EffectBowDraw_Start uses it */
 typedef struct {
@@ -754,6 +757,7 @@ typedef struct {
     s8 list_index[4];               /* 0x20 where the entity is in the list active_entities_head, -1: none (EffectPickTargets_Start) */
     char pad24[0x0C];
 } PickedMotion;
+_Static_assert(sizeof(PickedMotion) <= sizeof(EffectMotion), "PickedMotion does not fit EffectMotion");
 
 /* EffectMotion as EffectBeam_Update uses it: scales the model, spawns the end effect */
 typedef struct {
@@ -885,7 +889,7 @@ typedef struct EffectActor {
     struct EffectActor *target;     /* 0x60 */
     Vector4 *start_position;        /* 0x64 */
     Vector4 *start_rotation;        /* 0x68 */
-    int unk6C;                      /* 0x6C an Entity (EffectTarget) the effect homes on */
+    void *unk6C;                    /* 0x6C an Entity (EffectTarget) the effect homes on */
     Vector4 unk70;                  /* 0x70 */
     char pad80[0x10];
     int unk90;                      /* 0x90 */
@@ -903,9 +907,9 @@ typedef struct {
 #define EFFECT_COLOUR(effect) ((EffectActorColour *)(effect))
 
 /* EffectActor.flags bits */
-#define EFFECT_FLAG_LIVE (0x8000L << 41)           /* bit 56: the actor is in use */
-#define EFFECT_FLAG_HAS_SLOTS (0x8000L << 42)      /* bit 57: free its spawner slots with it */
-#define EFFECT_FLAG_HAS_TARGETERS (0x8000L << 43)  /* bit 58: free the effects aimed at it with it */
+#define EFFECT_FLAG_LIVE (0x8000LL << 41)           /* bit 56: the actor is in use */
+#define EFFECT_FLAG_HAS_SLOTS (0x8000LL << 42)      /* bit 57: free its spawner slots with it */
+#define EFFECT_FLAG_HAS_TARGETERS (0x8000LL << 43)  /* bit 58: free the effects aimed at it with it */
 
 /* effect_table[effect id]: an effect's definition-table entry (0x120 bytes) */
 typedef struct {
@@ -942,11 +946,13 @@ typedef struct {
 /* what EffectActor.unk6C points at: an Entity (entity/entity.h) as far as effects read it */
 typedef struct {
     ModelInstance *model;           /* 0x00 */
-    char pad04[0x38];
+    char pad04[offsetof(Entity, height) - sizeof(ModelInstance *)];
     f32 height;                     /* 0x3C */
-    char pad40[0x98];
+    char pad40[offsetof(Entity, flags) - offsetof(Entity, height) - sizeof(f32)];
     s64 flags;                      /* 0xD8 */
 } EffectTarget;
+_Static_assert(offsetof(EffectTarget, height) == offsetof(Entity, height), "EffectTarget is not Entity");
+_Static_assert(offsetof(EffectTarget, flags) == offsetof(Entity, flags), "EffectTarget is not Entity");
 
 /* one 0x50-byte slot of the effect spawner pool, effect_slots (0x60 of them) */
 typedef struct {
@@ -963,7 +969,7 @@ typedef struct {
 } EffectSlot;
 
 /* EffectSlot.flags bit 32: the slot is in use */
-#define EFFECT_SLOT_LIVE (0x8000L << 17)
+#define EFFECT_SLOT_LIVE (0x8000LL << 17)
 
 /* EffectSlot.flags as the bit-fields the game writes */
 typedef struct {

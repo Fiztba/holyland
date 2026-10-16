@@ -26,7 +26,7 @@ void Sound_SetBankVolumes(int level);
 void Sound_SyncBgmLevel(void);
 /* Starts a tracked sound with the player of `kind` in tracked_sound_players (0 Sound_PlayTracked, 1
    Sound_PlayTrackedAt) */
-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
+char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
 /* Starts a sound on the next tracked voice (0x64..0x7D) whose tracked_voices slot is free, from the mg bank
    (sound below 8) or the sfx_com bank, at the sound volume option; returns the voice, -1 if 11 tries find
    none */
@@ -161,9 +161,9 @@ int Sound_EntityBankLoadVoice(SoundJob *job);
 int Sound_EntityBankFreeSampleBuffer(SoundJob *job);
 /* Loads the sound bank of the entity type file just read into voice index + 6, a step a call; 0 and the
    voice in *voice_out once done, else 1 */
-int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out);
+int Sound_LoadEntityBankStep(sptr args_addr, int index, sptr voice_out);
 /* Plays sound from bank with the falloff player kind of falloff_sound_players */
-void Sound_PlayFalloff(int sound, int kind, int bank);
+void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle);
 /* Map bank load step: does nothing but move on */
 s32 Sound_MapBankNoOp(void);
 /* Map bank load step: waits for a pending reverb change, then loads the map's voice (SoundDriver_LoadVoiceStep) */
@@ -179,7 +179,7 @@ int Sound_MapBankApplyReverb(void);
    sounds start (map_sounds_enabled) and ends the load */
 int Sound_MapBankFinishUnlessFirst(void);
 /* Loads the sound bank of a map slot (MapSlot.sound_bank) a step a call while pending; returns 0 once it is done */
-int Sound_LoadMapBankStep(int slot_addr, int pending);
+int Sound_LoadMapBankStep(MapSlot *slot, int pending);
 /* Loads the sound bank of a map slot (MapSlot.sound_bank), waiting until it is done */
 int Sound_LoadMapBank(MapSlot *slot);
 /* Loads the sw bank file_id (sw%03d with 0x96 added) into the sound heap and hands it to the driver, waiting

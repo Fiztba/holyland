@@ -9,6 +9,10 @@
 #include "core/game.h"
 #include "model/linked_point.h"
 #include "collision/collision.h"
+#include <stdlib.h>
+#include <string.h>
+#include <libvu0.h>
+#include <sifrpc.h>
 
 #define TWO_PI 6.2831855f
 #define PI 3.1415927f
@@ -21,8 +25,6 @@ void Vector_Copy(void *dst, void *src);
 void Vector_Add(void *dst, void *lhs, void *rhs);
 void Vector_Scale(void *dst, void *src, float scale);
 void Vector_Subtract(void *dst, void *lhs, void *rhs);
-void sceVu0RotMatrixY(void *, void *, float);
-void sceVu0ApplyMatrix(void *, void *, void *);
 /* Wraps an angle into -pi..pi. */
 static inline f32 wrap_angle(f32 angle) {
     angle = angle - (float)(int)(angle / TWO_PI) * TWO_PI;
@@ -35,20 +37,14 @@ static inline f32 wrap_angle(f32 angle) {
 }
 s16 Effect_FramesToImpact(float, void *, void *, void *);
 void EffectHit_CheckAndEnd(EffectActor *effect, void *state);
-void sceVu0AddVector(void *, void *, void *);
 extern int ground_fan_index;
 int Collision_FindFloorBelow(f32, void *);
 typedef float Mat[4][4] __attribute__((aligned(16)));
-int rand(void);
-void sceVu0RotMatrixX(void *, void *, float);
 void Vector_Normalize(void *, void *);
 extern void (*effect_kind_handlers[][2])();
-extern u8 player_weapon[];
 extern int bolt_start_count;
 void Model_UpdateSkinnedBonePoints(ModelInstance *);
 char *Model_GetSkinnedBonePoint(char *, u32);
-void sceVu0RotMatrixZ(void *, void *, float);
-void *memset(void *, int, u32);
 extern int turn_fan_index;
 void Collision_CastRayAtMap(f32, void *, void *);
 int Sound_PlayMapAt(u8 sound, float *position);
@@ -56,13 +52,14 @@ int Collision_FindWaterBelow(f32, void *);
 extern GameStatus game_status;
 extern u16 pad_state[];
 extern u16 attack_button;
-int EffectHit_FindAimedEntity(void *, void *, void *);
+Entity *EffectHit_FindAimedEntity(void *, void *, void *);
 extern s64 light_point_start_target[2];
 /* LinkedPoint_StartDefault called as returning s16 (the caller keeps the handle in a halfword) */
 // match: only this type matches; model/linked_point.c defines it as returning int
 #define LINKED_POINT_START_S16 ((s16(*)(f32, void *, void *))LinkedPoint_StartDefault)
-extern u8 dark_sanctuary_idol_of_sorrow_placed[];
-extern u8 D_0034AFD6[];
+extern u8 map_script_flags[0x2000];
+#define dark_sanctuary_idol_of_sorrow_placed (map_script_flags + 0x989) /* map 038 [9] */
+#define D_0034AFD6 (map_script_flags + 0x1946)
 void Sound_PlaySw(int mode);
 /* 0x402D50 seven (weapon, effect param) pairs EffectWeaponSound_Start matches to play sound 3 */
 u32 weapon_sound_pairs[14] = { '%', '[', '&', ']', '\'', '^', '(', '\\', ')', '`', ',', 'a', '.', 'b' };
@@ -650,7 +647,7 @@ void EffectBolt_StartCounted(EffectActor *effect, EffectSlot *spawn_slot) {
     s16 angle;
 
     motion = (TurningMotion *)&effect->motion;
-    if (player_weapon[0] != 0x26) {
+    if (player_state.weapon != 0x26) {
         Effect_FreeSpawner(spawn_slot);
         return;
     }
@@ -2040,8 +2037,7 @@ void EffectScatterAroundPlayer_Start(EffectActor *effect) {
     offset.y = 3000.0f;
     offset.x = 0.0f;
     offset.z = 0.0f;
-    // match: argument order as (position, direction, scale) schedules the argument moves as retail does
-    ((void (*)(void *, void *, f32))Collision_CastRayAtMap)(&effect->model->position, &offset, 1.0f);
+    Collision_CastRayAtMap(1.0f, &effect->model->position, &offset);
     if (COLLISION_RESULT->hit != 0) {
         effect->model->position.y = COLLISION_RESULT->point[1] - (f32)effect->def->radius_half;
     } else {

@@ -1,7 +1,7 @@
 #include "input/pad.h"
 #include "core/game.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void Input_ReadPort(int);
 void Input_StartRumble(u8, u8, u8);
 void Input_Update(void);
@@ -22,7 +22,8 @@ extern u16 action_button;
 extern u16 menu_button;
 extern u16 shortcut_button;
 extern u16 pause_button;
-extern s8 sfx_volume[];
+extern u8 game_options[0x10];
+#define sfx_volume ((s8 *)game_options + 2) /* the options from the sound volume on ([4] is the rumble) */
 extern u8 rumble_active;
 extern u8 rumble_strength;
 extern u8 rumble_frames_left;

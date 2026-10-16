@@ -2,6 +2,9 @@
    line to the handler of its key; the key table ini_keys lists the keys and their handlers. */
 #include "core/ini.h"
 #include "player/player.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 extern char ini_path_format[];           /* "ini/%4.4d.ini" */
 extern char file_load_buffer[];           /* where the file is read to */
@@ -12,13 +15,6 @@ extern LevelRecord worn_item_level_records[160];
 extern u8 spell_levels[6][5];
 extern u16 spell_experience[6][5];
 
-int sprintf(char *, char *, ...);
-u32 strlen(char *);
-int strncmp(const char *, const char *, u32);
-char *strchr(const char *, int);
-char *strrchr(const char *, int);
-int atoi(const char *);
-void *memset(void *, int, u32);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 int File_Close(int);
@@ -91,8 +87,6 @@ IniKeyHandler ini_keys[30] = {
     { "debug_magic_rapid_fire", (void (*)(char *))Ini_SetDebugMagicRapidFire },
     { "", NULL },
 };
-/* 0x42BBE0 effect/item_effect.c's item_effect_defs as indexed from item kind 0 */
-asm(".globl item_effect_defs_by_kind\nitem_effect_defs_by_kind = ini_keys + 0x3D0\n");
 
 static void Ini_SetText(char *text, int length);
 static char *Ini_ReadLine(void);
@@ -105,6 +99,7 @@ void Ini_Load(int number) {
     int file;
     int i;
     char *line;
+    int size;
 
     sprintf(path, ini_path_format, number);
     file = File_Open(path, 0, 1);
@@ -115,9 +110,9 @@ void Ini_Load(int number) {
             return;
         }
     }
-    line = (char *)File_Read(file, file_load_buffer, -1);
+    size = File_Read(file, file_load_buffer, -1);
     File_Close(file);
-    Ini_SetText(file_load_buffer, (int)line);
+    Ini_SetText(file_load_buffer, size);
     while ((line = Ini_ReadLine()) != NULL) {
         for (i = 0; ini_keys[i].handler != NULL; i++) {
             if (strncmp(line, ini_keys[i].key, strlen(ini_keys[i].key)) == 0) {

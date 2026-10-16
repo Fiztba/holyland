@@ -1,6 +1,6 @@
 #include "effect/shot.h"
+#include <string.h>
 
-void *memset(void *, s32, u32);
 
 extern s32 dark_one_hits_left;
 

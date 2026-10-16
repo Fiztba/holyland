@@ -5,19 +5,16 @@
 #include "core/file.h"
 #include "save/mc.h"
 #include <libmc.h>
+#include <stdio.h>
+#include <string.h>
+#include <eekernel.h>
 
-void *memset(void *, int, u32);
-int sprintf(char *, const char *, ...);
-void *memcpy(void *, const void *, u32);
-int strcmp(const char *, const char *);
-void SyncDCache(void *start, void *end);
 
 void *MenuHeap_Alloc(int);
 int File_OpenUnflagged(char *, int, int);
 
-extern GameStatus game_status;
 extern int save_loaded;
-extern s32 save_area_name_id[];
+extern GameStatus game_status;
 extern s32 player_state[];
 extern PlayTime current_play_time;
 
@@ -69,8 +66,8 @@ s32 SaveCard_Init(void) {
 s32 SaveCard_Open(void) {
     CardRecord *card;
     s32 file_handle;
-    s32 base;
-    s32 addr;
+    sptr base;
+    sptr addr;
 
     if (Mc_Update() > 0) {
         return -1;
@@ -80,7 +77,7 @@ s32 SaveCard_Open(void) {
     card_check.retries = 0;
     card_check.kind = CARD_TASK_CHECK;
     card_check.keep_open = 1;
-    base = (s32)MenuHeap_Alloc(0x800);
+    base = (sptr)MenuHeap_Alloc(0x800);
     addr = (base & 0x3F) == 0 ? base : base + (base & 0x3F);
     save_infos = (SaveInfo *)addr;
     addr += 0x480;
@@ -105,7 +102,7 @@ s32 SaveCard_Open(void) {
     do {
         SaveCard_ResetRecord(card);
         card++;
-    } while ((s32)card < (s32)(card_records + 2));
+    } while (card < card_records + 2);
     SaveCard_ClearSaveInfos();
     return 0;
 }
@@ -634,7 +631,7 @@ static s32 SaveCard_StepSave(void) {
         }
         break;
     case 10:
-        SaveCard_FillSaveInfo((void *)task->card_index, file);
+        SaveCard_FillSaveInfo((void *)(sptr)task->card_index, file);
         sprintf(save_path, "%s%s%s%s", "/BASLUS-20318", "S", "/BASLUS-20318", "S");
         task->step++;
     case 11:
@@ -1337,7 +1334,7 @@ static void SaveCard_FillSaveInfo(void *unused_arg0, s32 index) {
     info = save_infos + index;
     info->exists = 1;
     info->damaged = 0;
-    info->numbers[0] = save_area_name_id[0];
+    info->numbers[0] = game_status.save_area;
     info->numbers[1] = player_state[20];
     info->numbers[2] = player_state[21];
     info->numbers[3] = player_state[45];
@@ -1529,7 +1526,7 @@ s32 SaveCard_GetSavesState(void) {
             return -1;
         }
         info++;
-    } while ((s32)info < (s32)end);
+    } while (info < end);
     return 0;
 }
 
@@ -1545,6 +1542,6 @@ s32 SaveCard_HasAnySave(void) {
             return 1;
         }
         info++;
-    } while ((s32)info < (s32)end);
+    } while (info < end);
     return 0;
 }

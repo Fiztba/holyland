@@ -6,10 +6,10 @@
 #include "player/player.h"
 #include "gfx/texture.h"
 #include "effect/effect.h"
+#include <stdio.h>
+#include <string.h>
+#include <libvu0.h>
 
-void *memset(void *, int, u32);
-void *memcpy(void *, const void *, u32);
-int sprintf(char *, char *, ...);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 int File_Close(int);
@@ -24,10 +24,6 @@ u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
 void Model_MultiplyChildMatrices(ModelPart *);
 void Sound_LoadSwBank(int);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0TransMatrix(float *, float *, float *);
-void sceVu0MulMatrix(void *, void *, void *);
 void Vector_Copy(void *, void *);
 void Vector_CopyQuadword(void *, void *);
 void Vector_Add(void *, void *, void *);
@@ -75,6 +71,7 @@ PlayerArmPoints held_item_arm_points_prev = { 0 }; /* 0x4147A0 the same for the 
 
 ModelInstance held_item_model __attribute__((section(".bss"))); /* 0x57B6A0 the held item; held_item_model_ptr in asm .sdata points here */
 static ModelInstance arm_model;         /* 0x57B860 */
+/* PORT: these four hold runtime structs (ModelChannel, ModelPart), may need more room on the PC */
 static char held_item_channels[0x90];   /* 0x57BA20 */
 static char held_item_setup[0x1000];    /* 0x57BAB0 */
 static char arm_channels[0x90];         /* 0x57CAB0 */
@@ -82,11 +79,11 @@ static char arm_setup[0x1000];          /* 0x57CB40 */
 static Vector4 trail_points[64];        /* 0x57DB40 screen positions of the weapon trail */
 static s32 trail_lives[64];             /* 0x57DF40 frames each trail point has left */
 
-static u32 shared_texture_table;        /* 0x447164 */
-static u32 held_item_file;              /* 0x447168 */
-static u32 held_item_textures;          /* 0x44716C */
-static u32 arm_file;                    /* 0x447170 */
-static u32 arm_textures;                /* 0x447174 */
+static char *shared_texture_table;      /* 0x447164 */
+static char *held_item_file;            /* 0x447168 */
+static char *held_item_textures;        /* 0x44716C */
+static char *arm_file;                  /* 0x447170 */
+static char *arm_textures;              /* 0x447174 */
 static s32 trail_min_life;              /* 0x447178 */
 static s32 trail_count;                 /* 0x44717C */
 static s32 trail_write_index;           /* 0x447180 */
@@ -103,15 +100,15 @@ int WeaponTrail_GetCount(void);
 
 void HeldWeapon_Init(void) {
     int file_handle;
-    u32 heap_cursor;
-    heap_cursor = (u32)held_weapon_area; // match: retail treats the heap cursor as a plain address
+    char *heap_cursor;
+    heap_cursor = held_weapon_area;
     shared_texture_table = heap_cursor;
     heap_cursor += 0x20000;
     arm_file = heap_cursor;
     heap_cursor += 0x50000;
     held_item_file = heap_cursor;
-    memset(&arm_model, 0, 0x1C0);
-    memset(&held_item_model, 0, 0x1C0);
+    memset(&arm_model, 0, sizeof(ModelInstance));
+    memset(&held_item_model, 0, sizeof(ModelInstance));
     memset((void *)arm_file, 0, 0x50000);
     memset((void *)held_item_file, 0, 0x30000);
     memset(arm_setup, 0, 0x1000);
@@ -121,7 +118,7 @@ void HeldWeapon_Init(void) {
     loaded_arm_gauntlet = -1;
     loaded_held_weapon = -1;
     file_handle = File_Open(arm_phong_texture_path, 0, 1);
-    File_Read(file_handle, (int)shared_texture_table, -1);
+    File_Read(file_handle, shared_texture_table, -1);
     File_Close(file_handle);
     Player_LoadArmModels();
 }
@@ -131,8 +128,8 @@ void HeldWeapon_Init(void) {
    the model, its motions and its textures from the parts the file has. */
 void Player_LoadArmModels(void) {
     char path[0x100];
-    int data;
-    int buffer;
+    char *data;
+    char *buffer;
     GameDefinition *item = &weapon_name_defs[player_state.weapon];
     GameDefinition *arm = &weapon_name_defs[player_state.equipment[EQUIP_GAUNTLET] + 70];
     PlayerArmFile *file;
@@ -146,7 +143,7 @@ void Player_LoadArmModels(void) {
             Effect_FreePlayerWeaponKinds();
         }
         memset((void *)held_item_file, 0, 0x30000);
-        memset(&held_item_model, 0, 0x1C0);
+        memset(&held_item_model, 0, sizeof(ModelInstance));
         memset(held_item_setup, 0, 0x1000);
         memset(held_item_channels, 0, 0x90);
         held_item_textures = 0;
@@ -170,19 +167,19 @@ void Player_LoadArmModels(void) {
         memcpy((void *)held_item_file, file_load_buffer, size);
         file = (PlayerArmFile *)held_item_file;
         if (file->model_size != 0) {
-            data = (int)file + file->model_offset;
-            buffer = (int)held_item_setup;
+            data = (char *)file + file->model_offset;
+            buffer = held_item_setup;
             Model_SetUpSkinned(&held_item_model, &data, &buffer);
         }
         if (file->motion_size != 0) {
             data = held_item_file + file->motion_offset;
-            buffer = (int)held_item_channels;
-            ModelMotion_LoadFile(data, &buffer, &held_item_model, 1);
+            buffer = held_item_channels;
+            ModelMotion_LoadFile((MotionFile *)data, (ModelChannel **)&buffer, &held_item_model, 1);
         }
         if (file->texture_size != 0) {
             held_item_textures = held_item_file + file->texture_offset;
         }
-        held_item_model.light_block = (s32)held_item_light_blocks;
+        held_item_model.light_block = (sptr)held_item_light_blocks;
         held_item_model.fog_block = &current_fog_block;
         MODEL_CHANNEL(&held_item_model)->unk8F = 0x80;
         Sound_LoadSwBank(player_state.weapon);
@@ -195,7 +192,7 @@ void Player_LoadArmModels(void) {
     if (loaded_arm_gauntlet != player_state.equipment[EQUIP_GAUNTLET]) {
         loaded_arm_gauntlet = player_state.equipment[EQUIP_GAUNTLET];
         memset((void *)arm_file, 0, 0x50000);
-        memset(&arm_model, 0, 0x1C0);
+        memset(&arm_model, 0, sizeof(ModelInstance));
         memset(arm_setup, 0, 0x1000);
         memset(arm_channels, 0, 0x90);
         arm_textures = 0;
@@ -217,14 +214,14 @@ void Player_LoadArmModels(void) {
         memcpy((void *)arm_file, file_load_buffer, size);
         file = (PlayerArmFile *)arm_file;
         if (file->model_size != 0) {
-            data = (int)file + file->model_offset;
-            buffer = (int)arm_setup;
+            data = (char *)file + file->model_offset;
+            buffer = arm_setup;
             Model_SetUpSkinned(&arm_model, &data, &buffer);
         }
         if (file->texture_size != 0) {
             arm_textures = arm_file + file->texture_offset;
         }
-        arm_model.light_block = (s32)held_item_light_blocks;
+        arm_model.light_block = (sptr)held_item_light_blocks;
         arm_model.fog_block = &current_fog_block;
     }
 }
@@ -285,8 +282,8 @@ void Player_UpdateArmModels(void) {
             *(ModelMatrix *)arm_part->matrix = *(ModelMatrix *)part->matrix;
         }
         held_item_model.update_bone_points(&held_item_model);
-        Vector_Copy(&held_item_arm_points.points[0], (void *)held_item_model.get_point(&held_item_model, 30));
-        Vector_Copy(&held_item_arm_points.points[1], (void *)held_item_model.get_point(&held_item_model, 31));
+        Vector_Copy(&held_item_arm_points.points[0], (void *)(sptr)held_item_model.get_point(&held_item_model, 30));
+        Vector_Copy(&held_item_arm_points.points[1], (void *)(sptr)held_item_model.get_point(&held_item_model, 31));
     }
     held_item_light_blocks[0] = current_light_block;
 }
@@ -315,8 +312,8 @@ void WeaponTrail_Update(void) {
         if (item == 0x98) {
             return;
         }
-        blade_base = (void *)weapon->get_point(weapon, 0);
-        blade_tip = (void *)weapon->get_point(weapon, 1);
+        blade_base = (void *)(sptr)weapon->get_point(weapon, 0);
+        blade_tip = (void *)(sptr)weapon->get_point(weapon, 1);
         sceVu0MulMatrix(world_screen, world_screen_matrix, identity_matrix);
         Vu0_LoadMatrix(world_screen);
         Vu0_ProjectToScreen((int *)&point, blade_base);
@@ -387,7 +384,7 @@ void Player_DrawArm(void) {
         Packet_BeginGsRegisters();
         Packet_AddGsRegister(GS_REG_ALPHA_1, weapon_trail_kinds[trail_kind].blend);
         Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
         Packet_EndGsRegisters();
         clipped = 6;
         size = count * 2 + 1;
@@ -396,8 +393,8 @@ void Player_DrawArm(void) {
         packet += 7;
         *packet++ = size | 0x51000000;
         /* GIF tag: count vertices of two registers each, a shaded, blended triangle strip */
-        tag = count | 0x8000 | (0x8000L << 46);
-        tag |= 0x9900L << 38; // match: a second statement, or the two constants fold into one
+        tag = count | 0x8000 | (0x8000LL << 46);
+        tag |= 0x9900LL << 38; // match: a second statement, or the two constants fold into one
         *(u64 *)packet = tag;
         packet += 2;
         *(u64 *)packet = 0x51; /* the registers: RGBAQ, XYZ2 */

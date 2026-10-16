@@ -11,6 +11,10 @@
 #include "effect/shot.h"
 #include "sound/sound.h"
 #include "math/vu0.h"
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libvu0.h>
 
 static s32 swing_magic_frames;                    /* 0x447114 frames the swing-cast magic still runs */
 static s32 swing_magic_id;                        /* 0x447118 magic id cast from the swing */
@@ -35,7 +39,8 @@ extern SoundLoadQueue sound_load_queue;
 extern u16 pad_state[];
 extern u8 item_counts[];
 extern s8 game_options[];
-extern u8 guardians_room_water_purified[];
+extern u8 map_script_flags[0x2000];
+#define guardians_room_water_purified (map_script_flags + 0x8C6) /* map 035 [6] */
 extern int current_map_slot;
 extern u32 frame_counter;
 extern int sacrificial_mask_cooldown;              /* frames until the item 0x32 may launch its effect again */
@@ -86,9 +91,6 @@ void (*item_step_handlers[8])(u16, u16) = {
     (void (*)(u16, u16))Player_HolsterWeapon, 0, 0, 0,
 };
 
-void *memset(void *, int, u32);
-float sinf(float);
-int rand(void);
 int Sound_PlayFootstep(int);
 int Sound_PlayCommon(int);
 int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
@@ -114,7 +116,10 @@ void Attack_WearWeapon(int, int);
 void Attack_WearWornItem(int idx, int amount);
 
 extern u8 spell_levels[6][5];
+<<<<<<< HEAD
 extern u64 player_status_bits[];            /* player_previous.unk1C8 */
+=======
+>>>>>>> port/s0-game
 extern GameDefinition *const weapon_name_defs;
 extern LevelRecord weapon_level_records[70];
 extern LevelDef item_name_defs[0x17C];
@@ -890,11 +895,10 @@ void Player_SwingWeapon(u16 held, u16 pressed) {
     }
 }
 
-extern u8 player_weapon_step[];
 
 void Player_InvokeTargetHandler(u16 target_id, u16 command) {
     Player_UpdateWeaponAim();
-    item_step_handlers[player_weapon_step[0]](target_id, command);
+    item_step_handlers[player_state.item_action_step](target_id, command);
 }
 
 /* Handler of an item that shoots: on the button, starts the motion and launches the item's shot. */
@@ -1019,7 +1023,7 @@ void Player_HolsterWeapon(void) {
     ModelMotion_Step(WEAPON_MODEL);
     if (MODEL_CHANNEL(WEAPON_MODEL)->value == 0) {
         Effect_FreePlayerWeaponKinds();
-        player_weapon_step[0] = 0;
+        player_state.item_action_step = 0;
     }
 }
 
@@ -1039,8 +1043,6 @@ int Player_CanFireAtAim(void) {
     return result;
 }
 
-float atan2f(float, float);
-float sqrtf(float);
 
 void Player_UpdateWeaponAim(void) {
     float vec[4];
@@ -1060,11 +1062,6 @@ extern f32 identity_matrix[16];
 
 /* the pad bits of each control */
 
-float cosf(float);
-double sin(double);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 float Angle_Wrap(float);
 int Angle_Approach(float *, float, float);
 int Sound_PlayMap(int);
@@ -1074,8 +1071,8 @@ void Player_FindFloorMaterial(void);
 void Player_CollideWithEntities(int);
 void Player_CollideWithMapObjects(int);
 
-#define PLAYER_FLAG_32 0x100000000L /* the view is levelling out */
-#define PLAYER_FLAG_37 0x2000000000L /* the view dips after a landing */
+#define PLAYER_FLAG_32 0x100000000LL /* the view is levelling out */
+#define PLAYER_FLAG_37 0x2000000000LL /* the view dips after a landing */
 
 #define STEP_LENGTH 25.0f
 
@@ -1575,7 +1572,7 @@ void Player_TakeFallDamage(float speed) {
     if (player_state.stepped_on_entity != 0) {
         amount = amount * 60 / 100;
     } else if ((player_state.status_bits >> 38 & 1) == 1) {
-        if (!(player_status_bits[0] >> 38 & 1)) {
+        if (!(player_previous.status_bits >> 38 & 1)) {
             amount = amount * 80 / 100;
         }
     }
@@ -1608,7 +1605,7 @@ void Player_StopWalking(void) {
     player_state.look_speed = 0.0f;
     player_state.turn_speed = 0.0f;
     player_state.stride_phase = 0;
-    player_state.status_bits &= ~0x100000000L;
+    player_state.status_bits &= ~0x100000000LL;
 }
 
 /* The breath bar under water (status bit 39, which Player_CollideWithMap sets while the water surface, strip
@@ -1623,7 +1620,7 @@ void Player_UpdateBreath(void) {
     int filled;
 
     player = &player_state;
-    was_set = (player_status_bits[0] >> 39) & 1;
+    was_set = (player_previous.status_bits >> 39) & 1;
     is_set = (player->status_bits >> 39) & 1;
     if (is_set != was_set) {
         if (is_set != 0) {
