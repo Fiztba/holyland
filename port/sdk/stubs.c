@@ -2,6 +2,8 @@
    the game going) and logs once that it was reached. Step 1 gives them their PC behaviour; graphics
    and sound replace the libgraph, libdma, libsdr and SIF ones. */
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "eekernel.h"
@@ -38,6 +40,8 @@ int CreateThread(struct ThreadParam *param) { (void)param; STUB("CreateThread");
 int DeleteThread(int id) { (void)id; return 0; }
 int StartThread(int id, void *arg) { (void)id; (void)arg; STUB("StartThread"); return 0; }
 void ExitThread(void) { STUB("ExitThread"); }
+int TerminateThread(int id) { (void)id; STUB("TerminateThread"); return 0; }
+void Exit(int status) { fprintf(stderr, "[port] the game called Exit(%d)\n", status); exit(status); }
 int ChangeThreadPriority(int id, int priority) { (void)id; (void)priority; return 0; }
 int RotateThreadReadyQueue(int priority) { (void)priority; return 0; }
 int GetThreadId(void) { return 1; }

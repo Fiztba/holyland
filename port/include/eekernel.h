@@ -55,6 +55,7 @@ int CreateThread(struct ThreadParam *param);
 int DeleteThread(int id);
 int StartThread(int id, void *arg);
 void ExitThread(void);
+int TerminateThread(int id);
 int ChangeThreadPriority(int id, int priority);
 int RotateThreadReadyQueue(int priority);
 int GetThreadId(void);
@@ -67,6 +68,9 @@ int SignalSema(int sema);
 int iSignalSema(int sema);
 int WaitSema(int sema);
 int PollSema(int sema);
+
+/* Stops the program (the EE's Exit). */
+void Exit(int status);
 
 /* Caches: nothing to do on the PC. */
 void FlushCache(int operation);

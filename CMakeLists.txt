@@ -41,7 +41,8 @@ add_library(kf4_port STATIC
     port/platform/ee_address.c
     port/math/libvu0.c
     port/sdk/stubs.c
-    port/sdk/game_stubs.c)
+    port/sdk/game_stubs.c
+    port/sdk/libc_ps2.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
 if(NOT WIN32)

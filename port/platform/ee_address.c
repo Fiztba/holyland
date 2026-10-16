@@ -111,10 +111,16 @@ EEWord ee_word_of(const void *ptr, const char *file, int line) {
 }
 
 void *ee_static_ptr_of(EEWord word) {
+    static int last;
     int i;
 
+    /* collision and drawing look up the same section (the scratchpad's) again and again */
+    if (word >= regions[last].ee_base && word - regions[last].ee_base < regions[last].end - regions[last].start) {
+        return (void *)(regions[last].start + (word - regions[last].ee_base));
+    }
     for (i = 0; i < region_count; i++) {
         if (word >= regions[i].ee_base && word - regions[i].ee_base < regions[i].end - regions[i].start) {
+            last = i;
             return (void *)(regions[i].start + (word - regions[i].ee_base));
         }
     }
