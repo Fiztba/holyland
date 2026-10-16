@@ -1,0 +1,40 @@
+# --- Never commit game data: disc images, executables, extracted files ---
+*.iso
+*.bin
+*.cue
+*.chd
+*.elf
+*.irx
+*.rom
+SLUS_*
+SLUS-*
+SLPS_*
+SLES_*
+SYSTEM.CNF
+baserom/
+assets/
+
+# --- Build output (contains disc-derived bytes) ---
+build/
+*.o
+*.a
+*.map
+build.ninja
+objdiff.json
+.ninja_log
+.ninja_deps
+
+# --- splat output: disassembly and data carved from the base ELF ---
+asm/
+config/undefined_*.txt
+config/auto/
+
+# --- Local toolchain / env ---
+tools/cc/
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+*.swp
+.splache

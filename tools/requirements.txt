@@ -1,0 +1,7 @@
+# Python packages for the build and its tools, installed into .venv by tools/setup.sh.
+pyelftools          # ELF reading (extract, gate, matching scans)
+pycdlib             # reads the disc's ISO9660 filesystem
+splat64[mips]       # splits the base ELF into asm/data for the build
+spimdisasm
+rabbitizer
+ninja
