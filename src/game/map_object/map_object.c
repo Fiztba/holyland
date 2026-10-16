@@ -232,7 +232,7 @@ void MapObject_StartMap(int map) {
         if (Game_GetTriggerItem(tag, object->source->spawn_flags.bytes[2])) {
             flag = 1;
         }
-        object->map_record = (s32)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
+        object->map_record = (sptr)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
         if (in_use) {
             MapObject_Activate(object);
         } else {
@@ -535,19 +535,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             }
             if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&glow_lights_shared;
+                    object->model->light_block = (sptr)&glow_lights_shared;
                 } else {
-                    object->model->light_block = (s32)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             } else {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&map_draw_state.unkC0;
+                    object->model->light_block = (sptr)&map_draw_state.unkC0;
                 } else {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             }
             if ((s8)object->source->spawn_flags.bytes[4] != -1) {
@@ -594,19 +594,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
             }
             if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&glow_lights_shared;
+                    object->model->light_block = (sptr)&glow_lights_shared;
                 } else {
-                    object->model->light_block = (s32)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&glow_lights[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             } else {
                 if ((s8)object->source->spawn_flags.bytes[5] != -1) {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
                 } else if (RECORD_FLAGS(object) & 0x10) {
-                    object->model->light_block = (s32)&map_draw_state.unkC0;
+                    object->model->light_block = (sptr)&map_draw_state.unkC0;
                 } else {
-                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
                 }
             }
             if ((s8)object->source->spawn_flags.bytes[4] == -1) {

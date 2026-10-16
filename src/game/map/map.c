@@ -52,13 +52,13 @@ int Map_ClassifyRecordOnScreen(MapDrawRecord *, ModelInstance *);
 void *memset(void *, int, u32);
 void Map_InsertRecordBySize(AreaNode *);
 void Model_SetUpPosed(ModelInstance *, char **, char **);
-void Model_SetUpSkinned(ModelInstance *, int *, int *);
+void Model_SetUpSkinned(ModelInstance *, char **, char **);
 MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
 u32 *Map_GetSlotPacket(int, int);
 void Model_SetPrimBits(ModelInstance *, s64, s64);
 void Model_SetAlphaBlend(ModelInstance *, s64);
 MapRecordInfo *Map_FindRecordAtInSlot(CameraState *, f32, int);
-void Wobble_BuildWaveUvs(ModelInstance *, u32 *);
+void Wobble_BuildWaveUvs(ModelInstance *, char **);
 void Vector_Copy(void *, void *);
 char *Collision_RelocateMesh(char *, ModelInstance *, int);
 void Player_MoveByOffset(f32 *);
@@ -200,10 +200,10 @@ void Map_DrawRecords(int mode) {
                     continue;
                 }
                 if (flags & 0x10) {
-                    MAP_RECORD_MODEL(record)->light_block = (s32)&map_draw_state.unkC0;
+                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.unkC0;
                     MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
                 } else {
-                    MAP_RECORD_MODEL(record)->light_block = (s32)&map_draw_state.light_blocks[map][record->light_block_index];
+                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.light_blocks[map][record->light_block_index];
                     MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
                 }
                 LinkedPoint_FindHitsForMapDraw(record, MAP_RECORD_MODEL(record));
@@ -284,10 +284,10 @@ void Map_DrawLateRecords(int mode) {
                     Packet_EndGsRegisters();
                 }
                 if (record->flags & 0x10) {
-                    MAP_RECORD_MODEL(record)->light_block = (s32)&map_draw_state.unkC0;
+                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.unkC0;
                     MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
                 } else {
-                    MAP_RECORD_MODEL(record)->light_block = (s32)&map_draw_state.light_blocks[map][record->light_block_index];
+                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.light_blocks[map][record->light_block_index];
                     MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
                 }
                 LinkedPoint_FindHitsForMapDraw(record, MAP_RECORD_MODEL(record));
@@ -345,7 +345,8 @@ void Map_ParseFile(int map) {
     /* the working memory: the models, then the two tables of the slot */
     // match: stored as a model pointer (it is room for models); as a char * it is scheduled earlier
     *(ModelInstance **)&memory->record_models = (ModelInstance *)work;
-    /* PORT: the models are runtime structs, larger on the PC: the work area may need more room */
+    /* PORT: the models (and the ModelParts Model_SetUpPosed/Skinned carve from the work area below, 0x90 bytes on
+       the PC for 0x80) are runtime structs, larger on the PC: the work area may need more room */
     work += header->record_count * sizeof(ModelInstance);
     memory->object_models = work;
     work += header->object_count * sizeof(ModelInstance);
@@ -466,7 +467,7 @@ void Map_BuildModels(int map) {
             if (record->record_flags & 0x100) {
                 Vector_Copy(&model->position, record);
                 model->position.w = 1.0f;
-                ((void (*)(ModelInstance *, u32 *, int))Wobble_BuildWaveUvs)(model, (u32 *)&work, 0); // match: a third argument the callee does not take
+                Wobble_BuildWaveUvs(model, &work);
             }
             if (((ModelInstance **)slot->record_model_table)[record->model_index] == NULL) {
                 ((ModelInstance **)slot->record_model_table)[record->model_index] = model;
@@ -519,7 +520,7 @@ void Map_BuildModels(int map) {
         object->model = model;
         object->source = info;
         object->definition = (MapObjectUnk04 *)&map_object_defs[info->def_index * 0x80];
-        object->map_record = (s32)Map_FindRecordAtInSlot((CameraState *)info, 0.0f, map);
+        object->map_record = (sptr)Map_FindRecordAtInSlot((CameraState *)info, 0.0f, map);
         MAP_OBJECT_BITS(object)->map = (u8)map;
     }
     cursor = (sptr)header + header->object_model_offset;
@@ -544,12 +545,12 @@ void Map_BuildModels(int map) {
         for (j = 0; j < header->object_count; j++, object++) {
             if (object->definition->model_index != 0xFFFF && (MAP_OBJECT_DEF_WORD(object) & 0x100) && object->source->model_index == i) {
                 next = cursor; // match: retail bug, as in the loop above
-                Model_SetUpSkinned(object->model, &next, (int *)&work);
+                Model_SetUpSkinned(object->model, (char **)&next, &work); /* next is a pointer-sized cursor (sptr) */
                 object->model->texture_slot = 1;
                 object->model->texture_data = next;
                 next += *(int *)next;
-                object->model->texture_packet_3 = (int)Map_GetSlotPacket(map, 3);
-                object->model->texture_packet_5 = (int)Map_GetSlotPacket(map, 5);
+                object->model->texture_packet_3 = (sptr)Map_GetSlotPacket(map, 3);
+                object->model->texture_packet_5 = (sptr)Map_GetSlotPacket(map, 5);
             }
         }
         cursor = next; // match: retail bug, as in the loop above
@@ -1015,15 +1016,15 @@ void Map_DrawFreeCameraView(void) {
             for (i = 0; i < ((MapSlotUnk08 *)slot->header)->record_count; i++, record++) {
                 if (!(record->flags & 0x80000000)) {
                     if (record->flags & 0x10) {
-                        MAP_RECORD_MODEL(record)->light_block = (s32)&map_draw_state.unkC0;
+                        MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.unkC0;
                         MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
                     } else {
-                        MAP_RECORD_MODEL(record)->light_block = (s32)&map_draw_state.light_blocks[map][record->light_block_index];
+                        MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.light_blocks[map][record->light_block_index];
                         MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
                     }
                     MAP_RECORD_MODEL(record)->hit_count = 0;
                     // match: both blocks chosen above are replaced at once by the viewer's own
-                    MAP_RECORD_MODEL(record)->light_block = (s32)&map_object_default_lights;
+                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_object_default_lights;
                     MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
                     Model_DrawPosed(MAP_RECORD_MODEL(record));
                 }

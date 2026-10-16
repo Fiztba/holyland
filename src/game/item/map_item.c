@@ -195,7 +195,7 @@ void MapItem_InitMap(int map) {
             Model_SetTextureBase((char *)node->model, 0x3B40, 0x3EC0);
             Model_SetVertexColour(node->model, 0xFF, 0xFF, 0xFF, -1);
             node->model->draw = (void (*)(ModelInstance *))MapItem_PrepareDraw;
-            node->model->texture_data = (int)source->texture;
+            node->model->texture_data = (sptr)source->texture;
             node->model->texture_slot = 2;
             TextureTable_SetBasePointers(source->texture, 0x3B40, 0x3EC0);
         }
@@ -456,7 +456,7 @@ s32 MapItem_Drop(s32 map, s32 item, s32 priority, f32 *position, f32 floor_y, f3
     Model_SetTextureBase((char *)node->model, 0x3B40, 0x3EC0);
     Model_SetVertexColour(node->model, 0xFF, 0xFF, 0xFF, -1);
     node->model->texture_slot = 2;
-    node->model->texture_data = (int)source->texture;
+    node->model->texture_data = (sptr)source->texture;
     TextureTable_SetBasePointers(source->texture, 0x3B40, 0x3EC0);
     if (order == 0xFFFFFFFF) {
         order = item_drop_counter++;
@@ -527,7 +527,7 @@ ItemNode *MapItem_PutOutForObject(int map, int item, void *position, void *rotat
     Model_SetTextureBase((char *)node->model, 0x3B40, 0x3EC0);
     Model_SetVertexColour(node->model, 0xFF, 0xFF, 0xFF, -1);
     node->model->texture_slot = 2;
-    node->model->texture_data = (int)source->texture;
+    node->model->texture_data = (sptr)source->texture;
     TextureTable_SetBasePointers(source->texture, 0x3B40, 0x3EC0);
     MapItem_Link(node);
     return node;
@@ -605,7 +605,7 @@ void MapItem_DrawAll(int with_picked) {
         for (i = 0; i < count; i++, part++) {
             ModelMatrix_BuildPartLocal(node->model, part, part);
         }
-        node->model->light_block = (s32)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
+        node->model->light_block = (sptr)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
         node->model->fog_block = &map_draw_state.fog_blocks[node->flags & 1][((MapRecordInfo *)node->map_record)->draw_block_index];
         LinkedPoint_FindHitsForModel(node->model);
         ModelTexture_SendForModel(node->model);
@@ -658,7 +658,7 @@ void MapItem_DrawPicked(int hidden) {
         sceVu0RotMatrixY((f32 *)part, (f32 *)part, wrap_angle(turn[1]));
         sceVu0TransMatrix((f32 *)part, (f32 *)part, offset);
     }
-    node->model->light_block = (s32)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
+    node->model->light_block = (sptr)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
     node->model->fog_block = &map_draw_state.fog_blocks[node->flags & 1][((MapRecordInfo *)node->map_record)->draw_block_index];
     LinkedPoint_FindHitsForModel(node->model);
     ModelTexture_SendForModel(node->model);
