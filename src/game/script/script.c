@@ -669,14 +669,168 @@ static void Script_ReadArg(ScriptThread *thread, u32 *source, ScriptArg *result)
     }
 }
 
+/* Scripts address the game variable blocks by their PS2 byte offsets. Three blocks are runtime structs whose
+   pointer fields move what follows them on the PC (GameStatus from 0x40, EventRunner from 0x50, PlayerState from
+   0x204), and the button words (blocks 0x33 on) are separate globals that lay one after another on the PS2, so
+   a script may reach the next one through a block. Script_GameVarAt turns a block and PS2 offset into the PC
+   address of that byte; the readers and writers go through it a byte at a time. */
+typedef struct {
+    u16 ps2;                        /* the PS2 offset a field starts at */
+    u16 pc;                         /* its PC offset */
+} ScriptVarField;
+
+#define SCRIPT_VAR_FIELD(T, field, ps2_offset) { ps2_offset, offsetof(T, field) }
+
+extern GameStatus game_status;
+extern EventRunner view_ray_status;
+extern u16 forward_button, back_button, turn_right_button, turn_left_button, step_right_button, step_left_button;
+extern u16 look_down_button, look_up_button, attack_button, magic_button, action_button, menu_button;
+extern u16 shortcut_button, pause_button;
+
+/* the fields before the first entry past 0 lie at the same offsets on both */
+LAYOUT_OFFSET(GameStatus, pad38, 0x38);
+static const ScriptVarField game_status_var_fields[] = {
+    { 0, 0 },
+    SCRIPT_VAR_FIELD(GameStatus, effect_owner, 0x40),
+    SCRIPT_VAR_FIELD(GameStatus, item_use_cooldown, 0x44),
+};
+LAYOUT_OFFSET(EventRunner, target_distance, 0x4C);
+static const ScriptVarField view_ray_var_fields[] = {
+    { 0, 0 },
+    SCRIPT_VAR_FIELD(EventRunner, current, 0x50),
+    SCRIPT_VAR_FIELD(EventRunner, facing_entity, 0x54),
+    SCRIPT_VAR_FIELD(EventRunner, facing_item, 0x58),
+};
+LAYOUT_OFFSET(PlayerState, landing_slow_timer, 0x200);
+static const ScriptVarField player_state_var_fields[] = {
+    { 0, 0 },
+    SCRIPT_VAR_FIELD(PlayerState, landing_slow_timer, 0x200),
+    SCRIPT_VAR_FIELD(PlayerState, stepped_on_entity, 0x204),
+    SCRIPT_VAR_FIELD(PlayerState, floor_map_object, 0x208),
+    SCRIPT_VAR_FIELD(PlayerState, touched_map_object, 0x20C),
+    SCRIPT_VAR_FIELD(PlayerState, floor_material, 0x210),
+    SCRIPT_VAR_FIELD(PlayerState, unk211, 0x211),
+    SCRIPT_VAR_FIELD(PlayerState, pad212, 0x212),
+    SCRIPT_VAR_FIELD(PlayerState, unk214, 0x214),
+    SCRIPT_VAR_FIELD(PlayerState, pad218, 0x218),
+    SCRIPT_VAR_FIELD(PlayerState, aim, 0x220),
+    SCRIPT_VAR_FIELD(PlayerState, aim_speed, 0x230),
+    SCRIPT_VAR_FIELD(PlayerState, view_tilt_frames, 0x234),
+    SCRIPT_VAR_FIELD(PlayerState, view_tilt_pitch, 0x238),
+    SCRIPT_VAR_FIELD(PlayerState, view_tilt_roll, 0x23C),
+    SCRIPT_VAR_FIELD(PlayerState, unk240, 0x240),
+    SCRIPT_VAR_FIELD(PlayerState, record_flag_block, 0x250),
+    SCRIPT_VAR_FIELD(PlayerState, pad251, 0x251),
+    SCRIPT_VAR_FIELD(PlayerState, map_index, 0x252),
+    SCRIPT_VAR_FIELD(PlayerState, frames_since_item_action, 0x254),
+    SCRIPT_VAR_FIELD(PlayerState, item_action_step, 0x258),
+    SCRIPT_VAR_FIELD(PlayerState, cast_launched_shot, 0x259),
+    SCRIPT_VAR_FIELD(PlayerState, magic2_asked, 0x25A),
+    SCRIPT_VAR_FIELD(PlayerState, magic1_asked, 0x25B),
+    SCRIPT_VAR_FIELD(PlayerState, magic1_window, 0x25C),
+    SCRIPT_VAR_FIELD(PlayerState, magic2_armed, 0x25D),
+    SCRIPT_VAR_FIELD(PlayerState, magic2_state, 0x25E),
+    SCRIPT_VAR_FIELD(PlayerState, magic1_state, 0x25F),
+    SCRIPT_VAR_FIELD(PlayerState, weapon_bounced, 0x261),
+    SCRIPT_VAR_FIELD(PlayerState, struck_solid_object, 0x262),
+    SCRIPT_VAR_FIELD(PlayerState, swing_ended, 0x263),
+    SCRIPT_VAR_FIELD(PlayerState, charging_magic, 0x264),
+    SCRIPT_VAR_FIELD(PlayerState, pad265, 0x265),
+    SCRIPT_VAR_FIELD(PlayerState, unk268, 0x268),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.strength_gauge, 0x26A),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.attack_request, 0x26C),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.unk08, 0x270),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.pad1A, 0x282),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.player_power, 0x288),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.player_magic, 0x28A),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.weapon_index, 0x28C),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.magic_id, 0x28E),
+    SCRIPT_VAR_FIELD(PlayerState, unk268.pad28, 0x290),
+    SCRIPT_VAR_FIELD(PlayerState, draw_motion_complete, 0x298),
+    SCRIPT_VAR_FIELD(PlayerState, pad299, 0x299),
+    SCRIPT_VAR_FIELD(PlayerState, mp_drain_tint, 0x29C),
+    SCRIPT_VAR_FIELD(PlayerState, pending_mp_drain, 0x2A0),
+    SCRIPT_VAR_FIELD(PlayerState, pad2A4, 0x2A4),
+    SCRIPT_VAR_FIELD(PlayerState, screen_fade, 0x2A8),
+    SCRIPT_VAR_FIELD(PlayerState, pad2AC, 0x2AC),
+    SCRIPT_VAR_FIELD(PlayerState, hp_step_remaining, 0x2B0),
+    SCRIPT_VAR_FIELD(PlayerState, hp_step_period, 0x2B4),
+    SCRIPT_VAR_FIELD(PlayerState, flag_timers, 0x2B8),
+    SCRIPT_VAR_FIELD(PlayerState, ailment0_start_frame, 0x2C4),
+    SCRIPT_VAR_FIELD(PlayerState, ailment1_start_frame, 0x2C8),
+    SCRIPT_VAR_FIELD(PlayerState, ailment2_start_frame, 0x2CC),
+    SCRIPT_VAR_FIELD(PlayerState, ailment3_start_frame, 0x2D0),
+    SCRIPT_VAR_FIELD(PlayerState, ailment4_start_frame, 0x2D4),
+    SCRIPT_VAR_FIELD(PlayerState, ailment5_start_frame, 0x2D8),
+    SCRIPT_VAR_FIELD(PlayerState, ailment0_slow_timer, 0x2DC),
+    SCRIPT_VAR_FIELD(PlayerState, light_spell_timer, 0x2E0),
+    SCRIPT_VAR_FIELD(PlayerState, intimidate_timer, 0x2E4),
+    SCRIPT_VAR_FIELD(PlayerState, intimidate_range, 0x2E8),
+    SCRIPT_VAR_FIELD(PlayerState, rage_timer, 0x2EC),
+    SCRIPT_VAR_FIELD(PlayerState, rage_power_bonus, 0x2F0),
+    SCRIPT_VAR_FIELD(PlayerState, pad2F4, 0x2F4),
+};
+
+/* the button words in their PS2 order (0x44692C on, two bytes each) */
+static u16 *const script_button_words[] = {
+    &forward_button, &back_button, &turn_right_button, &turn_left_button, &step_right_button, &step_left_button,
+    &look_down_button, &look_up_button, &attack_button, &magic_button, &action_button, &menu_button,
+    &shortcut_button, &pause_button,
+};
+
+static u8 *Script_MapVarField(u8 *base, const ScriptVarField *fields, int count, int offset) {
+    int i = count - 1;
+
+    while (i > 0 && fields[i].ps2 > offset) {
+        i--;
+    }
+    return base + fields[i].pc + (offset - fields[i].ps2);
+}
+
+/* The PC address of the byte at PS2 offset `offset` of game variable block `block`. */
+static u8 *Script_GameVarAt(u32 block, int offset) {
+    u8 *base = script_game_var_blocks[block];
+    int i;
+
+    if (base == (u8 *)&game_status) {
+        return Script_MapVarField(base, game_status_var_fields, (sizeof(game_status_var_fields) / sizeof(game_status_var_fields[0])), offset);
+    }
+    if (base == (u8 *)&view_ray_status) {
+        return Script_MapVarField(base, view_ray_var_fields, (sizeof(view_ray_var_fields) / sizeof(view_ray_var_fields[0])), offset);
+    }
+    if (base == (u8 *)&player_state) {
+        return Script_MapVarField(base, player_state_var_fields, (sizeof(player_state_var_fields) / sizeof(player_state_var_fields[0])), offset);
+    }
+    for (i = 0; i < (int)(sizeof(script_button_words) / sizeof(script_button_words[0])); i++) {
+        if (base == (u8 *)script_button_words[i]) {
+            i += offset >> 1;
+            if (offset >= 0 && i < (int)(sizeof(script_button_words) / sizeof(script_button_words[0]))) {
+                return (u8 *)script_button_words[i] + (offset & 1);
+            }
+            break;
+        }
+    }
+    return base + offset;
+}
+
+/* the bytes a value of script type `type` takes */
+static int Script_GameVarSize(u16 type) {
+    return type < 2 ? 1 : type < 4 ? 2 : 4;
+}
+
 /* Reads a game variable: the low byte of `code` picks the block in script_game_var_blocks, the byte above it the
    value's type. */
 static void Script_ReadGameVar(ScriptArg *result, u32 code, int offset) {
+    u8 bytes[4] __attribute__((aligned(4)));
     u8 *source;
     u16 type;
+    int i;
 
-    source = script_game_var_blocks[code & 0xFF] + offset;
     type = code >> 8;
+    for (i = 0; i < Script_GameVarSize(type); i++) {
+        bytes[i] = *Script_GameVarAt(code & 0xFF, offset + i); /* retail: the block's address plus offset */
+    }
+    source = bytes;
     switch (type) {
     case 0:
         result->value = *(s8 *)source;
@@ -767,10 +921,12 @@ static void Script_ReadLocalVar(ScriptArg *result, ScriptThread *thread, u32 cod
 /* Writes a game variable: the low byte of `code` picks the block in script_game_var_blocks, the byte above it the
    value's type. */
 static void Script_WriteGameVar(ScriptArg *source, u32 code, int offset) {
+    u8 bytes[4] __attribute__((aligned(4)));
     u8 *dest;
     u16 type;
+    int i;
 
-    dest = script_game_var_blocks[code & 0xFF] + offset;
+    dest = bytes; /* retail: the block's address plus offset */
     type = code >> 8;
     switch (type) {
     case 0:
@@ -786,6 +942,11 @@ static void Script_WriteGameVar(ScriptArg *source, u32 code, int offset) {
     case SCRIPT_TYPE_FLOAT:
         *(s32 *)dest = source->value;
         break;
+    default:
+        return;
+    }
+    for (i = 0; i < Script_GameVarSize(type); i++) {
+        *Script_GameVarAt(code & 0xFF, offset + i) = bytes[i];
     }
 }
 

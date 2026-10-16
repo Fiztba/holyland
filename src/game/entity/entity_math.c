@@ -35,6 +35,8 @@ void EntityMath_LerpVector(void *dst, void *src_a, void *src_b, float ratio) {
     s32 i;
 
     /* in VU0's vf1 to vf4, which the PS2 code leaves changed (math/vu0_macro.c keeps matrices there) */
+    /* qmtc2 of the float in a GPR: on the PS2 it also sets vf3.y to the word's sign extension and vf3.zw to the
+       GPR's upper half, whatever that held; the PC leaves vf3.yzw as they were */
     ee_vu0.vf[3][0] = ratio;                                    /* qmtc2 */
     ee_vu0.vf[4][3] = ee_vu0.vf[0][3] - ee_vu0.vf[3][0];        /* vsubx.w */
     for (i = 0; i < 4; i++) {
