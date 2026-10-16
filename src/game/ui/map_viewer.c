@@ -320,7 +320,7 @@ void MapViewer_DrawPictureMap(void) {
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
     Packet_EndGsRegisters();
     TextureTable_QueueOne((TextureTableHeader *)viewer_data, viewer_picture);
     GsDraw_QueueTexFlush();
@@ -361,11 +361,11 @@ void MapViewer_DrawPictureMap(void) {
         *packet++ = 0;
         *packet++ = 0;
         *packet++ = 0x6C0FC000;
-        *(u64 *)packet = 0xE0AA400000008001L;
+        *(u64 *)packet = 0xE0AA400000008001LL;
         packet += 2;
-        *(u64 *)packet = 0x513513513513EEL;
+        *(u64 *)packet = 0x513513513513EELL;
         packet += 2;
-        *(u64 *)packet = 0x4007FC0599306BC0L;
+        *(u64 *)packet = 0x4007FC0599306BC0LL;
         packet += 2;
         *packet++ = 6;
         *packet++ = 0;
@@ -780,9 +780,9 @@ static void MapViewer_DrawKingsMap(void) {
     Packet_BeginGsRegisters();
     Packet_AddGsRegister(0x1A, 0);
     Packet_AddGsRegister(0x1B, 0x248);
-    Packet_AddGsRegister(GS_REG_ALPHA_2, 0x4000000068L);
+    Packet_AddGsRegister(GS_REG_ALPHA_2, 0x4000000068LL);
     Packet_AddGsRegister(GS_REG_TEST_2, 0x3080B);
-    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
     Packet_EndGsRegisters();
     GsDraw_QueueFlush();
     for (map = 0; map < 2; map++) {

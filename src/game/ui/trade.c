@@ -104,7 +104,7 @@ extern MenuItem *item_list_last_page;
 extern s32 item_list_count;
 extern void (*trade_handler)(HandlerContext *); /* the screen Trade_RunHandler runs */
 extern s32 menu_file_block_count;
-extern s32 menu_heap;
+extern sptr menu_heap;
 extern sptr trade_menu_arena;
 void *memset(void *, int, u32);
 void func_001095D0(void);
@@ -114,7 +114,7 @@ void Packet_SendChain(void);
 void Packet_WaitForSend(void);
 void GsDraw_QueueTexFlush(void);
 void TextureTable_QueueAll(TextureTableHeader *);
-s32 MenuArena_Init(s32 value);
+s32 MenuArena_Init(sptr value);
 void MenuTexture_Upload(void *, LoadedBlockRef *);
 extern LinkNode *model_load_chain;
 /* the loads of the model shown and of the four the cursor brings on with up (0x10), down (0x40), left (0x80) and
@@ -130,7 +130,7 @@ extern s8 trade_screen_state;       /* 0: fading in, 1: open, 2 and up: fading o
 s32 Sound_PlayMenu(s32);
 int Menu_SetBlendMode(u8 mode);
 void MenuDraw_Bar(MenuCursorBar *);
-void MenuSprite_Draw(int, int, int, int);
+void MenuSprite_Draw(SpritePacket *, int, int, int);
 /* match: the part number is passed sign-extended and no result is kept (the definition takes a u8 and returns int) */
 #define SELECT_PART(part) ((void (*)(s32))Menu_SetBlendMode)(part)
 extern LevelRecordDef worn_defs[];
@@ -174,7 +174,7 @@ extern s8 trade_panel_state;        /* the panel's fade: 0 in, 1 open, 2 out and
 void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
 void sceVu0RotMatrixY(float *, float *, float);
 void sceVu0TransMatrix(float *, float *, float *);
-int Menu_DrawItemModel(f32 *); // match: an int result keeps $2 for the load after the call
+void Menu_DrawItemModel(f32 *);
 int Menu_IsEquipSlotFilled(s32, u32);
 s32 MenuText_SetColor(ColorBytes bytes);
 s32 MenuText_DrawWrapped(u16 *, s32);
@@ -194,7 +194,7 @@ static inline s32 ScaleValue(s32 value, s32 percent, s32 divisor) {
 #define DRAW_PACKETS(packets, count, param)                                                          \
     for (i = 0; i < (count); i++) {                                                                  \
         SELECT_PART((s8)(packets)[i].blend_mode);                                                    \
-        MenuSprite_Draw((int)&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
+        MenuSprite_Draw(&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
         SELECT_PART(0);                                                                              \
     }
 extern PlayerState player_state;
@@ -290,7 +290,7 @@ extern SpritePacket *pretune_parts;
 extern SpritePacket *tune_mess_parts;
 extern s8 smith_choices_active;     /* nonzero once the cursor is on the three lines */
 extern s8 smith_screen_state;       /* 0: fading in, 1: open, 2 to 4: fading out to a list, 5: fading out to leave */
-void MenuSprite_DrawPlain(int, int, int);
+void MenuSprite_DrawPlain(SpritePacket *, int, int);
 extern f32 smith_upgrade_list_model_position[4];
 extern u32 tune_part_count;              /* how many parts the screen has */
 extern SpritePacket *tune_parts;
@@ -628,7 +628,7 @@ static s32 Trade_CopyFrameToTexture(void) {
     packet[1] = 0x100B4000; // match: the tag word packet[0] is written last
     packet[2] = 0xE;
     packet[3] = 0;
-    *(u64 *)&packet[4] = (menu_first_draw_env[0] & ~0x1FFL) | 0x192;
+    *(u64 *)&packet[4] = (menu_first_draw_env[0] & ~0x1FFLL) | 0x192;
     packet[6] = 0x4C;
     packet[7] = 0;
     packet[8] = 0;
@@ -643,7 +643,7 @@ static s32 Trade_CopyFrameToTexture(void) {
     packet[17] = 0xE00000;
     packet[18] = 0x40;
     packet[19] = 0;
-    *(u64 *)&packet[20] = texture_base | 0x28028000 | 0x640000000L; /* TEX0: 1024 by 512 */
+    *(u64 *)&packet[20] = texture_base | 0x28028000 | 0x640000000LL; /* TEX0: 1024 by 512 */
     packet[22] = 0x6;
     packet[23] = 0;
     packet[24] = 0x80808080;
@@ -726,7 +726,7 @@ static s32 Trade_CopyFrameToTexture(void) {
     packet[0] = 0x8019;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 26;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     sceGsSyncPath(0, 0);
     trade_run_step++;
@@ -776,7 +776,7 @@ static s32 Trade_Start(HandlerContext *context) {
     packet[7] = 0;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 2;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     Trade_BuildItemRings(context->arg);
     Menu_InitLoadBuffers();
@@ -923,7 +923,7 @@ static void Trade_UpdateSelectScreen(HandlerContext *context) {
         }
         kind = preshop_parts[i].handler_index;
         SELECT_PART((s8)preshop_parts[i].blend_mode);
-        MenuSprite_Draw((int)&preshop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+        MenuSprite_Draw(&preshop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         SELECT_PART(0);
     }
 
@@ -1061,30 +1061,30 @@ static void Trade_UpdateStockList(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 break;
             case 2:
                 if (context->arg != 4) {
-                    MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
                 }
                 break;
             case 3:
                 if (trade_stock_list_cursor[0]->group != 12) {
-                    MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             case 4:
                 if (context->arg == 4) {
-                    MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else if (context->arg != 4) {
-            MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 5, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&shop_parts[i], kind + 1000, 5, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -1112,13 +1112,13 @@ static void Trade_UpdateStockList(HandlerContext *context) {
     }
 
     if (context->arg == 4) {
-        position.raw = 0x000DBBA079E08A30L;
+        position.raw = 0x000DBBA079E08A30LL;
         switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].upgrade_material_kind & 3) {
         case 1:
             label = bones_label;
             break;
         case 2:
-            position.raw = 0x000DBBA079E089C0L;
+            position.raw = 0x000DBBA079E089C0LL;
             label = scales_label;
             break;
         case 3:
@@ -1134,7 +1134,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
     }
 
     MenuText_SetColor(menu_draw_color);
-    row_position.raw = 0x0C7A12007C307080L;
+    row_position.raw = 0x0C7A12007C307080LL;
     for (row = 0, node = trade_stock_list_top[0]; row < 7; node = node->prev, row++) {
         item = &item_name_defs[node->unk0C];
         MenuText_SetPen(row_position);
@@ -1323,7 +1323,7 @@ static void Trade_UpdateStockList(HandlerContext *context) {
     text_number = current->unk0C + MSG_ITEM_TEXT_FIRST + 1; // match: a variable, so the offset is added before the index is scaled
     text_offset = ((s32 *)texts)[text_number];
     MenuText_SetColor(menu_draw_color);
-    position.raw = 0x000A875083207080L;
+    position.raw = 0x000A875083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
         MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
@@ -1510,23 +1510,23 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
-                MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
                 break;
             case 2:
                 break;
             case 3:
                 if (trade_stock_list_cursor[0]->group != 12) {
-                    MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else if (context->arg != 4) {
-            MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 6, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&shop_parts[i], kind + 1000, 6, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -1667,7 +1667,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
 
     node = trade_stock_list_top[0];
     MenuText_SetColor(menu_draw_color);
-    position.raw = 0x0C7A12007C307080L;
+    position.raw = 0x0C7A12007C307080LL;
     for (row = 0; row < 7; row++) {
         item = &item_name_defs[node->unk0C];
         MenuText_SetPen(position);
@@ -1701,21 +1701,21 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
         SELECT_PART((s8)shop_mess_parts[i].blend_mode);
         kind = shop_mess_parts[i].handler_index;
         if (context->arg != 4) {
-            MenuSprite_Draw((int)&shop_mess_parts[i], kind + 1000, 2, (int)message_part_alphas[i]);
+            MenuSprite_Draw(&shop_mess_parts[i], kind + 1000, 2, (int)message_part_alphas[i]);
         } else {
-            MenuSprite_Draw((int)&shop_mess_parts[i], kind + 1000, 6, (int)message_part_alphas[i]);
+            MenuSprite_Draw(&shop_mess_parts[i], kind + 1000, 6, (int)message_part_alphas[i]);
         }
         SELECT_PART(0);
     }
 
     chosen = &item_name_defs[trade_stock_list_cursor[0]->unk0C];
     MenuText_SetColor(menu_draw_color);
-    position.raw = 0x0A2DC6C07DB078C0L;
+    position.raw = 0x0A2DC6C07DB078C0LL;
     MenuText_SetPen(position);
     MenuText_DrawLineCentered(chosen, 0x18);
     if (context->arg == 4) {
-        position.raw = 0x000DBBA079E08A30L;
-        label_position.raw = 0x000DBBA081807C60L;
+        position.raw = 0x000DBBA079E08A30LL;
+        label_position.raw = 0x000DBBA081807C60LL;
         MenuText_SetPen(position);
         switch (item_name_defs[trade_stock_list_cursor[0]->unk0C].upgrade_material_kind & 3) {
         case 1:
@@ -1723,7 +1723,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
             break;
         case 2:
             label = scales_label;
-            label_position.raw = 0x000DBBA081807C00L;
+            label_position.raw = 0x000DBBA081807C00LL;
             break;
         case 3:
             label = claws_label;
@@ -1741,7 +1741,7 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
     texts = Message_GetFontText(menu_heap);
     number = current->unk0C + MSG_ITEM_TEXT_FIRST + 1; // match: its own local, or the offset is folded into the load
     text_offset = ((s32 *)texts)[number];
-    position.raw = 0x000F424083207080L;
+    position.raw = 0x000F424083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
         MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
@@ -1929,21 +1929,21 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1: // match: an empty case of its own
                 break;
             case 2:
-                MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
                 break;
             case 3:
                 if (item_list_cursor[0]->group != 11) {
-                    MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else {
-            MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -1970,7 +1970,7 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
     }
 
     MenuText_SetColor(menu_draw_color);
-    position.raw = 0x0C7A12007C307080L;
+    position.raw = 0x0C7A12007C307080LL;
     row = 0;
     memset(&view_matrix, 0, 0x40);
     view_matrix.rows[2][2] = view_matrix.rows[1][1] = view_matrix.rows[0][0] = 0.8f;
@@ -2146,7 +2146,7 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
     texts = Message_GetFontText(menu_heap);
     text_index = current->unk0C + MSG_ITEM_TEXT_FIRST + 1; // match: the index is worked out apart from the load
     text_offset = ((s32 *)texts)[text_index];
-    position.raw = 0x000A875083207080L;
+    position.raw = 0x000A875083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
         MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
@@ -2294,22 +2294,22 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
-                MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
                 break;
             case 2:
                 break;
             case 3:
                 if (item_list_cursor[0]->group != 11) {
-                    MenuSprite_Draw((int)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else {
             // match: 10000 where the other screens add 1000 (the callee takes it modulo 1000, so it draws the same)
-            MenuSprite_Draw((int)&shop_parts[i], kind + 10000, 4, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&shop_parts[i], kind + 10000, 4, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -2452,7 +2452,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
     }
 
     node = item_list_top[0];
-    position.raw = 0x0C0975E07C307080L;
+    position.raw = 0x0C0975E07C307080LL;
     MenuText_SetPen(position);
     for (row = 0; row < 7; row++) {
         MenuText_DrawLine((u16 *)&item_name_defs[node->unk0C], 0x1A);
@@ -2483,13 +2483,13 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
         }
         kind = shop_mess_parts[i].handler_index;
         SELECT_PART((s8)shop_mess_parts[i].blend_mode);
-        MenuSprite_Draw((int)&shop_mess_parts[i], kind + 1000, 4, (int)message_part_alphas[i]);
+        MenuSprite_Draw(&shop_mess_parts[i], kind + 1000, 4, (int)message_part_alphas[i]);
         SELECT_PART(0);
     }
 
     chosen = &item_name_defs[item_list_cursor[0]->unk0C];
     MenuText_SetColor(menu_draw_color);
-    position.raw = 0x0A2DC6C07DB078C0L;
+    position.raw = 0x0A2DC6C07DB078C0LL;
     MenuText_SetPen(position);
     MenuText_DrawLineCentered(chosen, 0x18);
 
@@ -2497,7 +2497,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
     texts = Message_GetFontText(menu_heap);
     number = current->unk0C + MSG_ITEM_TEXT_FIRST + 1; // match: its own local, or the offset is folded into the load
     text_offset = ((s32 *)texts)[number];
-    position.raw = 0x000A875083207080L;
+    position.raw = 0x000A875083207080LL;
     MenuText_SetPen(position);
     if (text_offset != 0) {
         MenuText_DrawWordWrappedLong(texts + text_offset, 0x33);
@@ -2927,7 +2927,7 @@ static s32 Smith_Start(void) {
     packet[7] = 0;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 2;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     memset(screen_part_alphas, 0, 0x400);
     memset(panel_part_alphas, 0, 0x400);
@@ -2960,7 +2960,7 @@ static s32 Smith_CopyFrameToTexture(void) {
     packet[1] = 0x100B4000; // match: the tag word packet[0] is written last
     packet[2] = 0xE;
     packet[3] = 0;
-    *(u64 *)&packet[4] = (menu_first_draw_env[0] & ~0x1FFL) | 0x192;
+    *(u64 *)&packet[4] = (menu_first_draw_env[0] & ~0x1FFLL) | 0x192;
     packet[6] = 0x4C;
     packet[7] = 0;
     packet[8] = 0;
@@ -2975,7 +2975,7 @@ static s32 Smith_CopyFrameToTexture(void) {
     packet[17] = 0xE00000;
     packet[18] = 0x40;
     packet[19] = 0;
-    *(u64 *)&packet[20] = texture_base | 0x28028000 | 0x640000000L; /* TEX0: 1024 by 512 */
+    *(u64 *)&packet[20] = texture_base | 0x28028000 | 0x640000000LL; /* TEX0: 1024 by 512 */
     packet[22] = 0x6;
     packet[23] = 0;
     packet[24] = 0x80808080;
@@ -3058,7 +3058,7 @@ static s32 Smith_CopyFrameToTexture(void) {
     packet[0] = 0x8019;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 26;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     sceGsSyncPath(0, 0);
     smith_run_step++;
@@ -3176,14 +3176,14 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
             MenuDraw_Bar(&bar);
         }
         ((int (*)(s8))Menu_SetBlendMode)(pretune_parts[i].blend_mode); // match: the byte is passed sign-extended here
-        MenuSprite_Draw((int)&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw(&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
     if (smith_choices_active == 0) {
         for (i = 0; i < tune_mess_part_count; i++) {
             kind = tune_mess_parts[i].handler_index;
-            MenuSprite_DrawPlain((int)&tune_mess_parts[i], kind, 1);
+            MenuSprite_DrawPlain(&tune_mess_parts[i], kind, 1);
         }
     }
 
@@ -3388,19 +3388,19 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 break;
             case 2:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
                 break;
             case 3:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw((int)&tune_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&tune_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -3490,7 +3490,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -3522,7 +3522,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -3555,7 +3555,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -3734,19 +3734,19 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
                 break;
             case 2:
                 break;
             case 3:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw((int)&tune_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&tune_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -3805,7 +3805,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -3838,7 +3838,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
                 // match: called as returning a value, which keeps $2 away from the pointer formed for the next call
-                ((int (*)(int, int, int, int))MenuSprite_Draw)((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode); // match: the other lists hand 0 here
             }
             parts = shop_g2_parts;
@@ -3871,7 +3871,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -3919,7 +3919,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
     for (i = 0; i < tune_mess_part_count; i++) {
         kind = tune_mess_parts[i].handler_index;
         SELECT_PART((s8)tune_mess_parts[i].blend_mode);
-        MenuSprite_Draw((int)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
+        MenuSprite_Draw(&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
         SELECT_PART(0);
     }
     selected_def = &item_name_defs[item_list_cursor[0]->unk0C];
@@ -4122,24 +4122,24 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 if (smith_confirm_shown != 0) {
-                    MenuSprite_Draw((int)&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
                 }
                 break;
             case 2:
                 if (smith_confirm_shown == 0) {
-                    MenuSprite_Draw((int)&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw(&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
                 }
                 break;
             case 3:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw((int)&tune_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&tune_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -4241,7 +4241,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -4273,7 +4273,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -4306,7 +4306,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -4345,7 +4345,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
         for (i = 0; i < tune_mess_part_count; i++) {
             kind = tune_mess_parts[i].handler_index;
             SELECT_PART((s8)tune_mess_parts[i].blend_mode);
-            MenuSprite_Draw((int)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
+            MenuSprite_Draw(&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
             SELECT_PART(0);
         }
         chosen = &item_name_defs[item_list_cursor[0]->unk0C];
@@ -4596,7 +4596,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
     bar_drawn = FALSE;
     for (i = 0; i < tune_s_part_count; i++) {
         if (!bar_drawn && tune_s_parts[i].has_cursor_bar == 1) {
-            word.raw = 0x0E0864707DF07490L;
+            word.raw = 0x0E0864707DF07490LL;
             bar_drawn = TRUE;
             bar.first.f.lo16 = word.f.lo16;
             line_offset = smith_upgrade_choice * 0xB0; // match: kept in a variable, or the sums below fold to constants
@@ -4621,7 +4621,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
         }
         kind = tune_s_parts[i].handler_index;
         SELECT_PART((s8)tune_s_parts[i].blend_mode);
-        MenuSprite_Draw((int)&tune_s_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw(&tune_s_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         SELECT_PART(0);
     }
     MenuText_SetColor(menu_draw_color);
@@ -4675,7 +4675,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             variant = player_weapon[item_list_cursor[0]->group];
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -4700,7 +4700,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             variant = player_weapon[item_list_cursor[0]->group];
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -4726,7 +4726,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             D_00446E2C = 100;
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -4764,7 +4764,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
     table = Message_GetFontText(menu_heap);
     text_index = selected->unk0C + MSG_ITEM_TEXT_FIRST + 1;
     entry = ((s32 *)table)[text_index];
-    word.raw = 0x000A875083207080L;
+    word.raw = 0x000A875083207080LL;
     MenuText_SetPen(word);
     if (entry != 0) {
         MenuText_DrawWordWrappedLong(table + entry, 0x33);
@@ -4905,19 +4905,19 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 break;
             case 2:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
                 break;
             case 3:
-                MenuSprite_Draw((int)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw((int)&tune_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
+            MenuSprite_Draw(&tune_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -5007,7 +5007,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -5039,7 +5039,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -5072,7 +5072,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw((int)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -5434,7 +5434,7 @@ static s32 SaveScreen_DrawBackground(void) {
     packet->gif_tag = 0x8019;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 0x1A;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     sceGsSyncPath(0, 0);
     menu_draw_color.red = menu_draw_color.green = menu_draw_color.blue = 0x80;
@@ -5489,7 +5489,7 @@ static int SaveScreen_Start(HandlerContext *context) {
     packet[7] = 0;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 2;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     Menu_InitLoadBuffers();
     // match: taking the handler first orders its lui before the save screen's
@@ -5573,20 +5573,20 @@ static void SaveScreen_UpdateCardSelect(void) {
         SELECT_PART((s8)slot_parts[i].blend_mode);
         switch (kind) {
         case 2:
-            MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+            MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             break;
         case 29:
             slot = slot_parts[i].slot;
             if (slot == 0 || slot == 2) {
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, slot, screen_part_alphas[i]);
+                MenuSprite_Draw(&slot_parts[i], kind + 1000, slot, screen_part_alphas[i]);
             }
             break;
         case 31:
             if (save_screen_state.check_finished != 0) {
                 if (system_screen_state != 1) {
-                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, save_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw(&slot_parts[i], kind + 1000, save_screen_state.selected_card, screen_part_alphas[i]);
                 } else {
-                    MenuSprite_Draw((int)&slot_parts[i], kind, save_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw(&slot_parts[i], kind, save_screen_state.selected_card, screen_part_alphas[i]);
                 }
             }
             break;
@@ -5600,69 +5600,69 @@ static void SaveScreen_UpdateCardSelect(void) {
             case 14:
             case 15:
             case 21:
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
             break;
         case 26:
             if (SaveCard_IsPresent(0) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
-                    MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x20);
+                    MenuSprite_DrawPlain(&slot_parts[i], kind, 0x20);
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 0x80);
             }
             break;
         case 27:
             if (SaveCard_IsPresent(1) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
-                    MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x20);
+                    MenuSprite_DrawPlain(&slot_parts[i], kind, 0x20);
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 0x80);
             }
             break;
         case 28:
             switch (save_screen_state.dialog_id) {
             case 4:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 4);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 4);
                 break;
             case 5:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 5);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 5);
                 break;
             case 12:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 12);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 12);
                 break;
             case 13:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 13);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 13);
                 break;
             case 14:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 14);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 14);
                 break;
             case 15:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 15);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 15);
                 break;
             case 21:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 21);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 21);
                 break;
             case 10:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 10);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 10);
                 break;
             case 22:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 22);
+                MenuSprite_DrawPlain(&slot_parts[i], kind, 22);
                 break;
             }
             break;
         default:
-            MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+            MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             break;
         }
         SELECT_PART(0);
@@ -6036,23 +6036,23 @@ static void SaveScreen_UpdateSaveList(void) {
         ((int (*)(s8))Menu_SetBlendMode)((s8)data_parts[i].blend_mode); // match: a signed byte, see SET_PART_MODE_OF
         switch (kind) {
         case 2:
-            MenuSprite_Draw((int)&data_parts[i], 0x3EA, 0, screen_part_alphas[i]);
+            MenuSprite_Draw(&data_parts[i], 0x3EA, 0, screen_part_alphas[i]);
             break;
         case 3:
             group = slot / 3;
             if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[group]] == 1) {
-                MenuSprite_Draw((int)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
+                MenuSprite_Draw(&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
             } else if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[group]] == 0) {
-                MenuSprite_Draw((int)&data_parts[i], 0x3EB, group * 3 + 1, screen_part_alphas[i]);
+                MenuSprite_Draw(&data_parts[i], 0x3EB, group * 3 + 1, screen_part_alphas[i]);
             }
             break;
         case 25:
             if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[slot]] != -1) {
-                MenuSprite_Draw((int)&data_parts[i], 0x401, save_screen_state.selected_save, screen_part_alphas[i]);
+                MenuSprite_Draw(&data_parts[i], 0x401, save_screen_state.selected_save, screen_part_alphas[i]);
             }
             break;
         default:
-            MenuSprite_Draw((int)&data_parts[i], kind + 1000, save_screen_state.selected_save, screen_part_alphas[i]);
+            MenuSprite_Draw(&data_parts[i], kind + 1000, save_screen_state.selected_save, screen_part_alphas[i]);
             break;
         }
         SET_PART_MODE(0);
@@ -6079,25 +6079,25 @@ static void SaveScreen_UpdateSaveList(void) {
         if (kind == 3) {
             switch (save_screen_state.list_step) {
             case 6:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 6);
+                MenuSprite_DrawPlain(&mc_parts[i], kind, 6);
                 break;
             case 7:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 7);
+                MenuSprite_DrawPlain(&mc_parts[i], kind, 7);
                 break;
             case 0:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 0);
+                MenuSprite_DrawPlain(&mc_parts[i], kind, 0);
                 break;
             case 2:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 2);
+                MenuSprite_DrawPlain(&mc_parts[i], kind, 2);
                 break;
             case 20:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 20);
+                MenuSprite_DrawPlain(&mc_parts[i], kind, 20);
                 break;
             case 10:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 10);
+                MenuSprite_DrawPlain(&mc_parts[i], kind, 10);
                 break;
             case 11:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 11);
+                MenuSprite_DrawPlain(&mc_parts[i], kind, 11);
                 break;
             }
         } else {
@@ -6109,7 +6109,7 @@ static void SaveScreen_UpdateSaveList(void) {
             case 10:
             case 11:
             case 20:
-                MenuSprite_Draw((int)&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw(&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
         }

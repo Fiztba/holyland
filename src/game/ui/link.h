@@ -32,6 +32,6 @@ typedef struct {
     u8 value[12];
 } LinkSlotValues;
 
-int Menu_TakeLoadBuffer(LinkNode *node);
+void Menu_TakeLoadBuffer(LinkNode *node);
 
 #endif
