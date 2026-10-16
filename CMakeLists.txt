@@ -16,10 +16,15 @@ endif()
 
 # ---- How the game code is compiled ---------------------------------------------------------------
 # ee-gcc 2.9's behaviour where the game depends on it: no type-based alias analysis, wrapping signed
-# overflow, no fused multiply-add, signed char, GCC's bit-field layout (also on Windows).
+# overflow, no fused multiply-add, signed char, GCC's bit-field layout (also on Windows). Retail reads
+# past the ends of some arrays on purpose and tests some pointers after using them: keep the compiler
+# from optimising on either.
 set(KF4_GAME_FLAGS
     -fno-strict-aliasing -fwrapv -ffp-contract=off -fno-fast-math -fsigned-char -fno-common
-    -fgnu89-inline)
+    -fgnu89-inline -fno-delete-null-pointer-checks)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    list(APPEND KF4_GAME_FLAGS -fno-aggressive-loop-optimizations)
+endif()
 if(WIN32)
     list(APPEND KF4_GAME_FLAGS -mno-ms-bitfields)
 endif()
