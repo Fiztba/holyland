@@ -23,6 +23,21 @@
 #include "gfx/screen.h"
 #include "save/save_card.h"
 #include "item/item.h"
+#include <eekernel.h>
+#include <libvu0.h>
+#include <stdio.h>
+#include <time.h>
+/* PORT: as libcdvd.h and libgraph.h declare them; those headers cannot be included while core/file.h and gfx/packet.h
+   declare SDK functions of their own */
+int sceCdBreak(void);
+struct sceCdCLOCK;
+int sceCdReadClock(struct sceCdCLOCK *clock);
+void sceGsResetGraph(short mode, short inter, short omode, short ffmd);
+void sceGsSetDefDBuffDc(void *db, short psm, short w, short h, short ztst, short zpsm, short flag);
+void sceGsSetHalfOffset(void *draw, short x, short y, short half);
+void sceGsSetHalfOffset2(void *draw, short x, short y, short half);
+int sceGsSwapDBuffDc(void *db, int id);
+int sceGsSyncV(int mode);
 
 extern LevelRecord weapon_level_records[70];
 extern LevelRecord worn_item_level_records[160];
@@ -134,14 +149,12 @@ int File_OpenUnflagged(char *name, int nowait, int pack);
 int File_Read(int, void *, int);
 int File_Close(int file);
 int File_Sync(int file, int mode);
-int FlushCache(int);
 void PoolPartFile_Relocate(char *);
 extern int worn_model_loading;
 extern PoolPartSource *pool_part_sources[13];
 void PoolSlot_LoadGroup(PoolPartSource *, u32);
 extern ChunkPoolNode *free_load_buffers;
 extern ChunkPoolNode load_buffer_nodes[];
-int sprintf(char *, char *, ...);
 extern char model_name_shown[];
 extern char model_name_up[];
 extern char model_name_down[];
@@ -250,18 +263,12 @@ extern LevelRecordDef worn_defs[];
 extern GsDoubleBufferDc menu_frame_buffers;
 extern LoadedTexture menu_font_texture;
 extern MenuModelMotion *equip_weapon_motions[];
-int sceGsResetGraph(int, int, int, int);
-void sceGsSetDefDBuffDc(void *, s16, s16, s16, s16, s16, s16);
 void MenuHeap_Reset(void);
 void MenuFile_IndexBlocks(char *);
 void MenuHeap_Mark(void);
 void MenuTexture_GetRegisters(TextureHeader *, u64 *, u64 *);
 void MenuHeap_FreeToMark(void);
 s32 PoolNodeFile_Relocate(RelocFile *);
-struct sceCdCLOCK;
-int sceCdReadClock(struct sceCdCLOCK *);
-int sceGsSyncV(int);
-int mktime(int *);
 void Vram_Clear(int, int);
 void Sound_MuteTracked(void);
 void Sound_UnmuteTracked(void);
@@ -289,7 +296,6 @@ extern f32 menu_view_screen_matrix[16];
 void MenuModel_DrawTinted(ChunkUpload *upload, f32 *draw_param, RenderSlotArg slot_arg);
 // match: called with the node, a matrix and the colour, not as the definition has it (the colour is loaded unaligned)
 #define DRAW_NODE_MODEL(node, matrix, colour) ((void (*)(LinkNode *, f32 *, ColorBytes))MenuModel_DrawTinted)(node, matrix, colour)
-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
 extern u64 menu_first_draw_env[47];             /* the frame register of the first buffer ([0]) and of the second ([46]) */
 extern u8 game_options[0x10];  /* the options block */
 extern char menu_first_draw_env2[];
@@ -300,10 +306,6 @@ extern u8 D_00447208;
 void Menu_DrawBrightness(s32);
 int Timer_GetTicks(void);
 int Timer_Restart(void); // match: an int result keeps $2 clear of the pad test after the call
-int sceGsSyncPath(int, int);
-void sceGsSetHalfOffset(void *, int, int, s16); // match: void, so the test after the call uses $2
-int sceGsSetHalfOffset2(void *, int, int, s16);
-int sceGsSwapDBuffDc(GsDoubleBufferDc *, int);
 
 // match: called as a void function, so the result register is free at once
 #define SET_TEST(value) ((void (*)(int, s64))MenuDraw_SetGsRegister)(GS_REG_TEST_1, value)
@@ -335,7 +337,6 @@ void TextureTable_QueueAll(TextureTableHeader *);
 void MenuTexture_Upload(TextureHeader *, LoadedBlockRef *);
 extern s8 main_menu_line;
 void Sound_LoadMgBank(int);
-void *memset(void *, int, u32);
 extern f32 screen_part_alphas[0x100];
 extern f32 panel_part_alphas[0x100];
 extern char equip_model_shown;
@@ -353,8 +354,6 @@ extern f32 use_item_model_angle;              /* the shown item model's turn abo
 extern s32 use_item_frames;
 extern s32 D_00446DF4;
 extern s8 use_item_state;               /* 0: fading in, 1: open, 2 to 4: waiting for the models, 5 to 7: fading out */
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0TransMatrix(float *, float *, float *);
 void MenuDraw_Bar(MenuCursorBar *);
 s32 MenuText_SetColor(ColorBytes bytes);
 s32 MenuText_DrawWrapped(u16 *, s32);
@@ -398,10 +397,8 @@ extern s32 D_00446E28;
 extern s32 D_00446E30;
 extern MenuFreeNode D_004472B8;
 extern s8 equip_state;
-extern s8 equip_panel_state;
-// match: equip_panel_state is the second byte of what the symbol list has as one two-byte object. It has to be a variable of
-// its own: a store to `equip_state[1]` is never put in a delay slot, and retail has it there.
-__asm__("equip_panel_state = equip_state + 1");
+extern s8 equip_panel_state; /* 0x4472C7 the second byte of what the symbol list has as one two-byte object at
+                                equip_state; nothing reads the two as one, so on the PC it is a variable of its own */
 void Player_RecomputeStats(void);
 int Menu_IsEquipSlotFilled(s32, u32);
 int Menu_IsEquipped(u32, s32, s32);
@@ -437,7 +434,7 @@ s32 MenuDraw_SetGsRegister(int, s64);
 #define GIF_SEND(packet, count)                                 \
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));          \
     *D2_QWC = count;                                            \
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;                                              \
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;                                              \
     *D2_CHCR = 0x100
 #define RESET_ALPHAS(parts, count)                                                                   \
     for (i = 0; i < count; i++) {                                                                    \
@@ -447,7 +444,7 @@ s32 MenuDraw_SetGsRegister(int, s64);
 #define DRAW_PARTS(parts, count, variant)                                                            \
     for (i = 0; i < count; i++) {                                                                    \
         SET_BLEND(parts[i].blend_mode);                                                              \
-        MenuSprite_Draw((int)&parts[i], parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);         \
+        MenuSprite_Draw((sptr)&parts[i], parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);         \
         SET_BLEND(0);                                                                                \
     }
 extern s8 key_items_state;               /* 0: fading in, 1: open, 2: fading out to Menu_UpdateKeyItems, 3: fading out to leave */
@@ -463,16 +460,15 @@ extern s32 recollection_page;              /* the page shown, 0 to 49 */
 extern s32 recollection_page_before;              /* the page shown the frame before */
 extern s8 recollection_state;               /* 0: fading in, 1: open, 2: fading out */
 extern s8 recollection_top;               /* the counter at the top of the list */
-int sceCdBreak(void);
 s32 MenuText_DrawWrappedLong(u16 *, s32);
 s32 MenuText_DrawLineShortened(u16 *, s32);
 /* The offset of text `number` in the text table, 0 when it has none. */
-static inline s32 GetListTextOffset(s32 table, s32 number) {
+static inline s32 GetListTextOffset(sptr table, s32 number) {
     return ((s32 *)table)[number];
 }
 extern f32 recollection_page_model_position[4];
 /* The offset of text `number` in the text table, 0 when it has none. */
-static inline s32 GetPageTextOffset(s32 table, s32 number) {
+static inline s32 GetPageTextOffset(sptr table, s32 number) {
     return ((s32 *)table)[number];
 }
 extern f32 visible_item_model_position[4];
@@ -497,7 +493,7 @@ static inline s32 ScaleValue(s32 value, s32 percent, s32 divisor) {
 #define DRAW_PACKETS(packets, count, param)                                                          \
     for (i = 0; i < (count); i++) {                                                                  \
         Menu_SetBlendMode((packets)[i].blend_mode);                                                  \
-        MenuSprite_Draw((int)&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
+        MenuSprite_Draw((sptr)&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
         ((void (*)(u8))Menu_SetBlendMode)(0);                                                        \
     }
 extern s32 system_menu_line;
@@ -1432,7 +1428,7 @@ static void Menu_StepPackageLoad(ChunkUpload *upload) {
 }
 
 /* Gives a load node a buffer from the free list, if one is left. Returns nothing. */
-int Menu_TakeLoadBuffer(LinkNode *node) { // match: declared int in ui/link.h, returns nothing
+void Menu_TakeLoadBuffer(LinkNode *node) {
     ChunkPoolNode *free_node = free_load_buffers;
 
     if (free_node != NULL) {
@@ -1940,7 +1936,7 @@ void Menu_Init(void) {
 
     sceGsResetGraph(0, 1, 2, 1);
     sceGsSetDefDBuffDc(&menu_frame_buffers, 0, 0x280, 0xE0, 3, 0x30, 1);
-    menu_frame_buffers.clear1_rgbaq = menu_frame_buffers.clear0_rgbaq = 0x180000000L;
+    menu_frame_buffers.clear1_rgbaq = menu_frame_buffers.clear0_rgbaq = 0x180000000LL;
     MenuHeap_Reset();
     Menu_LoadAllParts();
     menu_file = MenuHeap_Alloc(0xE0000);
@@ -1959,139 +1955,139 @@ void Menu_Init(void) {
     }
     for (i = 0; i < 150; i++) {
         shortcut_entries[i].unk0C = i;
-        shortcut_entries[i].unk00 = (int)&item_common_defs[i];
+        shortcut_entries[i].unk00 = &item_common_defs[i];
         shortcut_entries[i].group = 11;
     }
     for (i = 150; i < 241; i++) {
-        shortcut_entries[i].unk00 = (int)&fx_table[i - 150];
+        shortcut_entries[i].unk00 = &fx_table[i - 150];
         shortcut_entries[i].unk0C = i - 150;
         shortcut_entries[i].group = 1;
     }
     number = 0;
     for (i = 0; i < 150; i++) {
-        all_item_entries[number].unk00 = (int)&item_common_defs[i];
+        all_item_entries[number].unk00 = &item_common_defs[i];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 12;
         number++;
     }
     for (i = 0; i < 70; i++) {
-        all_item_entries[number].unk00 = (int)&weapon_defs[i];
+        all_item_entries[number].unk00 = &weapon_defs[i];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 0;
         number++;
     }
     for (i = 0; i < 30; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i];
+        all_item_entries[number].unk00 = &worn_defs[i];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 2;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i + 30];
+        all_item_entries[number].unk00 = &worn_defs[i + 30];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 3;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i + 55];
+        all_item_entries[number].unk00 = &worn_defs[i + 55];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 4;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i + 80];
+        all_item_entries[number].unk00 = &worn_defs[i + 80];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 5;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i + 105];
+        all_item_entries[number].unk00 = &worn_defs[i + 105];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 6;
         number++;
     }
     for (i = 0; i < 10; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i + 130];
+        all_item_entries[number].unk00 = &worn_defs[i + 130];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 7;
         number++;
     }
     for (i = 0; i < 10; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i + 140];
+        all_item_entries[number].unk00 = &worn_defs[i + 140];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 8;
         number++;
     }
     for (i = 0; i < 10; i++) {
-        all_item_entries[number].unk00 = (int)&worn_defs[i + 130];
+        all_item_entries[number].unk00 = &worn_defs[i + 130];
         all_item_entries[number].unk0C = number;
         all_item_entries[number].group = 9;
         number++;
     }
     number = 0;
     for (i = 0; i < 150; i++) {
-        common_item_entries[i].unk00 = (int)&item_common_defs[i];
+        common_item_entries[i].unk00 = &item_common_defs[i];
         common_item_entries[i].unk0C = number;
         common_item_entries[i].group = 11;
         number++;
     }
     for (i = 0; i < 70; i++) {
-        weapon_entries[i].unk00 = (int)&weapon_defs[i];
+        weapon_entries[i].unk00 = &weapon_defs[i];
         weapon_entries[i].unk0C = number;
         weapon_entries[i].group = 0;
         number++;
     }
     for (i = 0; i < 30; i++) {
-        shield_entries[i].unk00 = (int)&worn_defs[i];
+        shield_entries[i].unk00 = &worn_defs[i];
         shield_entries[i].unk0C = number;
         shield_entries[i].group = 2;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        helm_entries[i].unk00 = (int)&worn_defs[i + 30];
+        helm_entries[i].unk00 = &worn_defs[i + 30];
         helm_entries[i].unk0C = number;
         helm_entries[i].group = 3;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        armor_entries[i].unk00 = (int)&worn_defs[i + 55];
+        armor_entries[i].unk00 = &worn_defs[i + 55];
         armor_entries[i].unk0C = number;
         armor_entries[i].group = 4;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        gauntlet_entries[i].unk00 = (int)&worn_defs[i + 80];
+        gauntlet_entries[i].unk00 = &worn_defs[i + 80];
         gauntlet_entries[i].unk0C = number;
         gauntlet_entries[i].group = 5;
         number++;
     }
     for (i = 0; i < 25; i++) {
-        boot_entries[i].unk00 = (int)&worn_defs[i + 105];
+        boot_entries[i].unk00 = &worn_defs[i + 105];
         boot_entries[i].unk0C = number;
         boot_entries[i].group = 6;
         number++;
     }
     for (i = 0; i < 10; i++) {
-        ring_entries[i].unk00 = (int)&worn_defs[i + 130];
+        ring_entries[i].unk00 = &worn_defs[i + 130];
         ring_entries[i].unk0C = number;
         ring_entries[i].group = 7;
         number++;
     }
     for (i = 0; i < 10; i++) {
-        bracelet_entries[i].unk00 = (int)&worn_defs[i + 140];
+        bracelet_entries[i].unk00 = &worn_defs[i + 140];
         bracelet_entries[i].unk0C = number;
         bracelet_entries[i].group = 8;
         number++;
     }
     for (i = 0; i < 10; i++) {
-        amulet_entries[i].unk00 = (int)&worn_defs[i + 130];
+        amulet_entries[i].unk00 = &worn_defs[i + 130];
         amulet_entries[i].unk0C = number;
         amulet_entries[i].group = 9;
         number++;
     }
     for (i = 0; i < 91; i++) {
         spell_entries[i].unk0C = i;
-        spell_entries[i].unk00 = (int)&fx_table[i];
+        spell_entries[i].unk00 = &fx_table[i];
         spell_entries[i].group = 1;
     }
     use_item_list.group = 11;
@@ -2159,7 +2155,7 @@ static const MenuWeekdayNames weekday_names_table = { {
    card_screen_state.unk16 was set. */
 int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign-extends a byte here
     ClockTime clock;
-    int tm_fields[9];
+    struct tm tm_fields = { 0 }; /* the EE's struct tm: nine ints, the same fields */
     MenuWeekdayNames weekday_names;
     u32 *packet;
     s32 status; // match: one variable for the card state in the loop and the menu number after it
@@ -2174,13 +2170,13 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
     sceCdReadClock((struct sceCdCLOCK *)&clock);
     weekday_names = weekday_names_table; // match: never read
     // match: the clock bytes are BCD and are used as they are, the day is lowered by one, and the result is not used
-    tm_fields[0] = clock.sec;
-    tm_fields[1] = clock.min;
-    tm_fields[2] = clock.hour;
-    tm_fields[3] = clock.mday - 1;
-    tm_fields[4] = clock.mon - 1;
-    tm_fields[5] = clock.year + 100;
-    mktime(tm_fields);
+    tm_fields.tm_sec = clock.sec;
+    tm_fields.tm_min = clock.min;
+    tm_fields.tm_hour = clock.hour;
+    tm_fields.tm_mday = clock.mday - 1;
+    tm_fields.tm_mon = clock.mon - 1;
+    tm_fields.tm_year = clock.year + 100;
+    mktime(&tm_fields);
     menu_mode = mode;
     pad_mode = pad_mode_before = Pad_GetMode(0, 0);
     while (SoundDriver_FlushCommands(), menu_run_steps[menu_run_step]() != 0) {
@@ -2249,7 +2245,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
         packet[0] = 0x800A;
         while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
         *D2_QWC = 11;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
         context2_buffer_half = context1_buffer_half = 1;
     }
@@ -2300,6 +2296,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
         }
         return 0;
     }
+    return 0; /* other modes: the PS2 returned whatever was in $2 */
 }
 
 extern char equip_screen_name[8];
@@ -2390,10 +2387,10 @@ static void Menu_SendUnusedFlatSprite(void) {
     (cursor++)->as_int = 0xF2000E;
     (cursor++)->as_int = 0x41;
     (cursor++)->as_int = 0;
-    packet[0].as_int = 0x8000 | ((cursor - packet) / 4 - 1);
+    packet[0].as_int = 0x8000 | ((s32)(cursor - packet) / 4 - 1);
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)(cursor - packet) / 4;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
 }
 
@@ -2464,10 +2461,10 @@ static void Menu_SendUnusedSpriteFirst(void) {
     (cursor++)->as_int = 0x80;
     (cursor++)->as_int = 0x42;
     (cursor++)->as_int = 0;
-    packet[0].as_int = 0x8000 | ((cursor - packet) / 4 - 1);
+    packet[0].as_int = 0x8000 | ((s32)(cursor - packet) / 4 - 1);
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)(cursor - packet) / 4;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
 }
 
@@ -2538,16 +2535,16 @@ static void Menu_SendUnusedSpriteSecond(void) {
     (cursor++)->as_int = 0x80;
     (cursor++)->as_int = 0x42;
     (cursor++)->as_int = 0;
-    packet[0].as_int = 0x8000 | ((cursor - packet) / 4 - 1);
+    packet[0].as_int = 0x8000 | ((s32)(cursor - packet) / 4 - 1);
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
-    *D2_QWC = (cursor - packet) / 4;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_QWC = (s32)(cursor - packet) / 4;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
 }
 
 /* Draws the menu's item model with the matrix given: sends a three-quadword packet of GS settings,
    draws the model of node model_load_shown and puts the view-to-screen matrix back. */
-int Menu_DrawItemModel(f32 *matrix) { // match: callers declare an int result; nothing is returned
+void Menu_DrawItemModel(f32 *matrix) {
     u32 *packet;
 
     packet = MenuDraw_NextPacket();
@@ -2565,7 +2562,7 @@ int Menu_DrawItemModel(f32 *matrix) { // match: callers declare an int result; n
     packet[11] = 0;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 3;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     DRAW_NODE_MODEL(&model_load_shown, matrix, menu_draw_color);
     sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 1.0f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
@@ -2587,7 +2584,7 @@ static s32 Menu_CopyFrameToTexture(void) {
         packet[1] = 0x100B4000; // match: the tag word packet[0] is written last
         packet[2] = 0xE;
         packet[3] = 0;
-        *(u64 *)&packet[4] = (menu_first_draw_env[0] & ~0x1FFL) | 0x192;
+        *(u64 *)&packet[4] = (menu_first_draw_env[0] & ~0x1FFLL) | 0x192;
         packet[6] = 0x4C;
         packet[7] = 0;
         packet[8] = 0;
@@ -2602,7 +2599,7 @@ static s32 Menu_CopyFrameToTexture(void) {
         packet[17] = 0xE00000;
         packet[18] = 0x40;
         packet[19] = 0;
-        *(u64 *)&packet[20] = texture_base | 0x28028000 | 0x640000000L; /* TEX0: 1024 by 512 */
+        *(u64 *)&packet[20] = texture_base | 0x28028000 | 0x640000000LL; /* TEX0: 1024 by 512 */
         packet[22] = 0x6;
         packet[23] = 0;
         packet[24] = 0x80808080;
@@ -2685,7 +2682,7 @@ static s32 Menu_CopyFrameToTexture(void) {
         packet[0] = 0x8019;
         while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
         *D2_QWC = 26;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
     }
     sceGsSyncPath(0, 0);
@@ -2755,7 +2752,7 @@ static void Menu_DrawBackdropPlain(void) {
         packet[17] = 1;
         while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
         *D2_QWC = 5;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
         sceGsSyncPath(0, 0);
         packet = MenuDraw_NextPacket();
@@ -2773,7 +2770,7 @@ static void Menu_DrawBackdropPlain(void) {
         packet[11] = 2;
         while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
         *D2_QWC = 3;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
     }
 }
@@ -2786,7 +2783,7 @@ static void Menu_DrawBackdropItemSelParts(void) {
     for (i = 0; i < item_sel_part_count; i++) {
         if (item_sel_parts[i].handler_index == 2) {
             Menu_SetBlendMode(item_sel_parts[i].blend_mode);
-            MenuSprite_DrawPlain((int)&item_sel_parts[i], 2, 0);
+            MenuSprite_DrawPlain((sptr)&item_sel_parts[i], 2, 0);
             Menu_SetBlendMode(0);
         }
     }
@@ -2799,7 +2796,7 @@ static void Menu_DrawBackdropPreshopParts(void) {
     for (i = 0; i < preshop_part_count; i++) {
         if (preshop_parts[i].handler_index == 2) {
             Menu_SetBlendMode(preshop_parts[i].blend_mode);
-            MenuSprite_DrawPlain((int)&preshop_parts[i], 2, 0);
+            MenuSprite_DrawPlain((sptr)&preshop_parts[i], 2, 0);
             Menu_SetBlendMode(0);
         }
     }
@@ -2847,7 +2844,7 @@ static s32 Menu_Start(void) {
     packet[7] = 0;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 2;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     if (menu_mode == 0) {
         equip_group_shown = 0;
@@ -2940,7 +2937,7 @@ static s32 Menu_CutModelChain(void) {
         menu_step = 0;
         return FALSE;
     }
-    // match: other steps return nothing (see the report's retail bugs)
+    return 0; /* other steps: the PS2 returned whatever was in $2 (a retail bug) */
 }
 
 /* Makes the main menu the current screen, with its parts faded out. */
@@ -2997,9 +2994,9 @@ static void Menu_UpdateMain(HandlerContext *context) {
         kind = main_parts[i].handler_index;
         Menu_SetBlendMode(main_parts[i].blend_mode);
         if (main_menu_state != 1) {
-            MenuSprite_Draw((int)&main_parts[i], kind + 1000, main_menu_line, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&main_parts[i], kind + 1000, main_menu_line, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw((int)&main_parts[i], kind, main_menu_line, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&main_parts[i], kind, main_menu_line, (int)screen_part_alphas[i]);
         }
         Menu_SetBlendMode(0);
     }
@@ -3131,10 +3128,10 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
     MenuItem *bar_item;
     u32 i;
     s32 row;
-    s32 table;
+    sptr table;
     s32 entry;
     s32 slot;
-    s32 text;
+    sptr text;
     u8 kind;
     u32 full_alpha;
 
@@ -3156,9 +3153,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
         kind = item_parts[i].handler_index;
         ((void (*)(u8))Menu_SetBlendMode)(item_parts[i].blend_mode); // match: called as if it returned nothing
         if (item_list_cursor[0] != NULL) {
-            MenuSprite_Draw((int)&item_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&item_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw((int)&item_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&item_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
     }
@@ -3197,9 +3194,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
         item = item_list_top[0];
         MenuText_SetColor(menu_draw_color);
         for (row = 0; row < 7; row++, item = item->prev) {
-            text = (s32)&item_name_defs[item->unk0C];
+            text = (sptr)&item_name_defs[item->unk0C];
             MenuText_SetPen(word);
-            ((s32 (*)(s32, s32))MenuText_DrawWrapped)(text, 0x1A); // match: called as if it took and returned a number
+            MenuText_DrawWrapped((u16 *)text, 0x1A);
             word.f.mid16 += 0xB0;
             word.f.lo16 = 0x7080;
             if (item_list_page_mark[0]->prev == item) {
@@ -3334,7 +3331,7 @@ static void Menu_UpdateCastSpell(s32 context) {
     s32 row;
     s32 page;
     s32 number;
-    s32 table;
+    sptr table;
     s32 entry;
     s32 slot;
     u8 kind;
@@ -3364,7 +3361,7 @@ static void Menu_UpdateCastSpell(s32 context) {
     for (; i < magic_part_count; i++) {
         kind = magic_parts[i].handler_index;
         Menu_SetBlendMode(magic_parts[i].blend_mode);
-        MenuSprite_Draw((int)&magic_parts[i], kind + 1000, page, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&magic_parts[i], kind + 1000, page, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
     }
     for (row = 0; row < 7; row++, item = item->prev) {
@@ -3422,7 +3419,7 @@ static void Menu_UpdateCastSpell(s32 context) {
     packet[11] = 0;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 3;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x100;
     DRAW_NODE_MODEL(&model_load_shown, local, menu_draw_color);
     if ((menu_buttons & 0x4000) && menu_input_enabled != 0) {
@@ -3602,9 +3599,9 @@ static void Menu_UpdateEquip(void) {
         kind = equip_parts[i].handler_index;
         SET_BLEND(equip_parts[i].blend_mode);
         if (Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->unk0C)) {
-            MenuSprite_Draw((int)&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw((int)&equip_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&equip_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         SET_BLEND(0);
     }
@@ -3827,7 +3824,7 @@ static void Menu_UpdateEquip(void) {
                 detail_panel_sound_pending = 0;
                 for (i = 0; i < equip_s_part_count; i++) {
                     SET_BLEND(equip_s_parts[i].blend_mode);
-                    MenuSprite_Draw((int)&equip_s_parts[i], 1002, 1, (int)panel_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&equip_s_parts[i], 1002, 1, (int)panel_part_alphas[i]);
                     SET_BLEND(0);
                 }
                 MenuText_SetColor(panel_text_color);
@@ -3967,7 +3964,7 @@ static void Menu_UpdateEquip(void) {
         word.raw = 0x000A87507AF07D00;
         for (i = 0; i < equip_s_part_count; i++) {
             SET_BLEND(equip_s_parts[i].blend_mode);
-            MenuSprite_Draw((int)&equip_s_parts[i], equip_s_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+            MenuSprite_Draw((sptr)&equip_s_parts[i], equip_s_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
             SET_BLEND(0);
         }
         switch (equip_panel_state) {
@@ -4162,7 +4159,7 @@ static void Menu_UpdateStatus(void) {
 
     for (i = 0; i < status_part_count; i++) {
         Menu_SetBlendMode(status_parts[i].blend_mode);
-        MenuSprite_Draw((int)&status_parts[i], status_parts[i].handler_index + 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&status_parts[i], status_parts[i].handler_index + 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
@@ -4331,7 +4328,7 @@ static void Menu_UpdateKeyItems(void) {
     sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 0.5f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
     for (i = 0; i < keylist_part_count; i++) {
         Menu_SetBlendMode(keylist_parts[i].blend_mode);
-        MenuSprite_Draw((int)&keylist_parts[i], 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&keylist_parts[i], 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
     key_items_frames++;
@@ -4340,7 +4337,7 @@ static void Menu_UpdateKeyItems(void) {
         if (slot < 0) {
             continue;
         }
-        upload = (ChunkUpload *)((s32)key_item_model_loads + slot * sizeof(ChunkUpload)); // match: &key_item_model_loads[slot] as a sum of numbers gives the madd
+        upload = (ChunkUpload *)&key_item_model_loads[slot];
         if (upload->done != 0) {
             file = upload->pool_node->buffer;
             texture = (TextureHeader *)((char *)file + file->texture_offset);
@@ -4448,7 +4445,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
     GsPackedWord word;
     s32 i;
     s32 row_count;
-    s32 table;
+    sptr table;
     s32 first_text;
     s32 entry;
     u32 *packet;
@@ -4456,7 +4453,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
     s32 show_picture;
     s32 row;
     u32 full_alpha;
-    s32 text;
+    sptr text;
     s32 counter = 0;                /* one work variable: the pages tried, then a bit number, then a row */
 
     bar_origin.raw = 0x0001869F7C307EE0;
@@ -4546,7 +4543,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
 
     for (i = 0; i < image_part_count; i++) {
         Menu_SetBlendMode(image_parts[i].blend_mode);
-        MenuSprite_Draw((int)&image_parts[i], 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&image_parts[i], 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
@@ -4572,7 +4569,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
         packet[11] = 0;
         while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
         *D2_QWC = 3;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
         chunk = (PackageChunk *)((char *)npc_package_load.pool_node->buffer + 0x10);
         for (i = 0; i < recollection_page; i++) {
@@ -4734,7 +4731,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
     u32 i;
     s32 page;
     s32 number;
-    s32 table;
+    sptr table;
     s32 entry;
     u8 kind;
 
@@ -4742,7 +4739,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
     for (i = 0; i < image_part_count; i++) {
         kind = image_parts[i].handler_index;
         Menu_SetBlendMode(image_parts[i].blend_mode);
-        MenuSprite_DrawPlain((int)&image_parts[i], kind, 1);
+        MenuSprite_DrawPlain((sptr)&image_parts[i], kind, 1);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
     if (npc_package_load.done != 0) {
@@ -4766,7 +4763,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
         packet[11] = 0;
         while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
         *D2_QWC = 3;
-        *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+        *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
         *D2_CHCR = 0x100;
         chunk = (PackageChunk *)((char *)npc_package_load.pool_node->buffer + 0x10);
         for (i = 0; (s32)i < page; i++) {
@@ -4836,10 +4833,10 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
     s32 row;
     s32 i;
     s32 kind;
-    s32 texts;
+    sptr texts;
     s32 text_index;
     s32 text_offset;
-    s32 text;
+    sptr text;
 
     memset(view, 0, 0x40);
     view[10] = view[5] = view[0] = 0.8f;
@@ -4908,9 +4905,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
         kind = recol_parts[i].handler_index;
         Menu_SetBlendMode(recol_parts[i].blend_mode);
         if (owned_list_current[0]->group != 12) {
-            MenuSprite_Draw((int)&recol_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&recol_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw((int)&recol_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&recol_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
@@ -4983,9 +4980,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
         if (kind != 2) {
             ((void (*)(u8))Menu_SetBlendMode)(item_sel_parts[i].blend_mode); // match: called as returning nothing
             if (visible_item_state != 1 && ((worn_mask >> item_sel_parts[i].slot) & 1)) {
-                MenuSprite_Draw((int)&item_sel_parts[i], kind + 1000, worn_mask, (int)screen_part_alphas[i + 200]);
+                MenuSprite_Draw((sptr)&item_sel_parts[i], kind + 1000, worn_mask, (int)screen_part_alphas[i + 200]);
             } else {
-                MenuSprite_DrawPlain((int)&item_sel_parts[i], kind, worn_mask);
+                MenuSprite_DrawPlain((sptr)&item_sel_parts[i], kind, worn_mask);
             }
             Menu_SetBlendMode(0);
         }
@@ -5224,12 +5221,12 @@ static void Menu_UpdateSystem(MenuScreenContext *context) {
         kind = system_parts[i].handler_index;
         SET_PART_MODE(system_parts[i].blend_mode);
         if (system_screen_state == 4 && kind == 2) {
-            MenuSprite_Draw((int)&system_parts[i], 0x3EA, 0, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&system_parts[i], 0x3EA, 0, screen_part_alphas[i]);
         } else if (kind != 2) {
             if (system_screen_state != 1) {
-                MenuSprite_Draw((int)&system_parts[i], kind + 1000, system_menu_line, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&system_parts[i], kind + 1000, system_menu_line, screen_part_alphas[i]);
             } else {
-                MenuSprite_Draw((int)&system_parts[i], kind, system_menu_line, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&system_parts[i], kind, system_menu_line, screen_part_alphas[i]);
             }
         }
         SET_PART_MODE(0);
@@ -5616,11 +5613,11 @@ static void Menu_UpdateCardSlot(void) {
         Menu_SetBlendMode(slot_parts[i].blend_mode);
         switch (kind) {
         case 2:
-            MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 1, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 1, screen_part_alphas[i]);
             break;
         case 29:
             if ((u8)slot_parts[i].slot < 2) {
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, slot_parts[i].slot, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, slot_parts[i].slot, screen_part_alphas[i]);
             }
             break;
         case 3:
@@ -5629,67 +5626,67 @@ static void Menu_UpdateCardSlot(void) {
             case 5:
             case 9:
             case 10:
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
             break;
         case 31:
             if (card_screen_state.check_finished != 0) {
                 if (system_screen_state != 1) {
-                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, card_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, card_screen_state.selected_card, screen_part_alphas[i]);
                 } else {
-                    MenuSprite_Draw((int)&slot_parts[i], kind, card_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind, card_screen_state.selected_card, screen_part_alphas[i]);
                 }
             }
             break;
         case 26:
             if (SaveCard_IsPresent(0) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
                     if (menu_mode != 1 || card_slot_leave_steps == 0) {
-                        MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x20);
+                        MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x20);
                     }
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x80);
             }
             break;
         case 27:
             if (SaveCard_IsPresent(1) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
                     if (menu_mode != 1 || card_slot_leave_steps == 0) {
-                        MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x20);
+                        MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x20);
                     }
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x80);
             }
             break;
         case 28:
             switch (card_screen_state.dialog_id) {
             case 4:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 4);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 4);
                 break;
             case 5:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 5);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 5);
                 break;
             case 9:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 9);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 9);
                 break;
             case 10:
-                MenuSprite_DrawPlain((int)&slot_parts[i], kind, 10);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 10);
                 break;
             }
             /* fallthrough */
         default:
-            MenuSprite_Draw((int)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             break;
         }
         SET_PART_MODE(0);
@@ -5861,7 +5858,7 @@ static void Menu_UpdateSaveList(void) {
     u8 kind;
     s32 slot;
     s32 group;
-    s32 table;
+    sptr table;
     s32 entry;
     GsPackedWord word;
     PadReport *report;
@@ -5968,21 +5965,21 @@ static void Menu_UpdateSaveList(void) {
         Menu_SetBlendMode(data_parts[i].blend_mode);
         switch (kind) {
         case 2:
-            MenuSprite_Draw((int)&data_parts[i], 0x3EA, 1, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&data_parts[i], 0x3EA, 1, screen_part_alphas[i]);
             break;
         case 3:
             group = slot / 3;
             if (MENU_SCREEN_SAVES(&card_screen_state)->save_state[group] == 1) {
-                MenuSprite_Draw((int)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
             }
             break;
         case 25:
             if (MENU_SCREEN_SAVES(&card_screen_state)->save_state[slot] == 1) {
-                MenuSprite_Draw((int)&data_parts[i], 0x401, card_screen_state.selected_save, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&data_parts[i], 0x401, card_screen_state.selected_save, screen_part_alphas[i]);
             }
             break;
         default:
-            MenuSprite_Draw((int)&data_parts[i], kind + 1000, card_screen_state.selected_save, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&data_parts[i], kind + 1000, card_screen_state.selected_save, screen_part_alphas[i]);
             break;
         }
         SET_PART_MODE(0);
@@ -6006,19 +6003,19 @@ static void Menu_UpdateSaveList(void) {
         if (kind == 3) {
             switch (card_screen_state.list_step) {
             case 8:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 8);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 8);
                 break;
             case 1:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 1);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 1);
                 break;
             case 3:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 3);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 3);
                 break;
             case 10:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 10);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 10);
                 break;
             case 23:
-                MenuSprite_DrawPlain((int)&mc_parts[i], kind, 23);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 23);
                 break;
             }
         } else {
@@ -6028,7 +6025,7 @@ static void Menu_UpdateSaveList(void) {
             case 8:
             case 10:
             case 23:
-                MenuSprite_Draw((int)&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
         }
@@ -6372,7 +6369,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
     for (i = 0; i < option_part_count; i++) {
         kind = option_parts[i].handler_index;
         Menu_SetBlendMode(option_parts[i].blend_mode);
-        MenuSprite_Draw((int)&option_parts[i], kind + 1000, context->unk04, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&option_parts[i], kind + 1000, context->unk04, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
@@ -6625,14 +6622,14 @@ static void Menu_UpdateButtonConfig(void) {
         switch (kind) {
         case 2:
             if (button_prompt != 0) {
-                MenuSprite_Draw((int)&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             }
             break;
         case 3:
             if (button_prompt == 1) {
-                MenuSprite_Draw((int)&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             } else if (button_prompt == 2) {
-                MenuSprite_Draw((int)&keyconf_parts[i], kind + 1000, 1, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, 1, screen_part_alphas[i]);
             }
             break;
         case 0x18:
@@ -6656,7 +6653,7 @@ static void Menu_UpdateButtonConfig(void) {
                 D_00446DF4 = 0;
                 D_00446DF8 = 0;
             }
-            MenuSprite_Draw((int)&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
             break;
         case 0x21:
             if (D_00446E00 == 0) {
@@ -6664,11 +6661,11 @@ static void Menu_UpdateButtonConfig(void) {
             }
             D_00446E04 = button_choices_shown[D_00446E00];
             // match: called as returning a value, which keeps $2 out of the count's increment
-            ((int (*)(int, int, int, int))MenuSprite_Draw)((int)&(&keyconf_parts[j])[11 - D_00446E04], kind + 1000, D_00446E00, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&(&keyconf_parts[j])[11 - D_00446E04], kind + 1000, D_00446E00, screen_part_alphas[i]);
             D_00446E00++;
             break;
         default:
-            MenuSprite_Draw((int)&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
             break;
         }
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
@@ -6891,16 +6888,16 @@ static void Menu_UpdateCardCheck(void) {
             ((void (*)(u8))Menu_SetBlendMode)(mc_mess_parts[i].blend_mode); // match: called as returning nothing, which frees $2 for the switch
             switch (card_screen_state.dialog_id) {
             case 0x10:
-                MenuSprite_Draw((int)&mc_mess_parts[i], kind + 1000, 0x10, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x10, screen_part_alphas[i]);
                 break;
             case 0x11:
-                MenuSprite_Draw((int)&mc_mess_parts[i], kind + 1000, 0x11, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x11, screen_part_alphas[i]);
                 break;
             case 0x12:
-                MenuSprite_Draw((int)&mc_mess_parts[i], kind + 1000, 0x12, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x12, screen_part_alphas[i]);
                 break;
             case 0x13:
-                MenuSprite_Draw((int)&mc_mess_parts[i], kind + 1000, 0x13, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x13, screen_part_alphas[i]);
                 break;
             }
             Menu_SetBlendMode(0);
@@ -7043,7 +7040,7 @@ static void Menu_UpdateBrightness(void) {
     for (i = 0; i < bright_part_count; i++) {
         kind = bright_parts[i].handler_index;
         Menu_SetBlendMode(bright_parts[i].blend_mode);
-        MenuSprite_Draw((int)&bright_parts[i], kind + 1000, (int)brightness_slider + 0x72C, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&bright_parts[i], kind + 1000, (int)brightness_slider + 0x72C, (int)screen_part_alphas[i]);
         Menu_SetBlendMode(0);
     }
     switch (system_screen_state) {
@@ -7097,7 +7094,7 @@ static void Menu_WaitForCancel(void) {
    text drawer returns, nothing without a text. */
 static int Menu_DrawEquipItemText(s32 index) {
     DataNode *node;
-    s32 table;
+    sptr table;
     s32 slot;
     s32 entry;
     GsPackedWord word;
@@ -7112,6 +7109,7 @@ static int Menu_DrawEquipItemText(s32 index) {
         MenuDraw_SetGsRegister(GS_REG_TEST_1, 0x30000);
         return MenuText_DrawWrappedLong((u16 *)(table + entry), 0x1B);
     }
+    return 0; /* no text: the PS2 returned whatever was in $2 */
 }
 
 /* If the item list has anything: names its five models and chains the five load nodes for them. */
@@ -7461,7 +7459,7 @@ void Menu_DrawBrightness(s32 level) {
     cursor[1].as_int = 0xFFFFF;
     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00));
     *D2_QWC = 5;
-    *D2_MADR = ((u32)packet & 0x7FFFFFFF) | 0x80000000;
+    *D2_MADR = (SPR_EE_ADDRESS(packet) & 0x7FFFFFFF) | 0x80000000;
     *D2_CHCR = 0x105;
 }
 

@@ -20,7 +20,7 @@ int Menu_Run(s8 mode);
 s32 Menu_EndFrame(s32 run_handler);
 
 /* Draws the model of the first load node (model_load_shown) with the matrix given. Returns nothing. */
-int Menu_DrawItemModel(f32 *matrix); // match: callers use an int result
+void Menu_DrawItemModel(f32 *matrix);
 
 /* Runs the callback of the load node at the head of the chain, or goes on to the next node. */
 void Menu_StepModelLoads(int unused);
@@ -29,7 +29,7 @@ void Menu_StepModelLoads(int unused);
 void Menu_StepModelLoad(LinkNode *node);
 
 /* Gives a load node a buffer from the free list, if one is left (declared in ui/link.h too). Returns nothing. */
-int Menu_TakeLoadBuffer(LinkNode *node);
+void Menu_TakeLoadBuffer(LinkNode *node);
 
 /* Puts every load buffer back on the free list, keeping a load still in progress. */
 void Menu_ResetLoadBuffers(void);

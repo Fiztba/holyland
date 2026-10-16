@@ -5,6 +5,10 @@
 #include "common.h"
 #include "gfx/gs.h"
 
+/* The EE address of a packet in the scratchpad (0x70000000 and its offset there), as the menus hand it to DMA
+   channel 2 with the scratchpad bit (0x80000000): the PC's scratchpad has no EE address of its own (port/host.h) */
+#define SPR_EE_ADDRESS(packet) ((u32)(0x70000000u + (u32)((u8 *)(packet) - ee_scratchpad)))
+
 /* the colour the menus draw with (menu_draw_color), eight bytes passed by value to MenuText_SetColor and MenuModel_DrawTinted */
 typedef struct {
     u8 red;                         /* 0x00 */
@@ -28,7 +32,7 @@ typedef struct {
 } MenuCursorBar;
 
 typedef struct MenuItem {
-    int unk00;                      /* 0x00 */
+    void *unk00;                    /* 0x00 the item's def: an ItemCommonDef, PlayerItemDef, LevelRecordDef or FxTableEntry */
     struct MenuItem *next;          /* 0x04 */
     struct MenuItem *prev;          /* 0x08 */
     s16 unk0C;                      /* 0x0C the number in its model's file name */
@@ -66,19 +70,21 @@ typedef struct MenuFreeNode {
 
 /* what Menu_FreeLoadBuffer is handed: the node to give back at 0x0C */
 typedef struct {
-    char pad00[0x0C];
+    s64 pad00;                      /* the start of a LinkNode, so node lies over LinkNode.pool_node */
+    s32 pad08;
     MenuFreeNode *node;             /* 0x0C */
 } MenuFreeRequest;
 
 /* a node of the list *equip_list_shown[0] points into (Menu_MoveEquipCursor follows next/prev) */
 typedef struct DataNode {
-    int unk00;                      /* 0x00 */
+    void *unk00;                    /* 0x00 MenuItem.unk00 */
     struct DataNode *next;          /* 0x04 */
     struct DataNode *prev;          /* 0x08 */
     s16 unk0C;                      /* 0x0C table row, plus one */
 } DataNode;
 
-/* one of the three 0x180-byte records SaveCard_GetSaveInfo hands out (SaveInfo in save/save_card.h), as the save list of
+/* save: the list file's record on the memory card (SaveInfo)
+   one of the three 0x180-byte records SaveCard_GetSaveInfo hands out (SaveInfo in save/save_card.h), as the save list of
    Menu_UpdateSaveList reads it: what a save on the card says about itself */
 typedef struct {
     char pad00[0x04];
@@ -98,6 +104,11 @@ typedef struct {
     u8 play_hours;                  /* 0x17B the play time's hours */
     char pad17C[0x04];
 } CardSaveInfo;
+LAYOUT_SIZE(CardSaveInfo, 0x180);
+LAYOUT_OFFSET(CardSaveInfo, save_area, 0x04);
+LAYOUT_OFFSET(CardSaveInfo, gold, 0x28);
+LAYOUT_OFFSET(CardSaveInfo, play_seconds, 0x179);
+LAYOUT_OFFSET(CardSaveInfo, play_hours, 0x17B);
 
 /* MenuScreenState's three bytes at 0x1E as the array Menu_UpdateSaveList fills: what SaveCard_GetSaveState says of each save
    (1: there is one), then 0 or -1 for the others by what SaveCard_HasRoomFor answers */
