@@ -6,9 +6,10 @@
 The decomp often declares a function locally, with the types the matching needed; the EE passes
 integer and float arguments in separate registers, so a wrong local prototype often still worked
 there. On the PC it does not: Win64 hands arguments out by position, and SysV passes small structs
-in registers. This compiles every game unit to LLVM IR (which spells out each call's ABI: i32, float,
-double, ptr, byval structs …) and reports every function whose declarations disagree with its
-definition, as the compiler for TRIPLE lowers them (default: the build's own target; also try
+in registers. This compiles every game unit (the patched decomp copy in BUILD_DIR/decomp_src/src/game,
+the PC-only game/ in the repo, and the PS2 stand-ins in port/) to LLVM IR (which spells out each call's
+ABI: i32, float, double, ptr, byval structs …) and reports every function whose declarations disagree
+with its definition, as the compiler for TRIPLE lowers them (default: the build's own target; also try
 --target x86_64-linux-gnu for Linux's ABI).
 """
 import collections
@@ -43,8 +44,17 @@ def main():
         del args[i:i + 2]
     build = os.path.join(ROOT, args[0] if args else next(
         d for d in ("out/windows-clang", "out/linux-clang") if os.path.isdir(os.path.join(ROOT, d))))
+    game = os.path.join(build, "decomp_src", "src", "game")
+    roots = [game, os.path.join(ROOT, "game"), os.path.join(ROOT, "port")]
+
+    def posix(path):
+        return os.path.normpath(path).replace("\\", "/")
+
+    def under(path, root):
+        return path.startswith(posix(root) + "/")
+
     commands = [c for c in json.load(open(os.path.join(build, "compile_commands.json")))
-                if "/src/" in c["file"].replace("\\", "/")]
+                if any(under(posix(os.path.join(c["directory"], c["file"])), r) for r in roots)]
     seen = collections.defaultdict(lambda: collections.defaultdict(set))
     tmp = tempfile.mkdtemp()
     for n, c in enumerate(commands):
@@ -57,7 +67,9 @@ def main():
         if r.returncode:
             print(f"(skipped {c['file']}: {r.stderr.strip().splitlines()[-1] if r.stderr.strip() else 'failed'})")
             continue
-        rel = os.path.relpath(c["file"], ROOT).replace("\\", "/")
+        path = posix(os.path.join(c["directory"], c["file"]))
+        base = game if under(path, game) else ROOT
+        rel = os.path.relpath(path, base).replace("\\", "/")
         for m in SIG.finditer(open(out, encoding="utf-8", errors="replace").read()):
             kind, ret, name, params = m.groups()
             ret = ATTRS.sub("", ret).strip().split()[-1]
