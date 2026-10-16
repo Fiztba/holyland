@@ -69,6 +69,7 @@ typedef struct {
 } McState;
 
 /* the PS2 memory card icon.sys header, built by SaveCard_BuildIconSys */
+/* save: icon.sys in the game's memory card directory */
 typedef struct {
     char head[4];                   /* 0x00 "PS2D" */
     char pad04[0x02];
@@ -85,6 +86,10 @@ typedef struct {
     char delete_name[64];           /* 0x184 */
     char pad1C4[0x200];
 } McIconSys;
+LAYOUT_SIZE(McIconSys, 0x3C4);
+LAYOUT_OFFSET(McIconSys, bg_color, 0x10);
+LAYOUT_OFFSET(McIconSys, title, 0xC0);
+LAYOUT_OFFSET(McIconSys, delete_name, 0x184);
 
 /* progress of the file being written in 0x400-byte blocks */
 typedef struct {
