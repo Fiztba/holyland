@@ -1,0 +1,1891 @@
+diff --git a/src/game/model/linked_point.c b/src/game/model/linked_point.c
+index a633f2f657b9e59fbc7f7554e5a709ba122fed02..8ef6ea72763d65a2dcadd2a0125e8cf6bd5d2dac 100644
+--- a/src/game/model/linked_point.c
++++ b/src/game/model/linked_point.c
+@@ -1,9 +1,9 @@
+ #include "model/linked_point.h"
++#include <string.h>
++#include "libvu0.h"
+ 
+-void *memset(void *, int, u32);
+ void Vector_Copy(void *, void *);
+ void Vector_Add(void *, void *, void *);
+-void sceVu0SubVector(void *, void *, void *);
+ float sqrtf(float);
+ 
+ static LinkedPoint *linked_point_heads[2]; /* 0x4470C8 two active lists */
+diff --git a/src/game/model/model.c b/src/game/model/model.c
+index 52e5e3ee1bc578f6cf789a7e0a60be042ae1debc..749599bd2527df57141476fae10fb9de5494fe52 100644
+--- a/src/game/model/model.c
++++ b/src/game/model/model.c
+@@ -1,101 +1,61 @@
+ #include "model/model.h"
++#include "entity/entity.h" /* linked_point_pool */
+ #include "map/map.h"
+ #include "gfx/gs.h"
+ #include "math/vu0.h"
++#include "libvu0.h"
+ 
+ /* loads the matrix the children are multiplied by into vf1..vf4 */
+ #define LOAD_PARENT_MATRIX(matrix)                                                                 \
+-    __asm__ volatile(                                                                              \
+-        "lqc2 $vf1, 0x0(%0)\n"                                                                     \
+-        "lqc2 $vf2, 0x10(%0)\n"                                                                    \
+-        "lqc2 $vf3, 0x20(%0)\n"                                                                    \
+-        "lqc2 $vf4, 0x30(%0)\n"                                                                    \
+-        :                                                                                          \
+-        : "r"(matrix))
+-/* multiplies the matrix at `matrix` by the one loaded in vf1..vf4, in place */
+-#define MULTIPLY_BY_PARENT(matrix)                                                                 \
+-    __asm__ volatile(                                                                              \
+-        "lqc2 $vf22, 0x0(%0)\n"                                                                    \
+-        "lqc2 $vf23, 0x10(%0)\n"                                                                   \
+-        "lqc2 $vf24, 0x20(%0)\n"                                                                   \
+-        "lqc2 $vf25, 0x30(%0)\n"                                                                   \
+-        :                                                                                          \
+-        : "r"(matrix));                                                                            \
+-    __asm__ volatile(                                                                              \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vmulax.xyzw ACC, $vf1, $vf22x\n"                                                          \
+-        "vmadday.xyzw ACC, $vf2, $vf22y\n"                                                         \
+-        "vmaddaz.xyzw ACC, $vf3, $vf22z\n"                                                         \
+-        "vmaddw.xyzw $vf22, $vf4, $vf22w\n");                                                      \
+-    __asm__ volatile(                                                                              \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vmulax.xyzw ACC, $vf1, $vf23x\n"                                                          \
+-        "vmadday.xyzw ACC, $vf2, $vf23y\n"                                                         \
+-        "vmaddaz.xyzw ACC, $vf3, $vf23z\n"                                                         \
+-        "vmaddw.xyzw $vf23, $vf4, $vf23w\n");                                                      \
+-    __asm__ volatile(                                                                              \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vmulax.xyzw ACC, $vf1, $vf24x\n"                                                          \
+-        "vmadday.xyzw ACC, $vf2, $vf24y\n"                                                         \
+-        "vmaddaz.xyzw ACC, $vf3, $vf24z\n"                                                         \
+-        "vmaddw.xyzw $vf24, $vf4, $vf24w\n");                                                      \
+-    __asm__ volatile(                                                                              \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vmulax.xyzw ACC, $vf1, $vf25x\n"                                                          \
+-        "vmadday.xyzw ACC, $vf2, $vf25y\n"                                                         \
+-        "vmaddaz.xyzw ACC, $vf3, $vf25z\n"                                                         \
+-        "vmaddw.xyzw $vf25, $vf4, $vf25w\n");                                                      \
+-    __asm__ volatile(                                                                              \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "sqc2 $vf22, 0x0(%0)\n"                                                                    \
+-        "sqc2 $vf23, 0x10(%0)\n"                                                                   \
+-        "sqc2 $vf24, 0x20(%0)\n"                                                                   \
+-        "sqc2 $vf25, 0x30(%0)\n"                                                                   \
+-        : "=r"(matrix)                                                                             \
+-        : "0"(matrix))
+-// match: gcse numbers the registers of the three function addresses Model_SetUpSkinned stores by a hash of
+-// where the compiler keeps their names, so it depends on the names and the order they first appear in. These
+-// names, this early declaration and the asm label on Model_UpdateSkinnedBonePoints (the '*' it puts in front of
+-// the name) give retail's order ($24, $16, $25). Revisit when any of the three functions is renamed.
++    do {                                                                                           \
++        Vu_Lqc2(1, (u8 *)(matrix) + 0x0);                                                          \
++        Vu_Lqc2(2, (u8 *)(matrix) + 0x10);                                                         \
++        Vu_Lqc2(3, (u8 *)(matrix) + 0x20);                                                         \
++        Vu_Lqc2(4, (u8 *)(matrix) + 0x30);                                                         \
++    } while (0)
++/* multiplies the matrix at `matrix` by the one loaded in vf1..vf4, in place (through vf22..vf25) */
++static void multiply_by_parent(void *matrix) {
++    int row;
++
++    for (row = 0; row < 4; row++) {
++        Vu_Lqc2(22 + row, (u8 *)matrix + row * 0x10);
++    }
++    for (row = 22; row < 26; row++) {
++        Vu_MulA(VU_XYZW, 1, VF(row)[0]);
++        Vu_MaddA(VU_XYZW, 2, VF(row)[1]);
++        Vu_MaddA(VU_XYZW, 3, VF(row)[2]);
++        Vu_Madd(VU_XYZW, row, 4, VF(row)[3]);
++    }
++    for (row = 0; row < 4; row++) {
++        Vu_Sqc2((u8 *)matrix + row * 0x10, 22 + row);
++    }
++}
++#define MULTIPLY_BY_PARENT(matrix) multiply_by_parent(matrix)
+ char *Model_GetSkinnedBonePoint(char *, u32);
+-typedef u32 u_long128 __attribute__((mode(TI)));
+-/* copies a 4x4 matrix through VU0 registers */
++typedef Uint128 u_long128 __attribute__((aligned(4), may_alias)); /* a quadword moved with lq/sq; any alignment on the PC */
++/* copies a 4x4 matrix through VU0 registers (vf16..vf19) */
+ #define COPY_MATRIX(to, from)                                                                      \
+-    __asm__ volatile(                                                                              \
+-        "lqc2 $vf16, 0x0(%0)\n"                                                                    \
+-        "lqc2 $vf17, 0x10(%0)\n"                                                                   \
+-        "lqc2 $vf18, 0x20(%0)\n"                                                                   \
+-        "lqc2 $vf19, 0x30(%0)\n"                                                                   \
+-        "sqc2 $vf16, 0x0(%1)\n"                                                                    \
+-        "sqc2 $vf17, 0x10(%1)\n"                                                                   \
+-        "sqc2 $vf18, 0x20(%1)\n"                                                                   \
+-        "sqc2 $vf19, 0x30(%1)\n"                                                                   \
+-        : : "r"(from), "r"(to))
++    do {                                                                                           \
++        Vu_Lqc2(16, (u8 *)(from) + 0x0);                                                           \
++        Vu_Lqc2(17, (u8 *)(from) + 0x10);                                                          \
++        Vu_Lqc2(18, (u8 *)(from) + 0x20);                                                          \
++        Vu_Lqc2(19, (u8 *)(from) + 0x30);                                                          \
++        Vu_Sqc2((u8 *)(to) + 0x0, 16);                                                             \
++        Vu_Sqc2((u8 *)(to) + 0x10, 17);                                                            \
++        Vu_Sqc2((u8 *)(to) + 0x20, 18);                                                            \
++        Vu_Sqc2((u8 *)(to) + 0x30, 19);                                                            \
++    } while (0)
+ /* the largest float: a vertex's distance before it has been measured.
+    match: written as a literal, the compiler keeps it in .sdata (D_0044675C) */
+ #define NOT_MEASURED 3.4028235e38f
+ void Model_DrawSkinned(ModelInstance *);
+-// match: the asm label is part of the register order, see Model_GetSkinnedBonePoint above
+-void Model_UpdateSkinnedBonePoints(ModelInstance *) __asm__("Model_UpdateSkinnedBonePoints");
++void Model_UpdateSkinnedBonePoints(ModelInstance *);
+ float asinf(float);
+ float atan2f(float, float);
+ float Angle_Wrap(float);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0RotMatrixZ(float *, float *, float);
+ u32 *Packet_Alloc(int);
+ void Packet_AppendToChain(u32 *, u32 *);
+-int ModelMatrix_BuildDrawMatrices(ModelInstance *, s32, s32, void *, void *); // match: an int return keeps $2 busy after the call
++void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
+ void Vector_Copy(void *, void *);
+ void Packet_BeginGsRegisters(void);
+ void Packet_AddGsRegister(int, s64);
+@@ -103,16 +63,15 @@ void Packet_EndGsRegisters(void);
+ void Model_DrawPosed(ModelInstance *);
+ void Model_UpdateBonePoints(ModelInstance *);
+ Vector4 *Model_GetBonePoint(ModelInstance *, s32);
+-int ModelMatrix_BuildDrawMatrices(ModelInstance *, s32, s32, void *, void *); // match: an int return keeps $2 busy after the call
++void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
+ void Matrix_Multiply(void *, void *, void *);
+ float sqrtf(float);
+-extern ModelLight linked_point_pool[];
+ extern f32 identity_matrix[16];
+ extern f32 world_screen_matrix[16];
+ 
+ /* Multiply the matrices of a part's children by the part's own matrix. */
+ void Model_MultiplyChildMatrices(ModelPart *part) {
+-    register ModelPart *matrix asm("$2"); // match: the game keeps the matrix address in $2
++    ModelPart *matrix;
+     ModelPart *child;
+ 
+     matrix = part;
+@@ -135,7 +94,7 @@ void Model_MultiplyChildMatrices(ModelPart *part) {
+ 
+ /* Sets a skinned model up from a model file (vertices can follow their part or its parent): its parts and
+    bone points are carved out of *memory, and both cursors move past what was used. */
+-void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
++void Model_SetUpSkinned(ModelInstance *model, char **file_cursor, char **memory) {
+     ModelFile *file;
+     ModelFilePart *file_part;
+     ModelPart *memory_base;
+@@ -150,7 +109,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+     s32 j;
+ 
+     model->model_flags |= 0x4000;
+-    cursor = (char *)*file_cursor;
++    cursor = *file_cursor;
+     memory_base = (ModelPart *)*memory;
+     model->file = (ModelFile *)cursor;
+     file = (ModelFile *)cursor;
+@@ -162,15 +121,15 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+     positions = (Vector4 *)&memory_base[part_count];
+     model->parts = memory_base;
+     model->bone_positions = positions;
+-    *memory = (int)(positions + 32);
++    *memory = (char *)(positions + 32); /* PORT: the parts are runtime structs (0x90 bytes), the area may need more room on the PC */
+     part = memory_base;
+     for (i = 0; i < file->part_count; i++, part++, file_part++) {
+         part->data_count = file_part->data_count;
+-        part->data_addr = *file_cursor + file_part->data_offset;
++        part->data_addr = EE_WORD(*file_cursor + file_part->data_offset);
+         part->pad78_46 = file_part->unk07;
+         MODEL_PART_FLAG_BITS(part)->bit41 = TRUE;
+         // match: retail keeps only the empty loop; a walk whose result nothing uses is deleted like this one
+-        data = (ModelPartData *)(u32)part->data_addr;
++        data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < file_part->data_count; j++) {
+             length = data->length;
+             data = (ModelPartData *)((char *)data + length * 16);
+@@ -187,7 +146,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+     model->draw_parts = Model_DrawSkinned;
+     *file_cursor += file->size;
+     model->update_bone_points = Model_UpdateSkinnedBonePoints;
+-    model->get_point = (int (*)(void *, int))Model_GetSkinnedBonePoint;
++    model->get_point = (void *(*)(void *, int))Model_GetSkinnedBonePoint;
+     first = TRUE;
+     model->unk160[0] = 0;
+     model->unk160[1] = 0;
+@@ -199,7 +158,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+     model->alpha = 128.0f;
+     /* the first block with a nonzero unk37 in the whole model gets unk61 = 2 */
+     for (i = 0, part = model->parts; i < file->part_count; i++, part++) {
+-        data = (ModelPartData *)(u32)part->data_addr;
++        data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < part->data_count; j++) {
+             length = data->length;
+             if (first && data->unk30.unk37 != 0) {
+@@ -287,10 +246,10 @@ void Model_DrawSkinned(ModelInstance *model) {
+     light_out = packet;
+     light_out_b = packet + 0x10;
+     for (i = 0; i < model->hit_count; i++) {
+-        *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
+-        *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
++        *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
++        *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
+         light_out_b += 4;
+-        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
++        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
+         light_out += 4;
+     }
+     packet += 0x20;
+@@ -342,12 +301,12 @@ void Model_DrawSkinned(ModelInstance *model) {
+             *packet++ = 0x6C040028;
+             COPY_MATRIX(packet, part_turns[MODEL_PART_PARENT_ANY(part)]);
+         }
+-        data = (ModelPartData *)(u32)part->data_addr;
++        data = EE_PTR(ModelPartData *, part->data_addr);
+         packet = Packet_Alloc(part->data_count);
+         for (j = 0; j < part->data_count; j++) {
+             word = *(u32 *)data;
+             *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
+-            *packet = (u32)data + 0x10;
++            *packet = EE_WORD(data) + 0x10;
+             packet += 3;
+             data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
+         }
+@@ -424,10 +383,10 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
+     light_out = packet;
+     light_out_b = packet + 0x10;
+     for (i = 0; i < model->hit_count; i++) {
+-        *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
+-        *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
++        *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
++        *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
+         light_out_b += 4;
+-        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
++        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
+         light_out += 4;
+     }
+     packet += 0x20;
+@@ -449,8 +408,8 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
+             Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+             Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
+         } else {
+-            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+-            Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
++            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
++            Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+         }
+         Packet_EndGsRegisters();
+         part = model->parts;
+@@ -494,12 +453,12 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
+                 *packet++ = 0x6C040028;
+                 COPY_MATRIX(packet, part_turns[MODEL_PART_PARENT_ANY(part)]);
+             }
+-            data = (ModelPartData *)(u32)part->data_addr;
++            data = EE_PTR(ModelPartData *, part->data_addr);
+             packet = Packet_Alloc(part->data_count);
+             for (j = 0; j < part->data_count; j++) {
+                 word = *(u32 *)data;
+                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
+-                *packet = (u32)data + 0x10;
++                *packet = EE_WORD(data) + 0x10;
+                 packet += 3;
+                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
+             }
+@@ -564,7 +523,7 @@ void Model_SetBlockGsWords(ModelInstance *model, s64 unk30, s64 unk40, s64 unk50
+     part = model->parts;
+     for (i = 0; i < part_count; i++, part++) {
+         count = part->data_count;
+-        cursor = (char *)(int)part->data_addr;
++        cursor = EE_PTR(char *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             block = cursor;
+             length = ((ModelPartData *)block)->length;
+@@ -626,7 +585,7 @@ void Model_SetUvsFromScreen(void *model_arg) {
+         count = (s32)(MODEL_PART_WORD(part) >> 53);
+         last = -1;
+         j = 0;
+-        cursor = *(s32 **)&MODEL_PART_WORD(part);
++        cursor = EE_PTR(s32 *, (u32)MODEL_PART_WORD(part));
+         for (; j < count; j++) {
+             ModelWideData *block = (ModelWideData *)cursor;
+             u16 length = block->length;
+@@ -673,7 +632,7 @@ s64 *Model_SaveGsWordsAndUvs(ModelInstance *model, s64 *save) {
+     for (i = 0; i < part_count; i++, part++) {
+         int j = 0;
+         int count = (int)(MODEL_PART_WORD(part) >> 53);
+-        s64 *cursor = *(s64 **)&MODEL_PART_WORD(part);
++        s64 *cursor = EE_PTR(s64 *, (u32)MODEL_PART_WORD(part));
+ 
+         for (; j < count; j++) {
+             s64 *block = cursor;
+@@ -712,7 +671,7 @@ void Model_RestoreGsWordsAndUvs(ModelInstance *model) {
+     for (; i < part_count; i++, part++) {
+         int j = 0;
+         int count = (int)(MODEL_PART_WORD(part) >> 53);
+-        char *cursor = *(char **)&MODEL_PART_WORD(part);
++        char *cursor = EE_PTR(char *, (u32)MODEL_PART_WORD(part));
+ 
+         for (; j < count; j++) {
+             char *block = cursor;
+@@ -768,8 +727,8 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+     model->file = (ModelFile *)base;
+     file = (PosedModelFile *)base;
+     model->parts = (ModelPart *)memory_base;
+-    base = (char *)((model->file_part_count = file->part_count) * sizeof(ModelPart)); // match: base reused for the size, the count stored on the way
+-    *memory = memory_base + (u32)base;
++    /* PORT: the parts are runtime structs (0x90 bytes), the area may need more room on the PC */
++    *memory = memory_base + (model->file_part_count = file->part_count) * sizeof(ModelPart);
+     model->part_count = model->file_part_count; // match: copied from the store above, not from the file
+     part = (ModelPart *)memory_base;
+     file_part = file->parts;
+@@ -777,7 +736,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+         do {
+             part->data_count = file_part->data_count;
+             memory_base = *file_cursor + file_part->data_offset;
+-            part->data_addr = (u32)memory_base;
++            part->data_addr = EE_WORD(memory_base);
+             blended = is_blended(((ModelPartData *)memory_base)->gif_tag_high);
+             data = (ModelPartData *)memory_base;
+             opaque = FALSE;
+@@ -787,7 +746,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+             MODEL_PART_FLAG_BITS(part)->bit41 = opaque;
+             if (first) {
+                 count = file_part->data_count;
+-                data = (ModelPartData *)(u32)part->data_addr;
++                data = EE_PTR(ModelPartData *, part->data_addr);
+                 for (j = 0; j < count; j++) {
+                     length = data->length;
+                     if (((ModelPartDataBits30 *)&data->tex0)->unk37 != 0) {
+@@ -825,7 +784,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+     model->draw_parts = Model_DrawPosed;
+     *file_cursor += file->size;
+     model->update_bone_points = Model_UpdateBonePoints;
+-    model->get_point = (int (*)(void *, int))Model_GetBonePoint;
++    model->get_point = (void *(*)(void *, int))Model_GetBonePoint;
+ }
+ 
+ /* Draws a model (ModelInstance.draw_parts of the models Model_SetUpPosed sets up): queues a packet with
+@@ -884,10 +843,10 @@ void Model_DrawPosed(ModelInstance *model) {
+         light_out = packet;
+         light_out_b = packet + 0x10;
+         for (i = 0; i < model->hit_count; i++) {
+-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
+-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
++            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
++            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
+             light_out_b += 4;
+-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
++            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
+             light_out += 4;
+         }
+         packet += 0x20;
+@@ -910,18 +869,18 @@ void Model_DrawPosed(ModelInstance *model) {
+             if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT40) {
+                 continue;
+             }
+-            data = (ModelPartData *)(u32)part->data_addr;
++            data = EE_PTR(ModelPartData *, part->data_addr);
+             packet = Packet_Alloc(part->data_count + 6);
+             *packet = 0x10000005;
+             packet += 7;
+             *packet++ = 0x6C040004;
+             Matrix_Multiply(packet, model->model_matrix, part);
+             packet += 0x10;
+-            data = (ModelPartData *)(u32)part->data_addr;
++            data = EE_PTR(ModelPartData *, part->data_addr);
+             for (j = 0; j < part->data_count; j++) {
+                 word = *(u32 *)data;
+                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
+-                *packet = (u32)data + 0x10;
++                *packet = EE_WORD(data) + 0x10;
+                 packet += 3;
+                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
+             }
+@@ -986,10 +945,10 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
+         light_out = packet;
+         light_out_b = packet + 0x10;
+         for (i = 0; i < model->hit_count; i++) {
+-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
+-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
++            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
++            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
+             light_out_b += 4;
+-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
++            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
+             light_out += 4;
+         }
+         packet += 0x20;
+@@ -1021,11 +980,11 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
+             *packet++ = 0x6C040004;
+             COPY_MATRIX(packet, part);
+             packet += 0x10;
+-            data = (ModelPartData *)(u32)part->data_addr;
++            data = EE_PTR(ModelPartData *, part->data_addr);
+             for (j = 0; j < part->data_count; j++) {
+                 word = *(u32 *)data;
+                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
+-                *packet = (u32)data + 0x10;
++                *packet = EE_WORD(data) + 0x10;
+                 packet += 3;
+                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
+             }
+@@ -1089,10 +1048,10 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
+         light_out = packet;
+         light_out_b = packet + 0x10;
+         for (i = 0; i < model->hit_count; i++) {
+-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
+-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
++            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
++            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
+             light_out_b += 4;
+-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
++            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
+             light_out += 4;
+         }
+         packet += 0x20;
+@@ -1124,7 +1083,7 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
+                 Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+                 Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+             } else {
+-                Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++                Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+                 Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+             }
+             Packet_EndGsRegisters();
+@@ -1134,11 +1093,11 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
+             *packet++ = 0x6C040004;
+             Matrix_Multiply(packet, model->model_matrix, part);
+             packet += 0x10;
+-            data = (ModelPartData *)(u32)part->data_addr;
++            data = EE_PTR(ModelPartData *, part->data_addr);
+             for (j = 0; j < part->data_count; j++) {
+                 word = *(u32 *)data;
+                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
+-                *packet = (u32)data + 0x10;
++                *packet = EE_WORD(data) + 0x10;
+                 packet += 3;
+                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
+             }
+@@ -1202,10 +1161,10 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+         light_out = packet;
+         light_out_b = packet + 0x10;
+         for (i = 0; i < model->hit_count; i++) {
+-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
+-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
++            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
++            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
+             light_out_b += 4;
+-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
++            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
+             light_out += 4;
+         }
+         Packet_AppendToChain(packet_start, Packet_Alloc(1)); /* the packet ends where the next one would start */
+@@ -1225,12 +1184,12 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+                 if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT41) {
+                     Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+                 } else {
+-                    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++                    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+                 }
+             } else {
+                 Packet_AddGsRegister(0x1A, 0);
+                 Packet_AddGsRegister(0x1B, 0x278);
+-                data = (ModelPartData *)(u32)part->data_addr;
++                data = EE_PTR(ModelPartData *, part->data_addr);
+                 Packet_AddGsRegister(0x15, *(s64 *)&data->unk30);
+                 Packet_AddGsRegister(0x07, data->tex0);
+                 Packet_AddGsRegister(GS_REG_ALPHA_2,
+@@ -1240,7 +1199,7 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+                 if ((s16)model->fade_alpha >= 0x80) {
+                     Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
+                 } else {
+-                    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
++                    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+                 }
+             }
+             Packet_EndGsRegisters();
+@@ -1250,11 +1209,11 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+             *packet++ = 0x6C040004;
+             Matrix_Multiply(packet, model->model_matrix, part);
+             packet += 0x10;
+-            data = (ModelPartData *)(u32)part->data_addr;
++            data = EE_PTR(ModelPartData *, part->data_addr);
+             for (j = 0; j < part->data_count; j++) {
+                 word = *(u32 *)data;
+                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
+-                *packet = (u32)data + 0x10;
++                *packet = EE_WORD(data) + 0x10;
+                 packet += 3;
+                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
+             }
+@@ -1262,8 +1221,8 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+         }
+         Packet_BeginGsRegisters();
+         Packet_AddGsRegister(0x1A, 1);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L); // match: ZBUF_2 twice; ZBUF_1 is left as the last part set it
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL); // match: ZBUF_2 twice; ZBUF_1 is left as the last part set it
+         Packet_EndGsRegisters();
+     }
+ }
+@@ -1315,17 +1274,17 @@ void Model_SetPrimBits(ModelInstance *model, s64 clear_mask, s64 set_value) {
+     int set_bits;
+     int clear_bits;
+ 
+-    set_bits = set_value;
++    set_bits = (int)set_value;
+     set_bits &= 0x7FF;
+     set_bits <<= 15;
+-    clear_bits = clear_mask;
++    clear_bits = (int)clear_mask;
+     clear_bits &= 0x7FF;
+     clear_bits <<= 15;
+     part = model->parts;
+     part_count = model->part_count;
+     for (i = 0; i < part_count; i++, part++) {
+         count = part->data_count;
+-        record = (char *)(int)part->data_addr;
++        record = EE_PTR(char *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             base = record;
+             length = *(u16 *)base;
+@@ -1355,7 +1314,7 @@ void Model_SetTexture(ModelInstance *model, u64 unk40, s64 unk30) {
+     part_count = model->part_count;
+     for (i = 0; i < part_count; i++, part++) {
+         count = part->data_count;
+-        data = (ModelPartData *)(u32)part->data_addr;
++        data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             block = data;
+             length = block->length;
+@@ -1379,7 +1338,7 @@ void Model_SetAlphaBlend(ModelInstance *model, s64 value) {
+     for (; i < part_count; i++, part++) {
+         s32 j = 0;
+         s32 count = (s32)(MODEL_PART_WORD(part) >> 53);
+-        u64 *cursor = *(u64 **)&MODEL_PART_WORD(part);
++        u64 *cursor = EE_PTR(u64 *, (u32)MODEL_PART_WORD(part));
+ 
+         for (; j < count; j++) {
+             ModelPartData *block = (ModelPartData *)cursor;
+@@ -1402,7 +1361,7 @@ void Model_SetVu1Program(ModelInstance *model, s32 value) {
+ 
+     part = model->parts;
+     for (i = 0; i < model->part_count; i++, part++) {
+-        data = (ModelPartData *)(u32)part->data_addr;
++        data = EE_PTR(ModelPartData *, part->data_addr);
+         last_qword = (u32 *)((char *)data + data->length * 16);
+         last_qword[3] = value | 0x15000000;
+     }
+@@ -1424,7 +1383,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
+     for (; i < part_count; i++, part++) {
+         s32 j = 0;
+         s32 count = (s32)(MODEL_PART_WORD(part) >> 53);
+-        s32 *cursor = *(s32 **)&MODEL_PART_WORD(part);
++        s32 *cursor = EE_PTR(s32 *, (u32)MODEL_PART_WORD(part));
+ 
+         for (; j < count; j++) {
+             ModelPartData *block = (ModelPartData *)cursor;
+@@ -1457,7 +1416,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
+ 
+ /* Step the colour of every vertex within `radius` of `centre` towards `targets`, one component at
+    a time by `steps`. Returns how many components have not arrived yet. */
+-int Model_FadeVertexColoursNear(int model_arg, void *centre_arg, int *steps, int *targets, float radius) {
++int Model_FadeVertexColoursNear(void *model_arg, void *centre_arg, int *steps, int *targets, float radius) {
+     ModelInstance *model = (ModelInstance *)model_arg;
+     f32 *centre = centre_arg;
+     // match: the order of these declarations decides the stack slots of the four loop cursors (gcse hashes
+@@ -1487,7 +1446,7 @@ int Model_FadeVertexColoursNear(int model_arg, void *centre_arg, int *steps, int
+     for (; i < part_count; i++, part++) {
+         j = 0;
+         count = (s32)(MODEL_PART_WORD(part) >> 53);
+-        cursor = *(s32 **)&MODEL_PART_WORD(part);
++        cursor = EE_PTR(s32 *, (u32)MODEL_PART_WORD(part));
+         for (; j < count; j++) {
+             block = (ModelPartData *)cursor;
+             length = block->length;
+@@ -1549,7 +1508,7 @@ void Model_SetTextureBase(ModelInstance *model, int texture_base, int clut_base)
+     for (; i < part_count; i++, part++) {
+         int j = 0;
+         int count = (int)(MODEL_PART_WORD(part) >> 53);
+-        char *cursor = *(char **)&MODEL_PART_WORD(part);
++        char *cursor = EE_PTR(char *, (u32)MODEL_PART_WORD(part));
+ 
+         for (; j < count; j++) {
+             char *block = cursor;
+diff --git a/src/game/model/model.h b/src/game/model/model.h
+index 451b741564b00003996c5b5517515bbba3d9cc37..1bc751c956226e360f0b6c3586b14959bb1a5a7a 100644
+--- a/src/game/model/model.h
++++ b/src/game/model/model.h
+@@ -44,29 +44,37 @@ typedef struct __attribute__((packed)) {
+ typedef s32 VuIntVector[4] __attribute__((aligned(16)));
+ 
+ /* one vertex of a strip */
++/* overlay: a collision mesh file (CollisionStripPoint, collision/collision.h) */
+ typedef struct {
+-    void *unk00;                    /* 0x00 */
++    EEWord unk00;                   /* 0x00 (f32 *) the point's position, relocated by Collision_RelocateMesh */
+     s32 unk04;                      /* 0x04 */
+     s32 unk08;                      /* 0x08 */
+     s32 unk0C;                      /* 0x0C */
+ } StripVertex;
++LAYOUT_SIZE(StripVertex, 0x10);
+ 
+ /* a strip: a header, then vertex_count vertices */
++/* overlay: a collision mesh file (CollisionStrip) */
+ typedef struct {
+     u16 vertex_count;               /* 0x00 */
+     char pad02[0x1E];
+     StripVertex vertices[1];        /* 0x20 vertex_count of them */
+ } Strip;
++LAYOUT_OFFSET(Strip, vertices, 0x20);
+ 
+ /* ModelInstance.strips: the strips back to back */
++/* overlay: a collision mesh file (CollisionMesh) */
+ typedef struct {
+     s32 strip_count;                /* 0x00 */
+-    Strip *strips;                  /* 0x04 */
++    EEWord strips;                  /* 0x04 (Strip *) */
+     s32 unk08;                      /* 0x08 */
+     u32 unk0C;                      /* 0x0C */
+ } ModelStripList;
++LAYOUT_SIZE(ModelStripList, 0x10);
+ 
+-/* one 0x80-byte part (joint) of a model, ModelInstance.parts[i] */
++/* one 0x80-byte part (joint) of a model, ModelInstance.parts[i]. Runtime: on the PC child and sibling
++   are 8 bytes and the part is 0x90. data_addr stays the 32-bit EE address of the part's data (in game
++   RAM) because the code reads the last doubleword whole (MODEL_PART_WORD). */
+ typedef struct ModelPart {
+     char matrix[0x40];              /* 0x00 the part's matrix, passed by address */
+     f32 position[4];                /* 0x40 where it sits on its parent */
+@@ -79,14 +87,15 @@ typedef struct ModelPart {
+     char pad6D[0x03];
+     struct ModelPart *child;        /* 0x70 first part hanging off this one, NULL: none */
+     struct ModelPart *sibling;      /* 0x74 next part on the same parent, NULL: none */
+-    u64 data_addr : 32;             /* 0x78 */
++    u64 data_addr : 32;             /* 0x78 (ModelPartData *) the EE address of the first data block */
+     u64 part_flags : 7;             /* MotionPart.unk02 of the motion last loaded */
+     u64 level : 7;                  /* detail level picked by Motion_SeekKeys */
+     u64 pad78_46 : 7;
+     u64 data_count : 11;
+-} ModelPart;
++} __attribute__((aligned(16))) ModelPart; /* 16: its matrix is moved with lqc2/sqc2 */
+ 
+ /* one vertex of a ModelPartData block */
++/* overlay: a model file */
+ typedef struct {
+     s16 x;                          /* 0x00 */
+     s16 y;                          /* 0x02 */
+@@ -99,9 +108,11 @@ typedef struct {
+     char pad16[0x02];
+     s16 colour[4];                  /* 0x18 red, green, blue, alpha: 0..0xFF each (set by Model_SetVertexColour) */
+ } ModelPartVertex;
++LAYOUT_SIZE(ModelPartVertex, 0x20);
+ 
+ /* a ModelPartVertex with every field a signed word, as the code that builds vertices between
+    two others reads it (ModelScreen_StepVertices, ModelScreen_StepVerticesRounded) */
++/* overlay: a model file's vertices */
+ typedef struct {
+     s16 x;                          /* 0x00 */
+     s16 y;                          /* 0x02 */
+@@ -115,13 +126,16 @@ typedef struct {
+     s16 unk16;                      /* 0x16 0x7FFF on a vertex built between two others, 0 on the two ends */
+     s16 colour[4];                  /* 0x18 */
+ } ModelPartVertexWords;
++LAYOUT_SIZE(ModelPartVertexWords, 0x20);
+ 
+ /* a ModelPartData block from 0x70 on, for the models whose vertices start at 0x80 (ModelScreen_SetUvsFromScreen) */
++/* overlay: a model file */
+ typedef struct {
+     s32 unk00;                      /* 0x00 low 15 bits: how many vertices */
+     char pad04[0x0C];
+     ModelPartVertex vertices[1];    /* 0x10 */
+ } ModelPartDataTail;
++LAYOUT_OFFSET(ModelPartDataTail, vertices, 0x10);
+ 
+ /* the doubleword at ModelPartData+0x30 */
+ typedef struct {
+@@ -134,6 +148,7 @@ typedef struct {
+ 
+ /* one block of a part's data (ModelPart.data_addr): 0x90 bytes of GS setup, then the vertices.
+    The next block starts (length + 1) * 16 bytes after this one. */
++/* overlay: a model file (the DMA packets the parts are drawn with refer to it) */
+ typedef struct {
+     u16 length;                     /* 0x00 in 16-byte units, not counting the first */
+     char pad02[0x2E];
+@@ -148,8 +163,15 @@ typedef struct {
+     char pad78[0x18];
+     ModelPartVertex vertices[1];    /* 0x90 */
+ } ModelPartData;
++LAYOUT_OFFSET(ModelPartData, unk30, 0x30);
++LAYOUT_OFFSET(ModelPartData, tex0, 0x40);
++LAYOUT_OFFSET(ModelPartData, blend, 0x50);
++LAYOUT_OFFSET(ModelPartData, vertex_count, 0x70);
++LAYOUT_OFFSET(ModelPartData, gif_tag_high, 0x74);
++LAYOUT_OFFSET(ModelPartData, vertices, 0x90);
+ 
+ /* one record of a part's data (ModelPart.data_addr): 0x80 bytes plus its payload */
++/* overlay: a model file */
+ typedef struct {
+     char pad00[0x40];
+     int id_word;                    /* 0x40 low 14 bits: the record id */
+@@ -157,13 +179,16 @@ typedef struct {
+     int payload_size;               /* 0x60 low 15 bits: the payload length in 0x40-byte units */
+     char pad64[0x0C];
+ } ModelPartRecord;
++LAYOUT_OFFSET(ModelPartRecord, id_word, 0x40);
++LAYOUT_OFFSET(ModelPartRecord, payload_size, 0x60);
+ 
+ /* ModelPart with its last doubleword (the bit-fields) whole. Bits 32-38 clear:
+    Bone_MultiplyPathTo leaves the part's turn and offset out. */
+ typedef struct {
+-    char pad00[0x78];
++    char pad00[offsetof(ModelPart, sibling) + sizeof(struct ModelPart *)]; /* 0x78 on the PS2 */
+     u64 unk78;                      /* 0x78 */
+ } ModelPartWords;
++_Static_assert(offsetof(ModelPartWords, unk78) + 8 + 8 == sizeof(ModelPart), "ModelPartWords.unk78 must be ModelPart's last doubleword");
+ 
+ #define MODEL_PART_WORD(part) (((ModelPartWords *)(part))->unk78)
+ 
+@@ -180,6 +205,7 @@ typedef union {
+ #define MODEL_PART_PARENT_ANY(part) ((s32)(MODEL_PART_WORD_ANY(part) >> 46) & 0x7F)
+ 
+ /* one 0x40-byte vertex of a ModelWideData block */
++/* overlay: a model file */
+ typedef struct {
+     f32 position[4];                /* 0x00 */
+     f32 offset[4];                  /* 0x10 added to the position before it is projected (Model_SetUvsFromScreen) */
+@@ -189,9 +215,11 @@ typedef struct {
+     s32 on_parent;                  /* 0x2C 0: placed by its own part's matrix, otherwise by the parent part's */
+     char pad30[0x10];
+ } ModelWideVertex;
++LAYOUT_SIZE(ModelWideVertex, 0x40);
+ 
+ /* a block of a part's data in the models drawn with their own texture (MODEL_FLAG_800):
+    0xB0 bytes of GS setup, then 0x40-byte vertices */
++/* overlay: a model file */
+ typedef struct {
+     u16 length;                     /* 0x00 in 16-byte units, not counting the first */
+     char pad02[0x8E];
+@@ -199,6 +227,8 @@ typedef struct {
+     char pad94[0x1C];
+     ModelWideVertex vertices[1];    /* 0xB0 */
+ } ModelWideData;
++LAYOUT_OFFSET(ModelWideData, unk90, 0x90);
++LAYOUT_OFFSET(ModelWideData, vertices, 0xB0);
+ 
+ /* the doubleword at ModelPartData+0x70 (the block's GIF tag) */
+ typedef struct {
+@@ -208,6 +238,7 @@ typedef struct {
+ } ModelPartDataBits70;
+ 
+ /* one part of a PosedModelFile */
++/* overlay: a model file */
+ typedef struct {
+     f32 position[3];                /* 0x00 where the part rests: ModelPart.position */
+     f32 rotation[3];                /* 0x0C ModelPart.rotation_x, unk54, unk58 */
+@@ -216,8 +247,10 @@ typedef struct {
+     u16 data_count;                 /* 0x28 how many blocks */
+     char pad2A[0x06];
+ } PosedModelFilePart;
++LAYOUT_SIZE(PosedModelFilePart, 0x30);
+ 
+ /* a model file as Model_SetUpPosed reads it: every part comes with the pose it rests in */
++/* overlay: a model file */
+ typedef struct {
+     s32 size;                       /* 0x00 the next file starts this many bytes on */
+     u16 part_count;                 /* 0x04 */
+@@ -225,6 +258,8 @@ typedef struct {
+     s32 bone_anchors_offset;        /* 0x0C from the start of the file to 32 BoneAnchor, 0: none */
+     PosedModelFilePart parts[1];    /* 0x10 part_count of them */
+ } PosedModelFile;
++LAYOUT_OFFSET(PosedModelFile, bone_anchors_offset, 0x0C);
++LAYOUT_OFFSET(PosedModelFile, parts, 0x10);
+ 
+ /* ModelPart with the bit-fields that share a doubleword with unk60[2] */
+ typedef struct {
+@@ -244,10 +279,11 @@ typedef struct {
+ } ModelPartFlagWord;
+ 
+ #define MODEL_PART_FLAG_WORD(part) (((ModelPartFlagWord *)(part))->unk68)
+-#define MODEL_PART_BIT40 (0x8000L << 25)
+-#define MODEL_PART_BIT41 (0x8000L << 26)
++#define MODEL_PART_BIT40 (0x8000LL << 25)
++#define MODEL_PART_BIT41 (0x8000LL << 26)
+ 
+ /* per-part level thresholds, ModelInstance.level_tables[n][part] */
++/* overlay: a motion file (MotionData.parts), relocated in place by ModelMotion_Load */
+ typedef struct {
+     u8 count;                       /* 0x00 */
+     char pad01;
+@@ -256,10 +292,12 @@ typedef struct {
+     u8 sibling;                     /* 0x04 index of the next part on the same parent, 0: none */
+     char pad05[0x03];
+     u32 keys_offset;                /* 0x08 from the start of the MotionData, 0: no keys */
+-    u16 *thresholds;                /* 0x0C u16 values at a stride of 0x12 bytes (MotionKey), set from keys_offset */
++    EEWord thresholds;              /* 0x0C (u16 *) u16 values at a stride of 0x12 bytes (MotionKey), set from keys_offset */
+ } ModelPartLevels;
++LAYOUT_SIZE(ModelPartLevels, 0x10);
+ 
+ /* one 0x12-byte key of a part: three (unknown, unknown, vector index) groups */
++/* overlay: a motion file */
+ typedef struct {
+     u16 frame;                      /* 0x00 the threshold */
+     u16 length;                     /* 0x02 frames from this key to the next */
+@@ -271,6 +309,7 @@ typedef struct {
+     u16 rotation_out;               /* 0x0E tangent of the rotation curve leaving this key */
+     u16 scale;                      /* 0x10 */
+ } MotionKey;
++LAYOUT_SIZE(MotionKey, 0x12);
+ 
+ /* a vector of a motion (12 bytes) */
+ typedef struct {
+@@ -280,15 +319,18 @@ typedef struct {
+ } MotionVector;
+ 
+ /* one motion of a MotionFile; ModelMotion_Load hooks it up to a model */
++/* overlay: a motion file, relocated in place by ModelMotion_Load */
+ typedef struct {
+     u32 size;                       /* 0x00 the next motion starts this many bytes on */
+     u32 vectors_offset;             /* 0x04 */
+-    MotionVector *vectors;          /* 0x08 set from vectors_offset */
++    EEWord vectors;                 /* 0x08 (MotionVector *) set from vectors_offset */
+     u16 frame_count;                /* 0x0C ModelTableHeader.unk00 */
+     u8 part_count;                  /* 0x0E */
+     char pad0F;
+     ModelPartLevels parts[1];       /* 0x10 part_count of them; ModelChannel.tables[n] points here */
+ } MotionData;
++LAYOUT_OFFSET(MotionData, frame_count, 0x0C);
++LAYOUT_OFFSET(MotionData, parts, 0x10);
+ 
+ /* a 16-byte directory entry of a MotionFile */
+ typedef struct {
+@@ -296,19 +338,23 @@ typedef struct {
+ } MotionFileEntry;
+ 
+ /* a file of motions: the directory, then the MotionData blocks back to back */
++/* overlay: a motion file */
+ typedef struct {
+     char pad00[0x04];
+     u32 motion_count;               /* 0x04 */
+     char pad08[0x08];
+     MotionFileEntry entries[1];     /* 0x10 motion_count of them */
+ } MotionFile;
++LAYOUT_OFFSET(MotionFile, entries, 0x10);
+ 
+ /* where a bone sits: an offset from a part's origin (bone 0xFF: the model origin) */
++/* overlay: a model file */
+ typedef struct {
+     f32 offset[3];                  /* 0x00 */
+     u8 bone;                        /* 0x0C */
+     char pad0D[0x03];
+ } BoneAnchor;
++LAYOUT_SIZE(BoneAnchor, 0x10);
+ 
+ /* the 4 bytes in front of each block ModelInstance.level_tables[n] points at */
+ typedef struct {
+@@ -317,6 +363,7 @@ typedef struct {
+ } ModelTableHeader;
+ 
+ /* one part of a ModelFile */
++/* overlay: a model file */
+ typedef struct {
+     s32 data_offset;                /* 0x00 from the start of the file to the part's ModelPartData blocks */
+     u16 data_count;                 /* 0x04 how many blocks */
+@@ -324,8 +371,10 @@ typedef struct {
+     s8 unk07;                       /* 0x07 */
+     char pad08[0x08];
+ } ModelFilePart;
++LAYOUT_SIZE(ModelFilePart, 0x10);
+ 
+ /* a model file as Model_SetUpSkinned reads it */
++/* overlay: a model file */
+ typedef struct ModelFile {
+     s32 size;                       /* 0x00 the next file starts this many bytes on */
+     u16 part_count;                 /* 0x04 */
+@@ -333,6 +382,8 @@ typedef struct ModelFile {
+     BoneAnchor bone_anchors[32];    /* 0x10 */
+     ModelFilePart parts[1];         /* 0x210 part_count of them */
+ } ModelFile;
++LAYOUT_OFFSET(ModelFile, bone_anchors, 0x10);
++LAYOUT_OFFSET(ModelFile, parts, 0x210);
+ 
+ /* a model file's header through a union of its two layouts: a read through it aliases everything
+    (Model_SetUpPosed tests the part count that way, after it has moved the memory cursor) */
+@@ -345,14 +396,9 @@ typedef union {
+ 
+ #define MODEL_FLAG_800  0x800
+ 
+-/* ModelInstance with the three part slots at 0x130 as the array Model_SetUpSkinned fills
+-   (ModelInstance.root_part is the first) */
+-typedef struct {
+-    char pad00[0x130];
+-    ModelPart *parts[3];            /* 0x130 the parts whose ModelFilePart.unk06 is 1, 2 and 3 */
+-} ModelInstanceSlots;
+-
+-#define MODEL_SLOT_PARTS(model) (((ModelInstanceSlots *)(model))->parts)
++/* ModelInstance's three part slots at 0x130 as the array Model_SetUpSkinned fills (ModelInstance.root_part
++   is the first, pad134 the other two): the parts whose ModelFilePart.unk06 is 1, 2 and 3 */
++#define MODEL_SLOT_PARTS(model) ((ModelPart **)((char *)(model) + offsetof(ModelInstance, root_part)))
+ 
+ /* a vertex's own texture coordinates and the wave (gfx/screen.h WaveOscillator) that moves them */
+ typedef struct ModelWaveUv {
+@@ -388,13 +434,13 @@ typedef struct ModelInstance {
+     Vector4 *bone_positions;        /* 0x124 32 of them, written from bone_anchors */
+     struct ModelInstance *draw_next[2]; /* 0x128 next model in the same depth bucket, per draw list */
+     ModelPart *root_part;           /* 0x130 the part whose placement Entity_RebuildModelMatrices leaves out (the root?) */
+-    char pad134[0x08];
++    ModelPart *pad134[2];           /* 0x134 part slots 2 and 3 (MODEL_SLOT_PARTS) */
+     f32 radius;                     /* 0x13C how far the model reaches around its position (a map object's MapObject.reach_radius) */
+     u8 hit_handles[4];              /* 0x140 handles of the linked points (linked_point_pool) that touch it; the drawing code lights it by them */
+     u8 hit_count;                   /* 0x144 how many of hit_handles are used */
+     u8 fade_enabled;                /* 0x145 1: drawn with fade_alpha instead of the parts' own alpha */
+     s16 fade_alpha;                 /* 0x146 alpha (0..0x100) the model fades with while fade_enabled */
+-    s32 light_block;                /* 0x148 pointer to the model's lights: two 0x40 matrices */
++    sptr light_block;               /* 0x148 pointer to the model's lights: two 0x40 matrices */
+     void *fog_block;                /* 0x14C pointer to the model's fog block (near, far, colour) */
+     f32 colour_red;                 /* 0x150 the model's red tint */
+     f32 colour_green;               /* 0x154 the model's green tint */
+@@ -407,18 +453,18 @@ typedef struct ModelInstance {
+     int found_record[4];            /* 0x180 a copy of that record, its id bits replaced; a quadword sent after it */
+     u16 texture_slot;               /* 0x190 slot of unk194 in texture_slots (0..2), 3: always sent */
+     s16 shared_texture_slot;        /* 0x192 which entry of the shared last-sent texture record applies */
+-    int texture_data;               /* 0x194 the model's texture: a chunk table, or a raw packet */
+-    int shared_texture_packet;      /* 0x198 map texture packet 5, tracked in the shared record */
+-    int texture_packet_3;           /* 0x19C the map's texture packet 3, queued when it changes */
+-    int texture_packet_5;           /* 0x1A0 the map's texture packet 5, queued when it changes */
++    sptr texture_data;              /* 0x194 the model's texture: a chunk table, or a raw packet */
++    sptr shared_texture_packet;     /* 0x198 map texture packet 5, tracked in the shared record */
++    sptr texture_packet_3;          /* 0x19C the map's texture packet 3, queued when it changes */
++    sptr texture_packet_5;          /* 0x1A0 the map's texture packet 5, queued when it changes */
+     struct ModelWaveUv *wave_uvs;   /* 0x1A4 one per vertex, built by Wobble_BuildWaveUvs */
+     void (*draw_parts)(struct ModelInstance *model); /* 0x1A8 queues the model's part packets */
+     void (*draw)(struct ModelInstance *model); /* 0x1AC sets the GS state and draws */
+-    void (*after_draw)();           /* 0x1B0 called with the model by DrawList_Draw */
++    void (*after_draw)(struct ModelInstance *model); /* 0x1B0 called with the model by DrawList_Draw */
+     void (*update_bone_points)(struct ModelInstance *model); /* 0x1B4 recomputes the 32 bone positions from the bone anchors */
+-    int (*get_point)(void *model, int index); /* 0x1B8 */
++    void *(*get_point)(void *model, int index); /* 0x1B8: the point (a vector) of index */
+     void (*on_textures_sent)(struct ModelInstance *model); /* 0x1BC called when ModelTexture_SendForModel sent new textures */
+-} ModelInstance;
++} __attribute__((aligned(16))) ModelInstance; /* 16: its matrices are moved with lqc2/sqc2 */
+ 
+ /* a 0x40-byte vertex of four vectors; ModelScreen_StepFloatVertices fills the steps between two of them */
+ typedef struct {
+@@ -428,15 +474,6 @@ typedef struct {
+     f32 unk30[4];                   /* 0x30 */
+ } BlendVertex;
+ 
+-/* one of the 0x40-byte lights at linked_point_pool, as the drawing code copies it into a packet */
+-typedef struct {
+-    f32 unk00[4];                   /* 0x00 sent whole, but for the last word */
+-    f32 unk10[4];                   /* 0x10 sent whole */
+-    char pad20[0x04];
+-    f32 unk24;                      /* 0x24 sent in place of unk00[3] */
+-    char pad28[0x18];
+-} __attribute__((aligned(16))) ModelLight;
+-
+ /* where a vertex lands on the screen, as Vu0_ProjectToScreen and Vu0_ProjectToScreen3 write it */
+ typedef struct {
+     s32 x;                          /* 0x00 12.4 fixed point; the screen is 0x6C00 to 0x9400 across */
+@@ -468,43 +505,43 @@ typedef struct {
+     s32 screen[4];                  /* 0x1010 */
+ } ModelProjectScratch;
+ 
+-#define MODEL_PROJECT_SCRATCH ((ModelProjectScratch *)0x70000000)
++#define MODEL_PROJECT_SCRATCH SPR(ModelProjectScratch *, 0)
+ 
+ /* the scratchpad as a matrix, where the builders of model/model_matrix.c work */
+-#define MODEL_MATRIX_SCRATCH ((f32 *)0x70000000)
++#define MODEL_MATRIX_SCRATCH SPR(f32 *, 0)
+ 
+ /* the scratchpad as the motion code (model/motion.c) uses it: the key vectors it blends between */
+-#define MOTION_SCRATCH ((Vector4 *)0x70000000)
++#define MOTION_SCRATCH SPR(Vector4 *, 0)
+ 
+ /* the scratchpad as ModelMotion_Step uses it: the two keys and their two tangents of a Hermite step */
+-#define MOTION_SCRATCH_POINTS ((Vector4 *)0x70000000)
++#define MOTION_SCRATCH_POINTS SPR(Vector4 *, 0)
+ 
+ /* the scratchpad as Model_DrawSkinned and Model_DrawSkinnedTwoPass use it: the turn they work out, the two matrices
+    ModelMatrix_BuildDrawMatrices makes for the model, then a matrix per part and the same without the
+    model's own placement */
+-#define MODEL_TURN_SCRATCH ((f32 *)0x70000000)
+-#define MODEL_TURN_MATRIX_A ((void *)0x70000040)
+-#define MODEL_TURN_MATRIX_B ((void *)0x70000080)
+-#define MODEL_TURN_PART_MATRICES ((f32 (*)[16])0x700000C0)
+-#define MODEL_TURN_PART_TURNS ((f32 (*)[16])0x70001100)
++#define MODEL_TURN_SCRATCH SPR(f32 *, 0)
++#define MODEL_TURN_MATRIX_A SPR(void *, 0x40)
++#define MODEL_TURN_MATRIX_B SPR(void *, 0x80)
++#define MODEL_TURN_PART_MATRICES SPR(f32 (*)[16], 0xC0)
++#define MODEL_TURN_PART_TURNS SPR(f32 (*)[16], 0x1100)
+ 
+ /* the scratchpad as Model_DrawPosed, Model_DrawPosedDepthByPart and Model_DrawPosedWithAlpha use it: the two matrices
+    ModelMatrix_BuildDrawMatrices makes for the model */
+-#define MODEL_DRAW_MATRIX_A ((void *)0x70000000)
+-#define MODEL_DRAW_MATRIX_B ((void *)0x70000040)
++#define MODEL_DRAW_MATRIX_A SPR(void *, 0)
++#define MODEL_DRAW_MATRIX_B SPR(void *, 0x40)
+ 
+ /* the scratchpad as ModelScreen_CutClippedTriangles uses it: where each vertex of a block lands on the screen */
+-#define MODEL_CLIP_SCREEN_POINTS ((ModelScreenPoint *)0x70000000)
++#define MODEL_CLIP_SCREEN_POINTS SPR(ModelScreenPoint *, 0)
+ 
+ /* the scratchpad as ModelScreen_QueueCutTriangle uses it: the edge opposite the apex, then two rows of the fan */
+-#define MODEL_CUT_EDGE ((ModelPartVertexWords *)0x70000200)
+-#define MODEL_CUT_ROW_A ((ModelPartVertexWords *)0x700002A0)
+-#define MODEL_CUT_ROW_B ((ModelPartVertexWords *)0x70000340)
++#define MODEL_CUT_EDGE SPR(ModelPartVertexWords *, 0x200)
++#define MODEL_CUT_ROW_A SPR(ModelPartVertexWords *, 0x2A0)
++#define MODEL_CUT_ROW_B SPR(ModelPartVertexWords *, 0x340)
+ 
+ /* the same for ModelScreen_QueueCutFloatTriangle, which cuts with float vertices (BlendVertex) */
+-#define MODEL_CUT_BLEND_EDGE ((BlendVertex *)0x70000200)
+-#define MODEL_CUT_BLEND_ROW_A ((BlendVertex *)0x70000340)
+-#define MODEL_CUT_BLEND_ROW_B ((BlendVertex *)0x70000480)
++#define MODEL_CUT_BLEND_EDGE SPR(BlendVertex *, 0x200)
++#define MODEL_CUT_BLEND_ROW_A SPR(BlendVertex *, 0x340)
++#define MODEL_CUT_BLEND_ROW_B SPR(BlendVertex *, 0x480)
+ 
+ /* what MapObject.source points at */
+ typedef struct {
+@@ -609,34 +646,15 @@ typedef struct {
+ /* MapObjectUnk04.kind read as the byte it is, where retail compares it that way (Collision_PushOutOfMeshObj) */
+ #define MAP_OBJECT_DEF_KIND(def) (*(u8 *)(def))
+ 
+-/* AnimObject+0x40 */
+-typedef struct {
+-    char pad00[0x14];
+-    s32 unk14;                      /* 0x14 */
+-    s32 unk18;                      /* 0x18 */
+-} AnimObjectBody;
+ 
+-/* an animated object: the model, its animation table and a small state machine */
+-typedef struct {
+-    ModelInstance *model;           /* 0x00 */
+-    void *anims;                    /* 0x04 8-byte entries */
+-    char pad08[0x08];
+-    u8 unk10;                       /* 0x10 the flag word is ANIM_OBJECT_FLAGS */
+-    u8 mode;                        /* 0x11 */
+-    char pad12[0x02];
+-    char pad14[0x2C];
+-    AnimObjectBody body;            /* 0x40 */
+-} AnimObject;
+ 
+-/* the 32-bit flags at AnimObject+0x10 */
+-#define ANIM_OBJECT_FLAGS(object) (*(u32 *)&(object)->unk10)
+ 
+ /* the objects of a map, looked up by MapObject_GetById(map, id) */
+ typedef struct {
+     ModelInstance *model;           /* 0x00 */
+     MapObjectUnk04 *definition;     /* 0x04 its row of param/obj.prm: kind, model, scripts, toughness */
+     MapObjectUnk08 *source;         /* 0x08 its record in the map's object list: where it stands, its model */
+-    s32 map_record;                 /* 0x0C what Map_FindRecordAtInSlot returns for its position */
++    sptr map_record;                /* 0x0C what Map_FindRecordAtInSlot returns for its position */
+     u32 state_flags;                /* 0x10 flags, MAP_OBJECT_BITS */
+     f32 reach_radius;               /* 0x14 how far around its position it reaches, 0: nothing to hit */
+     f32 tested_point_distance;      /* 0x18 how far it is from the point last tested against the map objects (Collision_PushOutOfObjects, Collision_StandOnObjects) */
+@@ -753,29 +771,16 @@ typedef struct {
+ #define MAP_OBJECT_BITS_LOW(object) ((MapObjectBitsLow *)&(object)->state_flags)
+ 
+ /* the props of a map, looked up by Map_GetRecordById(map, id) */
++/* overlay: a 0x80-byte map record of the map file (map/map.h MapRecordInfo) */
+ typedef struct {
+     char pad00[0x32];
+     u16 unk32;                      /* 0x32 0xFFFF: nothing to collide with */
+     char pad34[0x48];
+-    ModelInstance *model;           /* 0x7C */
++    EEWord model;                   /* 0x7C (ModelInstance *) MAP_RECORD_MODEL (map/map.h) reads it */
+ } MapProp;
++LAYOUT_SIZE(MapProp, 0x80);
++LAYOUT_OFFSET(MapProp, model, 0x7C);
+ 
+-/* what pickup_item points at: one of the nodes at fixed_items. lying_items heads
+-   the list of the ones in use. */
+-typedef struct ModelNode {
+-    s32 unk00;                      /* 0x00 */
+-    s32 unk04;                      /* 0x04 cleared when the node is unlinked */
+-    s32 unk08;                      /* 0x08 cleared when the node is unlinked */
+-    s32 unk0C;                      /* 0x0C bit 0: the map slot */
+-    char pad10[0x04];
+-    void *unk14;                    /* 0x14 the MapRecordInfo (map/map.h) it is standing in, found every frame */
+-    ModelInstance *model;           /* 0x18 non-null while the node is in use */
+-    s16 item;                       /* 0x1C which item it is (index into item_name_defs) */
+-    s16 unk1E;                      /* 0x1E index into the map's row of map_item_pickup_counts */
+-    struct ModelNode *prev;         /* 0x20 */
+-    struct ModelNode *next;         /* 0x24 */
+-    char pad28[0x14];
+-} ModelNode;
+ 
+ /* one of a map's fixed items: where it lies and what it is (0x40 bytes, map_item_defs[map]) */
+ typedef struct {
+@@ -808,12 +813,12 @@ typedef struct {
+     DroppedItemRecord records[16];  /* 0x00 */
+ } DroppedItemRecords;
+ 
+-/* a ModelNode as the item code reads it: 64 fixed items per map at fixed_items, then 16
++/* a node as the item code reads it: 64 fixed items per map at fixed_items, then 16
+    dropped ones per map at dropped_items */
+ typedef struct ItemNode {
+     MapItemDef *def;                /* 0x00 NULL on a dropped item */
+     DroppedItemRecord *record;      /* 0x04 NULL on a fixed item */
+-    s32 unk08;                      /* 0x08 */
++    MapObject *unk08;               /* 0x08 the map object (a chest) the item lies in */
+     u32 flags;                      /* 0x0C ItemNodeBits */
+     char pad10[0x04];
+     void *map_record;               /* 0x14 the MapRecordInfo (map/map.h) it lies in, looked up before it is drawn */
+@@ -838,7 +843,6 @@ typedef struct {
+ 
+ /* ItemNode with all of its flags as bit-fields (MapItem_Drop) */
+ typedef struct {
+-    char pad00[0x0C];
+     u32 map : 1;                    /* 0x0C which of the two loaded maps it lies in */
+     u32 bit1 : 1;
+     u32 bit2 : 1;                   /* set on a dropped item */
+@@ -846,7 +850,7 @@ typedef struct {
+     u32 bits7 : 25;
+ } ItemNodeBits;
+ 
+-#define ITEM_NODE_BITS(node) ((ItemNodeBits *)(node))
++#define ITEM_NODE_BITS(node) ((ItemNodeBits *)&(node)->flags)
+ 
+ /* item_model_sources[map][32]: what is loaded for each kind of item a map holds (MapItem_FindModelSource finds one) */
+ typedef struct {
+@@ -857,9 +861,11 @@ typedef struct {
+ /* the object Collision_HitCapsuleQuadObj tests against a model's points */
+ typedef struct {
+     ModelInstance *model;           /* 0x00 */
+-    char pad04[0x0C];
++    void *pad04[3];                 /* 0x04 MapObject.definition, source, map_record: it is a view of a MapObject */
+     int flags;                      /* 0x10 */
+ } CollisionOwner;
++_Static_assert(offsetof(CollisionOwner, model) == offsetof(MapObject, model), "CollisionOwner is a view of MapObject");
++_Static_assert(offsetof(CollisionOwner, flags) == offsetof(MapObject, state_flags), "CollisionOwner is a view of MapObject");
+ 
+ /* ChannelOwner.channel: the playback state Motion_Start resets */
+ typedef struct {
+@@ -874,6 +880,15 @@ typedef struct {
+     u8 unk8F;                       /* 0x8F nonzero: a blend moves 255/unk8F of the way each frame (ModelMotion_StepBlend) */
+ } ModelChannel;
+ 
++/* PC sizes of areas the PS2 sized for its own structs. ModelPart is 0x80 bytes there (0x90 here), ModelChannel
++   0x90 (0x110 here), ModelInstance 0x1C0 (larger here): an area of ps2_size bytes that held them needs this many
++   bytes on the PC (each assumes the area held nothing but that struct, so it never comes up short). */
++#define PS2_MODEL_PART_SIZE     0x80
++#define PS2_MODEL_CHANNEL_SIZE  0x90
++#define PS2_MODEL_INSTANCE_SIZE 0x1C0
++#define MODEL_PART_AREA_SIZE(ps2_size) ((ps2_size) + (ps2_size) / PS2_MODEL_PART_SIZE * (sizeof(ModelPart) - PS2_MODEL_PART_SIZE))
++#define MODEL_INSTANCE_AREA_SIZE(ps2_size)     (((ps2_size) / PS2_MODEL_INSTANCE_SIZE + 1) * sizeof(ModelInstance) + 0xF & ~(size_t)0xF)
++
+ /* ModelInstance.level_tables points at the model's ModelChannel, whose first 0x80 bytes are the tables */
+ #define MODEL_CHANNEL(model) (*(ModelChannel **)&(model)->level_tables)
+ 
+@@ -893,11 +908,11 @@ typedef struct {
+     f32 z;                          /* 0x48 */
+ } ChannelVector;
+ 
+-/* what ChannelActor.owner points at */
++/* what ChannelActor.owner points at: a ModelInstance (level_tables, root_part) */
+ typedef struct {
+-    char pad00[0xFC];
++    char pad00[offsetof(ModelInstance, level_tables)]; /* 0x00 */
+     ModelChannel *channel;          /* 0xFC */
+-    char pad100[0x30];
++    char pad100[offsetof(ModelInstance, root_part) - offsetof(ModelInstance, level_tables) - sizeof(void *)];
+     ChannelVector *vec;             /* 0x130 */
+ } ChannelOwner;
+ 
+diff --git a/src/game/model/model_matrix.c b/src/game/model/model_matrix.c
+index 37eb92479a39d6281ddeda2c90b3e59d9cfc4301..865b9a7d8a90af6e7fd3ff411ca4e77d008723fa 100644
+--- a/src/game/model/model_matrix.c
++++ b/src/game/model/model_matrix.c
+@@ -3,6 +3,9 @@
+    matrices a model is drawn with. Several builders are not called by anything. */
+ #include "model/model_matrix.h"
+ #include "core/game.h"
++#include "math/vu0.h"
++#include <string.h>
++#include "libvu0.h"
+ 
+ extern f32 identity_matrix[16];          /* the unit matrix */
+ extern f32 scale_matrices[4][4];
+@@ -15,16 +18,8 @@ extern f32 D_00432620[16];
+ extern CameraState camera_state;
+ extern Vector4Arg mirrored_flat_offset; /* (0, -160000, 32768, 1): z times sin(pitch) is added to y */
+ 
+-void sceVu0CopyMatrix(void *, void *);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0RotMatrixZ(float *, float *, float);
+-void sceVu0TransMatrix(float *, float *, float *);
+-void sceVu0DivVectorXYZ(void *, void *, float);
+-void sceVu0SubVector(void *, void *, void *);
+ void Matrix_Multiply(void *, void *, void *);
+ void Vector_ApplyMatrix(void *, void *, void *);
+-void *memset(void *, int, u32);
+ float atan2f(float, float);
+ float sqrtf(float);
+ float sinf(float);
+@@ -271,28 +266,20 @@ static void Matrix_BuildEulerRotation(f32 (*matrix)[4], f32 *angles) {
+ 
+ /* Rotates the three axis rows of a matrix by the rotation part of another (3x3 product) with VU0. */
+ static void Matrix_MultiplyRotation(void *dest, void *rotation, void *matrix) {
+-    __asm__ volatile(
+-        "lqc2 $vf1, 0x0(%1)\n"
+-        "lqc2 $vf2, 0x10(%1)\n"
+-        "lqc2 $vf3, 0x20(%1)\n"
+-        "lqc2 $vf4, 0x30(%1)\n"
+-        "lqc2 $vf22, 0x0(%2)\n"
+-        "lqc2 $vf23, 0x10(%2)\n"
+-        "lqc2 $vf24, 0x20(%2)\n"
+-        "lqc2 $vf25, 0x30(%2)\n"
+-        "vmulax.xyz ACC, $vf1, $vf22x\n"
+-        "vmadday.xyz ACC, $vf2, $vf22y\n"
+-        "vmaddz.xyz $vf22, $vf3, $vf22z\n"
+-        "vmulax.xyz ACC, $vf1, $vf23x\n"
+-        "vmadday.xyz ACC, $vf2, $vf23y\n"
+-        "vmaddz.xyz $vf23, $vf3, $vf23z\n"
+-        "vmulax.xyz ACC, $vf1, $vf24x\n"
+-        "vmadday.xyz ACC, $vf2, $vf24y\n"
+-        "vmaddz.xyz $vf24, $vf3, $vf24z\n"
+-        "sqc2 $vf22, 0x0(%0)\n"
+-        "sqc2 $vf23, 0x10(%0)\n"
+-        "sqc2 $vf24, 0x20(%0)\n"
+-        : : "r"(dest), "r"(rotation), "r"(matrix));
++    int row;
++
++    for (row = 0; row < 4; row++) {
++        Vu_Lqc2(1 + row, (u8 *)rotation + row * 0x10);
++        Vu_Lqc2(22 + row, (u8 *)matrix + row * 0x10);
++    }
++    for (row = 22; row < 25; row++) {
++        Vu_MulA(VU_XYZ, 1, VF(row)[0]);
++        Vu_MaddA(VU_XYZ, 2, VF(row)[1]);
++        Vu_Madd(VU_XYZ, row, 3, VF(row)[2]);
++    }
++    for (row = 0; row < 3; row++) {
++        Vu_Sqc2((u8 *)dest + row * 0x10, 22 + row);
++    }
+ }
+ 
+ /* Transforms src_vec by src_matrix without its translation, into dst. */
+@@ -308,7 +295,7 @@ static void Matrix_RotateVector(void *dst, void *src_matrix, void *src_vec) {
+ 
+ /* Makes the two matrices a model is drawn with: the first with its rows divided by the model's scale;
+    the second, for models flagged 0x400, emptied but for the model's colour times its alpha. */
+-void ModelMatrix_BuildDrawMatrices(ModelInstance *model, s32 normal_src, s32 light_src, void *normal_dest,
++void ModelMatrix_BuildDrawMatrices(ModelInstance *model, sptr normal_src, sptr light_src, void *normal_dest,
+                                    void *light_dest) {
+     f32 (*normal)[4] = normal_dest;
+     f32 (*light)[4] = light_dest;
+diff --git a/src/game/model/model_matrix.h b/src/game/model/model_matrix.h
+index 63bd2cf70382a1254daaac739e4c462f0ee6510e..e93a3b6b32ef4953dd9fe07b196e37f5e042ad0a 100644
+--- a/src/game/model/model_matrix.h
++++ b/src/game/model/model_matrix.h
+@@ -11,7 +11,7 @@ void ModelMatrix_BuildPartLocal(ModelInstance *model, ModelPart *part, ModelPart
+ void ModelMatrix_Build(ModelInstance *model, Vector4 *position, Vector4 *rotation, f32 *scale);
+ 
+ /* Makes the two matrices a model is drawn with from the two sources. */
+-void ModelMatrix_BuildDrawMatrices(ModelInstance *model, s32 normal_src, s32 light_src, void *normal_dest,
++void ModelMatrix_BuildDrawMatrices(ModelInstance *model, sptr normal_src, sptr light_src, void *normal_dest,
+                                    void *light_dest);
+ 
+ #endif
+diff --git a/src/game/model/model_motion.c b/src/game/model/model_motion.c
+index 2edb255ae547676b22083c3699480508d65eb2c8..2857b3f1ce0a6a58c0a217e0f6d4d7b863d77574 100644
+--- a/src/game/model/model_motion.c
++++ b/src/game/model/model_motion.c
+@@ -1,7 +1,7 @@
+ /* Model motions: loading them into a ModelChannel, playing a frame (Hermite between keys) and blending in. */
+ #include "model/model.h"
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+ MotionData *ModelMotion_Load(MotionData *, ModelInstance *, int);
+ void ModelMotion_Hermite(void *, void *, void *, void *, void *, f32);
+ void ModelMotion_StepBlend(ModelInstance *);
+@@ -33,20 +33,20 @@ MotionData *ModelMotion_Load(MotionData *data, ModelInstance *model, int unused)
+         channel->value = 0;
+         model->model_flags |= 1;
+         channel->tables[channel->index] = motion->parts;
+-        motion->vectors = (MotionVector *)((char *)motion + motion->vectors_offset);
++        motion->vectors = EE_WORD((char *)motion + motion->vectors_offset);
+     } while (0);
+     model->part_count = motion->part_count;
+     // match: the parameter is reused as a cursor nothing reads (cleared, stepped per part, set to the end below)
+     for (data = NULL; i < model->part_count; i++, data++) {
+         model->parts[i].level = 0;
+         if (channel->tables[channel->index][i].keys_offset != 0 &&
+-            channel->tables[channel->index][i].thresholds == NULL) {
++            channel->tables[channel->index][i].thresholds == 0) {
+             channel->tables[channel->index][i].thresholds =
+-                (u16 *)((char *)motion + channel->tables[channel->index][i].keys_offset);
++                EE_WORD((char *)motion + channel->tables[channel->index][i].keys_offset);
+         }
+         parts = model->parts;
+-        vectors = motion->vectors;
+-        key = (MotionKey *)channel->tables[channel->index][i].thresholds;
++        vectors = EE_PTR(MotionVector *, motion->vectors);
++        key = EE_PTR(MotionKey *, channel->tables[channel->index][i].thresholds);
+         vector = &vectors[key->position];
+         parts[i].position[0] = vector->x;
+         parts[i].position[1] = vector->y;
+@@ -71,8 +71,7 @@ MotionData *ModelMotion_Load(MotionData *data, ModelInstance *model, int unused)
+         } else {
+             parts[i].sibling = NULL;
+         }
+-        // match: indexing level_tables as an array swaps the addu operands
+-        parts[i].part_flags = (*(ModelPartLevels **)((char *)model->level_tables + (channel->index << 2)))[i].unk02;
++        parts[i].part_flags = model->level_tables[channel->index][i].unk02;
+     }
+     data = (MotionData *)((char *)motion + motion->size);
+     return data;
+@@ -153,12 +152,12 @@ void ModelMotion_Step(void *model_arg) {
+         motion = (MotionData *)channel->tables[channel->index];
+         motion = (MotionData *)((ModelPartLevels *)motion - 1);
+         record = channel->tables[channel->index];
+-        vectors = motion->vectors;
++        vectors = EE_PTR(MotionVector *, motion->vectors);
+         for (i = 0; i < model->part_count; i++, record++) {
+             part = &model->parts[i];
+-            if (record->thresholds != NULL && record->count != 0) {
++            if (record->thresholds != 0 && record->count != 0) {
+                 // match: the level is read twice, as a shift and mask of the whole doubleword
+-                key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
++                key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+                 level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
+                 while (level < record->count && channel->param >= key->frame) {
+                     level++;
+@@ -262,7 +261,7 @@ void ModelMotion_StepBlend(ModelInstance *model) {
+     motion = (MotionData *)channel->tables[channel->index];
+     motion = (MotionData *)((ModelPartLevels *)motion - 1);
+     record = channel->tables[channel->index];
+-    vectors = motion->vectors;
++    vectors = EE_PTR(MotionVector *, motion->vectors);
+     if (channel->word >= channel->value) {
+         divisor = 1.0f;
+     } else if (channel->unk8F == 0) {
+@@ -272,7 +271,7 @@ void ModelMotion_StepBlend(ModelInstance *model) {
+     }
+     part = model->parts;
+     for (i = 0; i < model->part_count; i++, record++, part++) {
+-        key = (MotionKey *)record->thresholds;
++        key = EE_PTR(MotionKey *, record->thresholds);
+         if (key != NULL) {
+             part->rotation_x += (vectors[key->rotation].x - part->rotation_x) / divisor;
+             part->rotation_y += (vectors[key->rotation].y - part->rotation_y) / divisor;
+diff --git a/src/game/model/model_screen.c b/src/game/model/model_screen.c
+index 11eb0d1638f7ccfb3ac7bda2604a9d976f23d4e1..b541a44ed8b30e38c670d8649d17821a5b4d8989 100644
+--- a/src/game/model/model_screen.c
++++ b/src/game/model/model_screen.c
+@@ -1,4 +1,7 @@
+ #include "model/model.h"
++#include <eekernel.h>
++#include "libvu0.h"
++#include "math/vu0.h"
+ 
+ /* which sides of the screen a point is beyond */
+ #define CLIP_SIDES(point, sides)                                                                   \
+@@ -16,7 +19,7 @@
+     }
+ /* whether a point is too deep or outside the range the GS can draw */
+ #define OUT_OF_RANGE(point) ((point)->z > 0xFFFF0 || (((point)->x | (point)->y) & 0xFFFF0000))
+-typedef u32 u_long128 __attribute__((mode(TI)));
++typedef Uint128 u_long128 __attribute__((aligned(4), may_alias)); /* a quadword moved with lq/sq; any alignment on the PC */
+ /* copies a quadword and steps both pointers past it */
+ #define COPY_QWORD(to, from)                                                                       \
+     *(u_long128 *)(to) = *(u_long128 *)(from);                                                               \
+@@ -42,25 +45,17 @@ typedef u32 u_long128 __attribute__((mode(TI)));
+     (to).unk30[1] = (from)->colour[1];                                                             \
+     (to).unk30[2] = (from)->colour[2];                                                             \
+     (to).unk30[3] = (from)->colour[3]
+-void sceVu0MulMatrix(void *, void *, void *);
+-void Vu0_LoadMatrix(void *);
+-void Vu0_ProjectToScreen(int *, void *);
+-void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
+ void ModelScreen_QueueCutTriangle(u32 *, ModelPartVertexWords *, int, int, void *);
+ u32 *Packet_Alloc(int);
+ void Packet_AppendToChain(u32 *, u32 *);
+ void ModelScreen_StepVertices(ModelPartVertexWords *, ModelPartVertexWords *, ModelPartVertexWords *, int);
+-void Vector_Add(void *, void *, void *);
+ void ModelScreen_StepFloatVertices(BlendVertex *, BlendVertex *, BlendVertex *, int);
+-void Vector_Subtract(float *, float *, float *);
+-void Vector_Scale(float *, float *, float);
+ extern f32 world_screen_matrix[16];      /* world to screen */
+ extern int cut_triangle_count;  /* triangles cut up this way */
+ 
+-double sin(double);
+-int FlushCache(int);
+ extern int screen_uv_frame;         /* 0..59, stepped by ModelScreen_SetUvsFromScreen */
+-extern int screen_uv_frame_copy;    /* the same value; nothing reads it */
++extern int D_00447050[2];
++#define screen_uv_frame_copy (D_00447050[1]) /* the same value; nothing reads it */
+ 
+ /* Looks for the triangles of a model that the GS could not draw as they are (a corner out of its
+    range) but that are partly on the screen, and queues each cut up into smaller ones. */
+@@ -87,7 +82,7 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
+         Vu0_LoadMatrix(screen_matrix);
+         j = 0;
+         count = (s32)(MODEL_PART_WORD(part) >> 53);
+-        block = *(ModelPartData **)&MODEL_PART_WORD(part);
++        block = EE_PTR(ModelPartData *, (u32)MODEL_PART_WORD(part));
+         for (; j < count; j++) {
+             s32 vertex_count = block->vertex_count & 0x7FFF;
+             ModelPartVertexWords *vertex = (ModelPartVertexWords *)block->vertices;
+@@ -115,7 +110,9 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
+                 point2[2] = vertex->z;
+                 point2[3] = 1.0f;
+                 vertex++;
+-                Vu0_ProjectToScreen3((int *)screen++, (int *)screen++, (int *)screen++, point0, point1, point2);
++                /* retail hands them over in order: screen, screen + 1, screen + 2 */
++                Vu0_ProjectToScreen3((int *)screen, (int *)(screen + 1), (int *)(screen + 2), point0, point1, point2);
++                screen += 3;
+             }
+             for (k = vertex_count % 3; --k != -1;) {
+                 point0[0] = vertex->x;
+@@ -199,16 +196,14 @@ void ModelScreen_QueueCutTriangle(u32 *data, ModelPartVertexWords *vertex, int f
+         *packet = 0x10000005;
+         packet += 7;
+         *packet++ = 0x6C040004;
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%0)\n"
+-            "lqc2 $vf17, 0x10(%0)\n"
+-            "lqc2 $vf18, 0x20(%0)\n"
+-            "lqc2 $vf19, 0x30(%0)\n"
+-            "sqc2 $vf16, 0x0(%1)\n"
+-            "sqc2 $vf17, 0x10(%1)\n"
+-            "sqc2 $vf18, 0x20(%1)\n"
+-            "sqc2 $vf19, 0x30(%1)\n"
+-            : : "r"(matrix), "r"(packet));
++        Vu_Lqc2(16, (u8 *)matrix + 0x0); /* copied through vf16..vf19 */
++        Vu_Lqc2(17, (u8 *)matrix + 0x10);
++        Vu_Lqc2(18, (u8 *)matrix + 0x20);
++        Vu_Lqc2(19, (u8 *)matrix + 0x30);
++        Vu_Sqc2((u8 *)packet + 0x0, 16);
++        Vu_Sqc2((u8 *)packet + 0x10, 17);
++        Vu_Sqc2((u8 *)packet + 0x20, 18);
++        Vu_Sqc2((u8 *)packet + 0x30, 19);
+         packet += 0x10;
+     }
+     *packet = (size - 2) | 0x10000000;
+@@ -424,16 +419,14 @@ void ModelScreen_QueueCutFloatTriangle(u32 *data, ModelPartVertexWords *vertex,
+         *packet = 0x10000005;
+         packet += 7;
+         *packet++ = 0x6C040004;
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0x0(%0)\n"
+-            "lqc2 $vf17, 0x10(%0)\n"
+-            "lqc2 $vf18, 0x20(%0)\n"
+-            "lqc2 $vf19, 0x30(%0)\n"
+-            "sqc2 $vf16, 0x0(%1)\n"
+-            "sqc2 $vf17, 0x10(%1)\n"
+-            "sqc2 $vf18, 0x20(%1)\n"
+-            "sqc2 $vf19, 0x30(%1)\n"
+-            : : "r"(matrix), "r"(packet));
++        Vu_Lqc2(16, (u8 *)matrix + 0x0); /* copied through vf16..vf19 */
++        Vu_Lqc2(17, (u8 *)matrix + 0x10);
++        Vu_Lqc2(18, (u8 *)matrix + 0x20);
++        Vu_Lqc2(19, (u8 *)matrix + 0x30);
++        Vu_Sqc2((u8 *)packet + 0x0, 16);
++        Vu_Sqc2((u8 *)packet + 0x10, 17);
++        Vu_Sqc2((u8 *)packet + 0x20, 18);
++        Vu_Sqc2((u8 *)packet + 0x30, 19);
+         packet += 0x10;
+         *packet = 0x10000003;
+         packet += 4;
+@@ -613,9 +606,9 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
+         FlushCache(0);
+         sceVu0MulMatrix(matrix, world_screen_matrix, part);
+         Vu0_LoadMatrix(matrix);
+-        ((void (*)(int))FlushCache)(0); // match: called as void, retail reuses $2 at once
++        FlushCache(0);
+         count = part->data_count;
+-        next_data = (ModelPartData *)(int)part->data_addr;
++        next_data = EE_PTR(ModelPartData *, part->data_addr);
+         for (j = 0; j < count; j++) {
+             length = next_data->length;
+             data = next_data;
+diff --git a/src/game/model/model_textures.c b/src/game/model/model_textures.c
+index c42a21ff7f50e7b5edd8b006bfc054ecd993ed45..5f207e2bb2bbe65ca1151cc1e4760ee541d91091 100644
+--- a/src/game/model/model_textures.c
++++ b/src/game/model/model_textures.c
+@@ -1,18 +1,18 @@
+ #include "common.h"
+ #include "model/model.h"
+ #include "gfx/texture.h"
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+ void GsDraw_QueueTexFlush(void);
+ void TextureTable_QueueEnabled(TextureTableHeader *, s32);
+ void Map_QueuePacket(int *);
+ 
+-static int sent_texture_19C;        /* 0x447048 last model texture sent from unk19C */
+-static int sent_texture_1A0;        /* 0x44704C last model texture sent from unk1A0 */
++static sptr sent_texture_19C;        /* 0x447048 last model texture sent from unk19C */
++static sptr sent_texture_1A0;        /* 0x44704C last model texture sent from unk1A0 */
+ /* 0x447050 the model texture taken as sent from unk198, by unk192; only [0] is read, and nothing but the reset
+    writes it. A 4-byte object: [1] would be screen_uv_frame_copy (model/model_screen.c), so it stays extern. */
+ extern int D_00447050[2];
+-static int texture_slots[4];        /* 0x468190 chunk table last sent for each unk190 slot */
++static sptr texture_slots[4];        /* 0x468190 chunk table last sent for each unk190 slot */
+ 
+ /* Forgets every texture slot. */
+ void ModelTexture_ResetSlots(void) {
+@@ -24,7 +24,7 @@ void ModelTexture_ResetSlots(void) {
+ 
+ /* Sets texture slot `slot` (0..3) to chunk_table, the table ModelTexture_SendForModel then takes as sent.
+    Nothing calls it. */
+-void ModelTexture_SetSlot(int chunk_table, u32 slot) {
++void ModelTexture_SetSlot(sptr chunk_table, u32 slot) {
+     if (slot < 4U) {
+         texture_slots[slot] = chunk_table;
+     }
+@@ -44,7 +44,7 @@ void ModelTexture_SendForModel(void *model_arg) {
+             case 2:
+                 texture_slots[(s16)model->texture_slot] = model->texture_data;
+                 changed = TRUE;
+-                TextureTable_QueueEnabled((TextureTableHeader *)model->texture_data, (s32)model->chunk_skip_mask);
++                TextureTable_QueueEnabled((TextureTableHeader *)model->texture_data, (s32)(sptr)model->chunk_skip_mask);
+                 break;
+             case 3:
+                 Map_QueuePacket((int *)model->texture_data);
+diff --git a/src/game/model/motion.c b/src/game/model/motion.c
+index 058a3b993df478abff30bfde373c6f84dba8804a..4ec090991647882da3c6e08011689c6fb9b194df 100644
+--- a/src/game/model/motion.c
++++ b/src/game/model/motion.c
+@@ -3,11 +3,8 @@
+ #include "model/motion.h"
+ #include "entity/entity_events.h"
+ #include "libvu0.h"
++#include "math/vu0.h"
+ 
+-void Vector_Copy(void *, void *);
+-void sceVu0MulVector(void *, void *, void *);
+-void Vector_Subtract(void *, void *, void *);
+-void Vector_Scale(float *, float *, float);
+ float sinf(float);
+ float cosf(float);
+ extern f32 identity_matrix[16];
+@@ -15,18 +12,19 @@ void Vector_Hermite(void *, void *, void *, void *, void *, f32);
+ 
+ /* dst = a * (1 - t) + b * t across the xyz lanes, on the VU0 (EntityMath_LerpVector inlined) */
+ static inline void blend_vectors(Vector4 *dst, Vector4 *src_a, Vector4 *src_b, f32 ratio) {
+-    __asm__ volatile(
+-        "qmtc2.ni %3, $vf3\n"
+-        "vsubx.w $vf4, $vf0, $vf3x\n"
+-        "lqc2 $vf1, 0x0(%1)\n"
+-        "lqc2 $vf2, 0x0(%2)\n"
+-        "vmulax.xyz ACC, $vf2, $vf3x\n"
+-        "vmaddw.xyz $vf1, $vf1, $vf4w\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "sqc2 $vf1, 0x0(%0)\n"
+-        : : "r"(dst), "r"(src_a), "r"(src_b), "r"(ratio));
++    /* qmtc2.ni: vf3.x = ratio, vf3.y its sign extension (z and w are whatever the upper half of the register held) */
++    ee_vu0.vf[3][0] = ratio;
++    ee_vu0.vf[3][1] = 0.0f;
++    if (signbit(ratio)) {
++        u32 ones = 0xFFFFFFFF;
++        memcpy(&ee_vu0.vf[3][1], &ones, 4);
++    }
++    ee_vu0.vf[4][3] = VF(0)[3] - VF(3)[0]; /* vsubx.w */
++    Vu_Lqc2(1, src_a);
++    Vu_Lqc2(2, src_b);
++    Vu_MulA(VU_XYZ, 2, VF(3)[0]);
++    Vu_Madd(VU_XYZ, 1, 1, VF(4)[3]);
++    Vu_Sqc2(dst, 1);
+ }
+ 
+ static s32 Motion_PoseSlot(ModelInstance *model, s32 slot, s32 table, s32 frame_fixed, s32 step, s32 backwards);
+@@ -41,7 +39,7 @@ void Motion_ClearPartSlots(EntityModel *model) {
+     if (instance->part_count != 0) {
+         i = 0;
+         do {
+-            part = (EntityModelPart80Byte *)((i << 7) + (s32)model->parts);
++            part = (EntityModelPart80Byte *)&((ModelInstance *)model)->parts[i];
+             i += 1;
+             part->unk6C = 0;
+         } while (i < instance->part_count);
+@@ -54,7 +52,7 @@ void Motion_SetPartSlots(EntityModel *model, s32 first, s32 last, s32 value) {
+ 
+     if (first <= last) {
+         do {
+-            part = (EntityModelPart80Byte *)((first << 7) + (s32)model->parts);
++            part = (EntityModelPart80Byte *)&((ModelInstance *)model)->parts[first];
+             first += 1;
+             part->unk6C = value;
+         } while (first <= last);
+@@ -63,8 +61,7 @@ void Motion_SetPartSlots(EntityModel *model, s32 first, s32 last, s32 value) {
+ 
+ /* As Motion_SeekKeys, for the parts in motion slot `slot` only. */
+ int Motion_SeekSlotKeys(ModelInstance *model, int slot, int table_index, int value) {
+-    // match: indexing level_tables as an array swaps the addu operands
+-    ModelPartLevels **table = (ModelPartLevels **)((char *)model->level_tables + (table_index << 2));
++    ModelPartLevels **table = &model->level_tables[table_index];
+     ModelPartLevels *levels;
+     ModelPart *part;
+     u16 *threshold;
+@@ -74,8 +71,8 @@ int Motion_SeekSlotKeys(ModelInstance *model, int slot, int table_index, int val
+ 
+     for (levels = *table, i = 0; i < model->part_count; i++, levels++) {
+         part = &model->parts[i];
+-        if (part->motion_slot == slot && levels->thresholds != NULL && levels->count != 0) {
+-            threshold = levels->thresholds;
++        if (part->motion_slot == slot && levels->thresholds != 0 && levels->count != 0) {
++            threshold = EE_PTR(u16 *, levels->thresholds);
+             count = levels->count;
+             for (passed = 0; passed < count; passed++) {
+                 if (value < *threshold) {
+@@ -109,8 +106,7 @@ s32 Motion_StepSlot(Entity *entity, EntityUnkE0SlotBits *slot_bits, s32 type, s3
+ 
+     params = entity->params;
+     table = params->motion_ids[slot->index];
+-    // match: indexing level_tables as an array swaps the addu operands
+-    motion = *(MotionData **)((char *)ENTITY_MODEL(entity)->level_tables + (table << 2));
++    motion = (MotionData *)ENTITY_MODEL(entity)->level_tables[table];
+     motion = (MotionData *)((ModelPartLevels *)motion - 1);
+     if (entity->ailment_3_frames != 0 && (entity->busy_flags & 0x46) == 0) {
+         step = (f32)params->motion_speeds[entity->animation_index] * 0.75f;
+@@ -201,11 +197,10 @@ static s32 Motion_PoseSlot(ModelInstance *model, s32 type, s32 table, s32 frame_
+     s32 frame;
+     s32 target;
+ 
+-    // match: indexing level_tables as an array swaps the addu operands
+-    motion = *(MotionData **)((char *)model->level_tables + (table << 2));
++    motion = (MotionData *)model->level_tables[table];
+     motion = (MotionData *)((ModelPartLevels *)motion - 1);
+-    record = *(ModelPartLevels **)((char *)model->level_tables + (table << 2));
+-    vectors = motion->vectors;
++    record = model->level_tables[table];
++    vectors = EE_PTR(MotionVector *, motion->vectors);
+     if (backwards != 0) {
+         frame_fixed -= step;
+         target = frame_fixed;
+@@ -227,11 +222,11 @@ static s32 Motion_PoseSlot(ModelInstance *model, s32 type, s32 table, s32 frame_
+         if (target < 0) {
+             part->level = record->count - 1;
+         }
+-        if (record->thresholds != NULL) {
++        if (record->thresholds != 0) {
+             if (record->count == 0) {
+                 continue;
+             }
+-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
++            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
+             while (level < record->count && frame >= key->frame) {
+                 level++;
+@@ -334,17 +329,16 @@ s32 Motion_BlendSlotToPose(ModelInstance *model, s32 type, s32 table, s16 frame,
+     f32 tilt;
+     f32 spin;
+ 
+-    // match: indexing level_tables as an array swaps the addu operands
+-    motion = *(MotionData **)((char *)model->level_tables + (table << 2));
++    motion = (MotionData *)model->level_tables[table];
+     motion = (MotionData *)((ModelPartLevels *)motion - 1);
+-    record = *(ModelPartLevels **)((char *)model->level_tables + (table << 2));
+-    vectors = motion->vectors;
++    record = model->level_tables[table];
++    vectors = EE_PTR(MotionVector *, motion->vectors);
+     for (i = 0; i < model->part_count; i++, record++) {
+         part = &model->parts[i];
+         if (part->motion_slot == type) {
+-            if (record->thresholds != NULL) {
++            if (record->thresholds != 0) {
+                 if (record->count != 0) {
+-                    key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
++                    key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+                     level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
+                     while (level < record->count && frame >= key->frame) {
+                         level++;
+@@ -458,24 +452,24 @@ s32 Motion_MixSlotFirstKeys(ModelInstance *model, s32 type, s32 table_a, s32 tab
+     f32 angle;
+     f32 angle_alt;
+ 
+-    motion_a = *(MotionData **)((char *)model->level_tables + (table_a << 2));
++    motion_a = (MotionData *)model->level_tables[table_a];
+     motion_a = (MotionData *)((ModelPartLevels *)motion_a - 1);
+-    motion_b = *(MotionData **)((char *)model->level_tables + (table_b << 2));
++    motion_b = (MotionData *)model->level_tables[table_b];
+     motion_b = (MotionData *)((ModelPartLevels *)motion_b - 1);
+-    record_a = *(ModelPartLevels **)((char *)model->level_tables + (table_a << 2));
+-    record_b = *(ModelPartLevels **)((char *)model->level_tables + (table_b << 2));
+-    vectors_a = motion_a->vectors;
+-    vectors_b = motion_b->vectors;
++    record_a = model->level_tables[table_a];
++    record_b = model->level_tables[table_b];
++    vectors_a = EE_PTR(MotionVector *, motion_a->vectors);
++    vectors_b = EE_PTR(MotionVector *, motion_b->vectors);
+     part = model->parts;
+     for (i = 0; i < model->part_count; i++, record_a++, record_b++, part++) {
+         if (part->motion_slot != type) {
+             continue;
+         }
+-        key_a = (MotionKey *)record_a->thresholds;
++        key_a = EE_PTR(MotionKey *, record_a->thresholds);
+         if (key_a == NULL) {
+             continue;
+         }
+-        key_b = (MotionKey *)record_b->thresholds;
++        key_b = EE_PTR(MotionKey *, record_b->thresholds);
+         if (key_b == NULL) {
+             continue;
+         }
+@@ -568,14 +562,13 @@ int Motion_SeekKeys(ModelInstance *model, int table_index, int value) {
+     int i, passed;
+     u16 *threshold;
+ 
+-    /* match: indexing level_tables as an array swaps the addu operands */
+-    levels = *(ModelPartLevels **)((char *)model->level_tables + (table_index << 2));
++    levels = model->level_tables[table_index];
+     for (i = 0; i < model->part_count; i++, levels++) {
+         part = &model->parts[i];
+-        if (levels->thresholds == NULL || levels->count == 0) {
++        if (levels->thresholds == 0 || levels->count == 0) {
+             continue;
+         }
+-        threshold = levels->thresholds;
++        threshold = EE_PTR(u16 *, levels->thresholds);
+         for (passed = 0; passed < levels->count; passed++, threshold += 9) {
+             if (value < *threshold) {
+                 break;
+@@ -724,7 +717,7 @@ s32 Motion_StepModel(ModelInstance *model, s32 step, s32 backwards) {
+     motion = (MotionData *)channel->tables[channel->index];
+     record = (ModelPartLevels *)motion;
+     motion = (MotionData *)((ModelPartLevels *)motion - 1);
+-    vectors = motion->vectors;
++    vectors = EE_PTR(MotionVector *, motion->vectors);
+     if (backwards != 0) {
+         channel->param_shifted -= step;
+         target = channel->param_shifted;
+@@ -742,11 +735,11 @@ s32 Motion_StepModel(ModelInstance *model, s32 step, s32 backwards) {
+         if (target < 0) {
+             part->level = record->count - 1;
+         }
+-        if (record->thresholds != NULL) {
++        if (record->thresholds != 0) {
+             if (record->count == 0) {
+                 continue;
+             }
+-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
++            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
+             while (level < record->count && channel->param >= key->frame) {
+                 level++;
+@@ -860,7 +853,7 @@ s32 Motion_StepModelBlended(ModelInstance *model, s32 step, s32 backwards, f32 w
+     motion = (MotionData *)channel->tables[channel->index];
+     motion = (MotionData *)((ModelPartLevels *)motion - 1);
+     record = channel->tables[channel->index];
+-    vectors = motion->vectors;
++    vectors = EE_PTR(MotionVector *, motion->vectors);
+     if (backwards != 0) {
+         channel->param_shifted -= step;
+         target = channel->param_shifted;
+@@ -878,11 +871,11 @@ s32 Motion_StepModelBlended(ModelInstance *model, s32 step, s32 backwards, f32 w
+         if (target < 0) {
+             part->level = record->count - 1;
+         }
+-        if (record->thresholds != NULL) {
++        if (record->thresholds != 0) {
+             if (record->count == 0) {
+                 continue;
+             }
+-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
++            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
+             while (level < record->count && channel->param >= key->frame) {
+                 level++;
+@@ -999,7 +992,7 @@ s32 Motion_StepModelBlended(ModelInstance *model, s32 step, s32 backwards, f32 w
+ 
+ /* Eases every part toward the pose between the motion keys around the channel's frame, then counts the blend
+    frames down. */
+-void Motion_BlendToPose(ModelInstance *model, f32 weight) {
++s32 Motion_BlendToPose(ModelInstance *model, f32 weight) {
+     Vector4 *point0 = &MOTION_SCRATCH[0];
+     Vector4 *point1 = &MOTION_SCRATCH[1];
+     Vector4 *tangent0 = &MOTION_SCRATCH[2];
+@@ -1023,11 +1016,11 @@ void Motion_BlendToPose(ModelInstance *model, f32 weight) {
+     motion = (MotionData *)channel->tables[channel->index];
+     motion = (MotionData *)((ModelPartLevels *)motion - 1);
+     record = channel->tables[channel->index];
+-    vectors = motion->vectors;
++    vectors = EE_PTR(MotionVector *, motion->vectors);
+     for (i = 0; i < model->part_count; i++, record++) {
+         part = &model->parts[i];
+-        if (record->thresholds != NULL && record->count != 0) {
+-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
++        if (record->thresholds != 0 && record->count != 0) {
++            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
+             while (level < record->count && channel->param >= key->frame) {
+                 level++;
+@@ -1117,7 +1110,7 @@ void Motion_BlendToPose(ModelInstance *model, f32 weight) {
+             }
+         }
+     }
+-    channel->value--;
++    return --channel->value;
+ }
+ 
+ /* Poses every part between the first keys of two motions: ratio 0 gives the first motion's, 1 the second's.
+@@ -1139,21 +1132,21 @@ s32 Motion_MixFirstKeys(ModelInstance *model, s32 table_a, s32 table_b, f32 rati
+     f32 angle;
+     f32 angle_alt;
+ 
+-    motion_a = *(MotionData **)((char *)model->level_tables + (table_a << 2));
++    motion_a = (MotionData *)model->level_tables[table_a];
+     motion_a = (MotionData *)((ModelPartLevels *)motion_a - 1);
+-    motion_b = *(MotionData **)((char *)model->level_tables + (table_b << 2));
++    motion_b = (MotionData *)model->level_tables[table_b];
+     motion_b = (MotionData *)((ModelPartLevels *)motion_b - 1);
+-    record_a = *(ModelPartLevels **)((char *)model->level_tables + (table_a << 2));
+-    record_b = *(ModelPartLevels **)((char *)model->level_tables + (table_b << 2));
+-    vectors_a = motion_a->vectors;
+-    vectors_b = motion_b->vectors;
++    record_a = model->level_tables[table_a];
++    record_b = model->level_tables[table_b];
++    vectors_a = EE_PTR(MotionVector *, motion_a->vectors);
++    vectors_b = EE_PTR(MotionVector *, motion_b->vectors);
+     part = model->parts;
+     for (i = 0; i < model->part_count; i++, record_a++, record_b++, part++) {
+-        key_a = (MotionKey *)record_a->thresholds;
++        key_a = EE_PTR(MotionKey *, record_a->thresholds);
+         if (key_a == NULL) {
+             continue;
+         }
+-        key_b = (MotionKey *)record_b->thresholds;
++        key_b = EE_PTR(MotionKey *, record_b->thresholds);
+         if (key_b == NULL) {
+             continue;
+         }
+diff --git a/src/game/model/motion.h b/src/game/model/motion.h
+index 774174004b1ad8360b1f58283d53650f391284ec..4bd64029be6189758b0f8e04fdc7d11f1f7a2152 100644
+--- a/src/game/model/motion.h
++++ b/src/game/model/motion.h
+@@ -39,8 +39,9 @@ s32 Motion_StepModel(ModelInstance *model, s32 step, s32 backwards);
+ /* Motion_StepModel, blending the pose with the current one by `weight`. */
+ s32 Motion_StepModelBlended(ModelInstance *model, s32 step, s32 backwards, f32 weight);
+ 
+-/* Eases every part toward the pose at the channel's frame and counts the blend frames down. */
+-void Motion_BlendToPose(ModelInstance *model, f32 weight);
++/* Eases every part toward the pose at the channel's frame and counts the blend frames down; returns the
++   frames left. */
++s32 Motion_BlendToPose(ModelInstance *model, f32 weight);
+ 
+ /* Poses every part between the first keys of two motions. */
+ s32 Motion_MixFirstKeys(ModelInstance *model, s32 table_a, s32 table_b, f32 ratio);

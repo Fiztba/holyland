@@ -1,0 +1,47 @@
+diff --git a/src/game/input/input.c b/src/game/input/input.c
+index 9daa750b3ae7e380317c30a768f6f8c044b8ff7e..00d7f3c2fecfbe19595c69d93faa21718ddd55ba 100644
+--- a/src/game/input/input.c
++++ b/src/game/input/input.c
+@@ -1,7 +1,7 @@
+ #include "input/pad.h"
+ #include "core/game.h"
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+ void Input_ReadPort(int);
+ void Input_StartRumble(u8, u8, u8);
+ void Input_Update(void);
+@@ -22,7 +22,8 @@ extern u16 action_button;
+ extern u16 menu_button;
+ extern u16 shortcut_button;
+ extern u16 pause_button;
+-extern s8 sfx_volume[];
++extern u8 game_options[0x10];
++#define sfx_volume ((s8 *)game_options + 2) /* the options from the sound volume on ([4] is the rumble) */
+ extern u8 rumble_active;
+ extern u8 rumble_strength;
+ extern u8 rumble_frames_left;
+diff --git a/src/game/input/pad.c b/src/game/input/pad.c
+index ed01be08df35ec5c6663c00f8af28a0017cf9148..1cda2bc4c13919c2c86a2e4c95954f2fe684f00b 100644
+--- a/src/game/input/pad.c
++++ b/src/game/input/pad.c
+@@ -68,7 +68,7 @@ int Pad_Init(int mode) {
+         pad->mode_request = PAD_MODE_NONE;
+         pad->mode_lock = 0;
+         pad++;
+-    } while ((int)pad < (int)&pad_system.slots[8]); // match: retail compares signed
++    } while (pad < &pad_system.slots[8]);
+     return scePadInit(mode);
+ }
+ 
+diff --git a/src/game/input/pad_state.c b/src/game/input/pad_state.c
+index a17d46020ceee9840d9a3643036261740e4b7b99..612e59fc82933dc8b9f405a6efd57fd18a24dbef 100644
+--- a/src/game/input/pad_state.c
++++ b/src/game/input/pad_state.c
+@@ -5,6 +5,3 @@
+ PadState pad_state = { 0 };                                         /* 0x413DA8 */
+ PadState pad_states[2] = { 0 };                                      /* 0x413DB8 */
+ u32 D_00413DD8[2] __attribute__((section(".data"))) = { 0 };         /* 0x413DD8 */
+-
+-/* pad_pressed is pad_state.pressed: several files still read it by that name. */
+-asm(".globl pad_pressed\npad_pressed = pad_state + 2\n");

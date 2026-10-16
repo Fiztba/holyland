@@ -39,12 +39,14 @@ def main():
     if build is None:
         sys.exit("configure a build first: cmake --preset windows-clang (or linux-gcc)")
     build = os.path.join(ROOT, build)
+    # the game code this build compiles: the patched copy that CMake makes in the build dir
+    game = os.path.join(build, "decomp_src", "src", "game")
     with open(os.path.join(build, "compile_commands.json")) as f:
         commands = [c for c in json.load(f) if "/src/game/" in c["file"].replace("\\", "/")]
 
     if show:
         for c in commands:
-            rel = os.path.relpath(c["file"], os.path.join(ROOT, "src", "game")).replace("\\", "/")
+            rel = os.path.relpath(c["file"], game).replace("\\", "/")
             if any(rel == s or rel.startswith(s + "/") or ("src/game/" + rel) == s for s in show):
                 command = re.sub(r" -o \S+", "", c["command"]) + " -fsyntax-only"
                 r = subprocess.run(command, cwd=c["directory"], shell=True, capture_output=True, text=True)
@@ -58,14 +60,14 @@ def main():
             c["command"] + " -fsyntax-only -fmax-errors=0"
         command = re.sub(r" -o \S+", "", command)
         r = subprocess.run(command, cwd=c["directory"], shell=True, capture_output=True, text=True)
-        rel = os.path.relpath(c["file"], os.path.join(ROOT, "src", "game")).replace("\\", "/")
+        rel = os.path.relpath(c["file"], game).replace("\\", "/")
         for m in ERROR.finditer(r.stderr):
             path = os.path.normpath(os.path.join(c["directory"], m.group("file")))
             key = (path, m.group("line"), m.group("text"))
             if key in seen:
                 continue
             seen.add(key)
-            where = os.path.relpath(path, os.path.join(ROOT, "src", "game")).replace("\\", "/")
+            where = os.path.relpath(path, game).replace("\\", "/")
             errors[where if not where.startswith("..") else rel].append(kind_of(m.group("text")))
 
     per_folder = collections.Counter()
@@ -73,9 +75,9 @@ def main():
         per_folder[rel.split("/")[0] if "/" in rel else "(top)"] += len(errs)
     # inline asm is only rejected when the code is generated, so count what is left of it
     asm_left = collections.Counter()
-    for base, _, names in os.walk(os.path.join(ROOT, "src", "game")):
+    for base, _, names in os.walk(game):
         for name in names:
-            rel = os.path.relpath(os.path.join(base, name), os.path.join(ROOT, "src", "game")).replace("\\", "/")
+            rel = os.path.relpath(os.path.join(base, name), game).replace("\\", "/")
             if name.endswith((".c", ".h")) and not name.startswith("func_0022"):
                 with open(os.path.join(base, name), encoding="utf-8", errors="replace") as f:
                     n = len(ASM.findall(f.read()))

@@ -44,10 +44,13 @@ waits for the disc. Stop it with Ctrl+C.
   with the decomp.
 - [`docs/port/RULES.md`](docs/port/RULES.md): how the game code is changed for the PC (addresses
   in integers, file and save structs, inline asm, the SDK).
+- `tools/patches.py`: `apply` the patches into `work/`, `save` edits back into `patches/`, and
+  `upgrade` the decomp pin.
 - `tools/port_census.py`: what still stops each folder of `src/game` compiling.
 - `tools/port_abi_check.py`: functions declared with a different signature than they are defined
   with. These break on the PC even when they compile.
 
-This repository is a fork of kfiv-decomp, and the decomp is merged in with
-`git fetch decomp && git merge decomp/main`. Fixes to the reconstruction itself go to kfiv-decomp
-first. The decomp's matching PS2 build (`build.sh`) is documented there.
+The decomp is a git submodule in `decomp/`, pinned to one commit and never edited here; the PC
+edits to it are patches in `patches/`. Clone with `git clone --recurse-submodules`, or run
+`git submodule update --init`. Fixes to the reconstruction itself go to kfiv-decomp first. The
+decomp's matching PS2 build (`build.sh`) is documented there.

@@ -1,0 +1,3439 @@
+diff --git a/src/game/entity/entity.h b/src/game/entity/entity.h
+index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e75946c0da 100644
+--- a/src/game/entity/entity.h
++++ b/src/game/entity/entity.h
+@@ -4,11 +4,13 @@
+ 
+ #include "common.h"
+ #include "model/model.h"
++#include "player/player.h"
+ 
+ #define ENTITY_DESPAWN_MARGIN           300.0f
+ #define ENTITY_VERTICAL_DESPAWN_MARGIN  150.0f
+ 
+ /* what Entity.spawn_info points at */
++/* overlay: a spawn record of the map file (map_spawn_infos, map/map.c) */
+ typedef struct {
+     f32 spawn_x;                    /* 0x00 the block starts with the spawn position */
+     f32 spawn_y;                    /* 0x04 */
+@@ -43,6 +45,10 @@ typedef struct {
+     u16 item_script_id;             /* 0x58 passed to Script_Start when an item is used on the entity, 0: nothing */
+     u16 despawn_range;              /* 0x5A */
+ } EntitySpawnInfo;
++LAYOUT_SIZE(EntitySpawnInfo, 0x60);
++LAYOUT_OFFSET(EntitySpawnInfo, type_id, 0x30);
++LAYOUT_OFFSET(EntitySpawnInfo, spawn_flags, 0x38);
++LAYOUT_OFFSET(EntitySpawnInfo, despawn_range, 0x5A);
+ 
+ /* EntitySpawnInfo.spawn_flags read through a union. The game's field is a union member:
+    only then does the compiler keep earlier stores of other types ahead of the read. */
+@@ -56,40 +62,46 @@ typedef union {
+ 
+ struct Entity;
+ 
+-/* what EntityModel.level_tables points at */
++/* what EntityModel.level_tables points at: a view of ModelChannel (model/model.h), which starts with
++   0x20 pointers, so the padding follows that struct's layout */
+ typedef struct {
+-    char pad00[0x81];
++    char pad00[offsetof(ModelChannel, index)];
+     u8 unk81;                       /* 0x81 */
+     s16 unk82;                      /* 0x82 */
+     s32 unk84;                      /* 0x84 */
+     s32 unk88;                      /* 0x88 */
+     u16 unk8C;                      /* 0x8C set from EntityParams.motion_speeds[] */
+ } EntityModelUnkFC;
++_Static_assert(offsetof(EntityModelUnkFC, unk82) == offsetof(ModelChannel, param), "EntityModelUnkFC is not ModelChannel");
++_Static_assert(offsetof(EntityModelUnkFC, unk8C) == offsetof(ModelChannel, word), "EntityModelUnkFC is not ModelChannel");
+ 
+-/* one 0x100-byte element of what EntityModel.parts points at */
++/* one 0x100-byte element of what EntityModel.parts points at: two ModelParts (model/model.h), whose
++   pointers start at 0x70, so the element is as long as two of them */
+ typedef struct {
+     char pad00[0x50];
+     f32 unk50[4];                   /* 0x50 */
+     char pad60[0x08];
+     u64 unk68;                      /* 0x68 flags */
+-    char pad70[0x90];
++    char pad70[2 * sizeof(ModelPart) - 0x70];
+ } EntityModelUnkF8;
+ 
+ /* what EntityModel.parts points at, seen as 0x80-byte elements: MutantWall_TurnPart2ToPlayer indexes
+-   it that way (element 2 is at 0x100) */
++   it that way (element 2 is at 0x100). One element is one ModelPart. */
+ typedef struct {
+     char pad00[0x50];
+     f32 unk50[4];                   /* 0x50 */
+     char pad60[0x08];
+     u64 unk68;                      /* 0x68 flags */
+-    char pad70[0x10];
++    char pad70[sizeof(ModelPart) - 0x70];
+ } EntityModelPart80;
++_Static_assert(sizeof(EntityModelPart80) == sizeof(ModelPart), "EntityModelPart80 is not a ModelPart");
++_Static_assert(offsetof(ModelPart, child) == 0x70, "EntityModelPart80 is not a ModelPart");
+ 
+ /* EntityModelPart80 with the byte at 0x6C, which lies inside unk68 (reached by cast) */
+ typedef struct {
+     char pad00[0x6C];
+     s8 unk6C;                       /* 0x6C */
+-    char pad6D[0x13];
++    char pad6D[sizeof(ModelPart) - 0x6D];
+ } EntityModelPart80Byte;
+ 
+ /* EntityModelPart80.unk68 as the bit-fields the game sets (see ENTITY_FLAG_BITS) */
+@@ -103,24 +115,36 @@ typedef struct {
+ #define ENTITY_MODEL_PART_FLAG_BITS(part) ((EntityModelPartFlagBits *)&(part)->unk68)
+ 
+ /* what Entity.model points at. ModelInstance (model/model.h) is a second view of the same block,
+-   see ENTITY_MODEL; the two are to be unified. */
++   see ENTITY_MODEL; the two are to be unified. ModelInstance holds pointers, so on the PC the padding
++   follows its layout; aim_part and look_at_part are ModelInstance.pad134[0] and [1] (MODEL_SLOT_PARTS(model)[1]
++   and [2]). */
+ typedef struct {
+     char pad00[0xC0];
+     f32 position[4];                /* 0xC0 */
+     f32 rotation[4];                /* 0xD0 x, y (heading), z angles in radians */
+     f32 scale[4];                   /* 0xE0 the model's x, y and z scale */
+-    char padF0[0x08];
++    char padF0[offsetof(ModelInstance, parts) - 0xF0];
+     EntityModelUnkF8 *parts;        /* 0xF8 the model's part array (0x80 or 0x100 bytes per part) */
+     EntityModelUnkFC *level_tables; /* 0xFC the model's animation channel (ModelInstance.level_tables) */
+-    char pad100[0x02];
++    char pad100[offsetof(ModelInstance, draw_flags) - offsetof(ModelInstance, level_tables) - sizeof(void *)];
+     u16 draw_flags;                 /* 0x102 0x800: drawn with its own texture (same word as ModelInstance) */
+-    char pad104[0x30];
+-    s32 aim_part;                   /* 0x134 the part the model file marks 2; turned towards a target */
++    char pad104[offsetof(ModelInstance, pad134) - offsetof(ModelInstance, draw_flags) - sizeof(u16)];
++    ModelPart *aim_part;            /* 0x134 the part the model file marks 2; turned towards a target */
+     void *look_at_part;             /* 0x138 the part look-at turns (the third the model file marks) */
++    char pad13C[offsetof(ModelInstance, radius) - offsetof(ModelInstance, pad134) - 2 * sizeof(ModelPart *)];
+     f32 radius;                     /* 0x13C the larger of Entity.collision_radius and unk34 */
+-    char pad140[0x1C];
++    char pad140[offsetof(ModelInstance, alpha) - offsetof(ModelInstance, radius) - sizeof(f32)];
+     f32 alpha;                      /* 0x15C the model's alpha, 0x80 is opaque */
+ } EntityModel;
++_Static_assert(offsetof(EntityModel, position) == offsetof(ModelInstance, position), "EntityModel is not ModelInstance");
++_Static_assert(offsetof(EntityModel, rotation) == offsetof(ModelInstance, rotation), "EntityModel is not ModelInstance");
++_Static_assert(offsetof(EntityModel, parts) == offsetof(ModelInstance, parts), "EntityModel is not ModelInstance");
++_Static_assert(offsetof(EntityModel, level_tables) == offsetof(ModelInstance, level_tables), "EntityModel is not ModelInstance");
++_Static_assert(offsetof(EntityModel, draw_flags) == offsetof(ModelInstance, draw_flags), "EntityModel is not ModelInstance");
++_Static_assert(offsetof(EntityModel, aim_part) == offsetof(ModelInstance, pad134), "EntityModel is not ModelInstance");
++_Static_assert(sizeof(((ModelInstance *)0)->pad134) == 2 * sizeof(ModelPart *), "EntityModel is not ModelInstance");
++_Static_assert(offsetof(EntityModel, radius) == offsetof(ModelInstance, radius), "EntityModel is not ModelInstance");
++_Static_assert(offsetof(EntityModel, alpha) == offsetof(ModelInstance, alpha), "EntityModel is not ModelInstance");
+ 
+ /* two blocks of an EntityParamsUnk240Part that ParaStool_CheckPartHitInPlayerView copies whole into its request */
+ typedef struct {
+@@ -132,6 +156,7 @@ typedef struct {
+ } EntityParamsUnk240PartUnk12;
+ 
+ /* one of the three 0x28-byte parts of an EntityParamsUnk240 */
++/* overlay: part of a record of param/chr.prm (EntityParams) */
+ typedef struct {
+     EntityParamsUnk240PartUnk00 unk00; /* 0x00 */
+     EntityParamsUnk240PartUnk12 unk12; /* 0x12 */
+@@ -142,6 +167,9 @@ typedef struct {
+     u16 unk24;                      /* 0x24 first animation frame it is active on, 0: unused */
+     u16 unk26;                      /* 0x26 last animation frame it is active on */
+ } EntityParamsUnk240Part;
++LAYOUT_SIZE(EntityParamsUnk240Part, 0x28);
++LAYOUT_OFFSET(EntityParamsUnk240Part, unk12, 0x12);
++LAYOUT_OFFSET(EntityParamsUnk240Part, unk1E, 0x1E);
+ 
+ /* EntityParamsUnk240Part.unk1E as EntityAi_SendMeleeHit reads it: bit 1 of the halfword at 0x1E
+    says unk1F is copied (reached by cast: a union changes gcc's scheduling) */
+@@ -152,6 +180,7 @@ typedef struct {
+ #define ENTITY_PART_FLAGS(part) ((EntityParamsUnk240PartFlags *)&(part)->unk1E)
+ 
+ /* one of the 0x88-byte records at EntityParams+0x240 (EntityParams.melee_attack_third is the third) */
++/* overlay: part of a record of param/chr.prm (EntityParams) */
+ typedef struct {
+     u8 attack_weight;               /* 0x00 weight in the six-attack draw; 0: the attack is not used */
+     u8 hit_start_frame;             /* 0x01 animation frame the attack starts on, turned to the player up to it */
+@@ -165,6 +194,9 @@ typedef struct {
+     s16 heading_offset_deg;         /* 0x0E degrees its direction is off the entity's heading */
+     EntityParamsUnk240Part hit_parts[3]; /* 0x10 the three hit parts of the attack: window, arc, power, ailments */
+ } EntityParamsUnk240;
++LAYOUT_SIZE(EntityParamsUnk240, 0x88);
++LAYOUT_OFFSET(EntityParamsUnk240, reach_angle, 0x08);
++LAYOUT_OFFSET(EntityParamsUnk240, hit_parts, 0x10);
+ 
+ /* the two blocks ParaStool_CheckPartHitInPlayerView fills for Attack_Run */
+ typedef struct {
+@@ -202,7 +234,7 @@ typedef struct {
+     u8 is_magic_shot;               /* 0x00 0: the hit is a weapon's, 1: a magic's */
+     char pad01;
+     s16 strength_gauge;             /* 0x02 the power gauge's charge when the hit was launched */
+-    s32 attack_request;             /* 0x04 the request a weapon's shot reuses, 0 for a magic */
++    void *attack_request;           /* 0x04 the request a weapon's shot reuses, 0 for a magic (PlayerShot.attack_request) */
+     char pad08[0x06];
+     s16 worn_magic_bonus[6];        /* 0x0E per magic kind bonus from worn items, in fiftieths */
+     char pad1A[0x02];
+@@ -214,9 +246,21 @@ typedef struct {
+     char pad28[0x08];
+ } Unk1B1470Extra;
+ 
+-/* Unk1B1470Request with the bits at 0x4C as byte-sized fields: Attack_HitEntity reads unk4C_3 as a u8 */
++/* a shot slot (effect/shot.c) is filled as a PlayerShot (player/player.h) and read as an Unk1B1470Extra */
++_Static_assert(sizeof(Unk1B1470Extra) == sizeof(PlayerShot), "Unk1B1470Extra is not PlayerShot");
++_Static_assert(offsetof(Unk1B1470Extra, strength_gauge) == offsetof(PlayerShot, strength_gauge), "Unk1B1470Extra is not PlayerShot");
++_Static_assert(offsetof(Unk1B1470Extra, attack_request) == offsetof(PlayerShot, attack_request), "Unk1B1470Extra is not PlayerShot");
++_Static_assert(offsetof(Unk1B1470Extra, player_power) == offsetof(PlayerShot, player_power), "Unk1B1470Extra is not PlayerShot");
++_Static_assert(offsetof(Unk1B1470Extra, player_magic) == offsetof(PlayerShot, player_magic), "Unk1B1470Extra is not PlayerShot");
++_Static_assert(offsetof(Unk1B1470Extra, weapon_index) == offsetof(PlayerShot, weapon_index), "Unk1B1470Extra is not PlayerShot");
++_Static_assert(offsetof(Unk1B1470Extra, magic_id) == offsetof(PlayerShot, magic_id), "Unk1B1470Extra is not PlayerShot");
++_Static_assert(offsetof(Unk1B1470Extra, pad28) == offsetof(PlayerShot, pad28), "Unk1B1470Extra is not PlayerShot");
++
++/* Unk1B1470Request with the bits at 0x4C as byte-sized fields: Attack_HitEntity reads unk4C_3 as a u8.
++   The owner is there so that on the PC the bits follow it as they do in Unk1B1470Request. */
+ typedef struct {
+-    char pad00[0x4C];
++    char pad00[0x48];
++    struct Entity *owner;           /* 0x48 */
+     u8 unk4C_0 : 3;                 /* 0x4C */
+     u8 unk4C_3 : 1;
+     u8 unk4C_4 : 4;
+@@ -230,6 +274,8 @@ typedef struct {
+     struct Entity *owner;           /* 0x48 */
+     u64 flags : 32;                 /* 0x4C */
+ } Unk1B1470RequestWord;
++_Static_assert(offsetof(Unk1B1470RequestWord, owner) == offsetof(Unk1B1470Request, owner), "Unk1B1470RequestWord is not Unk1B1470Request");
++_Static_assert(offsetof(Unk1B1470Request, target_mask) == offsetof(Unk1B1470Request, owner) + sizeof(struct Entity *) + 1, "the flag bits of Unk1B1470Request are not the byte after owner");
+ 
+ /* Unk1B1470Request with the owner and the flag bytes after it as the one 64-bit word
+    Attack_RunSphere and Attack_HitPlayer test bits of (the flag bytes are its upper half) */
+@@ -238,25 +284,33 @@ typedef struct {
+     u64 owner_and_flags;            /* 0x48 */
+ } Unk1B1470RequestUnit;
+ 
+-#define UNK1B1470_REQUEST_UNIT(request) (((Unk1B1470RequestUnit *)(request))->owner_and_flags)
++/* On the PC the owner is 8 bytes, so the word is built from the flag bytes: the tests only look at its
++   upper half (the owner's address in the lower half is never tested). */
++#define UNK1B1470_REQUEST_UNIT(request) ((u64)((Unk1B1470RequestWord *)(request))->flags << 32)
+ /* unk4C_3 as a bit of the 64-bit word */
+-#define UNK1B1470_UNIT_UNK4C_3 (0x8000L << 20)
++#define UNK1B1470_UNIT_UNK4C_3 (0x8000LL << 20)
+ 
+ /* eight bytes the game copies with unaligned loads and stores */
+ typedef struct {
+     s64 value;
+ } __attribute__((packed)) EntityUnaligned64;
+ 
+-/* what Shot_Alloc returns: something an entity launches */
++/* what Shot_Alloc returns: something an entity launches, read back as an Unk1B1470Extra; that struct's pointer
++   moves the later fields on the PC, so the padding follows it */
+ typedef struct {
+-    char unk00;                     /* 0x00 */
+-    char pad01[0x1F];
+-    u16 unk20;                      /* 0x20 */
+-    s16 unk22;                      /* 0x22 */
+-    char pad24[0x04];
++    char unk00;                     /* 0x00 Unk1B1470Extra.is_magic_shot */
++    char pad01[offsetof(Unk1B1470Extra, player_power) - 1];
++    u16 unk20;                      /* 0x20 Unk1B1470Extra.player_power */
++    s16 unk22;                      /* 0x22 Unk1B1470Extra.player_magic */
++    char pad24[offsetof(Unk1B1470Extra, pad28) - offsetof(Unk1B1470Extra, player_magic) - sizeof(s16)];
+     EntityUnaligned64 unk28;        /* 0x28 copy of EntityParams.unk238 */
+ } EntityUnk1B1390;
+ 
++_Static_assert(offsetof(EntityUnk1B1390, unk20) == offsetof(Unk1B1470Extra, player_power), "EntityUnk1B1390 is not Unk1B1470Extra");
++_Static_assert(offsetof(EntityUnk1B1390, unk22) == offsetof(Unk1B1470Extra, player_magic), "EntityUnk1B1390 is not Unk1B1470Extra");
++_Static_assert(offsetof(EntityUnk1B1390, unk28) == offsetof(Unk1B1470Extra, pad28), "EntityUnk1B1390 is not Unk1B1470Extra");
++_Static_assert(sizeof(EntityUnk1B1390) <= sizeof(Unk1B1470Extra), "EntityUnk1B1390 is not Unk1B1470Extra");
++
+ /* one launch of a record at EntityParams+0x3D8 */
+ typedef struct {
+     u8 unk00;                       /* 0x00 passed to Attack_LaunchMagicEffect */
+@@ -265,6 +319,7 @@ typedef struct {
+ } EntityParamsUnk3D8Launch;
+ 
+ /* a whole 0x1C-byte record at EntityParams+0x3D8 (EntityParamsUnk3D8 is its first word) */
++/* overlay: part of a record of param/chr.prm (EntityParams) */
+ typedef struct {
+     u8 unk00;                       /* 0x00 */
+     u8 unk01;                       /* 0x01 */
+@@ -275,6 +330,8 @@ typedef struct {
+     char pad0D[0x03];
+     EntityParamsUnk3D8Launch unk10[3]; /* 0x10 */
+ } EntityParamsUnk3D8Full;
++LAYOUT_SIZE(EntityParamsUnk3D8Full, 0x1C);
++LAYOUT_OFFSET(EntityParamsUnk3D8Full, unk10, 0x10);
+ 
+ /* sub-struct at EntityParams+0x3D8 */
+ typedef struct {
+@@ -284,6 +341,7 @@ typedef struct {
+     u8 unk03;                       /* 0x03 */
+ } EntityParamsUnk3D8;
+ 
++/* overlay: part of a record of param/chr.prm (EntityParams) */
+ typedef struct {
+     EntityParamsUnk3D8 record;      /* 0x00 */
+     u16 reach_min;                  /* 0x04 nearest distance (past the radius) the attack is used at, 0: none */
+@@ -296,6 +354,9 @@ typedef struct {
+     u8 unk11;                       /* 0x11 */
+     char pad12[0x0A];
+ } EntityParamsUnk3D8Array;
++LAYOUT_SIZE(EntityParamsUnk3D8Array, 0x1C);
++LAYOUT_OFFSET(EntityParamsUnk3D8Array, unk08, 0x08);
++LAYOUT_OFFSET(EntityParamsUnk3D8Array, unk10, 0x10);
+ 
+ /* one of the four bodies of an entity kind the player collides with piece by piece (EntityParams.body_points) */
+ /* the same slot as the motion code reads it: every flag a byte-wide bit-field (Motion_StepSlot) */
+@@ -312,6 +373,7 @@ typedef struct {
+ #define ENTITY_BODY_USED    0x100
+ #define ENTITY_BODY_ROUND   0x200   /* as tall as it is wide, the point being its top */
+ 
++/* overlay: part of a record of param/chr.prm (EntityParams) */
+ typedef struct {
+     union {
+         u32 flags;                  /* 0x00 ENTITY_BODY_ bits */
+@@ -321,9 +383,12 @@ typedef struct {
+     u16 unk06;                      /* 0x06 its height, before the model's y scale */
+     f32 unk08;                      /* 0x08 a hit on this body counts this many times over (Attack_RunSphere) */
+ } EntityBodyPoint;
++LAYOUT_SIZE(EntityBodyPoint, 0x0C);
++LAYOUT_OFFSET(EntityBodyPoint, unk08, 0x08);
+ 
+ /* what Entity.params points at: per-kind tuning values. EntityController below is a second
+    view of the same block; the two are to be unified. */
++/* overlay: a 0x450-byte record of param/chr.prm (character_params, read whole; entity_params points at it) */
+ typedef struct {
+     u32 model_number : 16;          /* 0x00 the chr/cNNNN.chr model file number, 0xFFFF: none */
+     u32 entity_type : 8;            /* 0x02 index into entity_type_handlers */
+@@ -404,20 +469,39 @@ typedef struct {
+     s16 unk43E;                     /* 0x43E */
+     u16 variant_effect_ids[8];      /* 0x440 indexed by flag bits 60-62; passed to Effect_StartSpawner */
+ } EntityParams;
++LAYOUT_SIZE(EntityParams, 0x450);
++LAYOUT_OFFSET(EntityParams, flags, 0x10);
++LAYOUT_OFFSET(EntityParams, body_points, 0x20);
++LAYOUT_OFFSET(EntityParams, motion_speeds, 0x80);
++LAYOUT_OFFSET(EntityParams, body_radius, 0xCC);
++LAYOUT_OFFSET(EntityParams, anim_effect_offsets, 0x130);
++LAYOUT_OFFSET(EntityParams, anim_sound_offsets, 0x1B0);
++LAYOUT_OFFSET(EntityParams, gold, 0x230);
++LAYOUT_OFFSET(EntityParams, unk238, 0x238);
++LAYOUT_OFFSET(EntityParams, melee_attacks, 0x240);
++LAYOUT_OFFSET(EntityParams, melee_attack_third, 0x350);
++LAYOUT_OFFSET(EntityParams, ranged_attacks, 0x3D8);
++LAYOUT_OFFSET(EntityParams, floor_probe_depth, 0x42C);
++LAYOUT_OFFSET(EntityParams, pitch_limit_deg, 0x430);
++LAYOUT_OFFSET(EntityParams, variant_effect_ids, 0x440);
+ 
+ /* record index of the 0x88-byte records at +0x240, reached by stepping the whole params pointer
+    (the match keeps the index scaling apart from the +0x240) */
+ #define ENTITY_PARAMS_UNK240_RECORD(params, index) (((EntityParams *)((char *)(params) + (index) * sizeof(EntityParamsUnk240)))->melee_attacks[0])
+ 
+ /* what EntityParams.anim_effect_offsets[n] leads to: something Effect_StartSpawner starts at a bone on an animation frame */
++/* overlay: a record of param/chr.prm, after the EntityParams records */
+ typedef struct {
+     u16 unk00;                      /* 0x00 passed to Effect_StartSpawner */
+     u16 unk02;                      /* 0x02 the animation frame */
+     u8 unk04;                       /* 0x04 passed to Model_GetSkinnedBonePoint (and the one after it) */
+     s8 unk05;                       /* 0x05 not 0: EntityParams.variant_effect_ids picks what to start */
+ } EntityParamsUnk130;
++LAYOUT_SIZE(EntityParamsUnk130, 0x06);
++LAYOUT_OFFSET(EntityParamsUnk130, unk04, 0x04);
+ 
+ /* what EntityParams.anim_sound_offsets[n] leads to: something Sound_PlayFalloff starts on an animation frame */
++/* overlay: a record of param/chr.prm, after the EntityParams records */
+ typedef struct {
+     u8 unk00;                       /* 0x00 passed to Sound_PlayFalloff */
+     u8 unk01;                       /* 0x01 passed to Sound_PlayFalloff */
+@@ -425,6 +509,8 @@ typedef struct {
+     u8 unk04;                       /* 0x04 not 0: left out while Entity.ailment_4_frames is set */
+     char pad05[0x03];
+ } EntityParamsUnk1B0;
++LAYOUT_SIZE(EntityParamsUnk1B0, 0x08);
++LAYOUT_OFFSET(EntityParamsUnk1B0, unk04, 0x04);
+ 
+ /* the first word of an EntityParams.ranged_attacks record, as the AI functions take it */
+ #define ENTITY_PARAMS_UNK3D8(params, index) (&(params)->ranged_attacks[index].record)
+@@ -434,18 +520,22 @@ typedef struct {
+ 
+ /* EntityParams with the three ranged-attack records as a real array member: indexed this way the
+    compiler adds the scaled index to the params pointer, base first (DarkKnight_PickAttack needs that) */
++/* overlay: a record of param/chr.prm (EntityParams) */
+ typedef struct {
+     char pad00[0x3D8];
+     EntityParamsUnk3D8Array ranged[3]; /* 0x3D8 */
+ } EntityParamsRangedView;
++LAYOUT_OFFSET(EntityParamsRangedView, ranged, 0x3D8);
+ 
+ #define ENTITY_PARAMS_RANGED_VIEW(params) ((EntityParamsRangedView *)(params))
+ 
+ /* EntityParams with the float at 0xC0, which lies inside unk80 (Motion_StepSlot) */
++/* overlay: a record of param/chr.prm (EntityParams) */
+ typedef struct {
+     char pad00[0xC0];
+     f32 motion_scale;               /* 0xC0 how far the root part's movement in a motion carries the entity */
+ } EntityParamsMotionScale;
++LAYOUT_OFFSET(EntityParamsMotionScale, motion_scale, 0xC0);
+ 
+ #define ENTITY_PARAMS_MOTION_SCALE(params) (((EntityParamsMotionScale *)(params))->motion_scale)
+ 
+@@ -525,7 +615,7 @@ typedef struct {
+ /* Entity+0xE0 as the kinds handled at 0x1740A8..0x180000 use it */
+ typedef struct {
+     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
+-    char pad04[0x14];
++    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
+     void (*move)(void);             /* 0x18 */
+     s32 turn_rate;                  /* 0x1C turn speed built towards EntityParams.turn_limit */
+     char pad20[0x10];
+@@ -548,7 +638,7 @@ typedef struct {
+ /* Entity+0xE0 as the flying kind set up by DarkBird_Init lays it out */
+ typedef struct {
+     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
+-    char pad04[0x14];
++    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
+     void (*move)(void);             /* 0x18 */
+     f32 turn_rate;                  /* 0x1C turn speed */
+     char pad20[0x24];
+@@ -567,7 +657,7 @@ typedef struct {
+ /* Entity+0xE0 as the kind set up by ExpeditionSoldier_Init lays it out */
+ typedef struct {
+     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
+-    char pad04[0x14];
++    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
+     void (*move)(void);             /* 0x18 */
+     s32 turn_rate;                  /* 0x1C turn rate of the move command, cleared when one starts */
+     f32 unk20[4];                   /* 0x20 */
+@@ -581,7 +671,7 @@ typedef struct {
+ 
+ /* Entity+0xE0 as the kind set up by func_00150588 lays it out */
+ typedef struct {
+-    char pad00[0x1C];
++    void *pad00[7];                 /* 0x00 the seven handlers */
+     s32 unk1C;                      /* 0x1C */
+ } EntityUnkE0Kind150588;
+ 
+@@ -591,7 +681,7 @@ typedef struct {
+     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
+     void (*animate)(void);          /* 0x04 */
+     void (*on_hit)(void);           /* 0x08 */
+-    char pad0C[0x04];
++    void *pad0C;                    /* 0x0C the reaction handler */
+     void (*dormant)(void);          /* 0x10 */
+     void (*death)(void);            /* 0x14 */
+     void (*move)(void);             /* 0x18 */
+@@ -613,27 +703,31 @@ typedef struct {
+     char pad7D[0x23];
+ } __attribute__((aligned(8))) EntityUnkE0Kind168160;
+ 
+-/* an 8-byte slot of the work area as the bit-fields the init functions set */
++/* an 8-byte slot of the work area as the bit-fields the init functions set. The bits are u8 (u64 on the PS2,
++   where the slot is 8-byte aligned in the work area): a u64 bit-field would make the slot 8-byte aligned, and
++   on the PC the work area's slots are not. */
+ typedef struct {
+     u8 index : 5;                   /* what EntityAi_StartSlotMotion looks up */
+-    u64 bit5 : 1;
+-    u64 bit6 : 1;
+-    u64 pad7 : 1;
++    u8 bit5 : 1;
++    u8 bit6 : 1;
++    u8 pad7 : 1;
+     u8 unk01;                       /* 0x01 */
+     s16 unk02;                      /* 0x02 */
+     s32 unk04;                      /* 0x04 */
+ } EntityUnkE0SlotBits;
++LAYOUT_SIZE(EntityUnkE0SlotBits, 8);
+ 
+ /* Entity+0xE0 as the kinds set up by func_00151D30 and its neighbours use it */
+ typedef struct {
+-    char pad00[0x80];
++    void *pad00[7];                 /* 0x00 the seven handlers */
++    char pad1C[0x64];
+     EntityUnkE0SlotBits unk80;      /* 0x80 */
+     EntityUnkE0SlotBits unk88;      /* 0x88 */
+ } EntityUnkE0Kind151D30;
+ 
+ /* Entity+0xE0 as the kind set up by DarkSorcerer_Init lays it out */
+ typedef struct {
+-    char pad00[0x1C];
++    void *pad00[7];                 /* 0x00 the seven handlers */
+     f32 unk1C;                      /* 0x1C turn speed */
+     char pad20[0x24];
+     f32 unk44;                      /* 0x44 speed along x, y and z */
+@@ -645,7 +739,8 @@ typedef struct {
+ /* Entity+0xE0 as the kind set up by func_0015F8C0 lays it out. The area is
+    8-byte aligned: only then is "unk68 == 0 && unk6A == 0" one lwu. */
+ typedef struct {
+-    char pad00[0x68];
++    void *pad00[7];                 /* 0x00 the seven handlers */
++    char pad1C[0x4C];
+     s16 unk68;                      /* 0x68 counts down */
+     s16 unk6A;                      /* 0x6A counts down */
+     s16 unk6C;                      /* 0x6C counts down */
+@@ -662,7 +757,8 @@ typedef struct {
+ 
+ /* Entity+0xE0 as the kind set up by func_00162BC8 lays it out */
+ typedef struct {
+-    char pad00[0x30];
++    void *pad00[7];                 /* 0x00 the seven handlers */
++    char pad1C[0x14];
+     f32 unk30[4];                   /* 0x30 pitch and yaw passed to EntityEvent_StartEffectAtPoint */
+     char pad40[0x2E];
+     s16 unk6E;                      /* 0x6E */
+@@ -673,7 +769,8 @@ typedef struct {
+ 
+ /* Entity+0xE0 as the kind set up by Onyx_Init lays it out */
+ typedef struct {
+-    char pad00[0x68];
++    void *pad00[7];                 /* 0x00 the seven handlers */
++    char pad1C[0x4C];
+     s16 unk68[3];                   /* 0x68 weights of the first three actions (see Onyx_PickAttack) */
+     char pad6E[0x32];
+ } EntityUnkE0Kind17FC60;
+@@ -681,7 +778,7 @@ typedef struct {
+ /* Entity+0xE0 as the kind set up by func_00131390 lays it out */
+ typedef struct {
+     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
+-    char pad04[0x14];
++    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
+     void (*move)(void);             /* 0x18 */
+     f32 turn_rate;                  /* 0x1C turn speed used by EntityAi_TurnToHeading */
+     char pad20[0x4A];
+@@ -697,7 +794,7 @@ typedef struct {
+ 
+ /* Entity+0xE0 as the kind set up by func_0012ACA0 lays it out */
+ typedef struct {
+-    char pad00[0x1C];
++    void *pad00[7];                 /* 0x00 the seven handlers */
+     f32 unk1C;                      /* 0x1C turn speed */
+     char pad20[0x20];
+     f32 unk40[7];                   /* 0x40 [2] to [6]: how far each of the five neck joints (model parts 30 to 34) is bent */
+@@ -706,6 +803,7 @@ typedef struct {
+ 
+ /* what Entity.params points at (the entity's controller / type data), see ENTITY_CONTROLLER.
+    EntityParams above is a second view of the same block; the two are to be unified. */
++/* overlay: a 0x450-byte record of param/chr.prm (EntityParams) */
+ typedef struct {
+     char pad00[0x10];
+     u16 flags;                      /* 0x10 */
+@@ -728,6 +826,12 @@ typedef struct {
+     s16 far_distance;               /* 0x438 the farther of the two distances it keeps from the player */
+     s16 entity_group_index;         /* 0x43A index of its group entry (entity_group_state, origins) */
+ } EntityController;
++LAYOUT_SIZE(EntityController, 0x43C);
++LAYOUT_OFFSET(EntityController, attack_arc, 0x1C);
++LAYOUT_OFFSET(EntityController, turn_limit, 0x5C);
++LAYOUT_OFFSET(EntityController, motion_blend_frames, 0xC4);
++LAYOUT_OFFSET(EntityController, pitch_limit_deg, 0x430);
++LAYOUT_OFFSET(EntityController, entity_group_index, 0x43A);
+ 
+ /* EntityController.flags: the type needs two pool blocks (0x100000 bytes) */
+ #define CONTROLLER_FLAG_TWO_BLOCKS  0x8000
+@@ -756,7 +860,7 @@ typedef struct Entity {
+     f32 body_radius;                /* 0x44 EntityParams.unk04 scaled */
+     f32 floor_lift;                 /* 0x48 how far above the floor it is kept (see EntityCollision_SphereAgainstMap) */
+     f32 knockback_speed;            /* 0x4C speed the knockback pushes the entity along at */
+-    s32 update_func;                /* 0x50 the type's per-frame update (entity_type_handlers) */
++    void (*update_func)(struct Entity *entity); /* 0x50 the type's per-frame update (entity_type_handlers) */
+     void (*handler)(struct Entity *entity); /* 0x54 the current action; EntityAi_Update calls it every frame while flag bit 6 is set and no reaction is */
+     void (*prev_handler)(struct Entity *entity); /* 0x58 the action before the last EntityAi_StartAction */
+     void *target;                   /* 0x5C */
+@@ -812,16 +916,123 @@ typedef struct Entity {
+ } Entity;
+ 
+ /* Entity with the work area at 0xE0 as plain bytes: the init functions clear it
+-   one byte at a time, and only an array member gives their code */
+-#define ENTITY_WORK_AREA_SIZE 0xA0
++   one byte at a time, and only an array member gives their code. The area is 0xA0 bytes on the PS2,
++   the rest of the record from unkE0 on (its handlers are pointers, so it is longer on the PC). */
++#define ENTITY_WORK_AREA_SIZE ((s32)(sizeof(Entity) - offsetof(Entity, unkE0)))
+ 
+ typedef struct {
+-    char pad00[0xE0];
++    char pad00[offsetof(Entity, unkE0)];
+     u8 work_bytes[ENTITY_WORK_AREA_SIZE]; /* 0xE0 */
+ } EntityWorkBytes;
+ 
+ #define ENTITY_WORK_BYTES(entity) (((EntityWorkBytes *)(entity))->work_bytes)
+ 
++/* The EntityUnkE0Kind* views lie over Entity.unkE0. Their offset comments are the PS2's; on the PC the seven
++   handlers are 8 bytes each, so a PS2 offset below 0x1C is a handler (index * pointer size) and one from 0x1C on
++   lies (offsetof(EntityUnkE0, turn_rate) - 0x1C) further on. Every named field of a view sits where
++   EntityUnkE0 has that PS2 offset. */
++#define ENTITY_UNKE0_PC_OFFSET(ps2_offset)     ((ps2_offset) < 0x1C ? (ps2_offset) / 4 * sizeof(void *) : (ps2_offset) - 0x1C + offsetof(EntityUnkE0, turn_rate))
++#define ENTITY_UNKE0_VIEW_OFFSET(T, field, ps2_offset)     _Static_assert(offsetof(T, field) == ENTITY_UNKE0_PC_OFFSET(ps2_offset), #T "." #field " is not at EntityUnkE0's " #ps2_offset)
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, pause_timer, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, move_choice, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, motion_slot_0, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, motion_slot_1, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, target_point, 0x30);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_x, 0x48);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_y, 0x4C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_z, 0x50);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, action_frames, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, steer_to_target, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, climb_command, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, think_flag, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, unk80, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, unk88, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, side_speed, 0x44);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, forward_speed, 0x48);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, pitch_speed, 0x4C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk78, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, climb_command, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk80, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk88, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, unk20, 0x20);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, target_point, 0x30);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_42_state, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_43_state, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_to_operate_id, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind150588, unk1C, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, animate, 0x04);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, on_hit, 0x08);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, dormant, 0x10);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, death, 0x14);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk1C, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk20, 0x20);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk40, 0x40);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk44, 0x44);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6A, 0x6A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6C, 0x6C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6E, 0x6E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk78, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk79, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7A, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7B, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7C, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind151D30, unk80, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind151D30, unk88, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk1C, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk44, 0x44);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk48, 0x48);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk4C, 0x4C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk68, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk6A, 0x6A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk6C, 0x6C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk78, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk79, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7A, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7B, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7C, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7D, 0x7D);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7E, 0x7E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk30, 0x30);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk6E, 0x6E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk80, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk90, 0x90);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind17FC60, unk68, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, player_cast_timer, 0x6A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, unk7A, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, alternate_anim_flag, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, distance_band, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, distance_band_timer, 0x7D);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, afterimage_active, 0x7E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind12ACA0, unk1C, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind12ACA0, unk40, 0x40);
++_Static_assert(sizeof(EntityUnkE0Kind12ACA0) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind12ACA0 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind131390) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind131390 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind150588) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind150588 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind151D30) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind151D30 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind15F8C0) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind15F8C0 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind162BC8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind162BC8 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind168160) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind168160 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind16BF98) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind16BF98 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind1719F8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind1719F8 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind1740A8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind1740A8 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind178358) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind178358 is larger than the work area");
++_Static_assert(sizeof(EntityUnkE0Kind17FC60) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind17FC60 is larger than the work area");
++
+ /* Entity.flags as bit-fields. The game sets the flags through bit-fields:
+    several changed in a row only match when written this way. */
+ typedef struct {
+@@ -897,9 +1108,10 @@ typedef struct {
+ #define ENTITY_FLAG_HIT_BITS(entity) ((EntityFlagHitBits *)&(entity)->flags)
+ 
+ /* Entity.target is a union member in the game: where a store to it has to stay
+-   ahead of a later load, only a store through a union matches. */
++   ahead of a later load, only a store through a union matches. as_s32 is as wide as the pointer, so
++   storing 0 to it clears the whole of Entity.target on the PC too. */
+ typedef union {
+-    s32 as_s32;
++    sptr as_s32;
+     f32 as_f32;
+ } EntityUnk5C;
+ 
+@@ -924,20 +1136,33 @@ typedef union {
+ 
+ #define ENTITY_FLAG_WORD(flags) (((EntityFlagWord *)&(flags))->word)
+ 
+-/* the block at player_state: the player (position first). Files declare
+-   `extern PlayerData player_state;` themselves: older files still use an array. */
++/* the block at player_state: the player (position first), a view of PlayerState (player/player.h) with the
++   entity code's names. Files declare `extern PlayerData player_state;` themselves: older files still use an
++   array. PlayerState's pointer fields from 0x204 on move the later fields on the PC, so the padding is worked
++   out from PlayerState. */
+ typedef struct {
+     f32 position[4];                /* 0x00 */
+-    char pad10[0x04];
++    char pad10[offsetof(PlayerState, rotation.y) - 0x10];
+     f32 heading;                    /* 0x14 the player's heading angle, PlayerState.rotation.y */
+-    char pad18[0x1EC];
++    char pad18[offsetof(PlayerState, stepped_on_entity) - offsetof(PlayerState, rotation.y) - sizeof(f32)];
+     Entity *stood_on_entity;        /* 0x204 the entity the player was put on top of when climbing */
+-    char pad208[0x4A];
++    char pad208[offsetof(PlayerState, record_flag_block) - offsetof(PlayerState, stepped_on_entity) - sizeof(Entity *)];
++    u8 record_flag_block;           /* 0x250 PlayerState.record_flag_block */
++    char pad251[offsetof(PlayerState, map_index) - offsetof(PlayerState, record_flag_block) - sizeof(u8)];
+     u16 map_record_index;           /* 0x252 picks the MapSlot record the player is in */
+-    char pad254[0x05];
++    char pad254[offsetof(PlayerState, item_action_step) - offsetof(PlayerState, map_index) - sizeof(u16)];
++    u8 item_action_step;            /* 0x258 PlayerState.item_action_step */
+     u8 magic_shot_launched;         /* 0x259 set when a cast magic launches a shot, cleared each frame */
+ } PlayerData;
+ 
++_Static_assert(offsetof(PlayerData, heading) == offsetof(PlayerState, rotation.y), "PlayerData is not PlayerState");
++_Static_assert(offsetof(PlayerData, stood_on_entity) == offsetof(PlayerState, stepped_on_entity), "PlayerData is not PlayerState");
++_Static_assert(offsetof(PlayerData, record_flag_block) == offsetof(PlayerState, record_flag_block), "PlayerData is not PlayerState");
++_Static_assert(offsetof(PlayerData, map_record_index) == offsetof(PlayerState, map_index), "PlayerData is not PlayerState");
++_Static_assert(offsetof(PlayerData, item_action_step) == offsetof(PlayerState, item_action_step), "PlayerData is not PlayerState");
++_Static_assert(offsetof(PlayerData, magic_shot_launched) == offsetof(PlayerState, cast_launched_shot), "PlayerData is not PlayerState");
++_Static_assert(sizeof(PlayerData) <= sizeof(PlayerState), "PlayerData is not PlayerState");
++
+ /* four animation frame numbers: a local table that a function copies whole
+    from read-only data (in the game: `s32 frames[4] = { ... };`) */
+ typedef struct {
+@@ -977,6 +1202,7 @@ typedef struct {
+ } KfVector;
+ 
+ /* one of the 0x80-byte records MapSlot.records (map/map.h) points at */
++/* overlay: a record of the map file */
+ typedef struct {
+     char pad00[0x1C];
+     f32 push_heading;               /* 0x1C the heading its floor pushes the player along (Player_Move) */
+@@ -995,9 +1221,14 @@ typedef struct {
+     f32 lowest[4];                  /* 0x60 lowest x, y, z it covers */
+     f32 highest[4];                 /* 0x70 highest x, y, z it covers */
+ } MapRecord;
++LAYOUT_SIZE(MapRecord, 0x80);
++LAYOUT_OFFSET(MapRecord, collision_mesh_index, 0x32);
++LAYOUT_OFFSET(MapRecord, record_flags, 0x38);
++LAYOUT_OFFSET(MapRecord, lowest, 0x60);
+ 
+ /* one of the 0x80-byte records MapSlot.light_blocks (map/map.h) points at, indexed by byte 3 of
+    EntitySpawnInfo.spawn_flags */
++/* overlay: a light block of the map file */
+ typedef struct {
+     char pad00[0x04];
+     f32 light1_direction_x;         /* 0x04 x of light 1's direction in this light block */
+@@ -1015,6 +1246,9 @@ typedef struct {
+     f32 ambient_blue;               /* 0x78 blue of the block's ambient colour */
+     char pad7C[0x04];
+ } MapSlotUnk10;
++LAYOUT_SIZE(MapSlotUnk10, 0x80);
++LAYOUT_OFFSET(MapSlotUnk10, light1_red, 0x50);
++LAYOUT_OFFSET(MapSlotUnk10, ambient_red, 0x70);
+ 
+ /* Entity.flags as retail reads it where a store through another pointer (the work area, say) sits
+    between two uses: a union member can alias anything, so the compiler loads the flags again
+@@ -1043,6 +1277,12 @@ typedef struct {
+ 
+ #define ENTITY_POOL_SLOT_COUNT  5
+ 
++/* The entity work areas (Entity_ClaimWorkArea), 60 of them after the pool blocks: 0x2200 bytes each on the PS2,
++   holding a model's ModelParts (at most 62 fit there), its 32 bone positions and its ModelChannel. Both structs
++   are larger on the PC, so each area grows by what the most parts that fit there and the channel need. */
++#define ENTITY_MODEL_WORK_AREA_COUNT  60
++#define ENTITY_MODEL_WORK_AREA_SIZE   (0x2200 + 62 * (sizeof(ModelPart) - PS2_MODEL_PART_SIZE) + (sizeof(ModelChannel) - PS2_MODEL_CHANNEL_SIZE))
++
+ /* EntityPoolSlot.head.fields.kind */
+ #define ENTITY_POOL_FREE        0
+ #define ENTITY_POOL_QUEUED      1   /* type assigned, not loaded */
+@@ -1077,30 +1317,35 @@ typedef struct {
+     u8 unk6;                        /* 0x06 */
+     u8 unk7;                        /* 0x07 copied to Entity.sound_bank */
+     int age;                        /* 0x08 frame_counter when last released; the oldest is reused first */
+-    int base_address;               /* 0x0C */
++    char *base_address;             /* 0x0C where the block starts in entity_pool_area */
+ } EntityPoolSlot;
+ 
+ extern EntityPoolSlot entity_pool_slots[ENTITY_POOL_SLOT_COUNT];
+ 
+ /* the first 0x20 bytes of a loaded type file (file_load_buffer), kept in entity_type_file_header while the file's
+    sound part is handed to the sound loader */
++/* overlay: the header of a chr/cNNNN.chr type file */
+ typedef struct {
+     char pad00[0x14];
+-    int unk14;                      /* 0x14 an offset into the file, made an address; 0: no sound part */
+-    int unk18;                      /* 0x18 an offset into the file, made an address; 0: no sound part */
++    EEWord unk14;                   /* 0x14 an offset into the file, made an address (char *); 0: no sound part */
++    EEWord unk18;                   /* 0x18 an offset into the file, made an address (char *); 0: no sound part */
+     char pad1C[0x04];
+ } EntityTypeFileHeader;
++LAYOUT_SIZE(EntityTypeFileHeader, 0x20);
++LAYOUT_OFFSET(EntityTypeFileHeader, unk14, 0x14);
+ 
+ /* the start of the data loaded into an entity pool block (EntityPoolSlot.base_address):
+    offsets from the start of the block to its parts */
++/* overlay: the start of a chr/cNNNN.chr type file, copied into a pool block */
+ typedef struct {
+     char pad00[0x04];
+-    char *model_offset;             /* 0x04 handed to Model_SetUpSkinned with the entity's model. The two are
+-                                       pointer typed: only then does Entity_TryActivate load them after base_address */
+-    char *motion_offset;            /* 0x08 handed to ModelMotion_LoadFile */
++    s32 model_offset;               /* 0x04 handed to Model_SetUpSkinned with the entity's model */
++    s32 motion_offset;              /* 0x08 handed to ModelMotion_LoadFile */
+     s32 unk0C;                      /* 0x0C becomes ModelInstance.texture_data */
+     s32 pool_model_offset;          /* 0x10 the slot's own model (EntityPool_BuildBlockModel), 0: none */
+ } EntityPoolData;
++LAYOUT_SIZE(EntityPoolData, 0x14);
++LAYOUT_OFFSET(EntityPoolData, pool_model_offset, 0x10);
+ 
+ /* a node of the linked_point_pool pool (0x200 of them, chained through prev/next): a point
+    that eases toward a target over a duration or follows another vector. The two
+@@ -1128,8 +1373,8 @@ extern LinkedPoint linked_point_pool[LINKED_POINT_COUNT];
+ 
+ /* the scratchpad as the movement handlers of entity types 65 and 71 use it: a velocity and the
+    matrix that turns it to the model's heading */
+-#define ENTITY_SCRATCH_VECTOR ((f32 *)0x70000000)
+-#define ENTITY_SCRATCH_MATRIX ((f32 *)0x70000010)
++#define ENTITY_SCRATCH_VECTOR SPR(f32 *, 0)
++#define ENTITY_SCRATCH_MATRIX SPR(f32 *, 0x10)
+ 
+ /* upstream's typed views of the two blocks an Entity points at */
+ #define ENTITY_MODEL(entity) ((ModelInstance *)(entity)->model)
+@@ -1155,14 +1400,17 @@ typedef struct {
+     s16 unk52;                      /* 0x52 frames one step takes */
+ } ReferencedObject;
+ 
+-/* ladder_object: the map object the player is climbing */
++/* ladder_object: the map object the player is climbing. A view of MapObject (model/model.h), which holds
++   pointers, so on the PC the padding follows that struct's layout. */
+ typedef struct {
+     ModelInstance *model;           /* 0x00 its get_point gives the two end points (Ladder_Start) */
+-    char pad04[0x04];
++    char pad04[offsetof(MapObject, source) - sizeof(ModelInstance *)];
+     ReferencedObject *unk08;        /* 0x08 */
+-    char pad0C[0x04];
++    char pad0C[offsetof(MapObject, state_flags) - offsetof(MapObject, source) - sizeof(ReferencedObject *)];
+     s32 unk10;                      /* 0x10 flags; 0x10000 is tested by Ladder_WaitOnRung */
+ } ObjectReference;
++_Static_assert(offsetof(ObjectReference, unk08) == offsetof(MapObject, source), "ObjectReference is not MapObject");
++_Static_assert(offsetof(ObjectReference, unk10) == offsetof(MapObject, state_flags), "ObjectReference is not MapObject");
+ 
+ void Entity_ResetAllLists(void);
+ void Entity_FreeAllInGroup(int group_id);
+diff --git a/src/game/entity/entity_ai.c b/src/game/entity/entity_ai.c
+index a48378b612de14eedff322f8eb735525449a2271..b08b29043573d868e53a55966845bf9d691bbf3e 100644
+--- a/src/game/entity/entity_ai.c
++++ b/src/game/entity/entity_ai.c
+@@ -8,15 +8,17 @@
+ #include "map/map.h"
+ #include "model/model.h"
+ #include "entity/entity_ai.h"
++#include "entity/entity_math.h"
+ 
+ int rand(void);
+ s32 EntitySight_PropInWay(Entity *entity);
+ s32 EntitySight_ObjectInWay(Entity *entity);
+ #include "gfx/gs.h"
++#include "core/game.h"
++#include <string.h>
+ 
+-extern float camera_state[];
++extern CameraState camera_state;
+ s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_height, f32 max_distance, f32 heading);
+-void *memset(void *, int, u32);
+ void Vector_Copy(void *, void *);
+ s32 Attack_Run(Unk1B1470Request *, Unk1B1470Extra *);
+ /* EntityMath_WrapAngle, which the game inlines here: wraps an angle to +-pi */
+@@ -37,7 +39,7 @@ char *Model_GetSkinnedBonePoint(char *, u32);
+ s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits, f32 rate);
+ /* match: the call leaves the sixth argument (rate, $f12) unset */
+ #define TURN_PART_NO_RATE ((int (*)(void *, f32 *, int, f32 *, f32 *))Bone_TurnPart)
+-int Bone_TurnPartToLook(void *model, int part_arg, int angles_arg, int mode, void *target, int limits_arg, float rate);
++int Bone_TurnPartToLook(void *model, ModelPart *part, f32 *angles, int mode, void *target, f32 *limits, float rate);
+ extern PlayerState player_state;
+ #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->spawn_flags)
+ extern EntitySpawnInfo *map_spawn_infos[2];
+@@ -84,8 +86,8 @@ static s32 EntityAi_CheckMeleeAilment(Entity *entity, EntityParamsUnk240 *record
+ static void EntityAi_Kill(Entity *entity);
+ static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b, f32 *limit);
+ static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits);
+-static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c, int value_d, float scale);
+-static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate);
++static int func_00196200(Entity *entity, f32 *value_a, int value_b, void *value_c, f32 *value_d, float scale);
++static int func_00196248(Entity *entity, f32 *angles, int mode, f32 *limits, float rate);
+ static int EntityAi_IsPlayerNear(Entity *entity);
+ static void EntityAi_SensePlayerInArc(Entity *actor);
+ static void EntityAi_RollNoticePlayer(Entity *actor);
+@@ -112,8 +114,8 @@ float EntityAi_RandomAngle(void) {
+ /* Starts the second camera shake (GameLoop_UpdateCameraShake plays it): its reach (CameraState.entity_shake_reach) and its frames
+    (unk7C). The Giant Beetle's ranged attack uses it. */
+ void EntityAi_ShakeCamera(int float_value, int int_value) {
+-    camera_state[30] = float_value;
+-    *(int *)&camera_state[31] = int_value;
++    camera_state.entity_shake_reach = float_value;
++    camera_state.entity_shake_frames = int_value;
+ }
+ 
+ /* Sets Entity.state and keeps the old value in prev_state. */
+@@ -127,7 +129,7 @@ void EntityAi_SetState(Entity *entity, u8 state) {
+ 
+ /* Installs the entity's per-frame update (Entity.update_func; the type table entity_type_handlers gives it) and puts
+    action_step back to 0. */
+-void EntityAi_SetUpdate(Entity *entity, s32 update) {
++void EntityAi_SetUpdate(Entity *entity, void (*update)(Entity *)) {
+     entity->update_func = update;
+     entity->action_step = 0;
+ }
+@@ -315,14 +317,14 @@ static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b
+ 
+ /* Turns the model part at EntityModel.look_at_part to look at target (Bone_TurnPartToLook) while params flag 0x2000 is
+    set; FALSE without it. */
+-int EntityAi_LookAtPoint(Entity *entity, int angles, int mode, int target, int limits, float rate) {
++int EntityAi_LookAtPoint(Entity *entity, f32 *angles, int mode, void *target, f32 *limits, float rate) {
+     EntityModel *model = entity->model;
+-    int part = (int)model->look_at_part;
++    ModelPart *part = model->look_at_part;
+ 
+-    if (part == 0 || !(ENTITY_CONTROLLER(entity)->flags & 0x2000)) {
++    if (part == NULL || !(ENTITY_CONTROLLER(entity)->flags & 0x2000)) {
+         return 0;
+     }
+-    return Bone_TurnPartToLook(model, part, angles, mode, (void *)target, limits, rate);
++    return Bone_TurnPartToLook(model, part, angles, mode, target, limits, rate);
+ }
+ 
+ /* As EntityAi_LookAtPoint, at the player's position 220 above his feet. */
+@@ -335,7 +337,7 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
+     if (entity->model->look_at_part == NULL || !(entity->params->flags & 0x2000)) {
+         result = 0;
+     } else {
+-        result = Bone_TurnPartToLook(entity->model, (int)entity->model->look_at_part, (int)target, mode, position, (int)out, range);
++        result = Bone_TurnPartToLook(entity->model, entity->model->look_at_part, target, mode, position, out, range);
+     }
+     return result;
+ }
+@@ -343,23 +345,23 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
+ /* Bone_TurnPart for the model part at EntityModel.aim_part (the one the model file marks with ModelFilePart.unk06
+    2); FALSE without it. Nothing calls it, and no code that runs uses that part, so its role is not known. */
+ static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits) {
+-    int part = entity->model->aim_part;
++    ModelPart *part = entity->model->aim_part;
+     int result;
+ 
+-    if (part == 0) {
++    if (part == NULL) {
+         result = 0;
+     } else {
+-        result = TURN_PART_NO_RATE((void *)part, angles, mode, goal, limits);
++        result = TURN_PART_NO_RATE(part, angles, mode, goal, limits);
+     }
+     return result;
+ }
+ 
+ /* As EntityAi_LookAtPoint, for the model part at EntityModel.aim_part (role unknown, see func_001961D0) and
+    without the params flag test; FALSE without the part. Nothing calls it. */
+-static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c, int value_d, float scale) {
++static int func_00196200(Entity *entity, f32 *value_a, int value_b, void *value_c, f32 *value_d, float scale) {
+     EntityModel *model = entity->model;
+ 
+-    if (model->aim_part == 0) {
++    if (model->aim_part == NULL) {
+         return 0;
+     }
+     return Bone_TurnPartToLook(model, model->aim_part, value_a, value_b, value_c, value_d, scale);
+@@ -367,14 +369,14 @@ static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c
+ 
+ /* As func_00196200, at the player's position 115 above his feet; FALSE without the part.
+    Nothing calls it. */
+-static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate) {
++static int func_00196248(Entity *entity, f32 *angles, int mode, f32 *limits, float rate) {
+     float position[2]; // match: Vector_Copy writes four floats, but retail reserves room for two
+     EntityModel *model;
+ 
+     Vector_Copy(position, &player_state.position);
+     position[1] -= 115.0f;
+     model = entity->model;
+-    if (model->aim_part == 0) {
++    if (model->aim_part == NULL) {
+         return 0;
+     }
+     return Bone_TurnPartToLook(model, model->aim_part, angles, mode, position, limits, rate);
+@@ -385,7 +387,7 @@ static int func_00196248(Entity *entity, int angles, int mode, int limits, float
+ s32 EntityAi_RemoveIfFallen(Entity *entity) {
+     u16 ctrl_flags;
+ 
+-    if (*(f32 *)((char *)entity->model + 0xC4) > 10000.0f) {
++    if (entity->model->position[1] > 10000.0f) {
+         ctrl_flags = ENTITY_CONTROLLER(entity)->respawn_effect_id;
+         if (ctrl_flags != 0 && ctrl_flags != 0xFFFF) {
+             Effect_FreeForOwner(entity);
+@@ -418,27 +420,18 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
+     if (!ENTITY_FLAG_BITS(entity)->bit7) {
+         return FALSE;
+     }
+-    if (ENTITY_FLAG_BITS(entity)->bit4 && (entity->spawn_info->spawn_flags & (0x8000L << 46))) {
++    if (ENTITY_FLAG_BITS(entity)->bit4 && (entity->spawn_info->spawn_flags & (0x8000LL << 46))) {
+         return FALSE;
+     }
+-    death_count = Game_GetSpawnDeathCount(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
++    death_count = Game_GetSpawnDeathCount(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
+     if ((s8)SPAWN_FLAGS(entity->spawn_info)->bytes[5] != 0 && death_count >= (s8)SPAWN_FLAGS(entity->spawn_info)->bytes[5]) {
+         return FALSE;
+     }
+     spawn_info = entity->spawn_info;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%1)\n"
+-        "lqc2 $vf17, 0(%2)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xz $vf16, $vf16, $vf16\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%3)\n"
+-        : "=m"(distance) : "r"(&spawn_info->spawn_x), "r"(&player_state.position), "r"(distance));
++    /* EntityMath_DistanceXZ inlined (one VU0 block) */
++    distance[0] = EntityMath_DistanceXZ(&spawn_info->spawn_x, (f32 *)&player_state.position);
+     if (distance[0] <= (f32)spawn_info->respawn_distance) {
+-        if ((entity->spawn_info->spawn_flags & (0xC000L << 45)) == (0x8000L << 44)) {
++        if ((entity->spawn_info->spawn_flags & (0xC000LL << 45)) == (0x8000LL << 44)) {
+             return TRUE;
+         }
+         if (ENTITY_FLAG_BITS(entity)->pad8) {
+@@ -605,10 +598,10 @@ void EntityAi_CheckFarFromSpawn3D(Entity *entity) {
+     limit = spawn_info->wander_radius;
+     delta_z = model->position[2] - spawn_info->spawn_z;
+     if ((float)(limit * limit) < (delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z)) {
+-        entity->flags |= (0x8000UL << 38);
++        entity->flags |= (0x8000ULL << 38);
+         return;
+     }
+-    entity->flags &= 0xFFDFFFFFFFFFFFFFUL;
++    entity->flags &= 0xFFDFFFFFFFFFFFFFULL;
+ }
+ 
+ /* Sets flag 53 while the model is farther from its spawn point than EntitySpawnInfo.wander_radius (in x and z),
+@@ -626,10 +619,10 @@ void EntityAi_CheckFarFromSpawn(Entity *entity) {
+     limit = spawn_info->wander_radius;
+     delta_z = model->position[2] - spawn_info->spawn_z;
+     if ((float)(limit * limit) < (delta_x * delta_x) + (delta_z * delta_z)) {
+-        entity->flags |= (0x8000UL << 38);
++        entity->flags |= (0x8000ULL << 38);
+         return;
+     }
+-    entity->flags &= 0xFFDFFFFFFFFFFFFFUL;
++    entity->flags &= 0xFFDFFFFFFFFFFFFFULL;
+ }
+ 
+ /* Clears flag bit 31. The think functions call it when closing in and test the bit right after: set, they
+@@ -647,18 +640,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
+     f32 magnitude;
+ 
+     if (max_distance != 0.0f) {
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0(%1)\n"
+-            "lqc2 $vf17, 0(%2)\n"
+-            "vsub.xyz $vf16, $vf16, $vf17\n"
+-            "vmul.xyz $vf16, $vf16, $vf16\n"
+-            "vaddy.x $vf16, $vf16, $vf16y\n"
+-            "vaddz.x $vf16, $vf16, $vf16z\n"
+-            "vsqrt Q, $vf16x\n"
+-            "vwaitq\n"
+-            "vaddq.x $vf16, $vf0, Q\n"
+-            "sqc2 $vf16, 0(%3)\n"
+-            : "=m"(distance) : "r"(entity->model->position), "r"(target), "r"(distance));
++        /* EntityMath_Distance inlined (one VU0 block) */
++        distance[0] = EntityMath_Distance(entity->model->position, target);
+         if (max_distance < distance[0]) {
+             return 0;
+         }
+@@ -686,17 +669,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
+         }
+     }
+     if (pitch_range != 0.0f) {
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0(%1)\n"
+-            "lqc2 $vf17, 0(%2)\n"
+-            "vsub.xyz $vf16, $vf16, $vf17\n"
+-            "vmul.xz $vf16, $vf16, $vf16\n"
+-            "vaddz.x $vf16, $vf16, $vf16z\n"
+-            "vsqrt Q, $vf16x\n"
+-            "vwaitq\n"
+-            "vaddq.x $vf16, $vf0, Q\n"
+-            "sqc2 $vf16, 0(%3)\n"
+-            : "=m"(distance) : "r"(entity->model->position), "r"(target), "r"(distance));
++        /* EntityMath_DistanceXZ inlined (one VU0 block) */
++        distance[0] = EntityMath_DistanceXZ(entity->model->position, target);
+         diff = atan2f(target[1] - entity->model->position[1], distance[0]);
+         diff -= entity->model->rotation[0];
+         diff = diff - (f32)(s32)(diff / 6.2831855f) * 6.2831855f;
+@@ -1834,7 +1808,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
+     entity->reaction_step = 0;
+     if (run_now != 0) {
+         if (reaction != NULL) {
+-            reaction();
++            ((void (*)(Entity *))reaction)(entity); /* the reactions take the entity, which the EE left in $a0 */
+         }
+     }
+     return 1;
+@@ -1874,8 +1848,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
+ u16 Motion_FrameCount(ModelInstance *model, int index) {
+     ModelPartLevels *levels;
+ 
+-    /* match: indexing level_tables as an array swaps the addu operands */
+-    levels = *(ModelPartLevels **)((char *)model->level_tables + (index << 2));
++    levels = model->level_tables[index];
+     return *(u16 *)((char *)levels - 4);
+ }
+ 
+diff --git a/src/game/entity/entity_ai.h b/src/game/entity/entity_ai.h
+index 9e5ef3d40b85bf28c56d35837deee276ef1a90e9..d369800f3bcf695d93d2157f81d2200961ffcd4f 100644
+--- a/src/game/entity/entity_ai.h
++++ b/src/game/entity/entity_ai.h
+@@ -26,7 +26,7 @@ void EntityAi_ShakeCamera(int float_value, int int_value);
+ void EntityAi_SetState(Entity *entity, u8 state);
+ /* Installs the entity's per-frame update (Entity.update_func; the type table entity_type_handlers gives it) and puts
+    action_step back to 0 */
+-void EntityAi_SetUpdate(Entity *entity, s32 update);
++void EntityAi_SetUpdate(Entity *entity, void (*update)(Entity *));
+ /* Switches the entity's handler, keeping the old one as prev_handler; optionally runs the new one now */
+ int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
+ /* Switches the entity to handler (keeping the old one), sets flag bit 57 and bits 58-59, optionally runs it */
+@@ -50,7 +50,7 @@ int EntityAi_LaunchShots(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 elapsed
+ void EntityAi_SpawnBoneEffect(char **model, int effect_id, int point);
+ /* Turns the model part at EntityModel.look_at_part to look at target (Bone_TurnPartToLook) while params flag 0x2000 is
+    set; FALSE without it */
+-int EntityAi_LookAtPoint(Entity *entity, int angles, int mode, int target, int limits, float rate);
++int EntityAi_LookAtPoint(Entity *entity, f32 *angles, int mode, void *target, f32 *limits, float rate);
+ /* As EntityAi_LookAtPoint, at the player's position 220 above his feet */
+ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32 range);
+ /* Once the model is below y 10000 (fallen out of the map): frees its effects, clears flag bit 1 and returns
+diff --git a/src/game/entity/entity_ai_choice.c b/src/game/entity/entity_ai_choice.c
+index 05d6640033564df8be4148f8fc25de884631263a..8d8fd226cf78c4496149831be74e1f470d015c3c 100644
+--- a/src/game/entity/entity_ai_choice.c
++++ b/src/game/entity/entity_ai_choice.c
+@@ -3,6 +3,7 @@
+    commands (Entity.move_command) that take it towards its target or aside from a push. */
+ #include "entity/entity_ai_choice.h"
+ #include "entity/entity_aim.h"
++#include "entity/entity_math.h"
+ #include "player/player.h"
+ 
+ float sinf(float);
+@@ -10,7 +11,7 @@ float cosf(float);
+ double acos(double);
+ void Vector_Normalize(void *dst, void *src);
+ void Vector_Cross(void *, void *, void *);
+-extern u8 player_weapon_step[];
++#define player_weapon_step (&player_state.item_action_step)
+ extern EntityModel *held_item_model_ptr;
+ int rand(void);
+ extern PlayerState player_state;
+@@ -211,7 +212,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
+     f32 angle;
+ 
+     *(f32 *)heading_out = 0.0f;
+-    if (!(entity->flags & (0xB000L << 33))) {
++    if (!(entity->flags & (0xB000LL << 33))) {
+         return 0;
+     }
+     angle = entity->model->rotation[1];
+@@ -220,7 +221,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
+     facing[2] = -cosf(angle);
+     facing[3] = 1.0f;
+     push[0] = push[1] = push[2] = push[3] = 0.0f;
+-    if (entity->flags & (0xC000L << 31)) {
++    if (entity->flags & (0xC000LL << 31)) {
+         push[0] += entity->wall_push[0];
+         push[2] += entity->wall_push[2];
+     }
+@@ -252,7 +253,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
+ 
+     // match: the early return and the second `return FALSE` below leave a label in front of the body
+     // until jump2 merges the two, which keeps `heading` copied back into $f12 for sinf
+-    if (!(entity->flags & (0xB000L << 33))) {
++    if (!(entity->flags & (0xB000LL << 33))) {
+         return FALSE;
+     }
+     facing[0] = -sinf(heading);
+@@ -260,7 +261,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
+     facing[2] = -cosf(heading);
+     facing[3] = 1.0f;
+     push[0] = push[1] = push[2] = push[3] = 0.0f;
+-    if (entity->flags & (0xC000L << 31)) {
++    if (entity->flags & (0xC000LL << 31)) {
+         push[0] += entity->wall_push[0];
+         push[2] += entity->wall_push[2];
+     }
+@@ -829,18 +830,8 @@ s32 EntityAi_MoveCommand3D(Entity *entity, s32 mark_far, f32 range) {
+     if (entity->params->max_speed < (0.0f <= diff ? diff : -diff)) {
+         result |= 0.0f <= diff ? 0x20 : 0x10;
+     }
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xyz $vf16, $vf16, $vf16\n"
+-        "vaddy.x $vf16, $vf16, $vf16y\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(entity->model->position), "r"(entity->target), "r"(distance) : "memory");
++    /* EntityMath_Distance inlined (one VU0 block) */
++    distance[0] = EntityMath_Distance(entity->model->position, entity->target);
+     if (range < distance[0]) {
+         result |= 1;
+         if (mark_far != 0) {
+@@ -882,17 +873,8 @@ s32 EntityAi_MoveCommand(Entity *entity, s32 mark_far, f32 range) {
+     if (entity->params->turn_limit < (0.0f <= diff ? diff : -diff)) {
+         result = 0.0f <= diff ? 0x200 : 0x100;
+     }
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xz $vf16, $vf16, $vf16\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(entity->model->position), "r"(entity->target), "r"(distance) : "memory");
++    /* EntityMath_DistanceXZ inlined (one VU0 block) */
++    distance[0] = EntityMath_DistanceXZ(entity->model->position, entity->target);
+     if (range < distance[0]) {
+         result |= 1;
+         if (mark_far != 0) {
+@@ -938,17 +920,8 @@ s32 EntityAi_TurnOrMoveCommand(Entity *entity, s32 far_flag, f32 reach) {
+             result = 0x100;
+         }
+     } else {
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0(%0)\n"
+-            "lqc2 $vf17, 0(%1)\n"
+-            "vsub.xyz $vf16, $vf16, $vf17\n"
+-            "vmul.xz $vf16, $vf16, $vf16\n"
+-            "vaddz.x $vf16, $vf16, $vf16z\n"
+-            "vsqrt Q, $vf16x\n"
+-            "vwaitq\n"
+-            "vaddq.x $vf16, $vf0, Q\n"
+-            "sqc2 $vf16, 0(%2)\n"
+-            : : "r"(entity->model->position), "r"(entity->target), "r"(vec) : "memory");
++        /* EntityMath_DistanceXZ inlined (one VU0 block) */
++        vec[0] = EntityMath_DistanceXZ(entity->model->position, entity->target);
+         distance = vec[0];
+         if (reach < distance) {
+             result |= 1;
+@@ -967,7 +940,7 @@ int EntityAi_PushTurnCommand3D(Entity *entity, int turn) {
+     int code = 0;
+ 
+     push[0] = push[1] = push[2] = push[3] = 0.0f;
+-    if (entity->flags & (0xC000L << 31)) {
++    if (entity->flags & (0xC000LL << 31)) {
+         push[0] += entity->wall_push[0];
+         push[1] += entity->wall_push[1];
+         push[2] += entity->wall_push[2];
+diff --git a/src/game/entity/entity_ai_handlers.c b/src/game/entity/entity_ai_handlers.c
+index a7a7c7301286ea0284b06aabb4b3a9cac86b113a..fc37ca04961646e2952b934a3b0ce7552fcfc6f6 100644
+--- a/src/game/entity/entity_ai_handlers.c
++++ b/src/game/entity/entity_ai_handlers.c
+@@ -7,6 +7,7 @@
+ #include "entity/entity_events.h"
+ #include "model/motion.h"
+ #include "entity/entity_math.h"
++#include <libvu0.h>
+ 
+ int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
+ void EntityAi_SetState(char *, u8);
+@@ -19,8 +20,8 @@ void Vector_Copy(void *, void *);
+ void EntityAi_RaiseAttackWeight(Entity *);
+ void EntityAi_RaiseRangedWeights(Entity *);
+ void EntityAi_UpdateCollision(Entity *);
+-void EntityAi_SetUpdate(char *, s32);
+-extern s32 entity_type_handlers[][2];
++void EntityAi_SetUpdate(char *, void (*)(Entity *));
++extern void (*entity_type_handlers[][2])(Entity *);
+ int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
+ extern u32 frame_counter;
+ void EntityAi_SensePlayer(void *, int);
+@@ -32,15 +33,11 @@ int rand(void);
+ extern PlayerData player_state;
+ void EntityAi_ClearTurnInPlace(Entity *);
+ extern f32 identity_matrix[16];
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0RotMatrixZ(float *, float *, float);
+ void Vector_ApplyMatrix(void *, void *, void *);
+ void Vector_Scale(float *, float *, float);
+ float EntityAi_Accelerate(Entity *, float);
+ 
+-/* Motion_BlendToPose as if it returned a value.
+-   match: the callee is void, but retail keeps what it leaves in $2 */
++/* Motion_BlendToPose, which returns the blend frames left. */
+ #define MOTION_BLEND_TO_POSE ((int (*)(EntityModel *, f32))Motion_BlendToPose)
+ 
+ /* An action that starts no motion of its own: it waits until the current motion has blended in and played to
+@@ -661,7 +658,7 @@ void EntityAi_InitDefaults(Entity *entity) {
+     if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
+         ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
+     }
+-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
++    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+     } else {
+         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+@@ -689,7 +686,7 @@ void EntityAi_Animate(Entity *entity) {
+     unkE0 = &entity->unkE0;
+     if (ENTITY_FLAG_BITS(entity)->bit14) {
+         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
+-            entity->flags = flags & ~0x3800L;
++            entity->flags = flags & ~0x3800LL;
+         }
+         blend_frames = entity->model->level_tables->unk88;
+         if (blend_frames != 0) {
+@@ -764,7 +761,7 @@ void EntityAi_Think(Entity *entity, s32 unknown) {
+ 
+ /* The think function while flag bit 53 is set (too far from the spawn point): walks back to the spawn point,
+    turning aside while something pushes the entity from the front. */
+-int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
++void EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
+     Entity *entity = entity_ptr;
+     EntityUnkE0 *unkE0 = &entity->unkE0;
+     f32 to_spawn[4];
+@@ -786,7 +783,7 @@ int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
+         entity->move_command = EntityAi_MoveCommand(entity, 0, 50.0f);
+     } else {
+         push[0] = push[1] = push[2] = push[3] = 0.0f;
+-        if (entity->flags & (0xC000L << 31)) {
++        if (entity->flags & (0xC000LL << 31)) {
+             push[0] += entity->wall_push[0];
+             push[2] += entity->wall_push[2];
+         }
+@@ -819,7 +816,7 @@ int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
+ 
+ /* The think function of state 0: every 120-180 frames picks a point near the spawn point to walk to
+    (EntityPoint_PickNear), or stands for 60-90 frames (one time in five). */
+-int EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
++void EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
+     Entity *entity = entity_ptr;
+     EntityUnkE0 *unkE0 = &entity->unkE0;
+     f32 direction[4];
+diff --git a/src/game/entity/entity_ai_handlers.h b/src/game/entity/entity_ai_handlers.h
+index 65fa451f82564555bb67c5daec72ce71429f6614..7b30d6f6c478b73d1a1f1db0f7092e870e30a78a 100644
+--- a/src/game/entity/entity_ai_handlers.h
++++ b/src/game/entity/entity_ai_handlers.h
+@@ -56,10 +56,10 @@ void EntityAi_OnHit(Entity *entity);
+ void EntityAi_Think(Entity *entity, s32 unknown);
+ 
+ /* The think function while flag bit 53 is set: walks back to the spawn point. */
+-int EntityAi_ThinkReturn(void *entity_ptr, int unknown);
++void EntityAi_ThinkReturn(void *entity_ptr, int unknown);
+ 
+ /* The think function of state 0: wanders near the spawn point. */
+-int EntityAi_ThinkIdle(void *entity_ptr, int unknown);
++void EntityAi_ThinkIdle(void *entity_ptr, int unknown);
+ 
+ /* The think function of state 1 (the player was noticed and is no longer): keeps walking to the player. */
+ void EntityAi_ThinkPursue(Entity *entity, int extra);
+diff --git a/src/game/entity/entity_aim.c b/src/game/entity/entity_aim.c
+index 3a09608d76025517532444c5fc2fde189ce057bb..872f961ad9c09e54dff80f203c992c3afd3394d9 100644
+--- a/src/game/entity/entity_aim.c
++++ b/src/game/entity/entity_aim.c
+@@ -2,9 +2,11 @@
+    (bones) for looking at a point, and whether something stands between an entity and the player. */
+ #include "entity/entity_aim.h"
+ #include "entity/entity_collision.h"
++#include "entity/entity_math.h"
+ #include "player/player.h"
+ #include "collision/collision.h"
+ #include "map/map.h"
++#include <libvu0.h>
+ 
+ int rand(void);
+ extern EntityRangeWeights near_point_range_weights;
+@@ -13,18 +15,11 @@ float cosf(float);
+ void Vector_Add(void *, void *, void *);
+ extern PlayerState player_state;
+ extern f32 identity_matrix[16];
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0ApplyMatrix(float *, int *, float *);
+ void Vector_Scale(float *, float *, float);
+-void sceVu0TransMatrix(float *, float *, float *);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixZ(float *, float *, float);
+ void Matrix_Multiply(void *, void *, void *);
+-void sceVu0CopyMatrix(void *, void *);
+ void Vector_Subtract(void *, void *, void *);
+ void Vector_Normalize(void *, void *);
+ void Vector_Cross(void *, void *, void *);
+-void sceVu0TransposeMatrix(void *, void *);
+ double sqrt(double);
+ float atan2f(float, float);
+ void Vector_ApplyMatrix(void *, void *, void *);
+@@ -33,7 +28,7 @@ extern int current_map_slot;
+ extern s32 map_objects_started[2];
+ extern s32 map_object_counts[2];
+ extern MapObject map_slot_objects[];
+-extern MapObject map_slot1_objects[];
++extern MapObject *const map_slot1_objects;
+ void Vector_Copy(void *, void *);
+ void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
+ extern MapSlot map_slots[];
+@@ -91,17 +86,8 @@ void EntityPoint_PickNear(float range, void *point_arg, void *centre, void *posi
+     s32 roll;
+     s32 i;
+ 
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xz $vf16, $vf16, $vf16\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(position), "r"(centre), "r"(distance_out) : "memory");
++    /* EntityMath_DistanceXZ inlined (one VU0 block) */
++    distance_out[0] = EntityMath_DistanceXZ(position, centre);
+     if ((s32)(distance_out[0] * 100.0f / range) > 50) {
+         for (i = 0; i < 5; i++) {
+             table.weights[i + 5] *= 2;
+@@ -398,18 +384,8 @@ s32 EntitySight_ObjectInWay(Entity *entity) {
+     position[1] -= entity->collision_height * 0.5f;
+     Vector_Copy(target, &player_state);
+     target[1] -= 115.0f;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xyz $vf16, $vf16, $vf16\n"
+-        "vaddy.x $vf16, $vf16, $vf16y\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(target), "r"(position), "r"(distance_out) : "memory");
++    /* EntityMath_Distance inlined (one VU0 block) */
++    distance_out[0] = EntityMath_Distance(target, position);
+     distance = distance_out[0];
+     Vector_Subtract(direction, target, position);
+     Vector_Normalize(direction, direction);
+@@ -477,7 +453,7 @@ s32 EntitySight_EntityInWay(Entity *entity) {
+     while (other != NULL) {
+         flags = other->flags;
+         if (((s32)(flags >> 1) & 1) && ((s32)(flags >> 2) & 3) < 2 && other != entity) {
+-            if (EntityCollision_PointNearSegment(other->radius, (int *)&player_state, (int)entity->model->position, (int)other->model->position)) {
++            if (EntityCollision_PointNearSegment(other->radius, (f32 *)&player_state, entity->model->position, other->model->position)) {
+                 return TRUE;
+             }
+         }
+@@ -502,18 +478,8 @@ s32 EntitySight_PropInWay(Entity *entity) {
+     position[1] -= entity->collision_height * 0.5f;
+     Vector_Copy(target, &player_state);
+     target[1] -= 115.0f;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xyz $vf16, $vf16, $vf16\n"
+-        "vaddy.x $vf16, $vf16, $vf16y\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(target), "r"(position), "r"(distance_out) : "memory");
++    /* EntityMath_Distance inlined (one VU0 block) */
++    distance_out[0] = EntityMath_Distance(target, position);
+     distance = distance_out[0];
+     Vector_Subtract(target, target, position);
+     Vector_Normalize(target, target);
+@@ -570,17 +536,8 @@ s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_he
+     if (player_state.position.y < point[1] - max_height) {
+         return FALSE;
+     }
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xz $vf16, $vf16, $vf16\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(point), "r"(&player_state), "r"(distance_out) : "memory");
++    /* EntityMath_DistanceXZ inlined (one VU0 block) */
++    distance_out[0] = EntityMath_DistanceXZ(point, (f32 *)&player_state);
+     if (max_distance < distance_out[0]) {
+         return FALSE;
+     }
+diff --git a/src/game/entity/entity_collision.c b/src/game/entity/entity_collision.c
+index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edccdb95d184 100644
+--- a/src/game/entity/entity_collision.c
++++ b/src/game/entity/entity_collision.c
+@@ -5,12 +5,13 @@
+ #include "entity/entity_math.h"
+ #include "map/map.h"
+ #include "collision/collision.h"
++#include <libvu0.h>
+ 
+ extern PlayerData player_state;
+ void Vector_Normalize(void *, void *);
+ double sqrt(double);
++float sqrtf(float);
+ void Vector_Subtract(void *, void *, void *);
+-void sceVu0Normalize(float *, float *);
+ void Vector_Scale(float *, float *, float);
+ void Vector_Add(void *, void *, void *);
+ int rand(void);
+@@ -28,17 +29,17 @@ extern int current_map_slot;
+ extern s32 map_objects_started[2];
+ extern s32 map_object_counts[2];
+ extern MapObject map_slot_objects[];
+-extern MapObject map_slot1_objects[];
++extern MapObject *const map_slot1_objects;
+ void Collision_CylinderEdge(void *, void *, f32, void *, f32, f32);
+ void Collision_CylinderCylinder(void *, f32, f32, void *, f32, f32);
+ void Collision_BallEdge(void *, void *, f32, void *, f32);
+ void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
+-extern ModelInstanceBlock *map_slot_record_models[];
++extern MapSlotMemory map_slot_memory[2];
+ 
+ /* tests the entity's upright capsule against the triangle at `point` and pushes `position`
+    sideways out of it */
+ #define PUSH_OUT_OF_WALL()                                                                         \
+-    Collision_CapsuleTriangle(point[0].position, point[1].position, point[2].position, position,   \
++    Collision_CapsuleTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position,   \
+                               entity->collision_radius, entity->collision_height);                 \
+     if (COLLISION_RESULT->hit != 0) {                                                              \
+         ENTITY_FLAG_BITS(entity)->bit45 = TRUE;                                                    \
+@@ -52,22 +53,20 @@ extern ModelInstanceBlock *map_slot_record_models[];
+         position[2] = COLLISION_RESULT->point[2] + offset[2];                                      \
+     }
+ 
+-/* loads one edge of the triangle: its two ends, and start minus end into both `edge` and `flat` */
++/* loads one edge of the triangle: its two ends, and start minus end into both `edge` and `flat`
++   (on the PS2 one VU0 block: lqc2 both, vsub.xyzw, four sqc2) */
+ #define LOAD_EDGE(from, to)                                                                        \
+-    __asm__ volatile(                                                                              \
+-        "lqc2 $vf16, 0(%0)\n"                                                                      \
+-        "lqc2 $vf17, 0(%1)\n"                                                                      \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vnop\n"                                                                                   \
+-        "vsub.xyzw $vf18, $vf16, $vf17\n"                                                          \
+-        "sqc2 $vf16, 0(%2)\n"                                                                      \
+-        "sqc2 $vf17, 0(%3)\n"                                                                      \
+-        "vnop\n"                                                                                   \
+-        "sqc2 $vf18, 0(%4)\n"                                                                      \
+-        "sqc2 $vf18, 0(%5)\n"                                                                      \
+-        :                                                                                          \
+-        : "r"(from), "r"(to), "r"(start), "r"(end), "r"(edge), "r"(flat))
++    do {                                                                                           \
++        f32 *from_ = (f32 *)(from);                                                                \
++        f32 *to_ = (f32 *)(to);                                                                    \
++        s32 lane_;                                                                                 \
++        for (lane_ = 0; lane_ < 4; lane_++) {                                                      \
++            start[lane_] = from_[lane_];                                                           \
++            end[lane_] = to_[lane_];                                                               \
++            edge[lane_] = from_[lane_] - to_[lane_];                                               \
++            flat[lane_] = edge[lane_];                                                             \
++        }                                                                                          \
++    } while (0)
+ 
+ /* records a hit at `from`. The result is written through constant addresses (*&), not through
+    a shared base register. */
+@@ -98,6 +97,81 @@ static inline s32 map_object_count(s32 map) {
+ 
+ #define PUSH_CENTRE(amount)                                                                     centre[0] = COLLISION_RESULT->point[0] + COLLISION_RESULT->normal[0] * (amount);            centre[2] = COLLISION_RESULT->point[2] + COLLISION_RESULT->normal[2] * (amount)
+ 
++/* What the VU0 blocks of this file computed, in C. On the PS2 the lanes a block did not write (the w of
++   a vsub.xyz result, say) kept what the VU0 register last held, and some blocks stored that too; those
++   lanes are left as they are here. */
++
++/* x + y + z of a vector the way VU0 sums it: vaddy.x, then vaddz.x */
++static inline f32 vu0_sum_xyz(const f32 *v) {
++    f32 sum = v[0] + v[1];
++
++    return sum + v[2];
++}
++
++/* vopmula.xyz ACC, a, b then vopmsub.xyz out, b, a: the cross product a x b */
++static inline void vu0_cross(f32 *out, const f32 *a, const f32 *b) {
++    f32 x = a[1] * b[2] - b[1] * a[2];
++    f32 y = a[2] * b[0] - b[2] * a[0];
++    f32 z = a[0] * b[1] - b[0] * a[1];
++
++    out[0] = x;
++    out[1] = y;
++    out[2] = z;
++}
++
++/* vmul.xyz then the sum: the dot product of the x, y and z of a and b */
++static inline f32 vu0_dot_xyz(const f32 *a, const f32 *b) {
++    f32 product[3];
++
++    product[0] = a[0] * b[0];
++    product[1] = a[1] * b[1];
++    product[2] = a[2] * b[2];
++    return vu0_sum_xyz(product);
++}
++
++/* the length of the x, y and z of v as VU0 takes it: the dot product, vsqrt Q, vaddq.x from vf0 */
++static inline f32 vu0_length_xyz(const f32 *v) {
++    return 0.0f + sqrtf(vu0_dot_xyz(v, v));
++}
++
++/* v's x, y and z scaled to unit length: the length, then vdiv Q, vf0w, length and vmulq.xyz */
++static inline void vu0_normalize_xyz(f32 *out, const f32 *v) {
++    f32 scale = 1.0f / vu0_length_xyz(v);
++
++    out[0] = v[0] * scale;
++    out[1] = v[1] * scale;
++    out[2] = v[2] * scale;
++}
++
++/* vsub.xyz: out = a - b on x, y and z */
++static inline void vu0_sub_xyz(f32 *out, const f32 *a, const f32 *b) {
++    out[0] = a[0] - b[0];
++    out[1] = a[1] - b[1];
++    out[2] = a[2] - b[2];
++}
++
++/* the three cross products of the corners seen from `point` and their dot products in turn: all three of
++   one sign when `point` lies within the triangle */
++static inline void vu0_triangle_sides(const f32 *corner_a, const f32 *corner_b, const f32 *corner_c, const f32 *point,
++                                      f32 *side_a, f32 *side_b, f32 *side_c) {
++    f32 to_a[3];
++    f32 to_b[3];
++    f32 to_c[3];
++    f32 cross_ab[3];
++    f32 cross_bc[3];
++    f32 cross_ca[3];
++
++    vu0_sub_xyz(to_a, corner_a, point);
++    vu0_sub_xyz(to_b, corner_b, point);
++    vu0_sub_xyz(to_c, corner_c, point);
++    vu0_cross(cross_ab, to_a, to_b);
++    vu0_cross(cross_bc, to_b, to_c);
++    vu0_cross(cross_ca, to_c, to_a);
++    *side_a = vu0_dot_xyz(cross_ab, cross_bc);
++    *side_b = vu0_dot_xyz(cross_bc, cross_ca);
++    *side_c = vu0_dot_xyz(cross_ca, cross_ab);
++}
++
+ static void EntityCollision_CylinderCylinder(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius, f32 other_height);
+ static void EntityCollision_CylinderSphere(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius);
+ static void EntityCollision_SphereCylinder(f32 *position, f32 *other, f32 radius, f32 other_radius, f32 other_height);
+@@ -462,7 +536,7 @@ void EntityCollision_ApplySurfaceEffect(Entity *entity, s32 unknown_a, s32 unkno
+                 amount = chance;
+             }
+             entity->hit_points -= amount;
+-            entity->flags &= ~0xC000000000L;
++            entity->flags &= ~0xC000000000LL;
+             entity->hit_flash_frames = 3;
+         }
+         break;
+@@ -470,7 +544,7 @@ void EntityCollision_ApplySurfaceEffect(Entity *entity, s32 unknown_a, s32 unkno
+         if (entity->hit_points != 0) {
+             entity->hit_points = (entity->hit_points > 30) ? entity->hit_points - 30 : 0;
+             entity->hit_flash_frames = 3;
+-            entity->flags &= ~0xC000000000L;
++            entity->flags &= ~0xC000000000LL;
+         }
+         break;
+     }
+@@ -494,13 +568,13 @@ s32 EntityCollision_WalkAgainstMesh(Entity *entity, ModelInstance *model, f32 *p
+     period = 30;
+     mesh = (CollisionMesh *)model->strips;
+     if (frame_counter % period == entity->spawn_index % 10U) {
+-        strip = mesh->hazard_strips;
++        strip = EE_PTR(CollisionStrip *, mesh->hazard_strips);
+         i = mesh->hazard_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+             j = strip->point_count - 2;
+             do {
+-                Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, entity->model->position);
++                Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
+                 if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->point[1] <= entity->model->position[1]
+                     && entity->model->position[1] - entity->collision_height <= COLLISION_RESULT->point[1]) {
+                     EntityCollision_ApplySurfaceEffect(entity, point->unk04, point->unk08, point->unk0C);
+@@ -513,7 +587,7 @@ s32 EntityCollision_WalkAgainstMesh(Entity *entity, ModelInstance *model, f32 *p
+     }
+ walls:
+     if (!((s32)(entity->flags >> 23) & 1)) {
+-        strip = mesh->wall_strips;
++        strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+         i = mesh->wall_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+@@ -526,7 +600,7 @@ walls:
+         }
+     }
+     if (!((s32)(entity->flags >> 24) & 1)) {
+-        strip = mesh->second_wall_strips;
++        strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
+         i = mesh->second_wall_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+@@ -539,7 +613,7 @@ walls:
+         }
+     }
+     if (entity->spawn_info->type_id != 0x12) {
+-        strip = mesh->barrier_strips;
++        strip = EE_PTR(CollisionStrip *, mesh->barrier_strips);
+         i = mesh->barrier_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+@@ -547,7 +621,7 @@ walls:
+             if (Collision_GetBarrierLevel(point->unk04, point->unk08, point->unk0C) >= entity->spawn_info->barrier_level) {
+                 if (Collision_IsBarrierFloor(point->unk04, point->unk08, point->unk0C)) {
+                     do {
+-                        Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, entity->model->position);
++                        Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
+                         if (COLLISION_RESULT->hit != 0
+                             && entity->model->position[1] - entity->params->floor_probe_depth <= COLLISION_RESULT->point[1]
+                             && COLLISION_RESULT->point[1] <= *floor_y) {
+@@ -568,14 +642,14 @@ walls:
+             }
+         }
+     }
+-    if (!(entity->flags & 0x4000000400000L)) {
+-        strip = mesh->floor_strips;
++    if (!(entity->flags & 0x4000000400000LL)) {
++        strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+         i = mesh->floor_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+             j = strip->point_count - 2;
+             do {
+-                Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, entity->model->position);
++                Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
+                 if (COLLISION_RESULT->hit != 0
+                     && entity->model->position[1] - entity->params->floor_probe_depth <= COLLISION_RESULT->point[1]
+                     && COLLISION_RESULT->point[1] <= *floor_y) {
+@@ -628,7 +702,7 @@ void EntityCollision_WalkAgainstMap(Entity *entity) {
+                 if (record->collision_mesh_index == 0xFFFF) {
+                     continue;
+                 }
+-                if (record->model->strips == NULL) {
++                if (EE_PTR(ModelInstance *, record->model)->strips == NULL) {
+                     continue;
+                 }
+                 if (record->lowest[0] - entity->collision_radius > entity->model->position[0]) {
+@@ -649,7 +723,7 @@ void EntityCollision_WalkAgainstMap(Entity *entity) {
+                 if (record->highest[2] + entity->collision_radius < entity->model->position[2]) {
+                     continue;
+                 }
+-                if (EntityCollision_WalkAgainstMesh(entity, record->model, position, normal_sum, &floor_y)) {
++                if (EntityCollision_WalkAgainstMesh(entity, EE_PTR(ModelInstance *, record->model), position, normal_sum, &floor_y)) {
+                     entity->map_record = record;
+                     hit_floor = TRUE;
+                 }
+@@ -745,42 +819,33 @@ void EntityCollision_CapsuleTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c
+ 
+     COLLISION_RESULT->hit = 0;
+     result_normal = COLLISION_RESULT->normal;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "lqc2 $vf18, 0(%2)\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vsub.xyz $vf19, $vf16, $vf17\n"
+-        "vsub.xyz $vf20, $vf18, $vf17\n"
+-        "vsub.xyz $vf21, $vf18, $vf16\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vopmula.xyz ACC, $vf19, $vf20\n"
+-        "vopmsub.xyz $vf16, $vf20, $vf19\n"
+-        "sqc2 $vf19, 0(%3)\n"
+-        "sqc2 $vf20, 0(%4)\n"
+-        "sqc2 $vf21, 0(%5)\n"
+-        "vmul.xyz $vf17, $vf16, $vf16\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vaddx.xyz $vf17, $vf17, $vf17x\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vaddy.xyz $vf17, $vf17, $vf17y\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vrsqrt Q, $vf0w, $vf17z\n"
+-        "vwaitq\n"
+-        "vmulq.xyz $vf16, $vf16, Q\n"
+-        "sqc2 $vf16, 0(%6)\n"
+-        "sqc2 $vf16, 0(%7)\n"
+-        :
+-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(edge), "r"(flat), "r"(offset), "r"(normal),
+-          "r"(result_normal));
++    {
++        f32 face[4];
++        f32 squares[3];
++        f32 scale;
++
++        vu0_sub_xyz(edge, corner_a, corner_b);
++        vu0_sub_xyz(flat, corner_c, corner_b);
++        vu0_sub_xyz(offset, corner_c, corner_a);
++        vu0_cross(face, edge, flat);
++        face[3] = corner_a[3];
++        squares[0] = face[0] * face[0];
++        squares[1] = face[1] * face[1];
++        squares[2] = face[2] * face[2];
++        /* vaddx.xyz then vaddy.xyz, and the z lane taken: x is counted twice in the length (retail; the
++           function is never called) */
++        squares[2] = squares[2] + squares[0];
++        squares[1] = squares[1] + squares[0];
++        squares[2] = squares[2] + squares[1];
++        scale = 1.0f / sqrtf(squares[2]);
++        face[0] = face[0] * scale;
++        face[1] = face[1] * scale;
++        face[2] = face[2] * scale;
++        for (i = 0; i < 4; i++) {
++            normal[i] = face[i];
++            result_normal[i] = face[i];
++        }
++    }
+ 
+     nearest_sq = radius * radius;
+     ratio = -normal[1];
+@@ -958,15 +1023,15 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
+     Collision_TransformMeshPoints(model);
+     mesh = (CollisionMesh *)model->strips;
+     if (!((s32)(entity->flags >> 23) & 1)) {
+-        strip = mesh->wall_strips;
++        strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+         i = mesh->wall_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+             j = strip->point_count - 2;
+             do {
+-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
++                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
+                 if (COLLISION_RESULT->hit != 0) {
+-                    entity->flags |= 0x8000L << 30;
++                    entity->flags |= 0x8000LL << 30;
+                     Vector_Subtract(offset, position, COLLISION_RESULT);
+                     sceVu0Normalize(offset, offset);
+                     Vector_Add(normal_sum, normal_sum, offset);
+@@ -979,15 +1044,15 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
+         }
+     }
+     if (!((s32)(entity->flags >> 24) & 1)) {
+-        strip = mesh->second_wall_strips;
++        strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
+         i = mesh->second_wall_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+             j = strip->point_count - 2;
+             do {
+-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
++                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
+                 if (COLLISION_RESULT->hit != 0) {
+-                    entity->flags |= 0x8000L << 30;
++                    entity->flags |= 0x8000LL << 30;
+                     Vector_Subtract(offset, position, COLLISION_RESULT);
+                     sceVu0Normalize(offset, offset);
+                     Vector_Add(normal_sum, normal_sum, offset);
+@@ -999,16 +1064,16 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
+             strip = (CollisionStrip *)(point + 2);
+         }
+     }
+-    strip = mesh->barrier_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->barrier_strips);
+     i = mesh->barrier_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         if (Collision_GetBarrierLevel(point->unk04, point->unk08, point->unk0C) >= entity->spawn_info->barrier_level) {
+             do {
+-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
++                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
+                 if (COLLISION_RESULT->hit != 0) {
+-                    entity->flags |= 0x8000L << 30;
++                    entity->flags |= 0x8000LL << 30;
+                     Vector_Subtract(offset, position, COLLISION_RESULT);
+                     sceVu0Normalize(offset, offset);
+                     Vector_Add(normal_sum, normal_sum, offset);
+@@ -1022,17 +1087,17 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
+             strip = (CollisionStrip *)(point + strip->point_count);
+         }
+     }
+-    if (!(entity->flags & 0x4000000400000L)) {
+-        strip = mesh->floor_strips;
++    if (!(entity->flags & 0x4000000400000LL)) {
++        strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+         i = mesh->floor_strip_count;
+         while (--i != -1) {
+             point = strip->points;
+             j = strip->point_count - 2;
+             do {
+-                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
++                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
+                 if (COLLISION_RESULT->hit != 0) {
+                     hit_floor = TRUE;
+-                    entity->flags |= 0x8000L << 29;
++                    entity->flags |= 0x8000LL << 29;
+                     Vector_Subtract(offset, position, COLLISION_RESULT);
+                     sceVu0Normalize(offset, offset);
+                     Vector_Scale(offset, offset, entity->collision_radius);
+@@ -1063,7 +1128,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
+     Vector_Copy(position, entity->model->position);
+     normal_sum[0] = normal_sum[1] = normal_sum[2] = normal_sum[3] = 0.0f;
+     if (!((s32)(entity->flags >> 28) & 1)) {
+-        entity->flags &= ~(1L << 51);
++        entity->flags &= ~(1LL << 51);
+         position[1] += 0.1f;
+         lift = entity->floor_lift;
+     }
+@@ -1079,7 +1144,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
+                 if (record->collision_mesh_index == 0xFFFF) {
+                     continue;
+                 }
+-                if (record->model->strips == NULL) {
++                if (EE_PTR(ModelInstance *, record->model)->strips == NULL) {
+                     continue;
+                 }
+                 if (record->lowest[0] - entity->collision_radius > entity->model->position[0]) {
+@@ -1100,7 +1165,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
+                 if (record->highest[2] + entity->collision_radius < entity->model->position[2]) {
+                     continue;
+                 }
+-                if (EntityCollision_SphereAgainstMesh(entity, record->model, position, normal_sum)) {
++                if (EntityCollision_SphereAgainstMesh(entity, EE_PTR(ModelInstance *, record->model), position, normal_sum)) {
+                     entity->map_record = record;
+                     hit_floor = TRUE;
+                 }
+@@ -1149,72 +1214,28 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
+    `centre` than `radius`. */
+ static void EntityCollision_SphereSegment(void *start, void *end, void *centre, f32 radius) {
+     f32 direction[4];
++    f32 to_centre[3];
+     f32 along;
+     f32 distance;
+     CollisionResult *result;
+-    int float_bits;
+-
+-    __asm__ volatile(
+-        "lui %2, 0x7000\n"
+-        "lqc2 $vf16, 0(%4)\n"
+-        "lqc2 $vf17, 0(%5)\n"
+-        "lqc2 $vf18, 0(%6)\n"
+-        "vsub.xyz $vf19, $vf17, $vf16\n"
+-        "vsub.xyz $vf20, $vf18, $vf16\n"
+-        "vmul.xyz $vf20, $vf19, $vf20\n"
+-        "vaddy.x $vf20, $vf20, $vf20y\n"
+-        "vaddz.x $vf20, $vf20, $vf20z\n"
+-        "vmul.xyz $vf21, $vf19, $vf19\n"
+-        "vaddy.x $vf21, $vf21, $vf21y\n"
+-        "vaddz.x $vf21, $vf21, $vf21z\n"
+-        "vdiv Q, $vf20x, $vf21x\n"
+-        "sqc2 $vf19, %1\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf20, $vf0, Q\n"
+-        "qmfc2 %3, $vf20\n"
+-        "mtc1 %3, %0\n"
+-        : "=f"(along), "=m"(direction), "=r"(result), "=r"(float_bits)
+-        : "r"(start), "r"(end), "r"(centre));
++
++    result = COLLISION_RESULT;
++    vu0_sub_xyz(direction, end, start);
++    vu0_sub_xyz(to_centre, centre, start);
++    along = 0.0f + vu0_dot_xyz(direction, to_centre) / vu0_dot_xyz(direction, direction);
+ 
+     if (0.0f <= along && along <= 1.0f) {
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0(%3)\n"
+-            "lqc2 $vf17, 0(%4)\n"
+-            "lqc2 $vf18, %6\n"
+-            "mfc1 %1, %2\n"
+-            "qmtc2 %1, $vf20\n"
+-            "vmulx.xyzw $vf19, $vf18, $vf20x\n"
+-            "vadd.xyz $vf19, $vf19, $vf16\n"
+-            "vsub.xyz $vf20, $vf17, $vf19\n"
+-            "vmul.xyz $vf20, $vf20, $vf20\n"
+-            "vaddy.x $vf20, $vf20, $vf20y\n"
+-            "vaddz.x $vf20, $vf20, $vf20z\n"
+-            "vsqrt Q, $vf20x\n"
+-            "sqc2 $vf19, 0(%5)\n"
+-            "vwaitq\n"
+-            "vaddq.x $vf20, $vf0, Q\n"
+-            "qmfc2 %1, $vf20\n"
+-            "mtc1 %1, %0\n"
+-            : "=f"(distance), "=&r"(float_bits)
+-            : "f"(along), "r"(start), "r"(centre), "r"(result), "m"(direction[0]));
++        /* the nearest point of the segment goes to the result's point (vmulx.xyzw, vadd.xyz, sqc2) */
++        result->point[0] = direction[0] * along + ((f32 *)start)[0];
++        result->point[1] = direction[1] * along + ((f32 *)start)[1];
++        result->point[2] = direction[2] * along + ((f32 *)start)[2];
++        vu0_sub_xyz(to_centre, centre, result->point);
++        distance = vu0_length_xyz(to_centre);
+ 
+         COLLISION_RESULT->distance = distance;
+         if (!(radius <= distance)) {
+-            __asm__ volatile(
+-                "lqc2 $vf16, 0(%0)\n"
+-                "lqc2 $vf17, 0(%2)\n"
+-                "vsub.xyz $vf18, $vf16, $vf17\n"
+-                "vmul.xyz $vf19, $vf18, $vf18\n"
+-                "vaddy.x $vf19, $vf19, $vf19y\n"
+-                "vaddz.x $vf19, $vf19, $vf19z\n"
+-                "vsqrt Q, $vf19x\n"
+-                "vwaitq\n"
+-                "vaddq.x $vf19, $vf0, Q\n"
+-                "vdiv Q, $vf0w, $vf19x\n"
+-                "vwaitq\n"
+-                "vmulq.xyz $vf18, $vf18, Q\n"
+-                "sqc2 $vf18, 0(%1)\n"
+-                : : "r"(centre), "r"(COLLISION_RESULT->normal), "r"(result));
++            vu0_sub_xyz(to_centre, centre, result->point);
++            vu0_normalize_xyz(COLLISION_RESULT->normal, to_centre);
+ 
+             COLLISION_RESULT->hit = 1;
+         }
+@@ -1224,43 +1245,20 @@ static void EntityCollision_SphereSegment(void *start, void *end, void *centre,
+ /* Tests a sphere against a point: a hit when `point` is closer to `centre` than `radius`. */
+ static void EntityCollision_SpherePoint(void *point, void *centre, f32 radius) {
+     CollisionResult *result;
++    f32 to_centre[3];
+     f32 distance;
+-    int distance_bits;
+-
+-    __asm__ volatile(
+-        "lui %1, 0x7000\n"
+-        "lqc2 $vf16, 0(%3)\n"
+-        "lqc2 $vf17, 0(%4)\n"
+-        "vsub.xyz $vf18, $vf17, $vf16\n"
+-        "vmul.xyz $vf18, $vf18, $vf18\n"
+-        "vaddy.x $vf18, $vf18, $vf18y\n"
+-        "vaddz.x $vf18, $vf18, $vf18z\n"
+-        "vsqrt Q, $vf18x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf18, $vf0, Q\n"
+-        "qmfc2.ni %2, $vf18\n"
+-        "mtc1 %2, %0\n"
+-        : "=f"(distance), "=r"(result), "=r"(distance_bits)
+-        : "r"(point), "r"(centre));
++
++    result = COLLISION_RESULT;
++    vu0_sub_xyz(to_centre, centre, point);
++    distance = vu0_length_xyz(to_centre);
+ 
+     result->distance = distance;
+     if (!(radius <= distance)) {
+-        __asm__ volatile(
+-            "lqc2 $vf16, 0(%0)\n"
+-            "lqc2 $vf17, 0(%1)\n"
+-            "sqc2 $vf16, 0(%2)\n"
+-            "vsub.xyz $vf18, $vf17, $vf16\n"
+-            "vmul.xyz $vf19, $vf18, $vf18\n"
+-            "vaddy.x $vf19, $vf19, $vf19y\n"
+-            "vaddz.x $vf19, $vf19, $vf19z\n"
+-            "vsqrt Q, $vf19x\n"
+-            "vwaitq\n"
+-            "vaddq.x $vf19, $vf0, Q\n"
+-            "vdiv Q, $vf0w, $vf19x\n"
+-            "vwaitq\n"
+-            "vmulq.xyz $vf18, $vf18, Q\n"
+-            "sqc2 $vf18, 0(%3)\n"
+-            : : "r"(point), "r"(centre), "r"(result), "r"(COLLISION_RESULT->normal));
++        result->point[0] = ((f32 *)point)[0];
++        result->point[1] = ((f32 *)point)[1];
++        result->point[2] = ((f32 *)point)[2];
++        result->point[3] = ((f32 *)point)[3];
++        vu0_normalize_xyz(COLLISION_RESULT->normal, to_centre);
+ 
+         COLLISION_RESULT->hit = 1;
+     }
+@@ -1276,40 +1274,26 @@ static void EntityCollision_SphereTriangle(void *corner_a, void *corner_b, void
+ 
+     result->hit = 0;
+     normal = COLLISION_RESULT->normal;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%1)\n"
+-        "lqc2 $vf17, 0(%2)\n"
+-        "lqc2 $vf18, 0(%3)\n"
+-        "lqc2 $vf19, 0(%4)\n"
+-        "vsub.xyz $vf21, $vf16, $vf17\n"
+-        "vsub.xyz $vf22, $vf18, $vf17\n"
+-        "vopmula.xyz ACC, $vf22, $vf21\n"
+-        "vopmsub.xyz $vf20, $vf21, $vf22\n"
+-        "vmul.xyz $vf21, $vf20, $vf20\n"
+-        "vaddy.x $vf21, $vf21, $vf21y\n"
+-        "vaddz.x $vf21, $vf21, $vf21z\n"
+-        "vsqrt Q, $vf21x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf21, $vf0, Q\n"
+-        "vdiv Q, $vf0w, $vf21x\n"
+-        "vwaitq\n"
+-        "vmulq.xyz $vf20, $vf20, Q\n"
+-        "sqc2 $vf20, 0(%5)\n"
+-        "vmul.xyz $vf21, $vf20, $vf17\n"
+-        "vaddy.x $vf21, $vf21, $vf21y\n"
+-        "vaddz.x $vf21, $vf21, $vf21z\n"
+-        "vmul.xyz $vf22, $vf20, $vf19\n"
+-        "vsubx.x $vf21, $vf21, $vf22x\n"
+-        "vsuby.x $vf21, $vf21, $vf22y\n"
+-        "vsubz.x $vf21, $vf21, $vf22z\n"
+-        "qmfc2.ni $2, $vf21\n"
+-        "mtc1 $2, %0\n"
+-        "vmulx.xyz $vf22, $vf20, $vf21x\n"
+-        "vadd.xyz $vf22, $vf22, $vf19\n"
+-        "sqc2 $vf22, 0(%6)\n"
+-        : "=f"(distance)
+-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(centre), "r"(normal), "r"(result)
+-        : "$2");
++    {
++        f32 edge_a[3];
++        f32 edge_c[3];
++        f32 face[3];
++        f32 *centre_point = (f32 *)centre;
++
++        vu0_sub_xyz(edge_a, corner_a, corner_b);
++        vu0_sub_xyz(edge_c, corner_c, corner_b);
++        vu0_cross(face, edge_c, edge_a);
++        vu0_normalize_xyz(normal, face);
++        /* vsubx.x, vsuby.x, vsubz.x: the plane's distance less each term of the centre's */
++        distance = vu0_dot_xyz(normal, corner_b);
++        distance = distance - normal[0] * centre_point[0];
++        distance = distance - normal[1] * centre_point[1];
++        distance = distance - normal[2] * centre_point[2];
++        /* the centre moved onto the plane goes to the result's point (vmulx.xyz, vadd.xyz) */
++        result->point[0] = normal[0] * distance + centre_point[0];
++        result->point[1] = normal[1] * distance + centre_point[1];
++        result->point[2] = normal[2] * distance + centre_point[2];
++    }
+ 
+     result->distance = distance;
+     if (radius <= distance) {
+@@ -1318,38 +1302,7 @@ static void EntityCollision_SphereTriangle(void *corner_a, void *corner_b, void
+     if (distance <= -radius) {
+         return;
+     }
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%3)\n"
+-        "lqc2 $vf17, 0(%4)\n"
+-        "lqc2 $vf18, 0(%5)\n"
+-        "lqc2 $vf19, 0(%6)\n"
+-        "vsub.xyz $vf20, $vf16, $vf19\n"
+-        "vsub.xyz $vf21, $vf17, $vf19\n"
+-        "vsub.xyz $vf22, $vf18, $vf19\n"
+-        "vopmula.xyz ACC, $vf20, $vf21\n"
+-        "vopmsub.xyz $vf16, $vf21, $vf20\n"
+-        "vopmula.xyz ACC, $vf21, $vf22\n"
+-        "vopmsub.xyz $vf17, $vf22, $vf21\n"
+-        "vopmula.xyz ACC, $vf22, $vf20\n"
+-        "vopmsub.xyz $vf18, $vf20, $vf22\n"
+-        "vmul.xyz $vf20, $vf16, $vf17\n"
+-        "vaddy.x $vf20, $vf20, $vf20y\n"
+-        "vaddz.x $vf20, $vf20, $vf20z\n"
+-        "qmfc2.ni $2, $vf20\n"
+-        "mtc1 $2, %0\n"
+-        "vmul.xyz $vf21, $vf17, $vf18\n"
+-        "vaddy.x $vf21, $vf21, $vf21y\n"
+-        "vaddz.x $vf21, $vf21, $vf21z\n"
+-        "qmfc2.ni $2, $vf21\n"
+-        "mtc1 $2, %1\n"
+-        "vmul.xyz $vf22, $vf18, $vf16\n"
+-        "vaddy.x $vf22, $vf22, $vf22y\n"
+-        "vaddz.x $vf22, $vf22, $vf22z\n"
+-        "qmfc2.ni $2, $vf22\n"
+-        "mtc1 $2, %2\n"
+-        : "=f"(side_a), "=f"(side_b), "=f"(side_c)
+-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(result)
+-        : "$2");
++    vu0_triangle_sides(corner_a, corner_b, corner_c, result->point, &side_a, &side_b, &side_c);
+ 
+     if ((0.0f <= side_a && 0.0f <= side_b && 0.0f <= side_c) || (side_a < 0.0f && side_b < 0.0f && side_c < 0.0f)) {
+         COLLISION_RESULT->hit = 1;
+@@ -1390,56 +1343,27 @@ static void EntityCollision_RayTriangle(void *corner_a, void *corner_b, void *co
+ 
+     result->hit = 0;
+     normal = COLLISION_RESULT->normal;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%1)\n"
+-        "lqc2 $vf17, 0(%2)\n"
+-        "lqc2 $vf18, 0(%3)\n"
+-        "lqc2 $vf19, 0(%4)\n"
+-        "lqc2 $vf20, 0(%5)\n"
+-        "vsub.xyz $vf22, $vf16, $vf17\n"
+-        "vsub.xyz $vf23, $vf18, $vf17\n"
+-        "vopmula.xyz ACC, $vf23, $vf22\n"
+-        "vopmsub.xyz $vf21, $vf22, $vf23\n"
+-        "vmul.xyz $vf22, $vf21, $vf21\n"
+-        "vaddy.x $vf22, $vf22, $vf22y\n"
+-        "vaddz.x $vf22, $vf22, $vf22z\n"
+-        "vsqrt Q, $vf22x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf22, $vf0, Q\n"
+-        "vdiv Q, $vf0w, $vf22x\n"
+-        "vwaitq\n"
+-        "vmulq.xyz $vf21, $vf21, Q\n"
+-        "sqc2 $vf21, 0(%6)\n"
+-        "vmul.xyz $vf22, $vf21, $vf20\n"
+-        "vaddy.x $vf22, $vf22, $vf22y\n"
+-        "vaddz.x $vf22, $vf22, $vf22z\n"
+-        "qmfc2.ni $2, $vf22\n"
+-        "mtc1 $2, %0\n"
+-        : "=f"(facing)
+-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(origin), "r"(direction), "r"(normal)
+-        : "$2");
++    {
++        f32 edge_a[3];
++        f32 edge_c[3];
++        f32 face[3];
++
++        vu0_sub_xyz(edge_a, corner_a, corner_b);
++        vu0_sub_xyz(edge_c, corner_c, corner_b);
++        vu0_cross(face, edge_c, edge_a);
++        vu0_normalize_xyz(normal, face);
++        facing = vu0_dot_xyz(normal, direction);
++    }
+ 
+     if (facing < 0.02f && -0.02f < facing) {
+         return;
+     }
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%2)\n"
+-        "lqc2 $vf17, 0(%3)\n"
+-        "lqc2 $vf18, 0(%4)\n"
+-        "mfc1 $2, %1\n"
+-        "qmtc2.ni $2, $vf19\n"
+-        "vsub.xyz $vf21, $vf16, $vf17\n"
+-        "vmul.xyz $vf22, $vf21, $vf18\n"
+-        "vaddy.x $vf22, $vf22, $vf22y\n"
+-        "vaddz.x $vf22, $vf22, $vf22z\n"
+-        "vdiv Q, $vf22x, $vf19x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf20, $vf0, Q\n"
+-        "qmfc2.ni $2, $vf20\n"
+-        "mtc1 $2, %0\n"
+-        : "=f"(distance)
+-        : "f"(facing), "r"(corner_b), "r"(origin), "r"(normal)
+-        : "$2");
++    {
++        f32 to_plane[3];
++
++        vu0_sub_xyz(to_plane, corner_b, origin);
++        distance = 0.0f + vu0_dot_xyz(to_plane, normal) / facing;
++    }
+ 
+     if (length < distance) {
+         return;
+@@ -1450,38 +1374,7 @@ static void EntityCollision_RayTriangle(void *corner_a, void *corner_b, void *co
+     COLLISION_RESULT->distance = distance;
+     Vector_Scale(offset, direction, distance);
+     Vector_Add(COLLISION_RESULT, offset, origin);
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%3)\n"
+-        "lqc2 $vf17, 0(%4)\n"
+-        "lqc2 $vf18, 0(%5)\n"
+-        "lqc2 $vf19, 0(%6)\n"
+-        "vsub.xyz $vf20, $vf16, $vf19\n"
+-        "vsub.xyz $vf21, $vf17, $vf19\n"
+-        "vsub.xyz $vf22, $vf18, $vf19\n"
+-        "vopmula.xyz ACC, $vf20, $vf21\n"
+-        "vopmsub.xyz $vf16, $vf21, $vf20\n"
+-        "vopmula.xyz ACC, $vf21, $vf22\n"
+-        "vopmsub.xyz $vf17, $vf22, $vf21\n"
+-        "vopmula.xyz ACC, $vf22, $vf20\n"
+-        "vopmsub.xyz $vf18, $vf20, $vf22\n"
+-        "vmul.xyz $vf20, $vf16, $vf17\n"
+-        "vaddy.x $vf20, $vf20, $vf20y\n"
+-        "vaddz.x $vf20, $vf20, $vf20z\n"
+-        "qmfc2.ni $2, $vf20\n"
+-        "mtc1 $2, %0\n"
+-        "vmul.xyz $vf21, $vf17, $vf18\n"
+-        "vaddy.x $vf21, $vf21, $vf21y\n"
+-        "vaddz.x $vf21, $vf21, $vf21z\n"
+-        "qmfc2.ni $2, $vf21\n"
+-        "mtc1 $2, %1\n"
+-        "vmul.xyz $vf22, $vf18, $vf16\n"
+-        "vaddy.x $vf22, $vf22, $vf22y\n"
+-        "vaddz.x $vf22, $vf22, $vf22z\n"
+-        "qmfc2.ni $2, $vf22\n"
+-        "mtc1 $2, %2\n"
+-        : "=f"(side_a), "=f"(side_b), "=f"(side_c)
+-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(result)
+-        : "$2");
++    vu0_triangle_sides(corner_a, corner_b, corner_c, result->point, &side_a, &side_b, &side_c);
+ 
+     if ((0.0f <= side_a && 0.0f <= side_b && 0.0f <= side_c) || (side_a < 0.0f && side_b < 0.0f && side_c < 0.0f)) {
+         COLLISION_RESULT->hit = 1;
+@@ -1966,13 +1859,13 @@ static void EntityCollision_MoveOnMesh(CollisionOwner *owner, f32 *centre, f32 s
+     floor_y = 3.4028235e38f; // match: FLT_MAX as a literal (the compiler keeps it in .sdata, at 0x446840)
+     normal_sum[0] = normal_sum[1] = normal_sum[2] = normal_sum[3] = 0.0f;
+     Vector_Copy(position, centre);
+-    strip = mesh->floor_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+     i = mesh->floor_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, centre);
++            Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), centre);
+             if (COLLISION_RESULT->hit != 0) {
+                 if (centre[1] - step <= COLLISION_RESULT->point[1] && COLLISION_RESULT->point[1] <= centre[1] + 10.0f
+                     && COLLISION_RESULT->point[1] < floor_y) {
+@@ -1988,13 +1881,13 @@ static void EntityCollision_MoveOnMesh(CollisionOwner *owner, f32 *centre, f32 s
+         position[1] = floor_y;
+     }
+     position[1] -= 0.1f;
+-    strip = mesh->wall_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+     i = mesh->wall_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            Collision_CapsuleTriangle(point[0].position, point[1].position, point[2].position, position, radius, step);
++            Collision_CapsuleTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius, step);
+             if (COLLISION_RESULT->hit != 0) {
+                 hit_wall = 1;
+                 offset[0] = position[0] - COLLISION_RESULT->point[0];
+@@ -2269,13 +2162,13 @@ static void EntityCollision_SphereMesh(CollisionOwner *owner, void *centre, f32
+     mesh = (CollisionMesh *)owner->model->strips;
+     normal_sum[0] = normal_sum[1] = normal_sum[2] = normal_sum[3] = 0.0f;
+     Vector_Copy(position, centre);
+-    strip = mesh->floor_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+     i = mesh->floor_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, radius);
++            EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius);
+             if (COLLISION_RESULT->hit != 0) {
+                 hit_floor = TRUE;
+                 Vector_Subtract(offset, position, COLLISION_RESULT);
+@@ -2288,13 +2181,13 @@ static void EntityCollision_SphereMesh(CollisionOwner *owner, void *centre, f32
+         } while (--j != 0);
+         strip = (CollisionStrip *)(point + 2);
+     }
+-    strip = mesh->wall_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+     i = mesh->wall_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, radius);
++            EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius);
+             if (COLLISION_RESULT->hit != 0) {
+                 hit_unk18 = TRUE;
+                 Vector_Subtract(offset, position, COLLISION_RESULT);
+@@ -2307,13 +2200,13 @@ static void EntityCollision_SphereMesh(CollisionOwner *owner, void *centre, f32
+         } while (--j != 0);
+         strip = (CollisionStrip *)(point + 2);
+     }
+-    strip = mesh->second_wall_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
+     i = mesh->second_wall_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, radius);
++            EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, radius);
+             if (COLLISION_RESULT->hit != 0) {
+                 hit_unk20 = TRUE;
+                 Vector_Subtract(offset, position, COLLISION_RESULT);
+@@ -2359,20 +2252,20 @@ f32 EntityCollision_DistanceToPropFloor(void *prop_arg, void *position_arg) {
+     s32 j;
+ 
+     result = lowest = 3.4028235e38f;
+-    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == NULL || prop->model->strips == NULL) {
++    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == 0 || MAP_RECORD_MODEL(prop)->strips == NULL) {
+         return lowest;
+     }
+     found = FALSE;
+     // match: called as if it returned nothing (other files declare it int)
+-    ((void (*)(void *))Collision_TransformMeshPoints)(prop->model);
+-    mesh = (CollisionMesh *)prop->model->strips;
+-    strip = mesh->floor_strips;
++    ((void (*)(void *))Collision_TransformMeshPoints)(MAP_RECORD_MODEL(prop));
++    mesh = (CollisionMesh *)MAP_RECORD_MODEL(prop)->strips;
++    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+     i = mesh->floor_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, position);
++            Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position);
+             if (COLLISION_RESULT->hit != 0) {
+                 f32 y = COLLISION_RESULT->point[1];
+ 
+@@ -2393,9 +2286,8 @@ f32 EntityCollision_DistanceToPropFloor(void *prop_arg, void *position_arg) {
+ 
+ /* Finds the nearest triangle of the prop's mesh a ray hits. Returns which of the four strip lists it is in
+    (1-4, 0: none), leaves the distance in the result and copies the point to `out_point`. */
+-s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 length, s32 out_point_arg) {
++s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 length, void *out_point) {
+     MapProp *prop = prop_arg;
+-    void *out_point = (void *)out_point_arg;
+     CollisionMesh *mesh;
+     CollisionStrip *strip;
+     CollisionStripPoint *point;
+@@ -2404,21 +2296,21 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
+     s32 i;
+     s32 j;
+ 
+-    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == NULL || prop->model->strips == NULL) {
++    if (prop == NULL || prop->unk32 == 0xFFFF || prop->model == 0 || MAP_RECORD_MODEL(prop)->strips == NULL) {
+         return 0;
+     }
+     kind = 0;
+     // match: called as if it returned nothing (other files declare it int)
+-    ((void (*)(void *))Collision_TransformMeshPoints)(prop->model);
+-    mesh = (CollisionMesh *)prop->model->strips;
++    ((void (*)(void *))Collision_TransformMeshPoints)(MAP_RECORD_MODEL(prop));
++    mesh = (CollisionMesh *)MAP_RECORD_MODEL(prop)->strips;
+     nearest = 3.4028235e38f;
+-    strip = mesh->floor_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
+     i = mesh->floor_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
++            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
+             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
+                 nearest = COLLISION_RESULT->distance;
+                 kind = 1;
+@@ -2430,13 +2322,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
+         } while (--j != 0);
+         strip = (CollisionStrip *)(point + 2);
+     }
+-    strip = mesh->wall_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+     i = mesh->wall_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
++            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
+             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
+                 nearest = COLLISION_RESULT->distance;
+                 kind = 2;
+@@ -2448,13 +2340,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
+         } while (--j != 0);
+         strip = (CollisionStrip *)(point + 2);
+     }
+-    strip = mesh->second_wall_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->second_wall_strips);
+     i = mesh->second_wall_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
++            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
+             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
+                 nearest = COLLISION_RESULT->distance;
+                 kind = 3;
+@@ -2466,13 +2358,13 @@ s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 len
+         } while (--j != 0);
+         strip = (CollisionStrip *)(point + 2);
+     }
+-    strip = mesh->barrier_strips;
++    strip = EE_PTR(CollisionStrip *, mesh->barrier_strips);
+     i = mesh->barrier_strip_count;
+     while (--i != -1) {
+         point = strip->points;
+         j = strip->point_count - 2;
+         do {
+-            EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
++            EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
+             if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->distance < nearest) {
+                 nearest = COLLISION_RESULT->distance;
+                 kind = 4;
+@@ -2541,7 +2433,7 @@ s32 EntityCollision_RayProps(f32 *origin, f32 *direction, void *out_point, f32 l
+                 if (record->collision_mesh_index == 0xFFFF) {
+                     continue;
+                 }
+-                if (((MapProp *)record)->model->strips == NULL) {
++                if (MAP_RECORD_MODEL((MapProp *)record)->strips == NULL) {
+                     continue;
+                 }
+                 if (highest[0] < record->lowest[0] || record->highest[0] < lowest[0]) {
+@@ -2553,7 +2445,7 @@ s32 EntityCollision_RayProps(f32 *origin, f32 *direction, void *out_point, f32 l
+                 if (highest[2] < record->lowest[2] || record->highest[2] < lowest[2]) {
+                     continue;
+                 }
+-                kind = EntityCollision_RayProp(record, origin, direction, length, (s32)point);
++                kind = EntityCollision_RayProp(record, origin, direction, length, point);
+                 // match: retail never lowers `nearest`, so every hit passes and the last one wins
+                 if (kind != 0 && COLLISION_RESULT->distance < nearest) {
+                     result = kind;
+@@ -2613,15 +2505,15 @@ s32 EntityCollision_RayHitsPropWall(f32 *origin, f32 *direction, f32 length, f32
+                     continue;
+                 }
+                 // match: called as void, or the model pointer does not take $2
+-                ((void (*)(void *))Collision_TransformMeshPoints)(((MapProp *)record)->model);
+-                mesh = (CollisionMesh *)((MapProp *)record)->model->strips;
++                ((void (*)(void *))Collision_TransformMeshPoints)(MAP_RECORD_MODEL((MapProp *)record));
++                mesh = (CollisionMesh *)MAP_RECORD_MODEL((MapProp *)record)->strips;
+                 strips_left = mesh->wall_strip_count;
+-                strip = mesh->wall_strips;
++                strip = EE_PTR(CollisionStrip *, mesh->wall_strips);
+                 while (--strips_left != -1) {
+                     point = strip->points;
+                     points_left = strip->point_count - 2;
+                     do {
+-                        EntityCollision_RayTriangle(point[0].position, point[1].position, point[2].position, origin, direction, length);
++                        EntityCollision_RayTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), origin, direction, length);
+                         if (COLLISION_RESULT->hit != 0) {
+                             return TRUE;
+                         }
+@@ -2636,10 +2528,7 @@ s32 EntityCollision_RayHitsPropWall(f32 *origin, f32 *direction, f32 length, f32
+ }
+ 
+ /* Whether `point` lies within `radius` of the segment start..end (FALSE beyond its ends). */
+-int EntityCollision_PointNearSegment(float radius, int *start_arg, int end_arg, int point_arg) {
+-    f32 *start = (f32 *)start_arg;
+-    f32 *end = (f32 *)end_arg;
+-    f32 *point = (f32 *)point_arg;
++int EntityCollision_PointNearSegment(float radius, f32 *start, f32 *end, f32 *point) {
+     f32 along[4];
+     f32 to_point[4];
+     f32 nearest[4];
+@@ -2688,7 +2577,7 @@ f32 EntityCollision_DistanceToGround(f32 *point) {
+         if (slot->loaded != 0) {
+             record = (MapRecord *)slot->records;
+             record_count = slot->header->record_count;
+-            model = map_slot_record_models[current_map_slot == map ? 0 : 22];
++            model = (ModelInstanceBlock *)map_slot_memory[current_map_slot == map ? 0 : 1].record_models;
+             for (i = 0; i < record_count; i++, model++, record++) {
+                 if (record->collision_mesh_index == 0xFFFF) {
+                     continue;
+@@ -2701,12 +2590,12 @@ f32 EntityCollision_DistanceToGround(f32 *point) {
+                 ((void (*)(void *))Collision_TransformMeshPoints)(model);
+                 mesh = (CollisionMesh *)model->model.strips;
+                 strips_left = mesh->water_strip_count;
+-                strip = mesh->water_strips;
++                strip = EE_PTR(CollisionStrip *, mesh->water_strips);
+                 while (--strips_left != -1) {
+                     strip_point = strip->points;
+                     points_left = strip->point_count - 2;
+                     do {
+-                        Collision_DropOnTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, point);
++                        Collision_DropOnTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), point);
+                         if (COLLISION_RESULT->hit != 0) {
+                             return COLLISION_RESULT->point[1] - point[1];
+                         }
+diff --git a/src/game/entity/entity_collision.h b/src/game/entity/entity_collision.h
+index ec4439c89563faa6065889b01343678e84d49ae4..e405525f86bc4871cf9a281e83145e840cc0a37b 100644
+--- a/src/game/entity/entity_collision.h
++++ b/src/game/entity/entity_collision.h
+@@ -42,7 +42,7 @@ s32 EntityCollision_LineHits(Entity *target, f32 *from, PlayerData *destination)
+ f32 EntityCollision_DistanceToPropFloor(void *prop_arg, void *position_arg);
+ 
+ /* The strip list (1-4) of the nearest triangle of the prop a ray hits, 0: none. */
+-s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 length, s32 out_point_arg);
++s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 length, void *out_point);
+ 
+ /* The strip list (1-4) a ray hits among the props of the loaded maps, 0: none. */
+ s32 EntityCollision_RayProps(f32 *origin, f32 *direction, void *out_point, f32 length);
+@@ -51,7 +51,7 @@ s32 EntityCollision_RayProps(f32 *origin, f32 *direction, void *out_point, f32 l
+ s32 EntityCollision_RayHitsPropWall(f32 *origin, f32 *direction, f32 length, f32 *unused);
+ 
+ /* Whether `point` lies within `radius` of the segment start..end. */
+-int EntityCollision_PointNearSegment(float radius, int *start_arg, int end_arg, int point_arg);
++int EntityCollision_PointNearSegment(float radius, f32 *start, f32 *end, f32 *point);
+ 
+ /* The height of the ground of the loaded maps at `point` less the point's own. */
+ f32 EntityCollision_DistanceToGround(f32 *point);
+diff --git a/src/game/entity/entity_events.c b/src/game/entity/entity_events.c
+index d24bd12c052875ec1955dc33ea528580ee41cd24..fb5aca0a2178d187452356913b5aff307e3951bc 100644
+--- a/src/game/entity/entity_events.c
++++ b/src/game/entity/entity_events.c
+@@ -17,8 +17,9 @@ void Vector_Copy(void *, void *);
+ int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
+ extern char *entity_params;
+ extern PlayerState player_state;
+-// match: Sound_PlayFalloff.c has not been given its real arguments yet
+-void Sound_PlayFalloff(float, int, int, char, float, float);
++/* the EE passes floats and integers in separate registers, so retail's calls (sound_id first, as a float, then
++   the integers) reach the definition as (unk00, unk01, bank, (float)sound_id, distance, angle): written in that order */
++void Sound_PlayFalloff(int sound, int kind, int bank, float range, float distance, float angle);
+ extern EntitySpawnInfo *map_spawn_infos[2];
+ extern MapSlot map_slots[];
+ extern int current_map_slot;
+@@ -40,20 +41,15 @@ static inline f32 wrap_angle(f32 angle) {
+ 
+ /* EntityMath_DistanceXZ inlined: the distance between two points, height left out */
+ static inline f32 flat_distance(f32 *from, f32 *target) {
+-    f32 distance_out[4];
++    f32 delta_x;
++    f32 delta_z;
+ 
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xz $vf16, $vf16, $vf16\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(from), "r"(target), "r"(distance_out) : "memory");
+-    return distance_out[0];
++    /* vsub.xyz, vmul.xz, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
++    delta_x = from[0] - target[0];
++    delta_z = from[2] - target[2];
++    delta_x = delta_x * delta_x;
++    delta_z = delta_z * delta_z;
++    return 0.0f + sqrtf(delta_x + delta_z);
+ }
+ 
+ /* EntityMath_Approach inlined: `current` moved one step of `rate` towards `goal` */
+@@ -192,12 +188,12 @@ int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from
+ }
+ 
+ /* Starts effect `effect_id` at point `point_id` of the entity's model, turned by `rotation`. */
+-void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, int rotation) {
++void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, f32 *rotation) {
+     char *point;
+ 
+     point = Model_GetSkinnedBonePoint(*entity, point_id);
+     if (point != 0) {
+-        Effect_StartSpawner(effect_id, point, (void *)rotation, entity);
++        Effect_StartSpawner(effect_id, point, rotation, entity);
+     }
+ }
+ 
+@@ -286,7 +282,7 @@ void EntityEvent_StartFrameCues(Entity *entity, s32 animation, s32 frame_from, s
+             if (entity->ailment_4_frames != 0 && record->unk04 != 0) {
+                 continue;
+             }
+-            Sound_PlayFalloff(entity->params->sound_id, record->unk00, record->unk01, entity->sound_bank, entity->distance_to_player_3d, angle);
++            Sound_PlayFalloff(record->unk00, record->unk01, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, angle);
+         }
+     }
+ }
+@@ -306,7 +302,7 @@ void EntityEvent_StartCue(Entity *entity, s32 unknown1, s32 unknown2, s32 skip_i
+     if (entity->ailment_4_frames != 0 && skip_if_unk2A != 0) {
+         return;
+     }
+-    Sound_PlayFalloff(entity->params->sound_id, (u8)unknown1, (u8)unknown2, entity->sound_bank, entity->distance_to_player_3d, angle);
++    Sound_PlayFalloff((u8)unknown1, (u8)unknown2, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, angle);
+ }
+ 
+ /* As EntityEvent_StartCue, without the unk2A test. */
+@@ -322,7 +318,7 @@ void EntityEvent_StartCueAlways(Entity *entity, s32 unknown1, s32 unknown2) {
+     } else if (wrapped < -3.1415927f) {
+         wrapped += 6.2831855f;
+     }
+-    Sound_PlayFalloff(entity->params->sound_id, (u8)unknown1, (u8)unknown2, entity->sound_bank, entity->distance_to_player_3d, wrapped);
++    Sound_PlayFalloff((u8)unknown1, (u8)unknown2, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, wrapped);
+ }
+ 
+ /* Puts the entity back at its spawn point (Entity_ResetToSpawn), sets flag bits 1 and 8 and clears bits 2-3,
+@@ -336,7 +332,7 @@ void EntityEvent_Respawn(Entity *entity) {
+     if (entity->params->respawn_effect_id != 0) {
+         if (entity->params->respawn_effect_id != 0xFFFF) {
+             bone = Model_GetSkinnedBonePoint((char *)entity->model, entity->params->respawn_effect_bone);
+-            Effect_StartSpawner(entity->params->respawn_effect_id, bone, (char *)entity->model + 0xD0, entity);
++            Effect_StartSpawner(entity->params->respawn_effect_id, bone, entity->model->rotation, entity);
+         }
+     }
+ }
+@@ -350,7 +346,7 @@ void EntityEvent_OnDeath(Entity *entity) {
+     if ((s32)(entity->flags >> 38) & 3) {
+         Player_AddExperience(entity->params->experience_reward);
+     }
+-    Game_CountSpawnDeath(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
++    Game_CountSpawnDeath(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
+     Effect_FreeForOwner(entity);
+     if (entity->spawn_info->death_script_id != 0 && entity->group_id == current_map_slot) {
+         Script_Start(entity->spawn_info->death_script_id, 0);
+@@ -396,16 +392,14 @@ s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits
+ 
+ /* Bone_TurnPart for a part that is to look at a point: in mode 1 `angles` turn towards what Bone_LookAngles
+    gives for `target` (FALSE if it gives none). FALSE: no model or no part. */
+-int Bone_TurnPartToLook(void *model, int part_arg, int angles_arg, int mode, void *target, int limits_arg, float rate) {
+-    ModelPart *part = (ModelPart *)part_arg;
+-    f32 *angles = (f32 *)angles_arg;
++int Bone_TurnPartToLook(void *model, ModelPart *part, f32 *angles, int mode, void *target, f32 *limits, float rate) {
+     f32 goal[4];
+ 
+     if (model == NULL || part == NULL) {
+         return FALSE;
+     }
+     if (mode == 1) {
+-        if (Bone_LookAngles(model, part, target, (f32 *)limits_arg, goal) == 0) {
++        if (Bone_LookAngles(model, part, target, limits, goal) == 0) {
+             return FALSE;
+         }
+         turn_towards(&angles[0], goal[0], rate);
+diff --git a/src/game/entity/entity_events.h b/src/game/entity/entity_events.h
+index 1554dc342028144d35028aae701e57224835b396..94b50a47f7d00c296438ead48daf7be5f0b7b7ce 100644
+--- a/src/game/entity/entity_events.h
++++ b/src/game/entity/entity_events.h
+@@ -14,7 +14,7 @@ int EntityShot_LaunchAimed(Entity *entity, EntityParamsUnk3D8 *record, s32 frame
+ int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *record, s32 frame_from, s32 frame_to, f32 *direction);
+ 
+ /* Starts effect `effect_id` at point `point_id` of the entity's model, turned by `rotation`. */
+-void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, int rotation);
++void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, f32 *rotation);
+ 
+ /* Starts the effects animation `animation` lists for the frames in [frame_from, frame_to). */
+ void EntityEvent_StartFrameEffects(Entity *entity, s32 animation, s32 frame_from, s32 frame_to);
+@@ -38,6 +38,6 @@ void EntityEvent_OnDeath(Entity *entity);
+ s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits, f32 rate);
+ 
+ /* Bone_TurnPart for a part that is to look at `target`. */
+-int Bone_TurnPartToLook(void *model, int part, int angles, int mode, void *target, int limits, float rate);
++int Bone_TurnPartToLook(void *model, ModelPart *part, f32 *angles, int mode, void *target, f32 *limits, float rate);
+ 
+ #endif
+diff --git a/src/game/entity/entity_math.c b/src/game/entity/entity_math.c
+index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..65e750d81957439a436d31bf77ef9220ffec20f4 100644
+--- a/src/game/entity/entity_math.c
++++ b/src/game/entity/entity_math.c
+@@ -29,37 +29,45 @@ s32 EntityMath_SubtractClamped(s32 value, s32 amount, s32 low, s32 high) {
+ 
+ /* dst = a * (1 - t) + b * t across the xyz lanes, on the VU0. */
+ void EntityMath_LerpVector(void *dst, void *src_a, void *src_b, float ratio) {
+-    __asm__ volatile(
+-        "mfc1 $2, %3\n"
+-        "qmtc2.ni $2, $vf3\n"
+-        "vsubx.w $vf4, $vf0, $vf3x\n"
+-        "lqc2 $vf1, 0x0(%1)\n"
+-        "lqc2 $vf2, 0x0(%2)\n"
+-        "vmulax.xyz ACC, $vf2, $vf3x\n"
+-        "vmaddw.xyz $vf1, $vf1, $vf4w\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "vnop\n"
+-        "sqc2 $vf1, 0x0(%0)\n"
+-        : : "r"(dst), "r"(src_a), "r"(src_b), "f"(ratio) : "$2");
++    f32 *out = dst;
++    f32 *a = src_a;
++    f32 *b = src_b;
++    s32 i;
++
++    /* in VU0's vf1 to vf4, which the PS2 code leaves changed (math/vu0_macro.c keeps matrices there) */
++    /* qmtc2 of the float in a GPR: on the PS2 it also sets vf3.y to the word's sign extension and vf3.zw to the
++       GPR's upper half, whatever that held; the PC leaves vf3.yzw as they were */
++    ee_vu0.vf[3][0] = ratio;                                    /* qmtc2 */
++    ee_vu0.vf[4][3] = ee_vu0.vf[0][3] - ee_vu0.vf[3][0];        /* vsubx.w */
++    for (i = 0; i < 4; i++) {
++        ee_vu0.vf[1][i] = a[i];                                 /* lqc2 */
++        ee_vu0.vf[2][i] = b[i];
++    }
++    for (i = 0; i < 3; i++) {
++        ee_vu0.acc[i] = ee_vu0.vf[2][i] * ee_vu0.vf[3][0];      /* vmulax.xyz */
++    }
++    for (i = 0; i < 3; i++) {
++        ee_vu0.vf[1][i] = ee_vu0.acc[i] + ee_vu0.vf[1][i] * ee_vu0.vf[4][3]; /* vmaddw.xyz */
++    }
++    for (i = 0; i < 4; i++) {
++        out[i] = ee_vu0.vf[1][i];                               /* sqc2 */
++    }
+ }
+ 
+ /* The distance between two points. */
+ f32 EntityMath_Distance(f32 *point_a, f32 *point_b) {
+     float result[4];
+ 
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xyz $vf16, $vf16, $vf16\n"
+-        "vaddy.x $vf16, $vf16, $vf16y\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(point_a), "r"(point_b), "r"(result) : "memory");
++    /* vsub.xyz, vmul.xyz, vaddy.x, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
++    result[0] = point_a[0] - point_b[0];
++    result[1] = point_a[1] - point_b[1];
++    result[2] = point_a[2] - point_b[2];
++    result[0] = result[0] * result[0];
++    result[1] = result[1] * result[1];
++    result[2] = result[2] * result[2];
++    result[0] = result[0] + result[1];
++    result[0] = result[0] + result[2];
++    result[0] = 0.0f + sqrtf(result[0]);
+     return result[0];
+ }
+ 
+@@ -67,17 +75,13 @@ f32 EntityMath_Distance(f32 *point_a, f32 *point_b) {
+ float EntityMath_DistanceXZ(float *point_a, float *point_b) {
+     float result[4];
+ 
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf16, $vf17\n"
+-        "vmul.xz $vf16, $vf16, $vf16\n"
+-        "vaddz.x $vf16, $vf16, $vf16z\n"
+-        "vsqrt Q, $vf16x\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(point_a), "r"(point_b), "r"(result) : "memory");
++    /* vsub.xyz, vmul.xz, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
++    result[0] = point_a[0] - point_b[0];
++    result[2] = point_a[2] - point_b[2];
++    result[0] = result[0] * result[0];
++    result[2] = result[2] * result[2];
++    result[0] = result[0] + result[2];
++    result[0] = 0.0f + sqrtf(result[0]);
+     return result[0];
+ }
+ 
+diff --git a/src/game/entity/entity_pool.c b/src/game/entity/entity_pool.c
+index e192b77f86ff1b2b2b8c000fb67b4ff7fd19b62e..7a88551e3f5c2dd5dcc4caa8b686d38117864516 100644
+--- a/src/game/entity/entity_pool.c
++++ b/src/game/entity/entity_pool.c
+@@ -5,9 +5,9 @@
+ #include "model/model.h"
+ #include "sound/sound.h"
+ #include "effect/effect.h"
++#include <stdio.h>
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+-int sprintf(char *, char *, ...);
+ 
+ #define ENTITY_POOL_BLOCK_SIZE  0x80000
+ 
+@@ -30,7 +30,8 @@ extern s64 entity_work_area[];
+ extern ModelInstance entity_models[ENTITY_POOL_SLOT_COUNT];
+ 
+ static EntityTypeFileHeader entity_type_file_header;                            /* 0x474B70 the loaded type file's first 0x20 bytes */
+-static char entity_pool_slot_buffers[ENTITY_POOL_SLOT_COUNT][0x2000];            /* 0x474B90 the type data of each slot */
++/* 0x474B90 the type data of each slot: the slot model's parts (Model_SetUpPosed), 0x2000 bytes each on the PS2 */
++static char entity_pool_slot_buffers[ENTITY_POOL_SLOT_COUNT][MODEL_PART_AREA_SIZE(0x2000)] __attribute__((aligned(16)));
+ char character_params[0x80000] __attribute__((section(".bss")));         /* 0x47EB90 param/chr.prm, read whole */
+ 
+ int File_Sync(int, int);
+@@ -40,7 +41,7 @@ int File_IsLocked(void);
+ int File_Open(char *, int, int);
+ int File_Read(int, void *, int);
+ void File_Lock(void);
+-void Model_SetUpSkinned(ModelInstance *, int *, int *);
++void Model_SetUpSkinned(ModelInstance *, char **, char **);
+ s64 *Model_SaveGsWordsAndUvs(ModelInstance *, s64 *);
+ MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
+ u32 *Map_GetSlotPacket(int, int);
+@@ -76,11 +77,11 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot);
+ static void EntityPool_AbandonLoad(EntityPoolSlot *slot);
+ static void EntityPool_FreeUnusedBlocks(void);
+ static int Entity_FindFreeWorkArea(void);
+-static int Entity_ClaimWorkArea(int index);
++static char *Entity_ClaimWorkArea(int index);
+ static void Entity_FreeWorkArea(int index);
+ static void Entity_PrepareModelDraw(ModelInstance *model);
+ static void Entity_PrepareScreenTexturedDraw(ModelInstance *model);
+-static void func_00124AF8(void);
++static void func_00124AF8(ModelInstance *model);
+ static void EntityPool_BuildBlockModel(int slot_index);
+ static void Entity_AppendToWaiting(Entity *entity);
+ static Entity *Entity_UnlinkWaiting(Entity *entity);
+@@ -95,7 +96,7 @@ static void EntityPool_StepLoads(void);
+ /* Entity pool state. Lists A (waiting for a pool block), B (waiting for the block to load) and C (active) hold
+    the entities; the pool blocks and work areas are below. */
+ static EntityPoolSlot *loading_pool_slot;   /* 0x447098 the block being read or unpacked */
+-static int entity_work_areas_base;          /* 0x44709C base of the work areas */
++static char *entity_work_areas_base;        /* 0x44709C base of the work areas */
+ static u8 entity_work_areas_used[8];        /* 0x4470A0 bit per work area in use */
+ static Entity *waiting_entities_head;       /* 0x4470A8 list A head */
+ static Entity *waiting_entities_tail;       /* 0x4470AC list A tail */
+@@ -110,7 +111,7 @@ float sqrtf(float);
+ /* Clear the entity pool and empty every entity list. */
+ void Entity_ResetAllLists(void) {
+     EntityPoolSlot *block;
+-    int block_address;
++    char *block_address;
+     int blocks_left;
+ 
+     memset(entity_pool_area, 0, entity_pool_area_size);
+@@ -127,8 +128,8 @@ void Entity_ResetAllLists(void) {
+     waiting_entity_count = 0;
+     loading_entity_count = 0;
+     active_entity_count = 0;
+-    memset(entity_models, 0, 0x8C0);
+-    block_address = (int)entity_pool_area;
++    memset(entity_models, 0, sizeof(entity_models));
++    block_address = entity_pool_area;
+     block = entity_pool_slots;
+     blocks_left = ENTITY_POOL_SLOT_COUNT - 1;
+     do {
+@@ -366,13 +367,13 @@ static void EntityPool_StepLoads(void) {
+                 entity_type_file_header = *(EntityTypeFileHeader *)file_load_buffer;
+                 chr_file_slot = -1;
+                 if (entity_type_file_header.unk18 != 0 && entity_type_file_header.unk14 != 0) {
+-                    entity_type_file_header.unk18 += (int)file_load_buffer;
+-                    entity_type_file_header.unk14 += (int)file_load_buffer;
++                    entity_type_file_header.unk18 += EE_WORD(file_load_buffer);
++                    entity_type_file_header.unk14 += EE_WORD(file_load_buffer);
+                     slot->head.fields.kind = ENTITY_POOL_UNPACKING;
+-                    sound_load_queue.entity_bank_args = (int)&entity_type_file_header;
++                    sound_load_queue.entity_bank_args = (sptr)&entity_type_file_header;
+                     sound_load_queue.entity_bank_load_pending = 1;
+                     sound_load_queue.entity_slot_index = i;
+-                    sound_load_queue.entity_slot_voice_out = (int)slot;
++                    sound_load_queue.entity_slot_voice_out = (sptr)slot;
+                 } else {
+                     slot->head.fields.kind = ENTITY_POOL_READY;
+                 }
+@@ -426,8 +427,8 @@ static void EntityPool_StepLoads(void) {
+ 
+ /* Gives an entity whose pool block is ready its work area and model; FALSE if it has to wait. */
+ static int Entity_TryActivate(Entity *entity) {
+-    int data_address;
+-    int work_address;
++    char *data_address;
++    char *work_address;
+     EntityPoolSlot *slot = &entity_pool_slots[entity->pool_slot_index];
+     EntityPoolData *data = (EntityPoolData *)slot->base_address;
+     ModelInstance *model;
+@@ -442,7 +443,7 @@ static int Entity_TryActivate(Entity *entity) {
+     }
+     entity->work_area_index = work_index;
+     work_address = Entity_ClaimWorkArea(work_index);
+-    data_address = slot->base_address + (int)data->model_offset;
++    data_address = slot->base_address + data->model_offset;
+     Model_SetUpSkinned(ENTITY_MODEL(entity), &data_address, &work_address);
+     model = ENTITY_MODEL(entity);
+     model->draw = Entity_PrepareModelDraw;
+@@ -453,16 +454,16 @@ static int Entity_TryActivate(Entity *entity) {
+         model->draw = Entity_PrepareScreenTexturedDraw;
+         model->after_draw = func_00124AF8;
+         screen_textured_entity_type = entity->spawn_info->type_id;
+-        work_address = (int)entity_work_area;
+-        work_address = (int)Model_SaveGsWordsAndUvs(model, (s64 *)work_address);
++        work_address = (char *)entity_work_area;
++        work_address = (char *)Model_SaveGsWordsAndUvs(model, (s64 *)work_address);
+     }
+-    data_address = slot->base_address + (int)data->motion_offset;
+-    ModelMotion_LoadFile(data_address, &work_address, ENTITY_MODEL(entity), 1);
++    data_address = slot->base_address + data->motion_offset;
++    ModelMotion_LoadFile((MotionFile *)data_address, (ModelChannel **)&work_address, ENTITY_MODEL(entity), 1);
+     data_address = slot->base_address + data->unk0C;
+-    ENTITY_MODEL(entity)->texture_data = data_address;
++    ENTITY_MODEL(entity)->texture_data = (sptr)data_address;
+     ENTITY_MODEL(entity)->texture_slot = 0;
+-    ENTITY_MODEL(entity)->texture_packet_3 = (int)Map_GetSlotPacket(entity->group_id, 3);
+-    ENTITY_MODEL(entity)->texture_packet_5 = (int)Map_GetSlotPacket(entity->group_id, 5);
++    ENTITY_MODEL(entity)->texture_packet_3 = (sptr)Map_GetSlotPacket(entity->group_id, 3);
++    ENTITY_MODEL(entity)->texture_packet_5 = (sptr)Map_GetSlotPacket(entity->group_id, 5);
+     entity->sound_bank = slot->unk7;
+     EntityPool_AddUser(entity->pool_slot_index);
+     ((void (*)(Entity *))Entity_ResetToSpawn)(entity); // match: declared without its argument elsewhere
+@@ -838,7 +839,7 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot) {
+     } else if (size > 0x80000) {
+         goto hang;
+     }
+-    memcpy((void *)slot->base_address, file_load_buffer, size);
++    memcpy(slot->base_address, file_load_buffer, size);
+     return;
+ hang:
+     goto hang;
+@@ -941,24 +942,24 @@ static int Entity_FindFreeWorkArea(void) {
+ }
+ 
+ /* Marks work area `index` in use, clears it, and returns its address. */
+-static int Entity_ClaimWorkArea(int index) {
+-    int work_area;
++static char *Entity_ClaimWorkArea(int index) {
++    char *work_area;
+ 
+     entity_work_areas_used[index / 8] |= 1 << (index % 8);
+-    work_area = entity_work_areas_base + index * 0x2200;
+-    memset((void *)work_area, 0, 0x2200);
++    work_area = entity_work_areas_base + index * ENTITY_MODEL_WORK_AREA_SIZE;
++    memset(work_area, 0, ENTITY_MODEL_WORK_AREA_SIZE);
+     return work_area;
+ }
+ 
+ /* Marks work area `index` free and clears it. */
+ static void Entity_FreeWorkArea(int index) {
+     u8 bit;
+-    int work_area;
++    char *work_area;
+ 
+     bit = 1 << (index % 8);
+     entity_work_areas_used[index / 8] &= ~bit;
+-    work_area = entity_work_areas_base + index * 0x2200;
+-    memset((void *)work_area, 0, 0x2200);
++    work_area = entity_work_areas_base + index * ENTITY_MODEL_WORK_AREA_SIZE;
++    memset(work_area, 0, ENTITY_MODEL_WORK_AREA_SIZE);
+ }
+ 
+ /* Before an entity model is drawn (ModelInstance.draw): sets the GS Z buffer, test and alpha registers by the
+@@ -966,13 +967,13 @@ static void Entity_FreeWorkArea(int index) {
+ static void Entity_PrepareModelDraw(ModelInstance *model) {
+     Packet_BeginGsRegisters();
+     if (model->alpha >= 128.0f) {
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118LL);
+         Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+         Packet_AddGsRegister(GS_REG_TEST_2, 0x5000D);
+     } else {
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+         Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+         Packet_AddGsRegister(GS_REG_TEST_2, 0x30001);
+     }
+@@ -986,7 +987,7 @@ static void Entity_PrepareModelDraw(ModelInstance *model) {
+    Nothing calls it. */
+ void Entity_PrepareAdditiveDraw(ModelInstance *model) {
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x50000);
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+     Packet_EndGsRegisters();
+@@ -998,7 +999,7 @@ void Entity_PrepareAdditiveDraw(ModelInstance *model) {
+    coordinates back; then sets the GS registers by the model's alpha. */
+ static void Entity_PrepareScreenTexturedDraw(ModelInstance *model) {
+     if (model->draw_flags & MODEL_FLAG_800) {
+-        Model_SetBlockGsWords(model, 0x220013540L, 0x60, -1, -1);
++        Model_SetBlockGsWords(model, 0x220013540LL, 0x60, -1, -1);
+         Model_SetUvsFromScreen(model);
+         GsDraw_CopyFrameToTexture(0x3540, 0, 0x100, 0x100);
+         GsDraw_ResetDrawTarget();
+@@ -1010,27 +1011,27 @@ static void Entity_PrepareScreenTexturedDraw(ModelInstance *model) {
+     Packet_BeginGsRegisters();
+ 
+     if (128.0f <= model->alpha) {
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118L);
+-        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DL);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118LL);
++        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DLL);
+         if (model->draw_flags & MODEL_FLAG_800) {
+-            Packet_AddGsRegister(GS_REG_TEST_2, 0x30001L);
++            Packet_AddGsRegister(GS_REG_TEST_2, 0x30001LL);
+         } else {
+-            Packet_AddGsRegister(GS_REG_TEST_2, 0x5000DL);
++            Packet_AddGsRegister(GS_REG_TEST_2, 0x5000DLL);
+         }
+     } else {
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+-        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DL);
+-        Packet_AddGsRegister(GS_REG_TEST_2, 0x30001L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
++        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
++        Packet_AddGsRegister(GS_REG_TEST_1, 0x5000DLL);
++        Packet_AddGsRegister(GS_REG_TEST_2, 0x30001LL);
+     }
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+     Packet_AddGsRegister(GS_REG_ALPHA_2, 0x9);
+     Packet_EndGsRegisters();
+ }
+ 
+-/* Empty. */
+-static void func_00124AF8(void) {
++/* Empty (DrawList_Draw passes it the model). */
++static void func_00124AF8(ModelInstance *model) {
+ }
+ 
+ /* Clears a pool slot's model and work buffer, then builds the model from the slot's loaded data. */
+diff --git a/src/game/entity/entity_pools.c b/src/game/entity/entity_pools.c
+index 454fb7207c5e7983e7ddf1caef166a470ff9f00a..32007936320363c30a9946cb948e45a0ba4b1940 100644
+--- a/src/game/entity/entity_pools.c
++++ b/src/game/entity/entity_pools.c
+@@ -5,9 +5,12 @@
+ ModelInstance entity_models[ENTITY_POOL_SLOT_COUNT] = { 0 }; /* 0x3BE530 a model per pool slot */
+ 
+ Entity entity_pool[2][0x80] = { 0 }; /* 0x3BEDF0 the entities of both map slots */
+-/* the last entity of entity_pool, which other files name on its own */
+-asm(".globl entity_pool_last\nentity_pool_last = entity_pool + 0x17E80");  /* 0x3D6C70 the 256th entity */
++/* The last entity of entity_pool (0x3D6C70, the 256th), which other files name on its own as
++   entity_pool_last, was a symbol set by asm at entity_pool + 0x17E80. C cannot name an array element
++   as a symbol: on the PC those files compare with &entity_pool[1][0x7F] instead. */
+ 
+ EntityPoolSlot entity_pool_slots[ENTITY_POOL_SLOT_COUNT] = { 0 }; /* 0x3D6DF0 the pool slots */
+ 
++/* PORT: holds runtime structs, may need more room on the PC (ModelMotion_LoadFile puts the model's
++   ModelChannel after the saved GS words, Entity_TryActivate) */
+ s64 entity_work_area[0x2000] = { 0 }; /* 0x3D6E40 the work area Model_SaveGsWordsAndUvs builds a model in */
+diff --git a/src/game/entity/entity_type72.c b/src/game/entity/entity_type72.c
+index 527611342119bf31fc82b0c7b77c312cf46e479e..299f4308ab9f35cc200ebdc78361e250ec944928 100644
+--- a/src/game/entity/entity_type72.c
++++ b/src/game/entity/entity_type72.c
+@@ -2,12 +2,11 @@
+    function, which the table names, and the handlers that function installs. */
+ #include "entity/entity.h"
+ 
+-#define ENTITY_WORK_AREA_SIZE 0xA0
+-void EntityAi_SetUpdate(char *, s32);
++void EntityAi_SetUpdate(char *, void (*)(Entity *));
+ int Motion_StepModel(EntityModel *, s32, s32);
+ // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
+ void EntityAi_Animate(void);
+-extern s32 entity_type_handlers[][2];
++extern void (*entity_type_handlers[][2])(Entity *);
+ 
+ static void EntityType72_Think(void);
+ 
+diff --git a/src/game/entity/entity_types.c b/src/game/entity/entity_types.c
+index d96bdada0a9d06660caa93fd252c407bf4594e93..22da47a2b800816f86ac52a0ba24273fbef20171 100644
+--- a/src/game/entity/entity_types.c
++++ b/src/game/entity/entity_types.c
+@@ -88,60 +88,60 @@ void Entity_InitInert(Entity *entity);
+ void Entity_UpdateInert();
+ 
+ /* 0x3E6E40 [type][0] set-up, [type][1] update; types without a row act as type 0 */
+-s32 entity_type_handlers[0x60][2] = {
+-    (s32)EntityAi_InitDefaults, (s32)EntityAi_Update, (s32)Slime_Init, (s32)EntityAi_Update,
+-    (s32)Reaper_Init, (s32)EntityAi_Update, (s32)Spider_Init, (s32)EntityAi_Update,
+-    (s32)GiantSpider_Init, (s32)EntityAi_Update, (s32)Beetle_Init, (s32)EntityAi_Update,
+-    (s32)SkeletonSoldier_Init, (s32)EntityAi_Update, (s32)ExpeditionSoldier_Init, (s32)EntityAi_Update,
+-    (s32)Stool_Init, (s32)EntityAi_Update, (s32)SkeletonArcher_Init, (s32)EntityAi_Update,
+-    (s32)BloodBat_Init, (s32)EntityAi_Update, (s32)LivingDead_Init, (s32)EntityAi_Update,
+-    (s32)Crow_Init, (s32)EntityAi_Update, (s32)ExpeditionArcher_Init, (s32)EntityAi_Update,
+-    (s32)Phagos_Init, (s32)EntityAi_Update, (s32)Npc_Init, (s32)EntityAi_Update,
+-    (s32)Scorpion_Init, (s32)EntityAi_Update, (s32)DragonFly_Init, (s32)EntityAi_Update,
+-    (s32)AcidCrawler_Init, (s32)EntityAi_Update, (s32)Widda_Init, (s32)EntityAi_Update,
+-    (s32)WiddaArcher_Init, (s32)EntityAi_Update, (s32)Snake_Init, (s32)EntityAi_Update,
+-    (s32)Salamander_Init, (s32)EntityAi_Update, (s32)StoneGuardian_Init, (s32)EntityAi_Update,
+-    (s32)FireLord_Init, (s32)EntityAi_Update, (s32)Critter_Init, (s32)EntityAi_Update,
+-    (s32)Slasher_Init, (s32)EntityAi_Update, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
+-    (s32)Seafang_Init, (s32)EntityAi_Update, (s32)GoldenStatue_Init, (s32)EntityAi_Update,
+-    (s32)Widdacona_Init, (s32)EntityAi_Update, (s32)EyePedestal_Init, (s32)EntityAi_Update,
+-    (s32)LavaFace_Init, (s32)EntityAi_Update, (s32)Sentinel_Init, (s32)EntityAi_Update,
+-    (s32)LavaLizard_Init, (s32)EntityAi_Update, (s32)Giant_Init, (s32)EntityAi_Update,
+-    (s32)LivingArmor_Init, (s32)EntityAi_Update, (s32)HammerSkeleton_Init, (s32)EntityAi_Update,
+-    (s32)Bell_Init, (s32)EntityAi_Update, (s32)Mummy_Init, (s32)EntityAi_Update,
+-    (s32)Zombie_Init, (s32)EntityAi_Update, (s32)MalformedGiant_Init, (s32)EntityAi_Update,
+-    (s32)AncientMummy_Init, (s32)EntityAi_Update, (s32)ParaStool_Init, (s32)EntityAi_Update,
+-    (s32)DarkSoldier_Init, (s32)EntityAi_Update, (s32)EarthKing_Init, (s32)EntityAi_Update,
+-    (s32)WiddaQueen_Init, (s32)EntityAi_Update, (s32)IceGolem_Init, (s32)EntityAi_Update,
+-    (s32)FireElemental_Init, (s32)EntityAi_Update, (s32)EarthElemental_Init, (s32)EntityAi_Update,
+-    (s32)WindElemental_Init, (s32)EntityAi_Update, (s32)WaterElemental_Init, (s32)EntityAi_Update,
+-    (s32)DarkPuppet_Init, (s32)EntityAi_Update, (s32)DarkSorcerer_Init, (s32)EntityAi_Update,
+-    (s32)DarkSuccubus_Init, (s32)EntityAi_Update, (s32)DarkArcher_Init, (s32)EntityAi_Update,
+-    (s32)GreaterDemon_Init, (s32)EntityAi_Update, (s32)Aqualizard_Init, (s32)EntityAi_Update,
+-    (s32)Malice_Init, (s32)EntityAi_Update, (s32)DarkBird_Init, (s32)EntityAi_Update,
+-    (s32)Minion_Init, (s32)EntityAi_Update, (s32)AncientKing_Init, (s32)EntityAi_Update,
+-    (s32)HighSkeleton_Init, (s32)EntityAi_Update, (s32)GiantLeader_Init, (s32)EntityAi_Update,
+-    (s32)DarkKnight_Init, (s32)EntityAi_Update, (s32)Skull_Init, (s32)EntityAi_Update,
+-    (s32)FireGenie_Init, (s32)EntityAi_Update, (s32)Larva_Init, (s32)EntityAi_Update,
+-    (s32)LavaBird_Init, (s32)EntityAi_Update, (s32)MutantCeiling_Init, (s32)EntityAi_Update,
+-    (s32)MutantWall_Init, (s32)EntityAi_Update, (s32)DarkFlower_Init, (s32)EntityAi_Update,
+-    (s32)EntityType72_Init, (s32)EntityAi_Update, (s32)Watcher_Init, (s32)EntityAi_Update,
+-    (s32)Onyx_Init, (s32)EntityAi_Update, (s32)DarkOne_Init, (s32)EntityAi_Update,
+-    (s32)GiantBeetle_Init, (s32)EntityAi_Update, (s32)ForestGolem_Init, (s32)EntityAi_Update,
+-    (s32)Makara_Init, (s32)EntityAi_Update, (s32)MasterFadin_Init, (s32)EntityAi_Update,
+-    (s32)Fadin_Init, (s32)EntityAi_Update, (s32)Npc_InitType81, (s32)EntityAi_Update,
+-    (s32)LivingStatue_Init, (s32)EntityAi_Update, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
+-    (s32)Entity_InitInert, (s32)Entity_UpdateInert, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
+-    (s32)Entity_InitInert, (s32)Entity_UpdateInert, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
+-    (s32)Entity_InitInert, (s32)Entity_UpdateInert, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
+-    (s32)Entity_InitInert, (s32)Entity_UpdateInert, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
+-    (s32)Entity_InitInert, (s32)Entity_UpdateInert, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
+-    (s32)Entity_InitInert, (s32)Entity_UpdateInert, (s32)Entity_InitInert, (s32)Entity_UpdateInert,
++void (*entity_type_handlers[0x60][2])(Entity *) = {
++    EntityAi_InitDefaults, EntityAi_Update, Slime_Init, EntityAi_Update,
++    Reaper_Init, EntityAi_Update, Spider_Init, EntityAi_Update,
++    GiantSpider_Init, EntityAi_Update, Beetle_Init, EntityAi_Update,
++    SkeletonSoldier_Init, EntityAi_Update, ExpeditionSoldier_Init, EntityAi_Update,
++    Stool_Init, EntityAi_Update, SkeletonArcher_Init, EntityAi_Update,
++    BloodBat_Init, EntityAi_Update, LivingDead_Init, EntityAi_Update,
++    Crow_Init, EntityAi_Update, ExpeditionArcher_Init, EntityAi_Update,
++    Phagos_Init, EntityAi_Update, Npc_Init, EntityAi_Update,
++    Scorpion_Init, EntityAi_Update, DragonFly_Init, EntityAi_Update,
++    AcidCrawler_Init, EntityAi_Update, Widda_Init, EntityAi_Update,
++    WiddaArcher_Init, EntityAi_Update, Snake_Init, EntityAi_Update,
++    Salamander_Init, EntityAi_Update, StoneGuardian_Init, EntityAi_Update,
++    FireLord_Init, EntityAi_Update, Critter_Init, EntityAi_Update,
++    Slasher_Init, EntityAi_Update, Entity_InitInert, Entity_UpdateInert,
++    Seafang_Init, EntityAi_Update, GoldenStatue_Init, EntityAi_Update,
++    Widdacona_Init, EntityAi_Update, EyePedestal_Init, EntityAi_Update,
++    LavaFace_Init, EntityAi_Update, Sentinel_Init, EntityAi_Update,
++    LavaLizard_Init, EntityAi_Update, Giant_Init, EntityAi_Update,
++    LivingArmor_Init, EntityAi_Update, HammerSkeleton_Init, EntityAi_Update,
++    Bell_Init, EntityAi_Update, Mummy_Init, EntityAi_Update,
++    Zombie_Init, EntityAi_Update, MalformedGiant_Init, EntityAi_Update,
++    AncientMummy_Init, EntityAi_Update, ParaStool_Init, EntityAi_Update,
++    DarkSoldier_Init, EntityAi_Update, EarthKing_Init, EntityAi_Update,
++    WiddaQueen_Init, EntityAi_Update, IceGolem_Init, EntityAi_Update,
++    FireElemental_Init, EntityAi_Update, EarthElemental_Init, EntityAi_Update,
++    WindElemental_Init, EntityAi_Update, WaterElemental_Init, EntityAi_Update,
++    DarkPuppet_Init, EntityAi_Update, DarkSorcerer_Init, EntityAi_Update,
++    DarkSuccubus_Init, EntityAi_Update, DarkArcher_Init, EntityAi_Update,
++    GreaterDemon_Init, EntityAi_Update, Aqualizard_Init, EntityAi_Update,
++    Malice_Init, EntityAi_Update, DarkBird_Init, EntityAi_Update,
++    Minion_Init, EntityAi_Update, AncientKing_Init, EntityAi_Update,
++    HighSkeleton_Init, EntityAi_Update, GiantLeader_Init, EntityAi_Update,
++    DarkKnight_Init, EntityAi_Update, Skull_Init, EntityAi_Update,
++    FireGenie_Init, EntityAi_Update, Larva_Init, EntityAi_Update,
++    LavaBird_Init, EntityAi_Update, MutantCeiling_Init, EntityAi_Update,
++    MutantWall_Init, EntityAi_Update, DarkFlower_Init, EntityAi_Update,
++    EntityType72_Init, EntityAi_Update, Watcher_Init, EntityAi_Update,
++    Onyx_Init, EntityAi_Update, DarkOne_Init, EntityAi_Update,
++    GiantBeetle_Init, EntityAi_Update, ForestGolem_Init, EntityAi_Update,
++    Makara_Init, EntityAi_Update, MasterFadin_Init, EntityAi_Update,
++    Fadin_Init, EntityAi_Update, Npc_InitType81, EntityAi_Update,
++    LivingStatue_Init, EntityAi_Update, Entity_InitInert, Entity_UpdateInert,
++    Entity_InitInert, Entity_UpdateInert, Entity_InitInert, Entity_UpdateInert,
++    Entity_InitInert, Entity_UpdateInert, Entity_InitInert, Entity_UpdateInert,
++    Entity_InitInert, Entity_UpdateInert, Entity_InitInert, Entity_UpdateInert,
++    Entity_InitInert, Entity_UpdateInert, Entity_InitInert, Entity_UpdateInert,
++    Entity_InitInert, Entity_UpdateInert, Entity_InitInert, Entity_UpdateInert,
++    Entity_InitInert, Entity_UpdateInert, Entity_InitInert, Entity_UpdateInert,
+ };
+ 
+-ModelInstanceBlock fire_lord_model[2] = { 0 }; /* 0x3E7140 the Fire Lord's model, copied for its two draws */
+-/* the second of the two, which other files name on its own */
+-asm(".globl fire_lord_older_afterimage\nfire_lord_older_afterimage = fire_lord_model + 0x1C0");  /* 0x3E7300 the older afterimage, the model two frames back */
++/* 0x3E7140 the Fire Lord's model, copied for its two draws; [1] (0x3E7300) is the older afterimage, the
++   model two frames back (an asm symbol, fire_lord_older_afterimage, named it on its own on the PS2) */
++ModelInstanceBlock fire_lord_model[2] = { 0 };
+ 
+ /* 0x3E74C0 the Fire Lord's model matrix (second row zero in retail) */
+ ModelMatrix fire_lord_model_matrix = {
+diff --git a/src/game/entity/entity_world.c b/src/game/entity/entity_world.c
+index 4923feac2235adb0c3093f4155ec2ca12115ad18..1a6623b4401b496b2561ee9580417a2bb7af98a7 100644
+--- a/src/game/entity/entity_world.c
++++ b/src/game/entity/entity_world.c
+@@ -4,8 +4,11 @@
+ #include "gfx/gs.h"
+ #include "map/map.h"
+ #include "entity/entity.h"
++#include <libvu0.h>
++#include "core/game.h"
++#include "player/player.h"
++#include <string.h>
+ 
+-void *memset(void *, int, u32);
+ int rand(void);
+ 
+ extern MapSlot map_slots[];
+@@ -15,15 +18,16 @@ extern int map_spawn_counts[2];
+ extern EntitySpawnInfo *map_spawn_infos[2];
+ extern char *entity_params;
+ extern Vector4Arg entity_unit_scale;
+-extern s32 entity_type_handlers[][2];
+-extern int suspended_updates[3];
++extern void (*entity_type_handlers[][2])(Entity *);
++extern GameStatus game_status;
++#define suspended_updates (&game_status.update_hold_flags)
+ extern Entity *active_entities_head;
+ extern PlayerData player_state;
+ extern MapDrawState map_draw_state;
+ extern f32 identity_matrix[16];
+ extern u32 frame_counter;
+ extern int current_map_slot;
+-extern u8 player_floor_block[];
++#define player_floor_block (&player_state.record_flag_block)
+ extern const f32 D_004467F8[];
+ 
+ void Vector_Copy(void *, void *);
+@@ -40,8 +44,6 @@ float EntityMath_DistanceXZ(void *, void *);
+ float EntityMath_HeadingTo(float *, float *);
+ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+ float EntityMath_WrapAngle(float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0ApplyMatrix(float *, float *, float *);
+ void Packet_BeginGsRegisters(void);
+ void Packet_AddGsRegister(int, s64);
+ void Packet_EndGsRegisters(void);
+@@ -53,8 +55,8 @@ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+ void Model_MultiplyChildMatrices(ModelPart *);
+ f32 EntityCollision_DistanceToPropFloor(void *, void *);
+ 
+-#define SCRATCH_MATRIX ((f32 *)0x70000000)
+-#define SCRATCH_VECTOR ((f32 *)0x70000040)
++#define SCRATCH_MATRIX SPR(f32 *, 0)
++#define SCRATCH_VECTOR SPR(f32 *, 0x40)
+ #define MAP_RECORD(entity) ((MapRecord *)(entity)->map_record)
+ #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->spawn_flags)
+ 
+@@ -65,7 +67,7 @@ static int Entity_IsMapRecordActive(Entity *entity);
+ static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity);
+ static inline void entity_draw_set_model_tint(Entity *entity, f32 red, f32 green, f32 blue);
+ 
+-void EntityAi_SetUpdate(char *, s32);
++void EntityAi_SetUpdate(char *, void (*)(Entity *));
+ 
+ /* The set-up function entity_type_handlers gives types 27 and 83 to 95, which have no AI: puts the motion at
+    animation 0, clears the work area, sets flags 22-28 and installs the table's update (Entity_UpdateInert).
+@@ -117,7 +119,7 @@ void Entity_InitFromMapSpawns(int map) {
+         entity->pool_slot_index = -1;
+         entity->spawn_info = spawn_info;
+         entity_by_spawn_id[map][SPAWN_FLAGS(spawn_info)->bytes[4]] = entity;
+-        if ((SPAWN_FLAGS(spawn_info)->word & (0xC000L << 45)) == (0x8000L << 45)) {
++        if ((SPAWN_FLAGS(spawn_info)->word & (0xC000LL << 45)) == (0x8000LL << 45)) {
+             ENTITY_FLAG_BITS(entity)->bit7 = FALSE;
+         } else {
+             ENTITY_FLAG_BITS(entity)->bit7 = TRUE;
+@@ -199,7 +201,7 @@ void Entity_ResetToSpawn(Entity *entity) {
+     ENTITY_FLAG_BITS(entity)->bit10 = FALSE;
+     ENTITY_FLAG_BITS(entity)->bit17 = TRUE;
+     ENTITY_FLAG_BITS(entity)->bit31 = FALSE;
+-    entity->update_func = 0;
++    entity->update_func = NULL;
+     entity->handler = NULL;
+     entity->prev_handler = NULL;
+     entity->stun_frames = 0;
+@@ -240,7 +242,7 @@ void Entity_ResetToSpawn(Entity *entity) {
+     entity->knockback_damping = ABS(entity->knockback_damping);
+     entity->model->radius = (entity->collision_radius < entity->collision_height) ? entity->collision_height : entity->collision_radius;
+     Motion_Start(entity, 0, 0, 0, 1);
+-    ((void (*)(Entity *))entity_type_handlers[entity->params->entity_type][0])(entity);
++    entity_type_handlers[entity->params->entity_type][0](entity);
+     Entity_RebuildModelMatrices(entity);
+ }
+ 
+@@ -340,7 +342,7 @@ void Entity_UpdateAll(void) {
+         if (entity->ailment_1_frames != 0) {
+             if (entity->ailment_1_frames % 30 == 0) {
+                 entity->hit_points = (entity->hit_points < 3) ? 0 : entity->hit_points - 3;
+-                entity->flags &= ~(3L << 38);
++                entity->flags &= ~(3LL << 38);
+             }
+             entity->ailment_1_frames--;
+         }
+@@ -372,10 +374,10 @@ void Entity_UpdateAll(void) {
+             Vector_Scale(SCRATCH_VECTOR, SCRATCH_VECTOR, entity->knockback_speed);
+             Vector_Add(entity->model->position, entity->model->position, SCRATCH_VECTOR);
+         }
+-        if (entity->update_func == 0) {
++        if (entity->update_func == NULL) {
+             continue;
+         }
+-        ((void (*)(Entity *))entity->update_func)(entity);
++        entity->update_func(entity);
+         if (entity->knockback_speed > 0.0f) {
+             entity->knockback_speed -= entity->knockback_damping * 4.0f / 10.0f;
+         }
+@@ -390,9 +392,9 @@ void Entity_UpdateAll(void) {
+             ENTITY_MODEL(entity)->fog_block = &map_draw_state.fog_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->draw_block_index];
+         }
+         if ((s8)SPAWN_FLAGS(spawn_info)->bytes[3] != -1 || entity->map_record == NULL) {
+-            ENTITY_MODEL(entity)->light_block = (s32)&map_draw_state.light_blocks[entity->group_id][(s8)SPAWN_FLAGS(spawn_info)->bytes[3]];
++            ENTITY_MODEL(entity)->light_block = (sptr)&map_draw_state.light_blocks[entity->group_id][(s8)SPAWN_FLAGS(spawn_info)->bytes[3]];
+         } else {
+-            ENTITY_MODEL(entity)->light_block = (s32)&map_draw_state.light_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->light_block_index];
++            ENTITY_MODEL(entity)->light_block = (sptr)&map_draw_state.light_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->light_block_index];
+         }
+         Model_UpdateSkinnedBonePoints(ENTITY_MODEL(entity));
+     }
+@@ -621,7 +623,7 @@ static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity) {
+                 if (record->collision_mesh_index == 0xFFFF) {
+                     continue;
+                 }
+-                if (record->model->strips == NULL) {
++                if (EE_PTR(ModelInstance *, record->model)->strips == NULL) {
+                     continue;
+                 }
+                 if (entity->model->position[0] < record->lowest[0] - reach) {
+diff --git a/src/game/entity/npc.c b/src/game/entity/npc.c
+index d2b943e0ff921b1231884db407502a7063b224aa..046e5d8b6f52d7976c81c66a642a69f2684982ba 100644
+--- a/src/game/entity/npc.c
++++ b/src/game/entity/npc.c
+@@ -7,11 +7,12 @@
+ #include "entity/entity_events.h"
+ #include "model/motion.h"
+ #include "entity/entity_math.h"
++#include <libvu0.h>
+ 
+-void EntityAi_SetUpdate(char *, s32);
++void EntityAi_SetUpdate(char *, void (*)(Entity *));
+ int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
+ void Vector_Copy(void *, void *);
+-extern s32 entity_type_handlers[][2];
++extern void (*entity_type_handlers[][2])(Entity *);
+ int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
+ extern EntityGroupRecord entity_group_state[];
+ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now);
+@@ -22,9 +23,6 @@ int EntityAi_AnimationFrameCount(void *, int);
+ void EntityAi_SetAttackDelay(Entity *, s32);
+ extern char story_flags[0x40];
+ extern f32 identity_matrix[16];
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0RotMatrixZ(float *, float *, float);
+ void Vector_ApplyMatrix(void *, void *, void *);
+ void Vector_Normalize(void *, void *);
+ void Vector_Scale(float *, float *, float);
+@@ -33,8 +31,7 @@ extern u32 frame_counter;
+ void EntityAi_SensePlayer(Entity *, s32);
+ void EntityAi_CheckFarFromSpawn(char *);
+ 
+-/* Motion_BlendToPose as if it returned a value.
+-   match: the callee is void, but retail keeps what it leaves in $2 */
++/* Motion_BlendToPose, which returns the blend frames left. */
+ #define MOTION_BLEND_TO_POSE ((int (*)(EntityModel *, f32))Motion_BlendToPose)
+ 
+ static void Npc_Animate(Entity *entity);
+@@ -52,7 +49,7 @@ static void Npc_Death(Entity *entity);
+ static void Npc_Move(Entity *entity);
+ static void Npc_OnHitType81(Entity *entity);
+ static void Npc_ThinkType81(Entity *entity, s32 run_now);
+-static int Npc_ThinkType81Stand(void *entity_ptr, int unknown);
++static void Npc_ThinkType81Stand(void *entity_ptr, int unknown);
+ 
+ /* The set-up function of entity type 15, the talking characters (chr.prm): as EntityAi_InitDefaults, with the
+    Npc_ handlers, its look part from EntityParams.unk43C, and flag bit 16 set. */
+@@ -88,7 +85,7 @@ void Npc_Init(Entity *entity) {
+     if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
+         ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
+     }
+-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
++    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+     } else {
+         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+@@ -620,7 +617,7 @@ void Npc_InitType81(Entity *entity) {
+     if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
+         ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
+     }
+-    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
++    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+     } else {
+         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+@@ -672,7 +669,7 @@ static void Npc_ThinkType81(Entity *entity, s32 run_now) {
+ }
+ 
+ /* The think function of type 81 that stands: as Npc_ThinkStand. */
+-static int Npc_ThinkType81Stand(void *entity_ptr, int unknown) {
++static void Npc_ThinkType81Stand(void *entity_ptr, int unknown) {
+     Entity *entity = entity_ptr;
+ 
+     ENTITY_FLAG_BITS(entity)->bit9 = FALSE;

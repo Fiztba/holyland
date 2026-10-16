@@ -1,0 +1,1271 @@
+diff --git a/src/game/core/display.c b/src/game/core/display.c
+index 4d4e9413041a24660d7709bb6101b57d304247b6..0942a37d80ba0a5f78030dadfff8160adfa0554e 100644
+--- a/src/game/core/display.c
++++ b/src/game/core/display.c
+@@ -5,6 +5,12 @@
+ #include "gfx/gs.h"
+ #include "core/memory.h"
+ #include "core/timer.h"
++#include <stdio.h>
++#include <eekernel.h>
++#include <libgraph.h>
++#include <libvu0.h>
++#include <sifdev.h>
++#include <sifrpc.h>
+ 
+ extern char ioprp_image_path[];         /* "cdrom0:\IOPRP224.IMG;1" */
+ /* the paths of the nine IOP modules, "cdrom0:\IOP\SIO2MAN.IRX;1" and so on */
+@@ -21,25 +27,14 @@ extern char empty_module_args[];        /* "": no module arguments */
+ extern char vector4_print_format[];     /* "(%f,%f,%f,%f)\n" */
+ static char menu_heap_area[0x200000];   /* 0x1BFAF80 the area the menus' heap (menu_heap) lies in */
+ extern ClockControl D_00432820;
+-extern s32 menu_heap;
++extern sptr menu_heap;
+ extern GsDoubleBuffer game_dbuff;           /* the game's frame buffers, drawn through GS context 1 */
+ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn through GS context 2 */
+ extern int context1_buffer_half;              /* the half of the first double buffer in use; each swap flips it */
+ extern int context2_buffer_half;              /* the same for the second */
+ extern int vsync_even_field;        /* TRUE when the last vsync was of field 0 */
+ 
+-void sceSifInitRpc(int);
+ void File_InitDrive(void);
+-int sceSifRebootIop(const char *);
+-int sceSifSyncIop(void);
+-void sceFsReset(void);
+-int sceSifLoadModule(const char *, int, const char *);
+-int printf(const char *, ...);
+-void sceVu0UnitMatrix(f32 (*)[4]);
+-int FlushCache(int);
+-int sceGsSetHalfOffset(void *, int, int, s16);
+-int sceGsSwapDBuff(void *, int);
+-int sceGsSyncV(int);
+ 
+ 
+ /* Reboots the IOP with IOPRP224.IMG and loads the nine IOP modules (pad, memory card, sound and file I/O). */
+@@ -87,7 +82,7 @@ void System_InitMemory(void) {
+     D_00432820.unk209 = 0;
+     D_00432820.unk20A = 0;
+     D_00432820.unk20B = 2;
+-    menu_heap = (s32)menu_heap_area;
++    menu_heap = (sptr)menu_heap_area;
+ }
+ 
+ /* Empty. */
+diff --git a/src/game/core/file.c b/src/game/core/file.c
+index a9a32348cbb0e5c54e25ca61588ad9ae84e832bb..bff0bded9334f44fbae148de185445cbb8e104e4 100644
+--- a/src/game/core/file.c
++++ b/src/game/core/file.c
+@@ -1,9 +1,6 @@
+ /* The KF4.DAT file layer: one packed archive read through two file slots, or loose files under \DATA\. */
+ #include "core/file.h"
+ 
+-int sceCdInit(int);
+-int sceCdMmode(int);
+-
+ // match: core/file.h declares these, so a plain definition would go to COMMON
+ static u8 D_004475C8[0x38] __attribute__((section(".bss"))) = { 0 }; /* 0x4475C8 */
+ KFFile file_slots[2] __attribute__((section(".bss"))) = { 0 };       /* 0x447600 the two file slots */
+@@ -22,8 +19,8 @@ void File_LoadArchiveToc(void) {
+     int file;
+ 
+     memset(file_slots, 0, sizeof(file_slots));
+-    D_00447000[1] = (int)archive_toc;
+-    D_00447000[2] = (int)(archive_toc + 0x40);
++    D_00447000[1] = (sptr)archive_toc;
++    D_00447000[2] = (sptr)(archive_toc + 0x40);
+     file = File_Open("KF4.DAT", 0, 0);
+     File_Read(file, archive_toc, 0x20000);
+     ((KFDirHeader *)D_00447000[1])->lsn = file_slots[file].start;
+diff --git a/src/game/core/file.h b/src/game/core/file.h
+index 776b6fcf38c121adb61b5bd7f71f66cf3e2e5f53..0fc207406cb0572d27c8b6336329bc88720a1915 100644
+--- a/src/game/core/file.h
++++ b/src/game/core/file.h
+@@ -5,21 +5,10 @@
+ #define KF_FILE_H
+ 
+ #include "common.h"
+-
+-typedef struct {
+-    u8 trycount;
+-    u8 spindlctrl;
+-    u8 datapattern;
+-    u8 pad;
+-} sceCdRMode;
+-
+-typedef struct {
+-    u32 lsn;
+-    u32 size;
+-    char name[16];
+-    u8 date[8];
+-    u32 flag;
+-} sceCdlFILE;
++#include <stdio.h>
++#include <string.h>
++#include <strings.h>
++#include <libcdvd.h>
+ 
+ /* one open file */
+ typedef struct {
+@@ -38,22 +27,28 @@ typedef struct {
+ } KFFile;
+ 
+ /* a KF4.DAT member */
++/* overlay: an entry of the KF4.DAT table of contents (archive_toc, read from disc) */
+ typedef struct {
+     char name[0x34];
+     u32 size;
+     int unk38;
+     u32 offset;    /* bytes from the start of KF4.DAT */
+ } KFDirEntry;
++LAYOUT_SIZE(KFDirEntry, 0x40);
++LAYOUT_OFFSET(KFDirEntry, offset, 0x3C);
+ 
++/* overlay: the header of the KF4.DAT table of contents (archive_toc, read from disc) */
+ typedef struct {
+     int unk0;
+     u32 count;
+     int lsn;                /* first sector of KF4.DAT */
+     char pad[0x34];
+ } KFDirHeader;
++LAYOUT_SIZE(KFDirHeader, 0x40);
++LAYOUT_OFFSET(KFDirHeader, lsn, 0x8);
+ 
+ extern int file_layer_locked;   /* file layer locked */
+-extern int D_00447000[2];       /* [1] the KF4.DAT header, [2] its entries, [3] the fade direction (core/game.c); 8 bytes keeps it $gp-relative */
++extern sptr D_00447000[4];      /* [1] the KF4.DAT header, [2] its entries, [3] the fade direction (core/game.c) */
+ extern KFFile file_slots[2];
+ extern char archive_toc[];       /* the KF4.DAT table of contents */
+ 
+@@ -63,16 +58,4 @@ int File_Read(int fd, void *buf, int size);
+ int File_Sync(int fd, int mode);
+ int File_Open(char *name, int nowait, int pack);
+ 
+-int printf(const char *, ...);
+-int puts(const char *);
+-char *strcpy(char *, const char *);
+-char *strcat(char *, const char *);
+-int strcasecmp(const char *, const char *);
+-void *memset(void *, int, u32);
+-int sceCdSearchFile(sceCdlFILE *, const char *);
+-int sceCdRead(int lsn, int sectors, void *buf, sceCdRMode *mode);
+-int sceCdSeek(int lsn);
+-int sceCdSync(int mode);
+-int sceCdGetError(void);
+-
+ #endif
+diff --git a/src/game/core/game.c b/src/game/core/game.c
+index 450bcaa4c8868738fe0cbac3bd5b4f350496ef98..11ec387c35c4b180b43012d11bb3dea2a41b1411 100644
+--- a/src/game/core/game.c
++++ b/src/game/core/game.c
+@@ -1,6 +1,7 @@
+ /* The game module: new-game state, event flags, the save image, the screen fade and GS screen effects. */
+ #include "core/file.h"
+ #include "core/game.h"
++#include "sound/sound.h"
+ #include "input/pad.h"
+ #include "map_object/map_object.h"
+ #include "player/player.h"
+@@ -10,6 +11,10 @@
+ #include "libvu0.h"
+ #include "ui/menu_screens.h"
+ #include "ui/message.h"
++#include <math.h>
++#include <stdlib.h>
++#include <string.h>
++#include <libvu0.h>
+ 
+ extern u8 game_options[0x10];             /* the options (Game_SetDefaultOptions sets their defaults) */
+ extern u8 map_script_flags[0x2000];
+@@ -36,7 +41,7 @@ extern DefinitionByteSet trade_stock_3;
+ extern DefinitionByteSet trade_stock_4;
+ extern DefinitionByteSet trade_stock_5;
+ extern u8 save_image[0x20000];          /* the save image */
+-extern char sound_load_queue[0x28];
++extern SoundLoadQueue sound_load_queue;
+ extern MapSlot map_slots[];
+ extern const DefinitionByteSet initial_trade_stock_1;
+ extern const DefinitionByteSet initial_trade_stock_2;
+@@ -56,13 +61,10 @@ extern char current_play_time[8];
+ extern int fade_frames_left;                  /* frames of the fade left */
+ extern int fade_frames;                  /* frames the fade takes */
+ 
+-void *memcpy(void *, const void *, u32);
+-void GsDraw_FillScreen(int, int, int, int, int);
++void GsDraw_FillScreen(int, int, int, int, s64);
+ extern int haze_layer_depths[8];               /* the screen depth of each haze layer */
+ extern u32 haze_layer_distances[8];               /* the distances of the haze layers, nearest last */
+-extern float view_ray_status[];
+-extern float view_ray_previous_direction[];
+-extern float view_ray_length[];
++extern EventRunner view_ray_status;
+ extern sceVu0FMATRIX identity_matrix;
+ extern sceVu0FMATRIX world_view_matrix;
+ extern sceVu0FMATRIX world_screen_matrix;
+@@ -82,11 +84,7 @@ static int wobble_grid_previous[8][11][2];     /* 0x467C00 the points of the fra
+ static float wobble_grid_forces[8][11][2];   /* 0x467EC0 the force on each point */
+ static int fade_color[3];            /* 0x468180 the fade colour */
+ 
+-float sqrtf(float);
+-int rand(void);
+ u32 fptoui(float);
+-void sceVu0TransMatrix(void *, void *, void *);
+-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
+ void Vu0_LoadMatrix(void *);
+ void Vu0_ProjectToScreen(int *, void *);
+ void Vector_MultiplyComponents(float *, float *, float *);
+@@ -162,7 +160,7 @@ void Game_ResetProgress(void) {
+     memset(spell_experience, 0, sizeof(spell_experience));
+     memset(spell_levels, 0, sizeof(spell_levels));
+     Menu_ClearKeyItems();
+-    memset(sound_load_queue, 0, sizeof(sound_load_queue));
++    memset(&sound_load_queue, 0, sizeof(sound_load_queue));
+ }
+ 
+ /* marks what the player has equipped as found and tidies the spell tables */
+@@ -659,7 +657,7 @@ void Game_WriteSaveImage(void) {
+     memcpy(save_cursor, &bit_byte, 1);
+     save_cursor++;
+ 
+-    used = save_cursor - save_image;
++    used = (s32)(save_cursor - save_image);
+     size = (u32)(used + 0x7F) / 128 * 128;
+     table = save_cursor + (size - used);
+     *(int *)(save_image + 4) = size; // match: the header word is stored straight into the buffer
+@@ -870,7 +868,7 @@ void Game_DrawFade(void) {
+     if (alpha > 0) {
+         Packet_BeginGsRegisters();
+         Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+         Packet_EndGsRegisters();
+         GsDraw_FillScreen(fade_color[0], fade_color[1], fade_color[2], alpha, 0x44);
+         Packet_BeginGsRegisters();
+@@ -931,7 +929,7 @@ void Game_DrawHazeLayers(void) {
+         return;
+     }
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8L);
++    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8LL);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
+     Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
+     Packet_EndGsRegisters();
+@@ -946,12 +944,12 @@ void Game_DrawHazeLayers(void) {
+         *cursor++ = 0;
+         *cursor++ = 0;
+         *cursor++ = 0x6C09C000;
+-        *(u64 *)cursor = 0x80AF400000008001L;
++        *(u64 *)cursor = 0x80AF400000008001LL;
+         cursor += 2;
+-        *(u64 *)cursor = 0x513513EEL;
++        *(u64 *)cursor = 0x513513EELL;
+         cursor += 2;
+         texture_height_log2 = 9;
+-        tex0_low = texture_base | 0x28028000L;
++        tex0_low = texture_base | 0x28028000LL;
+         *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
+         cursor += 2;
+         *cursor++ = 6;
+@@ -1010,14 +1008,14 @@ void Game_DrawHazeLayersShifted(void) {
+         texture_base = 0;
+     }
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000a8L);
++    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000a8LL);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
+     Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
+     Packet_EndGsRegisters();
+     texture_height_log2 = 9;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
+-    sprite.unk08 = 0x60L;
++    sprite.unk08 = 0x60LL;
+     sprite.prim = 0x156;
+     sprite.rgba[0] = 0x80;
+     sprite.rgba[1] = 0x80;
+@@ -1073,7 +1071,7 @@ void Game_DrawDepthTestSprite(void) {
+         printf(z_value_format, depth_test_sprite_z);
+     }
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8L);
++    Packet_AddGsRegister(GS_REG_ALPHA_1, 0x80000000A8LL);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
+     Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
+     Packet_EndGsRegisters();
+@@ -1087,12 +1085,12 @@ void Game_DrawDepthTestSprite(void) {
+     *cursor++ = 0;
+     *cursor++ = 0;
+     *cursor++ = 0x6C09C000;
+-    *(u64 *)cursor = 0x80AF400000008001L;
++    *(u64 *)cursor = 0x80AF400000008001LL;
+     cursor += 2;
+-    *(u64 *)cursor = 0x513513EEL;
++    *(u64 *)cursor = 0x513513EELL;
+     cursor += 2;
+     texture_height_log2 = 9;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
+     cursor += 2;
+     *cursor++ = 6;
+@@ -1150,13 +1148,13 @@ void Game_BlendScreenOffsetDown(void) {
+     }
+     Packet_BeginGsRegisters();
+     remaining = 9;
+-    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffL);
++    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffLL);
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118LL);
+     Packet_EndGsRegisters();
+     texture_height_log2 = 9;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     sprite.unk08 = 0;
+     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
+     sprite.rgba[0] = 0x80;
+@@ -1184,7 +1182,7 @@ void Game_BlendScreenOffsetDown(void) {
+     } while (remaining >= 0);
+ 
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118LL);
+     Packet_EndGsRegisters();
+ }
+ 
+@@ -1202,14 +1200,14 @@ void Game_BlendScreenOffsetUpDown(void) {
+     }
+     Packet_BeginGsRegisters();
+     remaining = 9;
+-    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffL);
++    Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xffffffffLL);
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10a000118LL);
+     Packet_EndGsRegisters();
+ 
+     texture_height_log2 = 9;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     sprite.unk08 = 0;
+     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
+     sprite.rgba[0] = 0x80;
+@@ -1256,7 +1254,7 @@ void Game_BlendScreenOffsetUpDown(void) {
+     } while (remaining >= 0);
+ 
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xa000118LL);
+     Packet_EndGsRegisters();
+ }
+ 
+@@ -1289,12 +1287,12 @@ void Game_BlendPreviousFrame(int alpha) {
+     *cursor++ = 0;
+     *cursor++ = 0;
+     *cursor++ = 0x6C09C000;
+-    *(u64 *)cursor = 0x80AF400000008001L;
++    *(u64 *)cursor = 0x80AF400000008001LL;
+     cursor += 2;
+-    *(u64 *)cursor = 0x513513EEL;
++    *(u64 *)cursor = 0x513513EELL;
+     cursor += 2;
+     texture_height_log2 = 9;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
+     cursor += 2;
+     *cursor++ = 6;
+@@ -1364,12 +1362,12 @@ void Game_BlendPreviousFrameZoomed(int alpha) {
+     *cursor++ = 0;
+     *cursor++ = 0;
+     *cursor++ = 0x6C09C000;
+-    *(u64 *)cursor = 0x80AF400000008001L;
++    *(u64 *)cursor = 0x80AF400000008001LL;
+     cursor += 2;
+-    *(u64 *)cursor = 0x513513EEL;
++    *(u64 *)cursor = 0x513513EELL;
+     cursor += 2;
+     texture_height_log2 = 9;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
+     cursor += 2;
+     *cursor++ = 6;
+@@ -1427,14 +1425,14 @@ void Game_ShiftScreenByViewTurn(void) {
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+     Packet_AddGsRegister(GS_REG_SCANMSK, 3);
+     Packet_EndGsRegisters();
+ 
+     sceVu0MulMatrix(view_matrix, world_screen_matrix, identity_matrix);
+     Vu0_LoadMatrix(view_matrix);
+-    Vector_Scale(scaled_vector, view_ray_previous_direction, 1000.0f);
+-    Vector_Add(scaled_vector, scaled_vector, view_ray_previous_direction - 4);
++    Vector_Scale(scaled_vector, view_ray_status.prev_view_direction, 1000.0f);
++    Vector_Add(scaled_vector, scaled_vector, view_ray_status.prev_view_origin);
+     scaled_vector[3] = 1.0f;
+     Vu0_ProjectToScreen(screen_xy, scaled_vector);
+ 
+@@ -1458,13 +1456,13 @@ void Game_ShiftScreenByViewTurn(void) {
+     } else if (offset_y < -0x80) {
+         offset_y = -0x80;
+     }
+-    if (view_ray_length[0] < 125.0f) {
++    if (view_ray_status.view_distance < 125.0f) {
+         offset_y = 0;
+     }
+ 
+     sprite_packet.prim = 0x116;
+-    sprite_packet.tex0 = 0x28028000L | texture_base;
+-    sprite_packet.tex0 |= 0xA400L << 20;
++    sprite_packet.tex0 = 0x28028000LL | texture_base;
++    sprite_packet.tex0 |= 0xA400LL << 20;
+     sprite_packet.unk08 = 0;
+     sprite_packet.rgba[0] = 0x80;
+     sprite_packet.rgba[1] = 0x80;
+@@ -1520,7 +1518,7 @@ void Game_ShiftScreenByViewTurn(void) {
+ 
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_SCANMSK, 0);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+     Packet_EndGsRegisters();
+ }
+ 
+@@ -1541,27 +1539,27 @@ void Game_ShiftScreenByFocusTurn(void) {
+ 
+     texture_base = 0x1180;
+     if (context1_buffer_half != 0) texture_base = 0;
+-    focus_distance = view_ray_status[18] > 1000.0f ? 1000.0f : view_ray_status[18];
++    focus_distance = view_ray_status.nearest_entity_distance > 1000.0f ? 1000.0f : view_ray_status.nearest_entity_distance;
+     nearest_distance_squared = focus_distance * focus_distance;
+     for (entity = active_entities_head; entity != NULL; entity = entity->next) {
+         if (((int)(entity->flags >> 1) & 1) == 0) continue;
+         if (focus_distance < entity->distance_to_player) continue;
+         Vector_Copy(offset_to_entity, entity->model->position);
+         offset_to_entity[1] -= entity->height * 0.5f;
+-        Vector_Subtract(offset_to_entity, offset_to_entity, view_ray_status);
++        Vector_Subtract(offset_to_entity, offset_to_entity, view_ray_status.view_origin);
+         Vector_MultiplyComponents(scratch_vector, offset_to_entity, offset_to_entity);
+         distance_squared = scratch_vector[0] + scratch_vector[1] + scratch_vector[2];
+         if (nearest_distance_squared < distance_squared) continue;
+         sceVu0Normalize(scratch_vector, offset_to_entity);
+-        if (sceVu0InnerProduct(scratch_vector, view_ray_status + 4) < 0.86602497f) continue; /* about cos 30 degrees */
++        if (sceVu0InnerProduct(scratch_vector, view_ray_status.view_direction) < 0.86602497f) continue; /* about cos 30 degrees */
+         nearest_distance_squared = distance_squared;
+         focus_distance = sqrtf(distance_squared);
+     }
+ 
+     sceVu0MulMatrix(view_matrix, world_screen_matrix, identity_matrix);
+     Vu0_LoadMatrix(view_matrix);
+-    Vector_Scale(scratch_vector, view_ray_status + 12, focus_distance);
+-    Vector_Add(scratch_vector, scratch_vector, view_ray_status + 8);
++    Vector_Scale(scratch_vector, view_ray_status.prev_view_direction, focus_distance);
++    Vector_Add(scratch_vector, scratch_vector, view_ray_status.prev_view_origin);
+     scratch_vector[3] = 1.0f;
+     Vu0_ProjectToScreen(screen_position, scratch_vector);
+ 
+@@ -1578,12 +1576,12 @@ void Game_ShiftScreenByFocusTurn(void) {
+ 
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+     Packet_AddGsRegister(GS_REG_SCANMSK, 3);
+     Packet_EndGsRegisters();
+ 
+     sprite_packet.prim = 0x116;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     sprite_packet.unk08 = 0;
+     sprite_packet.rgba[0] = 0x80;
+     sprite_packet.rgba[1] = 0x80;
+@@ -1632,7 +1630,7 @@ void Game_ShiftScreenByFocusTurn(void) {
+ 
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_SCANMSK, 0);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+     Packet_EndGsRegisters();
+ }
+ 
+@@ -1653,10 +1651,10 @@ void Game_ApplyBrightness(int brightness) {
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+     Packet_EndGsRegisters();
+     sprite.unk08 = 0;
+-    tex0_low = texture_base | 0x28028000L;
++    tex0_low = texture_base | 0x28028000LL;
+     texture_height_log2 = 9;
+     sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
+     sprite.prim = 0x116;
+@@ -1683,7 +1681,7 @@ void Game_ApplyBrightness(int brightness) {
+     } while (remaining >= 0);
+ 
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+     Packet_EndGsRegisters();
+     GsDraw_QueueFlush();
+     GsDraw_QueueTexFlush();
+@@ -1703,10 +1701,10 @@ void Game_TintScreen(int red, int green, int blue) {
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+     Packet_EndGsRegisters();
+ 
+-    sprite_packet.tex0 = (0x28028000L | texture_base) | (0x9000L << 18);
++    sprite_packet.tex0 = (0x28028000LL | texture_base) | (0x9000LL << 18);
+     sprite_packet.unk08 = 0;
+     sprite_packet.prim = 0x116;
+     sprite_packet.rgba[0] = red;
+@@ -1738,7 +1736,7 @@ void Game_TintScreen(int red, int green, int blue) {
+     } while (remaining >= 0);
+ 
+     Packet_BeginGsRegisters();
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
+     Packet_EndGsRegisters();
+     GsDraw_QueueFlush();
+     GsDraw_QueueTexFlush();
+@@ -1803,8 +1801,8 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
+     Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xFFFFFFFF);
+     Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+     Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
+-    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+-    Packet_AddGsRegister(GS_REG_TEX0_1, 0x26802ABC0L);
++    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
++    Packet_AddGsRegister(GS_REG_TEX0_1, 0x26802ABC0LL);
+     Packet_AddGsRegister(GS_REG_TEX1_1, 0);
+     Packet_EndGsRegisters();
+ 
+@@ -1818,11 +1816,11 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
+             *cursor++ = 0;
+             *cursor++ = 0;
+             *cursor++ = 0;
+-            tex0_low = 0xC0AE400000008001L;
++            tex0_low = 0xC0AE400000008001LL;
+             *cursor++ = 0x6C0DC000;
+             *(s64 *)cursor = tex0_low;
+             cursor += 2;
+-            *(s64 *)cursor = 0x513513513513L;
++            *(s64 *)cursor = 0x513513513513LL;
+             cursor += 2;
+             for (k = 0; k < 2; k++) {
+                 for (corner_col = 0; corner_col < 2; corner_col++) {
+diff --git a/src/game/core/game.h b/src/game/core/game.h
+index 34f898920068d12d61fa1aa9b674bfa060d1f18c..feb2ef0e97b90f39939033dca99bf73e75a51ff2 100644
+--- a/src/game/core/game.h
++++ b/src/game/core/game.h
+@@ -39,6 +39,7 @@ typedef struct {
+     void *effect_owner;             /* 0x40 the model of the item effect that asked for unk30 = 0xC5F (ItemEffect_StepRequestGameStatus) */
+     int item_use_cooldown;          /* 0x44 counts down to 0; 1 when an item was just used (Player_UseItem) */
+ } GameStatus;
++LAYOUT_OFFSET(GameStatus, magic_to_cast, 0x28); /* the bit-fields before it are the word at 0x24 (GameStatusSplitBits, GameStatusFlagWord) */
+ 
+ /* GameStatus with bits 10 and 11 of the flag word (GameStatus.bits10) apart, as ScriptCmd_ExitMainLoop
+    sets them */
+@@ -114,16 +115,11 @@ typedef struct {
+     void *facing_item;              /* 0x58 the ItemNode (model/model.h) in front of the player, NULL: none (Interact_FindTarget) */
+ } EventRunner;
+ 
+-/* an event MapObject_OpenChestOnSignal hands to MapObject_UpdateClosedChest */
+-typedef struct {
+-    char pad00[0x10];
+-    u32 flags;                      /* 0x10 */
+-} GameEvent;
+ 
+ /* the viewers MapViewer_Run runs, indexed by picked_viewer (ui/map_viewer.c), 0xC bytes each */
+ typedef struct {
+     void (*run)(void);              /* 0x00 loops until the viewer is left */
+-    int unk04;                      /* 0x04 */
++    int (*unk04)(int *x, int *y);   /* 0x04 finds where the player's marker goes on the picture; 0 for the King's Map */
+     int count;                      /* 0x08 the number of pictures; viewer_picture stays below it */
+ } ViewerEntry;
+ 
+@@ -166,7 +162,9 @@ typedef struct {
+ 
+ /* D_00432820: what decides whether GameClock_Tick advances GameClock.ticks */
+ typedef struct {
+-    char pad00[0x208];
++    char pad00[0x100];
++    char script_error_flags[0x0C];  /* 0x100 one flag per SCRIPT_ERROR_ (script/script.c) */
++    char pad10C[0xFC];
+     char unk208;                    /* 0x208 System_InitMemory clears it */
+     char unk209;                    /* 0x209 System_InitMemory clears it */
+     char unk20A;                    /* 0x20A System_InitMemory clears it */
+@@ -280,12 +278,6 @@ typedef struct {
+     int points[8][11][2];
+ } __attribute__((aligned(16))) RippleGrid;
+ 
+-/* a node of the doubly linked list at lying_items */
+-typedef struct ListNode {
+-    char pad00[0x20];
+-    struct ListNode *prev;          /* 0x20 */
+-    struct ListNode *next;          /* 0x24 */
+-} ListNode;
+ 
+ /* pool_slots[32]: a pool of 0x70-byte slots chained into a free list through `next`;
+    pool_slot_free_list holds the head */
+@@ -308,41 +300,46 @@ typedef struct {
+     u64 unk08;                      /* 0x08 */
+ } PoolSlotRegisters;
+ 
+-/* a PoolSlot with unk58 and unk60 as the one member they are copied as */
+-typedef struct {
+-    char pad00[0x58];
+-    PoolSlotRegisters registers;    /* 0x58 */
+-    char pad68[0x08];
+-} PoolSlotRegistersView;
+-
+-#define POOL_SLOT_REGISTERS(slot) (((PoolSlotRegistersView *)(slot))->registers)
+-
+ /* one 0x10-byte record of a RelocEntry, with two file offsets that PoolNodeFile_Relocate turns into pointers */
++/* overlay: a layer record of a node file */
+ typedef struct {
+     char pad00[0x08];
+-    void *unk08;                    /* 0x08 */
+-    void *unk0C;                    /* 0x0C */
++    EEWord unk08;                   /* 0x08 (void *) */
++    EEWord unk0C;                   /* 0x0C (void *) */
+ } RelocLayer;
++LAYOUT_SIZE(RelocLayer, 0x10);
++LAYOUT_OFFSET(RelocLayer, unk08, 0x08);
++LAYOUT_OFFSET(RelocLayer, unk0C, 0x0C);
+ 
+ /* one 0x40-byte entry of a RelocFile */
++/* overlay: an entry of a node file */
+ typedef struct {
+     u16 key_count;                  /* 0x00 */
+     u16 layer_count;                /* 0x02 */
+     u16 slot;                       /* 0x04 the PoolSlot the node poses (PoolNode_Pose) */
+     char pad06[0x2A];
+-    void *unk30;                    /* 0x30 a file offset until PoolNodeFile_Relocate has run, like the next three */
+-    RelocLayer *layers;             /* 0x34 */
+-    void *unk38;                    /* 0x38 */
+-    void *unk3C;                    /* 0x3C */
++    EEWord unk30;                   /* 0x30 (PoolNodeKey *) a file offset until PoolNodeFile_Relocate has run, like the next three */
++    EEWord layers;                  /* 0x34 (RelocLayer *) */
++    EEWord unk38;                   /* 0x38 (RelocEntry *) the first child */
++    EEWord unk3C;                   /* 0x3C (RelocEntry *) the next sibling */
+ } RelocEntry;
++LAYOUT_SIZE(RelocEntry, 0x40);
++LAYOUT_OFFSET(RelocEntry, slot, 0x04);
++LAYOUT_OFFSET(RelocEntry, unk30, 0x30);
++LAYOUT_OFFSET(RelocEntry, layers, 0x34);
++LAYOUT_OFFSET(RelocEntry, unk38, 0x38);
++LAYOUT_OFFSET(RelocEntry, unk3C, 0x3C);
+ 
+ /* a file whose offsets PoolNodeFile_Relocate turns into pointers: a 0x10-byte header, then the entries */
++/* overlay: a node file */
+ typedef struct {
+     char pad00[0x08];
+     u32 entry_count;                /* 0x08 */
+     char pad0C[0x04];
+     RelocEntry entries[1];          /* 0x10 */
+ } RelocFile;
++LAYOUT_OFFSET(RelocFile, entry_count, 0x08);
++LAYOUT_OFFSET(RelocFile, entries, 0x10);
+ 
+ /* lists of pool slot numbers that PoolSlot_SetGroupParts and PoolSlot_LoadGroup copy whole from read-only data, and
+    their tables of counts */
+@@ -439,18 +436,7 @@ typedef struct {
+     u32 normal_index;               /* 0x1C4 */
+ } PoolDrawScratch;
+ 
+-#define POOL_DRAW_SCRATCH ((PoolDrawScratch *)0x70000000)
+-
+-/* PoolDrawScratch.cursor as a union (PoolPart_DrawTinted advances it through this view once per point) */
+-typedef struct {
+-    char pad000[0x18C];
+-    union {
+-        u32 *words;                 /* 0x18C */
+-        u8 *bytes;
+-    } cursor;
+-} PoolDrawScratchCursorView;
+-
+-#define POOL_DRAW_SCRATCH_CURSOR(scratch) (((PoolDrawScratchCursorView *)(scratch))->cursor)
++#define POOL_DRAW_SCRATCH SPR(PoolDrawScratch *, 0)
+ 
+ /* the two places in GS memory that MenuModel_DrawTinted and MenuModel_Draw pick a palette's from (their local clut_pages) */
+ typedef struct {
+@@ -472,21 +458,27 @@ typedef struct {
+ } PoolNodeKey;
+ 
+ /* one 0x50-byte part of a PoolPartFile */
++/* overlay: a part of a part file (or of PoolPartFile_Expand's copy of one) */
+ typedef struct PoolPart {
+     f32 position[4];                /* 0x00 */
+     f32 rotation[4];                /* 0x10 angles about x, y and z */
+     f32 scale[4];                   /* 0x20 */
+     u16 strip_count;                /* 0x30 */
+     char pad32[0x02];
+-    PoolPartMaterial *material;     /* 0x34 */
++    EEWord material;                /* 0x34 (PoolPartMaterial *) */
+     u16 point_count;                /* 0x38 */
+     char pad3A[0x02];
+-    f32 (*points)[4];               /* 0x3C */
++    EEWord points;                  /* 0x3C (f32 (*)[4]) */
+     u16 normal_count;               /* 0x40 */
+     char pad42[0x02];
+-    f32 (*normals)[4];              /* 0x44 */
++    EEWord normals;                 /* 0x44 (f32 (*)[4]) */
+     char pad48[0x08];
+ } PoolPart;
++LAYOUT_SIZE(PoolPart, 0x50);
++LAYOUT_OFFSET(PoolPart, strip_count, 0x30);
++LAYOUT_OFFSET(PoolPart, material, 0x34);
++LAYOUT_OFFSET(PoolPart, points, 0x3C);
++LAYOUT_OFFSET(PoolPart, normals, 0x44);
+ 
+ /* one 0x10-byte record of a PoolPartFile; the records end records_end_offset bytes into the file, the
+    last one belonging to the last part */
+@@ -498,21 +490,26 @@ typedef struct PoolPartRecord {
+ } PoolPartRecord;
+ 
+ /* a part file as loaded: a 0x10-byte header, then the parts */
++/* overlay: a part file */
+ typedef struct {
+-    PoolPartRecord *records_end;    /* 0x00 the end of its PoolPartRecord array, as an offset from the file's start */
++    s32 records_end;                /* 0x00 the end of its PoolPartRecord array, as an offset from the file's start */
+     char pad04[0x04];
+     u32 part_count;                 /* 0x08 */
+     char pad0C[0x04];
+     PoolPart parts[1];              /* 0x10 */
+ } PoolPartFile;
++LAYOUT_OFFSET(PoolPartFile, part_count, 0x08);
++LAYOUT_OFFSET(PoolPartFile, parts, 0x10);
+ 
+ /* the 0x10 bytes in front of a PoolPartFile's parts, copied as one (PoolPartFile_Expand) */
++/* overlay: the header of a part file */
+ typedef struct {
+-    PoolPartRecord *records_end;    /* 0x00 */
++    s32 records_end;                /* 0x00 */
+     char pad04[0x04];
+     u32 part_count;                 /* 0x08 */
+     char pad0C[0x04];
+ } PoolPartFileHeader;
++LAYOUT_SIZE(PoolPartFileHeader, 0x10);
+ 
+ /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
+ typedef union {
+diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
+index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f03a11332 100644
+--- a/src/game/core/game_loop.c
++++ b/src/game/core/game_loop.c
+@@ -19,6 +19,12 @@
+ #include "player/magic_ladder.h"
+ #include "ui/menu_screens.h"
+ #include "gfx/packet.h"
++#include <math.h>
++#include <stdlib.h>
++#include <string.h>
++#include <libgraph.h>
++#include <libvu0.h>
++#include "gfx/gs.h"
+ 
+ void Game_ResetProgress(void);
+ void Player_ResetForNewGame(void);
+@@ -63,7 +69,7 @@ void Game_StepFade(void);
+ void GameLoop_UpdateCamera(void);
+ void GameLoop_SetCameraMatrices(int, int);
+ void GsDraw_QueueVu1Matrix(void *);
+-int GameLoop_DrawFrame(int);
++void GameLoop_DrawFrame(int);
+ void Packet_WaitForSend(void);
+ void MapItem_UpdatePickup(void);
+ void Map_RunFreeCamera(void);
+@@ -73,7 +79,6 @@ void GameLoop_UpdatePause(void);
+ void Input_StopRumble(void);
+ void Sound_SetBgmVolume(int);
+ void Sound_SetBankVolumes(int);
+-int sceGsSyncV(int);
+ int Sound_BgmLoadCanYield(void);
+ void File_CloseAll(void);
+ void Wobble_AdvanceSines(void);
+@@ -101,33 +106,21 @@ void Game_BlendScreenOffsetDown(void);
+ void Game_BlendScreenOffsetUpDown(void);
+ void Game_BlendPreviousFrame(int);
+ void Game_ShiftScreenByViewTurn(void);
+-void GsDraw_FillScreen(int, int, int, int, int);
++void GsDraw_FillScreen(int, int, int, int, s64);
+ void Game_TintScreen(int, int, int);
+ void Game_DrawFade(void);
+ void Game_ApplyBrightness(int);
+ void func_001095D8(void);
+ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *, f32, int);
+-int rand(void);
+ float Angle_Wrap(float);
+-void sceVu0CopyMatrix(void *, void *);
+-void sceVu0RotMatrixZ(float *, float *, float);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0ApplyMatrix(float *, int *, float *);
+ void Vector_Copy(void *, void *);
+ void Vector_Scale(float *, float *, float);
+ void Vector_Subtract(void *, void *, void *);
+ void Vector_Add(void *, void *, void *);
+ int Angle_Approach(float *, float, float);
+-float atan2f(float, float);
+-float sqrtf(float);
+-void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
+-void sceVu0TransMatrix(float *, float *, float *);
+-void sceVu0InversMatrix(void *, void *);
+-void sceVu0MulMatrix(void *, void *, void *);
+ void Sound_StopAll(int);
+-int Sound_LoadMapBankStep(int, int);
+-int Sound_LoadEntityBankStep(int, int, int);
++int Sound_LoadMapBankStep(MapSlot *, int);
++int Sound_LoadEntityBankStep(sptr, int, sptr);
+ int Sound_LoadBgm(int, int);
+ void MapLoad_RequestHold(void);
+ int MapLoad_IsHeld(void);
+@@ -144,7 +137,6 @@ void MapViewer_Run(void);
+ void File_Lock(void);
+ void MapLoad_Release(void);
+ void GameLoop_ClearBothBuffers(void);
+-void *memset(void *, int, u32);
+ void Packet_BeginGsRegisters(void);
+ void Packet_AddGsRegister(int, s64);
+ void Packet_EndGsRegisters(void);
+@@ -155,17 +147,21 @@ void Input_ResumeRumble(void);
+ extern PlayerState player_state;
+ extern int save_loaded;          /* nonzero: a saved game was loaded */
+ extern u8 game_options[0x10];
+-extern PlayTime save_play_time[];   /* the play time in the loaded save (save_image + 8) */
++extern u8 save_image[0x20000];
++#define save_play_time ((PlayTime *)(save_image + 8)) /* the play time in the loaded save */
+ extern SoundLoadQueue sound_load_queue;
+ extern GameStatus game_status;
+ extern MapSlot map_slots[];
+ extern MapLoadState map_load_state;
+ extern u16 pad_state[];
+ extern f32 world_screen_matrix[16];
+-extern s64 game_dbuff_clear_color[];
+-extern s64 game_dbuff_context2_clear_color[];
++extern GsDoubleBuffer game_dbuff;
++#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
++extern GsDoubleBuffer game_dbuff_context2;
++#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
+ extern u32 frame_counter;
+-extern u8 guardians_room_water_purified[];
++extern u8 map_script_flags[0x2000];
++#define guardians_room_water_purified (map_script_flags + 0x8C6) /* map 035 [6] */
+ extern MapDrawStateOverlays map_draw_state;
+ extern int message_dim_alpha;
+ extern int current_map_slot;
+@@ -302,10 +298,10 @@ void GameLoop_Run(int arg) {
+         MapChange_RunToEnd();
+         GameLoop_UpdatePause();
+     }
+-    game_dbuff_clear_color[0] = 0xC000L << 17;
+-    game_dbuff_clear_color[30] = 0xC000L << 17;
+-    game_dbuff_context2_clear_color[0] = 0xC000L << 17;
+-    game_dbuff_context2_clear_color[30] = 0xC000L << 17;
++    game_dbuff_clear_color[0] = 0xC000LL << 17;
++    game_dbuff_clear_color[30] = 0xC000LL << 17;
++    game_dbuff_context2_clear_color[0] = 0xC000LL << 17;
++    game_dbuff_context2_clear_color[30] = 0xC000LL << 17;
+     Input_StopRumble();
+     Message_CloseBox();
+     Message_ClearNotices();
+@@ -331,7 +327,7 @@ void GameLoop_Run(int arg) {
+ 
+ /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
+    tints, the overlays MapDrawState asks for, the fades and the pause shade. */
+-int GameLoop_DrawFrame(int arg) {
++void GameLoop_DrawFrame(int arg) {
+     int tinted = FALSE;
+     f32 tint;
+     int red;
+@@ -508,9 +504,8 @@ int GameLoop_DrawFrame(int arg) {
+     }
+     Hud_Draw();
+     if (map_draw_state.screen_fill_alpha > 0) {
+-        // match: the last argument is passed as the 64-bit word
+-        ((void (*)(int, int, int, int, s64))GsDraw_FillScreen)(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
+-                                                             map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
++        GsDraw_FillScreen(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
++                          map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
+     }
+     Game_DrawFade();
+     Splash_Draw();
+@@ -728,7 +723,7 @@ void GameLoop_RunSoundLoads(void) {
+     }
+     switch (sound_load_queue.step) {
+     case 1:
+-        sound_load_queue.map_bank_load_pending = Sound_LoadMapBankStep((int)sound_load_queue.pending_map_slot, sound_load_queue.map_bank_load_pending);
++        sound_load_queue.map_bank_load_pending = Sound_LoadMapBankStep(sound_load_queue.pending_map_slot, sound_load_queue.map_bank_load_pending);
+         if (sound_load_queue.map_bank_load_pending == 0) {
+             sound_load_queue.pending_map_slot = NULL;
+             sound_load_queue.step = 0;
+diff --git a/src/game/core/game_state.c b/src/game/core/game_state.c
+index e409c7abd420f686699848e8ebbd48c4384e6716..9c5794eff93c252684c776941329159b36a58ca1 100644
+--- a/src/game/core/game_state.c
++++ b/src/game/core/game_state.c
+@@ -3,15 +3,10 @@
+ #include "map/map.h"
+ 
+ GameStatus game_status = { 0 }; /* 0x38CC50 the status of the running game */
+-/* Field aliases other files still use by their own names. */
+-/* 0x38CC57 unk07: 0 holds back the walk and step buttons; Player_Update sets it to 1 again */
+-asm(".globl player_can_walk\nplayer_can_walk = game_status + 0x7");
+-asm(".globl game_status_flags\ngame_status_flags = game_status + 0x24");  /* 0x38CC74 the flag word */
+-/* 0x38CC80 unk30: the updates held back (0x1 the player, 0x4 the entities, 0x8 the map objects' sway,
+-   0x10 falling items, ...) */
+-asm(".globl suspended_updates\nsuspended_updates = game_status + 0x30");
+-/* 0x38CC84 save_area: the message id of the area name the save list shows */
+-asm(".globl save_area_name_id\nsave_area_name_id = game_status + 0x34");
++/* The names other files used for its fields (asm aliases on the PS2 build): player_can_walk is
++   movement_input_enabled (0x38CC57), game_status_flags the flag word at 0x24 (0x38CC74),
++   suspended_updates update_hold_flags (0x38CC80: 0x1 the player, 0x4 the entities, 0x8 the map objects'
++   sway, 0x10 falling items, ...), save_area_name_id save_area. */
+ 
+ /* 0x38CCA0 default light block for map objects: one light (125, 110, 83) */
+ MapSlotUnk10Lights map_object_default_lights __attribute__((aligned(16))) = {
+@@ -20,7 +15,6 @@ MapSlotUnk10Lights map_object_default_lights __attribute__((aligned(16))) = {
+ };
+ 
+ MapSlot map_slots[2] = { 0 }; /* 0x38CD20 the two loaded maps */
+-asm(".globl map_slot0_header\nmap_slot0_header = map_slots + 0x8");  /* 0x38CD28 slot 0's header (sound/sound_game.c) */
+ 
+ /* 0x38CDE0 the prop of each prop id, per map slot */
+ MapProp *map_slot_props[2][0x100] = { 0 };
+diff --git a/src/game/core/ini.c b/src/game/core/ini.c
+index 6278d5bb761c0fc6120341fc985ab5e4d56dce69..caec40b9de95e16f3c162888498f2b5e6320370e 100644
+--- a/src/game/core/ini.c
++++ b/src/game/core/ini.c
+@@ -2,6 +2,9 @@
+    line to the handler of its key; the key table ini_keys lists the keys and their handlers. */
+ #include "core/ini.h"
+ #include "player/player.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+ extern char ini_path_format[];           /* "ini/%4.4d.ini" */
+ extern char file_load_buffer[];           /* where the file is read to */
+@@ -12,13 +15,6 @@ extern LevelRecord worn_item_level_records[160];
+ extern u8 spell_levels[6][5];
+ extern u16 spell_experience[6][5];
+ 
+-int sprintf(char *, char *, ...);
+-u32 strlen(char *);
+-int strncmp(const char *, const char *, u32);
+-char *strchr(const char *, int);
+-char *strrchr(const char *, int);
+-int atoi(const char *);
+-void *memset(void *, int, u32);
+ int File_Open(char *, int, int);
+ int File_Read(int, void *, int);
+ int File_Close(int);
+@@ -91,8 +87,6 @@ IniKeyHandler ini_keys[30] = {
+     { "debug_magic_rapid_fire", (void (*)(char *))Ini_SetDebugMagicRapidFire },
+     { "", NULL },
+ };
+-/* 0x42BBE0 effect/item_effect.c's item_effect_defs as indexed from item kind 0 */
+-asm(".globl item_effect_defs_by_kind\nitem_effect_defs_by_kind = ini_keys + 0x3D0\n");
+ 
+ static void Ini_SetText(char *text, int length);
+ static char *Ini_ReadLine(void);
+@@ -105,6 +99,7 @@ void Ini_Load(int number) {
+     int file;
+     int i;
+     char *line;
++    int size;
+ 
+     sprintf(path, ini_path_format, number);
+     file = File_Open(path, 0, 1);
+@@ -115,9 +110,9 @@ void Ini_Load(int number) {
+             return;
+         }
+     }
+-    line = (char *)File_Read(file, file_load_buffer, -1);
++    size = File_Read(file, file_load_buffer, -1);
+     File_Close(file);
+-    Ini_SetText(file_load_buffer, (int)line);
++    Ini_SetText(file_load_buffer, size);
+     while ((line = Ini_ReadLine()) != NULL) {
+         for (i = 0; ini_keys[i].handler != NULL; i++) {
+             if (strncmp(line, ini_keys[i].key, strlen(ini_keys[i].key)) == 0) {
+diff --git a/src/game/core/load.h b/src/game/core/load.h
+index b0ea2074174287612ca3ebb5270848af2b22a68f..5926e7b502d0c33bb96de291650dff0f9ff142aa 100644
+--- a/src/game/core/load.h
++++ b/src/game/core/load.h
+@@ -17,15 +17,20 @@ typedef struct {
+     int file_handle;                /* 0x24 -1 when closed */
+ } LoadJob;
+ 
+-/* the job Sound_BgmFadeOut and Sound_BgmLoadVoice step: control words, the IOP handle it got and its arguments */
++/* the job Sound_BgmFadeOut and Sound_BgmLoadVoice step: the BGM's LoadJob (bgm_load_job) seen as control words,
++   the IOP handles it got and its arguments. On the PC its fields are placed by LoadJob's own offsets. */
+ typedef struct {
+-    int *ctl;                       /* 0x00 */
+-    char pad04[0x0C];
+-    s32 result;                     /* 0x10 handle, negative until loaded */
+-    s32 unk14;                      /* 0x14 */
+-    s32 unk18;                      /* 0x18 */
+-    s32 unk1C;                      /* 0x1C */
++    int *ctl;                       /* 0x00 LoadJob.buffers */
++    char pad04[offsetof(LoadJob, unk10) - sizeof(int *)];
++    s32 result;                     /* 0x10 LoadJob.unk10: the voice, negative until loaded */
++    s32 unk14;                      /* 0x14 LoadJob.unk14: the sequence */
++    s32 unk18;                      /* 0x18 the first word of LoadJob.pad18 */
++    s32 unk1C;                      /* 0x1C its second word (0xBB810 in bgm_load_job) */
+ } IopLoadJob;
++_Static_assert(offsetof(IopLoadJob, result) == offsetof(LoadJob, unk10), "IopLoadJob is not LoadJob");
++_Static_assert(offsetof(IopLoadJob, unk14) == offsetof(LoadJob, unk14), "IopLoadJob is not LoadJob");
++_Static_assert(offsetof(IopLoadJob, unk18) == offsetof(LoadJob, pad18), "IopLoadJob is not LoadJob");
++_Static_assert(offsetof(IopLoadJob, unk1C) == offsetof(LoadJob, pad18) + 4, "IopLoadJob is not LoadJob");
+ 
+ /* LoadRequest.target (Sound_ReadRequestFile) */
+ typedef struct {
+@@ -51,7 +56,8 @@ typedef struct ChunkUpload {
+     char pad00[0x08];
+     int unk08;                      /* 0x08 set to -1 when done */
+     ChunkPoolNode *pool_node;       /* 0x0C the node whose buffer holds the chunk list */
+-    char pad10[0x08];
++    void *pad10[2];                 /* 0x10 LinkNode.unk10 and next (ui/link.h): the same nodes are viewed as both, so
++                                       on the PC these are pointer-sized like LinkNode's */
+     void (*callback)(struct ChunkUpload *upload); /* 0x18 runs the next stage */
+     int stage;                      /* 0x1C index into the stage handlers */
+     int done;                       /* 0x20 */
+@@ -83,7 +89,7 @@ typedef struct {
+ 
+ /* an IOP heap block load: the sizes it settled on and the heap it got */
+ typedef struct {
+-    IopLoadBuffer *buffer;          /* 0x00 */
++    EEWord buffer;                  /* 0x00 (IopLoadBuffer *) a view of SoundReloadRequest */
+     char pad04[0x04];
+     s32 size;                       /* 0x08 */
+     s32 unk0C;                      /* 0x0C */
+diff --git a/src/game/core/load_buffer.c b/src/game/core/load_buffer.c
+index 26c8e1a0c1ad74429ae52b9eab1bda87299cc02a..88494046cf28be3811e2c4b9898f0769c67807e5 100644
+--- a/src/game/core/load_buffer.c
++++ b/src/game/core/load_buffer.c
+@@ -3,6 +3,3 @@
+ 
+ /* 0x249680 the file-load buffer; the sound heap starts at its 64-byte boundary */
+ char file_load_buffer[0x100000] = { 0 };
+-
+-/* sound_heap_base names the heap's base byte: ((u32)sound_heap_base >> 6) << 6 is file_load_buffer */
+-asm(".globl sound_heap_base\nsound_heap_base = file_load_buffer + 0x3F\n");
+diff --git a/src/game/core/memory.c b/src/game/core/memory.c
+index 87d9fcc2e8e56dd151bd6ddcf536c673f930537d..1dc5fded58df11232978094805f663b1e4fb124b 100644
+--- a/src/game/core/memory.c
++++ b/src/game/core/memory.c
+@@ -1,7 +1,9 @@
+ #include "core/memory.h"
+ #include "map/map.h"
++#include "entity/entity.h"
++#include "effect/effect.h"
+ 
+-#define MEMORY_ARENA_SIZE 0x1600000
++#define MEMORY_ARENA_SIZE 0x1700000 /* 0x1600000 on the PS2; the PC's areas below are larger */
+ 
+ /* the sizes of the areas, in bytes */
+ extern int packet_area_size;        /* the packet buffers' area */
+@@ -19,26 +21,30 @@ extern MapSlotMemory map_slot_memory[2];
+ extern MapSlotMemory *map_slot_area;  /* the two map slots' memory, the array above */
+ extern char *map_file_area;
+ extern char *map_work_area;
+-extern int packet_area;              /* the packet area */
++extern sptr packet_area;             /* the packet area */
+ extern char *effect_area;
+ extern char *entity_pool_area;      /* the entity pool blocks and work areas (entity/entity_pool.c) */
+ extern char *held_weapon_area;
+-extern int trade_menu_arena;
++extern sptr trade_menu_arena;
+ extern char *hud_area;              /* the HUD textures (ui/hud.c) */
+ extern char *item_effect_area;
+ extern char *sound_bank_area;
+ 
+-static char memory_arena[MEMORY_ARENA_SIZE]; /* 0x5FAF80 every area lies in it */
++/* 0x5FAF80 every area lies in it; on the PC it is in game RAM at the same EE address, so the files
++   loaded into its areas can hold EE addresses (port/host.h) */
++#define memory_arena EE_RAM_AT(char *, 0x5FAF80)
+ 
+ /* Clears the arena, sets the size of each area and lays them out. */
+ void Memory_Init(void) {
+-    Memory_ClearWords(memory_arena, sizeof(memory_arena) / 4);
++    Memory_ClearWords(memory_arena, MEMORY_ARENA_SIZE / 4);
+     packet_area_size = 0x280000;
+-    effect_area_size = 0x1D0000;
++    /* the effects' model memory, the entity work areas and the map models hold structs that are larger on the PC:
++       those areas grow by what they need (0x1D0000, 0x300000 and 0x200000 on the PS2) */
++    effect_area_size = (int)(0x1D0000 + EFFECT_COUNT * (EFFECT_MODEL_MEMORY_SIZE - 0x800));
+     held_weapon_area_size = 0xA0000;
+-    map_work_area_size = 0x200000;
++    map_work_area_size = (int)(2 * MODEL_INSTANCE_AREA_SIZE(0x100000)); /* two halves, one per map slot */
+     map_file_area_size = 0xA80000;
+-    entity_pool_area_size = 0x300000;
++    entity_pool_area_size = (int)(0x280000 + ENTITY_MODEL_WORK_AREA_COUNT * ENTITY_MODEL_WORK_AREA_SIZE);
+     hud_area_size = 0x20000;
+     item_effect_area_size = 0x80000;
+     D_00446F2C = 0x60000;
+@@ -95,7 +101,7 @@ void Memory_PlaceAreas(void) {
+     char *next_area = memory_arena;
+ 
+     map_slot_area = map_slot_memory;
+-    packet_area = (int)next_area;
++    packet_area = (sptr)next_area;
+     next_area += packet_area_size;
+     trade_menu_arena = packet_area;
+     effect_area = next_area;
+diff --git a/src/game/core/play_time.c b/src/game/core/play_time.c
+index 608506cc622493703936bd88ef11da2034bd713b..d2fa6ffd3cd51c9c049b9ef7a512267ee785bd39 100644
+--- a/src/game/core/play_time.c
++++ b/src/game/core/play_time.c
+@@ -1,4 +1,5 @@
+ #include "core/game.h"
++#include <libcdvd.h>
+ 
+ #define BCD2DEC(x) (((x) & 0xF) + ((x) >> 4) * 10)
+ 
+@@ -12,7 +13,6 @@ int PlayTime_ToMinutes(ClockTime);
+ int mktime(void *);
+ int PlayTime_ClockSecondsSinceStart(void);
+ int PlayTime_DayOfYear(ClockTime);
+-int sceCdReadClock(ClockTime *);
+ 
+ extern ClockTime play_clock_start;
+ extern ClockTime play_time_base;
+@@ -187,7 +187,7 @@ int PlayTime_ToMinutes(ClockTime play_time) {
+ int PlayTime_ReadRealTimeClock(ClockTime *time) {
+     int result;
+ 
+-    result = sceCdReadClock(time);
++    result = sceCdReadClock((sceCdCLOCK *)time);
+     time->sec = BCD2DEC(time->sec);
+     time->min = BCD2DEC(time->min);
+     time->hour = BCD2DEC(time->hour);
+diff --git a/src/game/core/system.c b/src/game/core/system.c
+index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334cb9d46fb 100644
+--- a/src/game/core/system.c
++++ b/src/game/core/system.c
+@@ -6,6 +6,13 @@
+ #include "core/game.h"
+ #include "input/pad.h"
+ #include "gfx/gs.h"
++#include <libdev.h>
++#include <libdma.h>
++#include <libgraph.h>
++#include <libmc.h>
++#include <libsdr.h>
++#include <libvu0.h>
++#include <sifdev.h>
+ 
+ #define PAD_BUTTON_START 0x0008
+ 
+@@ -15,9 +22,10 @@ extern int map_file_area_size;          /* the size it is given for that heap */
+ extern int context1_buffer_half;          /* the half of the first double buffer in use; each swap flips it */
+ extern int context2_buffer_half;          /* the same for the second */
+ extern int D_00446F80;
+-extern u32 game_status_flags[];
+-extern s64 game_dbuff_clear_color[];
+-extern s64 game_dbuff_context2_clear_color[];
++extern GameStatus game_status;
++#define game_status_flags ((u32 *)((u8 *)&game_status + 0x24)) /* the flag word at 0x24 */
++#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
++#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
+ extern char opening_movie_path[];       /* "cdrom0:\DATA\KF4OP.PSS;1" */
+ extern char ending_movie_path[];        /* "cdrom0:\DATA\KF4ED.PSS;1" */
+ extern char staff_roll_movie_path[];    /* "cdrom0:\DATA\KF4STAFF.PSS;1" */
+@@ -30,31 +38,20 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
+ extern GsRegisterPair frame_dispfb_regs;    /* the DISPFB values of the two frames */
+ extern GsRegisterPair frame_display_regs;   /* the DISPLAY values of the two frames */
+ 
+-int Movie_Play(char *, u32, u32, int (*)(void), u32, s16, s16, s16);
++int Movie_Play(char *, char *, u32, int (*)(void), u32, s16, s16, s16);
+ void Packet_SwapBuffers(void);
+ void DrawList_Clear(void);
+ void func_001095D0(void);
+ void GsDraw_ResetDrawTarget(void);
+-void GsDraw_FillScreen(s64, s64, s64, s64, s64); // match: retail passes the last value as a 64-bit constant (0x100000044)
++void GsDraw_FillScreen(int, int, int, int, s64);
+ void func_001095D8(void);
+ void Packet_SendChain(void);
+ void Packet_WaitForSend(void);
+ void SoundDriver_ReleaseAll(void);
+ void Sound_Init(void);
+-int sceGsSyncV(int);
+ void Vram_Clear(int, int);
+ int func_0022B5B8();
+ int func_0022B8E8();
+-int sceDevVu0Pause();
+-int sceDevVu0SetTBit();
+-int sceDmaReset(int);
+-int sceGsResetGraph(int, int, int, int);
+-int sceGsResetPath();
+-int sceMcInit();
+-int sceSdRemoteInit();
+-int sceSifInitIopHeap();
+-void sceGsSetDefDBuff(void *, s16, s16, s16, s16, s16, s16);
+-void sceVu0CopyMatrix(void *, void *);
+ 
+ /* The opening movie's per-frame callback (given to Movie_Play by Movie_PlayOpening): polls the controller
+    and returns TRUE, ending the movie, when START is pressed. */
+@@ -74,7 +71,7 @@ void Movie_PlayOpening(void) {
+     char buf[0x40]; /* unused, but retail reserves the 0x40 bytes */
+ 
+     opening_movie_skipped = 0;
+-    Movie_Play(opening_movie_path, (u32)map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
++    Movie_Play(opening_movie_path, map_file_area, map_file_area_size, Movie_PollSkip, 0x3FFF, 2, 0, 0);
+     temp = (s64)0xC000 << 17;
+     game_dbuff_clear_color[0] = temp;
+     game_dbuff_clear_color[30] = temp;
+@@ -87,7 +84,7 @@ void Movie_PlayOpening(void) {
+     context1_buffer_half = 0;
+     context2_buffer_half = 0;
+     GsDraw_ResetDrawTarget();
+-    GsDraw_FillScreen(0, 0, 0, 0x80, 0x100000044L);
++    GsDraw_FillScreen(0, 0, 0, 0x80, 0x100000044LL);
+     func_001095D8();
+     context1_buffer_half = 1;
+     context2_buffer_half = 1;
+@@ -105,9 +102,9 @@ void Movie_PlayEnding(void) {
+ 
+     opening_movie_skipped = 0;
+     if ((game_status_flags[0] >> 11) & 1) {
+-        Movie_Play(ending_movie_path, (u32)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
++        Movie_Play(ending_movie_path, map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+     } else {
+-        Movie_Play(staff_roll_movie_path, (u32)map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
++        Movie_Play(staff_roll_movie_path, map_file_area, map_file_area_size, 0, 0x3FFF, 2, 0, 0);
+     }
+     sceGsSyncV(0);
+     sceGsSyncV(0);
+@@ -159,7 +156,7 @@ void Display_Init(void) {
+     Display_BuildProjection(projection_matrix, 512.0f, 1.0f, 65536.0f);
+     context1_buffer_half = 0;
+     D_00446F80 = 0;
+-    game_dbuff.clear1.rgbaq = game_dbuff.clear0.rgbaq = 0x100000000L;
++    game_dbuff.clear1.rgbaq = game_dbuff.clear0.rgbaq = 0x100000000LL;
+     sceGsSetDefDBuff(&game_dbuff_context2, 0, 0x280, 0x1C0, 3, 0x3A, 1);
+     game_dbuff_context2.disp[0].dispfb.fbp = 0;
+     game_dbuff_context2.disp[1].dispfb.fbp = 0x8C;
+diff --git a/src/game/core/timer_setup.c b/src/game/core/timer_setup.c
+index 993f1034d1e0bd5e54f2c291e18e448ef2b2a88b..38dd95203ebd5c77a68e8fd604f2082bd6e255f6 100644
+--- a/src/game/core/timer_setup.c
++++ b/src/game/core/timer_setup.c
+@@ -1,9 +1,8 @@
+ /* EE timer set-up. */
+ #include "core/timer.h"
+ #include <eeregs.h>
++#include <eekernel.h>
+ 
+-int AddIntcHandler(int, void *, int);
+-int EnableIntc(int);
+ 
+ /* Programs one of the four EE timers (mode and compare value); timers 0 and 1 also get an interrupt handler.
+    main sets timer 0 up with it. Returns -1 for a timer number above 3. */
