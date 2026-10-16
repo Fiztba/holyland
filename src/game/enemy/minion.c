@@ -7,14 +7,14 @@
 #include "common.h"
 
 int rand(void);
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 void Motion_SetPartSlots(EntityModel *, s32, s32, s32);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 int EntityAi_StartSlotMotion(void *, void *, int, int, int, int, int);

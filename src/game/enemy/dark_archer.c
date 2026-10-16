@@ -7,8 +7,7 @@
 #include "map/map.h"
 #include "effect/effect.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -115,7 +114,7 @@ void DarkArcher_Init(Entity *entity) {
     }
     entity->flags &= ~0x10000000;
     *(s32 *)&entity->target = 0; // match: stored as an int, so it can move ahead of the params load
-    EntityAi_SetUpdate((char *)entity, (s32)entity_type_handlers[entity->params->entity_type][1]);
+    EntityAi_SetUpdate((char *)entity, entity_type_handlers[entity->params->entity_type][1]);
     if (entity->spawn_info->spawn_mode != 0) {
         unkE0->think = DarkArcher_ThinkShootOrTurn;
         unkE0->animate = (void (*)(void))DarkArcher_Animate;

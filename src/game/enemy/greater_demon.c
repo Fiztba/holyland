@@ -16,7 +16,7 @@ extern f32 D_00446828[];
 
 static KfVector climb_points[3]; /* 0x4FF390 the points GreaterDemon_Think climbs over (it indexes up to 5) */
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
 void Vector_Copy(void *, void *);
@@ -24,7 +24,7 @@ void Vector_Copy(void *, void *);
 void EntityAi_Animate(void);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int EntityShot_Launch(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *);
 static void GreaterDemon_Think(Entity *entity, s32 unknown);
 static void GreaterDemon_Move(Entity *entity);

@@ -6,8 +6,7 @@
    that takes the count to 0 kills him; Prima's official guide (2004) describes the same fight. */
 #include "entity/entity.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32); // match: an int result keeps $2 busy after the call
@@ -17,7 +16,7 @@ void EntityAi_Animate(void);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_Dormant(Entity *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern s32 dark_one_hits_left;
 extern u32 frame_counter;
 void EntityEvent_StartEffectAtPoint(char **, int, u32, int);

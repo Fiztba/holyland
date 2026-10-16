@@ -7,10 +7,9 @@
 #include "effect/effect.h"
 #include "entity/entity_world.h"
 
-#define ENTITY_WORK_AREA_SIZE 0xA0
 extern MapSlot map_slots[];
-extern s32 entity_type_handlers[][2];
-void EntityAi_SetUpdate(char *, s32);
+extern void (*entity_type_handlers[][2])(Entity *);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);

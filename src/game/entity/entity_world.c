@@ -15,7 +15,7 @@ extern int map_spawn_counts[2];
 extern EntitySpawnInfo *map_spawn_infos[2];
 extern char *entity_params;
 extern Vector4Arg entity_unit_scale;
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 extern int suspended_updates[3];
 extern Entity *active_entities_head;
 extern PlayerData player_state;
@@ -65,7 +65,7 @@ static int Entity_IsMapRecordActive(Entity *entity);
 static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity);
 static inline void entity_draw_set_model_tint(Entity *entity, f32 red, f32 green, f32 blue);
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 
 /* The set-up function entity_type_handlers gives types 27 and 83 to 95, which have no AI: puts the motion at
    animation 0, clears the work area, sets flags 22-28 and installs the table's update (Entity_UpdateInert).
@@ -199,7 +199,7 @@ void Entity_ResetToSpawn(Entity *entity) {
     ENTITY_FLAG_BITS(entity)->bit10 = FALSE;
     ENTITY_FLAG_BITS(entity)->bit17 = TRUE;
     ENTITY_FLAG_BITS(entity)->bit31 = FALSE;
-    entity->update_func = 0;
+    entity->update_func = NULL;
     entity->handler = NULL;
     entity->prev_handler = NULL;
     entity->stun_frames = 0;
@@ -240,7 +240,7 @@ void Entity_ResetToSpawn(Entity *entity) {
     entity->knockback_damping = ABS(entity->knockback_damping);
     entity->model->radius = (entity->collision_radius < entity->collision_height) ? entity->collision_height : entity->collision_radius;
     Motion_Start(entity, 0, 0, 0, 1);
-    ((void (*)(Entity *))entity_type_handlers[entity->params->entity_type][0])(entity);
+    entity_type_handlers[entity->params->entity_type][0](entity);
     Entity_RebuildModelMatrices(entity);
 }
 
@@ -372,10 +372,10 @@ void Entity_UpdateAll(void) {
             Vector_Scale(SCRATCH_VECTOR, SCRATCH_VECTOR, entity->knockback_speed);
             Vector_Add(entity->model->position, entity->model->position, SCRATCH_VECTOR);
         }
-        if (entity->update_func == 0) {
+        if (entity->update_func == NULL) {
             continue;
         }
-        ((void (*)(Entity *))entity->update_func)(entity);
+        entity->update_func(entity);
         if (entity->knockback_speed > 0.0f) {
             entity->knockback_speed -= entity->knockback_damping * 4.0f / 10.0f;
         }

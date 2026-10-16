@@ -8,10 +8,10 @@
 #include "model/motion.h"
 #include "entity/entity_math.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Vector_Copy(void *, void *);
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 extern EntityGroupRecord entity_group_state[];
 int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now);

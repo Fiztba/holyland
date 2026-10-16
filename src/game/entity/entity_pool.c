@@ -7,6 +7,7 @@
 #include "effect/effect.h"
 
 void *memset(void *, int, u32);
+void *memcpy(void *, const void *, size_t);
 int sprintf(char *, char *, ...);
 
 #define ENTITY_POOL_BLOCK_SIZE  0x80000
@@ -30,6 +31,7 @@ extern s64 entity_work_area[];
 extern ModelInstance entity_models[ENTITY_POOL_SLOT_COUNT];
 
 static EntityTypeFileHeader entity_type_file_header;                            /* 0x474B70 the loaded type file's first 0x20 bytes */
+/* PORT: holds runtime structs, may need more room on the PC (the slot model's parts, Model_SetUpPosed) */
 static char entity_pool_slot_buffers[ENTITY_POOL_SLOT_COUNT][0x2000];            /* 0x474B90 the type data of each slot */
 char character_params[0x80000] __attribute__((section(".bss")));         /* 0x47EB90 param/chr.prm, read whole */
 
@@ -40,7 +42,7 @@ int File_IsLocked(void);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 void File_Lock(void);
-void Model_SetUpSkinned(ModelInstance *, int *, int *);
+void Model_SetUpSkinned(ModelInstance *, char **, char **);
 s64 *Model_SaveGsWordsAndUvs(ModelInstance *, s64 *);
 MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
 u32 *Map_GetSlotPacket(int, int);
@@ -76,7 +78,7 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot);
 static void EntityPool_AbandonLoad(EntityPoolSlot *slot);
 static void EntityPool_FreeUnusedBlocks(void);
 static int Entity_FindFreeWorkArea(void);
-static int Entity_ClaimWorkArea(int index);
+static char *Entity_ClaimWorkArea(int index);
 static void Entity_FreeWorkArea(int index);
 static void Entity_PrepareModelDraw(ModelInstance *model);
 static void Entity_PrepareScreenTexturedDraw(ModelInstance *model);
@@ -95,7 +97,7 @@ static void EntityPool_StepLoads(void);
 /* Entity pool state. Lists A (waiting for a pool block), B (waiting for the block to load) and C (active) hold
    the entities; the pool blocks and work areas are below. */
 static EntityPoolSlot *loading_pool_slot;   /* 0x447098 the block being read or unpacked */
-static int entity_work_areas_base;          /* 0x44709C base of the work areas */
+static char *entity_work_areas_base;        /* 0x44709C base of the work areas */
 static u8 entity_work_areas_used[8];        /* 0x4470A0 bit per work area in use */
 static Entity *waiting_entities_head;       /* 0x4470A8 list A head */
 static Entity *waiting_entities_tail;       /* 0x4470AC list A tail */
@@ -110,7 +112,7 @@ float sqrtf(float);
 /* Clear the entity pool and empty every entity list. */
 void Entity_ResetAllLists(void) {
     EntityPoolSlot *block;
-    int block_address;
+    char *block_address;
     int blocks_left;
 
     memset(entity_pool_area, 0, entity_pool_area_size);
@@ -127,8 +129,8 @@ void Entity_ResetAllLists(void) {
     waiting_entity_count = 0;
     loading_entity_count = 0;
     active_entity_count = 0;
-    memset(entity_models, 0, 0x8C0);
-    block_address = (int)entity_pool_area;
+    memset(entity_models, 0, sizeof(entity_models));
+    block_address = entity_pool_area;
     block = entity_pool_slots;
     blocks_left = ENTITY_POOL_SLOT_COUNT - 1;
     do {
@@ -366,13 +368,13 @@ static void EntityPool_StepLoads(void) {
                 entity_type_file_header = *(EntityTypeFileHeader *)file_load_buffer;
                 chr_file_slot = -1;
                 if (entity_type_file_header.unk18 != 0 && entity_type_file_header.unk14 != 0) {
-                    entity_type_file_header.unk18 += (int)file_load_buffer;
-                    entity_type_file_header.unk14 += (int)file_load_buffer;
+                    entity_type_file_header.unk18 += EE_WORD(file_load_buffer);
+                    entity_type_file_header.unk14 += EE_WORD(file_load_buffer);
                     slot->head.fields.kind = ENTITY_POOL_UNPACKING;
-                    sound_load_queue.entity_bank_args = (int)&entity_type_file_header;
+                    sound_load_queue.entity_bank_args = (sptr)&entity_type_file_header;
                     sound_load_queue.entity_bank_load_pending = 1;
                     sound_load_queue.entity_slot_index = i;
-                    sound_load_queue.entity_slot_voice_out = (int)slot;
+                    sound_load_queue.entity_slot_voice_out = (sptr)slot;
                 } else {
                     slot->head.fields.kind = ENTITY_POOL_READY;
                 }
@@ -426,8 +428,8 @@ static void EntityPool_StepLoads(void) {
 
 /* Gives an entity whose pool block is ready its work area and model; FALSE if it has to wait. */
 static int Entity_TryActivate(Entity *entity) {
-    int data_address;
-    int work_address;
+    char *data_address;
+    char *work_address;
     EntityPoolSlot *slot = &entity_pool_slots[entity->pool_slot_index];
     EntityPoolData *data = (EntityPoolData *)slot->base_address;
     ModelInstance *model;
@@ -442,7 +444,7 @@ static int Entity_TryActivate(Entity *entity) {
     }
     entity->work_area_index = work_index;
     work_address = Entity_ClaimWorkArea(work_index);
-    data_address = slot->base_address + (int)data->model_offset;
+    data_address = slot->base_address + data->model_offset;
     Model_SetUpSkinned(ENTITY_MODEL(entity), &data_address, &work_address);
     model = ENTITY_MODEL(entity);
     model->draw = Entity_PrepareModelDraw;
@@ -453,16 +455,16 @@ static int Entity_TryActivate(Entity *entity) {
         model->draw = Entity_PrepareScreenTexturedDraw;
         model->after_draw = func_00124AF8;
         screen_textured_entity_type = entity->spawn_info->type_id;
-        work_address = (int)entity_work_area;
-        work_address = (int)Model_SaveGsWordsAndUvs(model, (s64 *)work_address);
+        work_address = (char *)entity_work_area;
+        work_address = (char *)Model_SaveGsWordsAndUvs(model, (s64 *)work_address);
     }
-    data_address = slot->base_address + (int)data->motion_offset;
-    ModelMotion_LoadFile(data_address, &work_address, ENTITY_MODEL(entity), 1);
+    data_address = slot->base_address + data->motion_offset;
+    ModelMotion_LoadFile((MotionFile *)data_address, (ModelChannel **)&work_address, ENTITY_MODEL(entity), 1);
     data_address = slot->base_address + data->unk0C;
-    ENTITY_MODEL(entity)->texture_data = data_address;
+    ENTITY_MODEL(entity)->texture_data = (sptr)data_address;
     ENTITY_MODEL(entity)->texture_slot = 0;
-    ENTITY_MODEL(entity)->texture_packet_3 = (int)Map_GetSlotPacket(entity->group_id, 3);
-    ENTITY_MODEL(entity)->texture_packet_5 = (int)Map_GetSlotPacket(entity->group_id, 5);
+    ENTITY_MODEL(entity)->texture_packet_3 = (sptr)Map_GetSlotPacket(entity->group_id, 3);
+    ENTITY_MODEL(entity)->texture_packet_5 = (sptr)Map_GetSlotPacket(entity->group_id, 5);
     entity->sound_bank = slot->unk7;
     EntityPool_AddUser(entity->pool_slot_index);
     ((void (*)(Entity *))Entity_ResetToSpawn)(entity); // match: declared without its argument elsewhere
@@ -838,7 +840,7 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot) {
     } else if (size > 0x80000) {
         goto hang;
     }
-    memcpy((void *)slot->base_address, file_load_buffer, size);
+    memcpy(slot->base_address, file_load_buffer, size);
     return;
 hang:
     goto hang;
@@ -941,24 +943,26 @@ static int Entity_FindFreeWorkArea(void) {
 }
 
 /* Marks work area `index` in use, clears it, and returns its address. */
-static int Entity_ClaimWorkArea(int index) {
-    int work_area;
+/* PORT: holds runtime structs, may need more room on the PC (a work area takes the model's ModelParts
+   and its ModelChannel, Model_SetUpSkinned and ModelMotion_LoadFile) */
+static char *Entity_ClaimWorkArea(int index) {
+    char *work_area;
 
     entity_work_areas_used[index / 8] |= 1 << (index % 8);
     work_area = entity_work_areas_base + index * 0x2200;
-    memset((void *)work_area, 0, 0x2200);
+    memset(work_area, 0, 0x2200);
     return work_area;
 }
 
 /* Marks work area `index` free and clears it. */
 static void Entity_FreeWorkArea(int index) {
     u8 bit;
-    int work_area;
+    char *work_area;
 
     bit = 1 << (index % 8);
     entity_work_areas_used[index / 8] &= ~bit;
     work_area = entity_work_areas_base + index * 0x2200;
-    memset((void *)work_area, 0, 0x2200);
+    memset(work_area, 0, 0x2200);
 }
 
 /* Before an entity model is drawn (ModelInstance.draw): sets the GS Z buffer, test and alpha registers by the

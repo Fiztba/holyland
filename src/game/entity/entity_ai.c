@@ -127,7 +127,7 @@ void EntityAi_SetState(Entity *entity, u8 state) {
 
 /* Installs the entity's per-frame update (Entity.update_func; the type table entity_type_handlers gives it) and puts
    action_step back to 0. */
-void EntityAi_SetUpdate(Entity *entity, s32 update) {
+void EntityAi_SetUpdate(Entity *entity, void (*update)(Entity *)) {
     entity->update_func = update;
     entity->action_step = 0;
 }

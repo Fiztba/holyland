@@ -26,7 +26,7 @@ void EntityAi_ShakeCamera(int float_value, int int_value);
 void EntityAi_SetState(Entity *entity, u8 state);
 /* Installs the entity's per-frame update (Entity.update_func; the type table entity_type_handlers gives it) and puts
    action_step back to 0 */
-void EntityAi_SetUpdate(Entity *entity, s32 update);
+void EntityAi_SetUpdate(Entity *entity, void (*update)(Entity *));
 /* Switches the entity's handler, keeping the old one as prev_handler; optionally runs the new one now */
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 /* Switches the entity to handler (keeping the old one), sets flag bit 57 and bits 58-59, optionally runs it */

@@ -9,6 +9,7 @@
 #define ENTITY_VERTICAL_DESPAWN_MARGIN  150.0f
 
 /* what Entity.spawn_info points at */
+/* overlay: a spawn record of the map file (map_spawn_infos, map/map.c) */
 typedef struct {
     f32 spawn_x;                    /* 0x00 the block starts with the spawn position */
     f32 spawn_y;                    /* 0x04 */
@@ -43,6 +44,10 @@ typedef struct {
     u16 item_script_id;             /* 0x58 passed to Script_Start when an item is used on the entity, 0: nothing */
     u16 despawn_range;              /* 0x5A */
 } EntitySpawnInfo;
+LAYOUT_SIZE(EntitySpawnInfo, 0x60);
+LAYOUT_OFFSET(EntitySpawnInfo, type_id, 0x30);
+LAYOUT_OFFSET(EntitySpawnInfo, spawn_flags, 0x38);
+LAYOUT_OFFSET(EntitySpawnInfo, despawn_range, 0x5A);
 
 /* EntitySpawnInfo.spawn_flags read through a union. The game's field is a union member:
    only then does the compiler keep earlier stores of other types ahead of the read. */
@@ -56,40 +61,46 @@ typedef union {
 
 struct Entity;
 
-/* what EntityModel.level_tables points at */
+/* what EntityModel.level_tables points at: a view of ModelChannel (model/model.h), which starts with
+   0x20 pointers, so the padding follows that struct's layout */
 typedef struct {
-    char pad00[0x81];
+    char pad00[offsetof(ModelChannel, index)];
     u8 unk81;                       /* 0x81 */
     s16 unk82;                      /* 0x82 */
     s32 unk84;                      /* 0x84 */
     s32 unk88;                      /* 0x88 */
     u16 unk8C;                      /* 0x8C set from EntityParams.motion_speeds[] */
 } EntityModelUnkFC;
+_Static_assert(offsetof(EntityModelUnkFC, unk82) == offsetof(ModelChannel, param), "EntityModelUnkFC is not ModelChannel");
+_Static_assert(offsetof(EntityModelUnkFC, unk8C) == offsetof(ModelChannel, word), "EntityModelUnkFC is not ModelChannel");
 
-/* one 0x100-byte element of what EntityModel.parts points at */
+/* one 0x100-byte element of what EntityModel.parts points at: two ModelParts (model/model.h), whose
+   pointers start at 0x70, so the element is as long as two of them */
 typedef struct {
     char pad00[0x50];
     f32 unk50[4];                   /* 0x50 */
     char pad60[0x08];
     u64 unk68;                      /* 0x68 flags */
-    char pad70[0x90];
+    char pad70[2 * sizeof(ModelPart) - 0x70];
 } EntityModelUnkF8;
 
 /* what EntityModel.parts points at, seen as 0x80-byte elements: MutantWall_TurnPart2ToPlayer indexes
-   it that way (element 2 is at 0x100) */
+   it that way (element 2 is at 0x100). One element is one ModelPart. */
 typedef struct {
     char pad00[0x50];
     f32 unk50[4];                   /* 0x50 */
     char pad60[0x08];
     u64 unk68;                      /* 0x68 flags */
-    char pad70[0x10];
+    char pad70[sizeof(ModelPart) - 0x70];
 } EntityModelPart80;
+_Static_assert(sizeof(EntityModelPart80) == sizeof(ModelPart), "EntityModelPart80 is not a ModelPart");
+_Static_assert(offsetof(ModelPart, child) == 0x70, "EntityModelPart80 is not a ModelPart");
 
 /* EntityModelPart80 with the byte at 0x6C, which lies inside unk68 (reached by cast) */
 typedef struct {
     char pad00[0x6C];
     s8 unk6C;                       /* 0x6C */
-    char pad6D[0x13];
+    char pad6D[sizeof(ModelPart) - 0x6D];
 } EntityModelPart80Byte;
 
 /* EntityModelPart80.unk68 as the bit-fields the game sets (see ENTITY_FLAG_BITS) */
@@ -103,24 +114,33 @@ typedef struct {
 #define ENTITY_MODEL_PART_FLAG_BITS(part) ((EntityModelPartFlagBits *)&(part)->unk68)
 
 /* what Entity.model points at. ModelInstance (model/model.h) is a second view of the same block,
-   see ENTITY_MODEL; the two are to be unified. */
+   see ENTITY_MODEL; the two are to be unified. ModelInstance holds pointers, so on the PC the padding
+   follows its layout; aim_part and look_at_part are MODEL_SLOT_PARTS(model)[1] and [2]. */
 typedef struct {
     char pad00[0xC0];
     f32 position[4];                /* 0xC0 */
     f32 rotation[4];                /* 0xD0 x, y (heading), z angles in radians */
     f32 scale[4];                   /* 0xE0 the model's x, y and z scale */
-    char padF0[0x08];
+    char padF0[offsetof(ModelInstance, parts) - 0xF0];
     EntityModelUnkF8 *parts;        /* 0xF8 the model's part array (0x80 or 0x100 bytes per part) */
     EntityModelUnkFC *level_tables; /* 0xFC the model's animation channel (ModelInstance.level_tables) */
-    char pad100[0x02];
+    char pad100[offsetof(ModelInstance, draw_flags) - offsetof(ModelInstance, level_tables) - sizeof(void *)];
     u16 draw_flags;                 /* 0x102 0x800: drawn with its own texture (same word as ModelInstance) */
-    char pad104[0x30];
-    s32 aim_part;                   /* 0x134 the part the model file marks 2; turned towards a target */
+    char pad104[offsetof(ModelInstanceSlots, parts[1]) - offsetof(ModelInstance, draw_flags) - sizeof(u16)];
+    ModelPart *aim_part;            /* 0x134 the part the model file marks 2; turned towards a target */
     void *look_at_part;             /* 0x138 the part look-at turns (the third the model file marks) */
+    char pad13C[offsetof(ModelInstance, radius) - offsetof(ModelInstanceSlots, parts[3])];
     f32 radius;                     /* 0x13C the larger of Entity.collision_radius and unk34 */
-    char pad140[0x1C];
+    char pad140[offsetof(ModelInstance, alpha) - offsetof(ModelInstance, radius) - sizeof(f32)];
     f32 alpha;                      /* 0x15C the model's alpha, 0x80 is opaque */
 } EntityModel;
+_Static_assert(offsetof(EntityModel, position) == offsetof(ModelInstance, position), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, parts) == offsetof(ModelInstance, parts), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, level_tables) == offsetof(ModelInstance, level_tables), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, draw_flags) == offsetof(ModelInstance, draw_flags), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, aim_part) == offsetof(ModelInstanceSlots, parts[1]), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, radius) == offsetof(ModelInstance, radius), "EntityModel is not ModelInstance");
+_Static_assert(offsetof(EntityModel, alpha) == offsetof(ModelInstance, alpha), "EntityModel is not ModelInstance");
 
 /* two blocks of an EntityParamsUnk240Part that ParaStool_CheckPartHitInPlayerView copies whole into its request */
 typedef struct {
@@ -132,6 +152,7 @@ typedef struct {
 } EntityParamsUnk240PartUnk12;
 
 /* one of the three 0x28-byte parts of an EntityParamsUnk240 */
+/* overlay: part of a record of param/chr.prm (EntityParams) */
 typedef struct {
     EntityParamsUnk240PartUnk00 unk00; /* 0x00 */
     EntityParamsUnk240PartUnk12 unk12; /* 0x12 */
@@ -142,6 +163,9 @@ typedef struct {
     u16 unk24;                      /* 0x24 first animation frame it is active on, 0: unused */
     u16 unk26;                      /* 0x26 last animation frame it is active on */
 } EntityParamsUnk240Part;
+LAYOUT_SIZE(EntityParamsUnk240Part, 0x28);
+LAYOUT_OFFSET(EntityParamsUnk240Part, unk12, 0x12);
+LAYOUT_OFFSET(EntityParamsUnk240Part, unk1E, 0x1E);
 
 /* EntityParamsUnk240Part.unk1E as EntityAi_SendMeleeHit reads it: bit 1 of the halfword at 0x1E
    says unk1F is copied (reached by cast: a union changes gcc's scheduling) */
@@ -152,6 +176,7 @@ typedef struct {
 #define ENTITY_PART_FLAGS(part) ((EntityParamsUnk240PartFlags *)&(part)->unk1E)
 
 /* one of the 0x88-byte records at EntityParams+0x240 (EntityParams.melee_attack_third is the third) */
+/* overlay: part of a record of param/chr.prm (EntityParams) */
 typedef struct {
     u8 attack_weight;               /* 0x00 weight in the six-attack draw; 0: the attack is not used */
     u8 hit_start_frame;             /* 0x01 animation frame the attack starts on, turned to the player up to it */
@@ -165,6 +190,9 @@ typedef struct {
     s16 heading_offset_deg;         /* 0x0E degrees its direction is off the entity's heading */
     EntityParamsUnk240Part hit_parts[3]; /* 0x10 the three hit parts of the attack: window, arc, power, ailments */
 } EntityParamsUnk240;
+LAYOUT_SIZE(EntityParamsUnk240, 0x88);
+LAYOUT_OFFSET(EntityParamsUnk240, reach_angle, 0x08);
+LAYOUT_OFFSET(EntityParamsUnk240, hit_parts, 0x10);
 
 /* the two blocks ParaStool_CheckPartHitInPlayerView fills for Attack_Run */
 typedef struct {
@@ -202,7 +230,7 @@ typedef struct {
     u8 is_magic_shot;               /* 0x00 0: the hit is a weapon's, 1: a magic's */
     char pad01;
     s16 strength_gauge;             /* 0x02 the power gauge's charge when the hit was launched */
-    s32 attack_request;             /* 0x04 the request a weapon's shot reuses, 0 for a magic */
+    void *attack_request;           /* 0x04 the request a weapon's shot reuses, 0 for a magic (PlayerShot.attack_request) */
     char pad08[0x06];
     s16 worn_magic_bonus[6];        /* 0x0E per magic kind bonus from worn items, in fiftieths */
     char pad1A[0x02];
@@ -214,9 +242,11 @@ typedef struct {
     char pad28[0x08];
 } Unk1B1470Extra;
 
-/* Unk1B1470Request with the bits at 0x4C as byte-sized fields: Attack_HitEntity reads unk4C_3 as a u8 */
+/* Unk1B1470Request with the bits at 0x4C as byte-sized fields: Attack_HitEntity reads unk4C_3 as a u8.
+   The owner is there so that on the PC the bits follow it as they do in Unk1B1470Request. */
 typedef struct {
-    char pad00[0x4C];
+    char pad00[0x48];
+    struct Entity *owner;           /* 0x48 */
     u8 unk4C_0 : 3;                 /* 0x4C */
     u8 unk4C_3 : 1;
     u8 unk4C_4 : 4;
@@ -238,9 +268,11 @@ typedef struct {
     u64 owner_and_flags;            /* 0x48 */
 } Unk1B1470RequestUnit;
 
-#define UNK1B1470_REQUEST_UNIT(request) (((Unk1B1470RequestUnit *)(request))->owner_and_flags)
+/* On the PC the owner is 8 bytes, so the word is built from the flag bytes: the tests only look at its
+   upper half (the owner's address in the lower half is never tested). */
+#define UNK1B1470_REQUEST_UNIT(request) ((u64)((Unk1B1470RequestWord *)(request))->flags << 32)
 /* unk4C_3 as a bit of the 64-bit word */
-#define UNK1B1470_UNIT_UNK4C_3 (0x8000L << 20)
+#define UNK1B1470_UNIT_UNK4C_3 (0x8000LL << 20)
 
 /* eight bytes the game copies with unaligned loads and stores */
 typedef struct {
@@ -265,6 +297,7 @@ typedef struct {
 } EntityParamsUnk3D8Launch;
 
 /* a whole 0x1C-byte record at EntityParams+0x3D8 (EntityParamsUnk3D8 is its first word) */
+/* overlay: part of a record of param/chr.prm (EntityParams) */
 typedef struct {
     u8 unk00;                       /* 0x00 */
     u8 unk01;                       /* 0x01 */
@@ -275,6 +308,8 @@ typedef struct {
     char pad0D[0x03];
     EntityParamsUnk3D8Launch unk10[3]; /* 0x10 */
 } EntityParamsUnk3D8Full;
+LAYOUT_SIZE(EntityParamsUnk3D8Full, 0x1C);
+LAYOUT_OFFSET(EntityParamsUnk3D8Full, unk10, 0x10);
 
 /* sub-struct at EntityParams+0x3D8 */
 typedef struct {
@@ -284,6 +319,7 @@ typedef struct {
     u8 unk03;                       /* 0x03 */
 } EntityParamsUnk3D8;
 
+/* overlay: part of a record of param/chr.prm (EntityParams) */
 typedef struct {
     EntityParamsUnk3D8 record;      /* 0x00 */
     u16 reach_min;                  /* 0x04 nearest distance (past the radius) the attack is used at, 0: none */
@@ -296,6 +332,9 @@ typedef struct {
     u8 unk11;                       /* 0x11 */
     char pad12[0x0A];
 } EntityParamsUnk3D8Array;
+LAYOUT_SIZE(EntityParamsUnk3D8Array, 0x1C);
+LAYOUT_OFFSET(EntityParamsUnk3D8Array, unk08, 0x08);
+LAYOUT_OFFSET(EntityParamsUnk3D8Array, unk10, 0x10);
 
 /* one of the four bodies of an entity kind the player collides with piece by piece (EntityParams.body_points) */
 /* the same slot as the motion code reads it: every flag a byte-wide bit-field (Motion_StepSlot) */
@@ -312,6 +351,7 @@ typedef struct {
 #define ENTITY_BODY_USED    0x100
 #define ENTITY_BODY_ROUND   0x200   /* as tall as it is wide, the point being its top */
 
+/* overlay: part of a record of param/chr.prm (EntityParams) */
 typedef struct {
     union {
         u32 flags;                  /* 0x00 ENTITY_BODY_ bits */
@@ -321,9 +361,12 @@ typedef struct {
     u16 unk06;                      /* 0x06 its height, before the model's y scale */
     f32 unk08;                      /* 0x08 a hit on this body counts this many times over (Attack_RunSphere) */
 } EntityBodyPoint;
+LAYOUT_SIZE(EntityBodyPoint, 0x0C);
+LAYOUT_OFFSET(EntityBodyPoint, unk08, 0x08);
 
 /* what Entity.params points at: per-kind tuning values. EntityController below is a second
    view of the same block; the two are to be unified. */
+/* overlay: a 0x450-byte record of param/chr.prm (character_params, read whole; entity_params points at it) */
 typedef struct {
     u32 model_number : 16;          /* 0x00 the chr/cNNNN.chr model file number, 0xFFFF: none */
     u32 entity_type : 8;            /* 0x02 index into entity_type_handlers */
@@ -404,20 +447,39 @@ typedef struct {
     s16 unk43E;                     /* 0x43E */
     u16 variant_effect_ids[8];      /* 0x440 indexed by flag bits 60-62; passed to Effect_StartSpawner */
 } EntityParams;
+LAYOUT_SIZE(EntityParams, 0x450);
+LAYOUT_OFFSET(EntityParams, flags, 0x10);
+LAYOUT_OFFSET(EntityParams, body_points, 0x20);
+LAYOUT_OFFSET(EntityParams, motion_speeds, 0x80);
+LAYOUT_OFFSET(EntityParams, body_radius, 0xCC);
+LAYOUT_OFFSET(EntityParams, anim_effect_offsets, 0x130);
+LAYOUT_OFFSET(EntityParams, anim_sound_offsets, 0x1B0);
+LAYOUT_OFFSET(EntityParams, gold, 0x230);
+LAYOUT_OFFSET(EntityParams, unk238, 0x238);
+LAYOUT_OFFSET(EntityParams, melee_attacks, 0x240);
+LAYOUT_OFFSET(EntityParams, melee_attack_third, 0x350);
+LAYOUT_OFFSET(EntityParams, ranged_attacks, 0x3D8);
+LAYOUT_OFFSET(EntityParams, floor_probe_depth, 0x42C);
+LAYOUT_OFFSET(EntityParams, pitch_limit_deg, 0x430);
+LAYOUT_OFFSET(EntityParams, variant_effect_ids, 0x440);
 
 /* record index of the 0x88-byte records at +0x240, reached by stepping the whole params pointer
    (the match keeps the index scaling apart from the +0x240) */
 #define ENTITY_PARAMS_UNK240_RECORD(params, index) (((EntityParams *)((char *)(params) + (index) * sizeof(EntityParamsUnk240)))->melee_attacks[0])
 
 /* what EntityParams.anim_effect_offsets[n] leads to: something Effect_StartSpawner starts at a bone on an animation frame */
+/* overlay: a record of param/chr.prm, after the EntityParams records */
 typedef struct {
     u16 unk00;                      /* 0x00 passed to Effect_StartSpawner */
     u16 unk02;                      /* 0x02 the animation frame */
     u8 unk04;                       /* 0x04 passed to Model_GetSkinnedBonePoint (and the one after it) */
     s8 unk05;                       /* 0x05 not 0: EntityParams.variant_effect_ids picks what to start */
 } EntityParamsUnk130;
+LAYOUT_SIZE(EntityParamsUnk130, 0x06);
+LAYOUT_OFFSET(EntityParamsUnk130, unk04, 0x04);
 
 /* what EntityParams.anim_sound_offsets[n] leads to: something Sound_PlayFalloff starts on an animation frame */
+/* overlay: a record of param/chr.prm, after the EntityParams records */
 typedef struct {
     u8 unk00;                       /* 0x00 passed to Sound_PlayFalloff */
     u8 unk01;                       /* 0x01 passed to Sound_PlayFalloff */
@@ -425,6 +487,8 @@ typedef struct {
     u8 unk04;                       /* 0x04 not 0: left out while Entity.ailment_4_frames is set */
     char pad05[0x03];
 } EntityParamsUnk1B0;
+LAYOUT_SIZE(EntityParamsUnk1B0, 0x08);
+LAYOUT_OFFSET(EntityParamsUnk1B0, unk04, 0x04);
 
 /* the first word of an EntityParams.ranged_attacks record, as the AI functions take it */
 #define ENTITY_PARAMS_UNK3D8(params, index) (&(params)->ranged_attacks[index].record)
@@ -434,18 +498,22 @@ typedef struct {
 
 /* EntityParams with the three ranged-attack records as a real array member: indexed this way the
    compiler adds the scaled index to the params pointer, base first (DarkKnight_PickAttack needs that) */
+/* overlay: a record of param/chr.prm (EntityParams) */
 typedef struct {
     char pad00[0x3D8];
     EntityParamsUnk3D8Array ranged[3]; /* 0x3D8 */
 } EntityParamsRangedView;
+LAYOUT_OFFSET(EntityParamsRangedView, ranged, 0x3D8);
 
 #define ENTITY_PARAMS_RANGED_VIEW(params) ((EntityParamsRangedView *)(params))
 
 /* EntityParams with the float at 0xC0, which lies inside unk80 (Motion_StepSlot) */
+/* overlay: a record of param/chr.prm (EntityParams) */
 typedef struct {
     char pad00[0xC0];
     f32 motion_scale;               /* 0xC0 how far the root part's movement in a motion carries the entity */
 } EntityParamsMotionScale;
+LAYOUT_OFFSET(EntityParamsMotionScale, motion_scale, 0xC0);
 
 #define ENTITY_PARAMS_MOTION_SCALE(params) (((EntityParamsMotionScale *)(params))->motion_scale)
 
@@ -525,7 +593,7 @@ typedef struct {
 /* Entity+0xE0 as the kinds handled at 0x1740A8..0x180000 use it */
 typedef struct {
     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
-    char pad04[0x14];
+    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
     void (*move)(void);             /* 0x18 */
     s32 turn_rate;                  /* 0x1C turn speed built towards EntityParams.turn_limit */
     char pad20[0x10];
@@ -548,7 +616,7 @@ typedef struct {
 /* Entity+0xE0 as the flying kind set up by DarkBird_Init lays it out */
 typedef struct {
     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
-    char pad04[0x14];
+    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
     void (*move)(void);             /* 0x18 */
     f32 turn_rate;                  /* 0x1C turn speed */
     char pad20[0x24];
@@ -567,7 +635,7 @@ typedef struct {
 /* Entity+0xE0 as the kind set up by ExpeditionSoldier_Init lays it out */
 typedef struct {
     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
-    char pad04[0x14];
+    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
     void (*move)(void);             /* 0x18 */
     s32 turn_rate;                  /* 0x1C turn rate of the move command, cleared when one starts */
     f32 unk20[4];                   /* 0x20 */
@@ -581,7 +649,7 @@ typedef struct {
 
 /* Entity+0xE0 as the kind set up by func_00150588 lays it out */
 typedef struct {
-    char pad00[0x1C];
+    void *pad00[7];                 /* 0x00 the seven handlers */
     s32 unk1C;                      /* 0x1C */
 } EntityUnkE0Kind150588;
 
@@ -591,7 +659,7 @@ typedef struct {
     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
     void (*animate)(void);          /* 0x04 */
     void (*on_hit)(void);           /* 0x08 */
-    char pad0C[0x04];
+    void *pad0C;                    /* 0x0C the reaction handler */
     void (*dormant)(void);          /* 0x10 */
     void (*death)(void);            /* 0x14 */
     void (*move)(void);             /* 0x18 */
@@ -626,14 +694,15 @@ typedef struct {
 
 /* Entity+0xE0 as the kinds set up by func_00151D30 and its neighbours use it */
 typedef struct {
-    char pad00[0x80];
+    void *pad00[7];                 /* 0x00 the seven handlers */
+    char pad1C[0x64];
     EntityUnkE0SlotBits unk80;      /* 0x80 */
     EntityUnkE0SlotBits unk88;      /* 0x88 */
 } EntityUnkE0Kind151D30;
 
 /* Entity+0xE0 as the kind set up by DarkSorcerer_Init lays it out */
 typedef struct {
-    char pad00[0x1C];
+    void *pad00[7];                 /* 0x00 the seven handlers */
     f32 unk1C;                      /* 0x1C turn speed */
     char pad20[0x24];
     f32 unk44;                      /* 0x44 speed along x, y and z */
@@ -645,7 +714,8 @@ typedef struct {
 /* Entity+0xE0 as the kind set up by func_0015F8C0 lays it out. The area is
    8-byte aligned: only then is "unk68 == 0 && unk6A == 0" one lwu. */
 typedef struct {
-    char pad00[0x68];
+    void *pad00[7];                 /* 0x00 the seven handlers */
+    char pad1C[0x4C];
     s16 unk68;                      /* 0x68 counts down */
     s16 unk6A;                      /* 0x6A counts down */
     s16 unk6C;                      /* 0x6C counts down */
@@ -662,7 +732,8 @@ typedef struct {
 
 /* Entity+0xE0 as the kind set up by func_00162BC8 lays it out */
 typedef struct {
-    char pad00[0x30];
+    void *pad00[7];                 /* 0x00 the seven handlers */
+    char pad1C[0x14];
     f32 unk30[4];                   /* 0x30 pitch and yaw passed to EntityEvent_StartEffectAtPoint */
     char pad40[0x2E];
     s16 unk6E;                      /* 0x6E */
@@ -673,7 +744,8 @@ typedef struct {
 
 /* Entity+0xE0 as the kind set up by Onyx_Init lays it out */
 typedef struct {
-    char pad00[0x68];
+    void *pad00[7];                 /* 0x00 the seven handlers */
+    char pad1C[0x4C];
     s16 unk68[3];                   /* 0x68 weights of the first three actions (see Onyx_PickAttack) */
     char pad6E[0x32];
 } EntityUnkE0Kind17FC60;
@@ -681,7 +753,7 @@ typedef struct {
 /* Entity+0xE0 as the kind set up by func_00131390 lays it out */
 typedef struct {
     void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
-    char pad04[0x14];
+    void *pad04[5];                 /* 0x04 handlers (pointers: the rest of the area follows them on the PC) */
     void (*move)(void);             /* 0x18 */
     f32 turn_rate;                  /* 0x1C turn speed used by EntityAi_TurnToHeading */
     char pad20[0x4A];
@@ -697,7 +769,7 @@ typedef struct {
 
 /* Entity+0xE0 as the kind set up by func_0012ACA0 lays it out */
 typedef struct {
-    char pad00[0x1C];
+    void *pad00[7];                 /* 0x00 the seven handlers */
     f32 unk1C;                      /* 0x1C turn speed */
     char pad20[0x20];
     f32 unk40[7];                   /* 0x40 [2] to [6]: how far each of the five neck joints (model parts 30 to 34) is bent */
@@ -706,6 +778,7 @@ typedef struct {
 
 /* what Entity.params points at (the entity's controller / type data), see ENTITY_CONTROLLER.
    EntityParams above is a second view of the same block; the two are to be unified. */
+/* overlay: a 0x450-byte record of param/chr.prm (EntityParams) */
 typedef struct {
     char pad00[0x10];
     u16 flags;                      /* 0x10 */
@@ -728,6 +801,12 @@ typedef struct {
     s16 far_distance;               /* 0x438 the farther of the two distances it keeps from the player */
     s16 entity_group_index;         /* 0x43A index of its group entry (entity_group_state, origins) */
 } EntityController;
+LAYOUT_SIZE(EntityController, 0x43C);
+LAYOUT_OFFSET(EntityController, attack_arc, 0x1C);
+LAYOUT_OFFSET(EntityController, turn_limit, 0x5C);
+LAYOUT_OFFSET(EntityController, motion_blend_frames, 0xC4);
+LAYOUT_OFFSET(EntityController, pitch_limit_deg, 0x430);
+LAYOUT_OFFSET(EntityController, entity_group_index, 0x43A);
 
 /* EntityController.flags: the type needs two pool blocks (0x100000 bytes) */
 #define CONTROLLER_FLAG_TWO_BLOCKS  0x8000
@@ -756,7 +835,7 @@ typedef struct Entity {
     f32 body_radius;                /* 0x44 EntityParams.unk04 scaled */
     f32 floor_lift;                 /* 0x48 how far above the floor it is kept (see EntityCollision_SphereAgainstMap) */
     f32 knockback_speed;            /* 0x4C speed the knockback pushes the entity along at */
-    s32 update_func;                /* 0x50 the type's per-frame update (entity_type_handlers) */
+    void (*update_func)(struct Entity *entity); /* 0x50 the type's per-frame update (entity_type_handlers) */
     void (*handler)(struct Entity *entity); /* 0x54 the current action; EntityAi_Update calls it every frame while flag bit 6 is set and no reaction is */
     void (*prev_handler)(struct Entity *entity); /* 0x58 the action before the last EntityAi_StartAction */
     void *target;                   /* 0x5C */
@@ -812,11 +891,12 @@ typedef struct Entity {
 } Entity;
 
 /* Entity with the work area at 0xE0 as plain bytes: the init functions clear it
-   one byte at a time, and only an array member gives their code */
-#define ENTITY_WORK_AREA_SIZE 0xA0
+   one byte at a time, and only an array member gives their code. The area is 0xA0 bytes on the PS2,
+   the rest of the record from unkE0 on (its handlers are pointers, so it is longer on the PC). */
+#define ENTITY_WORK_AREA_SIZE ((s32)(sizeof(Entity) - offsetof(Entity, unkE0)))
 
 typedef struct {
-    char pad00[0xE0];
+    char pad00[offsetof(Entity, unkE0)];
     u8 work_bytes[ENTITY_WORK_AREA_SIZE]; /* 0xE0 */
 } EntityWorkBytes;
 
@@ -897,9 +977,10 @@ typedef struct {
 #define ENTITY_FLAG_HIT_BITS(entity) ((EntityFlagHitBits *)&(entity)->flags)
 
 /* Entity.target is a union member in the game: where a store to it has to stay
-   ahead of a later load, only a store through a union matches. */
+   ahead of a later load, only a store through a union matches. as_s32 is as wide as the pointer, so
+   storing 0 to it clears the whole of Entity.target on the PC too. */
 typedef union {
-    s32 as_s32;
+    sptr as_s32;
     f32 as_f32;
 } EntityUnk5C;
 
@@ -977,6 +1058,7 @@ typedef struct {
 } KfVector;
 
 /* one of the 0x80-byte records MapSlot.records (map/map.h) points at */
+/* overlay: a record of the map file */
 typedef struct {
     char pad00[0x1C];
     f32 push_heading;               /* 0x1C the heading its floor pushes the player along (Player_Move) */
@@ -995,9 +1077,14 @@ typedef struct {
     f32 lowest[4];                  /* 0x60 lowest x, y, z it covers */
     f32 highest[4];                 /* 0x70 highest x, y, z it covers */
 } MapRecord;
+LAYOUT_SIZE(MapRecord, 0x80);
+LAYOUT_OFFSET(MapRecord, collision_mesh_index, 0x32);
+LAYOUT_OFFSET(MapRecord, record_flags, 0x38);
+LAYOUT_OFFSET(MapRecord, lowest, 0x60);
 
 /* one of the 0x80-byte records MapSlot.light_blocks (map/map.h) points at, indexed by byte 3 of
    EntitySpawnInfo.spawn_flags */
+/* overlay: a light block of the map file */
 typedef struct {
     char pad00[0x04];
     f32 light1_direction_x;         /* 0x04 x of light 1's direction in this light block */
@@ -1015,6 +1102,9 @@ typedef struct {
     f32 ambient_blue;               /* 0x78 blue of the block's ambient colour */
     char pad7C[0x04];
 } MapSlotUnk10;
+LAYOUT_SIZE(MapSlotUnk10, 0x80);
+LAYOUT_OFFSET(MapSlotUnk10, light1_red, 0x50);
+LAYOUT_OFFSET(MapSlotUnk10, ambient_red, 0x70);
 
 /* Entity.flags as retail reads it where a store through another pointer (the work area, say) sits
    between two uses: a union member can alias anything, so the compiler loads the flags again
@@ -1077,30 +1167,35 @@ typedef struct {
     u8 unk6;                        /* 0x06 */
     u8 unk7;                        /* 0x07 copied to Entity.sound_bank */
     int age;                        /* 0x08 frame_counter when last released; the oldest is reused first */
-    int base_address;               /* 0x0C */
+    char *base_address;             /* 0x0C where the block starts in entity_pool_area */
 } EntityPoolSlot;
 
 extern EntityPoolSlot entity_pool_slots[ENTITY_POOL_SLOT_COUNT];
 
 /* the first 0x20 bytes of a loaded type file (file_load_buffer), kept in entity_type_file_header while the file's
    sound part is handed to the sound loader */
+/* overlay: the header of a chr/cNNNN.chr type file */
 typedef struct {
     char pad00[0x14];
-    int unk14;                      /* 0x14 an offset into the file, made an address; 0: no sound part */
-    int unk18;                      /* 0x18 an offset into the file, made an address; 0: no sound part */
+    EEWord unk14;                   /* 0x14 an offset into the file, made an address (char *); 0: no sound part */
+    EEWord unk18;                   /* 0x18 an offset into the file, made an address (char *); 0: no sound part */
     char pad1C[0x04];
 } EntityTypeFileHeader;
+LAYOUT_SIZE(EntityTypeFileHeader, 0x20);
+LAYOUT_OFFSET(EntityTypeFileHeader, unk14, 0x14);
 
 /* the start of the data loaded into an entity pool block (EntityPoolSlot.base_address):
    offsets from the start of the block to its parts */
+/* overlay: the start of a chr/cNNNN.chr type file, copied into a pool block */
 typedef struct {
     char pad00[0x04];
-    char *model_offset;             /* 0x04 handed to Model_SetUpSkinned with the entity's model. The two are
-                                       pointer typed: only then does Entity_TryActivate load them after base_address */
-    char *motion_offset;            /* 0x08 handed to ModelMotion_LoadFile */
+    s32 model_offset;               /* 0x04 handed to Model_SetUpSkinned with the entity's model */
+    s32 motion_offset;              /* 0x08 handed to ModelMotion_LoadFile */
     s32 unk0C;                      /* 0x0C becomes ModelInstance.texture_data */
     s32 pool_model_offset;          /* 0x10 the slot's own model (EntityPool_BuildBlockModel), 0: none */
 } EntityPoolData;
+LAYOUT_SIZE(EntityPoolData, 0x14);
+LAYOUT_OFFSET(EntityPoolData, pool_model_offset, 0x10);
 
 /* a node of the linked_point_pool pool (0x200 of them, chained through prev/next): a point
    that eases toward a target over a duration or follows another vector. The two
@@ -1128,8 +1223,8 @@ extern LinkedPoint linked_point_pool[LINKED_POINT_COUNT];
 
 /* the scratchpad as the movement handlers of entity types 65 and 71 use it: a velocity and the
    matrix that turns it to the model's heading */
-#define ENTITY_SCRATCH_VECTOR ((f32 *)0x70000000)
-#define ENTITY_SCRATCH_MATRIX ((f32 *)0x70000010)
+#define ENTITY_SCRATCH_VECTOR SPR(f32 *, 0)
+#define ENTITY_SCRATCH_MATRIX SPR(f32 *, 0x10)
 
 /* upstream's typed views of the two blocks an Entity points at */
 #define ENTITY_MODEL(entity) ((ModelInstance *)(entity)->model)
@@ -1155,14 +1250,17 @@ typedef struct {
     s16 unk52;                      /* 0x52 frames one step takes */
 } ReferencedObject;
 
-/* ladder_object: the map object the player is climbing */
+/* ladder_object: the map object the player is climbing. A view of MapObject (model/model.h), which holds
+   pointers, so on the PC the padding follows that struct's layout. */
 typedef struct {
     ModelInstance *model;           /* 0x00 its get_point gives the two end points (Ladder_Start) */
-    char pad04[0x04];
+    char pad04[offsetof(MapObject, source) - sizeof(ModelInstance *)];
     ReferencedObject *unk08;        /* 0x08 */
-    char pad0C[0x04];
+    char pad0C[offsetof(MapObject, state_flags) - offsetof(MapObject, source) - sizeof(ReferencedObject *)];
     s32 unk10;                      /* 0x10 flags; 0x10000 is tested by Ladder_WaitOnRung */
 } ObjectReference;
+_Static_assert(offsetof(ObjectReference, unk08) == offsetof(MapObject, source), "ObjectReference is not MapObject");
+_Static_assert(offsetof(ObjectReference, unk10) == offsetof(MapObject, state_flags), "ObjectReference is not MapObject");
 
 void Entity_ResetAllLists(void);
 void Entity_FreeAllInGroup(int group_id);

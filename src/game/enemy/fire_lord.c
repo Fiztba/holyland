@@ -6,7 +6,7 @@
 #include "common.h"
 #include "effect/effect.h"
 
-void EntityAi_SetUpdate(char *, s32);
+void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *entity, void (*handler)(Entity *), int run_now);
 void Motion_ClearPartSlots(EntityModel *);
 int Motion_StepModel(EntityModel *, s32, s32);
@@ -15,9 +15,7 @@ void EntityAi_OnHit(char *);
 void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
 extern ModelInstanceBlock fire_lord_model[2];
-// match: fire_lord_model[1], which the set-up function reaches by its own address
-extern ModelInstanceBlock fire_lord_older_afterimage;
-extern s32 entity_type_handlers[][2];
+extern void (*entity_type_handlers[][2])(Entity *);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -114,7 +112,7 @@ void FireLord_Init(Entity *entity) {
     entity->model->alpha = entity->model_alpha;
     Motion_ClearPartSlots(entity->model);
     Motion_StepModel(entity->model, 0, 0);
-    fire_lord_older_afterimage = *(ModelInstanceBlock *)entity->model;
+    fire_lord_model[1] = *(ModelInstanceBlock *)entity->model;
     fire_lord_model[0] = *(ModelInstanceBlock *)entity->model;
 }
 
