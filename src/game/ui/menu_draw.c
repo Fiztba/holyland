@@ -87,13 +87,13 @@ extern LevelRecord worn_item_level_records[];    /* the worn items' records */
 extern LevelRecordDef worn_defs[];
 extern FxTableEntry fx_table[];   /* the magic table */
 extern u8 game_options[];             /* the options block, a byte per setting */
-extern u8 music_volume[];
-extern u8 sfx_volume[];
-extern u8 D_00349683[];
-extern s8 head_bob_option[];
-extern s8 rumble_option[];
-extern s8 menu_backdrop_option[];
-extern s8 hud_option[];
+#define music_volume (game_options + 1)
+#define sfx_volume (game_options + 2)
+#define D_00349683 (game_options + 3)
+#define head_bob_option ((s8 *)game_options + 5)
+#define rumble_option ((s8 *)game_options + 6)
+#define menu_backdrop_option ((s8 *)game_options + 8)
+#define hud_option ((s8 *)game_options + 9)
 extern f32 pulse_sprite_alpha;              /* the alpha of the pulsing sprite, 80 to 128 */
 extern s8 pulse_sprite_falling;               /* TRUE while that alpha falls */
 

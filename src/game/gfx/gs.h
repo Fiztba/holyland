@@ -68,15 +68,32 @@ typedef union {
     } f;
 } GsPackedWord;
 
-/* menu_frame_buffers: the menus' two frame buffers, a libgraph sceGsDBuffDc of which the game only names
-   the colour each frame is cleared to */
+/* menu_frame_buffers: the menus' two frame buffers, a libgraph sceGsDBuffDc (two frame buffers, each with a
+   draw environment for both contexts). All 64-bit GS words, so the layout is the same on the PC. The game names
+   the draw environments (as menu_first_draw_env, menu_first_draw_env2, menu_second_draw_env,
+   menu_second_draw_env2) and the colour each frame is cleared to */
 typedef struct {
-    char pad000[0x180];
+    u64 disp[10];                   /* 0x000 two sceGsDispEnv */
+    u64 giftag0[2];                 /* 0x050 */
+    u64 draw01[16];                 /* 0x060 sceGsDrawEnv1 of the first frame; [0] is its FRAME_1 */
+    u64 draw02[16];                 /* 0x0E0 sceGsDrawEnv2 of the first frame */
+    u64 clear0[4];                  /* 0x160 sceGsClear of the first frame */
     u64 clear0_rgbaq;               /* 0x180 sceGsClear.rgbaq of the first frame */
-    char pad188[0x168];
+    u64 clear0_tail[7];             /* 0x188 */
+    u64 giftag1[2];                 /* 0x1C0 */
+    u64 draw11[16];                 /* 0x1D0 sceGsDrawEnv1 of the second frame; [0] is its FRAME_1 */
+    u64 draw12[16];                 /* 0x250 sceGsDrawEnv2 of the second frame */
+    u64 clear1[4];                  /* 0x2D0 sceGsClear of the second frame */
     u64 clear1_rgbaq;               /* 0x2F0 of the second frame */
-    char pad2F8[0x38];
+    u64 clear1_tail[7];             /* 0x2F8 */
 } GsDoubleBufferDc;
+
+LAYOUT_SIZE(GsDoubleBufferDc, 0x330);
+LAYOUT_OFFSET(GsDoubleBufferDc, draw02, 0xE0);
+LAYOUT_OFFSET(GsDoubleBufferDc, clear0_rgbaq, 0x180);
+LAYOUT_OFFSET(GsDoubleBufferDc, draw11, 0x1D0);
+LAYOUT_OFFSET(GsDoubleBufferDc, draw12, 0x250);
+LAYOUT_OFFSET(GsDoubleBufferDc, clear1_rgbaq, 0x2F0);
 
 /* GS registers as the bit-fields the game writes when it patches a double buffer (Display_Init) */
 typedef struct {
@@ -171,6 +188,13 @@ typedef struct {
     GsDrawEnvBits draw1;            /* 0x150 */
     GsClearBits clear1;             /* 0x1D0 */
 } GsDoubleBuffer;
+
+/* all 64-bit words, the layout the SDK's sceGsDBuff has on both machines; game_dbuff_clear_color[30] is clear1's */
+LAYOUT_SIZE(GsDoubleBuffer, 0x230);
+LAYOUT_OFFSET(GsDoubleBuffer, draw0, 0x60);
+LAYOUT_OFFSET(GsDoubleBuffer, clear0.rgbaq, 0x100);
+LAYOUT_OFFSET(GsDoubleBuffer, draw1, 0x150);
+LAYOUT_OFFSET(GsDoubleBuffer, clear1.rgbaq, 0x100 + 30 * 8);
 
 /* frame_dispfb_regs and frame_display_regs: the DISPFB and DISPLAY values of the two frames, kept by Display_Init */
 typedef struct {

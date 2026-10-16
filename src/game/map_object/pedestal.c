@@ -23,7 +23,7 @@ void sceVu0RotMatrixY(float *, float *, float);
 int Game_AddTriggerItem(int, int, int);
 extern MapSlot map_slots[];
 extern GameStatus game_status;
-extern void *faced_object[];
+#define faced_object (&view_ray_status.current)
 extern float player_state[];
 extern EventRunner view_ray_status;
 extern f32 identity_matrix[16];

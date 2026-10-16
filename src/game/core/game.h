@@ -166,7 +166,9 @@ typedef struct {
 
 /* D_00432820: what decides whether GameClock_Tick advances GameClock.ticks */
 typedef struct {
-    char pad00[0x208];
+    char pad00[0x100];
+    char script_error_flags[0x0C];  /* 0x100 one flag per SCRIPT_ERROR_ (script/script.c) */
+    char pad10C[0xFC];
     char unk208;                    /* 0x208 System_InitMemory clears it */
     char unk209;                    /* 0x209 System_InitMemory clears it */
     char unk20A;                    /* 0x20A System_InitMemory clears it */

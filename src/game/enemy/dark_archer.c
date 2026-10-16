@@ -43,7 +43,8 @@ int EntityAi_CanUseRanged(Entity *, int);
 void EntityAi_SensePlayer(void *, int);
 int Motion_Start(void *, int, int, u32, int);
 // match: the size is unknown; a complete small type would be read through $gp
-extern u8 dark_succubus_fight_started[];
+extern u8 map_script_flags[];
+#define dark_succubus_fight_started (map_script_flags + 0x988)
 extern MapSlot map_slots[];
 extern EntitySpawnInfo *map_spawn_infos[2];
 void Game_CountSpawnDeath(u32, int);

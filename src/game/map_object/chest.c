@@ -17,8 +17,8 @@ void MapObject_UpdateClosedChest(void *, int);
 void MapObject_SetupItemHolder(MapObject *);
 extern void (*map_object_update_hooks[])(MapObject *);
 extern Qword object_item_scale;
-extern u32 game_status_flags[];
-extern void *faced_object[];
+#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
+#define faced_object (&view_ray_status.current)
 extern u8 item_counts[];
 extern GameStatus game_status;
 extern EventRunner view_ray_status;

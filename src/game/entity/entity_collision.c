@@ -34,7 +34,7 @@ void Collision_CylinderEdge(void *, void *, f32, void *, f32, f32);
 void Collision_CylinderCylinder(void *, f32, f32, void *, f32, f32);
 void Collision_BallEdge(void *, void *, f32, void *, f32);
 void Collision_HitRayObj(MapObject *, f32 *, f32 *, f32);
-extern ModelInstanceBlock *map_slot_record_models[];
+extern MapSlotMemory map_slot_memory[2];
 
 /* tests the entity's upright capsule against the triangle at `point` and pushes `position`
    sideways out of it */
@@ -2577,7 +2577,7 @@ f32 EntityCollision_DistanceToGround(f32 *point) {
         if (slot->loaded != 0) {
             record = (MapRecord *)slot->records;
             record_count = slot->header->record_count;
-            model = map_slot_record_models[current_map_slot == map ? 0 : 22];
+            model = (ModelInstanceBlock *)map_slot_memory[current_map_slot == map ? 0 : 1].record_models;
             for (i = 0; i < record_count; i++, model++, record++) {
                 if (record->collision_mesh_index == 0xFFFF) {
                     continue;

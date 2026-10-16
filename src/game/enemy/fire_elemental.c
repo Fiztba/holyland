@@ -4,6 +4,7 @@
    records by hit points and experience, with resistances and drops where two monsters share those. */
 #include "entity/entity.h"
 #include "common.h"
+#include "player/player.h"
 
 void EntityAi_SetUpdate(char *, void (*)(Entity *));
 int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
@@ -41,7 +42,7 @@ s32 EntityAi_TurnToHeading(Entity *, f32 *, f32);
 float EntityMath_WrapAngle(float);
 s32 EntityAi_MoveCommand(Entity *, s32, f32);
 float EntityMath_AngleXZ(float *, char *);
-extern u8 player_weapon_step[];
+#define player_weapon_step (&player_state.item_action_step)
 extern EntityModel *held_item_model_ptr;
 int EntityShot_Launch(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *);
 void EntityAi_SetAttackDelay(Entity *, s32);

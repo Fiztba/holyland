@@ -53,7 +53,8 @@ void Vector_Copy(void *, void *);
 void Vector_Add(void *, void *, void *);
 
 extern MapDrawState map_draw_state;
-extern int suspended_updates[3];
+extern GameStatus game_status;
+#define suspended_updates (&game_status.update_hold_flags)
 extern MapSlot map_slots[];
 extern Vector4 map_object_glow_colors[4];
 extern u8 item_counts[];

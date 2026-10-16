@@ -24,8 +24,8 @@ extern int context2_buffer_half;          /* the same for the second */
 extern int D_00446F80;
 extern GameStatus game_status;
 #define game_status_flags ((u32 *)((u8 *)&game_status + 0x24)) /* the flag word at 0x24 */
-extern s64 game_dbuff_clear_color[];
-extern s64 game_dbuff_context2_clear_color[];
+#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
+#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
 extern char opening_movie_path[];       /* "cdrom0:\DATA\KF4OP.PSS;1" */
 extern char ending_movie_path[];        /* "cdrom0:\DATA\KF4ED.PSS;1" */
 extern char staff_roll_movie_path[];    /* "cdrom0:\DATA\KF4STAFF.PSS;1" */

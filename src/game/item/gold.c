@@ -35,7 +35,8 @@ extern ObjectMarkRow map_object_marks[];
 extern MapLoadState map_load_state;
 extern GameStatus game_status;
 extern f32 identity_matrix[16];
-extern u16 pad_pressed[];
+extern PadState pad_state;
+#define pad_pressed (&pad_state.pressed)
 extern PlayerState player_state;
 extern u16 action_button;
 extern int current_map_slot;

@@ -33,14 +33,16 @@ void *MapItem_GetFixedById(int);
 extern MapSlot map_slots[];
 extern u8 map_script_flags[];
 extern u8 entity_group_state[];
-extern u8 forge_door_open[];
-extern u8 forge_stage[];
-extern u8 ocean_shore_icon_of_fire_placed[];
-extern f32 map_record_height[];
-extern u8 guardians_room_water_purified[];
-extern u8 dark_sanctuary_fog_lifted[];
-extern u8 D_0034A0D5[];
-extern u8 craftsmans_room_door_unlocked[];
+extern u8 story_flags[];
+#define forge_door_open (story_flags + 0xC)
+#define forge_stage (story_flags + 6)
+#define ocean_shore_icon_of_fire_placed (map_script_flags + 0x6C5)
+extern u8 story_values[];
+#define map_record_height ((f32 *)(story_values + 0xC))
+#define guardians_room_water_purified (map_script_flags + 0x8C6)
+#define dark_sanctuary_fog_lifted (map_script_flags + 0x987)
+#define D_0034A0D5 (map_script_flags + 0xA45)
+#define craftsmans_room_door_unlocked (map_script_flags + 0x1A08)
 
 void func_0011A428(int);
 

@@ -4,6 +4,7 @@
 
 #include "common.h"
 #include "model/model.h"
+#include "player/player.h"
 
 #define ENTITY_DESPAWN_MARGIN           300.0f
 #define ENTITY_VERTICAL_DESPAWN_MARGIN  150.0f
@@ -1007,19 +1008,32 @@ typedef union {
 
 #define ENTITY_FLAG_WORD(flags) (((EntityFlagWord *)&(flags))->word)
 
-/* the block at player_state: the player (position first). Files declare
-   `extern PlayerData player_state;` themselves: older files still use an array. */
+/* the block at player_state: the player (position first), a view of PlayerState (player/player.h) with the
+   entity code's names. Files declare `extern PlayerData player_state;` themselves: older files still use an
+   array. PlayerState's pointer fields from 0x204 on move the later fields on the PC, so the padding is worked
+   out from PlayerState. */
 typedef struct {
     f32 position[4];                /* 0x00 */
-    char pad10[0x04];
+    char pad10[offsetof(PlayerState, rotation.y) - 0x10];
     f32 heading;                    /* 0x14 the player's heading angle, PlayerState.rotation.y */
-    char pad18[0x1EC];
+    char pad18[offsetof(PlayerState, stepped_on_entity) - offsetof(PlayerState, rotation.y) - sizeof(f32)];
     Entity *stood_on_entity;        /* 0x204 the entity the player was put on top of when climbing */
-    char pad208[0x4A];
+    char pad208[offsetof(PlayerState, record_flag_block) - offsetof(PlayerState, stepped_on_entity) - sizeof(Entity *)];
+    u8 record_flag_block;           /* 0x250 PlayerState.record_flag_block */
+    char pad251[offsetof(PlayerState, map_index) - offsetof(PlayerState, record_flag_block) - sizeof(u8)];
     u16 map_record_index;           /* 0x252 picks the MapSlot record the player is in */
-    char pad254[0x05];
+    char pad254[offsetof(PlayerState, item_action_step) - offsetof(PlayerState, map_index) - sizeof(u16)];
+    u8 item_action_step;            /* 0x258 PlayerState.item_action_step */
     u8 magic_shot_launched;         /* 0x259 set when a cast magic launches a shot, cleared each frame */
 } PlayerData;
+
+_Static_assert(offsetof(PlayerData, heading) == offsetof(PlayerState, rotation.y), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, stood_on_entity) == offsetof(PlayerState, stepped_on_entity), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, record_flag_block) == offsetof(PlayerState, record_flag_block), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, map_record_index) == offsetof(PlayerState, map_index), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, item_action_step) == offsetof(PlayerState, item_action_step), "PlayerData is not PlayerState");
+_Static_assert(offsetof(PlayerData, magic_shot_launched) == offsetof(PlayerState, cast_launched_shot), "PlayerData is not PlayerState");
+_Static_assert(sizeof(PlayerData) <= sizeof(PlayerState), "PlayerData is not PlayerState");
 
 /* four animation frame numbers: a local table that a function copies whole
    from read-only data (in the game: `s32 frames[4] = { ... };`) */

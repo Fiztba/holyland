@@ -4,12 +4,15 @@
 #include "gfx/gs.h"
 
 #include <string.h>
+#include "sound/sound.h"
 int sprintf(char *, const char *, ...);
 
 extern GameStatus game_status;
-extern int bgm_load_pending[3];
-extern int suspended_updates[3];
-extern u16 pad_pressed[];
+extern SoundLoadQueue sound_load_queue;
+#define bgm_load_pending (&sound_load_queue.bgm_load_pending)
+#define suspended_updates (&game_status.update_hold_flags)
+extern PadState pad_state;
+#define pad_pressed (&pad_state.pressed)
 extern u16 action_button;
 extern u32 *splash_image_packet;
 

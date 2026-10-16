@@ -15,7 +15,8 @@ void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
 extern void (*entity_type_handlers[][2])(Entity *);
 extern float player_state[];
-extern u8 master_fadin_killed[];
+extern u8 map_script_flags[];
+#define master_fadin_killed (map_script_flags + 0x1B87)
 int rand(void);
 float sqrtf(float);
 float atan2f(float, float);

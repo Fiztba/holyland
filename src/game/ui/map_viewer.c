@@ -93,8 +93,10 @@ extern MapDrawState map_draw_state;
 extern MapSlotUnk10Words viewer_default_lights;
 extern char kings_map_overlay_rect[0x40];
 extern char kings_map_corner_rect[0x40];
-extern s64 game_dbuff_clear_color[];
-extern s64 game_dbuff_context2_clear_color[];
+extern GsDoubleBuffer game_dbuff;
+#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
+extern GsDoubleBuffer game_dbuff_context2;
+#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
 
 /* the map viewer: the picture data read into the spare area, the viewer picked, and its animation */
 static char *viewer_data;                   /* 0x44705C the spare area the viewer's textures are read into */

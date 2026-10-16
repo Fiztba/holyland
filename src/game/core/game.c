@@ -64,9 +64,7 @@ extern int fade_frames;                  /* frames the fade takes */
 void GsDraw_FillScreen(int, int, int, int, int);
 extern int haze_layer_depths[8];               /* the screen depth of each haze layer */
 extern u32 haze_layer_distances[8];               /* the distances of the haze layers, nearest last */
-extern float view_ray_status[];
-extern float view_ray_previous_direction[];
-extern float view_ray_length[];
+extern EventRunner view_ray_status;
 extern sceVu0FMATRIX identity_matrix;
 extern sceVu0FMATRIX world_view_matrix;
 extern sceVu0FMATRIX world_screen_matrix;
@@ -1433,8 +1431,8 @@ void Game_ShiftScreenByViewTurn(void) {
 
     sceVu0MulMatrix(view_matrix, world_screen_matrix, identity_matrix);
     Vu0_LoadMatrix(view_matrix);
-    Vector_Scale(scaled_vector, view_ray_previous_direction, 1000.0f);
-    Vector_Add(scaled_vector, scaled_vector, view_ray_previous_direction - 4);
+    Vector_Scale(scaled_vector, view_ray_status.prev_view_direction, 1000.0f);
+    Vector_Add(scaled_vector, scaled_vector, view_ray_status.prev_view_origin);
     scaled_vector[3] = 1.0f;
     Vu0_ProjectToScreen(screen_xy, scaled_vector);
 
@@ -1458,7 +1456,7 @@ void Game_ShiftScreenByViewTurn(void) {
     } else if (offset_y < -0x80) {
         offset_y = -0x80;
     }
-    if (view_ray_length[0] < 125.0f) {
+    if (view_ray_status.view_distance < 125.0f) {
         offset_y = 0;
     }
 
@@ -1541,27 +1539,27 @@ void Game_ShiftScreenByFocusTurn(void) {
 
     texture_base = 0x1180;
     if (context1_buffer_half != 0) texture_base = 0;
-    focus_distance = view_ray_status[18] > 1000.0f ? 1000.0f : view_ray_status[18];
+    focus_distance = view_ray_status.nearest_entity_distance > 1000.0f ? 1000.0f : view_ray_status.nearest_entity_distance;
     nearest_distance_squared = focus_distance * focus_distance;
     for (entity = active_entities_head; entity != NULL; entity = entity->next) {
         if (((int)(entity->flags >> 1) & 1) == 0) continue;
         if (focus_distance < entity->distance_to_player) continue;
         Vector_Copy(offset_to_entity, entity->model->position);
         offset_to_entity[1] -= entity->height * 0.5f;
-        Vector_Subtract(offset_to_entity, offset_to_entity, view_ray_status);
+        Vector_Subtract(offset_to_entity, offset_to_entity, view_ray_status.view_origin);
         Vector_MultiplyComponents(scratch_vector, offset_to_entity, offset_to_entity);
         distance_squared = scratch_vector[0] + scratch_vector[1] + scratch_vector[2];
         if (nearest_distance_squared < distance_squared) continue;
         sceVu0Normalize(scratch_vector, offset_to_entity);
-        if (sceVu0InnerProduct(scratch_vector, view_ray_status + 4) < 0.86602497f) continue; /* about cos 30 degrees */
+        if (sceVu0InnerProduct(scratch_vector, view_ray_status.view_direction) < 0.86602497f) continue; /* about cos 30 degrees */
         nearest_distance_squared = distance_squared;
         focus_distance = sqrtf(distance_squared);
     }
 
     sceVu0MulMatrix(view_matrix, world_screen_matrix, identity_matrix);
     Vu0_LoadMatrix(view_matrix);
-    Vector_Scale(scratch_vector, view_ray_status + 12, focus_distance);
-    Vector_Add(scratch_vector, scratch_vector, view_ray_status + 8);
+    Vector_Scale(scratch_vector, view_ray_status.prev_view_direction, focus_distance);
+    Vector_Add(scratch_vector, scratch_vector, view_ray_status.prev_view_origin);
     scratch_vector[3] = 1.0f;
     Vu0_ProjectToScreen(screen_position, scratch_vector);
 

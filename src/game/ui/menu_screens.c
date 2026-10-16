@@ -155,20 +155,20 @@ extern PoolPartSource *pool_part_sources[13];
 void PoolSlot_LoadGroup(PoolPartSource *, u32);
 extern ChunkPoolNode *free_load_buffers;
 extern ChunkPoolNode load_buffer_nodes[];
-extern char model_name_shown[];
-extern char model_name_up[];
-extern char model_name_down[];
-extern char model_name_left[];
-extern char model_name_right[];
-extern char weapon_model_name[];
-extern char shield_model_name[];
-extern char armor_model_name[];
-extern char helm_model_name[];
-extern char gauntlet_model_name[];
-extern char boot_model_name[];
-extern char ring_model_name[];
-extern char bracelet_model_name[];
-extern char amulet_model_name[];
+#define model_name_shown (model_load_shown.name)
+#define model_name_up (model_load_up.name)
+#define model_name_down (model_load_down.name)
+#define model_name_left (model_load_left.name)
+#define model_name_right (model_load_right.name)
+#define weapon_model_name (weapon_model_load.name)
+#define shield_model_name (shield_model_load.name)
+#define armor_model_name (armor_model_load.name)
+#define helm_model_name (helm_model_load.name)
+#define gauntlet_model_name (gauntlet_model_load.name)
+#define boot_model_name (boot_model_load.name)
+#define ring_model_name (ring_model_load.name)
+#define bracelet_model_name (bracelet_model_load.name)
+#define amulet_model_name (amulet_model_load.name)
 extern LinkNode worn_model_loader;
 extern LinkNode weapon_model_load;
 extern LinkNode shield_model_load;
@@ -280,7 +280,8 @@ void Sound_MutePositional(void);
 void Input_Update(void);
 int SoundDriver_FlushCommands(void);
 s16 MenuPad_Update(void);
-extern GsDrawEnv game_dbuff_draw0;
+extern GsDoubleBuffer game_dbuff;
+#define game_dbuff_draw0 (*(GsDrawEnv *)&game_dbuff.draw0)
 extern s32 menu_run_step;
 extern s8 menu_mode;
 extern u16 menu_buttons;
@@ -296,11 +297,11 @@ extern f32 menu_view_screen_matrix[16];
 void MenuModel_DrawTinted(ChunkUpload *upload, f32 *draw_param, RenderSlotArg slot_arg);
 // match: called with the node, a matrix and the colour, not as the definition has it (the colour is loaded unaligned)
 #define DRAW_NODE_MODEL(node, matrix, colour) ((void (*)(LinkNode *, f32 *, ColorBytes))MenuModel_DrawTinted)(node, matrix, colour)
-extern u64 menu_first_draw_env[47];             /* the frame register of the first buffer ([0]) and of the second ([46]) */
+#define menu_first_draw_env (menu_frame_buffers.draw01) /* inside menu_frame_buffers: [0] is the first buffer's frame register */
 extern u8 game_options[0x10];  /* the options block */
-extern char menu_first_draw_env2[];
-extern char menu_second_draw_env[];           /* inside menu_frame_buffers: the second buffer's draw environments */
-extern char menu_second_draw_env2[];
+#define menu_first_draw_env2 (menu_frame_buffers.draw02)
+#define menu_second_draw_env (menu_frame_buffers.draw11) /* inside menu_frame_buffers: the second buffer's draw environments */
+#define menu_second_draw_env2 (menu_frame_buffers.draw12)
 extern s32 menu_frame_ticks;
 extern u8 D_00447208;
 void Menu_DrawBrightness(s32);
@@ -315,7 +316,7 @@ int Menu_SetBlendMode(u8);
 void MenuSprite_DrawPlain(sptr owner, int index, int param);
 extern s32 menu_step;
 extern char D_005CE0E0[];
-extern u8 brightness_option[];
+#define brightness_option (game_options + 0xA)
 extern LoadedBlockRef menu_file_blocks[];
 extern void *menu_screen_handler;
 extern float pulse_sprite_alpha;
@@ -368,7 +369,7 @@ extern s32 D_00446DF8;
 extern s8 cast_spell_state;               /* 0: fading in, 1: open, 2: waiting for the models, 3: fading out */
 int MenuText_SetGlyphSize(GsPackedWord);
 s32 MenuText_DrawLine(u16 *text, s32 limit);
-extern u8 player_weapon[];
+#define player_weapon (&player_state.weapon)
 extern MenuItem **equipped_item_refs[11];
 extern LinkNode *equip_model_loads[];
 extern f32 equip_item_model_position[4];
@@ -2648,7 +2649,7 @@ static s32 Menu_CopyFrameToTexture(void) {
         packet[69] = 0;
         packet[70] = 0x5;
         packet[71] = 0;
-        *(u64 *)&packet[72] = menu_first_draw_env[46];
+        *(u64 *)&packet[72] = menu_second_draw_env[0];
         packet[74] = 0x4C;
         packet[75] = 0;
         packet[76] = 0;
@@ -2711,7 +2712,7 @@ s32 Menu_EndFrame(s32 run_handler) {
         D_00447208++;
     }
     D_00447208 %= 3;
-    sceGsSetHalfOffset(context1_buffer_half != 0 ? menu_second_draw_env : (char *)menu_first_draw_env, 0x800, 0x800, even_field);
+    sceGsSetHalfOffset(context1_buffer_half != 0 ? menu_second_draw_env : menu_first_draw_env, 0x800, 0x800, even_field);
     sceGsSetHalfOffset2(context1_buffer_half != 0 ? menu_second_draw_env2 : menu_first_draw_env2, 0x800, 0x800, even_field);
     FlushCache(0);
     sceGsSyncPath(0, 0);

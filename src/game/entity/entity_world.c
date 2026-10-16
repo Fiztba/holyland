@@ -5,6 +5,8 @@
 #include "map/map.h"
 #include "entity/entity.h"
 #include <libvu0.h>
+#include "core/game.h"
+#include "player/player.h"
 
 void *memset(void *, int, u32);
 int rand(void);
@@ -17,14 +19,15 @@ extern EntitySpawnInfo *map_spawn_infos[2];
 extern char *entity_params;
 extern Vector4Arg entity_unit_scale;
 extern void (*entity_type_handlers[][2])(Entity *);
-extern int suspended_updates[3];
+extern GameStatus game_status;
+#define suspended_updates (&game_status.update_hold_flags)
 extern Entity *active_entities_head;
 extern PlayerData player_state;
 extern MapDrawState map_draw_state;
 extern f32 identity_matrix[16];
 extern u32 frame_counter;
 extern int current_map_slot;
-extern u8 player_floor_block[];
+#define player_floor_block (&player_state.record_flag_block)
 extern const f32 D_004467F8[];
 
 void Vector_Copy(void *, void *);

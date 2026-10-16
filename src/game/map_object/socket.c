@@ -15,7 +15,8 @@ void Vector_Scale(float *, float *, float);
 void Vector_Add(void *, void *, void *);
 void Player_AddItem(int);
 extern GameStatus game_status;
-extern void *faced_object[];
+extern EventRunner view_ray_status;
+#define faced_object (&view_ray_status.current)
 extern float player_state[];
 extern f32 identity_matrix[16];
 extern ItemCommonDef item_common_defs[];

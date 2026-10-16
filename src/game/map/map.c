@@ -110,8 +110,10 @@ int Map_TestFlagBlockBit(int, int, int, int);
 void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
 extern MapSlot map_slots[];
 extern MapDrawState map_draw_state;
-extern s64 game_dbuff_clear_color[];
-extern s64 game_dbuff_context2_clear_color[];
+extern GsDoubleBuffer game_dbuff;
+#define game_dbuff_clear_color ((s64 *)&game_dbuff.clear0.rgbaq)
+extern GsDoubleBuffer game_dbuff_context2;
+#define game_dbuff_context2_clear_color ((s64 *)&game_dbuff_context2.clear0.rgbaq)
 extern MapDrawRecord *record_draw_lists[2];
 extern int current_map_slot;
 extern MapDrawRecord *late_record_draw_lists[2];
@@ -139,7 +141,7 @@ extern u16 pad_state[];
 extern PlayerState player_state;
 extern MapSlotUnk10Words map_object_default_lights;
 extern TextureTableHeader *D_00446790;
-extern u8 player_floor_block[];
+#define player_floor_block (&player_state.record_flag_block)
 
 /* Draws the map records of both map slots whose flag bit 0 is clear (the list func_00112BD0 builds each
    frame), then each slot's map objects. mode 0 draws every record, the others only some; below 2 the

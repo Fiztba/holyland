@@ -3,7 +3,7 @@
 #include "core/game.h"
 #include "gfx/gs.h"
 
-/* 0x00432820. The decomp's labels script_error_flags lie inside it (D_00432820.pad00[256]): the code that names them must use these
+/* 0x00432820. The decomp's labels script_error_flags lie inside it (D_00432820.script_error_flags): the code that names them must use these
    fields, so they are not defined on their own */
 ClockControl D_00432820;
 

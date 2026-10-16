@@ -3,11 +3,13 @@
 #include "gfx/draw_env.h"
 #include <eekernel.h>
 #include <string.h>
+#include "gfx/gs.h"
 
 extern GsDataBlock offscreen_square_corners; /* two corners of a 256x256 square around (2048, 2048), 12.4 fixed point */
 extern int context1_buffer_half;
-extern GsDrawEnv game_dbuff_draw0;          /* game_dbuff.draw0 */
-extern GsDrawEnv game_dbuff_draw1;          /* game_dbuff.draw1 */
+extern GsDoubleBuffer game_dbuff;
+#define game_dbuff_draw0 (*(GsDrawEnv *)&game_dbuff.draw0) /* game_dbuff.draw0 */
+#define game_dbuff_draw1 (*(GsDrawEnv *)&game_dbuff.draw1) /* game_dbuff.draw1 */
 
 static void func_0019B4A0(void);
 static void func_0019B4A8(void);

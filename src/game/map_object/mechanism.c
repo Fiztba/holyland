@@ -5,14 +5,16 @@
 #include "effect/shot.h"
 #include "model/model.h"
 #include "map_object/map_object.h"
+#include "core/game.h"
 
 void Vector_Subtract(void *, void *, void *);
 float atan2f(float, float);
 float Angle_Wrap(float);
 float sqrtf(float);
 int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
-extern void *object_under_player[];
-extern u32 game_status_flags[];
+#define object_under_player ((void **)&player_state.floor_map_object)
+extern GameStatus game_status;
+#define game_status_flags ((u32 *)&GAME_STATUS_FLAG_WORD(&game_status))
 extern PlayerState player_state;
 extern u32 frame_counter;
 
