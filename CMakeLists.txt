@@ -6,9 +6,9 @@
 #   patches/         the PC edits to the decomp, as git diffs with paths relative to the decomp root
 #                    (patches/game/<folder>.patch, patches/game/_top.patch, patches/nonmatching.patch).
 #   port/            the PS2 side: libraries, SDK stubs and the host's main.
-# At configure time the decomp's src/game and src/nonmatching are copied into the build directory
-# (out/<preset>/decomp_src/src/), the patches are applied to that copy, and the copy is compiled.
-cmake_minimum_required(VERSION 3.20)
+# At configure time the decomp's src/game and src/nonmatching are copied, the patches are applied to
+# the copy, and the copy (out/<preset>/decomp_src/src/) is compiled.
+cmake_minimum_required(VERSION 3.21)
 project(kf4 C)
 
 set(CMAKE_C_STANDARD 99)
@@ -63,9 +63,11 @@ if(NOT WIN32)
 endif()
 
 # ---- The decomp's game code, patched --------------------------------------------------------------
-# Everything below compiles the copy in decomp_src/, never decomp/ itself. The copy is wiped and made
-# again at every configure, so it is always the pinned decomp with the current patches applied.
+# Everything below compiles the copy in decomp_src/, never decomp/ itself. Each configure builds the
+# patched decomp in a staging directory, then copies into decomp_src/ only the files whose content
+# changed, so a patch edit recompiles the files it touches and nothing else.
 set(KF4_DECOMP ${CMAKE_SOURCE_DIR}/decomp)
+set(KF4_STAGE ${CMAKE_BINARY_DIR}/decomp_stage)
 set(KF4_SRC ${CMAKE_BINARY_DIR}/decomp_src)
 if(NOT EXISTS ${KF4_DECOMP}/src/game)
     message(FATAL_ERROR "decomp/src/game is missing: run git submodule update --init")
@@ -85,22 +87,54 @@ if(rc EQUAL 0)
     endif()
 endif()
 
-file(REMOVE_RECURSE ${KF4_SRC})
-file(MAKE_DIRECTORY ${KF4_SRC}/src)
-file(COPY ${KF4_DECOMP}/src/game ${KF4_DECOMP}/src/nonmatching DESTINATION ${KF4_SRC}/src)
+# decomp/ must be at its pin, unedited: an edit there would be compiled without being in a patch
+execute_process(COMMAND ${GIT_EXECUTABLE} -C ${KF4_DECOMP} status --porcelain -- src/game src/nonmatching
+    OUTPUT_VARIABLE KF4_DECOMP_EDITS OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE out RESULT_VARIABLE rc)
+if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "git status failed in ${KF4_DECOMP}:\n${out}")
+endif()
+if(NOT "${KF4_DECOMP_EDITS}" STREQUAL "")
+    message(FATAL_ERROR "decomp/ has local changes:\n${KF4_DECOMP_EDITS}\n"
+        "decomp/ must stay at its pin, unedited. PC edits go in patches/ (tools/patches.py).")
+endif()
+
+# the staging copy: the pinned decomp with the patches applied, rebuilt from scratch every configure
+file(REMOVE_RECURSE ${KF4_STAGE})
+file(MAKE_DIRECTORY ${KF4_STAGE}/src)
+file(COPY ${KF4_DECOMP}/src/game ${KF4_DECOMP}/src/nonmatching DESTINATION ${KF4_STAGE}/src)
 # its own repo, so that git apply works on paths relative to the copy's root (not holyland's)
-execute_process(COMMAND ${GIT_EXECUTABLE} init -q WORKING_DIRECTORY ${KF4_SRC} RESULT_VARIABLE rc
+execute_process(COMMAND ${GIT_EXECUTABLE} init -q WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc
     OUTPUT_VARIABLE out ERROR_VARIABLE out)
 if(NOT rc EQUAL 0)
-    message(FATAL_ERROR "git init failed in ${KF4_SRC}:\n${out}")
+    message(FATAL_ERROR "git init failed in ${KF4_STAGE}:\n${out}")
 endif()
 foreach(patch ${KF4_PATCHES})
     execute_process(COMMAND ${GIT_EXECUTABLE} apply --whitespace=nowarn ${patch}
-        WORKING_DIRECTORY ${KF4_SRC} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+        WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
     if(NOT rc EQUAL 0)
         message(FATAL_ERROR "patch ${patch} does not apply to decomp/ at its pin:\n${out}")
     endif()
 endforeach()
+
+# sync the staging copy into decomp_src/. COPY_FILE leaves a file alone when it is already the same,
+# so its timestamp, and the object built from it, survive. (The .git is at the staging root, not under src.)
+file(GLOB_RECURSE KF4_STAGED LIST_DIRECTORIES false RELATIVE ${KF4_STAGE} ${KF4_STAGE}/src/*)
+foreach(rel ${KF4_STAGED})
+    get_filename_component(dir ${KF4_SRC}/${rel} DIRECTORY)
+    file(MAKE_DIRECTORY ${dir})
+    file(COPY_FILE ${KF4_STAGE}/${rel} ${KF4_SRC}/${rel} ONLY_IF_DIFFERENT)
+endforeach()
+# what decomp_src/ has and the staging copy does not (a patch's removed file, an old folder, the old
+# layout's .git) goes
+file(REMOVE_RECURSE ${KF4_SRC}/.git)
+file(GLOB_RECURSE KF4_OLD LIST_DIRECTORIES true RELATIVE ${KF4_SRC} ${KF4_SRC}/src/*)
+foreach(rel ${KF4_OLD})
+    if(NOT EXISTS ${KF4_STAGE}/${rel})
+        file(REMOVE_RECURSE ${KF4_SRC}/${rel})
+    endif()
+endforeach()
+file(REMOVE_RECURSE ${KF4_STAGE})
 
 # ---- The game, one object library per folder of src/game ------------------------------------------
 # The libdev members the decomp keeps as src/game/func_0022*.c are PS2 debugging code: not built.
