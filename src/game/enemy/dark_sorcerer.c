@@ -26,7 +26,7 @@ extern f32 D_00446830[];
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 extern PlayerData player_state;
 int rand(void);

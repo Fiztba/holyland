@@ -26,12 +26,12 @@ int rand(void);
 float sqrtf(float);
 float atan2f(float, float);
 char *Model_GetSkinnedBonePoint(char *, u32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 s32 EntityAi_ShouldDodge(Entity *, f32, f32);
 s32 EntityAi_PickCombatChoice(Entity *, s32);
@@ -171,8 +171,8 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
     second_aim[0] = atan2f(-delta[1], sqrtf(delta[0] * delta[0] + delta[2] * delta[2]));
     second_aim[1] = atan2f(delta[0], delta[2]);
     second_aim[2] = 0.0f;
-    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1E, (int)first_aim);
-    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1F, (int)second_aim);
+    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1E, first_aim);
+    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1F, second_aim);
     if (unkE0->pause_timer > 0) {
         if (unkE0->pause_timer > (s16)entity->params->action_frames - entity->params->near_distance) {
             from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, 4);
@@ -183,7 +183,7 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
             aims->unk30[0] = atan2f(-delta[1], sqrtf(delta[0] * delta[0] + delta[2] * delta[2]));
             aims->unk30[1] = atan2f(delta[0], delta[2]);
             aims->unk30[2] = 0.0f;
-            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, (int)aims->unk30);
+            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, aims->unk30);
             frames = entity->params->far_distance;
             entity->params->melee_attacks[0].hit_parts[0].unk00.unk00[8] = frames;
             entity->params->melee_attacks[0].hit_parts[1].unk00.unk00[8] = frames;
@@ -215,7 +215,7 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
     }
     if (unkE0->sub_timer > 0) {
         if (frame_counter % 3U == 0) {
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x25C, 0, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x25C, 0, entity->model->rotation);
         }
         ENTITY_FLAGS(entity) |= 0x8000L << 20;
         unkE0->sub_timer--;

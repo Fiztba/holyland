@@ -20,7 +20,7 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int rand(void);
 int EntityAi_TurnFromPush(void *, void *);
 void EntityPoint_PickNear(float, void *, void *, void *);

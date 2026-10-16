@@ -29,37 +29,43 @@ s32 EntityMath_SubtractClamped(s32 value, s32 amount, s32 low, s32 high) {
 
 /* dst = a * (1 - t) + b * t across the xyz lanes, on the VU0. */
 void EntityMath_LerpVector(void *dst, void *src_a, void *src_b, float ratio) {
-    __asm__ volatile(
-        "mfc1 $2, %3\n"
-        "qmtc2.ni $2, $vf3\n"
-        "vsubx.w $vf4, $vf0, $vf3x\n"
-        "lqc2 $vf1, 0x0(%1)\n"
-        "lqc2 $vf2, 0x0(%2)\n"
-        "vmulax.xyz ACC, $vf2, $vf3x\n"
-        "vmaddw.xyz $vf1, $vf1, $vf4w\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "sqc2 $vf1, 0x0(%0)\n"
-        : : "r"(dst), "r"(src_a), "r"(src_b), "f"(ratio) : "$2");
+    f32 *out = dst;
+    f32 *a = src_a;
+    f32 *b = src_b;
+    s32 i;
+
+    /* in VU0's vf1 to vf4, which the PS2 code leaves changed (math/vu0_macro.c keeps matrices there) */
+    ee_vu0.vf[3][0] = ratio;                                    /* qmtc2 */
+    ee_vu0.vf[4][3] = ee_vu0.vf[0][3] - ee_vu0.vf[3][0];        /* vsubx.w */
+    for (i = 0; i < 4; i++) {
+        ee_vu0.vf[1][i] = a[i];                                 /* lqc2 */
+        ee_vu0.vf[2][i] = b[i];
+    }
+    for (i = 0; i < 3; i++) {
+        ee_vu0.acc[i] = ee_vu0.vf[2][i] * ee_vu0.vf[3][0];      /* vmulax.xyz */
+    }
+    for (i = 0; i < 3; i++) {
+        ee_vu0.vf[1][i] = ee_vu0.acc[i] + ee_vu0.vf[1][i] * ee_vu0.vf[4][3]; /* vmaddw.xyz */
+    }
+    for (i = 0; i < 4; i++) {
+        out[i] = ee_vu0.vf[1][i];                               /* sqc2 */
+    }
 }
 
 /* The distance between two points. */
 f32 EntityMath_Distance(f32 *point_a, f32 *point_b) {
     float result[4];
 
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xyz $vf16, $vf16, $vf16\n"
-        "vaddy.x $vf16, $vf16, $vf16y\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(point_a), "r"(point_b), "r"(result) : "memory");
+    /* vsub.xyz, vmul.xyz, vaddy.x, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
+    result[0] = point_a[0] - point_b[0];
+    result[1] = point_a[1] - point_b[1];
+    result[2] = point_a[2] - point_b[2];
+    result[0] = result[0] * result[0];
+    result[1] = result[1] * result[1];
+    result[2] = result[2] * result[2];
+    result[0] = result[0] + result[1];
+    result[0] = result[0] + result[2];
+    result[0] = 0.0f + sqrtf(result[0]);
     return result[0];
 }
 
@@ -67,17 +73,13 @@ f32 EntityMath_Distance(f32 *point_a, f32 *point_b) {
 float EntityMath_DistanceXZ(float *point_a, float *point_b) {
     float result[4];
 
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xz $vf16, $vf16, $vf16\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(point_a), "r"(point_b), "r"(result) : "memory");
+    /* vsub.xyz, vmul.xz, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
+    result[0] = point_a[0] - point_b[0];
+    result[2] = point_a[2] - point_b[2];
+    result[0] = result[0] * result[0];
+    result[2] = result[2] * result[2];
+    result[0] = result[0] + result[2];
+    result[0] = 0.0f + sqrtf(result[0]);
     return result[0];
 }
 

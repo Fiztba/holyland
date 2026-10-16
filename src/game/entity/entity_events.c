@@ -40,20 +40,15 @@ static inline f32 wrap_angle(f32 angle) {
 
 /* EntityMath_DistanceXZ inlined: the distance between two points, height left out */
 static inline f32 flat_distance(f32 *from, f32 *target) {
-    f32 distance_out[4];
+    f32 delta_x;
+    f32 delta_z;
 
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xz $vf16, $vf16, $vf16\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%2)\n"
-        : : "r"(from), "r"(target), "r"(distance_out) : "memory");
-    return distance_out[0];
+    /* vsub.xyz, vmul.xz, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
+    delta_x = from[0] - target[0];
+    delta_z = from[2] - target[2];
+    delta_x = delta_x * delta_x;
+    delta_z = delta_z * delta_z;
+    return 0.0f + sqrtf(delta_x + delta_z);
 }
 
 /* EntityMath_Approach inlined: `current` moved one step of `rate` towards `goal` */
@@ -192,12 +187,12 @@ int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from
 }
 
 /* Starts effect `effect_id` at point `point_id` of the entity's model, turned by `rotation`. */
-void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, int rotation) {
+void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, f32 *rotation) {
     char *point;
 
     point = Model_GetSkinnedBonePoint(*entity, point_id);
     if (point != 0) {
-        Effect_StartSpawner(effect_id, point, (void *)rotation, entity);
+        Effect_StartSpawner(effect_id, point, rotation, entity);
     }
 }
 
@@ -350,7 +345,7 @@ void EntityEvent_OnDeath(Entity *entity) {
     if ((s32)(entity->flags >> 38) & 3) {
         Player_AddExperience(entity->params->experience_reward);
     }
-    Game_CountSpawnDeath(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
+    Game_CountSpawnDeath(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
     Effect_FreeForOwner(entity);
     if (entity->spawn_info->death_script_id != 0 && entity->group_id == current_map_slot) {
         Script_Start(entity->spawn_info->death_script_id, 0);
@@ -396,16 +391,14 @@ s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits
 
 /* Bone_TurnPart for a part that is to look at a point: in mode 1 `angles` turn towards what Bone_LookAngles
    gives for `target` (FALSE if it gives none). FALSE: no model or no part. */
-int Bone_TurnPartToLook(void *model, int part_arg, int angles_arg, int mode, void *target, int limits_arg, float rate) {
-    ModelPart *part = (ModelPart *)part_arg;
-    f32 *angles = (f32 *)angles_arg;
+int Bone_TurnPartToLook(void *model, ModelPart *part, f32 *angles, int mode, void *target, f32 *limits, float rate) {
     f32 goal[4];
 
     if (model == NULL || part == NULL) {
         return FALSE;
     }
     if (mode == 1) {
-        if (Bone_LookAngles(model, part, target, (f32 *)limits_arg, goal) == 0) {
+        if (Bone_LookAngles(model, part, target, limits, goal) == 0) {
             return FALSE;
         }
         turn_towards(&angles[0], goal[0], rate);

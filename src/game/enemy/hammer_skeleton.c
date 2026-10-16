@@ -115,7 +115,7 @@ static void HammerSkeleton_Death(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bits2 = 2;
             ENTITY_FLAG_BITS(entity)->bit4 = TRUE;
             entity->action_timer = 20;
-            Game_CountSpawnDeath(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
+            Game_CountSpawnDeath(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
             if (entity->spawn_info->death_script_id != 0 && entity->group_id == current_map_slot) {
                 Script_Start(entity->spawn_info->death_script_id, 0);
             }

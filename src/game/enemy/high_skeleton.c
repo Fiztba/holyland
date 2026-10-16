@@ -22,13 +22,13 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 void EntityAi_ThinkCombat(Entity *, s32);
 int Motion_Start(void *, int, int, u32, int);
 void EntityAi_SetState(char *, u8);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 
 static void HighSkeleton_Think(Entity *entity, s32 unknown);
 static void HighSkeleton_Dormant(Entity *entity);
@@ -216,7 +216,7 @@ static void HighSkeleton_DormantScaleUp(Entity *entity) {
         entity->action_step++;
         break;
     case 1:
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x22F, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x22F, 0xFF, entity->model->rotation);
         entity->action_step++;
         break;
     case 2:

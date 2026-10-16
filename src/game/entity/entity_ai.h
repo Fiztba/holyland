@@ -50,7 +50,7 @@ int EntityAi_LaunchShots(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 elapsed
 void EntityAi_SpawnBoneEffect(char **model, int effect_id, int point);
 /* Turns the model part at EntityModel.look_at_part to look at target (Bone_TurnPartToLook) while params flag 0x2000 is
    set; FALSE without it */
-int EntityAi_LookAtPoint(Entity *entity, int angles, int mode, int target, int limits, float rate);
+int EntityAi_LookAtPoint(Entity *entity, f32 *angles, int mode, void *target, f32 *limits, float rate);
 /* As EntityAi_LookAtPoint, at the player's position 220 above his feet */
 int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32 range);
 /* Once the model is below y 10000 (fallen out of the map): frees its effects, clears flag bit 1 and returns

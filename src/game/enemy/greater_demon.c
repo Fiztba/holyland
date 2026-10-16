@@ -34,8 +34,8 @@ void EntityPoint_PickNear(float, void *, void *, void *);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 static void GreaterDemon_ThinkCombat(Entity *, s32);
 int rand(void);
@@ -73,7 +73,7 @@ void EntityAi_SetState(char *, u8);
 int EntityAi_SetReaction(char *, void (*)(void), int); // match: an int result keeps $2 busy after the call
 static void GreaterDemon_ReactionHeavy(Entity *);
 void EntityAi_SetAttackDelay(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
 float EntityMath_DistanceXZ(void *, void *);
 void EntityEvent_Respawn(char *);
@@ -734,7 +734,7 @@ static void GreaterDemon_Guard(Entity *entity) {
             entity->flags &= ~(0x8000L << 28);
             entity->action_timer = entity->params->guard_frames;
         }
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x32F, 0, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x32F, 0, entity->model->rotation);
         if (entity->action_timer == 0) {
             ENTITY_FLAG_BITS(entity)->bit35 = 0;
             ENTITY_FLAG_BITS(entity)->bit14 = 1;

@@ -32,15 +32,15 @@ void EntityEvent_OnDeath(Entity *);
 extern EntityFrameTable5 ancient_king_near_shot_frames;
 int rand(void);
 void EntityAi_SetAttackDelay(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 // match: the definition takes an Actor, a struct local to EntityAi_Animate.c
 void EntityAi_Animate(void);
 void EntityAi_OnHit(char *);
 void EntityAi_Move(Entity *);
 void EntityAi_CheckFarFromSpawn(char *);
 float EntityMath_DistanceXZ(void *, void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
 s32 EntityAi_ShouldDodge(Entity *, f32, f32);
 s32 EntityAi_PickCombatChoice(Entity *, s32);
@@ -372,10 +372,10 @@ static void AncientKing_RespawnOthers(Entity *entity) {
         break;
     case 2:
         if (((EntityUnkE0Slot *)unkE0->motion_slot_1)->unk02 == entity->params->far_distance) {
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, entity->model->rotation);
         }
         if (entity->params->unk43C < ((EntityUnkE0Slot *)unkE0->motion_slot_1)->unk02) {
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, entity->model->rotation);
             AncientKing_RespawnTwoOthers(entity);
             entity->action_step++;
         }
@@ -750,10 +750,10 @@ static void AncientKing_RespawnOthersAfterSwitch(Entity *entity) {
         break;
     case 2:
         if (((EntityUnkE0Slot *)unkE0->motion_slot_1)->unk02 == entity->params->far_distance) {
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, entity->model->rotation);
         }
         if (entity->params->unk43C < entity->model->level_tables->unk82) {
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, entity->model->rotation);
             AncientKing_RespawnTwoOthers(entity);
             entity->action_step++;
         }

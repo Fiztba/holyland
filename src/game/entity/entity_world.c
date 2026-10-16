@@ -53,8 +53,8 @@ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
 void Model_MultiplyChildMatrices(ModelPart *);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 
-#define SCRATCH_MATRIX ((f32 *)0x70000000)
-#define SCRATCH_VECTOR ((f32 *)0x70000040)
+#define SCRATCH_MATRIX SPR(f32 *, 0)
+#define SCRATCH_VECTOR SPR(f32 *, 0x40)
 #define MAP_RECORD(entity) ((MapRecord *)(entity)->map_record)
 #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->spawn_flags)
 
@@ -390,9 +390,9 @@ void Entity_UpdateAll(void) {
             ENTITY_MODEL(entity)->fog_block = &map_draw_state.fog_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->draw_block_index];
         }
         if ((s8)SPAWN_FLAGS(spawn_info)->bytes[3] != -1 || entity->map_record == NULL) {
-            ENTITY_MODEL(entity)->light_block = (s32)&map_draw_state.light_blocks[entity->group_id][(s8)SPAWN_FLAGS(spawn_info)->bytes[3]];
+            ENTITY_MODEL(entity)->light_block = (sptr)&map_draw_state.light_blocks[entity->group_id][(s8)SPAWN_FLAGS(spawn_info)->bytes[3]];
         } else {
-            ENTITY_MODEL(entity)->light_block = (s32)&map_draw_state.light_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->light_block_index];
+            ENTITY_MODEL(entity)->light_block = (sptr)&map_draw_state.light_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->light_block_index];
         }
         Model_UpdateSkinnedBonePoints(ENTITY_MODEL(entity));
     }

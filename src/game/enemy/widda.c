@@ -27,8 +27,8 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 int rand(void);
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
@@ -45,7 +45,6 @@ void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
 void EntityAi_MeleeAttack(Entity *);
 void EntityAi_RangedAttack(Entity *);
-extern int entity_under_player[];
 int Motion_Start(void *, int, int, u32, int);
 
 static void Widda_Animate(Entity *entity);
@@ -341,7 +340,7 @@ static void Widda_Move(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 turn;
 
-    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & 0x800)) {
+    if (entity == player_state.stood_on_entity && (entity->params->flags & 0x800)) {
         entity->move_command = 0;
     }
     if (entity->move_command & 0x100) {

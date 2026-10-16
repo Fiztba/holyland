@@ -19,8 +19,8 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 extern PlayerData player_state;
 int rand(void);
@@ -40,7 +40,7 @@ void EntityAi_MeleeAttack(Entity *);
 void EntityAi_RangedAttack(Entity *);
 extern Qword living_armor_look_limits;
 float EntityMath_WrapAngle(float);
-int Bone_TurnPartToLook(void *, int, int, int, void *, int, float);
+int Bone_TurnPartToLook(void *, ModelPart *, f32 *, int, void *, f32 *, float);
 int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
@@ -239,7 +239,7 @@ static void LivingArmor_AimPart3AtPlayer(Entity *actor) {
     model = ENTITY_MODEL(actor);
     joint = &model->parts[3];
     if (joint != NULL && actor->animation_index == 0x11) {
-        Bone_TurnPartToLook(model, (int)joint, (int)actor->unkE0.target_point, 1, player_state.position, 0, 10.0f);
+        Bone_TurnPartToLook(model, joint, actor->unkE0.target_point, 1, player_state.position, 0, 10.0f);
         angle = joint->rotation_x - 2.0943952f;
         joint->rotation_x = angle;
         joint->rotation_x = EntityMath_WrapAngle(angle);

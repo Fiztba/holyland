@@ -28,7 +28,7 @@ int Motion_Start(void *, int, int, u32, int);
 s32 EntityAi_CheckMeleeHitAt(Entity *, void *, s32, s32, s32, f32);
 float EntityMath_WrapAngle(float);
 void EntityAi_SetAttackDelay(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 int EntityShot_LaunchAimed(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *, f32, f32);
 extern PlayerData player_state;
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
@@ -350,8 +350,8 @@ static void WiddaQueen_RangedAttack0(Entity *entity) {
             unkE0->step_index = 2;
         }
         if (entity->model->level_tables->unk82 == 0x16 && (entity->ailment_4_frames == 0 || unk3D8->unk0C != 0)) {
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 4, (int)entity->model->rotation);
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 8, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 4, entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 8, entity->model->rotation);
         }
         elapsed = (entity->model->level_tables->unk84 - entity->params->motion_speeds[entity->animation_index]) >> 8;
         Vector_Copy(target, player_state.position);

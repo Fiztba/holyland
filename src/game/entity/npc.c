@@ -52,7 +52,7 @@ static void Npc_Death(Entity *entity);
 static void Npc_Move(Entity *entity);
 static void Npc_OnHitType81(Entity *entity);
 static void Npc_ThinkType81(Entity *entity, s32 run_now);
-static int Npc_ThinkType81Stand(void *entity_ptr, int unknown);
+static void Npc_ThinkType81Stand(void *entity_ptr, int unknown);
 
 /* The set-up function of entity type 15, the talking characters (chr.prm): as EntityAi_InitDefaults, with the
    Npc_ handlers, its look part from EntityParams.unk43C, and flag bit 16 set. */
@@ -672,7 +672,7 @@ static void Npc_ThinkType81(Entity *entity, s32 run_now) {
 }
 
 /* The think function of type 81 that stands: as Npc_ThinkStand. */
-static int Npc_ThinkType81Stand(void *entity_ptr, int unknown) {
+static void Npc_ThinkType81Stand(void *entity_ptr, int unknown) {
     Entity *entity = entity_ptr;
 
     ENTITY_FLAG_BITS(entity)->bit9 = FALSE;

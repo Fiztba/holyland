@@ -27,7 +27,7 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_ThinkCombat(Entity *, s32);
 char *Model_GetSkinnedBonePoint(char *, u32);
 int Motion_Start(void *, int, int, u32, int);

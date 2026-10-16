@@ -14,7 +14,7 @@ int EntityShot_LaunchAimed(Entity *entity, EntityParamsUnk3D8 *record, s32 frame
 int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *record, s32 frame_from, s32 frame_to, f32 *direction);
 
 /* Starts effect `effect_id` at point `point_id` of the entity's model, turned by `rotation`. */
-void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, int rotation);
+void EntityEvent_StartEffectAtPoint(char **entity, int effect_id, u32 point_id, f32 *rotation);
 
 /* Starts the effects animation `animation` lists for the frames in [frame_from, frame_to). */
 void EntityEvent_StartFrameEffects(Entity *entity, s32 animation, s32 frame_from, s32 frame_to);
@@ -38,6 +38,6 @@ void EntityEvent_OnDeath(Entity *entity);
 s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits, f32 rate);
 
 /* Bone_TurnPart for a part that is to look at `target`. */
-int Bone_TurnPartToLook(void *model, int part, int angles, int mode, void *target, int limits, float rate);
+int Bone_TurnPartToLook(void *model, ModelPart *part, f32 *angles, int mode, void *target, f32 *limits, float rate);
 
 #endif

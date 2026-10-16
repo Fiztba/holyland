@@ -20,7 +20,7 @@ void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn3D(char *);
 void EntityAi_StepState(void *);
 f32 EntityCollision_DistanceToGround(f32 *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int rand(void);
 void EntityPoint_PickNearWithHeight(f32 *, f32, f32, void *, void *);
 int EntityAi_TurnFromPush(void *, void *);

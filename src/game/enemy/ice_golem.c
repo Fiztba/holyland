@@ -19,10 +19,10 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 extern PlayerData player_state;
 int rand(void);
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
@@ -126,7 +126,7 @@ static void IceGolem_Think(Entity *entity, s32 unknown) {
         }
     }
     if (frame_counter % 3U == 0) {
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x3AD, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x3AD, 0xFF, entity->model->rotation);
     }
 }
 

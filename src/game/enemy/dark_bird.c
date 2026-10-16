@@ -19,7 +19,7 @@ void EntityAi_SensePlayer(void *, int);
 int EntityAi_StartSlotMotion(void *, void *, int, int, int, int, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 extern PlayerData player_state;
 int rand(void);
@@ -60,7 +60,7 @@ void EntityEvent_OnDeath(Entity *);
 int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
 s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
 void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
-int EntityAi_LookAtPoint(void *, int, int, int, int, float);
+int EntityAi_LookAtPoint(void *, f32 *, int, void *, f32 *, float);
 int EntityAi_LookAtPlayer(Entity *, void *, s32, void *, f32);
 
 static void DarkBird_Think(Entity *entity, s32 unknown);
@@ -1108,7 +1108,7 @@ static void DarkBird_Animate(Entity *entity) {
     limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
     limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
     if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
-        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
     } else {
         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
     }

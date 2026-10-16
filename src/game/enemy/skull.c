@@ -19,8 +19,8 @@ extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 extern PlayerData player_state;
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
@@ -50,7 +50,7 @@ int Motion_Step(void *, int);
 int Motion_BlendToPose(EntityModel *, f32);
 char *Model_GetSkinnedBonePoint(char *, u32);
 int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 s32 EntityAi_TurnToHeading(Entity *, f32 *, f32);
 int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
 void EntityAi_SetAttackDelay(Entity *, s32);
@@ -532,7 +532,7 @@ static void Skull_Animate(Entity *entity) {
             shot->unk28 = entity->params->unk238;
             Attack_LaunchMagicEffect(0xD0, shot, Model_GetSkinnedBonePoint((char *)entity->model, 0xFF), entity->model->rotation, entity);
         } else {
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x39D, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x39D, 0xFF, entity->model->rotation);
         }
     }
 }

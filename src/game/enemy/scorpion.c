@@ -17,7 +17,7 @@ int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
 extern u32 frame_counter;
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_StepState(void *);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);
@@ -52,8 +52,8 @@ int Motion_Start(void *, int, int, u32, int);
 
 static void Scorpion_Animate(Entity *entity);
 static void Scorpion_Think(Entity *entity, s32 unknown);
-static int Scorpion_ThinkWander(Entity *entity, s32 unknown);
-static int Scorpion_ThinkCombat(Entity *entity, s32 unknown);
+static void Scorpion_ThinkWander(Entity *entity, s32 unknown);
+static void Scorpion_ThinkCombat(Entity *entity, s32 unknown);
 static void Scorpion_Move(Entity *entity);
 
 /* Set-up of a type 16 entity: clears its work area and installs the type's handlers. */
@@ -148,7 +148,7 @@ static void Scorpion_Think(Entity *entity, s32 unknown) {
    timer runs out it picks a point near the spawn point (EntityPoint_PickNear; 21 times in 100, for 60 to
    89 frames) or no target (120 to 179 frames), takes the command of EntityAi_MoveCommand towards it (or
    the turn away from a push, EntityAi_TurnFromPush) and starts the move action. */
-static int Scorpion_ThinkWander(Entity *entity, s32 unknown) {
+static void Scorpion_ThinkWander(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 direction[4];
     s32 turn;
@@ -185,7 +185,7 @@ static int Scorpion_ThinkWander(Entity *entity, s32 unknown) {
    bits 11 to 13 at 3); 1 goes for the player; 2 moves sideways (command bit 4 or 8, by the side of
    the player's facing the entity is on, work byte unk7A) until flag bit 45, 47 or 48 is set, which
    puts it on way 1. */
-static int Scorpion_ThinkCombat(Entity *entity, s32 unknown) {
+static void Scorpion_ThinkCombat(Entity *entity, s32 unknown) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 heading;
     f32 angle;

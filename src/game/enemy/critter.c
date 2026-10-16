@@ -22,7 +22,7 @@ void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
 f32 EntityCollision_DistanceToGround(f32 *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 int rand(void);
 int EntityAi_TurnFromPush(void *, void *);
 float EntityMath_WrapAngle(float);

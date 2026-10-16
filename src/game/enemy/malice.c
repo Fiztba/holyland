@@ -19,8 +19,8 @@ extern f32 D_00446814[];
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 f32 EntityCollision_DistanceToPropFloor(void *, void *);
 extern PlayerData player_state;
@@ -49,7 +49,7 @@ void sceVu0RotMatrixZ(float *, float *, float);
 void Vector_ApplyMatrix(void *, void *, void *);
 void Vector_Scale(float *, float *, float);
 extern f32 D_00446818[];
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 float EntityMath_AngleXZ(float *, char *);
 float EntityMath_WrapAngle(float);
 float EntityMath_HeadingTo(float *, float *);
@@ -502,7 +502,7 @@ static void Malice_FadeOutAndRelocate(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bit27 = 1;
             unkE0->action_counter = 0;
             unkE0->reload_timer = 0;
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x234, 0, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x234, 0, entity->model->rotation);
             entity->action_step++;
         }
         break;
@@ -554,7 +554,7 @@ static void Malice_FadeBackIn(Entity *entity) {
         if ((s16)entity->params->action_frames < unkE0->mode_timer++) {
             Motion_Start(entity, 1, 0, 0, 0);
             entity->model->rotation[1] = EntityMath_HeadingTo(entity->model->position, (f32 *)&player_state);
-            EntityEvent_StartEffectAtPoint((char **)entity, 0x235, 0, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, 0x235, 0, entity->model->rotation);
             entity->action_step++;
         }
         break;

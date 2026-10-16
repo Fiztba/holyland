@@ -16,7 +16,7 @@ int Motion_Step(void *, int);
 // match: the callee is void, but retail keeps what it leaves in $2
 int Motion_BlendToPose(EntityModel *, f32);
 int rand(void);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 float EntityMath_EaseAngleToward(float *, float, float);
 float EntityMath_DistanceXZ(void *, void *);
 int Motion_Start(void *, int, int, u32, int);
@@ -152,7 +152,7 @@ static void Crow_MoveOffAndRemove(Entity *entity, s32 unknown) {
     ENTITY_FLAG_BITS(entity)->bits11 = 0;
     entity->move_command |= 1;
     if (unkE0->pause_timer < entity->params->unk43A) {
-        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->far_distance, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->far_distance, 0xFF, entity->model->rotation);
         unkE0->pause_timer++;
     }
     // match: the whole step is written out in both arms (only the call is shared in retail)

@@ -22,9 +22,9 @@ void EntityAi_Death(Entity *);
 extern u32 frame_counter;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkCombat(Entity *, s32);
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 int Motion_Start(void *, int, int, u32, int);
 void EntityAi_SetState(char *, u8);
 void EntityEvent_OnDeath(Entity *);
@@ -125,7 +125,7 @@ static void Larva_Think(Entity *entity, s32 unknown) {
         }
     }
     if (frame_counter % 20U == 0) {
-        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, 0xFF, entity->model->rotation);
     }
     if (unkE0->sub_timer != 0) {
         unkE0->sub_timer--;
@@ -366,7 +366,7 @@ static void Larva_DormantMoveAlongArc(Entity *entity) {
             unkE0->part_angle_x = (f32)entity->params->yaw_limit_deg;
         }
         if (frame_counter % 3U == 0) {
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43C, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43C, 0xFF, entity->model->rotation);
         }
         if (unkE0->action_counter == 0) {
             unkE0->action_counter = EntityAi_CheckMeleeHit(entity, entity->params->melee_attacks, 0, 1, 2);
@@ -379,7 +379,7 @@ static void Larva_DormantMoveAlongArc(Entity *entity) {
             entity->model->scale[1] = unkE0->heading_speed;
             entity->model->scale[2] = unkE0->keep_min_distance;
             unkE0->action_flags = 1;
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43E, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43E, 0xFF, entity->model->rotation);
             EntityAi_SetState((char *)entity, 2);
             entity->flags &= ~0x200000;
             entity->flags &= ~0x100000;

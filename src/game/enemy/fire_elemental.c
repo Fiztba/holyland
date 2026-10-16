@@ -20,7 +20,7 @@ extern PlayerData player_state;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 int rand(void);
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
@@ -249,7 +249,7 @@ static void FireElemental_ThinkCombat(Entity *entity, s32 unknown) {
                 entity->move_command = 0x102;
             } else {
                 // match: called like EntityAi_MoveCommand, with a mode the callee ignores
-                entity->move_command = ((s16 (*)(float, void *, int))FireElemental_BackwardsCommand)(entity->radius + 100.0f + 30.0f, entity, 1);
+                entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
             }
         }
     }
@@ -676,7 +676,7 @@ static void FireElemental_BackAwayFromPlayer(Entity *entity) {
             entity->move_command = 0x102;
         } else {
             // match: called like EntityAi_MoveCommand, with a mode the callee ignores
-            entity->move_command = ((s16 (*)(float, void *, int))FireElemental_BackwardsCommand)(entity->radius + 100.0f + 30.0f, entity, 1);
+            entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
         }
         ((void (*)(Entity *))unkE0->move)(entity);
         break;
@@ -780,7 +780,7 @@ static void FireElemental_ThinkReturn(Entity *entity, s32 unknown) {
     if (turn == 0) {
         entity->target = entity->spawn_info;
         // match: called like EntityAi_MoveCommand, with a mode the callee ignores
-        entity->move_command = ((s16 (*)(float, void *, int))FireElemental_BackwardsCommand)(entity->radius + 100.0f + 30.0f, entity, 1);
+        entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
     } else {
         push[0] = push[1] = push[2] = push[3] = 0.0f;
         if (entity->flags & (0xC000L << 31)) {
@@ -809,7 +809,7 @@ static void FireElemental_ThinkReturn(Entity *entity, s32 unknown) {
             entity->move_command = 0x102;
         } else {
             // match: called like EntityAi_MoveCommand, with a mode the callee ignores
-            entity->move_command = ((s16 (*)(float, void *, int))FireElemental_BackwardsCommand)(entity->radius + 100.0f + 30.0f, entity, 1);
+            entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
         }
     }
     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, unknown);

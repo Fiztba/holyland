@@ -25,7 +25,7 @@ extern PlayerData player_state;
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(char *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 s32 EntityAi_MoveCommand(Entity *, s32, f32);
 s32 EntityAi_CanShoot(Entity *);
 s32 EntityAi_PickRangedAttack(Entity *);

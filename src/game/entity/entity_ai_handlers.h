@@ -56,10 +56,10 @@ void EntityAi_OnHit(Entity *entity);
 void EntityAi_Think(Entity *entity, s32 unknown);
 
 /* The think function while flag bit 53 is set: walks back to the spawn point. */
-int EntityAi_ThinkReturn(void *entity_ptr, int unknown);
+void EntityAi_ThinkReturn(void *entity_ptr, int unknown);
 
 /* The think function of state 0: wanders near the spawn point. */
-int EntityAi_ThinkIdle(void *entity_ptr, int unknown);
+void EntityAi_ThinkIdle(void *entity_ptr, int unknown);
 
 /* The think function of state 1 (the player was noticed and is no longer): keeps walking to the player. */
 void EntityAi_ThinkPursue(Entity *entity, int extra);

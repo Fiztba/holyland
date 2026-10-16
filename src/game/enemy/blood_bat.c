@@ -50,9 +50,9 @@ void EntityAi_SetState(char *, u8);
 
 static void BloodBat_Animate(Entity *entity);
 static void BloodBat_Think(Entity *entity, s32 unknown);
-static int BloodBat_ThinkReturn(void *entity_arg, int unknown);
+static void BloodBat_ThinkReturn(void *entity_arg, int unknown);
 static void BloodBat_ThinkWander(Entity *entity, s32 unknown);
-static int BloodBat_ThinkCombat(void *entity_arg, int unknown);
+static void BloodBat_ThinkCombat(void *entity_arg, int unknown);
 static void BloodBat_Move(Entity *entity);
 static void BloodBat_Dormant(Entity *entity);
 
@@ -151,7 +151,7 @@ static void BloodBat_Think(Entity *entity, s32 unknown) {
    whatever is pushing the entity, as EntityAi_ThinkReturn; with flag bits 11 to 13 at 0, the
    command of EntityAi_MoveCommand3D, and, while it is pushed, command bit 0x20 or 0x10 by the y of the push.
    */
-static int BloodBat_ThinkReturn(void *entity_arg, int unknown) {
+static void BloodBat_ThinkReturn(void *entity_arg, int unknown) {
     Entity *entity = entity_arg;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 to_spawn[4];
@@ -243,7 +243,7 @@ static void BloodBat_ThinkWander(Entity *entity, s32 unknown) {
    Closing in, it goes forward turning to Entity.heading_to_player, with command bit 0x20 or 0x10 to bring its y
    to the player's less work float unk4C (EntityParams.yaw_limit_deg give or take unk434), and it chooses
    anew once the player is within the radius plus 130. */
-static int BloodBat_ThinkCombat(void *entity_arg, int unknown) {
+static void BloodBat_ThinkCombat(void *entity_arg, int unknown) {
     Entity *entity = entity_arg;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 direction[4];

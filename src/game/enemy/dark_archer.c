@@ -53,8 +53,8 @@ extern EntitySpawnInfo *map_spawn_infos[2];
 void Game_CountSpawnDeath(u32, int);
 void EntityAi_CheckFarFromSpawn(void *);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkReturn(void *, int);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkPursue(Entity *, s32);
 int rand(void);
 s32 EntityAi_ShouldGuard(Entity *, f32, f32);
@@ -391,7 +391,7 @@ static void DarkArcher_DeathWithoutReward(Entity *entity) {
             ENTITY_FLAG_BITS(entity)->bit27 = 1;
             ENTITY_FLAG_BITS(entity)->bit26 = 1;
             entity->action_timer = 20;
-            Game_CountSpawnDeath(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
+            Game_CountSpawnDeath(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
             Effect_FreeForOwner(entity);
             entity->action_step++;
         }

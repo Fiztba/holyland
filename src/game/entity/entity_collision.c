@@ -9,6 +9,7 @@
 extern PlayerData player_state;
 void Vector_Normalize(void *, void *);
 double sqrt(double);
+float sqrtf(float);
 void Vector_Subtract(void *, void *, void *);
 void sceVu0Normalize(float *, float *);
 void Vector_Scale(float *, float *, float);
@@ -52,22 +53,20 @@ extern ModelInstanceBlock *map_slot_record_models[];
         position[2] = COLLISION_RESULT->point[2] + offset[2];                                      \
     }
 
-/* loads one edge of the triangle: its two ends, and start minus end into both `edge` and `flat` */
+/* loads one edge of the triangle: its two ends, and start minus end into both `edge` and `flat`
+   (on the PS2 one VU0 block: lqc2 both, vsub.xyzw, four sqc2) */
 #define LOAD_EDGE(from, to)                                                                        \
-    __asm__ volatile(                                                                              \
-        "lqc2 $vf16, 0(%0)\n"                                                                      \
-        "lqc2 $vf17, 0(%1)\n"                                                                      \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vsub.xyzw $vf18, $vf16, $vf17\n"                                                          \
-        "sqc2 $vf16, 0(%2)\n"                                                                      \
-        "sqc2 $vf17, 0(%3)\n"                                                                      \
-        "vnop\n"                                                                                   \
-        "sqc2 $vf18, 0(%4)\n"                                                                      \
-        "sqc2 $vf18, 0(%5)\n"                                                                      \
-        :                                                                                          \
-        : "r"(from), "r"(to), "r"(start), "r"(end), "r"(edge), "r"(flat))
+    do {                                                                                           \
+        f32 *from_ = (f32 *)(from);                                                                \
+        f32 *to_ = (f32 *)(to);                                                                    \
+        s32 lane_;                                                                                 \
+        for (lane_ = 0; lane_ < 4; lane_++) {                                                      \
+            start[lane_] = from_[lane_];                                                           \
+            end[lane_] = to_[lane_];                                                               \
+            edge[lane_] = from_[lane_] - to_[lane_];                                               \
+            flat[lane_] = edge[lane_];                                                             \
+        }                                                                                          \
+    } while (0)
 
 /* records a hit at `from`. The result is written through constant addresses (*&), not through
    a shared base register. */
@@ -97,6 +96,81 @@ static inline s32 map_object_count(s32 map) {
 }
 
 #define PUSH_CENTRE(amount)                                                                     centre[0] = COLLISION_RESULT->point[0] + COLLISION_RESULT->normal[0] * (amount);            centre[2] = COLLISION_RESULT->point[2] + COLLISION_RESULT->normal[2] * (amount)
+
+/* What the VU0 blocks of this file computed, in C. On the PS2 the lanes a block did not write (the w of
+   a vsub.xyz result, say) kept what the VU0 register last held, and some blocks stored that too; those
+   lanes are left as they are here. */
+
+/* x + y + z of a vector the way VU0 sums it: vaddy.x, then vaddz.x */
+static inline f32 vu0_sum_xyz(const f32 *v) {
+    f32 sum = v[0] + v[1];
+
+    return sum + v[2];
+}
+
+/* vopmula.xyz ACC, a, b then vopmsub.xyz out, b, a: the cross product a x b */
+static inline void vu0_cross(f32 *out, const f32 *a, const f32 *b) {
+    f32 x = a[1] * b[2] - b[1] * a[2];
+    f32 y = a[2] * b[0] - b[2] * a[0];
+    f32 z = a[0] * b[1] - b[0] * a[1];
+
+    out[0] = x;
+    out[1] = y;
+    out[2] = z;
+}
+
+/* vmul.xyz then the sum: the dot product of the x, y and z of a and b */
+static inline f32 vu0_dot_xyz(const f32 *a, const f32 *b) {
+    f32 product[3];
+
+    product[0] = a[0] * b[0];
+    product[1] = a[1] * b[1];
+    product[2] = a[2] * b[2];
+    return vu0_sum_xyz(product);
+}
+
+/* the length of the x, y and z of v as VU0 takes it: the dot product, vsqrt Q, vaddq.x from vf0 */
+static inline f32 vu0_length_xyz(const f32 *v) {
+    return 0.0f + sqrtf(vu0_dot_xyz(v, v));
+}
+
+/* v's x, y and z scaled to unit length: the length, then vdiv Q, vf0w, length and vmulq.xyz */
+static inline void vu0_normalize_xyz(f32 *out, const f32 *v) {
+    f32 scale = 1.0f / vu0_length_xyz(v);
+
+    out[0] = v[0] * scale;
+    out[1] = v[1] * scale;
+    out[2] = v[2] * scale;
+}
+
+/* vsub.xyz: out = a - b on x, y and z */
+static inline void vu0_sub_xyz(f32 *out, const f32 *a, const f32 *b) {
+    out[0] = a[0] - b[0];
+    out[1] = a[1] - b[1];
+    out[2] = a[2] - b[2];
+}
+
+/* the three cross products of the corners seen from `point` and their dot products in turn: all three of
+   one sign when `point` lies within the triangle */
+static inline void vu0_triangle_sides(const f32 *corner_a, const f32 *corner_b, const f32 *corner_c, const f32 *point,
+                                      f32 *side_a, f32 *side_b, f32 *side_c) {
+    f32 to_a[3];
+    f32 to_b[3];
+    f32 to_c[3];
+    f32 cross_ab[3];
+    f32 cross_bc[3];
+    f32 cross_ca[3];
+
+    vu0_sub_xyz(to_a, corner_a, point);
+    vu0_sub_xyz(to_b, corner_b, point);
+    vu0_sub_xyz(to_c, corner_c, point);
+    vu0_cross(cross_ab, to_a, to_b);
+    vu0_cross(cross_bc, to_b, to_c);
+    vu0_cross(cross_ca, to_c, to_a);
+    *side_a = vu0_dot_xyz(cross_ab, cross_bc);
+    *side_b = vu0_dot_xyz(cross_bc, cross_ca);
+    *side_c = vu0_dot_xyz(cross_ca, cross_ab);
+}
 
 static void EntityCollision_CylinderCylinder(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius, f32 other_height);
 static void EntityCollision_CylinderSphere(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius);
@@ -745,42 +819,33 @@ void EntityCollision_CapsuleTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c
 
     COLLISION_RESULT->hit = 0;
     result_normal = COLLISION_RESULT->normal;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%0)\n"
-        "lqc2 $vf17, 0(%1)\n"
-        "lqc2 $vf18, 0(%2)\n"
-        "vnop\n"
-        "vnop\n"
-        "vsub.xyz $vf19, $vf16, $vf17\n"
-        "vsub.xyz $vf20, $vf18, $vf17\n"
-        "vsub.xyz $vf21, $vf18, $vf16\n"
-        "vnop\n"
-        "vnop\n"
-        "vopmula.xyz ACC, $vf19, $vf20\n"
-        "vopmsub.xyz $vf16, $vf20, $vf19\n"
-        "sqc2 $vf19, 0(%3)\n"
-        "sqc2 $vf20, 0(%4)\n"
-        "sqc2 $vf21, 0(%5)\n"
-        "vmul.xyz $vf17, $vf16, $vf16\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vaddx.xyz $vf17, $vf17, $vf17x\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vaddy.xyz $vf17, $vf17, $vf17y\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "vrsqrt Q, $vf0w, $vf17z\n"
-        "vwaitq\n"
-        "vmulq.xyz $vf16, $vf16, Q\n"
-        "sqc2 $vf16, 0(%6)\n"
-        "sqc2 $vf16, 0(%7)\n"
-        :
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(edge), "r"(flat), "r"(offset), "r"(normal),
-          "r"(result_normal));
+    {
+        f32 face[4];
+        f32 squares[3];
+        f32 scale;
+
+        vu0_sub_xyz(edge, corner_a, corner_b);
+        vu0_sub_xyz(flat, corner_c, corner_b);
+        vu0_sub_xyz(offset, corner_c, corner_a);
+        vu0_cross(face, edge, flat);
+        face[3] = corner_a[3];
+        squares[0] = face[0] * face[0];
+        squares[1] = face[1] * face[1];
+        squares[2] = face[2] * face[2];
+        /* vaddx.xyz then vaddy.xyz, and the z lane taken: x is counted twice in the length (retail; the
+           function is never called) */
+        squares[2] = squares[2] + squares[0];
+        squares[1] = squares[1] + squares[0];
+        squares[2] = squares[2] + squares[1];
+        scale = 1.0f / sqrtf(squares[2]);
+        face[0] = face[0] * scale;
+        face[1] = face[1] * scale;
+        face[2] = face[2] * scale;
+        for (i = 0; i < 4; i++) {
+            normal[i] = face[i];
+            result_normal[i] = face[i];
+        }
+    }
 
     nearest_sq = radius * radius;
     ratio = -normal[1];
@@ -1149,72 +1214,28 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
    `centre` than `radius`. */
 static void EntityCollision_SphereSegment(void *start, void *end, void *centre, f32 radius) {
     f32 direction[4];
+    f32 to_centre[3];
     f32 along;
     f32 distance;
     CollisionResult *result;
-    int float_bits;
 
-    __asm__ volatile(
-        "lui %2, 0x7000\n"
-        "lqc2 $vf16, 0(%4)\n"
-        "lqc2 $vf17, 0(%5)\n"
-        "lqc2 $vf18, 0(%6)\n"
-        "vsub.xyz $vf19, $vf17, $vf16\n"
-        "vsub.xyz $vf20, $vf18, $vf16\n"
-        "vmul.xyz $vf20, $vf19, $vf20\n"
-        "vaddy.x $vf20, $vf20, $vf20y\n"
-        "vaddz.x $vf20, $vf20, $vf20z\n"
-        "vmul.xyz $vf21, $vf19, $vf19\n"
-        "vaddy.x $vf21, $vf21, $vf21y\n"
-        "vaddz.x $vf21, $vf21, $vf21z\n"
-        "vdiv Q, $vf20x, $vf21x\n"
-        "sqc2 $vf19, %1\n"
-        "vwaitq\n"
-        "vaddq.x $vf20, $vf0, Q\n"
-        "qmfc2 %3, $vf20\n"
-        "mtc1 %3, %0\n"
-        : "=f"(along), "=m"(direction), "=r"(result), "=r"(float_bits)
-        : "r"(start), "r"(end), "r"(centre));
+    result = COLLISION_RESULT;
+    vu0_sub_xyz(direction, end, start);
+    vu0_sub_xyz(to_centre, centre, start);
+    along = 0.0f + vu0_dot_xyz(direction, to_centre) / vu0_dot_xyz(direction, direction);
 
     if (0.0f <= along && along <= 1.0f) {
-        __asm__ volatile(
-            "lqc2 $vf16, 0(%3)\n"
-            "lqc2 $vf17, 0(%4)\n"
-            "lqc2 $vf18, %6\n"
-            "mfc1 %1, %2\n"
-            "qmtc2 %1, $vf20\n"
-            "vmulx.xyzw $vf19, $vf18, $vf20x\n"
-            "vadd.xyz $vf19, $vf19, $vf16\n"
-            "vsub.xyz $vf20, $vf17, $vf19\n"
-            "vmul.xyz $vf20, $vf20, $vf20\n"
-            "vaddy.x $vf20, $vf20, $vf20y\n"
-            "vaddz.x $vf20, $vf20, $vf20z\n"
-            "vsqrt Q, $vf20x\n"
-            "sqc2 $vf19, 0(%5)\n"
-            "vwaitq\n"
-            "vaddq.x $vf20, $vf0, Q\n"
-            "qmfc2 %1, $vf20\n"
-            "mtc1 %1, %0\n"
-            : "=f"(distance), "=&r"(float_bits)
-            : "f"(along), "r"(start), "r"(centre), "r"(result), "m"(direction[0]));
+        /* the nearest point of the segment goes to the result's point (vmulx.xyzw, vadd.xyz, sqc2) */
+        result->point[0] = direction[0] * along + ((f32 *)start)[0];
+        result->point[1] = direction[1] * along + ((f32 *)start)[1];
+        result->point[2] = direction[2] * along + ((f32 *)start)[2];
+        vu0_sub_xyz(to_centre, centre, result->point);
+        distance = vu0_length_xyz(to_centre);
 
         COLLISION_RESULT->distance = distance;
         if (!(radius <= distance)) {
-            __asm__ volatile(
-                "lqc2 $vf16, 0(%0)\n"
-                "lqc2 $vf17, 0(%2)\n"
-                "vsub.xyz $vf18, $vf16, $vf17\n"
-                "vmul.xyz $vf19, $vf18, $vf18\n"
-                "vaddy.x $vf19, $vf19, $vf19y\n"
-                "vaddz.x $vf19, $vf19, $vf19z\n"
-                "vsqrt Q, $vf19x\n"
-                "vwaitq\n"
-                "vaddq.x $vf19, $vf0, Q\n"
-                "vdiv Q, $vf0w, $vf19x\n"
-                "vwaitq\n"
-                "vmulq.xyz $vf18, $vf18, Q\n"
-                "sqc2 $vf18, 0(%1)\n"
-                : : "r"(centre), "r"(COLLISION_RESULT->normal), "r"(result));
+            vu0_sub_xyz(to_centre, centre, result->point);
+            vu0_normalize_xyz(COLLISION_RESULT->normal, to_centre);
 
             COLLISION_RESULT->hit = 1;
         }
@@ -1224,43 +1245,20 @@ static void EntityCollision_SphereSegment(void *start, void *end, void *centre, 
 /* Tests a sphere against a point: a hit when `point` is closer to `centre` than `radius`. */
 static void EntityCollision_SpherePoint(void *point, void *centre, f32 radius) {
     CollisionResult *result;
+    f32 to_centre[3];
     f32 distance;
-    int distance_bits;
 
-    __asm__ volatile(
-        "lui %1, 0x7000\n"
-        "lqc2 $vf16, 0(%3)\n"
-        "lqc2 $vf17, 0(%4)\n"
-        "vsub.xyz $vf18, $vf17, $vf16\n"
-        "vmul.xyz $vf18, $vf18, $vf18\n"
-        "vaddy.x $vf18, $vf18, $vf18y\n"
-        "vaddz.x $vf18, $vf18, $vf18z\n"
-        "vsqrt Q, $vf18x\n"
-        "vwaitq\n"
-        "vaddq.x $vf18, $vf0, Q\n"
-        "qmfc2.ni %2, $vf18\n"
-        "mtc1 %2, %0\n"
-        : "=f"(distance), "=r"(result), "=r"(distance_bits)
-        : "r"(point), "r"(centre));
+    result = COLLISION_RESULT;
+    vu0_sub_xyz(to_centre, centre, point);
+    distance = vu0_length_xyz(to_centre);
 
     result->distance = distance;
     if (!(radius <= distance)) {
-        __asm__ volatile(
-            "lqc2 $vf16, 0(%0)\n"
-            "lqc2 $vf17, 0(%1)\n"
-            "sqc2 $vf16, 0(%2)\n"
-            "vsub.xyz $vf18, $vf17, $vf16\n"
-            "vmul.xyz $vf19, $vf18, $vf18\n"
-            "vaddy.x $vf19, $vf19, $vf19y\n"
-            "vaddz.x $vf19, $vf19, $vf19z\n"
-            "vsqrt Q, $vf19x\n"
-            "vwaitq\n"
-            "vaddq.x $vf19, $vf0, Q\n"
-            "vdiv Q, $vf0w, $vf19x\n"
-            "vwaitq\n"
-            "vmulq.xyz $vf18, $vf18, Q\n"
-            "sqc2 $vf18, 0(%3)\n"
-            : : "r"(point), "r"(centre), "r"(result), "r"(COLLISION_RESULT->normal));
+        result->point[0] = ((f32 *)point)[0];
+        result->point[1] = ((f32 *)point)[1];
+        result->point[2] = ((f32 *)point)[2];
+        result->point[3] = ((f32 *)point)[3];
+        vu0_normalize_xyz(COLLISION_RESULT->normal, to_centre);
 
         COLLISION_RESULT->hit = 1;
     }
@@ -1276,40 +1274,26 @@ static void EntityCollision_SphereTriangle(void *corner_a, void *corner_b, void 
 
     result->hit = 0;
     normal = COLLISION_RESULT->normal;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%1)\n"
-        "lqc2 $vf17, 0(%2)\n"
-        "lqc2 $vf18, 0(%3)\n"
-        "lqc2 $vf19, 0(%4)\n"
-        "vsub.xyz $vf21, $vf16, $vf17\n"
-        "vsub.xyz $vf22, $vf18, $vf17\n"
-        "vopmula.xyz ACC, $vf22, $vf21\n"
-        "vopmsub.xyz $vf20, $vf21, $vf22\n"
-        "vmul.xyz $vf21, $vf20, $vf20\n"
-        "vaddy.x $vf21, $vf21, $vf21y\n"
-        "vaddz.x $vf21, $vf21, $vf21z\n"
-        "vsqrt Q, $vf21x\n"
-        "vwaitq\n"
-        "vaddq.x $vf21, $vf0, Q\n"
-        "vdiv Q, $vf0w, $vf21x\n"
-        "vwaitq\n"
-        "vmulq.xyz $vf20, $vf20, Q\n"
-        "sqc2 $vf20, 0(%5)\n"
-        "vmul.xyz $vf21, $vf20, $vf17\n"
-        "vaddy.x $vf21, $vf21, $vf21y\n"
-        "vaddz.x $vf21, $vf21, $vf21z\n"
-        "vmul.xyz $vf22, $vf20, $vf19\n"
-        "vsubx.x $vf21, $vf21, $vf22x\n"
-        "vsuby.x $vf21, $vf21, $vf22y\n"
-        "vsubz.x $vf21, $vf21, $vf22z\n"
-        "qmfc2.ni $2, $vf21\n"
-        "mtc1 $2, %0\n"
-        "vmulx.xyz $vf22, $vf20, $vf21x\n"
-        "vadd.xyz $vf22, $vf22, $vf19\n"
-        "sqc2 $vf22, 0(%6)\n"
-        : "=f"(distance)
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(centre), "r"(normal), "r"(result)
-        : "$2");
+    {
+        f32 edge_a[3];
+        f32 edge_c[3];
+        f32 face[3];
+        f32 *centre_point = (f32 *)centre;
+
+        vu0_sub_xyz(edge_a, corner_a, corner_b);
+        vu0_sub_xyz(edge_c, corner_c, corner_b);
+        vu0_cross(face, edge_c, edge_a);
+        vu0_normalize_xyz(normal, face);
+        /* vsubx.x, vsuby.x, vsubz.x: the plane's distance less each term of the centre's */
+        distance = vu0_dot_xyz(normal, corner_b);
+        distance = distance - normal[0] * centre_point[0];
+        distance = distance - normal[1] * centre_point[1];
+        distance = distance - normal[2] * centre_point[2];
+        /* the centre moved onto the plane goes to the result's point (vmulx.xyz, vadd.xyz) */
+        result->point[0] = normal[0] * distance + centre_point[0];
+        result->point[1] = normal[1] * distance + centre_point[1];
+        result->point[2] = normal[2] * distance + centre_point[2];
+    }
 
     result->distance = distance;
     if (radius <= distance) {
@@ -1318,38 +1302,7 @@ static void EntityCollision_SphereTriangle(void *corner_a, void *corner_b, void 
     if (distance <= -radius) {
         return;
     }
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%3)\n"
-        "lqc2 $vf17, 0(%4)\n"
-        "lqc2 $vf18, 0(%5)\n"
-        "lqc2 $vf19, 0(%6)\n"
-        "vsub.xyz $vf20, $vf16, $vf19\n"
-        "vsub.xyz $vf21, $vf17, $vf19\n"
-        "vsub.xyz $vf22, $vf18, $vf19\n"
-        "vopmula.xyz ACC, $vf20, $vf21\n"
-        "vopmsub.xyz $vf16, $vf21, $vf20\n"
-        "vopmula.xyz ACC, $vf21, $vf22\n"
-        "vopmsub.xyz $vf17, $vf22, $vf21\n"
-        "vopmula.xyz ACC, $vf22, $vf20\n"
-        "vopmsub.xyz $vf18, $vf20, $vf22\n"
-        "vmul.xyz $vf20, $vf16, $vf17\n"
-        "vaddy.x $vf20, $vf20, $vf20y\n"
-        "vaddz.x $vf20, $vf20, $vf20z\n"
-        "qmfc2.ni $2, $vf20\n"
-        "mtc1 $2, %0\n"
-        "vmul.xyz $vf21, $vf17, $vf18\n"
-        "vaddy.x $vf21, $vf21, $vf21y\n"
-        "vaddz.x $vf21, $vf21, $vf21z\n"
-        "qmfc2.ni $2, $vf21\n"
-        "mtc1 $2, %1\n"
-        "vmul.xyz $vf22, $vf18, $vf16\n"
-        "vaddy.x $vf22, $vf22, $vf22y\n"
-        "vaddz.x $vf22, $vf22, $vf22z\n"
-        "qmfc2.ni $2, $vf22\n"
-        "mtc1 $2, %2\n"
-        : "=f"(side_a), "=f"(side_b), "=f"(side_c)
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(result)
-        : "$2");
+    vu0_triangle_sides(corner_a, corner_b, corner_c, result->point, &side_a, &side_b, &side_c);
 
     if ((0.0f <= side_a && 0.0f <= side_b && 0.0f <= side_c) || (side_a < 0.0f && side_b < 0.0f && side_c < 0.0f)) {
         COLLISION_RESULT->hit = 1;
@@ -1390,56 +1343,27 @@ static void EntityCollision_RayTriangle(void *corner_a, void *corner_b, void *co
 
     result->hit = 0;
     normal = COLLISION_RESULT->normal;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%1)\n"
-        "lqc2 $vf17, 0(%2)\n"
-        "lqc2 $vf18, 0(%3)\n"
-        "lqc2 $vf19, 0(%4)\n"
-        "lqc2 $vf20, 0(%5)\n"
-        "vsub.xyz $vf22, $vf16, $vf17\n"
-        "vsub.xyz $vf23, $vf18, $vf17\n"
-        "vopmula.xyz ACC, $vf23, $vf22\n"
-        "vopmsub.xyz $vf21, $vf22, $vf23\n"
-        "vmul.xyz $vf22, $vf21, $vf21\n"
-        "vaddy.x $vf22, $vf22, $vf22y\n"
-        "vaddz.x $vf22, $vf22, $vf22z\n"
-        "vsqrt Q, $vf22x\n"
-        "vwaitq\n"
-        "vaddq.x $vf22, $vf0, Q\n"
-        "vdiv Q, $vf0w, $vf22x\n"
-        "vwaitq\n"
-        "vmulq.xyz $vf21, $vf21, Q\n"
-        "sqc2 $vf21, 0(%6)\n"
-        "vmul.xyz $vf22, $vf21, $vf20\n"
-        "vaddy.x $vf22, $vf22, $vf22y\n"
-        "vaddz.x $vf22, $vf22, $vf22z\n"
-        "qmfc2.ni $2, $vf22\n"
-        "mtc1 $2, %0\n"
-        : "=f"(facing)
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(origin), "r"(direction), "r"(normal)
-        : "$2");
+    {
+        f32 edge_a[3];
+        f32 edge_c[3];
+        f32 face[3];
+
+        vu0_sub_xyz(edge_a, corner_a, corner_b);
+        vu0_sub_xyz(edge_c, corner_c, corner_b);
+        vu0_cross(face, edge_c, edge_a);
+        vu0_normalize_xyz(normal, face);
+        facing = vu0_dot_xyz(normal, direction);
+    }
 
     if (facing < 0.02f && -0.02f < facing) {
         return;
     }
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%2)\n"
-        "lqc2 $vf17, 0(%3)\n"
-        "lqc2 $vf18, 0(%4)\n"
-        "mfc1 $2, %1\n"
-        "qmtc2.ni $2, $vf19\n"
-        "vsub.xyz $vf21, $vf16, $vf17\n"
-        "vmul.xyz $vf22, $vf21, $vf18\n"
-        "vaddy.x $vf22, $vf22, $vf22y\n"
-        "vaddz.x $vf22, $vf22, $vf22z\n"
-        "vdiv Q, $vf22x, $vf19x\n"
-        "vwaitq\n"
-        "vaddq.x $vf20, $vf0, Q\n"
-        "qmfc2.ni $2, $vf20\n"
-        "mtc1 $2, %0\n"
-        : "=f"(distance)
-        : "f"(facing), "r"(corner_b), "r"(origin), "r"(normal)
-        : "$2");
+    {
+        f32 to_plane[3];
+
+        vu0_sub_xyz(to_plane, corner_b, origin);
+        distance = 0.0f + vu0_dot_xyz(to_plane, normal) / facing;
+    }
 
     if (length < distance) {
         return;
@@ -1450,38 +1374,7 @@ static void EntityCollision_RayTriangle(void *corner_a, void *corner_b, void *co
     COLLISION_RESULT->distance = distance;
     Vector_Scale(offset, direction, distance);
     Vector_Add(COLLISION_RESULT, offset, origin);
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%3)\n"
-        "lqc2 $vf17, 0(%4)\n"
-        "lqc2 $vf18, 0(%5)\n"
-        "lqc2 $vf19, 0(%6)\n"
-        "vsub.xyz $vf20, $vf16, $vf19\n"
-        "vsub.xyz $vf21, $vf17, $vf19\n"
-        "vsub.xyz $vf22, $vf18, $vf19\n"
-        "vopmula.xyz ACC, $vf20, $vf21\n"
-        "vopmsub.xyz $vf16, $vf21, $vf20\n"
-        "vopmula.xyz ACC, $vf21, $vf22\n"
-        "vopmsub.xyz $vf17, $vf22, $vf21\n"
-        "vopmula.xyz ACC, $vf22, $vf20\n"
-        "vopmsub.xyz $vf18, $vf20, $vf22\n"
-        "vmul.xyz $vf20, $vf16, $vf17\n"
-        "vaddy.x $vf20, $vf20, $vf20y\n"
-        "vaddz.x $vf20, $vf20, $vf20z\n"
-        "qmfc2.ni $2, $vf20\n"
-        "mtc1 $2, %0\n"
-        "vmul.xyz $vf21, $vf17, $vf18\n"
-        "vaddy.x $vf21, $vf21, $vf21y\n"
-        "vaddz.x $vf21, $vf21, $vf21z\n"
-        "qmfc2.ni $2, $vf21\n"
-        "mtc1 $2, %1\n"
-        "vmul.xyz $vf22, $vf18, $vf16\n"
-        "vaddy.x $vf22, $vf22, $vf22y\n"
-        "vaddz.x $vf22, $vf22, $vf22z\n"
-        "qmfc2.ni $2, $vf22\n"
-        "mtc1 $2, %2\n"
-        : "=f"(side_a), "=f"(side_b), "=f"(side_c)
-        : "r"(corner_a), "r"(corner_b), "r"(corner_c), "r"(result)
-        : "$2");
+    vu0_triangle_sides(corner_a, corner_b, corner_c, result->point, &side_a, &side_b, &side_c);
 
     if ((0.0f <= side_a && 0.0f <= side_b && 0.0f <= side_c) || (side_a < 0.0f && side_b < 0.0f && side_c < 0.0f)) {
         COLLISION_RESULT->hit = 1;
@@ -2393,9 +2286,8 @@ f32 EntityCollision_DistanceToPropFloor(void *prop_arg, void *position_arg) {
 
 /* Finds the nearest triangle of the prop's mesh a ray hits. Returns which of the four strip lists it is in
    (1-4, 0: none), leaves the distance in the result and copies the point to `out_point`. */
-s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 length, s32 out_point_arg) {
+s32 EntityCollision_RayProp(void *prop_arg, f32 *origin, f32 *direction, f32 length, void *out_point) {
     MapProp *prop = prop_arg;
-    void *out_point = (void *)out_point_arg;
     CollisionMesh *mesh;
     CollisionStrip *strip;
     CollisionStripPoint *point;
@@ -2553,7 +2445,7 @@ s32 EntityCollision_RayProps(f32 *origin, f32 *direction, void *out_point, f32 l
                 if (highest[2] < record->lowest[2] || record->highest[2] < lowest[2]) {
                     continue;
                 }
-                kind = EntityCollision_RayProp(record, origin, direction, length, (s32)point);
+                kind = EntityCollision_RayProp(record, origin, direction, length, point);
                 // match: retail never lowers `nearest`, so every hit passes and the last one wins
                 if (kind != 0 && COLLISION_RESULT->distance < nearest) {
                     result = kind;
@@ -2636,10 +2528,7 @@ s32 EntityCollision_RayHitsPropWall(f32 *origin, f32 *direction, f32 length, f32
 }
 
 /* Whether `point` lies within `radius` of the segment start..end (FALSE beyond its ends). */
-int EntityCollision_PointNearSegment(float radius, int *start_arg, int end_arg, int point_arg) {
-    f32 *start = (f32 *)start_arg;
-    f32 *end = (f32 *)end_arg;
-    f32 *point = (f32 *)point_arg;
+int EntityCollision_PointNearSegment(float radius, f32 *start, f32 *end, f32 *point) {
     f32 along[4];
     f32 to_point[4];
     f32 nearest[4];

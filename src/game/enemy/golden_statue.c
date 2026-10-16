@@ -29,7 +29,7 @@ int EntityAi_PickAttack(char *);
 float EntityMath_AngleDifference(float, float);
 void EntityAi_MeleeAttack(Entity *);
 void EntityAi_RangedAttack(Entity *);
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_StepState(void *);
 void EntityAi_CheckFarFromSpawn(void *);
 extern PlayerData player_state;
@@ -46,7 +46,6 @@ int EntityAi_TurnCommand(Entity *);
 int EntityAi_TurnFromPush(void *, void *);
 void EntityAi_Dodge(Entity *);
 void EntityAi_Guard(Entity *);
-extern int entity_under_player[];
 int Motion_Start(void *, int, int, u32, int);
 double atan2(double, double);
 float EntityMath_WrapAngle(float);
@@ -418,7 +417,7 @@ static void GoldenStatue_Move(Entity *entity) {
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 turn;
 
-    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & 0x800)) {
+    if (entity == player_state.stood_on_entity && (entity->params->flags & 0x800)) {
         entity->move_command = 0;
     }
     if (entity->move_command & 0x100) {

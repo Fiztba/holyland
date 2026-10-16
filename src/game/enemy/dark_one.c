@@ -19,12 +19,12 @@ void EntityAi_Dormant(Entity *);
 extern void (*entity_type_handlers[][2])(Entity *);
 extern s32 dark_one_hits_left;
 extern u32 frame_counter;
-void EntityEvent_StartEffectAtPoint(char **, int, u32, int);
+void EntityEvent_StartEffectAtPoint(char **, int, u32, f32 *);
 void EntityEvent_StartCue(Entity *, s32, s32, s32);
 int Sound_PlayMapAtRange(u8, u8, float *, float);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_StepState(void *);
-int EntityAi_ThinkIdle(void *, int);
+void EntityAi_ThinkIdle(void *, int);
 void EntityAi_ThinkCombat(Entity *, s32);
 extern u8 player_weapon[];
 int Motion_Start(void *, int, int, u32, int);
@@ -95,18 +95,18 @@ static void DarkOne_Think(Entity *entity, s32 unknown) {
     if (frame_counter % 3U == 0) {
         switch (dark_one_hits_left) {
         case 3:
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, entity->model->rotation);
             break;
         case 2:
-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->yaw_limit_deg, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->yaw_limit_deg, 0xFF, entity->model->rotation);
             break;
         default:
-            EntityEvent_StartEffectAtPoint((char **)entity, (s16)entity->params->action_frames, 0xFF, (int)entity->model->rotation);
+            EntityEvent_StartEffectAtPoint((char **)entity, (s16)entity->params->action_frames, 0xFF, entity->model->rotation);
             break;
         }
     }
     if (ENTITY_FLAG_BITS(entity)->bit43) {
-        EntityEvent_StartEffectAtPoint((char **)entity, 0x13D, 0xFF, (int)entity->model->rotation);
+        EntityEvent_StartEffectAtPoint((char **)entity, 0x13D, 0xFF, entity->model->rotation);
         ENTITY_FLAG_BITS(entity)->bit43 = FALSE;
         if (dark_one_hits_left <= 0) {
             entity->hit_flash_frames = 6;

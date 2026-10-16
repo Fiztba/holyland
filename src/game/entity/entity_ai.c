@@ -8,6 +8,7 @@
 #include "map/map.h"
 #include "model/model.h"
 #include "entity/entity_ai.h"
+#include "entity/entity_math.h"
 
 int rand(void);
 s32 EntitySight_PropInWay(Entity *entity);
@@ -37,7 +38,7 @@ char *Model_GetSkinnedBonePoint(char *, u32);
 s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits, f32 rate);
 /* match: the call leaves the sixth argument (rate, $f12) unset */
 #define TURN_PART_NO_RATE ((int (*)(void *, f32 *, int, f32 *, f32 *))Bone_TurnPart)
-int Bone_TurnPartToLook(void *model, int part_arg, int angles_arg, int mode, void *target, int limits_arg, float rate);
+int Bone_TurnPartToLook(void *model, ModelPart *part, f32 *angles, int mode, void *target, f32 *limits, float rate);
 extern PlayerState player_state;
 #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->spawn_flags)
 extern EntitySpawnInfo *map_spawn_infos[2];
@@ -84,8 +85,8 @@ static s32 EntityAi_CheckMeleeAilment(Entity *entity, EntityParamsUnk240 *record
 static void EntityAi_Kill(Entity *entity);
 static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b, f32 *limit);
 static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits);
-static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c, int value_d, float scale);
-static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate);
+static int func_00196200(Entity *entity, f32 *value_a, int value_b, void *value_c, f32 *value_d, float scale);
+static int func_00196248(Entity *entity, f32 *angles, int mode, f32 *limits, float rate);
 static int EntityAi_IsPlayerNear(Entity *entity);
 static void EntityAi_SensePlayerInArc(Entity *actor);
 static void EntityAi_RollNoticePlayer(Entity *actor);
@@ -315,14 +316,14 @@ static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b
 
 /* Turns the model part at EntityModel.look_at_part to look at target (Bone_TurnPartToLook) while params flag 0x2000 is
    set; FALSE without it. */
-int EntityAi_LookAtPoint(Entity *entity, int angles, int mode, int target, int limits, float rate) {
+int EntityAi_LookAtPoint(Entity *entity, f32 *angles, int mode, void *target, f32 *limits, float rate) {
     EntityModel *model = entity->model;
-    int part = (int)model->look_at_part;
+    ModelPart *part = model->look_at_part;
 
-    if (part == 0 || !(ENTITY_CONTROLLER(entity)->flags & 0x2000)) {
+    if (part == NULL || !(ENTITY_CONTROLLER(entity)->flags & 0x2000)) {
         return 0;
     }
-    return Bone_TurnPartToLook(model, part, angles, mode, (void *)target, limits, rate);
+    return Bone_TurnPartToLook(model, part, angles, mode, target, limits, rate);
 }
 
 /* As EntityAi_LookAtPoint, at the player's position 220 above his feet. */
@@ -335,7 +336,7 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
     if (entity->model->look_at_part == NULL || !(entity->params->flags & 0x2000)) {
         result = 0;
     } else {
-        result = Bone_TurnPartToLook(entity->model, (int)entity->model->look_at_part, (int)target, mode, position, (int)out, range);
+        result = Bone_TurnPartToLook(entity->model, entity->model->look_at_part, target, mode, position, out, range);
     }
     return result;
 }
@@ -343,23 +344,23 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
 /* Bone_TurnPart for the model part at EntityModel.aim_part (the one the model file marks with ModelFilePart.unk06
    2); FALSE without it. Nothing calls it, and no code that runs uses that part, so its role is not known. */
 static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits) {
-    int part = entity->model->aim_part;
+    ModelPart *part = entity->model->aim_part;
     int result;
 
-    if (part == 0) {
+    if (part == NULL) {
         result = 0;
     } else {
-        result = TURN_PART_NO_RATE((void *)part, angles, mode, goal, limits);
+        result = TURN_PART_NO_RATE(part, angles, mode, goal, limits);
     }
     return result;
 }
 
 /* As EntityAi_LookAtPoint, for the model part at EntityModel.aim_part (role unknown, see func_001961D0) and
    without the params flag test; FALSE without the part. Nothing calls it. */
-static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c, int value_d, float scale) {
+static int func_00196200(Entity *entity, f32 *value_a, int value_b, void *value_c, f32 *value_d, float scale) {
     EntityModel *model = entity->model;
 
-    if (model->aim_part == 0) {
+    if (model->aim_part == NULL) {
         return 0;
     }
     return Bone_TurnPartToLook(model, model->aim_part, value_a, value_b, value_c, value_d, scale);
@@ -367,14 +368,14 @@ static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c
 
 /* As func_00196200, at the player's position 115 above his feet; FALSE without the part.
    Nothing calls it. */
-static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate) {
+static int func_00196248(Entity *entity, f32 *angles, int mode, f32 *limits, float rate) {
     float position[2]; // match: Vector_Copy writes four floats, but retail reserves room for two
     EntityModel *model;
 
     Vector_Copy(position, &player_state.position);
     position[1] -= 115.0f;
     model = entity->model;
-    if (model->aim_part == 0) {
+    if (model->aim_part == NULL) {
         return 0;
     }
     return Bone_TurnPartToLook(model, model->aim_part, angles, mode, position, limits, rate);
@@ -421,22 +422,13 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
     if (ENTITY_FLAG_BITS(entity)->bit4 && (entity->spawn_info->spawn_flags & (0x8000L << 46))) {
         return FALSE;
     }
-    death_count = Game_GetSpawnDeathCount(map_slots[entity->group_id].tag, entity->spawn_info - map_spawn_infos[entity->group_id]);
+    death_count = Game_GetSpawnDeathCount(map_slots[entity->group_id].tag, (s32)(entity->spawn_info - map_spawn_infos[entity->group_id]));
     if ((s8)SPAWN_FLAGS(entity->spawn_info)->bytes[5] != 0 && death_count >= (s8)SPAWN_FLAGS(entity->spawn_info)->bytes[5]) {
         return FALSE;
     }
     spawn_info = entity->spawn_info;
-    __asm__ volatile(
-        "lqc2 $vf16, 0(%1)\n"
-        "lqc2 $vf17, 0(%2)\n"
-        "vsub.xyz $vf16, $vf16, $vf17\n"
-        "vmul.xz $vf16, $vf16, $vf16\n"
-        "vaddz.x $vf16, $vf16, $vf16z\n"
-        "vsqrt Q, $vf16x\n"
-        "vwaitq\n"
-        "vaddq.x $vf16, $vf0, Q\n"
-        "sqc2 $vf16, 0(%3)\n"
-        : "=m"(distance) : "r"(&spawn_info->spawn_x), "r"(&player_state.position), "r"(distance));
+    /* EntityMath_DistanceXZ inlined (one VU0 block) */
+    distance[0] = EntityMath_DistanceXZ(&spawn_info->spawn_x, (f32 *)&player_state.position);
     if (distance[0] <= (f32)spawn_info->respawn_distance) {
         if ((entity->spawn_info->spawn_flags & (0xC000L << 45)) == (0x8000L << 44)) {
             return TRUE;
@@ -647,18 +639,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
     f32 magnitude;
 
     if (max_distance != 0.0f) {
-        __asm__ volatile(
-            "lqc2 $vf16, 0(%1)\n"
-            "lqc2 $vf17, 0(%2)\n"
-            "vsub.xyz $vf16, $vf16, $vf17\n"
-            "vmul.xyz $vf16, $vf16, $vf16\n"
-            "vaddy.x $vf16, $vf16, $vf16y\n"
-            "vaddz.x $vf16, $vf16, $vf16z\n"
-            "vsqrt Q, $vf16x\n"
-            "vwaitq\n"
-            "vaddq.x $vf16, $vf0, Q\n"
-            "sqc2 $vf16, 0(%3)\n"
-            : "=m"(distance) : "r"(entity->model->position), "r"(target), "r"(distance));
+        /* EntityMath_Distance inlined (one VU0 block) */
+        distance[0] = EntityMath_Distance(entity->model->position, target);
         if (max_distance < distance[0]) {
             return 0;
         }
@@ -686,17 +668,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
         }
     }
     if (pitch_range != 0.0f) {
-        __asm__ volatile(
-            "lqc2 $vf16, 0(%1)\n"
-            "lqc2 $vf17, 0(%2)\n"
-            "vsub.xyz $vf16, $vf16, $vf17\n"
-            "vmul.xz $vf16, $vf16, $vf16\n"
-            "vaddz.x $vf16, $vf16, $vf16z\n"
-            "vsqrt Q, $vf16x\n"
-            "vwaitq\n"
-            "vaddq.x $vf16, $vf0, Q\n"
-            "sqc2 $vf16, 0(%3)\n"
-            : "=m"(distance) : "r"(entity->model->position), "r"(target), "r"(distance));
+        /* EntityMath_DistanceXZ inlined (one VU0 block) */
+        distance[0] = EntityMath_DistanceXZ(entity->model->position, target);
         diff = atan2f(target[1] - entity->model->position[1], distance[0]);
         diff -= entity->model->rotation[0];
         diff = diff - (f32)(s32)(diff / 6.2831855f) * 6.2831855f;

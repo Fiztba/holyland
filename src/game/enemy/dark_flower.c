@@ -17,7 +17,7 @@ void EntityAi_Dormant(Entity *);
 void EntityAi_Death(Entity *);
 extern void (*entity_type_handlers[][2])(Entity *);
 extern u32 frame_counter;
-int EntityAi_ThinkReturn(void *, int);
+void EntityAi_ThinkReturn(void *, int);
 void EntityAi_StepState(void *);
 void EntityAi_SensePlayer(void *, int);
 void EntityAi_CheckFarFromSpawn(void *);

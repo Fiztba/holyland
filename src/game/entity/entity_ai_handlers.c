@@ -764,7 +764,7 @@ void EntityAi_Think(Entity *entity, s32 unknown) {
 
 /* The think function while flag bit 53 is set (too far from the spawn point): walks back to the spawn point,
    turning aside while something pushes the entity from the front. */
-int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
+void EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
     Entity *entity = entity_ptr;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 to_spawn[4];
@@ -819,7 +819,7 @@ int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
 
 /* The think function of state 0: every 120-180 frames picks a point near the spawn point to walk to
    (EntityPoint_PickNear), or stands for 60-90 frames (one time in five). */
-int EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
+void EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
     Entity *entity = entity_ptr;
     EntityUnkE0 *unkE0 = &entity->unkE0;
     f32 direction[4];
