@@ -15,11 +15,11 @@ typedef struct {
     f32 normal[4];                  /* 0x20 unit vector away from what was hit */
 } CollisionResult;
 
-#define COLLISION_RESULT ((CollisionResult *)0x70000000)
+#define COLLISION_RESULT SPR(CollisionResult *, 0)
 
 /* the scratchpad from 0x100 on: the points of a model's collision mesh (CollisionMesh.points)
    placed in the world by Collision_TransformMeshPoints; the strips point at these */
-#define COLLISION_WORLD_POINTS ((Vector4 *)0x70000100)
+#define COLLISION_WORLD_POINTS SPR(Vector4 *, 0x100)
 
 /* the scratchpad as Player_PushOutOfWalls uses it. Reached as fields of one block at 0x70000000, retail forms each
    address anew (`lui $1`); a pointer constant such as (Vector4 *)0x70000080 is kept in a register instead. */
@@ -31,7 +31,7 @@ typedef struct {
     Vector4 unk90;                  /* 0x90 the point Player_CollideWithMap keeps away from the walls */
 } CollisionScratch;
 
-#define COLLISION_SCRATCH ((CollisionScratch *)0x70000000)
+#define COLLISION_SCRATCH SPR(CollisionScratch *, 0)
 
 /* a CollisionResult kept aside and put back (Collision_FindFloorBelow): retail moves it by doublewords */
 typedef union {
@@ -39,7 +39,7 @@ typedef union {
     s64 doublewords[6];
 } CollisionResultCopy;
 
-#define COLLISION_RESULT_COPY ((CollisionResultCopy *)0x70000000)
+#define COLLISION_RESULT_COPY SPR(CollisionResultCopy *, 0)
 
 /* a CollisionResult aligned to 8 bytes: copied whole it moves by doublewords, and its members
    keep their own types (Collision_CastSegmentAtMap, where the union above does not match) */
@@ -52,37 +52,44 @@ typedef struct {
     f32 normal[4];                  /* 0x20 */
 } __attribute__((aligned(8))) CollisionResultAligned;
 
-#define COLLISION_RESULT_ALIGNED ((CollisionResultAligned *)0x70000000)
+#define COLLISION_RESULT_ALIGNED SPR(CollisionResultAligned *, 0)
 
 /* one point of a triangle strip */
+/* overlay: a strip point of a collision mesh in a map or model file */
 typedef struct {
-    void *position;                 /* 0x00 */
+    EEWord position;                /* 0x00 (Vector4 *) a point number in the file; Collision_RelocateMesh makes it
+                                       the address of that point in COLLISION_WORLD_POINTS */
     s32 unk04;                      /* 0x04 */
     s32 unk08;                      /* 0x08 */
     s32 unk0C;                      /* 0x0C */
 } CollisionStripPoint;
+LAYOUT_SIZE(CollisionStripPoint, 0x10);
 
 /* a triangle strip; the next one follows its last point */
+/* overlay: a strip of a collision mesh in a map or model file */
 typedef struct {
     u16 point_count;                /* 0x00 */
     char pad02[0x1E];
     CollisionStripPoint points[1];  /* 0x20 point_count of them */
 } CollisionStrip;
+LAYOUT_OFFSET(CollisionStrip, points, 0x20);
 
 /* what ModelInstance.strips points at */
+/* overlay: the header of a collision mesh in a map or model file (Collision_RelocateMesh turns its offsets into
+   addresses in place) */
 typedef struct {
     s32 strip_count;                /* 0x00 */
-    CollisionStrip *strips;         /* 0x04 */
-    char *points;                   /* 0x08 the end of the strips: unk0C 16-byte entries */
+    EEWord strips;                  /* 0x04 (CollisionStrip *) */
+    EEWord points;                  /* 0x08 (char *) the end of the strips: unk0C 16-byte entries */
     u32 point_count;                /* 0x0C how many points there are, 4 or more */
     f32 reach_radius;               /* 0x10 how far it reaches from its origin, unscaled (MapObject_InitMap) */
-    char *mesh_size;                /* 0x14 the next mesh of a map file starts this many bytes on (a size, typed as Map_BuildModels needs) */
-    CollisionStrip *wall_strips;    /* 0x18 unk38 strips */
-    CollisionStrip *floor_strips;   /* 0x1C */
-    CollisionStrip *second_wall_strips; /* 0x20 unk3C strips */
-    CollisionStrip *barrier_strips; /* 0x24 unk3E strips */
-    CollisionStrip *hazard_strips;  /* 0x28 unk40 strips */
-    CollisionStrip *water_strips;   /* 0x2C the strips EntityCollision_DistanceToGround drops a point onto */
+    s32 mesh_size;                  /* 0x14 the next mesh of a map file starts this many bytes on */
+    EEWord wall_strips;             /* 0x18 (CollisionStrip *) unk38 strips */
+    EEWord floor_strips;            /* 0x1C (CollisionStrip *) */
+    EEWord second_wall_strips;      /* 0x20 (CollisionStrip *) unk3C strips */
+    EEWord barrier_strips;          /* 0x24 (CollisionStrip *) unk3E strips */
+    EEWord hazard_strips;           /* 0x28 (CollisionStrip *) unk40 strips */
+    EEWord water_strips;            /* 0x2C (CollisionStrip *) the strips EntityCollision_DistanceToGround drops a point onto */
     char pad30[0x08];
     u16 wall_strip_count;           /* 0x38 how many strips unk18 has */
     u16 floor_strip_count;          /* 0x3A */
@@ -91,17 +98,28 @@ typedef struct {
     u16 hazard_strip_count;         /* 0x40 how many strips unk28 has */
     u16 water_strip_count;          /* 0x42 how many strips unk2C has */
 } CollisionMesh;
+LAYOUT_SIZE(CollisionMesh, 0x44);
+LAYOUT_OFFSET(CollisionMesh, strips, 0x04);
+LAYOUT_OFFSET(CollisionMesh, mesh_size, 0x14);
+LAYOUT_OFFSET(CollisionMesh, wall_strips, 0x18);
+LAYOUT_OFFSET(CollisionMesh, water_strips, 0x2C);
+LAYOUT_OFFSET(CollisionMesh, wall_strip_count, 0x38);
+LAYOUT_OFFSET(CollisionMesh, water_strip_count, 0x42);
 
 /* CollisionMesh with its strip lists and their lengths as arrays (Collision_CastRayAtMap picks them by index;
    Collision_CastRayAtMapLists goes through seven, one more than CollisionMesh names) */
+/* overlay: a collision mesh header, as CollisionMesh */
 typedef struct {
     char pad00[0x18];
-    CollisionStrip *strip_lists[7]; /* 0x18 unk18, floor_strips, unk20, unk24, unk28, unk2C, and one at 0x30 */
+    EEWord strip_lists[7];          /* 0x18 (CollisionStrip *) unk18, floor_strips, unk20, unk24, unk28, unk2C, and one at 0x30 */
     char pad34[0x04];
     u16 strip_counts[7];            /* 0x38 */
 } CollisionMeshLists;
+LAYOUT_OFFSET(CollisionMeshLists, strip_lists, 0x18);
+LAYOUT_OFFSET(CollisionMeshLists, strip_counts, 0x38);
 
 /* a MapRecord (entity/entity.h) as the collision code reads it: the box it covers and its model */
+/* overlay: a 0x80-byte map record in a map file (MapSlot.records) */
 typedef struct {
     f32 position[4];                /* 0x00 */
     f32 rotation[4];                /* 0x10 */
@@ -116,8 +134,12 @@ typedef struct {
     f32 box_highest[4];             /* 0x50 a point, moved with the record */
     f32 lowest[4];                  /* 0x60 lowest x, y, z it covers */
     f32 highest[3];                 /* 0x70 highest x, y, z it covers */
-    ModelInstance *model;           /* 0x7C */
+    EEWord model;                   /* 0x7C (ModelInstance *) set by Map_BuildModels */
 } MapRecordBounds;
+LAYOUT_SIZE(MapRecordBounds, 0x80);
+LAYOUT_OFFSET(MapRecordBounds, record_flags, 0x3C);
+LAYOUT_OFFSET(MapRecordBounds, lowest, 0x60);
+LAYOUT_OFFSET(MapRecordBounds, model, 0x7C);
 
 /* which of a mesh's strip lists (CollisionMeshLists) a hit is tested against: local tables
    that Attack_TestMapModel, Attack_TestMapModelFloors and Attack_TestMapModelWalls copy whole from read-only data */
@@ -160,5 +182,29 @@ void Collision_BallSwing(void *ball_centre, void *swing_origin, f32 radius, f32 
 /* Collision_BallSwing for the player's swing: the slab between two heights, and a pitch window. */
 void Collision_BallSwingPitch(void *ball_centre, void *swing_origin, f32 radius, f32 range, f32 lowest, f32 highest,
                               f32 half_angle, f32 facing, f32 half_pitch, f32 pitch);
+
+/* The VU0 block the triangle tests start with (lqc2 the corners into vf16-vf18; vsub.xyz vf19 = a - b,
+   vf20 = c - b; vopmula.xyz/vopmsub.xyz vf16 = vf19 x vf20; sqc2 vf19, vf20, vf16): the two edges from corner b
+   and their cross product. The w of the stored normal is corner_a's (vf16 keeps it); the edges' w were whatever
+   vf19 and vf20 held before, which nothing reads, so they are left as they are. */
+static inline void Collision_TriangleEdges(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *edge_a, f32 *edge_c,
+                                           f32 *normal) {
+    f32 acc[3];
+    f32 w = corner_a[3];
+
+    edge_a[0] = corner_a[0] - corner_b[0];
+    edge_a[1] = corner_a[1] - corner_b[1];
+    edge_a[2] = corner_a[2] - corner_b[2];
+    edge_c[0] = corner_c[0] - corner_b[0];
+    edge_c[1] = corner_c[1] - corner_b[1];
+    edge_c[2] = corner_c[2] - corner_b[2];
+    acc[0] = edge_a[1] * edge_c[2];
+    acc[1] = edge_a[2] * edge_c[0];
+    acc[2] = edge_a[0] * edge_c[1];
+    normal[0] = acc[0] - edge_c[1] * edge_a[2];
+    normal[1] = acc[1] - edge_c[2] * edge_a[0];
+    normal[2] = acc[2] - edge_c[0] * edge_a[1];
+    normal[3] = w;
+}
 
 #endif
