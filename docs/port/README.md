@@ -56,6 +56,8 @@ compiles just `src/game/ui`.
 
 ## Status
 
+The steps, in order: [PLAN.md](PLAN.md).
+
 **Step 0** (in progress): the game code compiles and links as a 64-bit program on Windows and Linux,
 and `main` runs until it needs something the stand-ins do not do yet.
 

@@ -11,7 +11,7 @@ game (USA, SLUS-20318). The game's own code is compiled for Windows and Linux as
 **Status: step 0.** The game code compiles and links on Windows and Linux, and runs its start-up
 until it asks for the disc. Nothing is drawn or heard yet. Next come the disc, the thread
 scheduler and the pad (step 1: boot to a new game), then graphics and sound. See
-[`docs/port/`](docs/port/).
+[`docs/port/PLAN.md`](docs/port/PLAN.md) for the plan.
 
 ## Building
 
