@@ -1,7 +1,28 @@
 # Turning the game code into its PC form
 
-The rules for editing `src/game` so it compiles and runs as a 64-bit PC program. Read `port/host.h`
-alongside: it defines everything these rules use.
+The rules for editing the game code (`src/game`) so it compiles and runs as a 64-bit PC program.
+Read `port/host.h` alongside: it defines everything these rules use.
+
+## Where to edit: the decomp is read-only
+
+The decomp is read-only in this repository. Never edit:
+- `decomp/`, the kfiv-decomp submodule. Configure fails if it has local changes.
+- `out/<preset>/decomp_src/`, the patched copy that is compiled. Compiler errors point into it, but
+  its files are read-only, and the next configure would overwrite an edit there anyway.
+
+Edit the game code only in a work copy:
+
+```sh
+python3 tools/patches.py apply   # work/ = the pinned decomp with patches/ applied
+# ... edit work/src/game ...
+python3 tools/patches.py save    # writes the edits back into patches/; commit patches/
+```
+
+To find the file a compiler error names, swap `out/<preset>/decomp_src/` for `work/`; the paths below
+it are the same. `game/` (PC-only game code) and `port/` are ordinary files, edited in place.
+
+A fix to the reconstruction itself (a name, a type, a struct) is not a PC edit: it goes to kfiv-decomp,
+and comes here when the pin moves.
 
 ## The goal, and what not to change
 
@@ -9,8 +30,8 @@ alongside: it defines everything these rules use.
 don't "improve" it, don't rename things. A retail bug found along the way goes in a comment and in
 your report.
 
-**Change as little text as you can.** This tree is merged from the decomp regularly, and every
-changed line is a possible merge conflict.
+**Change as little text as you can.** The patches are carried onto every new decomp commit
+(`patches.py upgrade`), and every changed line is a possible conflict.
 - No reformatting.
 - No moving code.
 - Don't rename functions or variables.
@@ -177,11 +198,12 @@ cmake --preset windows-clang                      # once (or linux-gcc)
 cmake --build out/windows-clang --target game_ui  # your folder
 python tools/port_census.py                       # every folder's errors and asm left
 python tools/port_census.py --show ui             # one folder's messages
-python tools/lint_readability.py --changed        # see proto-conflict and data-conflict:
-                                                  # declarations that disagree across files
+python tools/port_abi_check.py                    # declarations that disagree with the definition
+python3 tools/patches.py save                     # your edits in work/ into patches/
 ```
 
 A folder is done when:
 - its census row is 0 errors and 0 asm;
-- `lint_readability.py` shows no `proto-conflict` or `data-conflict` for names you touched;
+- `port_abi_check.py` reports nothing for names you touched;
+- your edits are saved into `patches/`, and nothing under `decomp/` or `decomp_src/` was edited;
 - you have reported every changed global, struct, signature or header.

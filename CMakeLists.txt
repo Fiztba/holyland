@@ -120,6 +120,12 @@ endforeach()
 
 # sync the staging copy into decomp_src/. COPY_FILE leaves a file alone when it is already the same,
 # so its timestamp, and the object built from it, survive. (The .git is at the staging root, not under src.)
+# decomp_src/ is kept read-only between configures (see below), so make it writable for the sync.
+if(EXISTS ${KF4_SRC}/src)
+    file(CHMOD_RECURSE ${KF4_SRC}/src
+        FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
+        DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+endif()
 file(GLOB_RECURSE KF4_STAGED LIST_DIRECTORIES false RELATIVE ${KF4_STAGE} ${KF4_STAGE}/src/*)
 foreach(rel ${KF4_STAGED})
     get_filename_component(dir ${KF4_SRC}/${rel} DIRECTORY)
@@ -136,6 +142,11 @@ foreach(rel ${KF4_OLD})
     endif()
 endforeach()
 file(REMOVE_RECURSE ${KF4_STAGE})
+# decomp_src/ is generated: compiler errors point into it, but an edit there is lost at the next
+# configure. Its files are read-only so that the edit fails instead; edit work/ (tools/patches.py).
+file(CHMOD_RECURSE ${KF4_SRC}/src
+    FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ
+    DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 
 # ---- The game, one object library per folder of src/game ------------------------------------------
 # The libdev members the decomp keeps as src/game/func_0022*.c are PS2 debugging code: not built.

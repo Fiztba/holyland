@@ -16,7 +16,14 @@ decomp's, pinned in `decomp/` and never edited here; the PC edits to it are kept
 ## The decomp and the patches
 
 `decomp/` is a git submodule of [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp.git), pinned
-to one commit (currently `90dad42`). Do not edit it in this repository. Clone with submodules:
+to one commit (currently `90dad42`).
+
+> **The decomp is read-only here.** Never edit `decomp/` or the compiled copy in
+> `out/<preset>/decomp_src/`; this goes for people and agents alike. Configure fails if `decomp/` has
+> local changes, and `decomp_src/` is made read-only (an edit there would be lost at the next
+> configure). Edit game code in `work/` and save it into `patches/` (below).
+
+Clone with submodules:
 
 ```sh
 git clone --recurse-submodules <this repository>
