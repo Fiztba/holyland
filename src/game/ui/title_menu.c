@@ -30,6 +30,7 @@ int TitleMenu_Run(void) {
             break;
         }
     } while (screen != -1);
+    return 0; /* not reached: screen is never -1 (the PS2 fell off the end here) */
 }
 
 /* Whether the player has any item other than the keys and the "none" items (the main menu's item screen). */
