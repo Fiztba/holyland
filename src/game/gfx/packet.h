@@ -62,12 +62,14 @@ typedef struct {
 #define SPRITE_PACKET_COLOR_VIEW(packet) ((SpritePacketColorView *)(packet))
 
 /* one quadword DMA tag at the head of a packet chain */
+/* overlay: a DMA tag */
 typedef struct {
     s32 id_and_qwc;                 /* 0x00 the DMA tag ID (bits 28-30) and quadword count */
-    s32 address;                    /* 0x04 the next packet, or 0 */
+    EEWord address;                 /* 0x04 (u32 *) the next packet, or 0 */
     s32 unk08;                      /* 0x08 */
     s32 unk0C;                      /* 0x0C */
 } DmaTag;
+LAYOUT_SIZE(DmaTag, 0x10);
 
 /* one corner of a ScreenSprite */
 typedef struct {
@@ -305,10 +307,6 @@ typedef struct {
     u32 colours_important;          /* 0x24 */
 } BmpInfoHeader;
 
-#ifndef SCE_LIBGRAPH_LIBGRAPH_H /* a file that includes <libgraph.h> first uses its prototypes */
-int sceGsPutDrawEnv(GsDrawPacket *);
-int sceGsSetDefDrawEnv(GsDrawEnv *, s16, s16, s16, s16, s16);
-int sceGsSyncPath(int, int);
-#endif
+#include <libgraph.h> /* sceGsPutDrawEnv, sceGsSetDefDrawEnv, sceGsSyncPath */
 
 #endif

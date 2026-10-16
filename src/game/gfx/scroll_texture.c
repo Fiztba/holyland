@@ -1,8 +1,8 @@
 #include "gfx/scroll_texture.h"
 #include "gfx/gs.h"
 #include "gfx/texture.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void GsDraw_DrawScrollingTexture(void *, void *);
 void GsDraw_ResetDrawTarget(void);
 void GsDraw_QueueTexFlush(void);

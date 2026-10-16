@@ -2,16 +2,11 @@
 #include "model/model.h"
 #include "gfx/packet.h"
 #include "gfx/screen.h"
+#include "math/vu0.h"
+#include <string.h>
 
-double sin(double);
-void *memset(void *, int, u32);
 u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
-void Matrix_Multiply(void *, void *, void *);
-void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
-void Vu0_LoadMatrix(void *);
-void Vu0_ProjectToScreen(int *, void *);
-float sinf(float);
 int rand(void);
 void srand(u32);
 
@@ -128,7 +123,7 @@ void Wobble_DrawRippledModel(ModelInstance *model, int unk1, int unk2, int unk3,
             Matrix_Multiply(matrix, world_screen_matrix, matrix);
             Vu0_LoadMatrix(matrix);
             data_count = part->data_count;
-            next = (ModelPartData *)(int)part->data_addr;
+            next = EE_PTR(ModelPartData *, part->data_addr);
             for (j = 0; j < data_count; j++) {
                 flags = 0;
                 length = next->length;
@@ -266,7 +261,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
     part = model->parts;
     for (i = 0; i < part_count; i++, part++) {
         count = part->data_count;
-        data = (ModelPartData *)(int)part->data_addr;
+        data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < count; j++) {
             texture = data->tex0 & 0x3FFF;
             length = data->length;
@@ -276,6 +271,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
             data = (ModelPartData *)((char *)data + (length + 1) * 0x10);
         }
     }
+    return FALSE; /* PORT: retail falls off the end here and returns whatever $v0 held */
 }
 
 /* Resets the 16 screen wobble oscillators, spreading their phases over one turn. */
@@ -311,9 +307,9 @@ void Wobble_StepOscillators(void) {
 }
 
 /* the address rounded up to a multiple of 16 */
-static inline u32 align_16(u32 address) {
-    u32 remainder = address & 0xF;
-    u32 aligned = address;
+static inline uptr align_16(uptr address) {
+    uptr remainder = address & 0xF;
+    uptr aligned = address;
 
     if (remainder != 0) {
         aligned = remainder - 0x10;
@@ -324,7 +320,7 @@ static inline u32 align_16(u32 address) {
 
 /* Builds the model's table of wave texture coordinates at *alloc (16-byte aligned) and moves *alloc
    past it. Each vertex keeps its own coordinates and gets a wave picked from where it is. */
-void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
+void Wobble_BuildWaveUvs(ModelInstance *model, char **alloc) {
     ModelPart *part;
     ModelPartData *next_data;
     ModelPartData *data;
@@ -337,17 +333,17 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
     int part_count;
     int vertex_count;
     u16 length;
-    u32 address;
-    u32 remainder;
+    uptr address;
+    uptr remainder;
 
-    address = align_16(*alloc);
+    address = align_16((uptr)*alloc);
     model->wave_uvs = (ModelWaveUv *)address;
     part = model->parts;
     part_count = model->part_count;
     wave_uv = (ModelWaveUv *)address;
     for (i = 0; i < part_count; i++, part++) {
         count = part->data_count;
-        next_data = (ModelPartData *)(int)part->data_addr;
+        next_data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < count; j++) {
             data = next_data;
             next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices
@@ -366,13 +362,13 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
             next_data = (ModelPartData *)((char *)data + (length + 1) * 0x10);
         }
     }
-    address = (u32)wave_uv;
+    address = (uptr)wave_uv;
     remainder = address & 0xF;
     if (remainder != 0) {
         remainder -= 0x10;
         address -= remainder;
     }
-    *alloc = address;
+    *alloc = (char *)address;
 }
 
 /* Moves every vertex's texture coordinates by its wave. */
@@ -395,7 +391,7 @@ void Wobble_ApplyWaveUvs(ModelInstance *model) {
     wave_uv = model->wave_uvs;
     for (i = 0; i < part_count; i++, part++) {
         count = part->data_count;
-        next_data = (ModelPartData *)(int)part->data_addr;
+        next_data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < count; j++) {
             data = next_data;
             next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices
@@ -443,7 +439,7 @@ void Wobble_SetUvsFromJitteredScreen(ModelInstance *model) {
     for (i = 0; i < part_count; i++, part++) {
         Vu0_LoadMatrix(scratch->matrices[i]);
         count = part->data_count;
-        next_data = (ModelPartData *)(int)part->data_addr;
+        next_data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < count; j++) {
             data = next_data;
             next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices

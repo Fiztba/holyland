@@ -1,9 +1,9 @@
 /* A 256x256 draw environment the game can switch to and back. */
 #include "gfx/packet.h"
 #include "gfx/draw_env.h"
+#include <eekernel.h>
+#include <string.h>
 
-void *memset(void *, int, u32);
-int FlushCache(int);
 extern GsDataBlock offscreen_square_corners; /* two corners of a 256x256 square around (2048, 2048), 12.4 fixed point */
 extern int context1_buffer_half;
 extern GsDrawEnv game_dbuff_draw0;          /* game_dbuff.draw0 */

@@ -3,11 +3,8 @@
 #include "model/motion.h"
 #include "entity/entity_events.h"
 #include "libvu0.h"
+#include "math/vu0.h"
 
-void Vector_Copy(void *, void *);
-void sceVu0MulVector(void *, void *, void *);
-void Vector_Subtract(void *, void *, void *);
-void Vector_Scale(float *, float *, float);
 float sinf(float);
 float cosf(float);
 extern f32 identity_matrix[16];
@@ -15,18 +12,19 @@ void Vector_Hermite(void *, void *, void *, void *, void *, f32);
 
 /* dst = a * (1 - t) + b * t across the xyz lanes, on the VU0 (EntityMath_LerpVector inlined) */
 static inline void blend_vectors(Vector4 *dst, Vector4 *src_a, Vector4 *src_b, f32 ratio) {
-    __asm__ volatile(
-        "qmtc2.ni %3, $vf3\n"
-        "vsubx.w $vf4, $vf0, $vf3x\n"
-        "lqc2 $vf1, 0x0(%1)\n"
-        "lqc2 $vf2, 0x0(%2)\n"
-        "vmulax.xyz ACC, $vf2, $vf3x\n"
-        "vmaddw.xyz $vf1, $vf1, $vf4w\n"
-        "vnop\n"
-        "vnop\n"
-        "vnop\n"
-        "sqc2 $vf1, 0x0(%0)\n"
-        : : "r"(dst), "r"(src_a), "r"(src_b), "r"(ratio));
+    /* qmtc2.ni: vf3.x = ratio, vf3.y its sign extension (z and w are whatever the upper half of the register held) */
+    ee_vu0.vf[3][0] = ratio;
+    ee_vu0.vf[3][1] = 0.0f;
+    if (signbit(ratio)) {
+        u32 ones = 0xFFFFFFFF;
+        memcpy(&ee_vu0.vf[3][1], &ones, 4);
+    }
+    ee_vu0.vf[4][3] = VF(0)[3] - VF(3)[0]; /* vsubx.w */
+    Vu_Lqc2(1, src_a);
+    Vu_Lqc2(2, src_b);
+    Vu_MulA(VU_XYZ, 2, VF(3)[0]);
+    Vu_Madd(VU_XYZ, 1, 1, VF(4)[3]);
+    Vu_Sqc2(dst, 1);
 }
 
 static s32 Motion_PoseSlot(ModelInstance *model, s32 slot, s32 table, s32 frame_fixed, s32 step, s32 backwards);
@@ -41,7 +39,7 @@ void Motion_ClearPartSlots(EntityModel *model) {
     if (instance->part_count != 0) {
         i = 0;
         do {
-            part = (EntityModelPart80Byte *)((i << 7) + (s32)model->parts);
+            part = (EntityModelPart80Byte *)&((ModelInstance *)model)->parts[i];
             i += 1;
             part->unk6C = 0;
         } while (i < instance->part_count);
@@ -54,7 +52,7 @@ void Motion_SetPartSlots(EntityModel *model, s32 first, s32 last, s32 value) {
 
     if (first <= last) {
         do {
-            part = (EntityModelPart80Byte *)((first << 7) + (s32)model->parts);
+            part = (EntityModelPart80Byte *)&((ModelInstance *)model)->parts[first];
             first += 1;
             part->unk6C = value;
         } while (first <= last);
@@ -63,8 +61,7 @@ void Motion_SetPartSlots(EntityModel *model, s32 first, s32 last, s32 value) {
 
 /* As Motion_SeekKeys, for the parts in motion slot `slot` only. */
 int Motion_SeekSlotKeys(ModelInstance *model, int slot, int table_index, int value) {
-    // match: indexing level_tables as an array swaps the addu operands
-    ModelPartLevels **table = (ModelPartLevels **)((char *)model->level_tables + (table_index << 2));
+    ModelPartLevels **table = &model->level_tables[table_index];
     ModelPartLevels *levels;
     ModelPart *part;
     u16 *threshold;
@@ -74,8 +71,8 @@ int Motion_SeekSlotKeys(ModelInstance *model, int slot, int table_index, int val
 
     for (levels = *table, i = 0; i < model->part_count; i++, levels++) {
         part = &model->parts[i];
-        if (part->motion_slot == slot && levels->thresholds != NULL && levels->count != 0) {
-            threshold = levels->thresholds;
+        if (part->motion_slot == slot && levels->thresholds != 0 && levels->count != 0) {
+            threshold = EE_PTR(u16 *, levels->thresholds);
             count = levels->count;
             for (passed = 0; passed < count; passed++) {
                 if (value < *threshold) {
@@ -109,8 +106,7 @@ s32 Motion_StepSlot(Entity *entity, EntityUnkE0SlotBits *slot_bits, s32 type, s3
 
     params = entity->params;
     table = params->motion_ids[slot->index];
-    // match: indexing level_tables as an array swaps the addu operands
-    motion = *(MotionData **)((char *)ENTITY_MODEL(entity)->level_tables + (table << 2));
+    motion = (MotionData *)ENTITY_MODEL(entity)->level_tables[table];
     motion = (MotionData *)((ModelPartLevels *)motion - 1);
     if (entity->ailment_3_frames != 0 && (entity->busy_flags & 0x46) == 0) {
         step = (f32)params->motion_speeds[entity->animation_index] * 0.75f;
@@ -201,11 +197,10 @@ static s32 Motion_PoseSlot(ModelInstance *model, s32 type, s32 table, s32 frame_
     s32 frame;
     s32 target;
 
-    // match: indexing level_tables as an array swaps the addu operands
-    motion = *(MotionData **)((char *)model->level_tables + (table << 2));
+    motion = (MotionData *)model->level_tables[table];
     motion = (MotionData *)((ModelPartLevels *)motion - 1);
-    record = *(ModelPartLevels **)((char *)model->level_tables + (table << 2));
-    vectors = motion->vectors;
+    record = model->level_tables[table];
+    vectors = EE_PTR(MotionVector *, motion->vectors);
     if (backwards != 0) {
         frame_fixed -= step;
         target = frame_fixed;
@@ -227,11 +222,11 @@ static s32 Motion_PoseSlot(ModelInstance *model, s32 type, s32 table, s32 frame_
         if (target < 0) {
             part->level = record->count - 1;
         }
-        if (record->thresholds != NULL) {
+        if (record->thresholds != 0) {
             if (record->count == 0) {
                 continue;
             }
-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
             while (level < record->count && frame >= key->frame) {
                 level++;
@@ -334,17 +329,16 @@ s32 Motion_BlendSlotToPose(ModelInstance *model, s32 type, s32 table, s16 frame,
     f32 tilt;
     f32 spin;
 
-    // match: indexing level_tables as an array swaps the addu operands
-    motion = *(MotionData **)((char *)model->level_tables + (table << 2));
+    motion = (MotionData *)model->level_tables[table];
     motion = (MotionData *)((ModelPartLevels *)motion - 1);
-    record = *(ModelPartLevels **)((char *)model->level_tables + (table << 2));
-    vectors = motion->vectors;
+    record = model->level_tables[table];
+    vectors = EE_PTR(MotionVector *, motion->vectors);
     for (i = 0; i < model->part_count; i++, record++) {
         part = &model->parts[i];
         if (part->motion_slot == type) {
-            if (record->thresholds != NULL) {
+            if (record->thresholds != 0) {
                 if (record->count != 0) {
-                    key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+                    key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
                     level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
                     while (level < record->count && frame >= key->frame) {
                         level++;
@@ -458,24 +452,24 @@ s32 Motion_MixSlotFirstKeys(ModelInstance *model, s32 type, s32 table_a, s32 tab
     f32 angle;
     f32 angle_alt;
 
-    motion_a = *(MotionData **)((char *)model->level_tables + (table_a << 2));
+    motion_a = (MotionData *)model->level_tables[table_a];
     motion_a = (MotionData *)((ModelPartLevels *)motion_a - 1);
-    motion_b = *(MotionData **)((char *)model->level_tables + (table_b << 2));
+    motion_b = (MotionData *)model->level_tables[table_b];
     motion_b = (MotionData *)((ModelPartLevels *)motion_b - 1);
-    record_a = *(ModelPartLevels **)((char *)model->level_tables + (table_a << 2));
-    record_b = *(ModelPartLevels **)((char *)model->level_tables + (table_b << 2));
-    vectors_a = motion_a->vectors;
-    vectors_b = motion_b->vectors;
+    record_a = model->level_tables[table_a];
+    record_b = model->level_tables[table_b];
+    vectors_a = EE_PTR(MotionVector *, motion_a->vectors);
+    vectors_b = EE_PTR(MotionVector *, motion_b->vectors);
     part = model->parts;
     for (i = 0; i < model->part_count; i++, record_a++, record_b++, part++) {
         if (part->motion_slot != type) {
             continue;
         }
-        key_a = (MotionKey *)record_a->thresholds;
+        key_a = EE_PTR(MotionKey *, record_a->thresholds);
         if (key_a == NULL) {
             continue;
         }
-        key_b = (MotionKey *)record_b->thresholds;
+        key_b = EE_PTR(MotionKey *, record_b->thresholds);
         if (key_b == NULL) {
             continue;
         }
@@ -568,14 +562,13 @@ int Motion_SeekKeys(ModelInstance *model, int table_index, int value) {
     int i, passed;
     u16 *threshold;
 
-    /* match: indexing level_tables as an array swaps the addu operands */
-    levels = *(ModelPartLevels **)((char *)model->level_tables + (table_index << 2));
+    levels = model->level_tables[table_index];
     for (i = 0; i < model->part_count; i++, levels++) {
         part = &model->parts[i];
-        if (levels->thresholds == NULL || levels->count == 0) {
+        if (levels->thresholds == 0 || levels->count == 0) {
             continue;
         }
-        threshold = levels->thresholds;
+        threshold = EE_PTR(u16 *, levels->thresholds);
         for (passed = 0; passed < levels->count; passed++, threshold += 9) {
             if (value < *threshold) {
                 break;
@@ -724,7 +717,7 @@ s32 Motion_StepModel(ModelInstance *model, s32 step, s32 backwards) {
     motion = (MotionData *)channel->tables[channel->index];
     record = (ModelPartLevels *)motion;
     motion = (MotionData *)((ModelPartLevels *)motion - 1);
-    vectors = motion->vectors;
+    vectors = EE_PTR(MotionVector *, motion->vectors);
     if (backwards != 0) {
         channel->param_shifted -= step;
         target = channel->param_shifted;
@@ -742,11 +735,11 @@ s32 Motion_StepModel(ModelInstance *model, s32 step, s32 backwards) {
         if (target < 0) {
             part->level = record->count - 1;
         }
-        if (record->thresholds != NULL) {
+        if (record->thresholds != 0) {
             if (record->count == 0) {
                 continue;
             }
-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
             while (level < record->count && channel->param >= key->frame) {
                 level++;
@@ -860,7 +853,7 @@ s32 Motion_StepModelBlended(ModelInstance *model, s32 step, s32 backwards, f32 w
     motion = (MotionData *)channel->tables[channel->index];
     motion = (MotionData *)((ModelPartLevels *)motion - 1);
     record = channel->tables[channel->index];
-    vectors = motion->vectors;
+    vectors = EE_PTR(MotionVector *, motion->vectors);
     if (backwards != 0) {
         channel->param_shifted -= step;
         target = channel->param_shifted;
@@ -878,11 +871,11 @@ s32 Motion_StepModelBlended(ModelInstance *model, s32 step, s32 backwards, f32 w
         if (target < 0) {
             part->level = record->count - 1;
         }
-        if (record->thresholds != NULL) {
+        if (record->thresholds != 0) {
             if (record->count == 0) {
                 continue;
             }
-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
             while (level < record->count && channel->param >= key->frame) {
                 level++;
@@ -1023,11 +1016,11 @@ void Motion_BlendToPose(ModelInstance *model, f32 weight) {
     motion = (MotionData *)channel->tables[channel->index];
     motion = (MotionData *)((ModelPartLevels *)motion - 1);
     record = channel->tables[channel->index];
-    vectors = motion->vectors;
+    vectors = EE_PTR(MotionVector *, motion->vectors);
     for (i = 0; i < model->part_count; i++, record++) {
         part = &model->parts[i];
-        if (record->thresholds != NULL && record->count != 0) {
-            key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+        if (record->thresholds != 0 && record->count != 0) {
+            key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
             level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
             while (level < record->count && channel->param >= key->frame) {
                 level++;
@@ -1139,21 +1132,21 @@ s32 Motion_MixFirstKeys(ModelInstance *model, s32 table_a, s32 table_b, f32 rati
     f32 angle;
     f32 angle_alt;
 
-    motion_a = *(MotionData **)((char *)model->level_tables + (table_a << 2));
+    motion_a = (MotionData *)model->level_tables[table_a];
     motion_a = (MotionData *)((ModelPartLevels *)motion_a - 1);
-    motion_b = *(MotionData **)((char *)model->level_tables + (table_b << 2));
+    motion_b = (MotionData *)model->level_tables[table_b];
     motion_b = (MotionData *)((ModelPartLevels *)motion_b - 1);
-    record_a = *(ModelPartLevels **)((char *)model->level_tables + (table_a << 2));
-    record_b = *(ModelPartLevels **)((char *)model->level_tables + (table_b << 2));
-    vectors_a = motion_a->vectors;
-    vectors_b = motion_b->vectors;
+    record_a = model->level_tables[table_a];
+    record_b = model->level_tables[table_b];
+    vectors_a = EE_PTR(MotionVector *, motion_a->vectors);
+    vectors_b = EE_PTR(MotionVector *, motion_b->vectors);
     part = model->parts;
     for (i = 0; i < model->part_count; i++, record_a++, record_b++, part++) {
-        key_a = (MotionKey *)record_a->thresholds;
+        key_a = EE_PTR(MotionKey *, record_a->thresholds);
         if (key_a == NULL) {
             continue;
         }
-        key_b = (MotionKey *)record_b->thresholds;
+        key_b = EE_PTR(MotionKey *, record_b->thresholds);
         if (key_b == NULL) {
             continue;
         }

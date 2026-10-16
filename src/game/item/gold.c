@@ -12,7 +12,7 @@ void *memset(void *, int, u32);
 int File_Open(char *, int, int);
 int File_Read(int, void *, int);
 int File_Close(int);
-void Model_SetUpSkinned(ModelInstance *, int *, int *);
+void Model_SetUpSkinned(ModelInstance *, char **, char **);
 void Gold_PrepareFadedDraw(OverlaySprite *);
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int, s64);

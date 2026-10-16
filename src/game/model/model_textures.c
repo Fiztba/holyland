@@ -1,18 +1,18 @@
 #include "common.h"
 #include "model/model.h"
 #include "gfx/texture.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void GsDraw_QueueTexFlush(void);
 void TextureTable_QueueEnabled(TextureTableHeader *, s32);
 void Map_QueuePacket(int *);
 
-static int sent_texture_19C;        /* 0x447048 last model texture sent from unk19C */
-static int sent_texture_1A0;        /* 0x44704C last model texture sent from unk1A0 */
+static sptr sent_texture_19C;        /* 0x447048 last model texture sent from unk19C */
+static sptr sent_texture_1A0;        /* 0x44704C last model texture sent from unk1A0 */
 /* 0x447050 the model texture taken as sent from unk198, by unk192; only [0] is read, and nothing but the reset
    writes it. A 4-byte object: [1] would be screen_uv_frame_copy (model/model_screen.c), so it stays extern. */
 extern int D_00447050[2];
-static int texture_slots[4];        /* 0x468190 chunk table last sent for each unk190 slot */
+static sptr texture_slots[4];        /* 0x468190 chunk table last sent for each unk190 slot */
 
 /* Forgets every texture slot. */
 void ModelTexture_ResetSlots(void) {
@@ -24,7 +24,7 @@ void ModelTexture_ResetSlots(void) {
 
 /* Sets texture slot `slot` (0..3) to chunk_table, the table ModelTexture_SendForModel then takes as sent.
    Nothing calls it. */
-void ModelTexture_SetSlot(int chunk_table, u32 slot) {
+void ModelTexture_SetSlot(sptr chunk_table, u32 slot) {
     if (slot < 4U) {
         texture_slots[slot] = chunk_table;
     }
@@ -44,7 +44,7 @@ void ModelTexture_SendForModel(void *model_arg) {
             case 2:
                 texture_slots[(s16)model->texture_slot] = model->texture_data;
                 changed = TRUE;
-                TextureTable_QueueEnabled((TextureTableHeader *)model->texture_data, (s32)model->chunk_skip_mask);
+                TextureTable_QueueEnabled((TextureTableHeader *)model->texture_data, (s32)(sptr)model->chunk_skip_mask);
                 break;
             case 3:
                 Map_QueuePacket((int *)model->texture_data);

@@ -1,101 +1,61 @@
 #include "model/model.h"
+#include "entity/entity.h" /* linked_point_pool */
 #include "map/map.h"
 #include "gfx/gs.h"
 #include "math/vu0.h"
+#include "libvu0.h"
 
 /* loads the matrix the children are multiplied by into vf1..vf4 */
 #define LOAD_PARENT_MATRIX(matrix)                                                                 \
-    __asm__ volatile(                                                                              \
-        "lqc2 $vf1, 0x0(%0)\n"                                                                     \
-        "lqc2 $vf2, 0x10(%0)\n"                                                                    \
-        "lqc2 $vf3, 0x20(%0)\n"                                                                    \
-        "lqc2 $vf4, 0x30(%0)\n"                                                                    \
-        :                                                                                          \
-        : "r"(matrix))
-/* multiplies the matrix at `matrix` by the one loaded in vf1..vf4, in place */
-#define MULTIPLY_BY_PARENT(matrix)                                                                 \
-    __asm__ volatile(                                                                              \
-        "lqc2 $vf22, 0x0(%0)\n"                                                                    \
-        "lqc2 $vf23, 0x10(%0)\n"                                                                   \
-        "lqc2 $vf24, 0x20(%0)\n"                                                                   \
-        "lqc2 $vf25, 0x30(%0)\n"                                                                   \
-        :                                                                                          \
-        : "r"(matrix));                                                                            \
-    __asm__ volatile(                                                                              \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vmulax.xyzw ACC, $vf1, $vf22x\n"                                                          \
-        "vmadday.xyzw ACC, $vf2, $vf22y\n"                                                         \
-        "vmaddaz.xyzw ACC, $vf3, $vf22z\n"                                                         \
-        "vmaddw.xyzw $vf22, $vf4, $vf22w\n");                                                      \
-    __asm__ volatile(                                                                              \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vmulax.xyzw ACC, $vf1, $vf23x\n"                                                          \
-        "vmadday.xyzw ACC, $vf2, $vf23y\n"                                                         \
-        "vmaddaz.xyzw ACC, $vf3, $vf23z\n"                                                         \
-        "vmaddw.xyzw $vf23, $vf4, $vf23w\n");                                                      \
-    __asm__ volatile(                                                                              \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vmulax.xyzw ACC, $vf1, $vf24x\n"                                                          \
-        "vmadday.xyzw ACC, $vf2, $vf24y\n"                                                         \
-        "vmaddaz.xyzw ACC, $vf3, $vf24z\n"                                                         \
-        "vmaddw.xyzw $vf24, $vf4, $vf24w\n");                                                      \
-    __asm__ volatile(                                                                              \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vmulax.xyzw ACC, $vf1, $vf25x\n"                                                          \
-        "vmadday.xyzw ACC, $vf2, $vf25y\n"                                                         \
-        "vmaddaz.xyzw ACC, $vf3, $vf25z\n"                                                         \
-        "vmaddw.xyzw $vf25, $vf4, $vf25w\n");                                                      \
-    __asm__ volatile(                                                                              \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "vnop\n"                                                                                   \
-        "sqc2 $vf22, 0x0(%0)\n"                                                                    \
-        "sqc2 $vf23, 0x10(%0)\n"                                                                   \
-        "sqc2 $vf24, 0x20(%0)\n"                                                                   \
-        "sqc2 $vf25, 0x30(%0)\n"                                                                   \
-        : "=r"(matrix)                                                                             \
-        : "0"(matrix))
-// match: gcse numbers the registers of the three function addresses Model_SetUpSkinned stores by a hash of
-// where the compiler keeps their names, so it depends on the names and the order they first appear in. These
-// names, this early declaration and the asm label on Model_UpdateSkinnedBonePoints (the '*' it puts in front of
-// the name) give retail's order ($24, $16, $25). Revisit when any of the three functions is renamed.
+    do {                                                                                           \
+        Vu_Lqc2(1, (u8 *)(matrix) + 0x0);                                                          \
+        Vu_Lqc2(2, (u8 *)(matrix) + 0x10);                                                         \
+        Vu_Lqc2(3, (u8 *)(matrix) + 0x20);                                                         \
+        Vu_Lqc2(4, (u8 *)(matrix) + 0x30);                                                         \
+    } while (0)
+/* multiplies the matrix at `matrix` by the one loaded in vf1..vf4, in place (through vf22..vf25) */
+static void multiply_by_parent(void *matrix) {
+    int row;
+
+    for (row = 0; row < 4; row++) {
+        Vu_Lqc2(22 + row, (u8 *)matrix + row * 0x10);
+    }
+    for (row = 22; row < 26; row++) {
+        Vu_MulA(VU_XYZW, 1, VF(row)[0]);
+        Vu_MaddA(VU_XYZW, 2, VF(row)[1]);
+        Vu_MaddA(VU_XYZW, 3, VF(row)[2]);
+        Vu_Madd(VU_XYZW, row, 4, VF(row)[3]);
+    }
+    for (row = 0; row < 4; row++) {
+        Vu_Sqc2((u8 *)matrix + row * 0x10, 22 + row);
+    }
+}
+#define MULTIPLY_BY_PARENT(matrix) multiply_by_parent(matrix)
 char *Model_GetSkinnedBonePoint(char *, u32);
-typedef u32 u_long128 __attribute__((mode(TI)));
-/* copies a 4x4 matrix through VU0 registers */
+typedef Uint128 u_long128 __attribute__((aligned(4), may_alias)); /* a quadword moved with lq/sq; any alignment on the PC */
+/* copies a 4x4 matrix through VU0 registers (vf16..vf19) */
 #define COPY_MATRIX(to, from)                                                                      \
-    __asm__ volatile(                                                                              \
-        "lqc2 $vf16, 0x0(%0)\n"                                                                    \
-        "lqc2 $vf17, 0x10(%0)\n"                                                                   \
-        "lqc2 $vf18, 0x20(%0)\n"                                                                   \
-        "lqc2 $vf19, 0x30(%0)\n"                                                                   \
-        "sqc2 $vf16, 0x0(%1)\n"                                                                    \
-        "sqc2 $vf17, 0x10(%1)\n"                                                                   \
-        "sqc2 $vf18, 0x20(%1)\n"                                                                   \
-        "sqc2 $vf19, 0x30(%1)\n"                                                                   \
-        : : "r"(from), "r"(to))
+    do {                                                                                           \
+        Vu_Lqc2(16, (u8 *)(from) + 0x0);                                                           \
+        Vu_Lqc2(17, (u8 *)(from) + 0x10);                                                          \
+        Vu_Lqc2(18, (u8 *)(from) + 0x20);                                                          \
+        Vu_Lqc2(19, (u8 *)(from) + 0x30);                                                          \
+        Vu_Sqc2((u8 *)(to) + 0x0, 16);                                                             \
+        Vu_Sqc2((u8 *)(to) + 0x10, 17);                                                            \
+        Vu_Sqc2((u8 *)(to) + 0x20, 18);                                                            \
+        Vu_Sqc2((u8 *)(to) + 0x30, 19);                                                            \
+    } while (0)
 /* the largest float: a vertex's distance before it has been measured.
    match: written as a literal, the compiler keeps it in .sdata (D_0044675C) */
 #define NOT_MEASURED 3.4028235e38f
 void Model_DrawSkinned(ModelInstance *);
-// match: the asm label is part of the register order, see Model_GetSkinnedBonePoint above
-void Model_UpdateSkinnedBonePoints(ModelInstance *) __asm__("Model_UpdateSkinnedBonePoints");
+void Model_UpdateSkinnedBonePoints(ModelInstance *);
 float asinf(float);
 float atan2f(float, float);
 float Angle_Wrap(float);
-void sceVu0RotMatrixX(float *, float *, float);
-void sceVu0RotMatrixY(float *, float *, float);
-void sceVu0RotMatrixZ(float *, float *, float);
 u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
-int ModelMatrix_BuildDrawMatrices(ModelInstance *, s32, s32, void *, void *); // match: an int return keeps $2 busy after the call
+void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
 void Vector_Copy(void *, void *);
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int, s64);
@@ -103,16 +63,15 @@ void Packet_EndGsRegisters(void);
 void Model_DrawPosed(ModelInstance *);
 void Model_UpdateBonePoints(ModelInstance *);
 Vector4 *Model_GetBonePoint(ModelInstance *, s32);
-int ModelMatrix_BuildDrawMatrices(ModelInstance *, s32, s32, void *, void *); // match: an int return keeps $2 busy after the call
+void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
 void Matrix_Multiply(void *, void *, void *);
 float sqrtf(float);
-extern ModelLight linked_point_pool[];
 extern f32 identity_matrix[16];
 extern f32 world_screen_matrix[16];
 
 /* Multiply the matrices of a part's children by the part's own matrix. */
 void Model_MultiplyChildMatrices(ModelPart *part) {
-    register ModelPart *matrix asm("$2"); // match: the game keeps the matrix address in $2
+    ModelPart *matrix;
     ModelPart *child;
 
     matrix = part;
@@ -135,7 +94,7 @@ void Model_MultiplyChildMatrices(ModelPart *part) {
 
 /* Sets a skinned model up from a model file (vertices can follow their part or its parent): its parts and
    bone points are carved out of *memory, and both cursors move past what was used. */
-void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+void Model_SetUpSkinned(ModelInstance *model, char **file_cursor, char **memory) {
     ModelFile *file;
     ModelFilePart *file_part;
     ModelPart *memory_base;
@@ -150,7 +109,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
     s32 j;
 
     model->model_flags |= 0x4000;
-    cursor = (char *)*file_cursor;
+    cursor = *file_cursor;
     memory_base = (ModelPart *)*memory;
     model->file = (ModelFile *)cursor;
     file = (ModelFile *)cursor;
@@ -162,15 +121,15 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
     positions = (Vector4 *)&memory_base[part_count];
     model->parts = memory_base;
     model->bone_positions = positions;
-    *memory = (int)(positions + 32);
+    *memory = (char *)(positions + 32); /* PORT: the parts are runtime structs (0x90 bytes), the area may need more room on the PC */
     part = memory_base;
     for (i = 0; i < file->part_count; i++, part++, file_part++) {
         part->data_count = file_part->data_count;
-        part->data_addr = *file_cursor + file_part->data_offset;
+        part->data_addr = EE_WORD(*file_cursor + file_part->data_offset);
         part->pad78_46 = file_part->unk07;
         MODEL_PART_FLAG_BITS(part)->bit41 = TRUE;
         // match: retail keeps only the empty loop; a walk whose result nothing uses is deleted like this one
-        data = (ModelPartData *)(u32)part->data_addr;
+        data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < file_part->data_count; j++) {
             length = data->length;
             data = (ModelPartData *)((char *)data + length * 16);
@@ -199,7 +158,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
     model->alpha = 128.0f;
     /* the first block with a nonzero unk37 in the whole model gets unk61 = 2 */
     for (i = 0, part = model->parts; i < file->part_count; i++, part++) {
-        data = (ModelPartData *)(u32)part->data_addr;
+        data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < part->data_count; j++) {
             length = data->length;
             if (first && data->unk30.unk37 != 0) {
@@ -287,10 +246,10 @@ void Model_DrawSkinned(ModelInstance *model) {
     light_out = packet;
     light_out_b = packet + 0x10;
     for (i = 0; i < model->hit_count; i++) {
-        *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
-        *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
+        *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
+        *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
         light_out_b += 4;
-        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
+        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
         light_out += 4;
     }
     packet += 0x20;
@@ -342,12 +301,12 @@ void Model_DrawSkinned(ModelInstance *model) {
             *packet++ = 0x6C040028;
             COPY_MATRIX(packet, part_turns[MODEL_PART_PARENT_ANY(part)]);
         }
-        data = (ModelPartData *)(u32)part->data_addr;
+        data = EE_PTR(ModelPartData *, part->data_addr);
         packet = Packet_Alloc(part->data_count);
         for (j = 0; j < part->data_count; j++) {
             word = *(u32 *)data;
             *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
-            *packet = (u32)data + 0x10;
+            *packet = EE_WORD(data) + 0x10;
             packet += 3;
             data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
         }
@@ -424,10 +383,10 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
     light_out = packet;
     light_out_b = packet + 0x10;
     for (i = 0; i < model->hit_count; i++) {
-        *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
-        *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
+        *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
+        *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
         light_out_b += 4;
-        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
+        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
         light_out += 4;
     }
     packet += 0x20;
@@ -449,8 +408,8 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
             Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
             Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
         } else {
-            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
-            Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+            Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
         }
         Packet_EndGsRegisters();
         part = model->parts;
@@ -494,12 +453,12 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
                 *packet++ = 0x6C040028;
                 COPY_MATRIX(packet, part_turns[MODEL_PART_PARENT_ANY(part)]);
             }
-            data = (ModelPartData *)(u32)part->data_addr;
+            data = EE_PTR(ModelPartData *, part->data_addr);
             packet = Packet_Alloc(part->data_count);
             for (j = 0; j < part->data_count; j++) {
                 word = *(u32 *)data;
                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
-                *packet = (u32)data + 0x10;
+                *packet = EE_WORD(data) + 0x10;
                 packet += 3;
                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
             }
@@ -564,7 +523,7 @@ void Model_SetBlockGsWords(ModelInstance *model, s64 unk30, s64 unk40, s64 unk50
     part = model->parts;
     for (i = 0; i < part_count; i++, part++) {
         count = part->data_count;
-        cursor = (char *)(int)part->data_addr;
+        cursor = EE_PTR(char *, part->data_addr);
         for (j = 0; j < count; j++) {
             block = cursor;
             length = ((ModelPartData *)block)->length;
@@ -626,7 +585,7 @@ void Model_SetUvsFromScreen(void *model_arg) {
         count = (s32)(MODEL_PART_WORD(part) >> 53);
         last = -1;
         j = 0;
-        cursor = *(s32 **)&MODEL_PART_WORD(part);
+        cursor = EE_PTR(s32 *, (u32)MODEL_PART_WORD(part));
         for (; j < count; j++) {
             ModelWideData *block = (ModelWideData *)cursor;
             u16 length = block->length;
@@ -673,7 +632,7 @@ s64 *Model_SaveGsWordsAndUvs(ModelInstance *model, s64 *save) {
     for (i = 0; i < part_count; i++, part++) {
         int j = 0;
         int count = (int)(MODEL_PART_WORD(part) >> 53);
-        s64 *cursor = *(s64 **)&MODEL_PART_WORD(part);
+        s64 *cursor = EE_PTR(s64 *, (u32)MODEL_PART_WORD(part));
 
         for (; j < count; j++) {
             s64 *block = cursor;
@@ -712,7 +671,7 @@ void Model_RestoreGsWordsAndUvs(ModelInstance *model) {
     for (; i < part_count; i++, part++) {
         int j = 0;
         int count = (int)(MODEL_PART_WORD(part) >> 53);
-        char *cursor = *(char **)&MODEL_PART_WORD(part);
+        char *cursor = EE_PTR(char *, (u32)MODEL_PART_WORD(part));
 
         for (; j < count; j++) {
             char *block = cursor;
@@ -768,8 +727,8 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
     model->file = (ModelFile *)base;
     file = (PosedModelFile *)base;
     model->parts = (ModelPart *)memory_base;
-    base = (char *)((model->file_part_count = file->part_count) * sizeof(ModelPart)); // match: base reused for the size, the count stored on the way
-    *memory = memory_base + (u32)base;
+    /* PORT: the parts are runtime structs (0x90 bytes), the area may need more room on the PC */
+    *memory = memory_base + (model->file_part_count = file->part_count) * sizeof(ModelPart);
     model->part_count = model->file_part_count; // match: copied from the store above, not from the file
     part = (ModelPart *)memory_base;
     file_part = file->parts;
@@ -777,7 +736,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
         do {
             part->data_count = file_part->data_count;
             memory_base = *file_cursor + file_part->data_offset;
-            part->data_addr = (u32)memory_base;
+            part->data_addr = EE_WORD(memory_base);
             blended = is_blended(((ModelPartData *)memory_base)->gif_tag_high);
             data = (ModelPartData *)memory_base;
             opaque = FALSE;
@@ -787,7 +746,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
             MODEL_PART_FLAG_BITS(part)->bit41 = opaque;
             if (first) {
                 count = file_part->data_count;
-                data = (ModelPartData *)(u32)part->data_addr;
+                data = EE_PTR(ModelPartData *, part->data_addr);
                 for (j = 0; j < count; j++) {
                     length = data->length;
                     if (((ModelPartDataBits30 *)&data->tex0)->unk37 != 0) {
@@ -884,10 +843,10 @@ void Model_DrawPosed(ModelInstance *model) {
         light_out = packet;
         light_out_b = packet + 0x10;
         for (i = 0; i < model->hit_count; i++) {
-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
+            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
+            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
             light_out_b += 4;
-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
+            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
             light_out += 4;
         }
         packet += 0x20;
@@ -910,18 +869,18 @@ void Model_DrawPosed(ModelInstance *model) {
             if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT40) {
                 continue;
             }
-            data = (ModelPartData *)(u32)part->data_addr;
+            data = EE_PTR(ModelPartData *, part->data_addr);
             packet = Packet_Alloc(part->data_count + 6);
             *packet = 0x10000005;
             packet += 7;
             *packet++ = 0x6C040004;
             Matrix_Multiply(packet, model->model_matrix, part);
             packet += 0x10;
-            data = (ModelPartData *)(u32)part->data_addr;
+            data = EE_PTR(ModelPartData *, part->data_addr);
             for (j = 0; j < part->data_count; j++) {
                 word = *(u32 *)data;
                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
-                *packet = (u32)data + 0x10;
+                *packet = EE_WORD(data) + 0x10;
                 packet += 3;
                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
             }
@@ -986,10 +945,10 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
         light_out = packet;
         light_out_b = packet + 0x10;
         for (i = 0; i < model->hit_count; i++) {
-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
+            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
+            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
             light_out_b += 4;
-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
+            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
             light_out += 4;
         }
         packet += 0x20;
@@ -1021,11 +980,11 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
             *packet++ = 0x6C040004;
             COPY_MATRIX(packet, part);
             packet += 0x10;
-            data = (ModelPartData *)(u32)part->data_addr;
+            data = EE_PTR(ModelPartData *, part->data_addr);
             for (j = 0; j < part->data_count; j++) {
                 word = *(u32 *)data;
                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
-                *packet = (u32)data + 0x10;
+                *packet = EE_WORD(data) + 0x10;
                 packet += 3;
                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
             }
@@ -1089,10 +1048,10 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
         light_out = packet;
         light_out_b = packet + 0x10;
         for (i = 0; i < model->hit_count; i++) {
-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
+            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
+            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
             light_out_b += 4;
-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
+            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
             light_out += 4;
         }
         packet += 0x20;
@@ -1124,7 +1083,7 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
                 Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
                 Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
             } else {
-                Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+                Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
                 Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
             }
             Packet_EndGsRegisters();
@@ -1134,11 +1093,11 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
             *packet++ = 0x6C040004;
             Matrix_Multiply(packet, model->model_matrix, part);
             packet += 0x10;
-            data = (ModelPartData *)(u32)part->data_addr;
+            data = EE_PTR(ModelPartData *, part->data_addr);
             for (j = 0; j < part->data_count; j++) {
                 word = *(u32 *)data;
                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
-                *packet = (u32)data + 0x10;
+                *packet = EE_WORD(data) + 0x10;
                 packet += 3;
                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
             }
@@ -1202,10 +1161,10 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
         light_out = packet;
         light_out_b = packet + 0x10;
         for (i = 0; i < model->hit_count; i++) {
-            *(u_long128 *)light_out = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk00;
-            *(u_long128 *)light_out_b = *(u_long128 *)linked_point_pool[model->hit_handles[i]].unk10;
+            *(u_long128 *)light_out = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].position;
+            *(u_long128 *)light_out_b = *(u_long128 *)&linked_point_pool[model->hit_handles[i]].target;
             light_out_b += 4;
-            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].unk24;
+            ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
             light_out += 4;
         }
         Packet_AppendToChain(packet_start, Packet_Alloc(1)); /* the packet ends where the next one would start */
@@ -1225,12 +1184,12 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
                 if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT41) {
                     Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
                 } else {
-                    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
+                    Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
                 }
             } else {
                 Packet_AddGsRegister(0x1A, 0);
                 Packet_AddGsRegister(0x1B, 0x278);
-                data = (ModelPartData *)(u32)part->data_addr;
+                data = EE_PTR(ModelPartData *, part->data_addr);
                 Packet_AddGsRegister(0x15, *(s64 *)&data->unk30);
                 Packet_AddGsRegister(0x07, data->tex0);
                 Packet_AddGsRegister(GS_REG_ALPHA_2,
@@ -1240,7 +1199,7 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
                 if ((s16)model->fade_alpha >= 0x80) {
                     Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
                 } else {
-                    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
+                    Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
                 }
             }
             Packet_EndGsRegisters();
@@ -1250,11 +1209,11 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
             *packet++ = 0x6C040004;
             Matrix_Multiply(packet, model->model_matrix, part);
             packet += 0x10;
-            data = (ModelPartData *)(u32)part->data_addr;
+            data = EE_PTR(ModelPartData *, part->data_addr);
             for (j = 0; j < part->data_count; j++) {
                 word = *(u32 *)data;
                 *packet++ = (word & 0x8FFFFFFF) | 0x30000000;
-                *packet = (u32)data + 0x10;
+                *packet = EE_WORD(data) + 0x10;
                 packet += 3;
                 data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
             }
@@ -1262,8 +1221,8 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
         }
         Packet_BeginGsRegisters();
         Packet_AddGsRegister(0x1A, 1);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L);
-        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118L); // match: ZBUF_2 twice; ZBUF_1 is left as the last part set it
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
+        Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL); // match: ZBUF_2 twice; ZBUF_1 is left as the last part set it
         Packet_EndGsRegisters();
     }
 }
@@ -1315,17 +1274,17 @@ void Model_SetPrimBits(ModelInstance *model, s64 clear_mask, s64 set_value) {
     int set_bits;
     int clear_bits;
 
-    set_bits = set_value;
+    set_bits = (int)set_value;
     set_bits &= 0x7FF;
     set_bits <<= 15;
-    clear_bits = clear_mask;
+    clear_bits = (int)clear_mask;
     clear_bits &= 0x7FF;
     clear_bits <<= 15;
     part = model->parts;
     part_count = model->part_count;
     for (i = 0; i < part_count; i++, part++) {
         count = part->data_count;
-        record = (char *)(int)part->data_addr;
+        record = EE_PTR(char *, part->data_addr);
         for (j = 0; j < count; j++) {
             base = record;
             length = *(u16 *)base;
@@ -1355,7 +1314,7 @@ void Model_SetTexture(ModelInstance *model, u64 unk40, s64 unk30) {
     part_count = model->part_count;
     for (i = 0; i < part_count; i++, part++) {
         count = part->data_count;
-        data = (ModelPartData *)(u32)part->data_addr;
+        data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < count; j++) {
             block = data;
             length = block->length;
@@ -1379,7 +1338,7 @@ void Model_SetAlphaBlend(ModelInstance *model, s64 value) {
     for (; i < part_count; i++, part++) {
         s32 j = 0;
         s32 count = (s32)(MODEL_PART_WORD(part) >> 53);
-        u64 *cursor = *(u64 **)&MODEL_PART_WORD(part);
+        u64 *cursor = EE_PTR(u64 *, (u32)MODEL_PART_WORD(part));
 
         for (; j < count; j++) {
             ModelPartData *block = (ModelPartData *)cursor;
@@ -1402,7 +1361,7 @@ void Model_SetVu1Program(ModelInstance *model, s32 value) {
 
     part = model->parts;
     for (i = 0; i < model->part_count; i++, part++) {
-        data = (ModelPartData *)(u32)part->data_addr;
+        data = EE_PTR(ModelPartData *, part->data_addr);
         last_qword = (u32 *)((char *)data + data->length * 16);
         last_qword[3] = value | 0x15000000;
     }
@@ -1424,7 +1383,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
     for (; i < part_count; i++, part++) {
         s32 j = 0;
         s32 count = (s32)(MODEL_PART_WORD(part) >> 53);
-        s32 *cursor = *(s32 **)&MODEL_PART_WORD(part);
+        s32 *cursor = EE_PTR(s32 *, (u32)MODEL_PART_WORD(part));
 
         for (; j < count; j++) {
             ModelPartData *block = (ModelPartData *)cursor;
@@ -1457,7 +1416,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
 
 /* Step the colour of every vertex within `radius` of `centre` towards `targets`, one component at
    a time by `steps`. Returns how many components have not arrived yet. */
-int Model_FadeVertexColoursNear(int model_arg, void *centre_arg, int *steps, int *targets, float radius) {
+int Model_FadeVertexColoursNear(void *model_arg, void *centre_arg, int *steps, int *targets, float radius) {
     ModelInstance *model = (ModelInstance *)model_arg;
     f32 *centre = centre_arg;
     // match: the order of these declarations decides the stack slots of the four loop cursors (gcse hashes
@@ -1487,7 +1446,7 @@ int Model_FadeVertexColoursNear(int model_arg, void *centre_arg, int *steps, int
     for (; i < part_count; i++, part++) {
         j = 0;
         count = (s32)(MODEL_PART_WORD(part) >> 53);
-        cursor = *(s32 **)&MODEL_PART_WORD(part);
+        cursor = EE_PTR(s32 *, (u32)MODEL_PART_WORD(part));
         for (; j < count; j++) {
             block = (ModelPartData *)cursor;
             length = block->length;
@@ -1549,7 +1508,7 @@ void Model_SetTextureBase(ModelInstance *model, int texture_base, int clut_base)
     for (; i < part_count; i++, part++) {
         int j = 0;
         int count = (int)(MODEL_PART_WORD(part) >> 53);
-        char *cursor = *(char **)&MODEL_PART_WORD(part);
+        char *cursor = EE_PTR(char *, (u32)MODEL_PART_WORD(part));
 
         for (; j < count; j++) {
             char *block = cursor;

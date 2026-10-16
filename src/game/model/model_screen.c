@@ -1,4 +1,7 @@
 #include "model/model.h"
+#include <eekernel.h>
+#include "libvu0.h"
+#include "math/vu0.h"
 
 /* which sides of the screen a point is beyond */
 #define CLIP_SIDES(point, sides)                                                                   \
@@ -16,7 +19,7 @@
     }
 /* whether a point is too deep or outside the range the GS can draw */
 #define OUT_OF_RANGE(point) ((point)->z > 0xFFFF0 || (((point)->x | (point)->y) & 0xFFFF0000))
-typedef u32 u_long128 __attribute__((mode(TI)));
+typedef Uint128 u_long128 __attribute__((aligned(4), may_alias)); /* a quadword moved with lq/sq; any alignment on the PC */
 /* copies a quadword and steps both pointers past it */
 #define COPY_QWORD(to, from)                                                                       \
     *(u_long128 *)(to) = *(u_long128 *)(from);                                                               \
@@ -42,23 +45,14 @@ typedef u32 u_long128 __attribute__((mode(TI)));
     (to).unk30[1] = (from)->colour[1];                                                             \
     (to).unk30[2] = (from)->colour[2];                                                             \
     (to).unk30[3] = (from)->colour[3]
-void sceVu0MulMatrix(void *, void *, void *);
-void Vu0_LoadMatrix(void *);
-void Vu0_ProjectToScreen(int *, void *);
-void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
 void ModelScreen_QueueCutTriangle(u32 *, ModelPartVertexWords *, int, int, void *);
 u32 *Packet_Alloc(int);
 void Packet_AppendToChain(u32 *, u32 *);
 void ModelScreen_StepVertices(ModelPartVertexWords *, ModelPartVertexWords *, ModelPartVertexWords *, int);
-void Vector_Add(void *, void *, void *);
 void ModelScreen_StepFloatVertices(BlendVertex *, BlendVertex *, BlendVertex *, int);
-void Vector_Subtract(float *, float *, float *);
-void Vector_Scale(float *, float *, float);
 extern f32 world_screen_matrix[16];      /* world to screen */
 extern int cut_triangle_count;  /* triangles cut up this way */
 
-double sin(double);
-int FlushCache(int);
 extern int screen_uv_frame;         /* 0..59, stepped by ModelScreen_SetUvsFromScreen */
 extern int screen_uv_frame_copy;    /* the same value; nothing reads it */
 
@@ -87,7 +81,7 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
         Vu0_LoadMatrix(screen_matrix);
         j = 0;
         count = (s32)(MODEL_PART_WORD(part) >> 53);
-        block = *(ModelPartData **)&MODEL_PART_WORD(part);
+        block = EE_PTR(ModelPartData *, (u32)MODEL_PART_WORD(part));
         for (; j < count; j++) {
             s32 vertex_count = block->vertex_count & 0x7FFF;
             ModelPartVertexWords *vertex = (ModelPartVertexWords *)block->vertices;
@@ -115,7 +109,9 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
                 point2[2] = vertex->z;
                 point2[3] = 1.0f;
                 vertex++;
-                Vu0_ProjectToScreen3((int *)screen++, (int *)screen++, (int *)screen++, point0, point1, point2);
+                /* retail hands them over in order: screen, screen + 1, screen + 2 */
+                Vu0_ProjectToScreen3((int *)screen, (int *)(screen + 1), (int *)(screen + 2), point0, point1, point2);
+                screen += 3;
             }
             for (k = vertex_count % 3; --k != -1;) {
                 point0[0] = vertex->x;
@@ -199,16 +195,14 @@ void ModelScreen_QueueCutTriangle(u32 *data, ModelPartVertexWords *vertex, int f
         *packet = 0x10000005;
         packet += 7;
         *packet++ = 0x6C040004;
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%0)\n"
-            "lqc2 $vf17, 0x10(%0)\n"
-            "lqc2 $vf18, 0x20(%0)\n"
-            "lqc2 $vf19, 0x30(%0)\n"
-            "sqc2 $vf16, 0x0(%1)\n"
-            "sqc2 $vf17, 0x10(%1)\n"
-            "sqc2 $vf18, 0x20(%1)\n"
-            "sqc2 $vf19, 0x30(%1)\n"
-            : : "r"(matrix), "r"(packet));
+        Vu_Lqc2(16, (u8 *)matrix + 0x0); /* copied through vf16..vf19 */
+        Vu_Lqc2(17, (u8 *)matrix + 0x10);
+        Vu_Lqc2(18, (u8 *)matrix + 0x20);
+        Vu_Lqc2(19, (u8 *)matrix + 0x30);
+        Vu_Sqc2((u8 *)packet + 0x0, 16);
+        Vu_Sqc2((u8 *)packet + 0x10, 17);
+        Vu_Sqc2((u8 *)packet + 0x20, 18);
+        Vu_Sqc2((u8 *)packet + 0x30, 19);
         packet += 0x10;
     }
     *packet = (size - 2) | 0x10000000;
@@ -424,16 +418,14 @@ void ModelScreen_QueueCutFloatTriangle(u32 *data, ModelPartVertexWords *vertex, 
         *packet = 0x10000005;
         packet += 7;
         *packet++ = 0x6C040004;
-        __asm__ volatile(
-            "lqc2 $vf16, 0x0(%0)\n"
-            "lqc2 $vf17, 0x10(%0)\n"
-            "lqc2 $vf18, 0x20(%0)\n"
-            "lqc2 $vf19, 0x30(%0)\n"
-            "sqc2 $vf16, 0x0(%1)\n"
-            "sqc2 $vf17, 0x10(%1)\n"
-            "sqc2 $vf18, 0x20(%1)\n"
-            "sqc2 $vf19, 0x30(%1)\n"
-            : : "r"(matrix), "r"(packet));
+        Vu_Lqc2(16, (u8 *)matrix + 0x0); /* copied through vf16..vf19 */
+        Vu_Lqc2(17, (u8 *)matrix + 0x10);
+        Vu_Lqc2(18, (u8 *)matrix + 0x20);
+        Vu_Lqc2(19, (u8 *)matrix + 0x30);
+        Vu_Sqc2((u8 *)packet + 0x0, 16);
+        Vu_Sqc2((u8 *)packet + 0x10, 17);
+        Vu_Sqc2((u8 *)packet + 0x20, 18);
+        Vu_Sqc2((u8 *)packet + 0x30, 19);
         packet += 0x10;
         *packet = 0x10000003;
         packet += 4;
@@ -613,9 +605,9 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
         FlushCache(0);
         sceVu0MulMatrix(matrix, world_screen_matrix, part);
         Vu0_LoadMatrix(matrix);
-        ((void (*)(int))FlushCache)(0); // match: called as void, retail reuses $2 at once
+        FlushCache(0);
         count = part->data_count;
-        next_data = (ModelPartData *)(int)part->data_addr;
+        next_data = EE_PTR(ModelPartData *, part->data_addr);
         for (j = 0; j < count; j++) {
             length = next_data->length;
             data = next_data;

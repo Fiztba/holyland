@@ -1,7 +1,7 @@
 #include "common.h"
 #include "model/model.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 void Vector_Subtract(void *, void *, void *);
 float sqrtf(float);
 
@@ -30,7 +30,7 @@ void DrawList_Add(ModelInstance *model, s32 layer, s32 list) {
         } else if (depth >= 1000) {
             depth = 999;
         }
-        bucket = (ModelInstance **)((char *)draw_buckets + (depth * 4 + list * 0xFA0 + layer * 0x1F40));
+        bucket = &draw_buckets[layer][list][depth];
         next = *bucket;
         *bucket = model;
         model->draw_next[list] = next;
@@ -45,7 +45,7 @@ void DrawList_Draw(u32 layer, u32 list) {
 
     if (layer < 5U && list < 2U) {
         for (depth = 999; depth >= 0; depth--) {
-            bucket = (ModelInstance **)((char *)draw_buckets + (depth * 4 + list * 0xFA0 + layer * 0x1F40));
+            bucket = &draw_buckets[layer][list][depth];
             model = *bucket;
             if (model != 0) {
                 do {

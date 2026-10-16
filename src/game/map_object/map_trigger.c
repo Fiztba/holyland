@@ -20,7 +20,7 @@ void Vector_Scale(float *, float *, float);
 void Model_SetPrimBits(ModelInstance *, s64, s64);
 void Model_SetAlphaBlend(ModelInstance *, s64);
 void Model_SetVertexColour(void *, int, int, int, int);
-int Model_FadeVertexColoursNear(int, void *, int *, int *, float);
+int Model_FadeVertexColoursNear(void *, void *, int *, int *, float);
 void *memset(void *, int, u32);
 int rand(void);
 extern GameStatus game_status;

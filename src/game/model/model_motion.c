@@ -1,7 +1,7 @@
 /* Model motions: loading them into a ModelChannel, playing a frame (Hermite between keys) and blending in. */
 #include "model/model.h"
+#include <string.h>
 
-void *memset(void *, int, u32);
 MotionData *ModelMotion_Load(MotionData *, ModelInstance *, int);
 void ModelMotion_Hermite(void *, void *, void *, void *, void *, f32);
 void ModelMotion_StepBlend(ModelInstance *);
@@ -33,20 +33,20 @@ MotionData *ModelMotion_Load(MotionData *data, ModelInstance *model, int unused)
         channel->value = 0;
         model->model_flags |= 1;
         channel->tables[channel->index] = motion->parts;
-        motion->vectors = (MotionVector *)((char *)motion + motion->vectors_offset);
+        motion->vectors = EE_WORD((char *)motion + motion->vectors_offset);
     } while (0);
     model->part_count = motion->part_count;
     // match: the parameter is reused as a cursor nothing reads (cleared, stepped per part, set to the end below)
     for (data = NULL; i < model->part_count; i++, data++) {
         model->parts[i].level = 0;
         if (channel->tables[channel->index][i].keys_offset != 0 &&
-            channel->tables[channel->index][i].thresholds == NULL) {
+            channel->tables[channel->index][i].thresholds == 0) {
             channel->tables[channel->index][i].thresholds =
-                (u16 *)((char *)motion + channel->tables[channel->index][i].keys_offset);
+                EE_WORD((char *)motion + channel->tables[channel->index][i].keys_offset);
         }
         parts = model->parts;
-        vectors = motion->vectors;
-        key = (MotionKey *)channel->tables[channel->index][i].thresholds;
+        vectors = EE_PTR(MotionVector *, motion->vectors);
+        key = EE_PTR(MotionKey *, channel->tables[channel->index][i].thresholds);
         vector = &vectors[key->position];
         parts[i].position[0] = vector->x;
         parts[i].position[1] = vector->y;
@@ -71,8 +71,7 @@ MotionData *ModelMotion_Load(MotionData *data, ModelInstance *model, int unused)
         } else {
             parts[i].sibling = NULL;
         }
-        // match: indexing level_tables as an array swaps the addu operands
-        parts[i].part_flags = (*(ModelPartLevels **)((char *)model->level_tables + (channel->index << 2)))[i].unk02;
+        parts[i].part_flags = model->level_tables[channel->index][i].unk02;
     }
     data = (MotionData *)((char *)motion + motion->size);
     return data;
@@ -153,12 +152,12 @@ void ModelMotion_Step(void *model_arg) {
         motion = (MotionData *)channel->tables[channel->index];
         motion = (MotionData *)((ModelPartLevels *)motion - 1);
         record = channel->tables[channel->index];
-        vectors = motion->vectors;
+        vectors = EE_PTR(MotionVector *, motion->vectors);
         for (i = 0; i < model->part_count; i++, record++) {
             part = &model->parts[i];
-            if (record->thresholds != NULL && record->count != 0) {
+            if (record->thresholds != 0 && record->count != 0) {
                 // match: the level is read twice, as a shift and mask of the whole doubleword
-                key = (MotionKey *)record->thresholds + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
+                key = EE_PTR(MotionKey *, record->thresholds) + ((u32)(MODEL_PART_WORD(part) >> 39) & 0x7F);
                 level = (u32)(MODEL_PART_WORD(part) >> 39) & 0x7F;
                 while (level < record->count && channel->param >= key->frame) {
                     level++;
@@ -262,7 +261,7 @@ void ModelMotion_StepBlend(ModelInstance *model) {
     motion = (MotionData *)channel->tables[channel->index];
     motion = (MotionData *)((ModelPartLevels *)motion - 1);
     record = channel->tables[channel->index];
-    vectors = motion->vectors;
+    vectors = EE_PTR(MotionVector *, motion->vectors);
     if (channel->word >= channel->value) {
         divisor = 1.0f;
     } else if (channel->unk8F == 0) {
@@ -272,7 +271,7 @@ void ModelMotion_StepBlend(ModelInstance *model) {
     }
     part = model->parts;
     for (i = 0; i < model->part_count; i++, record++, part++) {
-        key = (MotionKey *)record->thresholds;
+        key = EE_PTR(MotionKey *, record->thresholds);
         if (key != NULL) {
             part->rotation_x += (vectors[key->rotation].x - part->rotation_x) / divisor;
             part->rotation_y += (vectors[key->rotation].y - part->rotation_y) / divisor;
