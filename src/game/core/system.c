@@ -30,7 +30,7 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
 extern GsRegisterPair frame_dispfb_regs;    /* the DISPFB values of the two frames */
 extern GsRegisterPair frame_display_regs;   /* the DISPLAY values of the two frames */
 
-int Movie_Play(char *, u32, u32, int (*)(void), u32, s16, s16, s16);
+int Movie_Play(char *, char *, u32, int (*)(void), u32, s16, s16, s16);
 void Packet_SwapBuffers(void);
 void DrawList_Clear(void);
 void func_001095D0(void);

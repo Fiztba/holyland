@@ -33,14 +33,6 @@ typedef struct {
     u8 bytes[4];                    /* 0x00 */
 } MovieEndCode;
 
-/* a block of data handed to the IOP with sceSifSetDma (the SDK's sceSifDmaData) */
-typedef struct {
-    void *data;                     /* 0x00 */
-    void *addr;                     /* 0x04 IOP address */
-    int size;                       /* 0x08 */
-    int attr;                       /* 0x0C */
-} MovieSifDmaData;
-
 /* the ring the movie file is read into before it is demultiplexed (the SDK sample's ReadBuf) */
 typedef struct {
     u8 data[0x50000];               /* 0x00000 */
@@ -50,10 +42,12 @@ typedef struct {
 } MovieReadBuffer;
 
 /* a source-chain DMA tag in the low half of a quadword */
+/* overlay: a DMA tag */
 typedef struct {
     u64 tag;                        /* 0x00 address << 32 | id << 28 | qwc */
     u64 unk08;                      /* 0x08 */
 } MovieDmaTag;
+LAYOUT_SIZE(MovieDmaTag, 0x10);
 
 /* the movie file being played: streamed from the disc when its path starts with "cdrom0:", read with sceRead
    otherwise */
@@ -86,9 +80,9 @@ typedef struct {
 
 /* movie_thread: the movie player's buffers, threads, file and display */
 typedef struct {
-    u32 heap_start;                 /* 0x00 the block Movie_Play is given to allocate from */
-    u32 heap_next;                  /* 0x04 first free byte (Movie_HeapAlloc) */
-    u32 heap_end;                   /* 0x08 last byte */
+    uptr heap_start;                /* 0x00 the block Movie_Play is given to allocate from */
+    uptr heap_next;                 /* 0x04 first free byte (Movie_HeapAlloc) */
+    uptr heap_end;                  /* 0x08 last byte */
     char pad0C[0x04];
     void *idle_stack;               /* 0x10 0x800 bytes */
     void *decode_stack;             /* 0x14 0x4000 bytes */
@@ -100,7 +94,7 @@ typedef struct {
     void *out_tags;                 /* 0x2C five MovieOutTag */
     void *time_stamps;              /* 0x30 0x3C00 bytes, 0x280 MovieTimeStamp */
     void *unk34;                    /* 0x34 0x100 bytes, not used */
-    s32 read_buffer;                /* 0x38 the MovieReadBuffer (MOVIE_READ_BUFFER) */
+    MovieReadBuffer *read_buffer;   /* 0x38 the MovieReadBuffer (MOVIE_READ_BUFFER) */
     char pad3C[0x04];
     s32 decode_thread;              /* 0x40 thread id */
     s32 idle_thread;                /* 0x44 thread id */
@@ -114,14 +108,7 @@ typedef struct {
     s16 display_y;                  /* 0xD8 */
 } MovieThreadState;
 
-/* MovieThreadState.read_buffer as the pointer it holds: Movie_Setup only matches when the load has a pointer
-   type (it then moves ahead of the stores to the DMA registers) */
-typedef struct {
-    char pad00[0x38];
-    MovieReadBuffer *read_buffer;   /* 0x38 */
-} MovieThreadStatePointers;
-
-#define MOVIE_READ_BUFFER(state) (((MovieThreadStatePointers *)(state))->read_buffer)
+#define MOVIE_READ_BUFFER(state) ((state)->read_buffer)
 
 /* one decoded picture as the IPU delivers it (RGBA32 macroblocks) */
 typedef struct {
@@ -189,9 +176,8 @@ typedef struct {
     s32 stamp_write;                /* 0x5C next slot written */
 } MovieStreamBuffer;
 
-/* `data` read as an integer, so that the compiler keeps the load behind a store through an `int *`
-   (MovieStream_BeginPut only matches this way) */
-#define MOVIE_STREAM_DATA_ADDRESS(stream) (*(s32 *)&(stream)->data)
+/* `data` read as an integer (MovieStream_BeginPut) */
+#define MOVIE_STREAM_DATA_ADDRESS(stream) ((sptr)(stream)->data)
 
 /* movie_decoder: the libmpeg handle, its stream buffer and the decoder state (the SDK sample's VideoDec) */
 typedef struct {
@@ -229,7 +215,7 @@ typedef struct {
 /* Plays a movie file to its end (or until skip_requested, polled from the eleventh picture on, returns
    nonzero), with the player's buffers carved out of the heap_size bytes at heap. volume is the sound's master
    volume, video_mode, display_x and display_y set up the display. Returns -1 when the block is too small. */
-int Movie_Play(char *path, u32 heap, u32 heap_size, int (*skip_requested)(void), u32 volume, s16 video_mode,
+int Movie_Play(char *path, char *heap, u32 heap_size, int (*skip_requested)(void), u32 volume, s16 video_mode,
                s16 display_x, s16 display_y);
 
 #endif

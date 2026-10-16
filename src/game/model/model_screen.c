@@ -109,7 +109,9 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
                 point2[2] = vertex->z;
                 point2[3] = 1.0f;
                 vertex++;
-                Vu0_ProjectToScreen3((int *)screen++, (int *)screen++, (int *)screen++, point0, point1, point2);
+                /* retail hands them over in order: screen, screen + 1, screen + 2 */
+                Vu0_ProjectToScreen3((int *)screen, (int *)(screen + 1), (int *)(screen + 2), point0, point1, point2);
+                screen += 3;
             }
             for (k = vertex_count % 3; --k != -1;) {
                 point0[0] = vertex->x;
