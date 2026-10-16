@@ -131,7 +131,7 @@ extern s8 trade_screen_state;       /* 0: fading in, 1: open, 2 and up: fading o
 s32 Sound_PlayMenu(s32);
 int Menu_SetBlendMode(u8 mode);
 void MenuDraw_Bar(MenuCursorBar *);
-void MenuSprite_Draw(SpritePacket *, int, int, int);
+void MenuSprite_Draw(sptr, int, int, int);
 /* match: the part number is passed sign-extended and no result is kept (the definition takes a u8 and returns int) */
 #define SELECT_PART(part) ((void (*)(s32))Menu_SetBlendMode)(part)
 extern LevelRecordDef worn_defs[];
@@ -192,7 +192,7 @@ static inline s32 ScaleValue(s32 value, s32 percent, s32 divisor) {
 #define DRAW_PACKETS(packets, count, param)                                                          \
     for (i = 0; i < (count); i++) {                                                                  \
         SELECT_PART((s8)(packets)[i].blend_mode);                                                    \
-        MenuSprite_Draw(&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
+        MenuSprite_Draw((sptr)&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
         SELECT_PART(0);                                                                              \
     }
 extern PlayerState player_state;
@@ -287,7 +287,7 @@ extern SpritePacket *pretune_parts;
 extern SpritePacket *tune_mess_parts;
 extern s8 smith_choices_active;     /* nonzero once the cursor is on the three lines */
 extern s8 smith_screen_state;       /* 0: fading in, 1: open, 2 to 4: fading out to a list, 5: fading out to leave */
-void MenuSprite_DrawPlain(SpritePacket *, int, int);
+void MenuSprite_DrawPlain(sptr, int, int);
 extern f32 smith_upgrade_list_model_position[4];
 extern u32 tune_part_count;              /* how many parts the screen has */
 extern SpritePacket *tune_parts;
@@ -920,7 +920,7 @@ static void Trade_UpdateSelectScreen(HandlerContext *context) {
         }
         kind = preshop_parts[i].handler_index;
         SELECT_PART((s8)preshop_parts[i].blend_mode);
-        MenuSprite_Draw(&preshop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&preshop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         SELECT_PART(0);
     }
 
@@ -1058,30 +1058,30 @@ static void Trade_UpdateStockList(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 break;
             case 2:
                 if (context->arg != 4) {
-                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
                 }
                 break;
             case 3:
                 if (trade_stock_list_cursor[0]->group != 12) {
-                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             case 4:
                 if (context->arg == 4) {
-                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else if (context->arg != 4) {
-            MenuSprite_Draw(&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw(&shop_parts[i], kind + 1000, 5, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 5, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -1507,23 +1507,23 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
-                MenuSprite_Draw(&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
                 break;
             case 2:
                 break;
             case 3:
                 if (trade_stock_list_cursor[0]->group != 12) {
-                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else if (context->arg != 4) {
-            MenuSprite_Draw(&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw(&shop_parts[i], kind + 1000, 6, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 6, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -1698,9 +1698,9 @@ static void Trade_UpdateTakeAmount(HandlerContext *context) {
         SELECT_PART((s8)shop_mess_parts[i].blend_mode);
         kind = shop_mess_parts[i].handler_index;
         if (context->arg != 4) {
-            MenuSprite_Draw(&shop_mess_parts[i], kind + 1000, 2, (int)message_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_mess_parts[i], kind + 1000, 2, (int)message_part_alphas[i]);
         } else {
-            MenuSprite_Draw(&shop_mess_parts[i], kind + 1000, 6, (int)message_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_mess_parts[i], kind + 1000, 6, (int)message_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -1926,21 +1926,21 @@ static void Trade_UpdateOwnedList(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1: // match: an empty case of its own
                 break;
             case 2:
-                MenuSprite_Draw(&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
                 break;
             case 3:
                 if (item_list_cursor[0]->group != 11) {
-                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else {
-            MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -2291,22 +2291,22 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
         if (kind == 3) {
             switch (shop_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
-                MenuSprite_Draw(&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
                 break;
             case 2:
                 break;
             case 3:
                 if (item_list_cursor[0]->group != 11) {
-                    MenuSprite_Draw(&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&shop_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
                 }
                 break;
             }
         } else {
             // match: 10000 where the other screens add 1000 (the callee takes it modulo 1000, so it draws the same)
-            MenuSprite_Draw(&shop_parts[i], kind + 10000, 4, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&shop_parts[i], kind + 10000, 4, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -2480,7 +2480,7 @@ static void Trade_UpdateGiveAmount(HandlerContext *context) {
         }
         kind = shop_mess_parts[i].handler_index;
         SELECT_PART((s8)shop_mess_parts[i].blend_mode);
-        MenuSprite_Draw(&shop_mess_parts[i], kind + 1000, 4, (int)message_part_alphas[i]);
+        MenuSprite_Draw((sptr)&shop_mess_parts[i], kind + 1000, 4, (int)message_part_alphas[i]);
         SELECT_PART(0);
     }
 
@@ -3173,14 +3173,14 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
             MenuDraw_Bar(&bar);
         }
         ((int (*)(s8))Menu_SetBlendMode)(pretune_parts[i].blend_mode); // match: the byte is passed sign-extended here
-        MenuSprite_Draw(&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
     if (smith_choices_active == 0) {
         for (i = 0; i < tune_mess_part_count; i++) {
             kind = tune_mess_parts[i].handler_index;
-            MenuSprite_DrawPlain(&tune_mess_parts[i], kind, 1);
+            MenuSprite_DrawPlain((sptr)&tune_mess_parts[i], kind, 1);
         }
     }
 
@@ -3385,19 +3385,19 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 break;
             case 2:
-                MenuSprite_Draw(&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
                 break;
             case 3:
-                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw(&tune_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&tune_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -3487,7 +3487,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -3519,7 +3519,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -3552,7 +3552,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -3731,19 +3731,19 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
-                MenuSprite_Draw(&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
                 break;
             case 2:
                 break;
             case 3:
-                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw(&tune_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&tune_parts[i], kind + 1000, 2, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -3802,7 +3802,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -3835,7 +3835,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
                 // match: called as returning a value, which keeps $2 away from the pointer formed for the next call
-                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode); // match: the other lists hand 0 here
             }
             parts = shop_g2_parts;
@@ -3868,7 +3868,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -3916,7 +3916,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
     for (i = 0; i < tune_mess_part_count; i++) {
         kind = tune_mess_parts[i].handler_index;
         SELECT_PART((s8)tune_mess_parts[i].blend_mode);
-        MenuSprite_Draw(&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
+        MenuSprite_Draw((sptr)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
         SELECT_PART(0);
     }
     selected_def = &item_name_defs[item_list_cursor[0]->unk0C];
@@ -4119,24 +4119,24 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 if (smith_confirm_shown != 0) {
-                    MenuSprite_Draw(&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&tune_parts[i], 1003, 1, (int)screen_part_alphas[i]);
                 }
                 break;
             case 2:
                 if (smith_confirm_shown == 0) {
-                    MenuSprite_Draw(&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
                 }
                 break;
             case 3:
-                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw(&tune_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&tune_parts[i], kind + 1000, 3, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -4238,7 +4238,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -4270,7 +4270,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -4303,7 +4303,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -4342,7 +4342,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
         for (i = 0; i < tune_mess_part_count; i++) {
             kind = tune_mess_parts[i].handler_index;
             SELECT_PART((s8)tune_mess_parts[i].blend_mode);
-            MenuSprite_Draw(&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
+            MenuSprite_Draw((sptr)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
             SELECT_PART(0);
         }
         chosen = &item_name_defs[item_list_cursor[0]->unk0C];
@@ -4618,7 +4618,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
         }
         kind = tune_s_parts[i].handler_index;
         SELECT_PART((s8)tune_s_parts[i].blend_mode);
-        MenuSprite_Draw(&tune_s_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&tune_s_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         SELECT_PART(0);
     }
     MenuText_SetColor(menu_draw_color);
@@ -4672,7 +4672,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             variant = player_weapon[item_list_cursor[0]->group];
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -4697,7 +4697,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             variant = player_weapon[item_list_cursor[0]->group];
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -4723,7 +4723,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
             D_00446E2C = 100;
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -4902,19 +4902,19 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
         if (kind == 3) {
             switch (tune_parts[i].slot) {
             case 0:
-                MenuSprite_Draw(&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 0, (int)screen_part_alphas[i]);
                 break;
             case 1:
                 break;
             case 2:
-                MenuSprite_Draw(&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 2, (int)screen_part_alphas[i]);
                 break;
             case 3:
-                MenuSprite_Draw(&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&tune_parts[i], 1003, 3, (int)screen_part_alphas[i]);
                 break;
             }
         } else {
-            MenuSprite_Draw(&tune_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&tune_parts[i], kind + 1000, 4, (int)screen_part_alphas[i]);
         }
         SELECT_PART(0);
     }
@@ -5004,7 +5004,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g_part_count; i++) {
                 SELECT_PART((s8)shop_g_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g_parts[i], shop_g_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g_parts;
@@ -5036,7 +5036,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             }
             for (i = 0; i < shop_g2_part_count; i++) {
                 SELECT_PART((s8)shop_g2_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_g2_parts[i], shop_g2_parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_g2_parts;
@@ -5069,7 +5069,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
             }
             for (i = 0; i < shop_a_part_count; i++) {
                 SELECT_PART((s8)shop_a_parts[i].blend_mode);
-                MenuSprite_Draw(&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+                MenuSprite_Draw((sptr)&shop_a_parts[i], shop_a_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
                 SELECT_PART(0);
             }
             parts = shop_a_parts;
@@ -5570,20 +5570,20 @@ static void SaveScreen_UpdateCardSelect(void) {
         SELECT_PART((s8)slot_parts[i].blend_mode);
         switch (kind) {
         case 2:
-            MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             break;
         case 29:
             slot = slot_parts[i].slot;
             if (slot == 0 || slot == 2) {
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, slot, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, slot, screen_part_alphas[i]);
             }
             break;
         case 31:
             if (save_screen_state.check_finished != 0) {
                 if (system_screen_state != 1) {
-                    MenuSprite_Draw(&slot_parts[i], kind + 1000, save_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, save_screen_state.selected_card, screen_part_alphas[i]);
                 } else {
-                    MenuSprite_Draw(&slot_parts[i], kind, save_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind, save_screen_state.selected_card, screen_part_alphas[i]);
                 }
             }
             break;
@@ -5597,69 +5597,69 @@ static void SaveScreen_UpdateCardSelect(void) {
             case 14:
             case 15:
             case 21:
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
             break;
         case 26:
             if (SaveCard_IsPresent(0) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
-                    MenuSprite_DrawPlain(&slot_parts[i], kind, 0x20);
+                    MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x20);
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x80);
             }
             break;
         case 27:
             if (SaveCard_IsPresent(1) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
-                    MenuSprite_DrawPlain(&slot_parts[i], kind, 0x20);
+                    MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x20);
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x80);
             }
             break;
         case 28:
             switch (save_screen_state.dialog_id) {
             case 4:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 4);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 4);
                 break;
             case 5:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 5);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 5);
                 break;
             case 12:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 12);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 12);
                 break;
             case 13:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 13);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 13);
                 break;
             case 14:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 14);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 14);
                 break;
             case 15:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 15);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 15);
                 break;
             case 21:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 21);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 21);
                 break;
             case 10:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 10);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 10);
                 break;
             case 22:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 22);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 22);
                 break;
             }
             break;
         default:
-            MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             break;
         }
         SELECT_PART(0);
@@ -6033,23 +6033,23 @@ static void SaveScreen_UpdateSaveList(void) {
         ((int (*)(s8))Menu_SetBlendMode)((s8)data_parts[i].blend_mode); // match: a signed byte, see SET_PART_MODE_OF
         switch (kind) {
         case 2:
-            MenuSprite_Draw(&data_parts[i], 0x3EA, 0, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&data_parts[i], 0x3EA, 0, screen_part_alphas[i]);
             break;
         case 3:
             group = slot / 3;
             if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[group]] == 1) {
-                MenuSprite_Draw(&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
             } else if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[group]] == 0) {
-                MenuSprite_Draw(&data_parts[i], 0x3EB, group * 3 + 1, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3 + 1, screen_part_alphas[i]);
             }
             break;
         case 25:
             if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[slot]] != -1) {
-                MenuSprite_Draw(&data_parts[i], 0x401, save_screen_state.selected_save, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&data_parts[i], 0x401, save_screen_state.selected_save, screen_part_alphas[i]);
             }
             break;
         default:
-            MenuSprite_Draw(&data_parts[i], kind + 1000, save_screen_state.selected_save, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&data_parts[i], kind + 1000, save_screen_state.selected_save, screen_part_alphas[i]);
             break;
         }
         SET_PART_MODE(0);
@@ -6076,25 +6076,25 @@ static void SaveScreen_UpdateSaveList(void) {
         if (kind == 3) {
             switch (save_screen_state.list_step) {
             case 6:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 6);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 6);
                 break;
             case 7:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 7);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 7);
                 break;
             case 0:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 0);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 0);
                 break;
             case 2:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 2);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 2);
                 break;
             case 20:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 20);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 20);
                 break;
             case 10:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 10);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 10);
                 break;
             case 11:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 11);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 11);
                 break;
             }
         } else {
@@ -6106,7 +6106,7 @@ static void SaveScreen_UpdateSaveList(void) {
             case 10:
             case 11:
             case 20:
-                MenuSprite_Draw(&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
         }

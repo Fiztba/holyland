@@ -182,10 +182,10 @@ extern LinkNode amulet_model_load;
 extern LinkNode key_item_model_loads[12];
 extern sptr packet_area;
 extern ChunkUpload npc_package_load;
-s32 MenuArena_Init(sptr value);
+int MenuArena_Init(sptr); // match: this file only matches with an int result
 void *MenuArena_Alloc(s32, s32);
 void *MenuHeap_Alloc(int);
-int MenuFile_Load(char *, void *);
+sptr MenuFile_Load(char *, void *);
 extern u32 main_part_count;
 extern u32 item_part_count;
 extern u32 magic_part_count;
@@ -293,7 +293,7 @@ extern int pad_mode_before;
 extern MenuScreenState card_screen_state;
 extern ColorBytes menu_draw_color;
 extern f32 menu_view_screen_matrix[16];
-void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slot_arg);
+void MenuModel_DrawTinted(ChunkUpload *upload, f32 *draw_param, RenderSlotArg slot_arg);
 // match: called with the node, a matrix and the colour, not as the definition has it (the colour is loaded unaligned)
 #define DRAW_NODE_MODEL(node, matrix, colour) ((void (*)(LinkNode *, f32 *, ColorBytes))MenuModel_DrawTinted)(node, matrix, colour)
 extern u64 menu_first_draw_env[47];             /* the frame register of the first buffer ([0]) and of the second ([46]) */
@@ -312,7 +312,7 @@ int Timer_Restart(void); // match: an int result keeps $2 clear of the pad test 
 
 extern ColorBytes backdrop_shade_color[]; // match: the initialiser of the local below ({ 0x10, 0x10, 0x10 }); an array so it is not reached through $gp
 int Menu_SetBlendMode(u8);
-void MenuSprite_DrawPlain(SpritePacket *owner, int index, int param);
+void MenuSprite_DrawPlain(sptr owner, int index, int param);
 extern s32 menu_step;
 extern char D_005CE0E0[];
 extern u8 brightness_option[];
@@ -346,7 +346,7 @@ extern s8 recollection_cursor;
 s32 Sound_PlayMenu(s32);
 int Menu_OwnsAnyItem(void);
 int Menu_KnowsCastableSpell(void);
-void MenuSprite_Draw(SpritePacket *, int, int, int);
+void MenuSprite_Draw(sptr, int, int, int);
 extern u8 D_00446B39;
 extern GameStatus game_status;
 extern f32 use_item_model_position[4];
@@ -444,7 +444,7 @@ s32 MenuDraw_SetGsRegister(int, s64);
 #define DRAW_PARTS(parts, count, variant)                                                            \
     for (i = 0; i < count; i++) {                                                                    \
         SET_BLEND(parts[i].blend_mode);                                                              \
-        MenuSprite_Draw(&parts[i], parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);         \
+        MenuSprite_Draw((sptr)&parts[i], parts[i].handler_index + 1000, variant, (int)panel_part_alphas[i]);         \
         SET_BLEND(0);                                                                                \
     }
 extern s8 key_items_state;               /* 0: fading in, 1: open, 2: fading out to Menu_UpdateKeyItems, 3: fading out to leave */
@@ -493,7 +493,7 @@ static inline s32 ScaleValue(s32 value, s32 percent, s32 divisor) {
 #define DRAW_PACKETS(packets, count, param)                                                          \
     for (i = 0; i < (count); i++) {                                                                  \
         Menu_SetBlendMode((packets)[i].blend_mode);                                                  \
-        MenuSprite_Draw(&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
+        MenuSprite_Draw((sptr)&(packets)[i], (packets)[i].handler_index + 1000, (param), (int)panel_part_alphas[i]); \
         ((void (*)(u8))Menu_SetBlendMode)(0);                                                        \
     }
 extern s32 system_menu_line;
@@ -2783,7 +2783,7 @@ static void Menu_DrawBackdropItemSelParts(void) {
     for (i = 0; i < item_sel_part_count; i++) {
         if (item_sel_parts[i].handler_index == 2) {
             Menu_SetBlendMode(item_sel_parts[i].blend_mode);
-            MenuSprite_DrawPlain(&item_sel_parts[i], 2, 0);
+            MenuSprite_DrawPlain((sptr)&item_sel_parts[i], 2, 0);
             Menu_SetBlendMode(0);
         }
     }
@@ -2796,7 +2796,7 @@ static void Menu_DrawBackdropPreshopParts(void) {
     for (i = 0; i < preshop_part_count; i++) {
         if (preshop_parts[i].handler_index == 2) {
             Menu_SetBlendMode(preshop_parts[i].blend_mode);
-            MenuSprite_DrawPlain(&preshop_parts[i], 2, 0);
+            MenuSprite_DrawPlain((sptr)&preshop_parts[i], 2, 0);
             Menu_SetBlendMode(0);
         }
     }
@@ -2994,9 +2994,9 @@ static void Menu_UpdateMain(HandlerContext *context) {
         kind = main_parts[i].handler_index;
         Menu_SetBlendMode(main_parts[i].blend_mode);
         if (main_menu_state != 1) {
-            MenuSprite_Draw(&main_parts[i], kind + 1000, main_menu_line, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&main_parts[i], kind + 1000, main_menu_line, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw(&main_parts[i], kind, main_menu_line, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&main_parts[i], kind, main_menu_line, (int)screen_part_alphas[i]);
         }
         Menu_SetBlendMode(0);
     }
@@ -3153,9 +3153,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
         kind = item_parts[i].handler_index;
         ((void (*)(u8))Menu_SetBlendMode)(item_parts[i].blend_mode); // match: called as if it returned nothing
         if (item_list_cursor[0] != NULL) {
-            MenuSprite_Draw(&item_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&item_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw(&item_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&item_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
     }
@@ -3361,7 +3361,7 @@ static void Menu_UpdateCastSpell(s32 context) {
     for (; i < magic_part_count; i++) {
         kind = magic_parts[i].handler_index;
         Menu_SetBlendMode(magic_parts[i].blend_mode);
-        MenuSprite_Draw(&magic_parts[i], kind + 1000, page, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&magic_parts[i], kind + 1000, page, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
     }
     for (row = 0; row < 7; row++, item = item->prev) {
@@ -3599,9 +3599,9 @@ static void Menu_UpdateEquip(void) {
         kind = equip_parts[i].handler_index;
         SET_BLEND(equip_parts[i].blend_mode);
         if (Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->unk0C)) {
-            MenuSprite_Draw(&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw(&equip_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&equip_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         SET_BLEND(0);
     }
@@ -3824,7 +3824,7 @@ static void Menu_UpdateEquip(void) {
                 detail_panel_sound_pending = 0;
                 for (i = 0; i < equip_s_part_count; i++) {
                     SET_BLEND(equip_s_parts[i].blend_mode);
-                    MenuSprite_Draw(&equip_s_parts[i], 1002, 1, (int)panel_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&equip_s_parts[i], 1002, 1, (int)panel_part_alphas[i]);
                     SET_BLEND(0);
                 }
                 MenuText_SetColor(panel_text_color);
@@ -3964,7 +3964,7 @@ static void Menu_UpdateEquip(void) {
         word.raw = 0x000A87507AF07D00;
         for (i = 0; i < equip_s_part_count; i++) {
             SET_BLEND(equip_s_parts[i].blend_mode);
-            MenuSprite_Draw(&equip_s_parts[i], equip_s_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
+            MenuSprite_Draw((sptr)&equip_s_parts[i], equip_s_parts[i].handler_index + 1000, 0, (int)panel_part_alphas[i]);
             SET_BLEND(0);
         }
         switch (equip_panel_state) {
@@ -4159,7 +4159,7 @@ static void Menu_UpdateStatus(void) {
 
     for (i = 0; i < status_part_count; i++) {
         Menu_SetBlendMode(status_parts[i].blend_mode);
-        MenuSprite_Draw(&status_parts[i], status_parts[i].handler_index + 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&status_parts[i], status_parts[i].handler_index + 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
@@ -4328,7 +4328,7 @@ static void Menu_UpdateKeyItems(void) {
     sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 0.5f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
     for (i = 0; i < keylist_part_count; i++) {
         Menu_SetBlendMode(keylist_parts[i].blend_mode);
-        MenuSprite_Draw(&keylist_parts[i], 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&keylist_parts[i], 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
     key_items_frames++;
@@ -4543,7 +4543,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
 
     for (i = 0; i < image_part_count; i++) {
         Menu_SetBlendMode(image_parts[i].blend_mode);
-        MenuSprite_Draw(&image_parts[i], 1000, 0, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&image_parts[i], 1000, 0, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
@@ -4739,7 +4739,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
     for (i = 0; i < image_part_count; i++) {
         kind = image_parts[i].handler_index;
         Menu_SetBlendMode(image_parts[i].blend_mode);
-        MenuSprite_DrawPlain(&image_parts[i], kind, 1);
+        MenuSprite_DrawPlain((sptr)&image_parts[i], kind, 1);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
     if (npc_package_load.done != 0) {
@@ -4905,9 +4905,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
         kind = recol_parts[i].handler_index;
         Menu_SetBlendMode(recol_parts[i].blend_mode);
         if (owned_list_current[0]->group != 12) {
-            MenuSprite_Draw(&recol_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&recol_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
         } else {
-            MenuSprite_Draw(&recol_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&recol_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
         }
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
@@ -4980,9 +4980,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
         if (kind != 2) {
             ((void (*)(u8))Menu_SetBlendMode)(item_sel_parts[i].blend_mode); // match: called as returning nothing
             if (visible_item_state != 1 && ((worn_mask >> item_sel_parts[i].slot) & 1)) {
-                MenuSprite_Draw(&item_sel_parts[i], kind + 1000, worn_mask, (int)screen_part_alphas[i + 200]);
+                MenuSprite_Draw((sptr)&item_sel_parts[i], kind + 1000, worn_mask, (int)screen_part_alphas[i + 200]);
             } else {
-                MenuSprite_DrawPlain(&item_sel_parts[i], kind, worn_mask);
+                MenuSprite_DrawPlain((sptr)&item_sel_parts[i], kind, worn_mask);
             }
             Menu_SetBlendMode(0);
         }
@@ -5221,12 +5221,12 @@ static void Menu_UpdateSystem(MenuScreenContext *context) {
         kind = system_parts[i].handler_index;
         SET_PART_MODE(system_parts[i].blend_mode);
         if (system_screen_state == 4 && kind == 2) {
-            MenuSprite_Draw(&system_parts[i], 0x3EA, 0, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&system_parts[i], 0x3EA, 0, screen_part_alphas[i]);
         } else if (kind != 2) {
             if (system_screen_state != 1) {
-                MenuSprite_Draw(&system_parts[i], kind + 1000, system_menu_line, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&system_parts[i], kind + 1000, system_menu_line, screen_part_alphas[i]);
             } else {
-                MenuSprite_Draw(&system_parts[i], kind, system_menu_line, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&system_parts[i], kind, system_menu_line, screen_part_alphas[i]);
             }
         }
         SET_PART_MODE(0);
@@ -5613,11 +5613,11 @@ static void Menu_UpdateCardSlot(void) {
         Menu_SetBlendMode(slot_parts[i].blend_mode);
         switch (kind) {
         case 2:
-            MenuSprite_Draw(&slot_parts[i], kind + 1000, 1, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 1, screen_part_alphas[i]);
             break;
         case 29:
             if ((u8)slot_parts[i].slot < 2) {
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, slot_parts[i].slot, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, slot_parts[i].slot, screen_part_alphas[i]);
             }
             break;
         case 3:
@@ -5626,67 +5626,67 @@ static void Menu_UpdateCardSlot(void) {
             case 5:
             case 9:
             case 10:
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
             break;
         case 31:
             if (card_screen_state.check_finished != 0) {
                 if (system_screen_state != 1) {
-                    MenuSprite_Draw(&slot_parts[i], kind + 1000, card_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, card_screen_state.selected_card, screen_part_alphas[i]);
                 } else {
-                    MenuSprite_Draw(&slot_parts[i], kind, card_screen_state.selected_card, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind, card_screen_state.selected_card, screen_part_alphas[i]);
                 }
             }
             break;
         case 26:
             if (SaveCard_IsPresent(0) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
                     if (menu_mode != 1 || card_slot_leave_steps == 0) {
-                        MenuSprite_DrawPlain(&slot_parts[i], kind, 0x20);
+                        MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x20);
                     }
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x80);
             }
             break;
         case 27:
             if (SaveCard_IsPresent(1) == 0) {
                 if (system_screen_state == 0) {
-                    MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
+                    MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x20, screen_part_alphas[i]);
                 } else if (system_screen_state < 2) {
                     if (menu_mode != 1 || card_slot_leave_steps == 0) {
-                        MenuSprite_DrawPlain(&slot_parts[i], kind, 0x20);
+                        MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x20);
                     }
                 }
             } else if (system_screen_state != 1) {
-                MenuSprite_Draw(&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0x80, screen_part_alphas[i]);
             } else {
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 0x80);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 0x80);
             }
             break;
         case 28:
             switch (card_screen_state.dialog_id) {
             case 4:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 4);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 4);
                 break;
             case 5:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 5);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 5);
                 break;
             case 9:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 9);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 9);
                 break;
             case 10:
-                MenuSprite_DrawPlain(&slot_parts[i], kind, 10);
+                MenuSprite_DrawPlain((sptr)&slot_parts[i], kind, 10);
                 break;
             }
             /* fallthrough */
         default:
-            MenuSprite_Draw(&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&slot_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             break;
         }
         SET_PART_MODE(0);
@@ -5965,21 +5965,21 @@ static void Menu_UpdateSaveList(void) {
         Menu_SetBlendMode(data_parts[i].blend_mode);
         switch (kind) {
         case 2:
-            MenuSprite_Draw(&data_parts[i], 0x3EA, 1, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&data_parts[i], 0x3EA, 1, screen_part_alphas[i]);
             break;
         case 3:
             group = slot / 3;
             if (MENU_SCREEN_SAVES(&card_screen_state)->save_state[group] == 1) {
-                MenuSprite_Draw(&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
             }
             break;
         case 25:
             if (MENU_SCREEN_SAVES(&card_screen_state)->save_state[slot] == 1) {
-                MenuSprite_Draw(&data_parts[i], 0x401, card_screen_state.selected_save, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&data_parts[i], 0x401, card_screen_state.selected_save, screen_part_alphas[i]);
             }
             break;
         default:
-            MenuSprite_Draw(&data_parts[i], kind + 1000, card_screen_state.selected_save, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&data_parts[i], kind + 1000, card_screen_state.selected_save, screen_part_alphas[i]);
             break;
         }
         SET_PART_MODE(0);
@@ -6003,19 +6003,19 @@ static void Menu_UpdateSaveList(void) {
         if (kind == 3) {
             switch (card_screen_state.list_step) {
             case 8:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 8);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 8);
                 break;
             case 1:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 1);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 1);
                 break;
             case 3:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 3);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 3);
                 break;
             case 10:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 10);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 10);
                 break;
             case 23:
-                MenuSprite_DrawPlain(&mc_parts[i], kind, 23);
+                MenuSprite_DrawPlain((sptr)&mc_parts[i], kind, 23);
                 break;
             }
         } else {
@@ -6025,7 +6025,7 @@ static void Menu_UpdateSaveList(void) {
             case 8:
             case 10:
             case 23:
-                MenuSprite_Draw(&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_parts[i], kind + 1000, 0, screen_part_alphas[i]);
                 break;
             }
         }
@@ -6369,7 +6369,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
     for (i = 0; i < option_part_count; i++) {
         kind = option_parts[i].handler_index;
         Menu_SetBlendMode(option_parts[i].blend_mode);
-        MenuSprite_Draw(&option_parts[i], kind + 1000, context->unk04, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&option_parts[i], kind + 1000, context->unk04, (int)screen_part_alphas[i]);
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
     }
 
@@ -6622,14 +6622,14 @@ static void Menu_UpdateButtonConfig(void) {
         switch (kind) {
         case 2:
             if (button_prompt != 0) {
-                MenuSprite_Draw(&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             }
             break;
         case 3:
             if (button_prompt == 1) {
-                MenuSprite_Draw(&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, 0, screen_part_alphas[i]);
             } else if (button_prompt == 2) {
-                MenuSprite_Draw(&keyconf_parts[i], kind + 1000, 1, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, 1, screen_part_alphas[i]);
             }
             break;
         case 0x18:
@@ -6653,7 +6653,7 @@ static void Menu_UpdateButtonConfig(void) {
                 D_00446DF4 = 0;
                 D_00446DF8 = 0;
             }
-            MenuSprite_Draw(&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
             break;
         case 0x21:
             if (D_00446E00 == 0) {
@@ -6661,11 +6661,11 @@ static void Menu_UpdateButtonConfig(void) {
             }
             D_00446E04 = button_choices_shown[D_00446E00];
             // match: called as returning a value, which keeps $2 out of the count's increment
-            MenuSprite_Draw(&(&keyconf_parts[j])[11 - D_00446E04], kind + 1000, D_00446E00, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&(&keyconf_parts[j])[11 - D_00446E04], kind + 1000, D_00446E00, screen_part_alphas[i]);
             D_00446E00++;
             break;
         default:
-            MenuSprite_Draw(&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
+            MenuSprite_Draw((sptr)&keyconf_parts[i], kind + 1000, slot, screen_part_alphas[i]);
             break;
         }
         ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
@@ -6888,16 +6888,16 @@ static void Menu_UpdateCardCheck(void) {
             ((void (*)(u8))Menu_SetBlendMode)(mc_mess_parts[i].blend_mode); // match: called as returning nothing, which frees $2 for the switch
             switch (card_screen_state.dialog_id) {
             case 0x10:
-                MenuSprite_Draw(&mc_mess_parts[i], kind + 1000, 0x10, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x10, screen_part_alphas[i]);
                 break;
             case 0x11:
-                MenuSprite_Draw(&mc_mess_parts[i], kind + 1000, 0x11, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x11, screen_part_alphas[i]);
                 break;
             case 0x12:
-                MenuSprite_Draw(&mc_mess_parts[i], kind + 1000, 0x12, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x12, screen_part_alphas[i]);
                 break;
             case 0x13:
-                MenuSprite_Draw(&mc_mess_parts[i], kind + 1000, 0x13, screen_part_alphas[i]);
+                MenuSprite_Draw((sptr)&mc_mess_parts[i], kind + 1000, 0x13, screen_part_alphas[i]);
                 break;
             }
             Menu_SetBlendMode(0);
@@ -7040,7 +7040,7 @@ static void Menu_UpdateBrightness(void) {
     for (i = 0; i < bright_part_count; i++) {
         kind = bright_parts[i].handler_index;
         Menu_SetBlendMode(bright_parts[i].blend_mode);
-        MenuSprite_Draw(&bright_parts[i], kind + 1000, (int)brightness_slider + 0x72C, (int)screen_part_alphas[i]);
+        MenuSprite_Draw((sptr)&bright_parts[i], kind + 1000, (int)brightness_slider + 0x72C, (int)screen_part_alphas[i]);
         Menu_SetBlendMode(0);
     }
     switch (system_screen_state) {
