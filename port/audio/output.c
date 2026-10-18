@@ -1,14 +1,19 @@
-/* The SPU2's output (port/include/port/audio.h): rendered on EE time and handed to the outputs.
+/* The SPU2's output (port/include/port/audio.h), on one of two clocks.
 
-   The SPU2 renders up to the current EE time at each vblank, at each of the driver's timer ticks and
-   before each call to the driver, so what the driver reads back (a stream's state, the half the input
-   is on) is as up to date as it was on the PS2. The frames go to:
-   - a WAV file (--audio-dump), the same bytes on every run with the same input;
-   - the sound device (SDL2, with a window), queued as they are made. The game is held to 59.94
-     vblanks a second, so they arrive at the rate the device plays them, a vblank's worth at a time.
-     The device starts once 100 ms are queued, and if the queue ever runs dry it waits for 100 ms
-     again, so that it never plays the gaps between vblanks. With --fast the frames arrive faster:
-     past half a second queued, the queue is dropped. */
+   The game's clock (headless, --audio-dump, --input, --fast, --no-audio, or no sound device): the SPU2
+   is rendered up to the current EE time at each vblank, at each of the driver's timer ticks (a kernel
+   event) and before each call to the driver, so what the driver reads back (a stream's state, a voice's
+   envelope) is as up to date as on the PS2, and the same input gives the same sound to the byte. The
+   frames go to the WAV file and, with a window, are queued for the sound device.
+
+   The sound device's clock (a window and a device, none of the above): the IOP side runs on the clock
+   it has on the PS2, its own. SDL's audio thread renders the SPU2 when the device asks for sound and
+   runs the driver's 240 Hz tick between the frames it renders, so the music and the streams play on
+   while the game's thread is held up (a load, a shader built, a host slower than the PS2) instead of
+   stopping and starting. The game's calls to the driver take the same lock and happen at the device's
+   current frame. What the game reads back then depends on how far the device has played, so a run is
+   not repeatable to the frame: the tests use the game's clock. If the device stops asking for sound
+   for half a second, the game's clock takes over for the rest of the run. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,22 +27,62 @@
 #include <SDL.h>
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 void fsiopsnd_reset(void);
 uint64_t fsiopsnd_next_tick(void);
 void fsiopsnd_tick(uint64_t now);
+void fsiopsnd_tick_device(void);
+void fsiopsnd_resume_ticks(uint64_t now);
 
 #define CHUNK_FRAMES 512
+/* The driver's tick in SPU2 frames: 614448 EE cycles / 3072 = 200 + 1/64 */
+#define TICK_FRAMES_X64 12801u
 
 static int initialised;
+static int device_clock;      /* the IOP side runs on the sound device's clock */
+static int64_t frame_offset;  /* the SPU2 frame at EE time 0, after a change of clock */
 static FILE *wav;
 static uint32_t wav_frames;
+
+/* ---- The lock over the SPU2, libsd and the driver (the game's thread against SDL's audio thread) - */
+#ifdef _WIN32
+static SRWLOCK audio_lock = SRWLOCK_INIT;
+void port_audio_lock(void) {
+    AcquireSRWLockExclusive(&audio_lock);
+}
+void port_audio_unlock(void) {
+    ReleaseSRWLockExclusive(&audio_lock);
+}
+#else
+static pthread_mutex_t audio_lock = PTHREAD_MUTEX_INITIALIZER;
+void port_audio_lock(void) {
+    pthread_mutex_lock(&audio_lock);
+}
+void port_audio_unlock(void) {
+    pthread_mutex_unlock(&audio_lock);
+}
+#endif
 
 #ifdef KF4_HAVE_SDL
 #define DEVICE_START_BYTES (SPU2_RATE * 4u / 10u)
 #define DEVICE_MAX_BYTES (SPU2_RATE * 4u / 2u)
+#define DEVICE_STALL_MS 500u
 
 static SDL_AudioDeviceID device;
-static int device_playing;
+static int device_playing;          /* the game's clock: the queue has started */
+static uint64_t tick_due_x64;       /* the device's clock: the next tick, in 1/64 SPU2 frames */
+static volatile uint32_t last_callback;
+static int stats_on;
+static uint32_t stats_time;
+static uint32_t stats_min = 0xFFFFFFFFu;
+static unsigned stats_dry;
+static unsigned stats_drops;
+static uint64_t stats_frames;
 #endif
 
 static void wav_put32(uint8_t *p, uint32_t v) {
@@ -58,6 +103,55 @@ static void wav_header(uint8_t header[44], uint32_t frames) {
     wav_put32(header + 40, bytes);
 }
 
+/* ---- The device's clock --------------------------------------------------------------------------- */
+#ifdef KF4_HAVE_SDL
+/* SDL's audio thread: the frames the device asks for, with the driver's ticks between them */
+static void device_callback(void *user, Uint8 *stream, int length) {
+    int16_t *out = (int16_t *)stream;
+    int frames = length / 4;
+
+    (void)user;
+    port_audio_lock();
+    last_callback = SDL_GetTicks();
+    if (!device_clock) {
+        port_audio_unlock();
+        memset(stream, 0, (size_t)length);
+        return;
+    }
+    while (frames > 0) {
+        uint64_t now_x64 = spu2_time() * 64u;
+        int count = frames;
+
+        if (tick_due_x64 <= now_x64) {
+            sd_set_time_render();
+            fsiopsnd_tick_device();
+            tick_due_x64 += TICK_FRAMES_X64;
+            continue;
+        }
+        if ((tick_due_x64 - now_x64 + 63u) / 64u < (uint64_t)count) {
+            count = (int)((tick_due_x64 - now_x64 + 63u) / 64u);
+        }
+        spu2_render(out, count);
+        out += count * 2;
+        frames -= count;
+    }
+    port_audio_unlock();
+}
+
+/* The device stopped asking for sound: the game's clock from here, from the frame the SPU2 is at */
+static void fall_back_to_game_clock(void) {
+    port_audio_lock();
+    device_clock = 0;
+    sd_set_clock(0, frame_offset = (int64_t)spu2_time() - (int64_t)(port_ee_cycles() / AUDIO_EE_CYCLES_PER_FRAME));
+    fsiopsnd_resume_ticks(port_ee_cycles());
+    port_audio_unlock();
+    SDL_CloseAudioDevice(device);
+    device = 0;
+    fprintf(stderr, "[audio] the sound device stopped asking for sound; the sound now follows the game's clock, "
+                    "without a device\n");
+}
+#endif
+
 static void open_outputs(void) {
     if (port_options.audio_dump != NULL) {
         uint8_t header[44];
@@ -71,9 +165,12 @@ static void open_outputs(void) {
         fwrite(header, 1, sizeof(header), wav);
     }
 #ifdef KF4_HAVE_SDL
+    stats_on = getenv("KF4_AUDIO_STATS") != NULL;
     if (!port_options.headless && !port_options.no_audio) {
         SDL_AudioSpec want;
         SDL_AudioSpec have;
+        int pull = (port_options.audio_dump == NULL && port_options.input == NULL && !port_options.fast) ||
+                   getenv("KF4_AUDIO_DEVICE_CLOCK") != NULL;
 
         if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
             fprintf(stderr, "[audio] no sound: %s\n", SDL_GetError());
@@ -84,15 +181,24 @@ static void open_outputs(void) {
         want.format = AUDIO_S16LSB;
         want.channels = 2;
         want.samples = 1024;
+        want.callback = pull ? device_callback : NULL;
         device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
         if (device == 0) {
             fprintf(stderr, "[audio] no sound device: %s\n", SDL_GetError());
             return;
         }
+        if (pull) {
+            device_clock = 1;
+            sd_set_clock(1, 0);
+            tick_due_x64 = TICK_FRAMES_X64;
+            last_callback = SDL_GetTicks();
+            SDL_PauseAudioDevice(device, 0);
+        }
     }
 #endif
 }
 
+/* The game's clock: frames to the WAV file and the device's queue */
 static void output(const int16_t *frames, int count) {
     if (wav != NULL) {
         fwrite(frames, 4, (size_t)count, wav);
@@ -102,11 +208,30 @@ static void output(const int16_t *frames, int count) {
     if (device != 0) {
         Uint32 queued = SDL_GetQueuedAudioSize(device);
 
+        if (stats_on) {
+            uint32_t now = SDL_GetTicks();
+
+            if (device_playing && queued < stats_min) {
+                stats_min = queued;
+            }
+            stats_frames += (uint64_t)count;
+            if (now - stats_time >= 1000) {
+                fprintf(stderr, "[audio] game clock: %.1f%% of real time made, queue min %u ms, ran dry %u, dropped %u\n",
+                        100.0 * (double)stats_frames / ((now - stats_time) * 48.0),
+                        stats_min == 0xFFFFFFFFu ? 0u : stats_min / 192u, stats_dry, stats_drops);
+                stats_time = now;
+                stats_min = 0xFFFFFFFFu;
+                stats_dry = stats_drops = 0;
+                stats_frames = 0;
+            }
+        }
         if (device_playing && queued == 0) {
             /* ran dry: wait to have 100 ms again */
+            stats_dry++;
             SDL_PauseAudioDevice(device, 1);
             device_playing = 0;
         } else if (queued > DEVICE_MAX_BYTES) {
+            stats_drops++;
             SDL_ClearQueuedAudio(device);
         }
         SDL_QueueAudio(device, frames, (Uint32)count * 4u);
@@ -146,15 +271,36 @@ void port_audio_init(void) {
     atexit(port_audio_finish);
 }
 
+int port_audio_device_clock(void) {
+    return device_clock;
+}
+
 void port_audio_sync(uint64_t now) {
-    uint64_t target = now / AUDIO_EE_CYCLES_PER_FRAME;
+    int64_t target;
     int16_t chunk[CHUNK_FRAMES * 2];
 
     if (!initialised) {
         return;
     }
-    while (spu2_time() < target) {
-        uint64_t left = target - spu2_time();
+#ifdef KF4_HAVE_SDL
+    if (device_clock) {
+        uint32_t since = SDL_GetTicks() - last_callback;
+
+        if (since > DEVICE_STALL_MS) {
+            fall_back_to_game_clock();
+        } else {
+            if (stats_on && SDL_GetTicks() - stats_time >= 1000) {
+                fprintf(stderr, "[audio] device clock: SPU2 at %.2f s, game at %.2f s\n", spu2_time() / 48000.0,
+                        (double)now / 147456000.0);
+                stats_time = SDL_GetTicks();
+            }
+            return;
+        }
+    }
+#endif
+    target = (int64_t)(now / AUDIO_EE_CYCLES_PER_FRAME) + frame_offset;
+    while ((int64_t)spu2_time() < target) {
+        int64_t left = target - (int64_t)spu2_time();
         int count = left < CHUNK_FRAMES ? (int)left : CHUNK_FRAMES;
 
         spu2_render(chunk, count);
@@ -163,7 +309,7 @@ void port_audio_sync(uint64_t now) {
 }
 
 uint64_t port_audio_next_event(void) {
-    return initialised ? fsiopsnd_next_tick() : UINT64_MAX;
+    return initialised && !device_clock ? fsiopsnd_next_tick() : UINT64_MAX;
 }
 
 void port_audio_event(uint64_t now) {

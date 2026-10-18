@@ -294,6 +294,33 @@ uint64_t fsiopsnd_next_tick(void) {
     return w.initialised ? w.nextTick : UINT64_MAX;
 }
 
+/* One tick of the driver's timer (the tick thread's work while the state is RUN) */
+static void tick_body(void) {
+    if (w.tickState == TICK_QUIT) {
+        w.initialised = 0;
+        return;
+    }
+    if (w.tickState != TICK_RUN) {
+        return;
+    }
+    sceMidi_ATick(&w.midiCtx);
+    stream_dump();
+    sceHSyn_ATick(&w.hsynCtx);
+    fsSnd_ATick();
+}
+
+/* The device's clock (port/audio/output.c, the audio thread, under the lock): every 4167 us of sound */
+void fsiopsnd_tick_device(void) {
+    if (w.initialised) {
+        tick_body();
+    }
+}
+
+/* Back on the game's clock: the next tick a period from now */
+void fsiopsnd_resume_ticks(uint64_t now) {
+    w.nextTick = now + TICK_EE_CYCLES;
+}
+
 void fsiopsnd_tick(uint64_t now) {
     w.nextTick += TICK_EE_CYCLES;
     /* the timer only wakes the tick thread while the state is RUN */
@@ -1335,6 +1362,7 @@ int port_fsiopsnd_call(unsigned int function, void *send_buffer, int send_size, 
     int reply_size = 4;
 
     port_audio_sync(now);
+    port_audio_lock();
     sd_set_time(now);
     memset(w.rpcArg, 0, sizeof(w.rpcArg));
     if (send_buffer != NULL && send_size > 0) {
@@ -1355,5 +1383,6 @@ int port_fsiopsnd_call(unsigned int function, void *send_buffer, int send_size, 
         memset(receive_buffer, 0, (size_t)n);
         memcpy(receive_buffer, reply, (size_t)(n < reply_size ? n : reply_size));
     }
+    port_audio_unlock();
     return 0;
 }

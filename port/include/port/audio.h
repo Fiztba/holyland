@@ -30,6 +30,11 @@ void port_audio_event(uint64_t now);
 void port_audio_sync(uint64_t now);
 /* At the end of the run: flushes the outputs. */
 void port_audio_finish(void);
+/* 1 while the IOP side runs on the sound device's clock (a window and a device; port/audio/output.c) */
+int port_audio_device_clock(void);
+/* The lock over the SPU2, libsd and the driver, taken by the game's calls and by the audio thread */
+void port_audio_lock(void);
+void port_audio_unlock(void);
 
 /* ---- The sound driver's RPC server, 0x1010 (port/audio/fsiopsnd.c) --------------------------- */
 int port_fsiopsnd_call(unsigned int function, void *send_buffer, int send_size, void *receive_buffer,

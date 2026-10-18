@@ -79,8 +79,20 @@ static uint64_t ee_frame(uint64_t ee_cycle) {
     return ee_cycle / AUDIO_EE_CYCLES_PER_FRAME;
 }
 
+static int clock_device;
+static int64_t clock_offset;
+
+void sd_set_clock(int device, int64_t offset) {
+    clock_device = device;
+    clock_offset = offset;
+}
+
 void sd_set_time(uint64_t ee_cycle) {
-    spu2_sd_set_time(ee_frame(ee_cycle));
+    if (clock_device) {
+        spu2_sd_set_time(spu2_time());
+        return;
+    }
+    spu2_sd_set_time((uint64_t)((int64_t)ee_frame(ee_cycle) + clock_offset));
 }
 
 void sd_set_time_render(void) {

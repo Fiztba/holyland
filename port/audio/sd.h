@@ -32,6 +32,9 @@
    the SPU2's render (a transfer callback) the calls happen at the frame being rendered. */
 void sd_set_time(uint64_t ee_cycle);
 void sd_set_time_render(void);
+/* Which clock sd_set_time follows: the EE's (device 0; the SPU2 frame is EE cycles / 3072 + offset),
+   or the sound device's (device 1: the calls happen at the frame the SPU2 is at) */
+void sd_set_clock(int device, int64_t offset);
 
 int sd_init(int flag);
 void sd_set_param(uint16_t entry, uint16_t value);

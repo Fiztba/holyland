@@ -135,15 +135,37 @@ The port writes the same logs (`KF4_SD_TRACE`, `KF4_STREAM_DUMP`, `--audio-dump`
   first sees a message can differ by one.
 - **`0x30C0` (`adsSetWithLsn`, streams by sector number).** It is not implemented: KF4 never sends it.
 
-## Output
+## Output, and the two clocks
 
-- `--audio-dump FILE` writes the sound as a 48 kHz 16-bit stereo WAV. It is the same bytes on every
-  run with the same input.
-- **With a window (SDL2), the sound device plays it.** The frames are queued as the SPU2 renders
-  them. The game is held to 59.94 vblanks a second, so they arrive at the rate the device plays
-  them. With `--fast` they arrive faster: past half a second queued, the queue is dropped.
-- `--no-audio` opens no device. The sound is still made, because the game reads the driver's
-  state back.
+**The game's clock.** This mode is used when any of these holds:
+- the run is headless;
+- `--audio-dump`, `--input` (a pad script), `--fast` or `--no-audio` is given;
+- there is no sound device.
+
+The SPU2 is rendered up to the current EE time at each vblank, at each tick and before each RPC
+call, as described above. The same input gives the same run and the same sound, to the byte.
+- `--audio-dump FILE` writes the sound as a 48 kHz 16-bit stereo WAV.
+- With a window, the frames are queued for the sound device. The device starts once 100 ms are
+  queued, and again after running dry. With `--fast` the queue is dropped past half a second.
+
+**The sound device's clock.** This mode is used when there is a window and a device, and none of
+the above. On the PS2 the IOP runs on its own clock: the music and the streams play on while the EE
+loads a map. Here the same happens:
+- SDL's audio thread renders the SPU2 when the device asks for sound, and runs the driver's tick
+  between the frames it renders, every 200 + 1/64 frames (4167 µs).
+- The game's RPC calls take the same lock (`port_audio_lock`) and happen at the frame the device has
+  reached. libsd's calls are stamped with that frame (`sd_set_clock`).
+- So a hitch on the game's thread no longer stops the sound. A hitch is a load, a shader paraLLEl-GS
+  builds on first sight, or an area where the port runs below the PS2's speed.
+- What the game reads back now depends on how far the device has played: a stream's state
+  (`0x3090`), a voice's envelope (modhsyn). Such a run is not repeatable to the frame, which is why
+  the tests use the game's clock.
+- If the device stops asking for sound for half a second, the game's clock takes over for the rest
+  of the run, with no device.
+- `port_disc_read` takes a lock of its own, because the driver's stream refills read the disc on the
+  audio thread.
+
+`--no-audio` opens no device, and the sound is still made: the game reads the driver's state back.
 
 ## Debugging
 
@@ -152,4 +174,6 @@ The port writes the same logs (`KF4_SD_TRACE`, `KF4_STREAM_DUMP`, `--audio-dump`
 | `KF4_SIF_TRACE=path` | what the EE asks of the IOP: module loads, heap, SIF DMA payloads, RPC calls and replies |
 | `KF4_SD_TRACE=path` | every libsd call, by module, with the driver's RPC calls and ticks between |
 | `KF4_STREAM_DUMP=path` | the synthesizer's input streams at each tick |
-| `KF4_AUDIO_FIRST_TICK=cycle` | puts the driver's ticks on that EE cycle's phase, to line them up with a reference |
+| `KF4_AUDIO_FIRST_TICK=cycle` | puts the driver's ticks on that EE cycle's phase, to line them up with a reference (the game's clock) |
+| `KF4_AUDIO_STATS=1` | once a second on stderr: on the game's clock, the share of real time made and the device queue's low point and underruns; on the device's clock, the SPU2's time against the game's |
+| `KF4_AUDIO_DEVICE_CLOCK=1` | the device's clock even with a pad script, `--fast` or `--audio-dump`, to test it on a scripted run |

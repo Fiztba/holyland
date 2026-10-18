@@ -24,6 +24,7 @@
 #define stat _stat64
 #else
 #include <dirent.h>
+#include <pthread.h>
 #endif
 
 #include "port/host.h"
@@ -368,7 +369,30 @@ static const DiscFile *host_file_at(uint32_t lsn) {
     return NULL;
 }
 
+/* One reader at a time: the image is one FILE (a seek, then a read), and the sound driver reads its
+   streams from the audio thread (port/audio) while the game reads from its own */
+#ifdef _WIN32
+static SRWLOCK read_lock = SRWLOCK_INIT;
+#define READ_LOCK() AcquireSRWLockExclusive(&read_lock)
+#define READ_UNLOCK() ReleaseSRWLockExclusive(&read_lock)
+#else
+static pthread_mutex_t read_lock = PTHREAD_MUTEX_INITIALIZER;
+#define READ_LOCK() pthread_mutex_lock(&read_lock)
+#define READ_UNLOCK() pthread_mutex_unlock(&read_lock)
+#endif
+
+static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
+
 int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
+    int result;
+
+    READ_LOCK();
+    result = disc_read(lsn, sectors, buffer);
+    READ_UNLOCK();
+    return result;
+}
+
+static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
     unsigned char *out = buffer;
 
     if (lsn >= disc_sectors) {
