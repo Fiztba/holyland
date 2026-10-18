@@ -12,19 +12,19 @@
       "name": "windows-clang",
       "displayName": "Windows, clang (llvm-mingw or LLVM's clang)",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_C_COMPILER": "clang" }
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
     },
     {
       "name": "linux-gcc",
       "displayName": "Linux, gcc",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_C_COMPILER": "gcc" }
+      "cacheVariables": { "CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++" }
     },
     {
       "name": "linux-clang",
       "displayName": "Linux, clang",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_C_COMPILER": "clang" }
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
     }
   ],
   "buildPresets": [

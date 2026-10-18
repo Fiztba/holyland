@@ -9,7 +9,10 @@
        --input FILE      press the buttons a pad script says (port/sdk/libpad.c) instead of SDL's
        --log FILE        write the game's state each vblank, and what happens between ("-": stderr)
        --clock DATE      the disc drive's clock, YYYY-MM-DDTHH:MM:SS (Japan's time), not the host's
-       --headless        no SDL at all
+       --headless        no SDL at all: no window, and the GS draws only for --dump-frames
+       --no-gs           draw nothing (VIF1 and VU1 still run)
+       --dump-frames N,N write the picture shown at these vblanks as PNGs
+       --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default) */
 #include <stdarg.h>
 #include <stdio.h>
@@ -26,7 +29,8 @@ static FILE *log_file;
 static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
-            "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--host-dir DIR]\n",
+            "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--host-dir DIR]\n"
+            "          [--dump-frames N,N,...] [--dump-dir DIR]\n",
             program);
     exit(2);
 }
@@ -58,6 +62,10 @@ static void parse_options(int argc, char **argv) {
             port_options.headless = 1;
             continue;
         }
+        if (strcmp(option, "--no-gs") == 0) {
+            port_options.no_gs = 1;
+            continue;
+        }
         if (strcmp(option, "--help") == 0 || strcmp(option, "-h") == 0 || value == NULL) {
             usage(argv[0]);
         }
@@ -74,6 +82,10 @@ static void parse_options(int argc, char **argv) {
             parse_clock(value);
         } else if (strcmp(option, "--host-dir") == 0) {
             port_options.host_dir = value;
+        } else if (strcmp(option, "--dump-frames") == 0) {
+            port_options.dump_frames = value;
+        } else if (strcmp(option, "--dump-dir") == 0) {
+            port_options.dump_dir = value;
         } else {
             usage(argv[0]);
         }
@@ -148,7 +160,9 @@ int main(int argc, char **argv) {
     port_disc_open(port_options.disc);
     port_kernel_init();
     port_dmac_start();
+    port_gs_init();
     port_pad_init();
+    port_video_init();
     fprintf(stderr, "[port] game RAM at %p, running the game\n", (void *)ee_ram);
     return kf4_game_main();
 }

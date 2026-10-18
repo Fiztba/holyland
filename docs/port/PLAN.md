@@ -93,6 +93,37 @@ Hand the game's GS packets to paraLLEl-GS, the accurate GS rasteriser. The packe
 The VU1 programs run on the CPU for now. This gives an accurate picture quickly, and it becomes
 the reference the native renderer is compared against.
 
+Result:
+- The game is drawn from boot through the logos, the title menu, New Game, the brightness screen and
+  the opening, to the first map with its HUD, in an SDL2 window at 59.94 vblanks a second, with a
+  pad or the keyboard. `tools/frame_test.py` dumps five of those pictures twice and checks they are
+  the same byte for byte; gcc and clang give the same pictures. `tools/boot_test.py`'s log is the same
+  as step 1's.
+- `port/platform/dmac.c` reads channel 1 and 2 transfers, in normal mode and as source chains (all
+  eight tag IDs, TTE, TIE). A chain started with QWC set sends those qwords first and goes on only
+  if CHCR's TAG says so; the game starts some with TAG 0, a REFE. Channel 2 ignores DIR:
+  `ui/title.c` starts it with STR alone.
+- `port/platform/vif1.c` reads every VIF code the game sends, and every UNPACK format, with masks,
+  modes, skipping writes and double buffering. `port/platform/vu1.c` interprets VU1 cycle by cycle,
+  because the programs are software-pipelined and rely on when each result lands: FMAC results 4
+  cycles on (with stalls), Q and P late with no stall, the clip flag 4 cycles on, and a branch that
+  reads the VI register the instruction before it wrote. `tools/vu1_disasm.py` prints the programs.
+- The program at 0x700 is used after all. No C code starts it, so data from the disc must, and its
+  loop relies on that branch timing.
+- `port/sdk/libgraph.c` is Sony's libgraph from the decomp. On the PC: CSR keeps FIELD, a packet on
+  the stack (`Vram_Clear`'s image) goes by DMA from a copy, and `sceGsExecStoreImage` reads the GS
+  back for the screen effects that copy the frame into a texture.
+- Each vblank's scanout is ordered with the packets: the kernel waits for the channels started
+  before the vblank, and the controller scans out before it reads one started after. Without that,
+  `--fast` showed the buffer the game had already cleared for the next frame.
+
+Still open:
+- The opening shows no message text. That may be how it is on the PS2; it has not been checked
+  against it.
+- The VU1 interpreter runs on the CPU. It keeps up at full speed (3000 vblanks in about 25 s with
+  `--fast`), and step 3 replaces it.
+- PATH3 masking is not modelled: the paths are taken in the order the game starts them.
+
 ## Step 3: graphics, stage 2 (native renderer)
 
 A renderer under the game's draw layer, as ico-pc has:
@@ -137,7 +168,8 @@ the GS path (maps and models first).
 ## Working together
 
 - The game code comes from kfiv-decomp, a git submodule in `decomp/`, pinned to one commit. It is
-  never edited here. Clone with `--recurse-submodules`, or run `git submodule update --init`.
+  never edited here. Run `git submodule update --init` (not `--recursive`; the README says which of
+  paraLLEl-GS's own submodules the port needs).
 - The PC edits are patches against the decomp in `patches/`. To change game code, run
   `python3 tools/patches.py apply`, edit in `work/src/game`, then `python3 tools/patches.py save` and
   commit `patches/`. PC-only game code, such as `game/data/`, is edited in place.

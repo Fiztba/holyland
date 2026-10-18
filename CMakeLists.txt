@@ -7,6 +7,8 @@
 #                    (patches/game/<folder>.patch, patches/game/_top.patch, patches/nonmatching.patch).
 #   port/            the PS2 side: libraries, SDK stubs and the host's main.
 #   game/            PC-only game code (the data sections in C), compiled with the patched decomp.
+#   third_party/     git submodules: parallel-gs, the GS renderer (docs/port/README.md says how to
+#                    check out only the parts of it the port builds).
 # At configure time the decomp's src/game and src/nonmatching are copied, the patches are applied to
 # the copy, and the copy (out/<preset>/decomp_src/src/) is compiled.
 cmake_minimum_required(VERSION 3.21)
@@ -58,11 +60,16 @@ add_library(kf4_port STATIC
     port/platform/fiber.c
     port/platform/kernel.c
     port/platform/dmac.c
+    port/platform/vif1.c
+    port/platform/vu1.c
+    port/platform/gs.c
+    port/platform/video.c
     port/platform/disc.c
     port/platform/host_time.c
     port/math/libvu0.c
     port/sdk/libcdvd.c
     port/sdk/libdma.c
+    port/sdk/libgraph.c
     port/sdk/libmc.c
     port/sdk/libpad.c
     port/sdk/sif.c
@@ -72,6 +79,9 @@ add_library(kf4_port STATIC
     port/sdk/libc_ps2.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
+# VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
+# across that
+set_source_files_properties(port/platform/vu1.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
 find_package(Threads REQUIRED)
 target_link_libraries(kf4_port PUBLIC Threads::Threads)
 if(WIN32)
@@ -93,7 +103,22 @@ if(KF4_USE_SDL AND SDL2_FOUND)
         target_link_libraries(kf4_port PRIVATE ${SDL2_LIBRARIES})
     endif()
 else()
-    message(STATUS "SDL2 not used: the pad takes only a pad script (--input)")
+    message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
+endif()
+# paraLLEl-GS, the GS in Vulkan compute; without it the game runs and draws nothing
+option(KF4_USE_PARALLEL_GS "Draw with paraLLEl-GS (third_party/parallel-gs)" ON)
+if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/volk/volk.h)
+    enable_language(CXX)
+    set(PARALLEL_GS_STANDALONE ON CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
+    add_library(kf4_gs STATIC port/gs/gs_parallel.cpp)
+    target_include_directories(kf4_gs PRIVATE port/include)
+    target_link_libraries(kf4_gs PRIVATE parallel-gs)
+    set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
+    target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
+    target_link_libraries(kf4_port PUBLIC kf4_gs)
+elseif(KF4_USE_PARALLEL_GS)
+    message(STATUS "third_party/parallel-gs is not checked out: the game will draw nothing")
 endif()
 
 # ---- The decomp's game code, patched --------------------------------------------------------------

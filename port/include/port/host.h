@@ -44,6 +44,8 @@ static inline void *ee_ptr_of(EEWord word) {
     return word < EE_RAM_SIZE ? (void *)(ee_ram + word) : ee_static_ptr_of(word);
 }
 EEWord ee_word_of(const void *ptr, const char *file, int line);
+/* The same, without the trap: 1 and the EEWord, or 0 for a pointer with none (the stack, the heap). */
+int ee_word_try(const void *ptr, EEWord *word);
 
 /* ---- The scratchpad -------------------------------------------------------------------------
    The EE's 16 KB of fast RAM at 0x70000000. SPR(T, offset) is a pointer into it:

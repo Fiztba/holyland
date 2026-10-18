@@ -90,6 +90,8 @@ void sceGsPutDispEnv(void *disp);
 int sceGsPutDrawEnv(void *pkt);
 void sceGsSetDefDispEnv(sceGsDispEnv *disp, short psm, short w, short h, short dx, short dy);
 int sceGsSetDefDrawEnv(void *env, short psm, short w, short h, short ztst, short zpsm);
+int sceGsSetDefDrawEnv2(void *env, short psm, short w, short h, short ztst, short zpsm);
+short sceGszbufaddr(short psm, short width, short height);
 int sceGsSetDefClear(sceGsClear *cl, short ztst, short x, short y, short w, short h, unsigned char r,
                      unsigned char g, unsigned char b, unsigned char a, unsigned int z);
 void sceGsSetDefDBuff(void *db, short psm, short w, short h, short ztst, short zpsm, short flag);

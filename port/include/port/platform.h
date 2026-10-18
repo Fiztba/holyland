@@ -24,7 +24,10 @@ typedef struct {
     const char *host_dir;    /* --host-dir: where host0: files go (default: the current directory) */
     long long frames;        /* --frames: stop after this many vblanks (0: run on) */
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
-    int headless;            /* --headless: no SDL at all */
+    int headless;            /* --headless: no SDL at all, and no window */
+    int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
+    const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
+    const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */
     int clock_fields[6];     /* year, month, day, hour, minute, second */
 } PortOptions;
@@ -73,6 +76,60 @@ void port_dmac_wait(int channel);
 /* The channel's CHCR as the game sees it, and transfers finished so far. */
 volatile int *port_dmac_chcr(int channel);
 uint64_t port_dmac_transfers(int channel);
+/* Runs fn(arg) on the controller's thread, which owns the GS, and returns when it has. */
+void port_dmac_call(void (*fn)(void *), void *arg);
+
+/* ---- VIF1 and VU1 (port/platform/vif1.c, port/platform/vu1.c) -------------------------------
+   Run on the controller's thread as DMA channel 1 feeds them. */
+void port_vif1_reset(void);
+/* Takes VIF codes and their data, in 32-bit words (any split: a command may span two calls). */
+void port_vif1_feed(const uint32_t *words, size_t count);
+/* VIF1's MSKPATH3: 1 while PATH3 is masked. */
+int port_vif1_path3_masked(void);
+/* XGKICK: sends the GIF packet at a VU1 data address (in qwords) by PATH1. */
+void port_gif_path1_kick(uint32_t address);
+
+void port_vu1_reset(void);
+/* MPG wrote micro memory: decode it again. */
+void port_vu1_micro_written(void);
+uint8_t *port_vu1_micro(void);
+uint8_t *port_vu1_data(void);
+/* Runs a microprogram from an address (in instructions) to its end, with VIF1's TOP and ITOP. */
+void port_vu1_start(uint32_t address, uint32_t top, uint32_t itop);
+/* MSCNT: runs on from where the last one ended. */
+void port_vu1_continue(uint32_t top, uint32_t itop);
+
+/* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
+   Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
+#define PORT_GS_FRAME_PIXELS (1024u * 1024u)
+typedef struct {
+    uint32_t width, height;
+    uint32_t *rgba; /* width * height pixels, R in the low byte */
+} PortGsFrame;
+/* Starts the renderer (after port_dmac_start), unless the run draws nothing. */
+void port_gs_init(void);
+/* 1 when there is a renderer. */
+int port_gs_enabled(void);
+/* A GIF packet by PATH1, 2 or 3, in whole qwords. */
+void port_gs_gif(int path, const void *data, size_t bytes);
+/* Reads qwords of a local-to-host transfer (BITBLTBUF/TRXDIR 1) from the GS. */
+void port_gs_read_fifo(void *dst, uint32_t qwords);
+/* At vblank start (the game thread): queues the display registers for a scanout. */
+void port_gs_post_vsync(void);
+/* Waits until every queued vblank is scanned out (before the program stops). */
+void port_gs_finish(void);
+/* The controller's side: a vblank is queued; scan it out. */
+int port_gs_vsync_pending(void);
+void port_gs_run_vsync(void);
+
+/* ---- The window (port/platform/video.c) -------------------------------------------------- */
+void port_video_init(void);
+/* (the controller's thread) the newest picture, for the window */
+void port_video_submit(const PortGsFrame *frame);
+/* (the controller's thread) writes the picture as <dump-dir>/frame_<vblank>.png */
+void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
+/* (the game thread, at vblank) shows the newest picture and keeps the window alive */
+void port_video_present(void);
 
 /* ---- The disc (port/platform/disc.c) --------------------------------------------------------
    The user's own disc, as an ISO 9660 image or as the folder it was extracted to, read by sector

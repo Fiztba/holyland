@@ -1,4 +1,4 @@
-# Configures the PC port (which proves the patches apply to the pinned decomp), builds it, and fails if any game code still errors.
+# Configures the PC port (which proves the patches apply to the pinned decomp), builds it with paraLLEl-GS, and fails if any game code still errors.
 name: ci
 
 on:
@@ -12,8 +12,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Check out what paraLLEl-GS needs
+        run: |
+          git -C third_party/parallel-gs submodule update --init Granite
+          git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build gcc
+        run: sudo apt-get update && sudo apt-get install -y ninja-build gcc g++
       - name: Configure
         run: cmake --preset linux-gcc
       - name: Build

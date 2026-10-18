@@ -280,6 +280,8 @@ static void vblank_start(void) {
     vblank_count++;
     /* FIELD (bit 13) turns over each field; VSINT (bit 3) is set */
     *csr = (*csr ^ (1u << 13)) | (1u << 3);
+    /* the GS scans out the field the display registers say, alongside the game */
+    port_gs_post_vsync();
     raise_intc(INTC_VBLANK_S);
     wake_vsync_waiters();
     if (!port_options.fast) {
@@ -294,6 +296,7 @@ static void vblank_start(void) {
         }
     }
     port_pad_poll();
+    port_video_present();
 }
 
 /* Moves EE time on to `until`, raising the vblank and timer interrupts it passes, in their order. */
@@ -884,6 +887,7 @@ static void frame_end(void) {
     }
     if (port_options.frames > 0 && vblank_count >= (uint64_t)port_options.frames) {
         port_event("stop: %lld vblanks run", port_options.frames);
+        port_gs_finish();
         exit(0);
     }
 }

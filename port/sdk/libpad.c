@@ -1,6 +1,9 @@
 /* libpad for the PC port (port/include/libpad.h): a DualShock 2 in port 0, slot 0, and nothing in
    port 1. Its buttons come from a pad script (--input), for tests, or else from the first SDL game
-   controller.
+   controller and the keyboard (with the window focused):
+       arrows      the d-pad              W A S D    the left stick   I J K L   the right stick
+       Z or space  cross    X  circle     C  square  V  triangle
+       Q  L1    E  R1    1  L2    3  R2   Enter  start  Backspace  select
 
    The pad behaves as a DualShock 2 does for libpad: digital (id 4, report type 0x41) or analog (id 7,
    0x73), pressure-sensitive (0x79) when the game asks, two motors, and each request finished at once
@@ -212,6 +215,46 @@ static int stick_byte(Sint16 value) {
     return (value + 32768) >> 8;
 }
 
+/* a stick from two pairs of keys: 0x00 or 0xFF along each axis held, 0x80 otherwise */
+static int key_axis(const Uint8 *keys, SDL_Scancode low, SDL_Scancode high) {
+    return keys[low] && !keys[high] ? 0x00 : keys[high] && !keys[low] ? 0xFF : 0x80;
+}
+
+static void keyboard_read(void) {
+    static const struct {
+        SDL_Scancode key;
+        unsigned int bit;
+    } map[] = {
+        {SDL_SCANCODE_BACKSPACE, BUTTON_SELECT},
+        {SDL_SCANCODE_RETURN, BUTTON_START},
+        {SDL_SCANCODE_UP, BUTTON_UP},
+        {SDL_SCANCODE_RIGHT, BUTTON_RIGHT},
+        {SDL_SCANCODE_DOWN, BUTTON_DOWN},
+        {SDL_SCANCODE_LEFT, BUTTON_LEFT},
+        {SDL_SCANCODE_1, BUTTON_L2},
+        {SDL_SCANCODE_3, BUTTON_R2},
+        {SDL_SCANCODE_Q, BUTTON_L1},
+        {SDL_SCANCODE_E, BUTTON_R1},
+        {SDL_SCANCODE_V, BUTTON_TRIANGLE},
+        {SDL_SCANCODE_X, BUTTON_CIRCLE},
+        {SDL_SCANCODE_Z, BUTTON_CROSS},
+        {SDL_SCANCODE_SPACE, BUTTON_CROSS},
+        {SDL_SCANCODE_C, BUTTON_SQUARE},
+    };
+    const Uint8 *keys = SDL_GetKeyboardState(NULL);
+    size_t i;
+
+    for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (keys[map[i].key]) {
+            live.buttons |= map[i].bit;
+        }
+    }
+    live.axis[0] = key_axis(keys, SDL_SCANCODE_J, SDL_SCANCODE_L);
+    live.axis[1] = key_axis(keys, SDL_SCANCODE_I, SDL_SCANCODE_K);
+    live.axis[2] = key_axis(keys, SDL_SCANCODE_A, SDL_SCANCODE_D);
+    live.axis[3] = key_axis(keys, SDL_SCANCODE_W, SDL_SCANCODE_S);
+}
+
 static void sdl_read(void) {
     static const struct {
         SDL_GameControllerButton button;
@@ -236,6 +279,7 @@ static void sdl_read(void) {
 
     memset(&live, 0, sizeof(live));
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
+    keyboard_read();
     if (controller == NULL) {
         return;
     }
@@ -250,10 +294,19 @@ static void sdl_read(void) {
     if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16384) {
         live.buttons |= BUTTON_R2;
     }
-    live.axis[0] = stick_byte(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX));
-    live.axis[1] = stick_byte(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY));
-    live.axis[2] = stick_byte(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX));
-    live.axis[3] = stick_byte(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY));
+    {
+        static const SDL_GameControllerAxis axes[4] = {SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY,
+                                                       SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY};
+
+        for (i = 0; i < 4; i++) {
+            int value = stick_byte(SDL_GameControllerGetAxis(controller, axes[i]));
+
+            /* the stick, unless it rests in the middle and a key is held */
+            if (live.axis[i] == 0x80 || value < 0x60 || value > 0xA0) {
+                live.axis[i] = value;
+            }
+        }
+    }
 }
 
 static void sdl_open_first(void) {
@@ -276,16 +329,18 @@ void port_pad_init(void) {
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
     if (port_options.input) {
         load_script(port_options.input);
-        return;
     }
 #ifdef KF4_HAVE_SDL
+    /* with a window, SDL's events are read even when a script plays the pad */
     if (!port_options.headless) {
         if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
             fprintf(stderr, "[port] SDL: %s; the pad stays idle\n", SDL_GetError());
             return;
         }
         use_sdl = 1;
-        sdl_open_first();
+        if (!port_options.input) {
+            sdl_open_first();
+        }
     }
 #endif
 }
@@ -298,6 +353,12 @@ void port_pad_poll(void) {
         return;
     }
     while (SDL_PollEvent(&event)) {
+        if (port_options.input) {
+            if (event.type == SDL_QUIT) {
+                exit(0);
+            }
+            continue;
+        }
         if (event.type == SDL_CONTROLLERDEVICEADDED && controller == NULL) {
             sdl_open_first();
         } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && controller != NULL &&
@@ -310,7 +371,9 @@ void port_pad_poll(void) {
             exit(0);
         }
     }
-    sdl_read();
+    if (!port_options.input) {
+        sdl_read();
+    }
 #endif
 }
 

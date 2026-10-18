@@ -91,24 +91,37 @@ void port_address_init(void) {
     find_sections();
 }
 
-EEWord ee_word_of(const void *ptr, const char *file, int line) {
+int ee_word_try(const void *ptr, EEWord *word) {
     const unsigned char *p = ptr;
     uintptr_t address = (uintptr_t)ptr;
     int i;
 
     if (p == NULL) {
-        return 0;
+        *word = 0;
+        return 1;
     }
     if (p >= ee_ram && p < ee_ram + EE_RAM_SIZE) {
-        return (EEWord)(p - ee_ram);
+        *word = (EEWord)(p - ee_ram);
+        return 1;
     }
     if (p >= ee_scratchpad && p < ee_scratchpad + sizeof(ee_scratchpad)) {
-        return EE_SCRATCHPAD_ADDRESS + (EEWord)(p - ee_scratchpad);
+        *word = EE_SCRATCHPAD_ADDRESS + (EEWord)(p - ee_scratchpad);
+        return 1;
     }
     for (i = 0; i < region_count; i++) {
         if (address >= regions[i].start && address < regions[i].end) {
-            return regions[i].ee_base + (uint32_t)(address - regions[i].start);
+            *word = regions[i].ee_base + (uint32_t)(address - regions[i].start);
+            return 1;
         }
+    }
+    return 0;
+}
+
+EEWord ee_word_of(const void *ptr, const char *file, int line) {
+    EEWord word;
+
+    if (ee_word_try(ptr, &word)) {
+        return word;
     }
     port_fatal(file, line, "pointer %p is neither in game RAM nor in the program, so it has no EE address", ptr);
 }

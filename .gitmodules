@@ -1,3 +1,6 @@
 [submodule "decomp"]
 	path = decomp
 	url = https://github.com/Voicedrew11/kfiv-decomp.git
+[submodule "third_party/parallel-gs"]
+	path = third_party/parallel-gs
+	url = https://github.com/Arntzen-Software/parallel-gs.git

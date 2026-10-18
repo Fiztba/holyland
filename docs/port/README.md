@@ -23,13 +23,17 @@ to one commit (currently `88b0978`).
 > local changes, and `decomp_src/` is made read-only (an edit there would be lost at the next
 > configure). Edit game code in `work/` and save it into `patches/` (below).
 
-Clone with submodules:
+Clone with submodules, but not recursively: `third_party/parallel-gs` (the GS renderer) has a
+Granite submodule with twenty more of its own, and the port needs only two of them.
 
 ```sh
-git clone --recurse-submodules <this repository>
-# or, after a plain clone:
+git clone <this repository> && cd holyland
 git submodule update --init
+git -C third_party/parallel-gs submodule update --init Granite
+git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
 ```
+
+Without the last two lines the port still builds, but draws nothing.
 
 The PC edits are in `patches/`, as diffs against the decomp with paths relative to its root:
 - `patches/game/<folder>.patch`: one per top-level folder of `src/game`.
@@ -76,8 +80,10 @@ If not, it keeps the scratch copy so the conflicts can be resolved there, and th
 
 ## Building
 
-The game code is GNU C, so build it with clang or gcc (not MSVC's cl). You need CMake 3.20 or newer
-and Ninja.
+The game code is GNU C, so build it with clang or gcc (not MSVC's cl). You need CMake 3.21 or newer
+and Ninja. The renderer, paraLLEl-GS, is C++ (clang++ or g++, which the presets name). It runs on
+desktop Vulkan GPUs (its README lists the features it needs); running it needs a Vulkan driver,
+building it does not.
 
 **Windows:** use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw), or LLVM's clang, on the PATH:
 
@@ -93,8 +99,9 @@ cmake --preset linux-gcc        # or linux-clang
 cmake --build out/linux-gcc
 ```
 
-The program is `out/<preset>/kf4`. SDL2 is used for the pad if CMake finds it (`-DKF4_USE_SDL=OFF`
-turns it off).
+The program is `out/<preset>/kf4`. SDL2 is used for the window and the pad if CMake finds it
+(`-DKF4_USE_SDL=OFF` turns it off). paraLLEl-GS is built when it is checked out
+(`-DKF4_USE_PARALLEL_GS=OFF` turns it off); without it the game runs and draws nothing.
 
 ## Running
 
@@ -106,12 +113,25 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 |---|---|
 | `--disc PATH` | the game's disc image (or set `KF4_DISC`) |
 | `--fast` | run as fast as possible instead of at 60 vblanks a second |
-| `--headless` | no window, no SDL |
+| `--headless` | no window, no SDL; the GS draws only for `--dump-frames` |
+| `--no-gs` | draw nothing (VIF1 and VU1 still run) |
+| `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
+| `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
 | `--frames N` | stop after N vblanks |
 | `--input FILE` | play the pad from a script instead of SDL |
 | `--log FILE` | the per-frame log (`-` for stdout) |
 | `--clock YYYY-MM-DDTHH:MM:SS` | the disc drive's clock at boot, in Japan's time, instead of the host's; for repeatable runs |
 | `--host-dir DIR` | the folder `host0:` paths are read from |
+
+The window shows the game at 4:3. A game controller is the pad; so is the keyboard:
+
+| Keys | Pad |
+|---|---|
+| arrows | d-pad |
+| W A S D, I J K L | left stick, right stick |
+| Z or space, X, C, V | cross, circle, square, triangle |
+| Q, E, 1, 3 | L1, R1, L2, R2 |
+| Enter, Backspace | start, select |
 
 A pad script has one press per line: `<vblank> <buttons> [vblanks held, default 6]`. The buttons are
 names such as `CROSS`, `START`, `UP`, joined with `+`, or `-` for none. A line `<vblank> lx=N ...` (or `ly`, `rx`,
@@ -122,7 +142,11 @@ The log has one line per vblank event (`<vblank> event: ...`: files read, movies
 and one per game frame with the game's status, the map and the player's position.
 
 `tools/boot_test.py --disc kfiv_us.iso` is step 1's check: it boots to a new game twice and checks
-the two logs match and reach the first map.
+the two logs match and reach the first map. It runs headless with no GS, so it needs no GPU.
+
+`tools/frame_test.py --disc kfiv_us.iso` is step 2's: the same boot with the GS, dumping the logo,
+the title menu, the brightness screen, the opening and the first map. It checks two runs give the
+same pictures byte for byte and that none is blank (`--keep DIR` keeps them to look at).
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
@@ -142,10 +166,12 @@ and `main` runs until it needs something the stand-ins do not do yet.
 **Step 1** (done): the stand-ins (thread scheduler, files, DMA, IOP, memory card, pad) get the game
 from boot to a new game with nothing drawn, deterministically (`tools/boot_test.py`).
 
+**Step 2** (done): the game is drawn, in a window, from boot to the first map, and played with a
+pad or the keyboard. The DMA controller reads the VIF1 and GIF chains; VIF1 and an interpreter of
+VU1 run the game's microprograms; the GS is paraLLEl-GS (`tools/frame_test.py`).
+
 Next:
-1. **Graphics:**
-   - first the game's packets go to paraLLEl-GS;
-   - then the VU1 programs become native renderers.
+1. **Graphics, stage 2:** the VU1 programs become native renderers.
 2. **Sound.**
 
 ## Layout
@@ -157,11 +183,13 @@ Next:
 | `game/` | PC-only game code, compiled with the patched decomp (`game/data/`: the data sections in C; `state_log.c`: the per-frame log) |
 | `work/` | git-ignored: the decomp with the patches applied, for editing (`tools/patches.py apply`) |
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
-| `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, the disc |
-| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libpad, libmc; stand-ins for libgraph, libmpeg and libsdr |
+| `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, VIF1, VU1, the GS's front end, the window and frame dumps, the disc |
+| `port/gs/` | the GS backend: paraLLEl-GS behind a small C interface |
+| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad, libmc; stand-ins for libmpeg and libsdr |
 | `port/math/` | libvu0 in C |
-| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py` |
+| `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
+| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text) |
 | `tests/` | pad scripts for headless runs (`newgame.pad`) |
-| `.github/workflows/ci.yml` | CI: configure (the patches apply), build, `port_census.py` reports 0 errors |
+| `.github/workflows/ci.yml` | CI: configure (the patches apply), build with paraLLEl-GS, `port_census.py` reports 0 errors |
 | `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |
 | `docs/port/` | these notes |
