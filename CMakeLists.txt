@@ -247,6 +247,14 @@ add_executable(kf4 port/platform/main_host.c ${KF4_GAME_OBJECTS})
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
 target_link_libraries(kf4 PRIVATE kf4_port)
 
+# The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone
+add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c)
+target_include_directories(vu1_test PRIVATE port/include)
+target_compile_options(vu1_test PRIVATE -frounding-math)
+if(NOT WIN32)
+    target_link_libraries(vu1_test PRIVATE m)
+endif()
+
 # Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
 # llvm-mingw's C++ runtime, which paraLLEl-GS needs)
 if(WIN32)
