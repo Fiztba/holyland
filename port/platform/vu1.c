@@ -1352,6 +1352,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         port_stats.vu1_ticks += port_ticks() - start - (port_stats.gif_ticks - gif_before);
         port_stats.vu1_runs++;
         port_stats.vu1_insns += (uint64_t)guard + 1;
+        port_stats.vu1_cycles = vu.cycle;
     }
 }
 

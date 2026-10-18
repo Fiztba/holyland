@@ -48,6 +48,7 @@ typedef struct {
     uint64_t vsync_ticks; /* the GS's scanouts, with the picture to the window and --dump-frames */
     uint64_t vu1_runs;    /* MSCAL, MSCALF and MSCNT */
     uint64_t vu1_insns;   /* instruction pairs run */
+    uint64_t vu1_cycles;  /* VU1's own clock (stalls included): two runs that timed the same agree */
     uint64_t path1_hash;  /* of every packet VU1's XGKICK sent: two runs that drew the same agree */
 } PortStats;
 extern PortStats port_stats;

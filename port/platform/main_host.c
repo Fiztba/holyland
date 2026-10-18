@@ -200,7 +200,8 @@ static void print_stats(void) {
             port_stats.vu1_insns ? vu1 * 1e9 / (double)port_stats.vu1_insns : 0.0);
     fprintf(stderr, "[stats] GIF hand-off %.3f s, vsync %.3f s\n", (double)port_stats.gif_ticks / per_second,
             (double)port_stats.vsync_ticks / per_second);
-    fprintf(stderr, "[stats] PATH1 hash %016llx\n", (unsigned long long)port_stats.path1_hash);
+    fprintf(stderr, "[stats] VU1 cycles %llu, PATH1 hash %016llx\n",
+            (unsigned long long)port_stats.vu1_cycles, (unsigned long long)port_stats.path1_hash);
 }
 
 int main(int argc, char **argv) {
