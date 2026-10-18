@@ -1,0 +1,31 @@
+# Configures the PC port (which proves the patches apply to the pinned decomp), builds it with paraLLEl-GS, and fails if any game code still errors.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Check out what paraLLEl-GS needs
+        run: |
+          git -C third_party/parallel-gs submodule update --init Granite
+          git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build gcc g++
+      - name: Configure
+        run: cmake --preset linux-gcc
+      - name: Build
+        run: cmake --build out/linux-gcc
+      - name: VU1 self-test
+        run: out/linux-gcc/vu1_test
+      - name: Census must be zero
+        run: |
+          python3 tools/port_census.py out/linux-gcc > census.txt
+          cat census.txt
+          grep -q '^0 error(s) in' census.txt

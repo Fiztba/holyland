@@ -1,0 +1,1092 @@
+diff --git a/src/game/effect/effect.c b/src/game/effect/effect.c
+index 90e91f38f9d06eaac8923dcaa62adf05aaf0a94d..088206d9e3e9acd41179e78f577e80aaf38c0b2c 100644
+--- a/src/game/effect/effect.c
++++ b/src/game/effect/effect.c
+@@ -7,13 +7,12 @@
+ #include "core/memory.h"
+ #include "player/player.h"
+ #include "gfx/screen.h"
++#include <stdio.h>
++#include <string.h>
++#include <eekernel.h>
++#include <libgraph.h>
++#include <sifrpc.h>
+ 
+-void *memset(void *, int, u32);
+-int printf(const char *, ...);
+-int FlushCache(int);
+-int sceGsSyncPath(int, int);
+-void sceGsSetDefStoreImage(void *, s16, s16, s16, s16, s16, s16, s16);
+-void sceGsExecStoreImage(void *, void *);
+ char *Texture_UploadTable(char *base, int upload);
+ void Texture_SendTexFlush(void);
+ void Vector_Copy(void *dst, void *src);
+@@ -31,7 +30,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin);
+ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+ void DrawList_Add(ModelInstance *, s32, s32);
+-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
++char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
+ void Sound_StopTracked(s8 handle);
+ void Model_SetUpPosed(ModelInstance *, char **, char **);
+ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last);
+@@ -39,13 +38,15 @@ u32 *Map_GetSlotPacket(int, int);
+ 
+ extern GameStatus game_status;
+ extern MapSlot map_slots[2];
+-extern char map_draw_slot_blocks[];
++extern MapDrawState map_draw_state;
+ extern MapObject map_slot_objects[][0x200];
+ extern Entity entity_pool[][0x80];
+-extern Entity entity_pool_last;           /* the last entity of entity_pool */
+ extern void (*effect_draw_hooks[4][4])(ModelInstance *);
+-extern void (*effect_kind_handlers[][2])();
++extern EffectKindHandlers effect_kind_handlers[];
+ extern FxTableEntry fx_table[];
++/* PORT: an effect with no magic has effect_param 0xFFFF, and retail still reads its fx_table entry, 17 MB
++   past the table's 0x100 entries (0x402DA8 on the PS2): game RAM. An entry past the table is read there. */
++#define FX_TABLE_ENTRY(param) ((u32)(param) < 0x100 ? &fx_table[param] : EE_RAM_AT(FxTableEntry *, 0x402DA8) + (param))
+ extern PlayerState player_state;
+ extern Vector4 origin_point;
+ extern int current_map_slot;
+@@ -60,8 +61,8 @@ static int effect_count = 0;        /* 0x4468D0 live effects */
+ 
+ static u32 *effect_texture_packet;  /* 0x4470F8 DMA packet holding the effect textures read back from the GS */
+ static char *effect_model_file;     /* 0x4470FC sfx/sfx.dat */
+-static char *effect_model_memory;   /* 0x447100 0x800 bytes of model memory per effect */
+-static char **effect_model_table;   /* 0x447104 the model of each EffectDef.model_index, inside effect_model_file */
++static char *effect_model_memory;   /* 0x447100 0x800 bytes of model memory per effect (EFFECT_MODEL_MEMORY_SIZE on the PC) */
++static EEWord *effect_model_table; /* 0x447104 (char *) the model of each EffectDef.model_index, inside effect_model_file */
+ 
+ /* 0x502260 param/sfx.prm; entries is the view whose bit-field tests stay array reads */
+ static union {
+@@ -82,7 +83,7 @@ void Effect_Init(void) {
+     char unused_buffer[0x2C0];
+     char *buffer;
+     int handle;
+-    char **table;
++    EEWord *table;
+     int i;
+     int key;
+     EffectDef *def;
+@@ -98,10 +99,10 @@ void Effect_Init(void) {
+     effect_texture_packet = (u32 *)buffer;
+     buffer += 0x70400;
+     effect_model_memory = buffer;
+-    buffer += 0xC0000;
++    buffer += EFFECT_COUNT * EFFECT_MODEL_MEMORY_SIZE; /* 0xC0000 on the PS2 */
+     effect_model_file = buffer;
+     buffer += 0x9FC00;
+-    effect_model_table = (char **)effect_model_file;
++    effect_model_table = (EEWord *)effect_model_file;
+     memset(effect_light_block, 0, sizeof(effect_light_block));
+     effect_light_block[7].z = 1.0f;
+     effect_light_block[7].y = 1.0f;
+@@ -120,7 +121,7 @@ void Effect_Init(void) {
+     File_Close(handle);
+     table = effect_model_table;
+     for (i = 0; i < 0x200; i++) {
+-        table[i] += (int)table; /* file offsets become pointers */
++        table[i] += EE_WORD(table); /* file offsets become pointers */
+     }
+     Effect_CaptureTextures();
+     scale = 0.017453292f;
+@@ -163,7 +164,7 @@ static void Effect_CaptureTextures(void) {
+     packet += 2;
+     *(u64 *)packet = 0xE;
+     packet += 2;
+-    *(u64 *)packet = 0x8B90L << 34;
++    *(u64 *)packet = 0x8B90LL << 34;
+     packet += 2;
+     *packet++ = 0x50;
+     *packet++ = 0;
+@@ -197,7 +198,7 @@ void Effect_DebugFreeAllButPlayer(void) {
+ 
+     for (i = 0; i < EFFECT_SLOT_COUNT; i++, slot++) {
+         if (slot->flags & EFFECT_SLOT_LIVE) {
+-            printf("SFXGEN[%d] OWNER[0x%x]\n", i, slot->owner_entity);
++            printf("SFXGEN[%d] OWNER[0x%x]\n", i, (u32)(uptr)slot->owner_entity);
+             if (!(slot->flags & EFFECT_SLOT_LIVE)) {
+                 continue;
+             }
+@@ -213,7 +214,7 @@ void Effect_DebugFreeAllButPlayer(void) {
+ 
+     for (i = 0; i < EFFECT_COUNT; i++, effect = (EffectActor *)((char *)effect + sizeof(EffectActor))) {
+         if (effect->flags & EFFECT_FLAG_LIVE) {
+-            printf("SFX[%d] OWNER[0x%x]\n", i, effect->owner_entity);
++            printf("SFX[%d] OWNER[0x%x]\n", i, (u32)(uptr)effect->owner_entity);
+             if (!(effect->flags & EFFECT_FLAG_LIVE)) {
+                 continue;
+             }
+@@ -299,7 +300,7 @@ int Effect_StartSpawner(int effect_id, void *position, void *rotation, void *own
+     EFFECT_SLOT_FLAG_PARTS(slot)->level = def->max_level;
+     EFFECT_SLOT_FLAG_PARTS(slot)->start_delay_frames = def->spawn_start_delay;
+     slot->owner_entity = owner_entity;
+-    EFFECT_SLOT_FLAG_PARTS(slot)->def = def;
++    EFFECT_SLOT_FLAG_PARTS(slot)->def = EE_WORD(def);
+     EFFECT_SLOT_FLAG_PARTS(slot)->frames_to_firing = 0;
+     slot->owner_effect = NULL;
+     slot->start_position = NULL;
+@@ -358,8 +359,8 @@ void Effect_UpdateAll(void) {
+         slot = effect_slots;
+         for (i = 0; i < EFFECT_SLOT_COUNT; i++, slot++) {
+             if (slot->flags & EFFECT_SLOT_LIVE) {
+-                if (only_owner == NULL || only_owner == slot->owner_entity || EFFECT_SLOT_FLAG_PARTS(slot)->def == kind_280 ||
+-                    EFFECT_SLOT_FLAG_PARTS(slot)->def == kind_282 || EFFECT_SLOT_FLAG_PARTS(slot)->def == kind_284) {
++                if (only_owner == NULL || only_owner == slot->owner_entity || EFFECT_SLOT_DEF(slot) == kind_280 ||
++                    EFFECT_SLOT_DEF(slot) == kind_282 || EFFECT_SLOT_DEF(slot) == kind_284) {
+                     Effect_RunSpawner(slot);
+                     if (!effect_slots) { // match: tests the pool's address, which is never null
+                         break;
+@@ -391,7 +392,7 @@ void Effect_UpdateAll(void) {
+                         Effect_SpawnFromEffect(effect->def->frame_spawn_effects[key], effect);
+                     }
+                 }
+-                effect_kind_handlers[effect->def->kind_index][1](effect);
++                effect_kind_handlers[effect->def->kind_index].update(effect);
+             }
+         }
+     }
+@@ -405,7 +406,7 @@ void Effect_UploadTextures(void) {
+     GsDraw_QueueFlush();
+     first_word = cursor = Packet_Alloc(2);
+     *cursor++ = effect_texture_packet[0] | 0x30000000;
+-    *cursor++ = (u32)(effect_texture_packet + 4);
++    *cursor++ = EE_WORD(effect_texture_packet + 4);
+     *cursor++ = 0;
+     *cursor = 0;
+     Packet_AppendToChain(first_word, cursor + 1);
+@@ -438,8 +439,7 @@ void Effect_DrawAll(int pass) {
+         placement = EFFECT_DEF_FLAGS(effect->def) & 0x600000;
+         model = effect->model;
+         if (placement == 0 || placement == 0x600000) {
+-            // match: the margin is set up before the node, so the call passes it first
+-            if (((int (*)(f32 *, f32, AreaNode *))Map_IsPointInRecord)((f32 *)&model->position, 0.0f, (AreaNode *)effect->map_record) == 0) {
++            if (Map_IsPointInRecord((f32 *)&model->position, (AreaNode *)effect->map_record, 0.0f) == 0) {
+                 effect->map_record = (char *)Map_FindRecordAt((f32 *)&effect->model->position, 0.0f);
+             }
+             if (effect->map_record == NULL && effect->owner_entity == (Entity *)&player_state && ((PlayerState *)effect->owner_entity)->map_index != 0xFFFF) {
+@@ -484,15 +484,15 @@ void Effect_DrawAll(int pass) {
+         for (part_index = 0; part_index < model->part_count; part_index++, part++) {
+             ModelMatrix_BuildPartLocal(model, part, part);
+         }
+-        model->fog_block = map_draw_slot_blocks + (current_map_slot << 10);
++        model->fog_block = map_draw_state.fog_blocks[current_map_slot];
+         // match: the flag is read through the union so the test stays behind the unk14C store
+-        if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000L << 25))) {
+-            model->light_block = (s32)effect_light_block;
++        if (!(((EntityFlagWord *)&effect->def->sub_effect_id)->word & (0x8000LL << 25))) {
++            model->light_block = (sptr)effect_light_block;
+         } else {
+-            model->light_block = (s32)(map_draw_slot_blocks - 0x1D0);
++            model->light_block = (sptr)&map_draw_state.current_light_block;
+         }
+         model->hit_count = 0;
+-        if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000L << 26))) {
++        if (pass == 0 || !(EFFECT_DEF_WORD_F0(effect->def) & (0x8000LL << 26))) {
+             DrawList_Add(model, ((EffectTableEntry *)effect->def)->placement, pass);
+         }
+         if (pass == 0 && effect->frame >= effect->def->keyframe_end) {
+@@ -514,7 +514,7 @@ static void Effect_RunSpawner(EffectSlot *slot) {
+         EFFECT_SLOT_VIEW(slot)->start_delay_frames--;
+         return;
+     }
+-    def = EFFECT_SLOT_VIEW(slot)->def;
++    def = EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def);
+     if (def->spawn_interval != 0) {
+         u8 timer = EFFECT_SLOT_VIEW(slot)->frames_to_firing--;
+ 
+@@ -545,7 +545,7 @@ static void Effect_RunSpawner(EffectSlot *slot) {
+         effect->frame = 0;
+         effect->start_position = slot->start_position;
+         effect->model = &effect_models[index];
+-        effect->def = EFFECT_SLOT_VIEW(slot)->def;
++        effect->def = EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def);
+         effect->owner_entity = slot->owner_entity;
+         effect->target = slot->owner_effect;
+         effect->effect_param = slot->effect_param;
+@@ -555,12 +555,12 @@ static void Effect_RunSpawner(EffectSlot *slot) {
+         effect->reserved_frames = 4; /* frames the actor stays reserved once it is freed */
+         effect->target_entity = 0;
+         Effect_SetupModel(index);
+-        effect_kind_handlers[effect->def->kind_index][0](effect, slot);
++        effect_kind_handlers[effect->def->kind_index].start(effect, slot);
+         EFFECT_FLAG_BITS(effect)->bit59 = effect->def->sound_id != 0;
+-        if (fx_table[effect->effect_param].item_menu_magic != 0) {
+-            EFFECT_FLAG_PARTS(effect)->sound_track = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (int)&player_state, EFFECT_FLAG_PARTS(effect)->sound_track);
++        if (FX_TABLE_ENTRY(effect->effect_param)->item_menu_magic != 0) {
++            EFFECT_FLAG_PARTS(effect)->sound_track = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->sound_track);
+         } else if (EFFECT_FLAG_BITS(effect)->bit59 || effect->effect_param == player_state.equipped_magic) {
+-            EFFECT_FLAG_PARTS(effect)->sound_track = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (int)&effect->model->position, EFFECT_FLAG_PARTS(effect)->sound_track);
++            EFFECT_FLAG_PARTS(effect)->sound_track = Sound_PlayTrackedKind(EFFECT_FLAG_BITS(effect)->bit59, effect->def->sound_id, 0, (float *)&effect->model->position, EFFECT_FLAG_PARTS(effect)->sound_track);
+         }
+         if (EFFECT_FLAG_PARTS(effect)->sound_track > 0) {
+             effect_sound_count++;
+@@ -569,7 +569,7 @@ static void Effect_RunSpawner(EffectSlot *slot) {
+         if (placement == 0 || placement == 0x600000) {
+             effect->map_record = (char *)Map_FindRecordAt((f32 *)&effect->model->position, 0.0f);
+         }
+-        def = EFFECT_SLOT_VIEW(slot)->def;
++        def = EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def);
+     }
+     if (--EFFECT_SLOT_VIEW(slot)->level == 0) {
+         Effect_FreeSpawner(slot);
+@@ -699,8 +699,8 @@ static void Effect_SetupModel(int index) {
+         }
+     }
+     model->model_flags |= 0x1800;
+-    file_cursor = effect_model_table[def->model_index];
+-    memory = effect_model_memory + (index << 11);
++    file_cursor = EE_PTR(char *, effect_model_table[def->model_index]);
++    memory = effect_model_memory + index * EFFECT_MODEL_MEMORY_SIZE;
+     Model_SetUpPosed(model, &file_cursor, &memory);
+     model->draw = effect_draw_hooks[((EffectTableEntry *)effect->def)->placement][effect->def->draw_hook_index];
+     model->model_flags |= 0x800;
+@@ -712,15 +712,15 @@ static void Effect_SetupModel(int index) {
+             map = 1;
+         } else if ((MapObject *)effect->owner_entity >= map_slot_objects[0] && (MapObject *)effect->owner_entity <= &map_slot_objects[1][0x1FF]) {
+             map = (u8)((MapObject *)effect->owner_entity)->state_flags & 1;
+-        } else if (effect->owner_entity >= entity_pool[0] && effect->owner_entity <= &entity_pool_last) {
++        } else if (effect->owner_entity >= entity_pool[0] && effect->owner_entity <= &entity_pool[1][0x7F]) {
+             map = effect->owner_entity->group_id; /* an entity: the map it is in */
+         } else {
+             map = current_map_slot;
+         }
+         effect->model->texture_slot = 3;
+-        effect->model->texture_data = (int)Map_GetSlotPacket(map, 4);
++        effect->model->texture_data = (sptr)Map_GetSlotPacket(map, 4);
+         effect->model->shared_texture_slot = 0;
+-        effect->model->shared_texture_packet = (int)Map_GetSlotPacket(map, 5);
++        effect->model->shared_texture_packet = (sptr)Map_GetSlotPacket(map, 5);
+     }
+ }
+ 
+@@ -739,7 +739,7 @@ static void Effect_FindModelRecord(ModelInstance *model, int unused_arg1, int re
+     for (part_index = 0; part_index < part_total; part_index++, part++) {
+         int record_count = part->data_count;
+ 
+-        record = (char *)(int)part->data_addr;
++        record = EE_PTR(char *, part->data_addr);
+         for (record_index = 0; record_index < record_count; record_index++, record += 0x10) {
+             if ((((ModelPartRecord *)record)->id_word & 0x3FFF) == record_id) {
+                 *(UnalignedQword *)model->found_record = *(UnalignedQword *)&((ModelPartRecord *)record)->id_word;
+@@ -768,7 +768,7 @@ void Effect_OffsetAll(void *offset) {
+     if (effect_slot_count > 0) {
+         for (i = 0; i < EFFECT_SLOT_COUNT; i++, slot++) {
+             if (slot->flags & EFFECT_SLOT_LIVE) {
+-                if (!(EFFECT_DEF_FLAGS(EFFECT_SLOT_VIEW(slot)->def) & 0x600000)) {
++                if (!(EFFECT_DEF_FLAGS(EE_PTR(EffectDef *, EFFECT_SLOT_VIEW(slot)->def)) & 0x600000)) {
+                     Vector_Add(&slot->position, &slot->position, offset);
+                 }
+             }
+@@ -908,8 +908,8 @@ void Effect_FreePlayerWeaponKinds(void) {
+     effect = effect_pool;
+     for (i = 0; i < EFFECT_SLOT_COUNT && effect_slot_count > 0; i++, slot++) {
+         if ((slot->flags & EFFECT_SLOT_LIVE) &&
+-            (EFFECT_SLOT_FLAG_PARTS(slot)->def == &effect_table.defs[0x280] || EFFECT_SLOT_FLAG_PARTS(slot)->def == &effect_table.defs[0x282] ||
+-             EFFECT_SLOT_FLAG_PARTS(slot)->def == &effect_table.defs[0x284]) &&
++            (EFFECT_SLOT_DEF(slot) == &effect_table.defs[0x280] || EFFECT_SLOT_DEF(slot) == &effect_table.defs[0x282] ||
++             EFFECT_SLOT_DEF(slot) == &effect_table.defs[0x284]) &&
+             slot->owner_entity == (Entity *)&player_state) {
+             Effect_FreeSpawner(slot);
+         }
+@@ -933,14 +933,14 @@ void Effect_FreePlayerMagic(void) {
+     effect = effect_pool;
+     for (i = 0; i < EFFECT_SLOT_COUNT && effect_slot_count > 0; i++, slot++) {
+         if ((slot->flags & EFFECT_SLOT_LIVE) && slot->owner_entity == (Entity *)&player_state && slot->effect_param != 0 &&
+-            fx_table[slot->effect_param].item_menu_magic == 0 && EFFECT_SLOT_FLAG_PARTS(slot)->def != &effect_table.defs[0x280] &&
+-            EFFECT_SLOT_FLAG_PARTS(slot)->def != &effect_table.defs[0x282] && EFFECT_SLOT_FLAG_PARTS(slot)->def != &effect_table.defs[0x284]) {
++            FX_TABLE_ENTRY(slot->effect_param)->item_menu_magic == 0 && EFFECT_SLOT_DEF(slot) != &effect_table.defs[0x280] &&
++            EFFECT_SLOT_DEF(slot) != &effect_table.defs[0x282] && EFFECT_SLOT_DEF(slot) != &effect_table.defs[0x284]) {
+             Effect_FreeSpawner(slot);
+         }
+     }
+     for (i = 0; i < EFFECT_COUNT && effect_count > 0; i++, effect++) {
+         if ((effect->flags & EFFECT_FLAG_LIVE) && effect->owner_entity == (Entity *)&player_state && effect->effect_param != 0 &&
+-            fx_table[effect->effect_param].item_menu_magic == 0 && effect->def != &effect_table.defs[0x280] &&
++            FX_TABLE_ENTRY(effect->effect_param)->item_menu_magic == 0 && effect->def != &effect_table.defs[0x280] &&
+             effect->def != &effect_table.defs[0x282] && effect->def != &effect_table.defs[0x284]) {
+             Effect_Free(effect);
+         }
+@@ -976,7 +976,7 @@ int Effect_IsDefRangeInUse(int first_def, int last_def) {
+     slot = effect_slots;
+     for (i = 0; i < EFFECT_SLOT_COUNT && effect_slot_count > 0; i++, slot++) {
+         if (slot->flags & EFFECT_SLOT_LIVE) {
+-            if (EFFECT_SLOT_FLAG_PARTS(slot)->def >= first && EFFECT_SLOT_FLAG_PARTS(slot)->def <= last) {
++            if (EFFECT_SLOT_DEF(slot) >= first && EFFECT_SLOT_DEF(slot) <= last) {
+                 return 1;
+             }
+         }
+@@ -993,12 +993,12 @@ int Effect_IsDefRangeInUse(int first_def, int last_def) {
+ }
+ 
+ /* GS values for the model draw hooks below (effect_draw_hooks, picked by Effect_SetupModel) */
+-#define EFFECT_ZBUF_NO_WRITE 0x10A000118L       /* ZBUF_1: the depth buffer, masked: no depth writes */
+-#define EFFECT_ZBUF_WRITE 0xA000118L            /* ZBUF_1: the depth buffer, written */
++#define EFFECT_ZBUF_NO_WRITE 0x10A000118LL       /* ZBUF_1: the depth buffer, masked: no depth writes */
++#define EFFECT_ZBUF_WRITE 0xA000118LL            /* ZBUF_1: the depth buffer, written */
+ #define EFFECT_ALPHA_ADD 0x48                   /* ALPHA_1: Cs * As + Cd */
+ #define EFFECT_ALPHA_SUBTRACT 0x42              /* ALPHA_1: Cd - Cs * As */
+ #define EFFECT_ALPHA_BLEND 0x44                 /* ALPHA_1: (Cs - Cd) * As + Cd */
+-#define EFFECT_ALPHA_OPAQUE 0x80000000A8L       /* ALPHA_1: Cs (FIX 0x80) */
++#define EFFECT_ALPHA_OPAQUE 0x80000000A8LL       /* ALPHA_1: Cs (FIX 0x80) */
+ #define EFFECT_TEST_COLOUR_DEPTH 0x53001        /* TEST_1: colour only (alpha test NEVER, AFAIL RGB_ONLY), depth test GEQUAL */
+ #define EFFECT_TEST_COLOUR_ON_TOP 0x33001       /* TEST_1: colour only, depth test ALWAYS */
+ #define EFFECT_TEST_CUTOUT_DEPTH 0x5000D        /* TEST_1: pixels with alpha above 0, depth test GEQUAL */
+diff --git a/src/game/effect/effect.h b/src/game/effect/effect.h
+index aaa845d5a1d3ac421addaa54b8b7bccd46548933..4bf944aa47909949adc66fd5380bd347574333ca 100644
+--- a/src/game/effect/effect.h
++++ b/src/game/effect/effect.h
+@@ -8,6 +8,8 @@
+ 
+ #define EFFECT_SLOT_COUNT 0x60      /* spawner slots */
+ #define EFFECT_COUNT 0x180          /* effects (EffectActor) */
++/* an effect's model memory: 0x800 bytes on the PS2, room for 16 0x80-byte ModelParts (sfx.dat has 16-part models) */
++#define EFFECT_MODEL_MEMORY_SIZE MODEL_PART_AREA_SIZE(0x800)
+ #define EFFECT_DEF_COUNT 0x400      /* entries of the definition table param/sfx.prm */
+ 
+ /* the effect's definition, EffectActor.def: one 0x120-byte entry of effect_table.
+@@ -77,7 +79,8 @@ typedef struct {
+ typedef struct {
+     Vector4 velocity;               /* 0x00 (EffectActor+0x10) */
+     Vector4 unk10;                  /* 0x10 per-kind state */
+-    char unk20[0x10];               /* 0x20 */
++    char unk20[0x20];               /* 0x20 PORT: 0x10 on the PS2; the views with pointers (PickedMotion,
++                                       AttachedMotion, SavedArgMotion) need more room on the PC */
+ } EffectMotion;
+ 
+ /* EffectMotion as EffectShot_Update uses it */
+@@ -138,6 +141,7 @@ typedef struct {
+     ModelInstance **anchor;         /* 0x10 the model it is attached to */
+     char unk14[0x1C];               /* 0x14 passed by address */
+ } AttachedMotion;
++_Static_assert(sizeof(AttachedMotion) <= sizeof(EffectMotion), "AttachedMotion does not fit EffectMotion");
+ 
+ /* EffectMotion as EffectHomeOnEntity_Start uses it: follows EffectActor.target */
+ typedef struct {
+@@ -532,6 +536,8 @@ typedef struct {
+     f32 drift_x;
+     f32 drift_y;
+ } DriftModel;
++_Static_assert(offsetof(DriftModel, drift_x) == offsetof(ModelInstance, scale_x), "DriftModel is not ModelInstance");
++_Static_assert(offsetof(DriftModel, drift_y) == offsetof(ModelInstance, scale_y), "DriftModel is not ModelInstance");
+ 
+ /* EffectMotion as EffectWobble_Update uses it */
+ typedef struct {
+@@ -562,6 +568,7 @@ typedef struct {
+     Entity *owner_entity;           /* 0x10 a copy of EffectActor.owner_entity */
+     u8 unk14;                       /* 0x14 cleared on spawn */
+ } SavedArgMotion;
++_Static_assert(sizeof(SavedArgMotion) <= sizeof(EffectMotion), "SavedArgMotion does not fit EffectMotion");
+ 
+ /* EffectMotion as EffectBowDraw_Start uses it */
+ typedef struct {
+@@ -665,6 +672,7 @@ typedef struct {
+     char pad00[0xE4];
+     f32 scale_y;                    /* 0xE4 the y scale */
+ } TiltModel;
++_Static_assert(offsetof(TiltModel, scale_y) == offsetof(ModelInstance, scale_y), "TiltModel is not ModelInstance");
+ 
+ /* Local view: the motion's spin angle after the velocity. */
+ typedef struct {
+@@ -754,6 +762,7 @@ typedef struct {
+     s8 list_index[4];               /* 0x20 where the entity is in the list active_entities_head, -1: none (EffectPickTargets_Start) */
+     char pad24[0x0C];
+ } PickedMotion;
++_Static_assert(sizeof(PickedMotion) <= sizeof(EffectMotion), "PickedMotion does not fit EffectMotion");
+ 
+ /* EffectMotion as EffectBeam_Update uses it: scales the model, spawns the end effect */
+ typedef struct {
+@@ -885,7 +894,7 @@ typedef struct EffectActor {
+     struct EffectActor *target;     /* 0x60 */
+     Vector4 *start_position;        /* 0x64 */
+     Vector4 *start_rotation;        /* 0x68 */
+-    int target_entity;              /* 0x6C the Entity the effect homes on (EffectTarget view) */
++    void *target_entity;            /* 0x6C the Entity the effect homes on (EffectTarget view) */
+     Vector4 saved_position;         /* 0x70 position kept with the model's, moved by Effect_TransformAll and Effect_OffsetAll */
+     char pad80[0x10];
+     int reserved_frames;            /* 0x90 frames the actor stays reserved once it is freed */
+@@ -903,9 +912,9 @@ typedef struct {
+ #define EFFECT_COLOUR(effect) ((EffectActorColour *)(effect))
+ 
+ /* EffectActor.flags bits */
+-#define EFFECT_FLAG_LIVE (0x8000L << 41)           /* bit 56: the actor is in use */
+-#define EFFECT_FLAG_HAS_SLOTS (0x8000L << 42)      /* bit 57: free its spawner slots with it */
+-#define EFFECT_FLAG_HAS_TARGETERS (0x8000L << 43)  /* bit 58: free the effects aimed at it with it */
++#define EFFECT_FLAG_LIVE (0x8000LL << 41)           /* bit 56: the actor is in use */
++#define EFFECT_FLAG_HAS_SLOTS (0x8000LL << 42)      /* bit 57: free its spawner slots with it */
++#define EFFECT_FLAG_HAS_TARGETERS (0x8000LL << 43)  /* bit 58: free the effects aimed at it with it */
+ 
+ /* effect_table[effect id]: an effect's definition-table entry (0x120 bytes) */
+ typedef struct {
+@@ -942,11 +951,13 @@ typedef struct {
+ /* what EffectActor.target_entity points at: an Entity (entity/entity.h) as far as effects read it */
+ typedef struct {
+     ModelInstance *model;           /* 0x00 */
+-    char pad04[0x38];
++    char pad04[offsetof(Entity, height) - sizeof(ModelInstance *)];
+     f32 height;                     /* 0x3C */
+-    char pad40[0x98];
++    char pad40[offsetof(Entity, flags) - offsetof(Entity, height) - sizeof(f32)];
+     s64 flags;                      /* 0xD8 */
+ } EffectTarget;
++_Static_assert(offsetof(EffectTarget, height) == offsetof(Entity, height), "EffectTarget is not Entity");
++_Static_assert(offsetof(EffectTarget, flags) == offsetof(Entity, flags), "EffectTarget is not Entity");
+ 
+ /* one 0x50-byte slot of the effect spawner pool, effect_slots (0x60 of them) */
+ typedef struct {
+@@ -962,8 +973,15 @@ typedef struct {
+     char pad3E[0x12];
+ } EffectSlot;
+ 
++/* A row of effect_kind_handlers: the kind's start handler, called with the slot the effect is spawned from,
++   and its update handler, called every frame. */
++typedef struct {
++    void (*start)(EffectActor *effect, EffectSlot *spawn_slot);
++    void (*update)(EffectActor *effect);
++} EffectKindHandlers;
++
+ /* EffectSlot.flags bit 32: the slot is in use */
+-#define EFFECT_SLOT_LIVE (0x8000L << 17)
++#define EFFECT_SLOT_LIVE (0x8000LL << 17)
+ 
+ /* EffectSlot.flags as the bit-fields the game writes */
+ typedef struct {
+@@ -978,31 +996,39 @@ typedef struct {
+ 
+ #define EFFECT_SLOT_FLAG_BITS(slot) ((EffectSlotFlagBits *)&(slot)->flags)
+ 
+-/* EffectSlot.flags as the bytes some functions read */
++/* EffectSlot.flags as the bytes some functions read. The EffectDef is the flag word's low 32 bits, so on the
++   PC it is kept as its EE address (EFFECT_SLOT_DEF reads it back). */
+ typedef struct {
+-    EffectDef *def;                 /* 0x20 */
+-    u8 unk24;                       /* 0x24 */
++    EEWord def;                     /* 0x20 (EffectDef *) */
++    u8 unk24;                       /* 0x24 bit 0: EFFECT_SLOT_LIVE */
+     u8 level;                       /* 0x25 the spawner's level, from EffectDef.max_level */
+     u8 frames_to_firing;            /* 0x26 frames to the next firing */
+     u8 start_delay_frames;          /* 0x27 frames before the first firing, from EffectDef.spawn_start_delay */
+ } EffectSlotFlagParts;
++LAYOUT_SIZE(EffectSlotFlagParts, 8);
++_Static_assert(sizeof(EffectSlotFlagParts) == sizeof(((EffectSlot *)0)->flags), "EffectSlotFlagParts is EffectSlot.flags");
+ 
+ #define EFFECT_SLOT_FLAG_PARTS(slot) ((EffectSlotFlagParts *)&(slot)->flags)
++#define EFFECT_SLOT_DEF(slot) EE_PTR(EffectDef *, EFFECT_SLOT_FLAG_PARTS(slot)->def)
+ 
+ /* the whole EffectSlot as Effect_RunSpawner reads it: the bytes of the flag word as members of
+    the slot itself (no address is taken, so gcc keeps no pointer to the word), and start_rotation as
+    the vector pointer it is */
+ typedef struct {
+-    char pad00[0x20];
+-    EffectDef *def;                 /* 0x20 */
++    char pad00[offsetof(EffectSlot, flags)];
++    EEWord def;                     /* 0x20 (EffectDef *), as in EffectSlotFlagParts */
+     u8 unk24;                       /* 0x24 */
+     u8 level;                       /* 0x25 the firings left */
+     u8 frames_to_firing;            /* 0x26 frames to the next firing */
+     u8 start_delay_frames;          /* 0x27 frames before the first firing, from EffectDef.spawn_start_delay */
+-    char pad28[0x0C];
++    char pad28[offsetof(EffectSlot, start_rotation) - offsetof(EffectSlot, flags) - 8];
+     Vector4 *start_rotation;        /* 0x34 EffectSlot.start_rotation */
+-    char pad38[0x18];
++    char pad38[sizeof(EffectSlot) - offsetof(EffectSlot, start_rotation) - sizeof(Vector4 *)];
+ } EffectSlotView;
++_Static_assert(offsetof(EffectSlotView, def) == offsetof(EffectSlot, flags), "EffectSlotView is not EffectSlot");
++_Static_assert(offsetof(EffectSlotView, level) == offsetof(EffectSlot, flags) + offsetof(EffectSlotFlagParts, level), "EffectSlotView is not EffectSlot");
++_Static_assert(offsetof(EffectSlotView, start_rotation) == offsetof(EffectSlot, start_rotation), "EffectSlotView is not EffectSlot");
++_Static_assert(sizeof(EffectSlotView) == sizeof(EffectSlot), "EffectSlotView is not EffectSlot");
+ 
+ #define EFFECT_SLOT_VIEW(slot) ((EffectSlotView *)(slot))
+ 
+diff --git a/src/game/effect/effect_handlers.c b/src/game/effect/effect_handlers.c
+index b838114fb1a612a884cf66b295fbcdea0816f8d7..84e8135d897b6c5a437b9b921a6fc8bee0b6a311 100644
+--- a/src/game/effect/effect_handlers.c
++++ b/src/game/effect/effect_handlers.c
+@@ -71,7 +71,7 @@ void EffectFollowLight_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectFollowLight_Update(EffectActor *effect);
+ void EffectFollowPoseScaled_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectFollowPoseScaled_Update(EffectActor *effect);
+-void EffectFollowPose_Start(EffectActor *effect);
++void EffectFollowPose_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectFollowPose_Update(EffectActor *effect);
+ void EffectFollowPosition_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectFollowPosition_Update(EffectActor *effect);
+@@ -102,7 +102,7 @@ void EffectHomingChain_Start(EffectActor *actor, EffectSlot *spawn_slot);
+ void EffectHomingChain_Update(EffectActor *effect);
+ void EffectHoverShot_Start(EffectActor *actor, EffectSlot *spawn_slot);
+ void EffectHoverShot_Update(EffectActor *effect);
+-void EffectIdle_Start(void);
++void EffectIdle_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectIdle_Update(EffectActor *effect);
+ void EffectImpactLob_Start(EffectActor *actor, EffectSlot *spawn_slot);
+ void EffectImpactLob_Update(EffectActor *actor);
+@@ -150,7 +150,7 @@ void EffectRay_StartAtPlayer(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectRay_Update(EffectActor *effect);
+ void EffectRepeater_Start(EffectActor *actor, EffectSlot *spawn_slot);
+ void EffectRepeater_Update(EffectActor *effect);
+-void EffectScatterAroundPlayer_Start(EffectActor *effect);
++void EffectScatterAroundPlayer_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectScatterAroundPlayer_Update(EffectActor *effect);
+ void EffectSeekPlayer_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectSeekPlayer_Update(EffectActor *actor);
+@@ -185,7 +185,7 @@ void EffectWhileGroundFan_Update(EffectActor *effect);
+ void EffectWobble_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectWobble_Update(EffectActor *effect);
+ 
+-void (*effect_kind_handlers[256][2])() = { /* 0x402550 */
++EffectKindHandlers effect_kind_handlers[256] = { /* 0x402550 */
+     { EffectFly_Start, EffectFly_Update },
+     { EffectFly_StartRaised, EffectFly_Update },
+     { EffectAtTarget_Start, EffectAtTarget_Update },
+diff --git a/src/game/effect/effect_kinds_a.c b/src/game/effect/effect_kinds_a.c
+index 7d95e993232d8d027ae096a608cfb2a40174aa3f..e75449ae0e6437c5d0615014c11897f983172497 100644
+--- a/src/game/effect/effect_kinds_a.c
++++ b/src/game/effect/effect_kinds_a.c
+@@ -4,27 +4,21 @@
+ #include "collision/collision.h"
+ #include "player/player.h"
+ #include "math/vu0.h"
++#include <math.h>
++#include <stdlib.h>
++#include <libvu0.h>
+ 
+ extern PlayerState player_state;
+ extern f32 identity_matrix[16];
+ extern Entity *active_entities_head;
+ extern int floor_skim_spawn_count;
+ 
+-int rand(void);
+-double sin(double);
+-double cos(double);
+-double sqrt(double);
+-void sceVu0AddVector(void *, void *, void *);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0RotMatrixZ(float *, float *, float);
+-void sceVu0ApplyMatrix(void *, void *, void *);
+-char Sound_PlayTrackedKind(int index, int first, int second, int third, int fourth);
++char Sound_PlayTrackedKind(int index, int first, int second, float *third, int fourth);
+ void EffectHit_CheckAndEnd(EffectActor *effect, s8 *state);
+ int EffectHit_CheckAndEndByFlag(EffectActor *effect, s8 *state);
+ void EffectHit_End(EffectActor *effect, s8 *state);
+ void EffectAngle_FromVector(float *angles, float *direction);
+-int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
++Entity *EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
+ Entity *EffectHit_FindNearestEntity(EffectActor *effect, Vector4 *position, Vector4 *unused_rotation);
+ int Effect_IsEntityUntargetable(Entity *entity);
+ int Effect_IsNearAnyEntity(float radius, void *point);
+@@ -42,7 +36,7 @@ void Collision_CastRayAtMap(f32 scale, void *position_arg, void *direction);
+ 
+ /* Start handler of the kinds that do nothing of their own (kind 6 and most unused kinds): does
+    nothing. */
+-void EffectIdle_Start(void) {
++void EffectIdle_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+ }
+ 
+ /* Update handler of those kinds: only counts the frame. */
+@@ -140,7 +134,7 @@ void EffectFly_UpdateGrowing(EffectActor *effect) {
+ void EffectAtTarget_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     TargetMotion *motion;
+     EffectTarget *target;
+-    int target_id;
++    Entity *target_id;
+ 
+     target_id = EffectHit_FindAimedEntity(effect, &player_state.position, &player_state.rotation);
+     effect->target_entity = target_id;
+@@ -183,7 +177,7 @@ void EffectAtTargetFloor_Start(EffectActor *actor, EffectSlot *spawn_slot) {
+ 
+     source = (Entity *)EffectHit_FindAimedEntity(actor, &player_state.position, &player_state.rotation);
+     motion = (SnappedMotion *)&actor->motion;
+-    actor->target_entity = (int)source;
++    actor->target_entity = source;
+     motion->no_floor = 1;
+     if (actor->target_entity == 0) {
+         EffectStart_PlaceModel(actor, spawn_slot);
+@@ -347,7 +341,7 @@ void EffectTrailHoming_Update(EffectActor *actor) {
+         EffectSteer_Toward(&motion->velocity, &delta, actor->def->speed, motion->turn_rate);
+         EffectAngle_FromVector(&actor->model->rotation.x, &motion->velocity.x);
+         if (ENTITY_FLAG_BITS((Entity *)actor->target_entity)->bits2 > 0) {
+-            actor->target_entity = (int)EffectHit_FindNearestEntity(actor, &actor->model->position, &actor->model->rotation);
++            actor->target_entity = EffectHit_FindNearestEntity(actor, &actor->model->position, &actor->model->rotation);
+         }
+     }
+     if (actor->frame < actor->def->max_frames || actor->def->max_frames == 0) {
+@@ -846,7 +840,7 @@ void EffectGroundRunWait_Update(EffectActor *actor) {
+         return;
+     }
+     for (i = 0; i < 0x180; i++, slot++) {
+-        if (slot->flags & (0x8000L << 41)) {
++        if (slot->flags & (0x8000LL << 41)) {
+             if (slot->def->kind_index == 0xE) {
+                 actor->frame++;
+                 return;
+@@ -1016,7 +1010,7 @@ void EffectGroundSway_Update(EffectActor *effect) {
+         return;
+     }
+     if (effect->frame == 0) {
+-        result = Sound_PlayTrackedKind(1, 10, 0, (int)&player_state, EFFECT_FLAG_PARTS(effect)->sound_track);
++        result = Sound_PlayTrackedKind(1, 10, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->sound_track);
+         EFFECT_FLAG_PARTS(effect)->sound_track = result;
+         if ((s8)result > 0) {
+             effect_sound_count += 1;
+@@ -1110,7 +1104,7 @@ void EffectGroundTrail_Update(EffectActor *effect) {
+         return;
+     }
+     if (effect->frame == 0) {
+-        result = Sound_PlayTrackedKind(1, 10, 0, (int)&player_state, EFFECT_FLAG_PARTS(effect)->sound_track);
++        result = Sound_PlayTrackedKind(1, 10, 0, (float *)&player_state, EFFECT_FLAG_PARTS(effect)->sound_track);
+         EFFECT_FLAG_PARTS(effect)->sound_track = result;
+         if ((s8)result > 0) {
+             effect_sound_count += 1;
+@@ -1412,7 +1406,7 @@ void EffectBeam_Start(EffectActor *actor, EffectSlot *spawn_slot) {
+     motion->scale_per_mille = 0;
+     chosen = picked->entity[EFFECT_SLOT_FLAG_PARTS(spawn_slot)->level - 1];
+     if (chosen != NULL) {
+-        actor->target_entity = (int)chosen;
++        actor->target_entity = chosen;
+         motion->scale_per_mille = picked->distance[EFFECT_SLOT_FLAG_PARTS(spawn_slot)->level - 1];
+         Vector_Copy(&motion->end_position, chosen->model->position);
+         EffectBeam_AnglesToward(&actor->model->rotation, ((Entity *)actor->target_entity)->model->position, &actor->model->position);
+@@ -1684,7 +1678,7 @@ void EffectBobHoming_Update(EffectActor *effect) {
+     effect->model->position.y += motion->bob_speed;
+     if (effect->frame == effect->def->max_frames && effect->def->interval != 0) {
+         // match: retail passes the rotation as a third argument the function does not take
+-        effect->target_entity = (int)((Entity *(*)(EffectActor *, Vector4 *, Vector4 *))EffectHit_FindNearestEntity)(effect, &effect->model->position, &effect->model->rotation);
++        effect->target_entity = ((Entity *(*)(EffectActor *, Vector4 *, Vector4 *))EffectHit_FindNearestEntity)(effect, &effect->model->position, &effect->model->rotation);
+         motion->turn = 0.0f;
+     }
+     if (effect->target_entity != 0) {
+@@ -1737,7 +1731,7 @@ void EffectBobFly_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     float bob_limit;
+ 
+     motion = (BobbingGrowMotion *)&effect->motion;
+-    ((void (*)(void))EffectStart_TurnModel)(); // match: retail calls with no arguments
++    EffectStart_TurnModel(effect, spawn_slot); /* retail passes no arguments: a0 and a1 still hold these two */
+     EffectStart_PlaceModel(effect, spawn_slot);
+     EffectAngle_ToVector(effect->def->speed, &motion->velocity, &effect->model->rotation);
+     effect->flags |= EFFECT_FLAG_HAS_TARGETERS;
+diff --git a/src/game/effect/effect_query.c b/src/game/effect/effect_query.c
+index a4b196328036f49fbc2a50b6db0d2155acd6e646..a49d64153f8f0cc751f9c8945274e7b626ea2d45 100644
+--- a/src/game/effect/effect_query.c
++++ b/src/game/effect/effect_query.c
+@@ -5,6 +5,7 @@
+ #include "effect/effect.h"
+ #include "math/vu0.h"
+ #include "collision/collision.h"
++#include <math.h>
+ 
+ float Effect_Distance(void *, void *);
+ void Collision_CastRayAtMap(f32, void *, void *);
+@@ -45,21 +46,17 @@ int Effect_IsNearAnyEntity(float radius, void *point) {
+ 
+ /* Distance between two points. */
+ float Effect_Distance(void *from, void *target) {
+-    f32 distance[4];
++    f32 *a = from;
++    f32 *b = target;
++    f32 dx = b[0] - a[0];
++    f32 dy = b[1] - a[1];
++    f32 dz = b[2] - a[2];
++    f32 sum;
+ 
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf17, $vf16\n"
+-        "vmul.xyz $vf17, $vf16, $vf16\n"
+-        "vaddx.z $vf17, $vf17, $vf17x\n"
+-        "vaddy.z $vf17, $vf17, $vf17y\n"
+-        "vsqrt Q, $vf17z\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        : : "r"(from), "r"(target), "r"(distance) : "memory");
+-    return distance[0];
++    /* vsub, vmul, then z + x, then + y, and the square root (VU0) */
++    sum = dz * dz + dx * dx;
++    sum = sum + dy * dy;
++    return sqrtf(sum);
+ }
+ 
+ // Horizontal (XZ-plane) distance between origin and target.
+@@ -71,20 +68,17 @@ float Effect_DistanceXZ(float *origin, float *target) {
+     target_at_origin_height.y = origin[1];
+     target_at_origin_height.z = target[2];
+     target_at_origin_height.w = 0;
+-    __asm__ volatile(
+-        "lqc2 $vf16, 0(%0)\n"
+-        "lqc2 $vf17, 0(%1)\n"
+-        "vsub.xyz $vf16, $vf17, $vf16\n"
+-        "vmul.xyz $vf17, $vf16, $vf16\n"
+-        "vaddx.z $vf17, $vf17, $vf17x\n"
+-        "vaddy.z $vf17, $vf17, $vf17y\n"
+-        "vsqrt Q, $vf17z\n"
+-        "vwaitq\n"
+-        "vaddq.x $vf16, $vf0, Q\n"
+-        "sqc2 $vf16, 0(%2)\n"
+-        :
+-        : "r"(origin), "r"(&target_at_origin_height), "r"(&out)
+-        : "memory");
++    {
++        f32 dx = target_at_origin_height.x - origin[0];
++        f32 dy = target_at_origin_height.y - origin[1];
++        f32 dz = target_at_origin_height.z - origin[2];
++        f32 sum;
++
++        /* vsub, vmul, then z + x, then + y, and the square root (VU0) */
++        sum = dz * dz + dx * dx;
++        sum = sum + dy * dy;
++        out.x = sqrtf(sum);
++    }
+     return out.x;
+ }
+ 
+diff --git a/src/game/effect/fx_kinds.c b/src/game/effect/fx_kinds.c
+index 9b8b30281da303ac5cf091416e88ce12ab57a4b5..eebae5aaca5e7ac0080cc6be39979890ce1b69bd 100644
+--- a/src/game/effect/fx_kinds.c
++++ b/src/game/effect/fx_kinds.c
+@@ -9,6 +9,10 @@
+ #include "core/game.h"
+ #include "model/linked_point.h"
+ #include "collision/collision.h"
++#include <stdlib.h>
++#include <string.h>
++#include <libvu0.h>
++#include <sifrpc.h>
+ 
+ #define TWO_PI 6.2831855f
+ #define PI 3.1415927f
+@@ -21,8 +25,6 @@ void Vector_Copy(void *dst, void *src);
+ void Vector_Add(void *dst, void *lhs, void *rhs);
+ void Vector_Scale(void *dst, void *src, float scale);
+ void Vector_Subtract(void *dst, void *lhs, void *rhs);
+-void sceVu0RotMatrixY(void *, void *, float);
+-void sceVu0ApplyMatrix(void *, void *, void *);
+ /* Wraps an angle into -pi..pi. */
+ static inline f32 wrap_angle(f32 angle) {
+     angle = angle - (float)(int)(angle / TWO_PI) * TWO_PI;
+@@ -35,20 +37,14 @@ static inline f32 wrap_angle(f32 angle) {
+ }
+ s16 Effect_FramesToImpact(float, void *, void *, void *);
+ void EffectHit_CheckAndEnd(EffectActor *effect, void *state);
+-void sceVu0AddVector(void *, void *, void *);
+ extern int ground_fan_index;
+ int Collision_FindFloorBelow(f32, void *);
+ typedef float Mat[4][4] __attribute__((aligned(16)));
+-int rand(void);
+-void sceVu0RotMatrixX(void *, void *, float);
+ void Vector_Normalize(void *, void *);
+-extern void (*effect_kind_handlers[][2])();
+-extern u8 player_weapon[];
++extern EffectKindHandlers effect_kind_handlers[];
+ extern int bolt_start_count;
+ void Model_UpdateSkinnedBonePoints(ModelInstance *);
+ char *Model_GetSkinnedBonePoint(char *, u32);
+-void sceVu0RotMatrixZ(void *, void *, float);
+-void *memset(void *, int, u32);
+ extern int turn_fan_index;
+ void Collision_CastRayAtMap(f32, void *, void *);
+ int Sound_PlayMapAt(u8 sound, float *position);
+@@ -56,13 +52,14 @@ int Collision_FindWaterBelow(f32, void *);
+ extern GameStatus game_status;
+ extern u16 pad_state[];
+ extern u16 attack_button;
+-int EffectHit_FindAimedEntity(void *, void *, void *);
++Entity *EffectHit_FindAimedEntity(void *, void *, void *);
+ extern s64 light_point_start_target[2];
+ /* LinkedPoint_StartDefault called as returning s16 (the caller keeps the handle in a halfword) */
+ // match: only this type matches; model/linked_point.c defines it as returning int
+ #define LINKED_POINT_START_S16 ((s16(*)(f32, void *, void *))LinkedPoint_StartDefault)
+-extern u8 dark_sanctuary_idol_of_sorrow_placed[];
+-extern u8 D_0034AFD6[];
++extern u8 map_script_flags[0x2000];
++#define dark_sanctuary_idol_of_sorrow_placed (map_script_flags + 0x989) /* map 038 [9] */
++#define D_0034AFD6 (map_script_flags + 0x1946)
+ void Sound_PlaySw(int mode);
+ /* 0x402D50 seven (weapon, effect param) pairs EffectWeaponSound_Start matches to play sound 3 */
+ u32 weapon_sound_pairs[14] = { '%', '[', '&', ']', '\'', '^', '(', '\\', ')', '`', ',', 'a', '.', 'b' };
+@@ -90,7 +87,7 @@ void EffectBolt_StartBySurface(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectBolt_StartWithTargeters(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectBolt_StartCounted(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectBolt_Update(EffectActor *actor);
+-void EffectFollowPose_Start(EffectActor *effect);
++void EffectFollowPose_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectFollowPose_Update(EffectActor *effect);
+ void EffectFollowPosition_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectFollowPosition_Update(EffectActor *effect);
+@@ -152,7 +149,7 @@ void EffectLight_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectLight_Update(EffectActor *effect);
+ void EffectSpiral_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectSpiral_Update(EffectActor *effect);
+-void EffectScatterAroundPlayer_Start(EffectActor *effect);
++void EffectScatterAroundPlayer_Start(EffectActor *effect, EffectSlot *spawn_slot);
+ void EffectScatterAroundPlayer_Update(EffectActor *effect);
+ void EffectDrop_Start(EffectActor *actor, EffectSlot *spawn_slot);
+ void EffectDrop_Update(EffectActor *effect);
+@@ -555,7 +552,7 @@ void EffectHandover_Update(EffectActor *effect) {
+             }
+             EffectHandover_StartNext(effect, &effect->model->position, effect_id);
+         } else if (hits & 4) {
+-            if (effect_kind_handlers[effect->def->kind_index][0] == EffectHandover_StartBySurface && (COLLISION_RESULT->floor_material == 3 || COLLISION_RESULT->floor_material == 5)) {
++            if (effect_kind_handlers[effect->def->kind_index].start == EffectHandover_StartBySurface && (COLLISION_RESULT->floor_material == 3 || COLLISION_RESULT->floor_material == 5)) {
+                 EffectHandover_StartNext(effect, &effect->model->position, effect->def->child_effect_id);
+             } else {
+                 EffectHandover_StartNext(effect, &effect->model->position, effect->def->end_effect);
+@@ -650,7 +647,7 @@ void EffectBolt_StartCounted(EffectActor *effect, EffectSlot *spawn_slot) {
+     s16 angle;
+ 
+     motion = (TurningMotion *)&effect->motion;
+-    if (player_weapon[0] != 0x26) {
++    if (player_state.weapon != 0x26) {
+         Effect_FreeSpawner(spawn_slot);
+         return;
+     }
+@@ -692,7 +689,7 @@ void EffectBolt_Update(EffectActor *actor) {
+         if (hit != 0 && actor->def->end_effect != 0xFFFF) {
+             if (hit & 2) {
+                 Effect_Spawn(actor->def->end_effect, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
+-            } else if ((effect_kind_handlers[actor->def->kind_index][0] == EffectBolt_StartBySurface || effect_kind_handlers[actor->def->kind_index][0] == EffectBolt_StartWithTargeters) && (COLLISION_RESULT->floor_material == 3 || COLLISION_RESULT->floor_material == 5)) {
++            } else if ((effect_kind_handlers[actor->def->kind_index].start == EffectBolt_StartBySurface || effect_kind_handlers[actor->def->kind_index].start == EffectBolt_StartWithTargeters) && (COLLISION_RESULT->floor_material == 3 || COLLISION_RESULT->floor_material == 5)) {
+                 Effect_Spawn(actor->def->interval, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
+             } else {
+                 Effect_Spawn(motion->effect_id, &actor->model->position, &actor->model->rotation, actor->owner_entity, actor->effect_param, actor->owner);
+@@ -704,7 +701,7 @@ void EffectBolt_Update(EffectActor *actor) {
+ }
+ 
+ /* Kind 40 start: keeps the target's position and rotation; the model is not placed. */
+-void EffectFollowPose_Start(EffectActor *effect) {
++void EffectFollowPose_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     Vector_Copy(&effect->motion, &effect->target->model->position);
+     Vector_Copy(&effect->motion.unk10, &effect->target->model->rotation);
+ }
+@@ -2019,7 +2016,7 @@ void EffectSpiral_Update(EffectActor *effect) {
+ /* Kind 86 start: at def->offset_base turned by the player's heading, plus a random spread, randomly turned,
+    def->radius_half off the floor found within 1500 of it; ends where there is none. Velocity.y is
+    def->speed. */
+-void EffectScatterAroundPlayer_Start(EffectActor *effect) {
++void EffectScatterAroundPlayer_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     Vector4 offset;
+     f32 matrix[16];
+     EffectMotion *motion;
+@@ -2040,8 +2037,7 @@ void EffectScatterAroundPlayer_Start(EffectActor *effect) {
+     offset.y = 3000.0f;
+     offset.x = 0.0f;
+     offset.z = 0.0f;
+-    // match: argument order as (position, direction, scale) schedules the argument moves as retail does
+-    ((void (*)(void *, void *, f32))Collision_CastRayAtMap)(&effect->model->position, &offset, 1.0f);
++    Collision_CastRayAtMap(1.0f, &effect->model->position, &offset);
+     if (COLLISION_RESULT->hit != 0) {
+         effect->model->position.y = COLLISION_RESULT->point[1] - (f32)effect->def->radius_half;
+     } else {
+diff --git a/src/game/effect/fx_shared.c b/src/game/effect/fx_shared.c
+index 4a6bbd258a4f189164f20bea79a7d2c8045c3d3d..7ccc176dd078b8b894052502ab76fbbe429ad2c8 100644
+--- a/src/game/effect/fx_shared.c
++++ b/src/game/effect/fx_shared.c
+@@ -4,10 +4,11 @@
+ #include "common.h"
+ #include "effect/effect.h"
+ #include "entity/entity.h"
++#include <math.h>
++#include <stdlib.h>
++#include <libvu0.h>
+ 
+ void Vector_Copy(void *, void *);
+-void sceVu0ScaleVectorXYZ(void *, void *, float);
+-void sceVu0AddVector(void *, void *, void *);
+ /* Wraps an angle into -pi..pi. */
+ static inline f32 wrap_angle(f32 angle) {
+     angle = angle - (float)(int)(angle / 6.2831855f) * 6.2831855f;
+@@ -19,15 +20,7 @@ static inline f32 wrap_angle(f32 angle) {
+     return angle;
+ }
+ int Attack_RunEffectHitCheck(void *effect);
+-void sceVu0RotMatrixX(float *, float *, float);
+-void sceVu0RotMatrixY(float *, float *, float);
+-void sceVu0ApplyMatrix(float *, float *, float *);
+ extern f32 identity_matrix[16];
+-float sqrtf(float);
+-float atan2f(float, float);
+-int rand(void);
+-double sin(double);
+-double cos(double);
+ #define TWO_PI 6.2831855f
+ #define PI 3.1415927f
+ void Vector_Normalize(void *dst, void *src);
+@@ -52,7 +45,7 @@ void EffectStart_TurnModel(EffectActor *effect, EffectSlot *spawn_slot);
+ static int EffectKeys_FindStage(void *effect, int *frames);
+ static void EffectKeys_Weights(f32 *result, f32 *eased, int value, int min, int max, int mode);
+ void EffectSteer_Toward(Vector4 *velocity, Vector4 *direction, float speed, float turn);
+-int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
++Entity *EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference);
+ Entity *EffectHit_FindNearestEntity(EffectActor *effect, Vector4 *position, Vector4 *unused_rotation);
+ 
+ /* Sets the model's scale from the definition's scale keys; returns the key reached, or -1 while it blends
+@@ -342,7 +335,7 @@ void EffectSteer_Toward(Vector4 *velocity, Vector4 *direction, float speed, floa
+ 
+ /* The entity within def->interval of position that lies most nearly in the direction of the reference
+    angles, inside def->unkE4 of pitch and def->unkE8 of heading; 0 when none. */
+-int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference) {
++Entity *EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *reference) {
+     Vector4 angles;
+     Vector4 offset;
+     Entity *entity;
+@@ -381,7 +374,7 @@ int EffectHit_FindAimedEntity(EffectActor *effect, Vector4 *position, Vector4 *r
+             best = entity;
+         }
+     }
+-    return (int)best;
++    return best;
+ }
+ 
+ /* The nearest entity within def->interval of position that can be targeted, or NULL. */
+diff --git a/src/game/effect/item_effect.c b/src/game/effect/item_effect.c
+index 2c58a35e31eda01ff580a5c940e49998cb773304..92b11ef46c634d15938ff3a696523765f6bd187c 100644
+--- a/src/game/effect/item_effect.c
++++ b/src/game/effect/item_effect.c
+@@ -3,29 +3,28 @@
+ #include "core/game.h"
+ #include "gfx/gs.h"
+ #include "model/model.h"
++#include "map/map.h"
+ #include "player/player.h"
+ #include "ui/splash.h"
+ #include "ui/message.h"
++#include <stdio.h>
++#include <string.h>
+ 
+-extern char map_draw_slot_blocks[];
++extern MapDrawState map_draw_state;
+ extern LevelRecord weapon_level_records[];
+ extern GameStatus game_status;
+ extern PlayerState player_state;
+ extern EventRunner view_ray_status;
+-extern ItemUseEffectDef item_effect_defs_by_kind[];
+ extern char item_effect_small_model_path[];
+ extern char item_effect_small_motion_path[];
+ extern char item_effect_large_model_path[];
+ extern char item_effect_large_motion_path[];
+ extern char item_effect_texture_path_format[];
+-extern u8 player_weapon_step[];
+ extern int current_map_slot;
+ extern int item_effect_area_size;
+ extern char *item_effect_area;
+ extern PlayerItemDef weapon_defs[];
+ 
+-void *memset(void *, int, u32);
+-int sprintf(char *, char *, ...);
+ int File_Open(char *, int, int);
+ int File_Close(int);
+ int File_Read(int, void *, int);
+@@ -104,8 +103,8 @@ void (*item_effect_steps[4])(void) = {
+ };
+ 
+ static inline char *align16(char *address) {
+-    if ((int)address & 0xF) {
+-        address -= ((int)address & 0xF) - 0x10;
++    if ((uptr)address & 0xF) {
++        address -= (int)((uptr)address & 0xF) - 0x10;
+     }
+     return address;
+ }
+@@ -192,7 +191,7 @@ void ItemEffect_Load(void) {
+ }
+ 
+ /* Clears the item use effect state. */
+-int ItemEffect_Reset(void) { // match: GameLoop_ResetSystems only matches with it declared to return a value
++void ItemEffect_Reset(void) {
+     item_effect_active = 0;
+     item_effect_kind = 0;
+     item_effect_step = 0;
+@@ -215,18 +214,18 @@ void ItemEffect_Start(int kind, int marked) {
+     }
+     item_effect_pending_effects = item_effect_active = 1;
+     item_effect_marked = marked;
+-    item_effect_def = &item_effect_defs_by_kind[kind];
++    item_effect_def = &item_effect_defs[kind - 0x46]; /* item_effect_defs_by_kind[kind] */
+     item_effect_kind = kind;
+     item_effect_step = 0;
+     if (kind >= 0x4D) {
+         model = item_effect_model_b;
+         model->texture_slot = 2;
+-        model->texture_data = (int)item_effect_textures[kind - 0x4C];
++        model->texture_data = (sptr)item_effect_textures[kind - 0x4C];
+         item_effect_model = model;
+     } else {
+         model = item_effect_model_a;
+         model->texture_slot = 2;
+-        model->texture_data = (int)item_effect_textures[kind - 0x46];
++        model->texture_data = (sptr)item_effect_textures[kind - 0x46];
+         item_effect_model = model;
+     }
+     item_effect_model->draw_parts = Model_DrawPosedDepthByPart;
+@@ -240,8 +239,8 @@ void ItemEffect_Start(int kind, int marked) {
+     Vector_Copy(&item_effect_model->rotation, &player_state.rotation);
+     item_effect_model->scale_x = item_effect_model->scale_y = item_effect_model->scale_z = 1.0f;
+     item_effect_model->scale_w = 1.0f;
+-    item_effect_model->light_block = (s32)item_effect_light_block;
+-    item_effect_model->fog_block = &map_draw_slot_blocks[current_map_slot * 0x400];
++    item_effect_model->light_block = (sptr)item_effect_light_block;
++    item_effect_model->fog_block = map_draw_state.fog_blocks[current_map_slot];
+     for (i = 0; i < item_effect_model->part_count; i++) {
+         if (i == 0) {
+             MODEL_PART_FLAG_BITS(&item_effect_model->parts[0])->bit41 = TRUE;
+@@ -307,7 +306,7 @@ void ItemEffect_StepRequestGameStatus(void) {
+ 
+ /* Item-effect step 1: waits until the confirmation overlay flag is clear. */
+ void ItemEffect_StepWaitOverlay(void) {
+-    if (player_weapon_step[0] == 0) {
++    if (player_state.item_action_step == 0) {
+         game_status.update_hold_flags = 0xC5F;
+         game_status.effect_owner = item_effect_model;
+         item_effect_step++;
+@@ -331,8 +330,8 @@ void ItemEffect_StepFadeOut(void) {
+ 
+         item_effect_active = 0;
+         item_effect_step = 0;
+-        status_words[0x30 / 4] = 0; /* unk30 */
+-        status_words[0x40 / 4] = 0; /* unk40 */
++        game_status.update_hold_flags = 0;
++        game_status.effect_owner = NULL;
+         item_effect_model = NULL;
+         item_effect_load_pad = 0;
+         item_effect_def = NULL;
+diff --git a/src/game/effect/item_effect.h b/src/game/effect/item_effect.h
+index 7ca4d9ce9d7a24d109a196a3906fe3f20a316e6d..ac91aa3e77c8bb629a87993e64aa1b577cf47109 100644
+--- a/src/game/effect/item_effect.h
++++ b/src/game/effect/item_effect.h
+@@ -5,7 +5,7 @@
+ #include "common.h"
+ 
+ void ItemEffect_Load(void);
+-int ItemEffect_Reset(void);
++void ItemEffect_Reset(void);
+ void ItemEffect_Start(int kind, int marked);
+ void ItemEffect_Update(void);
+ void ItemEffect_Draw(void);
+diff --git a/src/game/effect/shot.c b/src/game/effect/shot.c
+index 1cdbe0c70cbce7717d3a4f660db50768151a4c52..576d7ed9f7bcb04fc09b4c29ced9d411d5e19353 100644
+--- a/src/game/effect/shot.c
++++ b/src/game/effect/shot.c
+@@ -1,16 +1,17 @@
+ #include "effect/shot.h"
++#include "entity/entity.h"
++#include <string.h>
+ 
+-void *memset(void *, s32, u32);
+ 
+ extern s32 dark_one_hits_left;
+ 
+ #define SHOT_RING_SLOTS 0x100
+-#define SHOT_SLOT_SIZE 0x30
++#define SHOT_SLOT_SIZE sizeof(PlayerShot) /* 0x30 on the PS2; filled as a PlayerShot, read as an Unk1B1470Extra */
+ 
+ static s32 shot_ring_next;                                  /* 0x44710C next slot of shot_ring */
+ static s32 second_ring_next;                                /* 0x447110 next slot of second_ring */
+-static char shot_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE];   /* 0x574348 the shots the player and entities launch */
+-static char second_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE]; /* 0x577348 the same, nothing claims from it */
++static char shot_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE] __attribute__((aligned(16)));   /* 0x574348 the shots the player and entities launch */
++static char second_ring[SHOT_RING_SLOTS * SHOT_SLOT_SIZE] __attribute__((aligned(16))); /* 0x577348 the same, nothing claims from it */
+ 
+ /* Empties both rings of shot slots. */
+ void Shot_ClearAll(void) {

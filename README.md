@@ -1,177 +1,60 @@
-# kfiv-decomp
+# holyland
 
-A matching decompilation of **King's Field: The Ancient City** (*King's Field IV*;
-FromSoftware, 2001) for the PlayStation 2. The target is the USA retail boot
-ELF, `SLUS_203.18` (SLUS-20318). The goal is C source that the original
-toolchain compiles back into the identical executable.
+A native PC port of **King's Field: The Ancient City** (*King's Field IV*; FromSoftware, 2001), built
+from the [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp) decompilation of the PlayStation 2
+game (USA, SLUS-20318). The game's own code is compiled for Windows and Linux as a 64-bit program;
+`port/` stands in for the PS2 under it.
 
-[![code](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-code.json)](docs/progress/) [![functions](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-functions.json)](docs/progress/) [![game named](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-named.json)](docs/progress/) [![structs recovered](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Voicedrew11/kfiv-decomp/main/docs/progress/badge-structs.json)](docs/progress/)
+> No game data is in this repository. When the port can load the game, you will need your own disc
+> image.
 
-**Status:** the build reproduces the retail ROM image (all bytes the console
-loads) **byte for byte**. The SDK, libc, libm and libgcc code is in C (181
-units in `src/sce/`, about 12 % of `.text`); the game itself is still
-splat-disassembled assembly. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Status: step 0.** The game code compiles and links on Windows and Linux, and runs its start-up
+until it asks for the disc. Nothing is drawn or heard yet. Next come the disc, the thread
+scheduler and the pad (step 1: boot to a new game), then graphics and sound. See
+[`docs/port/PLAN.md`](docs/port/PLAN.md) for the plan.
 
-> No disc data is in this repository. You supply your own disc image; the
-> build extracts the ELF from it and checks its SHA-1.
+## Building
 
-## Quickstart
+You need CMake 3.20 or newer, Ninja, and clang or gcc. The game code is GNU C, so MSVC's `cl` cannot
+build it.
 
-```sh
-mkdir -p baserom
-ln -s "/path/to/King's Field The Ancient City.iso" baserom/kfiv_us.iso
-./build.sh
-```
-
-`build.sh` runs whatever is missing:
-
-1. `tools/setup.sh` creates `.venv`, fetches the period compilers and a
-   pinned objdiff-cli into `tools/cc/`, and builds GNU ld 2.10 and dvp-as
-   from source.
-2. `tools/extract_elf.py` writes `baserom/us/SLUS_203.18` and
-   `baserom/us/kfiv.rom` (the ELF's load segment) and checks both SHA-1s.
-3. `tools/split.py` runs splat and writes `asm/`.
-4. `tools/gen_ninja.py` and `ninja` assemble, compile and link with ld 2.10,
-   then check the ROM SHA-1.
-
-Host requirements: 64-bit Linux with 32-bit glibc (the compilers are i386
-binaries), a host gcc with `-m32` support, flex, bison, curl, git and Python 3.
-Fedora: `sudo dnf install glibc-devel.i686 libstdc++.i686 flex bison`.
-
-| file | SHA-1 |
-| --- | --- |
-| `SLUS_203.18` | `8031536201dec92889d3013ca80f09374571d626` |
-| `kfiv.rom` (PT_LOAD bytes, i.e. `objcopy -O binary`) | `87615665d1a4a88e57942126a03ab7ad03cd42c6` |
-
-## Toolchain
-
-KFIV is plain C. It was built with the same toolchain and the same Sony SDK
-release as ICO, whose decompilation
-([nathanialf/ico](https://github.com/nathanialf/ico)) is complete. More than
-680 SDK, libc and libgcc functions compiled from ICO's reconstructed sources
-are **byte-identical** to code in KFIV.
-
-| tool | role |
-| --- | --- |
-| ee-gcc 2.9-ee-991111-01 (`-O2`) | compiles everything |
-| ee-as 2.9-991111 (bundled) | assembles libc, libm and libgcc, and splat's asm |
-| ee-as 2.9-991111, delay-slot filling (one-byte patch built by `tools/compile_c.sh`) | assembles the game's C |
-| SCE ee-as 2.10-ee-001003-1 (from ee-gcc 2.96) | assembles Sony's SDK libraries |
-| GNU ld 2.10 + R5900/DVP patches | links |
-| dvp-as | the VU1 microprograms (not wired in yet) |
-
-SDK library versions in the binary: libkernl, libcdvd and libmc 2.2.4;
-libgraph, libdma, libpad, libipu, libmpeg and libsdr 2.2.0.
-
-## Layout
-
-```
-config/    splat yaml template, symbol_addrs.txt, linker-script template,
-           sha1sums.txt
-include/   macro.inc (splat asm macros for ee-as 2.9)
-src/       C sources as they are decompiled (src/game/, and src/sce/ for
-           the libraries)
-src/game/  the game, a folder per subsystem; headers are included by
-           their path under src/game ("entity/entity.h"):
-             core/        start-up, main loop, game state, memory, files,
-                          timers, ini settings
-             debug/       debug tools, text log, host0 dumps
-             math/        angles, vectors, VU0 helpers, shared matrices
-             gfx/         GS packets and drawing, textures, screen effects,
-                          movies
-             model/       models, motions, model matrices, linked points
-             map/         map loading, changing, set-up, drawing state
-             map_object/  map objects (doors, chests, switches ...) and
-                          their tables
-             collision/   collision tests and the map's collision meshes
-             script/      the map script interpreter and its commands
-             entity/      entity pools, the shared AI, entity events, NPCs
-             enemy/       one file per monster
-             effect/      effects, effect kinds, shots, item effects
-             player/      the player: update, status, items, attacks
-             item/        item tables, items lying on maps, gold
-             input/       pads and buttons
-             sound/       the sound driver and the game's sound layer
-             ui/          menus, HUD, messages, title, trade screens,
-                          map viewer
-             save/        memory card and save files
-           main.c, common.h and the not-yet-named func_*.c files sit
-           at the top
-tools/     setup, extraction, carve, split, build generation, matching and
-           check scripts
-docs/      roadmap and notes
-asm/  baserom/  build/  tools/cc/  .venv/    generated or local, gitignored
-```
-
-## Progress
+**Windows:** use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw), or LLVM's clang, with it on
+`PATH`:
 
 ```sh
-.venv/bin/ninja progress
+cmake --preset windows-clang
+cmake --build out/windows-clang
+out/windows-clang/kf4.exe
 ```
 
-writes `build/report.json` with objdiff-cli: matched code and data, by bytes
-and by function, overall and for the `game` and `sce` (libraries)
-categories. `tools/gen_ninja.py` writes the `objdiff.json` it reads, one unit
-per entry in the link order. Each C unit is compared against a target object
-assembled from splat's per-function asm of the retail code, so the objdiff
-GUI also works on this checkout. A checkout set up before objdiff-cli was
-added needs `tools/setup.sh` run once more.
+**Linux:**
 
-`ninja progress` also prints the summary and writes `build/progress.html`, a
-local per-function page (not committed). Before that it runs
-`tools/readability_scan.py`, which measures how readable the game C is past
-its function names: structs with no `unkXX`/`padXX` field left, named fields,
-globals and flag bits, and counts of casts, `// match:` comments, gotos and
-long comments still to clean up. `tools/progress.py --write` refreshes
-`docs/progress/` (a summary without per-function data, shields badges and a
-static page) and the table below; commit those with each batch of work.
-`docs/progress/index.html` can be served with GitHub Pages (Settings → Pages →
-`main`, `/docs`).
+```sh
+cmake --preset linux-gcc          # or linux-clang
+cmake --build out/linux-gcc
+out/linux-gcc/kf4
+```
 
-<!-- progress:start -->
-| | code | linked | functions | named | units linked |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| overall | 99.58% | 99.58% | 3837 / 3839 | 3771 / 3839 | 411 / 455 |
-| game | 99.53% | 99.53% | 2990 / 2991 | 2945 / 2991 | 207 / 249 |
-| sce | 100.00% | 100.00% | 847 / 848 | 826 / 848 | 204 / 206 |
+For now the program prints the PS2 calls it reaches that the PC does not do yet (`[todo] ...`), then
+waits for the disc. Stop it with Ctrl+C.
 
-| game readability | | |
-| --- | ---: | ---: |
-| structs recovered | 33.93% | 209 of 616 |
-| struct fields named | 70.88% | 2675 of 3774 |
-| field uses named | 90.04% | 52358 of 58152 |
-| globals named | 85.69% | 1258 of 1468 |
-| bit operations named | 4.59% | 134 of 2919 |
-| function-pointer casts | 1455 | left |
-| `// match:` comments | 1050 | left |
-| gotos | 79 | left |
-| multi-line comments | 1800 | left |
-<!-- progress:end -->
+## Working on it
 
-## Contributing
+- [`docs/port/README.md`](docs/port/README.md): how the port is laid out, and how it stays in step
+  with the decomp.
+- [`docs/port/RULES.md`](docs/port/RULES.md): how the game code is changed for the PC (addresses
+  in integers, file and save structs, inline asm, the SDK).
+- `tools/patches.py`: `apply` the patches into `work/`, `save` edits back into `patches/`, and
+  `upgrade` the decomp pin.
+- `tools/port_census.py`: what still stops each folder of `src/game` compiling.
+- `tools/port_abi_check.py`: functions declared with a different signature than they are defined
+  with. These break on the PC even when they compile.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md): pick a function, write it in C,
-check it with `tools/match.py`, run `./build.sh`, open a pull request.
+The decomp is a git submodule in `decomp/`, pinned to one commit, and the PC edits to it are patches
+in `patches/`. Clone with `git clone --recurse-submodules`, or run `git submodule update --init`.
 
-## How units get into the build
-
-`tools/carve.py` compiles every unit under `src/sce/` and `src/game/`, places
-each in the retail ELF with `tools/lib_layout.py` (every section's bytes must
-match) and writes `build/kfiv.us.yaml` (the template `config/kfiv.us.yaml`
-plus a subsegment per unit), `build/link_order.us.txt` and
-`build/symbol_addrs.carve.txt`. `./build.sh` runs it whenever `src/` or
-`config/` changed, and splits again when the units changed. A unit owns its
-stretch of `.text`, `.data`, `.rodata`, the float literal pool `.lit4`,
-`.sdata` and `.bss`; the stretches between units stay assembly. Adding a unit is adding
-its source file. `tools/tu_scan.py` reports which game functions must
-share a unit (see [`docs/ROADMAP.md`](docs/ROADMAP.md), step 3).
-
-## Credits and licence
-
-This repository is MIT-licensed ([`LICENSE`](LICENSE)). It holds no game
-data; the game itself belongs to its rights holders.
-
-The binutils patches, the obstack shim (`tools/period_obstack.c`) and the
-toolchain recipe come from the ico decompilation (MIT, © the ico
-decompilation contributors; notice in [`tools/LICENSE.ico`](tools/LICENSE.ico)). This project has no affiliation with
-FromSoftware or Sony Interactive Entertainment.
+**The decomp is read-only in this repository.** Don't edit `decomp/` or the compiled copy in
+`out/<preset>/decomp_src/` (where compiler errors point). Make game-code changes in `work/` with
+`tools/patches.py apply`, then `tools/patches.py save` them into `patches/`. See
+[`docs/port/RULES.md`](docs/port/RULES.md). Fixes to the reconstruction itself go to kfiv-decomp first. The
+decomp's matching PS2 build (`build.sh`) is documented there.

@@ -38,3 +38,9 @@ __pycache__/
 .idea/
 *.swp
 .splache
+
+# --- PC port build output ---
+out/
+
+# --- tools/patches.py working copy ---
+work/
