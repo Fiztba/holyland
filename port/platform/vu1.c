@@ -1,29 +1,41 @@
 /* VU1 on the CPU: an interpreter for the microprograms the game uploads (game/data/vudata.c; see
-   tools/vu1_disasm.py for their text).
+   tools/vu1_disasm.py for their text). It knows every VU1 instruction; an encoding that is none of
+   them stops the program (PORT_FATAL), as does an instruction the game's programs could not run.
 
    The game's microprograms are software-pipelined: they issue an instruction and use its result a
    fixed number of cycles later, and in places they rely on reading the old value before a result is
    due. So this counts cycles as VU1 does (one instruction pair a cycle, plus the stalls the hardware
    inserts) and makes each result visible when VU1 would:
-   - VF registers: an FMAC result (upper instructions, and LQ, MOVE, MR32, MFIR, MFP) is due 4 cycles
-     after issue. A read before then stalls until it is due, as on VU1, so the value read is always
-     the new one; only the cycle count moves.
+   - VF registers: an FMAC result (upper instructions, and LQ, MOVE, MR32, MFIR, MFP, RGET, RNEXT) is
+     due 4 cycles after issue. A read before then stalls until it is due, as on VU1, so the value
+     read is always the new one; only the cycle count moves.
+   - VI registers: ILW and ILWR are due 4 cycles after issue, and an instruction that reads the
+     register before then stalls. Every other VI write is immediate, but see the branches below.
    - Q: DIV and SQRT are due 7 cycles after issue, RSQRT 13. Until then Q keeps its old value (there
-     is no stall), WAITQ waits for it, and a second divide waits for the first.
-   - P: the EFU result is due after the instruction's latency (ESADD 11); MFP reads the old P until
-     then.
-   - The clip flag: each CLIP shifts the flag at once, but FCAND/FCEQ/FCOR/FCGET see a CLIP's result
-     only 4 cycles after it was issued.
+     is no stall), WAITQ waits for it, and a second divide waits for the first. The divide's I and D
+     status bits change when Q does.
+   - P: each EFU instruction has its own latency (ESADD 11 ... EATAN 54). MFP reads the old P until
+     the result is due. WAITP and the next EFU instruction stall until one cycle before it is due,
+     and P is written then.
+   - The flags: the MAC and status flags an FMAC instruction sets, the clip flag a CLIP or FCSET
+     sets, and the sticky bits FSSET sets are seen by FMxxx, FSxxx, FCxxx 4 cycles after issue.
    Within a pair the upper and the lower instruction both read their operands before either writes;
    when both write the same VF register the lower one's write is dropped. The I register an upper
    instruction reads is the one before its own pair's LOI.
 
-   Floats follow VU1 where it matters for these programs: no infinities or NaNs (an exponent of 255 is
-   read as the largest float), denormals read and write as zero, and arithmetic rounds toward zero.
+   Floats are VU floats, not IEEE ones. An exponent of 255 is an ordinary exponent, so there are no
+   infinities or NaNs and the largest value is 0x7FFFFFFF (about 2^129); denormals read as zero.
+   Arithmetic rounds toward zero. A result too large is +-0x7FFFFFFF and sets O, one too small is
+   +-0 and sets U (and Z). Division by zero gives +-0x7FFFFFFF and sets D (I for 0/0). The arithmetic
+   is IEEE's rounded toward zero; the PS2's adder can differ from that in the last bit, which is not
+   modelled.
 
-   VI writes are immediate, with one exception: a conditional branch reads the VI register an
-   integer op in the instruction just before it wrote as it was before that op. Of the game's
-   programs only the one at 0x700 relies on it (its loop at 0x7BE).
+   Branches: a conditional branch reads its VI registers early. When the instruction just before it
+   wrote one of them with an integer op (IADD ... ISUBIU, LQI/LQD/SQI/SQD's step, MTIR, XTOP,
+   XITOP), the branch sees the value the register had 4 cycles before the branch, before every
+   write in that window (PCSX2's microVU, after hardware tests). The flag instructions' writes to a
+   VI register, and an ILW (which stalls the branch), are seen at once. Of the game's programs only
+   the one at 0x700 relies on it (its loop at 0x7BE).
 
    Only the DMA controller's thread calls in here (port/platform/dmac.c). */
 #include <fenv.h>
@@ -38,10 +50,12 @@
 #define DATA_QWORDS 1024 /* 16 KB of data memory */
 #define REG_ACC 32       /* VF write target: the accumulator */
 #define REG_NONE 0xFF
+#define VU_MAX 0x7FFFFFFFu /* the largest VU float */
+#define SIGN 0x80000000u
 
 enum {
     /* upper: the generic arithmetic ones (op, second operand, destination) */
-    U_NOP, U_ARITH, U_ITOF, U_FTOI, U_ABS, U_CLIP, U_OPMULA, U_OPMSUB,
+    U_NOP, U_ARITH, U_ITOF, U_FTOI, U_ABS, U_CLIP, U_OPMULA, U_OPMSUB, U_UNKNOWN,
 };
 enum { A_ADD, A_SUB, A_MUL, A_MADD, A_MSUB, A_MAX, A_MINI };
 enum { B_FT, B_BC, B_Q, B_I };
@@ -50,12 +64,19 @@ enum {
     L_NOP, L_LOI, L_LQ, L_SQ, L_LQI, L_LQD, L_SQI, L_SQD, L_ILW, L_ISW, L_ILWR, L_ISWR,
     L_IADDIU, L_ISUBIU, L_IADD, L_ISUB, L_IADDI, L_IAND, L_IOR,
     L_MOVE, L_MR32, L_MTIR, L_MFIR, L_DIV, L_SQRT, L_RSQRT, L_WAITQ,
-    L_FCAND, L_FCSET, L_FCEQ, L_FCOR, L_FCGET,
+    L_FCAND, L_FCSET, L_FCEQ, L_FCOR, L_FCGET, L_FSAND, L_FSSET, L_FSEQ, L_FSOR, L_FMAND, L_FMEQ,
+    L_FMOR,
     L_B, L_BAL, L_JR, L_JALR, L_IBEQ, L_IBNE, L_IBLTZ, L_IBGTZ, L_IBLEZ, L_IBGEZ,
-    L_XTOP, L_XITOP, L_XGKICK, L_MFP, L_WAITP, L_ESADD, L_ERSADD, L_ELENG, L_ERLENG, L_ESQRT,
-    L_ERSQRT, L_ERCPR, L_ESUM, L_RINIT, L_RGET, L_RNEXT, L_RXOR,
+    L_XTOP, L_XITOP, L_XGKICK, L_MFP, L_WAITP,
+    /* the EFU, in the order of efu_latency */
+    L_ESADD, L_ERSADD, L_ELENG, L_ERLENG, L_EATANXY, L_EATANXZ, L_ESUM, L_ESQRT, L_ERSQRT,
+    L_ERCPR, L_ESIN, L_EATAN, L_EEXP,
+    L_RINIT, L_RGET, L_RNEXT, L_RXOR,
     L_UNKNOWN,
 };
+#define IS_EFU(lop) ((lop) >= L_ESADD && (lop) <= L_EEXP)
+/* cycles from issue until P has the result (the VU1 manual's EFU table) */
+static const uint8_t efu_latency[] = {11, 18, 18, 24, 54, 54, 12, 12, 18, 12, 29, 54, 44};
 
 typedef struct {
     uint8_t reg;  /* VF register */
@@ -66,9 +87,11 @@ typedef struct {
     /* upper */
     uint8_t uop, arith, bsrc, bc, udest, fd, fs, ft;
     uint8_t uwrite; /* VF register written (REG_ACC, REG_NONE) */
+    uint8_t uflags; /* sets the MAC and status flags */
     /* lower */
     uint8_t lop, ldest, lt, ls, ld, fsf, ftf;
     uint8_t lwrite; /* VF register written (REG_NONE) */
+    uint16_t vireads; /* VI registers read (bit n: vi n), for ILW's stall */
     int32_t imm;
     uint32_t i_value; /* LOI */
     uint8_t ebit;
@@ -76,10 +99,22 @@ typedef struct {
     VfUse reads[4];
 } VuInsn;
 
+/* A flag write in flight, seen when it is due. */
+enum { FW_FMAC, FW_CLIP, FW_STICKY };
 typedef struct {
-    uint32_t value;
     uint64_t due;
-} ClipWrite;
+    uint8_t kind;
+    uint16_t mac;   /* FW_FMAC: the MAC flag */
+    uint32_t value; /* FW_FMAC: Z S U O; FW_CLIP: the clip flag; FW_STICKY: FSSET's sticky bits */
+} FlagWrite;
+
+/* A write to a VI register, for the branches that read it (see the top) */
+typedef struct {
+    uint64_t cycle;    /* when the instruction issued */
+    uint8_t reg;
+    uint8_t flag_read; /* an FCxxx, FMxxx or FSxxx */
+    uint16_t old;      /* the value before */
+} ViWrite;
 
 static struct {
     uint32_t vf[32][4];
@@ -89,11 +124,19 @@ static struct {
     uint32_t q_next, p_next;
     uint64_t q_due, p_due;
     int q_pending, p_pending;
-    uint32_t clip;         /* every CLIP so far */
-    uint32_t clip_visible; /* what the flag instructions see */
-    ClipWrite clip_queue[8];
-    int clip_count;
+    uint32_t q_status_next; /* the divide's I and D bits */
+    uint32_t mac;           /* the MAC flag the flag instructions see */
+    uint32_t status;        /* the status flag they see */
+    uint32_t clip;          /* every CLIP and FCSET so far */
+    uint32_t clip_visible;  /* the clip flag they see */
+    FlagWrite flag_queue[16]; /* in issue order, so in due order */
+    unsigned flag_head, flag_count;
+    int32_t mac_queued; /* the MAC flag of the last FMAC write queued, -1 after an FSSET */
     uint64_t ready[32][4]; /* the cycle each VF field's last write is due */
+    uint64_t vi_ready[16]; /* the cycle each VI register's last ILW is due */
+    uint64_t vi_ready_last; /* the latest of them */
+    ViWrite vi_writes[8]; /* the last few, the newest at vi_write_count - 1 */
+    unsigned vi_write_count;
     uint64_t cycle;
     uint32_t pc;           /* where MSCNT continues */
     int decoded;           /* micro memory decoded since the last upload */
@@ -104,48 +147,148 @@ static uint8_t *data;     /* 0x1100C000 */
 static VuInsn code[MICRO_INSNS];
 
 /* ---- Floats --------------------------------------------------------------------------------- */
-static inline float as_float(uint32_t bits) {
-    float f;
+/* The MAC flag bits of the w field (x is << 3) that vf_round reports; S is the result's sign */
+#define FL_Z 0x0001u
+#define FL_U 0x0100u
+#define FL_O 0x1000u
 
-    if ((bits & 0x7F800000u) == 0) {
-        bits &= 0x80000000u;
-    } else if ((bits & 0x7F800000u) == 0x7F800000u) {
-        bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
+/* A VU float as a double, exactly: a denormal is +-0, and an exponent of 255 is a number. */
+static double vf_value(uint32_t bits) {
+    uint32_t e = (bits >> 23) & 0xFF;
+    uint64_t d;
+    double v;
+
+    if (e == 0) {
+        d = (uint64_t)(bits & SIGN) << 32;
+    } else {
+        d = ((uint64_t)(bits & SIGN) << 32) | ((uint64_t)(e + 896) << 52) |
+            ((uint64_t)(bits & 0x007FFFFFu) << 29);
     }
-    memcpy(&f, &bits, 4);
-    return f;
+    memcpy(&v, &d, 8);
+    return v;
 }
 
-static inline uint32_t as_bits(float f) {
+/* A result (already rounded toward zero in double) as a VU float, truncated to 24 bits; adds its Z,
+   U and O flags (FL_*) to *flags if asked for. */
+static uint32_t vf_round(double v, unsigned *flags) {
+    uint64_t d;
+    uint32_t sign;
+    int e;
+    unsigned fl = 0;
+
+    memcpy(&d, &v, 8);
+    sign = (uint32_t)(d >> 32) & SIGN;
+    e = (int)((d >> 52) & 0x7FF) - 896;
+    if (v == 0.0) {
+        fl = FL_Z;
+        d = sign;
+    } else if (e <= 0) {
+        fl = FL_U | FL_Z;
+        d = sign;
+    } else if (e > 255) {
+        fl = FL_O;
+        d = sign | VU_MAX;
+    } else {
+        d = sign | ((uint32_t)e << 23) | (uint32_t)((d >> 29) & 0x007FFFFFu);
+    }
+    if (flags) {
+        *flags |= fl;
+    }
+    return (uint32_t)d;
+}
+
+/* a + b, a - b or a * b (A_ADD, A_SUB, A_MUL), with its Z, U and O flags added to *flags. The common
+   case is done in IEEE floats, rounding toward zero as the rest: operands below exponent 255 and a
+   result that is neither zero, a denormal nor the largest IEEE float (where IEEE stops and the VU
+   goes on) give the same bits. Everything else is done again exactly. */
+static inline uint32_t vf_op(int op, uint32_t a, uint32_t b, unsigned *flags) {
+    if ((a & 0x7F800000u) != 0x7F800000u && (b & 0x7F800000u) != 0x7F800000u) {
+        uint32_t fa = (a & 0x7F800000u) ? a : a & SIGN, fb = (b & 0x7F800000u) ? b : b & SIGN;
+        float x, y, r;
+        uint32_t bits;
+
+        memcpy(&x, &fa, 4);
+        memcpy(&y, &fb, 4);
+        r = op == A_ADD ? x + y : op == A_SUB ? x - y : x * y;
+        memcpy(&bits, &r, 4);
+        if ((bits & 0x7F800000u) != 0 && (bits & 0x7FFFFFFFu) != 0x7F7FFFFFu) {
+            return bits;
+        }
+    }
+    if (op == A_ADD) {
+        return vf_round(vf_value(a) + vf_value(b), flags);
+    }
+    if (op == A_SUB) {
+        return vf_round(vf_value(a) - vf_value(b), flags);
+    }
+    return vf_round(vf_value(a) * vf_value(b), flags);
+}
+
+static inline uint32_t vf_add(uint32_t a, uint32_t b) {
+    return vf_op(A_ADD, a, b, NULL);
+}
+
+static inline uint32_t vf_sub(uint32_t a, uint32_t b) {
+    return vf_op(A_SUB, a, b, NULL);
+}
+
+static inline uint32_t vf_mul(uint32_t a, uint32_t b) {
+    return vf_op(A_MUL, a, b, NULL);
+}
+
+static inline int vf_is_zero(uint32_t bits) {
+    return (bits & 0x7F800000u) == 0;
+}
+
+/* a / b; by zero, the largest float with the quotient's sign (0/0 too) */
+static inline uint32_t vf_div(uint32_t a, uint32_t b) {
+    if (vf_is_zero(b)) {
+        return ((a ^ b) & SIGN) | VU_MAX;
+    }
+    return vf_round(vf_value(a) / vf_value(b), NULL);
+}
+
+/* the square root of |a| */
+static inline uint32_t vf_sqrt(uint32_t a) {
+    return vf_round(sqrt(fabs(vf_value(a))), NULL);
+}
+
+static inline uint32_t f32_bits(float f) {
     uint32_t bits;
 
     memcpy(&bits, &f, 4);
-    if ((bits & 0x7F800000u) == 0) {
-        bits &= 0x80000000u;
-    } else if ((bits & 0x7F800000u) == 0x7F800000u) {
-        bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
-    }
     return bits;
 }
 
-/* a < b for VU floats compared as sign and magnitude */
-static inline int vu_less(uint32_t a, uint32_t b) {
-    int32_t ka = (a & 0x80000000u) ? -(int32_t)(a & 0x7FFFFFFFu) : (int32_t)a;
-    int32_t kb = (b & 0x80000000u) ? -(int32_t)(b & 0x7FFFFFFFu) : (int32_t)b;
-
-    return ka < kb;
+/* MAX and MINI compare sign and magnitude, so -0 < +0, and return an operand unchanged */
+static inline uint32_t vf_max(uint32_t a, uint32_t b) {
+    if ((int32_t)a < 0 && (int32_t)b < 0) {
+        return (int32_t)a < (int32_t)b ? a : b;
+    }
+    return (int32_t)a > (int32_t)b ? a : b;
 }
 
-static uint32_t ftoi(uint32_t bits, float scale) {
-    float f = as_float(bits) * scale;
+static inline uint32_t vf_mini(uint32_t a, uint32_t b) {
+    return vf_max(a, b) == a ? b : a;
+}
 
-    if (f >= 2147483648.0f) {
+static uint32_t ftoi(uint32_t bits, int shift) {
+    double v = vf_value(bits) * (double)(1 << shift);
+
+    if (v >= 2147483648.0) {
         return 0x7FFFFFFFu;
     }
-    if (f <= -2147483648.0f) {
+    if (v <= -2147483648.0) {
         return 0x80000000u;
     }
-    return (uint32_t)(int32_t)f;
+    return (uint32_t)(int32_t)v;
+}
+
+/* ITOF0/4/12/15 and FTOI0/4/12/15: the fraction bits of the fixed-point side */
+static const int fixed_shift[4] = {0, 4, 12, 15};
+
+static uint32_t itof(uint32_t bits, int shift) {
+    return vf_round((double)(int32_t)bits / (double)(1 << shift), NULL);
 }
 
 /* ---- Decoding ------------------------------------------------------------------------------- */
@@ -186,6 +329,7 @@ static void decode_upper(VuInsn *in, uint32_t w) {
     } else if (op < 0x30) {
         if (op == 0x2E) {
             in->uop = U_OPMSUB;
+            in->uflags = 1;
             in->udest = 0xE;
             add_read(in, fs, 0xE);
             add_read(in, ft, 0xE);
@@ -222,6 +366,7 @@ static void decode_upper(VuInsn *in, uint32_t w) {
             return;
         } else if (sop == 0x2E) {
             in->uop = U_OPMULA;
+            in->uflags = 1;
             add_read(in, fs, 0xE);
             add_read(in, ft, 0xE);
             in->uwrite = REG_ACC;
@@ -230,7 +375,7 @@ static void decode_upper(VuInsn *in, uint32_t w) {
         } else if (sop == 0x2F) {
             in->uop = U_NOP;
             return;
-        } else if (sop >= 0x1C && sop < 0x2E) {
+        } else if (sop >= 0x1C && sop < 0x2E && sop != 0x2B) {
             static const struct { uint8_t arith, bsrc; } acc_qi[18] = {
                 {A_MUL, B_Q}, {0, 0}, {A_MUL, B_I}, {0, 0}, {A_ADD, B_Q}, {A_MADD, B_Q},
                 {A_ADD, B_I}, {A_MADD, B_I}, {A_SUB, B_Q}, {A_MSUB, B_Q}, {A_SUB, B_I}, {A_MSUB, B_I},
@@ -240,13 +385,14 @@ static void decode_upper(VuInsn *in, uint32_t w) {
             in->bsrc = acc_qi[sop - 0x1C].bsrc;
             in->uwrite = REG_ACC;
         } else {
-            in->uop = U_NOP;
+            in->uop = U_UNKNOWN;
             return;
         }
     } else {
-        in->uop = U_NOP;
+        in->uop = U_UNKNOWN;
         return;
     }
+    in->uflags = in->arith != A_MAX && in->arith != A_MINI;
     add_read(in, fs, dest);
     if (in->bsrc == B_FT) {
         add_read(in, ft, dest);
@@ -263,6 +409,7 @@ static void decode_lower(VuInsn *in, uint32_t w) {
     int top = (w >> 25) & 0x7F;
     int dest = (w >> 21) & 15;
     int it = (w >> 16) & 31, is = (w >> 11) & 31, id = (w >> 6) & 31;
+    uint16_t vs = (uint16_t)((1u << (is & 15)) & ~1u), vt = (uint16_t)((1u << (it & 15)) & ~1u);
 
     in->ldest = (uint8_t)dest;
     in->lt = (uint8_t)it;
@@ -277,11 +424,11 @@ static void decode_lower(VuInsn *in, uint32_t w) {
         int op = w & 63;
 
         switch (op) {
-        case 0x30: in->lop = L_IADD; return;
-        case 0x31: in->lop = L_ISUB; return;
-        case 0x32: in->lop = L_IADDI; in->imm = sext(id, 5); return;
-        case 0x34: in->lop = L_IAND; return;
-        case 0x35: in->lop = L_IOR; return;
+        case 0x30: in->lop = L_IADD; in->vireads = vs | vt; return;
+        case 0x31: in->lop = L_ISUB; in->vireads = vs | vt; return;
+        case 0x32: in->lop = L_IADDI; in->imm = sext(id, 5); in->vireads = vs; return;
+        case 0x34: in->lop = L_IAND; in->vireads = vs | vt; return;
+        case 0x35: in->lop = L_IOR; in->vireads = vs | vt; return;
         }
         if (op < 0x3C) {
             return;
@@ -302,18 +449,18 @@ static void decode_lower(VuInsn *in, uint32_t w) {
             add_read(in, is, ((dest & 8) ? 4 : 0) | ((dest & 4) ? 2 : 0) | ((dest & 2) ? 1 : 0) | ((dest & 1) ? 8 : 0));
             in->lwrite = (uint8_t)it;
             return;
-        case 0x34: in->lop = L_LQI; in->lwrite = (uint8_t)it; return;
-        case 0x35: in->lop = L_SQI; add_read(in, is, dest); return;
-        case 0x36: in->lop = L_LQD; in->lwrite = (uint8_t)it; return;
-        case 0x37: in->lop = L_SQD; add_read(in, is, dest); return;
+        case 0x34: in->lop = L_LQI; in->lwrite = (uint8_t)it; in->vireads = vs; return;
+        case 0x35: in->lop = L_SQI; add_read(in, is, dest); in->vireads = vt; return;
+        case 0x36: in->lop = L_LQD; in->lwrite = (uint8_t)it; in->vireads = vs; return;
+        case 0x37: in->lop = L_SQD; add_read(in, is, dest); in->vireads = vt; return;
         case 0x38: in->lop = L_DIV; add_read(in, is, 8 >> in->fsf); add_read(in, it, 8 >> in->ftf); return;
         case 0x39: in->lop = L_SQRT; add_read(in, it, 8 >> in->ftf); return;
         case 0x3A: in->lop = L_RSQRT; add_read(in, is, 8 >> in->fsf); add_read(in, it, 8 >> in->ftf); return;
         case 0x3B: in->lop = L_WAITQ; return;
         case 0x3C: in->lop = L_MTIR; add_read(in, is, 8 >> in->fsf); return;
-        case 0x3D: in->lop = L_MFIR; in->lwrite = (uint8_t)it; return;
-        case 0x3E: in->lop = L_ILWR; return;
-        case 0x3F: in->lop = L_ISWR; return;
+        case 0x3D: in->lop = L_MFIR; in->lwrite = (uint8_t)it; in->vireads = vs; return;
+        case 0x3E: in->lop = L_ILWR; in->vireads = vs; return;
+        case 0x3F: in->lop = L_ISWR; in->vireads = vs | vt; return;
         case 0x40: in->lop = L_RNEXT; in->lwrite = (uint8_t)it; return;
         case 0x41: in->lop = L_RGET; in->lwrite = (uint8_t)it; return;
         case 0x42: in->lop = L_RINIT; add_read(in, is, 8 >> in->fsf); return;
@@ -321,41 +468,53 @@ static void decode_lower(VuInsn *in, uint32_t w) {
         case 0x64: in->lop = L_MFP; in->lwrite = (uint8_t)it; return;
         case 0x68: in->lop = L_XTOP; return;
         case 0x69: in->lop = L_XITOP; return;
-        case 0x6C: in->lop = L_XGKICK; return;
+        case 0x6C: in->lop = L_XGKICK; in->vireads = vs; return;
         case 0x70: in->lop = L_ESADD; add_read(in, is, 0xE); return;
         case 0x71: in->lop = L_ERSADD; add_read(in, is, 0xE); return;
         case 0x72: in->lop = L_ELENG; add_read(in, is, 0xE); return;
         case 0x73: in->lop = L_ERLENG; add_read(in, is, 0xE); return;
+        case 0x74: in->lop = L_EATANXY; add_read(in, is, 0xC); return;
+        case 0x75: in->lop = L_EATANXZ; add_read(in, is, 0xA); return;
         case 0x76: in->lop = L_ESUM; add_read(in, is, 0xF); return;
         case 0x78: in->lop = L_ESQRT; add_read(in, is, 8 >> in->fsf); return;
         case 0x79: in->lop = L_ERSQRT; add_read(in, is, 8 >> in->fsf); return;
         case 0x7A: in->lop = L_ERCPR; add_read(in, is, 8 >> in->fsf); return;
         case 0x7B: in->lop = L_WAITP; return;
+        case 0x7C: in->lop = L_ESIN; add_read(in, is, 8 >> in->fsf); return;
+        case 0x7D: in->lop = L_EATAN; add_read(in, is, 8 >> in->fsf); return;
+        case 0x7E: in->lop = L_EEXP; add_read(in, is, 8 >> in->fsf); return;
         }
         return;
     }
     switch (top) {
-    case 0x00: in->lop = L_LQ; in->lwrite = (uint8_t)it; return;
-    case 0x01: in->lop = L_SQ; add_read(in, is, dest); return;
-    case 0x04: in->lop = L_ILW; return;
-    case 0x05: in->lop = L_ISW; return;
-    case 0x08: in->lop = L_IADDIU; in->imm = (int32_t)(((w >> 10) & 0x7800) | (w & 0x7FF)); return;
-    case 0x09: in->lop = L_ISUBIU; in->imm = (int32_t)(((w >> 10) & 0x7800) | (w & 0x7FF)); return;
+    case 0x00: in->lop = L_LQ; in->lwrite = (uint8_t)it; in->vireads = vs; return;
+    case 0x01: in->lop = L_SQ; add_read(in, is, dest); in->vireads = vt; return;
+    case 0x04: in->lop = L_ILW; in->vireads = vs; return;
+    case 0x05: in->lop = L_ISW; in->vireads = vs | vt; return;
+    case 0x08: in->lop = L_IADDIU; in->imm = (int32_t)(((w >> 10) & 0x7800) | (w & 0x7FF)); in->vireads = vs; return;
+    case 0x09: in->lop = L_ISUBIU; in->imm = (int32_t)(((w >> 10) & 0x7800) | (w & 0x7FF)); in->vireads = vs; return;
     case 0x10: in->lop = L_FCEQ; in->imm = (int32_t)(w & 0xFFFFFF); return;
     case 0x11: in->lop = L_FCSET; in->imm = (int32_t)(w & 0xFFFFFF); return;
     case 0x12: in->lop = L_FCAND; in->imm = (int32_t)(w & 0xFFFFFF); return;
     case 0x13: in->lop = L_FCOR; in->imm = (int32_t)(w & 0xFFFFFF); return;
+    case 0x14: in->lop = L_FSEQ; in->imm = (int32_t)(((w >> 10) & 0x800) | (w & 0x7FF)); return;
+    case 0x15: in->lop = L_FSSET; in->imm = (int32_t)(((w >> 10) & 0x800) | (w & 0x7FF)); return;
+    case 0x16: in->lop = L_FSAND; in->imm = (int32_t)(((w >> 10) & 0x800) | (w & 0x7FF)); return;
+    case 0x17: in->lop = L_FSOR; in->imm = (int32_t)(((w >> 10) & 0x800) | (w & 0x7FF)); return;
+    case 0x18: in->lop = L_FMEQ; in->vireads = vs; return;
+    case 0x1A: in->lop = L_FMAND; in->vireads = vs; return;
+    case 0x1B: in->lop = L_FMOR; in->vireads = vs; return;
     case 0x1C: in->lop = L_FCGET; return;
     case 0x20: in->lop = L_B; return;
     case 0x21: in->lop = L_BAL; return;
-    case 0x24: in->lop = L_JR; return;
-    case 0x25: in->lop = L_JALR; return;
-    case 0x28: in->lop = L_IBEQ; return;
-    case 0x29: in->lop = L_IBNE; return;
-    case 0x2C: in->lop = L_IBLTZ; return;
-    case 0x2D: in->lop = L_IBGTZ; return;
-    case 0x2E: in->lop = L_IBLEZ; return;
-    case 0x2F: in->lop = L_IBGEZ; return;
+    case 0x24: in->lop = L_JR; in->vireads = vs; return;
+    case 0x25: in->lop = L_JALR; in->vireads = vs; return;
+    case 0x28: in->lop = L_IBEQ; in->vireads = vs | vt; return;
+    case 0x29: in->lop = L_IBNE; in->vireads = vs | vt; return;
+    case 0x2C: in->lop = L_IBLTZ; in->vireads = vs; return;
+    case 0x2D: in->lop = L_IBGTZ; in->vireads = vs; return;
+    case 0x2E: in->lop = L_IBLEZ; in->vireads = vs; return;
+    case 0x2F: in->lop = L_IBGEZ; in->vireads = vs; return;
     }
 }
 
@@ -406,10 +565,11 @@ static inline uint32_t *mem_qword(uint32_t address) {
     return (uint32_t *)(data + (address & (DATA_QWORDS - 1)) * 16);
 }
 
-static void set_q(uint32_t value, int latency) {
+static void set_q(uint32_t value, int latency, uint32_t status) {
     vu.q_next = value;
     vu.q_due = vu.cycle + (uint64_t)latency;
     vu.q_pending = 1;
+    vu.q_status_next = status;
 }
 
 static void set_p(uint32_t value, int latency) {
@@ -418,25 +578,47 @@ static void set_p(uint32_t value, int latency) {
     vu.p_pending = 1;
 }
 
-static void settle(void) {
-    int n, kept = 0;
+/* At most two writes issue a cycle (an upper and a lower instruction), and each is due 4 cycles
+   on, so no more than 8 are ever in flight. */
+static inline void push_flags(int kind, uint16_t mac, uint32_t value) {
+    FlagWrite *fw = &vu.flag_queue[(vu.flag_head + vu.flag_count++) & 15];
 
+    fw->due = vu.cycle + 4;
+    fw->kind = (uint8_t)kind;
+    fw->mac = mac;
+    fw->value = value;
+}
+
+static void settle(void) {
     if (vu.q_pending && vu.cycle >= vu.q_due) {
         vu.q = vu.q_next;
         vu.q_pending = 0;
+        /* I and D, and their sticky bits */
+        vu.status = (vu.status & ~0x30u) | vu.q_status_next | (vu.q_status_next << 6);
     }
     if (vu.p_pending && vu.cycle >= vu.p_due) {
         vu.p = vu.p_next;
         vu.p_pending = 0;
     }
-    for (n = 0; n < vu.clip_count; n++) {
-        if (vu.clip_queue[n].due <= vu.cycle) {
-            vu.clip_visible = vu.clip_queue[n].value;
-        } else {
-            vu.clip_queue[kept++] = vu.clip_queue[n];
+    while (vu.flag_count && vu.flag_queue[vu.flag_head].due <= vu.cycle) {
+        const FlagWrite *fw = &vu.flag_queue[vu.flag_head];
+
+        vu.flag_head = (vu.flag_head + 1) & 15;
+        vu.flag_count--;
+        switch (fw->kind) {
+        case FW_FMAC:
+            /* Z S U O, and their sticky bits */
+            vu.mac = fw->mac;
+            vu.status = (vu.status & ~0xFu) | fw->value | (fw->value << 6);
+            break;
+        case FW_CLIP:
+            vu.clip_visible = fw->value;
+            break;
+        default:
+            vu.status = (vu.status & 0x3Fu) | fw->value;
+            break;
         }
     }
-    vu.clip_count = kept;
 }
 
 /* Lets everything in flight finish, as the pipelines drain after a program ends. */
@@ -445,52 +627,136 @@ static void drain(void) {
     settle();
 }
 
-static inline uint32_t div_result(uint32_t num, uint32_t den) {
-    float n = as_float(num), d = as_float(den);
-
-    if (d == 0.0f) {
-        /* the largest float, with the sign of the quotient (0/0 too) */
-        return ((num ^ den) & 0x80000000u) | 0x7F7FFFFFu;
-    }
-    return as_bits(n / d);
+/* x*x + y*y + z*z, as the EFU's ESADD */
+static uint32_t efu_sum_squares(const uint32_t *v) {
+    return vf_add(vf_add(vf_mul(v[0], v[0]), vf_mul(v[1], v[1])), vf_mul(v[2], v[2]));
 }
 
-static uint32_t efu_length2(const uint32_t *v) {
-    float x = as_float(v[0]), y = as_float(v[1]), z = as_float(v[2]);
+/* EATAN's series in t = (x - 1)/(x + 1) (EATANxy's in (y - x)/(y + x)): pi/4 + t*c1 + t^3*c2 ...
+   with the constants of the VU1 manual */
+static uint32_t efu_atan(uint32_t t) {
+    static const float c[8] = {0.999999344348907f, -0.333298563957214f, 0.199465364217758f,
+                               -0.139085337519646f, 0.096420042216778f, -0.055909886956215f,
+                               0.021861229091883f, -0.004054057877511f};
+    uint32_t sum = vf_mul(t, f32_bits(c[0])), power = t;
+    int n;
 
-    return as_bits(x * x + y * y + z * z);
+    for (n = 1; n < 8; n++) {
+        power = vf_mul(vf_mul(power, t), t);
+        sum = vf_add(sum, vf_mul(power, f32_bits(c[n])));
+    }
+    return vf_add(sum, f32_bits(0.785398185253143f));
+}
+
+/* ESIN: x + x^3*s2 + x^5*s3 + x^7*s4 + x^9*s5 */
+static uint32_t efu_sin(uint32_t x) {
+    static const float c[4] = {-0.166666567325592f, 0.008333025500178f, -0.000198074136279f,
+                               0.000002601886990f};
+    uint32_t square = vf_mul(x, x), power = x, sum = x;
+    int n;
+
+    for (n = 0; n < 4; n++) {
+        power = vf_mul(power, square);
+        sum = vf_add(sum, vf_mul(power, f32_bits(c[n])));
+    }
+    return sum;
+}
+
+/* EEXP: e^-x as 1 / (1 + x*e1 + x^2*e2 ... + x^6*e6)^4 */
+static uint32_t efu_exp(uint32_t x) {
+    static const float c[6] = {0.249998688697815f, 0.031257584691048f, 0.002591371303424f,
+                               0.000171562001924f, 0.000005430199963f, 0.000000690600018f};
+    uint32_t sum = f32_bits(1.0f), power = f32_bits(1.0f);
+    int n;
+
+    for (n = 0; n < 6; n++) {
+        power = vf_mul(power, x);
+        sum = vf_add(sum, vf_mul(power, f32_bits(c[n])));
+    }
+    sum = vf_mul(sum, sum);
+    sum = vf_mul(sum, sum);
+    return vf_div(f32_bits(1.0f), sum);
+}
+
+static uint32_t efu_result(const VuInsn *in) {
+    const uint32_t *v = vu.vf[in->ls];
+    uint32_t one = f32_bits(1.0f), x = v[in->fsf];
+
+    switch (in->lop) {
+    case L_ESADD: return efu_sum_squares(v);
+    case L_ERSADD: return vf_div(one, efu_sum_squares(v));
+    case L_ELENG: return vf_sqrt(efu_sum_squares(v));
+    case L_ERLENG: return vf_div(one, vf_sqrt(efu_sum_squares(v)));
+    case L_EATANXY: return efu_atan(vf_div(vf_sub(v[1], v[0]), vf_add(v[1], v[0])));
+    case L_EATANXZ: return efu_atan(vf_div(vf_sub(v[2], v[0]), vf_add(v[2], v[0])));
+    case L_ESUM: return vf_add(vf_add(vf_add(v[0], v[1]), v[2]), v[3]);
+    case L_ESQRT: return vf_sqrt(x);
+    case L_ERSQRT: return vf_div(one, vf_sqrt(x));
+    case L_ERCPR: return vf_div(one, x);
+    case L_ESIN: return efu_sin(x);
+    case L_EATAN: return efu_atan(vf_div(vf_sub(x, one), vf_add(x, one)));
+    default: return efu_exp(x);
+    }
+}
+
+/* The value of a VI register a conditional branch reads (see the top); stalled: it waited for an
+   ILW. An instruction writes one VI register at most, so the 4 cycles before the branch hold 4
+   writes at most. */
+static uint16_t branch_vi(int reg, int stalled) {
+    const ViWrite *h = &vu.vi_writes[(vu.vi_write_count - 1) & 7];
+    uint16_t value = vu.vi[reg];
+    unsigned n;
+
+    if (reg == 0 || stalled || h->reg != reg || h->flag_read || h->cycle + 1 != vu.cycle) {
+        return value;
+    }
+    for (n = 1; n <= 4; n++) {
+        h = &vu.vi_writes[(vu.vi_write_count - n) & 7];
+        if (h->cycle + 4 < vu.cycle) {
+            break;
+        }
+        if (h->reg == reg) {
+            if (h->flag_read) {
+                break;
+            }
+            value = h->old;
+        }
+    }
+    return value;
 }
 
 /* ---- Running --------------------------------------------------------------------------------- */
+/* the lower (0) or upper (1) word of the instruction pair at pc, for messages */
+static uint32_t micro_word(uint32_t pc, int upper) {
+    uint32_t w;
+
+    memcpy(&w, micro + (pc & (MICRO_INSNS - 1)) * 8 + upper * 4, 4);
+    return w;
+}
+
 static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int branch_pending = 0;
     uint32_t branch_target = 0;
     int end_next = 0;
     int guard = 0;
     int saved_round = fegetround();
-    /* The integer op just before a conditional branch: a branch reads its VI registers a stage
-       ahead of where that op writes, so it still sees the old value (the 0x700 program counts its
-       loop that way: isubiu vi11, then ibgtz vi11). */
-    int last_vi = 0, this_vi = 0;
-    uint16_t last_vi_old = 0, this_vi_old = 0;
 
     if (!vu.decoded) {
         decode_all();
     }
+    memset(vu.vi_writes, 0, sizeof(vu.vi_writes));
     fesetround(FE_TOWARDZERO);
     for (;;) {
         const VuInsn *in = &code[pc & (MICRO_INSNS - 1)];
         uint64_t need = vu.cycle;
         uint32_t uval[4];
         uint32_t lval[4];
+        unsigned mac = 0; /* the Z, U and O bits of the MAC flag the upper sets */
         int lmask = 0;
         int n, f;
         int branch_now = 0;
+        int stalled;
         uint32_t target = 0;
-
-        last_vi = this_vi;
-        last_vi_old = this_vi_old;
-        this_vi = 0;
 
         /* stalls */
         for (n = 0; n < in->nreads; n++) {
@@ -502,23 +768,38 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 }
             }
         }
+        if (in->vireads && vu.vi_ready_last > need) {
+            for (n = 1; n < 16; n++) {
+                if ((in->vireads & (1u << n)) && vu.vi_ready[n] > need) {
+                    need = vu.vi_ready[n];
+                }
+            }
+        }
         if ((in->lop == L_DIV || in->lop == L_SQRT || in->lop == L_RSQRT || in->lop == L_WAITQ) &&
             vu.q_pending && vu.q_due > need) {
             need = vu.q_due;
         }
-        if (in->lop >= L_WAITP && in->lop <= L_ERCPR && vu.p_pending && vu.p_due > need) {
-            need = vu.p_due;
+        if ((IS_EFU(in->lop) || in->lop == L_WAITP) && vu.p_pending && vu.p_due - 1 > need) {
+            need = vu.p_due - 1;
         }
+        stalled = need > vu.cycle;
         vu.cycle = need;
         settle();
+        if ((IS_EFU(in->lop) || in->lop == L_WAITP) && vu.p_pending && vu.cycle + 1 >= vu.p_due) {
+            /* the stall ends a cycle before P is due, with P written */
+            vu.p = vu.p_next;
+            vu.p_pending = 0;
+        }
 
-        /* upper, into uval */
+        /* upper, into uval (and the Z, U and O flags it sets into mac) */
         switch (in->uop) {
+        case U_NOP:
+            break;
         case U_ARITH: {
             const uint32_t *a = vu.vf[in->fs];
             for (f = 0; f < 4; f++) {
                 uint32_t b;
-                float r;
+                unsigned fl = 0;
 
                 if (!(in->udest & (8 >> f))) {
                     continue;
@@ -530,66 +811,58 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 default: b = vu.i; break;
                 }
                 switch (in->arith) {
-                case A_ADD: r = as_float(a[f]) + as_float(b); uval[f] = as_bits(r); break;
-                case A_SUB: r = as_float(a[f]) - as_float(b); uval[f] = as_bits(r); break;
-                case A_MUL: r = as_float(a[f]) * as_float(b); uval[f] = as_bits(r); break;
+                case A_ADD: uval[f] = vf_op(A_ADD, a[f], b, &fl); break;
+                case A_SUB: uval[f] = vf_op(A_SUB, a[f], b, &fl); break;
+                case A_MUL: uval[f] = vf_op(A_MUL, a[f], b, &fl); break;
                 case A_MADD:
-                    r = as_float(vu.acc[f]) + as_float(as_bits(as_float(a[f]) * as_float(b)));
-                    uval[f] = as_bits(r);
+                    uval[f] = vf_op(A_ADD, vu.acc[f], vf_mul(a[f], b), &fl);
                     break;
                 case A_MSUB:
-                    r = as_float(vu.acc[f]) - as_float(as_bits(as_float(a[f]) * as_float(b)));
-                    uval[f] = as_bits(r);
+                    uval[f] = vf_op(A_SUB, vu.acc[f], vf_mul(a[f], b), &fl);
                     break;
-                case A_MAX: uval[f] = vu_less(a[f], b) ? b : a[f]; break;
-                default: uval[f] = vu_less(b, a[f]) ? b : a[f]; break;
+                case A_MAX: uval[f] = vf_max(a[f], b); break;
+                default: uval[f] = vf_mini(a[f], b); break;
                 }
+                mac |= fl << (3 - f);
             }
             break;
         }
-        case U_ITOF: {
-            static const float scale[4] = {1.0f, 0.0625f, 1.0f / 4096.0f, 1.0f / 32768.0f};
+        case U_ITOF:
             for (f = 0; f < 4; f++) {
                 if (in->udest & (8 >> f)) {
-                    uval[f] = as_bits((float)(int32_t)vu.vf[in->fs][f] * scale[in->bc]);
+                    uval[f] = itof(vu.vf[in->fs][f], fixed_shift[in->bc]);
                 }
             }
             break;
-        }
-        case U_FTOI: {
-            static const float scale[4] = {1.0f, 16.0f, 4096.0f, 32768.0f};
+        case U_FTOI:
             for (f = 0; f < 4; f++) {
                 if (in->udest & (8 >> f)) {
-                    uval[f] = ftoi(vu.vf[in->fs][f], scale[in->bc]);
+                    uval[f] = ftoi(vu.vf[in->fs][f], fixed_shift[in->bc]);
                 }
             }
             break;
-        }
         case U_ABS:
             for (f = 0; f < 4; f++) {
                 uval[f] = vu.vf[in->fs][f] & 0x7FFFFFFFu;
             }
             break;
         case U_CLIP: {
-            float w = fabsf(as_float(vu.vf[in->ft][3]));
+            /* compared as sign and magnitude; a denormal w is the largest denormal */
+            uint32_t w = vu.vf[in->ft][3] & 0x7FFFFFFFu;
             uint32_t judge = 0;
 
+            if ((w & 0x7F800000u) == 0) {
+                w = 0x007FFFFFu;
+            }
             for (f = 0; f < 3; f++) {
-                float v = as_float(vu.vf[in->fs][f]);
+                uint32_t v = vu.vf[in->fs][f];
 
-                if (v > w) {
-                    judge |= 1u << (f * 2);
-                }
-                if (v < -w) {
-                    judge |= 2u << (f * 2);
+                if ((v & 0x7FFFFFFFu) > w) {
+                    judge |= (v & SIGN ? 2u : 1u) << (f * 2);
                 }
             }
             vu.clip = ((vu.clip << 6) | judge) & 0xFFFFFFu;
-            if (vu.clip_count < 8) {
-                vu.clip_queue[vu.clip_count].value = vu.clip;
-                vu.clip_queue[vu.clip_count].due = vu.cycle + 4;
-                vu.clip_count++;
-            }
+            push_flags(FW_CLIP, 0, vu.clip);
             break;
         }
         case U_OPMULA:
@@ -597,17 +870,49 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             const uint32_t *s = vu.vf[in->fs], *t = vu.vf[in->ft];
             static const int i1[3] = {1, 2, 0}, i2[3] = {2, 0, 1};
             for (f = 0; f < 3; f++) {
-                float prod = as_float(as_bits(as_float(s[i1[f]]) * as_float(t[i2[f]])));
+                unsigned fl = 0;
 
-                uval[f] = in->uop == U_OPMULA ? as_bits(prod) : as_bits(as_float(vu.acc[f]) - prod);
+                if (in->uop == U_OPMULA) {
+                    uval[f] = vf_op(A_MUL, s[i1[f]], t[i2[f]], &fl);
+                } else {
+                    uval[f] = vf_op(A_SUB, vu.acc[f], vf_mul(s[i1[f]], t[i2[f]]), &fl);
+                }
+                mac |= fl << (3 - f);
             }
             break;
         }
         default:
-            break;
+            PORT_FATAL("VU1: unknown upper instruction %08X at 0x%03X", micro_word(pc, 1), pc);
+        }
+        if (in->uflags) {
+            unsigned zsuo;
+
+            for (f = 0; f < 4; f++) {
+                if (in->udest & (8 >> f)) {
+                    mac |= (uval[f] >> 31) << (7 - f); /* S */
+                }
+            }
+            zsuo = ((mac & 0x000F) ? 1u : 0) | ((mac & 0x00F0) ? 2u : 0) | ((mac & 0x0F00) ? 4u : 0) |
+                   ((mac & 0xF000) ? 8u : 0);
+            /* the same flags again change nothing (unless an FSSET came between) */
+            if ((int32_t)mac != vu.mac_queued) {
+                vu.mac_queued = (int32_t)mac;
+                push_flags(FW_FMAC, (uint16_t)mac, zsuo);
+            }
         }
 
         /* lower */
+#define SET_VI(r_, value_, flag_read_)                                                             \
+    do {                                                                                           \
+        if (r_) {                                                                                  \
+            ViWrite *w_ = &vu.vi_writes[vu.vi_write_count++ & 7];                                  \
+            w_->cycle = vu.cycle;                                                                  \
+            w_->reg = (uint8_t)(r_);                                                               \
+            w_->flag_read = (flag_read_);                                                          \
+            w_->old = vu.vi[r_];                                                                   \
+            vu.vi[r_] = (uint16_t)(value_);                                                        \
+        }                                                                                          \
+    } while (0)
         switch (in->lop) {
         case L_NOP:
             break;
@@ -621,17 +926,15 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             if (in->lop == L_LQ) {
                 address = (uint32_t)(vu.vi[in->ls] + in->imm);
             } else if (in->lop == L_LQD) {
-                if (in->ls != 0) {
-                    vu.vi[in->ls]--;
-                }
+                SET_VI(in->ls, vu.vi[in->ls] - 1, 0);
                 address = vu.vi[in->ls];
             } else {
                 address = vu.vi[in->ls];
             }
             memcpy(lval, mem_qword(address), 16);
             lmask = in->ldest;
-            if (in->lop == L_LQI && in->ls != 0) {
-                vu.vi[in->ls]++;
+            if (in->lop == L_LQI) {
+                SET_VI(in->ls, vu.vi[in->ls] + 1, 0);
             }
             break;
         }
@@ -644,9 +947,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             if (in->lop == L_SQ) {
                 address = (uint32_t)(vu.vi[in->lt] + in->imm);
             } else if (in->lop == L_SQD) {
-                if (in->lt != 0) {
-                    vu.vi[in->lt]--;
-                }
+                SET_VI(in->lt, vu.vi[in->lt] - 1, 0);
                 address = vu.vi[in->lt];
             } else {
                 address = vu.vi[in->lt];
@@ -657,8 +958,8 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                     q[f] = vu.vf[in->ls][f];
                 }
             }
-            if (in->lop == L_SQI && in->lt != 0) {
-                vu.vi[in->lt]++;
+            if (in->lop == L_SQI) {
+                SET_VI(in->lt, vu.vi[in->lt] + 1, 0);
             }
             break;
         }
@@ -667,11 +968,12 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             uint32_t *q = mem_qword((uint32_t)(vu.vi[in->ls] + (in->lop == L_ILW ? in->imm : 0)));
             for (f = 0; f < 4; f++) {
                 if (in->ldest & (8 >> f)) {
-                    if (in->lt != 0) {
-                        vu.vi[in->lt] = (uint16_t)q[f];
-                    }
+                    SET_VI(in->lt, q[f], 0);
                     break;
                 }
+            }
+            if (in->lt) {
+                vu.vi_ready[in->lt] = vu.vi_ready_last = vu.cycle + 4;
             }
             break;
         }
@@ -685,23 +987,13 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             }
             break;
         }
-#define INT_OP(reg, value)                                                                         \
-    do {                                                                                           \
-        if (reg) {                                                                                 \
-            uint16_t result_ = (uint16_t)(value);                                                  \
-            this_vi = (reg);                                                                       \
-            this_vi_old = vu.vi[reg];                                                              \
-            vu.vi[reg] = result_;                                                                  \
-        }                                                                                          \
-    } while (0)
-        case L_IADDIU: INT_OP(in->lt, vu.vi[in->ls] + in->imm); break;
-        case L_ISUBIU: INT_OP(in->lt, vu.vi[in->ls] - in->imm); break;
-        case L_IADDI: INT_OP(in->lt, vu.vi[in->ls] + in->imm); break;
-        case L_IADD: INT_OP(in->ld, vu.vi[in->ls] + vu.vi[in->lt]); break;
-        case L_ISUB: INT_OP(in->ld, vu.vi[in->ls] - vu.vi[in->lt]); break;
-        case L_IAND: INT_OP(in->ld, vu.vi[in->ls] & vu.vi[in->lt]); break;
-        case L_IOR: INT_OP(in->ld, vu.vi[in->ls] | vu.vi[in->lt]); break;
-#undef INT_OP
+        case L_IADDIU: SET_VI(in->lt, vu.vi[in->ls] + in->imm, 0); break;
+        case L_ISUBIU: SET_VI(in->lt, vu.vi[in->ls] - in->imm, 0); break;
+        case L_IADDI: SET_VI(in->lt, vu.vi[in->ls] + in->imm, 0); break;
+        case L_IADD: SET_VI(in->ld, vu.vi[in->ls] + vu.vi[in->lt], 0); break;
+        case L_ISUB: SET_VI(in->ld, vu.vi[in->ls] - vu.vi[in->lt], 0); break;
+        case L_IAND: SET_VI(in->ld, vu.vi[in->ls] & vu.vi[in->lt], 0); break;
+        case L_IOR: SET_VI(in->ld, vu.vi[in->ls] | vu.vi[in->lt], 0); break;
         case L_MOVE:
             memcpy(lval, vu.vf[in->ls], 16);
             lmask = in->ldest;
@@ -713,49 +1005,73 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             lval[3] = vu.vf[in->ls][0];
             lmask = in->ldest;
             break;
-        case L_MTIR: if (in->lt) vu.vi[in->lt] = (uint16_t)vu.vf[in->ls][in->fsf]; break;
+        case L_MTIR: SET_VI(in->lt, vu.vf[in->ls][in->fsf], 0); break;
         case L_MFIR:
             for (f = 0; f < 4; f++) {
                 lval[f] = (uint32_t)(int32_t)(int16_t)vu.vi[in->ls];
             }
             lmask = in->ldest;
             break;
-        case L_DIV:
-            set_q(div_result(vu.vf[in->ls][in->fsf], vu.vf[in->lt][in->ftf]), 7);
+        case L_DIV: {
+            uint32_t s = vu.vf[in->ls][in->fsf], t = vu.vf[in->lt][in->ftf];
+            uint32_t status = !vf_is_zero(t) ? 0 : vf_is_zero(s) ? 0x10u : 0x20u;
+
+            set_q(vf_div(s, t), 7, status);
             break;
-        case L_SQRT:
-            set_q(as_bits(sqrtf(fabsf(as_float(vu.vf[in->lt][in->ftf])))), 7);
+        }
+        case L_SQRT: {
+            uint32_t t = vu.vf[in->lt][in->ftf];
+
+            set_q(vf_sqrt(t), 7, (t & SIGN) && !vf_is_zero(t) ? 0x10u : 0);
             break;
+        }
         case L_RSQRT: {
-            uint32_t den = as_bits(sqrtf(fabsf(as_float(vu.vf[in->lt][in->ftf]))));
-            set_q(div_result(vu.vf[in->ls][in->fsf], den), 13);
+            uint32_t s = vu.vf[in->ls][in->fsf], t = vu.vf[in->lt][in->ftf];
+
+            if (vf_is_zero(t)) {
+                /* as DIV: D, or I for 0/0, and the largest float with s's sign */
+                set_q((s & SIGN) | VU_MAX, 13, vf_is_zero(s) ? 0x10u : 0x20u);
+            } else {
+                set_q(vf_div(s, vf_sqrt(t)), 13, t & SIGN ? 0x10u : 0);
+            }
             break;
         }
         case L_WAITQ:
         case L_WAITP:
             break;
-        case L_FCAND: vu.vi[1] = (vu.clip_visible & (uint32_t)in->imm) != 0; break;
-        case L_FCEQ: vu.vi[1] = vu.clip_visible == (uint32_t)in->imm; break;
-        case L_FCOR: vu.vi[1] = ((vu.clip_visible | (uint32_t)in->imm) & 0xFFFFFFu) == 0xFFFFFFu; break;
-        case L_FCGET: if (in->lt) vu.vi[in->lt] = (uint16_t)(vu.clip_visible & 0xFFF); break;
+        case L_FCAND: SET_VI(1, (vu.clip_visible & (uint32_t)in->imm) != 0, 1); break;
+        case L_FCEQ: SET_VI(1, vu.clip_visible == (uint32_t)in->imm, 1); break;
+        case L_FCOR: SET_VI(1, ((vu.clip_visible | (uint32_t)in->imm) & 0xFFFFFFu) == 0xFFFFFFu, 1); break;
+        case L_FCGET: SET_VI(in->lt, vu.clip_visible & 0xFFF, 1); break;
         case L_FCSET:
-            vu.clip = vu.clip_visible = (uint32_t)in->imm;
-            vu.clip_count = 0;
+            vu.clip = (uint32_t)in->imm;
+            push_flags(FW_CLIP, 0, vu.clip);
             break;
+        case L_FSAND: SET_VI(in->lt, vu.status & (uint32_t)in->imm, 1); break;
+        case L_FSEQ: SET_VI(in->lt, vu.status == (uint32_t)in->imm, 1); break;
+        case L_FSOR: SET_VI(in->lt, vu.status | (uint32_t)in->imm, 1); break;
+        case L_FSSET:
+            push_flags(FW_STICKY, 0, (uint32_t)in->imm & 0xFC0u);
+            vu.mac_queued = -1;
+            break;
+        case L_FMAND: SET_VI(in->lt, vu.mac & vu.vi[in->ls], 1); break;
+        case L_FMEQ: SET_VI(in->lt, vu.mac == vu.vi[in->ls], 1); break;
+        case L_FMOR: SET_VI(in->lt, vu.mac | vu.vi[in->ls], 1); break;
         case L_B:
         case L_BAL:
             branch_now = 1;
             target = pc + 1 + (uint32_t)in->imm;
-            if (in->lop == L_BAL && in->lt) {
-                vu.vi[in->lt] = (uint16_t)(pc + 2);
+            if (in->lop == L_BAL) {
+                /* in a branch's delay slot, the link is the instruction after the first target */
+                SET_VI(in->lt, branch_pending ? branch_target + 1 : pc + 2, 0);
             }
             break;
         case L_JR:
         case L_JALR:
             branch_now = 1;
             target = vu.vi[in->ls];
-            if (in->lop == L_JALR && in->lt) {
-                vu.vi[in->lt] = (uint16_t)(pc + 2);
+            if (in->lop == L_JALR) {
+                SET_VI(in->lt, branch_pending ? branch_target + 1 : pc + 2, 0);
             }
             break;
         case L_IBEQ:
@@ -764,8 +1080,8 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         case L_IBGTZ:
         case L_IBLEZ:
         case L_IBGEZ: {
-            uint16_t vs = last_vi && in->ls == last_vi ? last_vi_old : vu.vi[in->ls];
-            uint16_t vt = last_vi && in->lt == last_vi ? last_vi_old : vu.vi[in->lt];
+            uint16_t vs = branch_vi(in->ls, stalled);
+            uint16_t vt = branch_vi(in->lt, stalled);
             int16_t s = (int16_t)vs;
             int taken;
 
@@ -783,8 +1099,8 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             }
             break;
         }
-        case L_XTOP: if (in->lt) vu.vi[in->lt] = (uint16_t)top; break;
-        case L_XITOP: if (in->lt) vu.vi[in->lt] = (uint16_t)itop; break;
+        case L_XTOP: SET_VI(in->lt, top, 0); break;
+        case L_XITOP: SET_VI(in->lt, itop, 0); break;
         case L_XGKICK:
             port_gif_path1_kick(vu.vi[in->ls]);
             break;
@@ -794,22 +1110,21 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             }
             lmask = in->ldest;
             break;
-        case L_ESADD: set_p(efu_length2(vu.vf[in->ls]), 11); break;
-        case L_ERSADD: set_p(div_result(0x3F800000u, efu_length2(vu.vf[in->ls])), 18); break;
-        case L_ELENG: set_p(as_bits(sqrtf(as_float(efu_length2(vu.vf[in->ls])))), 18); break;
+        case L_ESADD:
+        case L_ERSADD:
+        case L_ELENG:
         case L_ERLENG:
-            set_p(div_result(0x3F800000u, as_bits(sqrtf(as_float(efu_length2(vu.vf[in->ls]))))), 24);
-            break;
-        case L_ESQRT: set_p(as_bits(sqrtf(fabsf(as_float(vu.vf[in->ls][in->fsf])))), 12); break;
+        case L_EATANXY:
+        case L_EATANXZ:
+        case L_ESUM:
+        case L_ESQRT:
         case L_ERSQRT:
-            set_p(div_result(0x3F800000u, as_bits(sqrtf(fabsf(as_float(vu.vf[in->ls][in->fsf]))))), 18);
+        case L_ERCPR:
+        case L_ESIN:
+        case L_EATAN:
+        case L_EEXP:
+            set_p(efu_result(in), efu_latency[in->lop - L_ESADD]);
             break;
-        case L_ERCPR: set_p(div_result(0x3F800000u, vu.vf[in->ls][in->fsf]), 12); break;
-        case L_ESUM: {
-            const uint32_t *v = vu.vf[in->ls];
-            set_p(as_bits(as_float(v[0]) + as_float(v[1]) + as_float(v[2]) + as_float(v[3])), 12);
-            break;
-        }
         case L_RINIT: vu.r = 0x3F800000u | (vu.vf[in->ls][in->fsf] & 0x007FFFFFu); break;
         case L_RXOR: vu.r = 0x3F800000u | ((vu.r ^ vu.vf[in->ls][in->fsf]) & 0x007FFFFFu); break;
         case L_RGET:
@@ -826,12 +1141,12 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             lmask = in->ldest;
             break;
         default:
-            PORT_TODO("VU1: an instruction the interpreter does not know");
-            break;
+            PORT_FATAL("VU1: unknown lower instruction %08X at 0x%03X", micro_word(pc, 0), pc);
         }
+#undef SET_VI
 
         /* write back: the upper first; the lower's VF write is dropped if it is the same register */
-        if (in->uwrite != REG_NONE && in->uop != U_NOP && in->uop != U_CLIP) {
+        if (in->uwrite != REG_NONE) {
             uint32_t *d = in->uwrite == REG_ACC ? vu.acc : vu.vf[in->uwrite];
 
             if (in->uwrite != 0) {
@@ -845,8 +1160,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 }
             }
         }
-        if (lmask && in->lwrite != REG_NONE && in->lwrite != 0 &&
-            !(in->uwrite == in->lwrite && in->uop != U_NOP)) {
+        if (lmask && in->lwrite != REG_NONE && in->lwrite != 0 && in->uwrite != in->lwrite) {
             for (f = 0; f < 4; f++) {
                 if (lmask & (8 >> f)) {
                     vu.vf[in->lwrite][f] = lval[f];
