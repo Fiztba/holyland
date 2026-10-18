@@ -49,6 +49,7 @@
 #define MICRO_INSNS 2048 /* 16 KB of micro memory */
 #define DATA_QWORDS 1024 /* 16 KB of data memory */
 #define REG_ACC 32       /* VF write target: the accumulator */
+#define REG_SCRATCH 33   /* where a write that goes nowhere goes */
 #define REG_NONE 0xFF
 #define VU_MAX 0x7FFFFFFFu /* the largest VU float */
 #define SIGN 0x80000000u
@@ -97,6 +98,11 @@ typedef struct {
     uint8_t ebit;
     uint8_t qwait; /* DIV, SQRT, RSQRT, WAITQ: waits for a divide in flight */
     uint8_t pwait; /* the EFU's and WAITP: wait for P */
+    /* the write-back, worked out at decode: the register each result goes to (vf01..vf31, REG_ACC)
+       and its fields, none if it writes nothing or vf00, or if it is the lower's and the upper
+       writes the same register */
+    uint8_t uwreg, uwmask, lwreg, lwmask;
+    uint8_t hazard; /* bit k - 1: it reads a field the instruction k before it in memory writes */
     uint8_t nreads;
     VfUse reads[4];
 } VuInsn;
@@ -119,9 +125,8 @@ typedef struct {
 } ViWrite;
 
 static struct {
-    uint32_t vf[32][4];
+    uint32_t vf[34][4]; /* vf00..vf31, ACC (REG_ACC), and REG_SCRATCH */
     uint16_t vi[16];
-    uint32_t acc[4];
     uint32_t q, p, i, r;
     uint32_t q_next, p_next;
     uint64_t q_due, p_due;
@@ -134,8 +139,6 @@ static struct {
     FlagWrite flag_queue[16]; /* in issue order, so in due order */
     unsigned flag_head, flag_count;
     int32_t mac_queued; /* the MAC flag of the last FMAC write queued, -1 after an FSSET */
-    uint64_t ready[32][4]; /* the cycle each VF field's last write is due */
-    uint64_t reg_ready[32]; /* the latest of each register's four */
     uint64_t next_due;     /* the earliest cycle settle() has something to do (Q, P, a flag write) */
     uint64_t vi_ready[16]; /* the cycle each VI register's last ILW is due */
     uint64_t vi_ready_last; /* the latest of them */
@@ -614,6 +617,20 @@ static void decode_lower(VuInsn *in, uint32_t w) {
     }
 }
 
+/* in reads a VF field w writes */
+static int reads_written(const VuInsn *in, const VuInsn *w) {
+    int n;
+
+    for (n = 0; n < in->nreads; n++) {
+        const VfUse *use = &in->reads[n];
+
+        if ((use->reg == w->uwreg && (use->mask & w->uwmask)) || (use->reg == w->lwreg && (use->mask & w->lwmask))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void decode_all(void) {
     int n;
 
@@ -637,6 +654,24 @@ static void decode_all(void) {
         in->pwait = IS_EFU(in->lop) || in->lop == L_WAITP;
         if ((in->lop >= L_FSAND && in->lop <= L_FMOR)) {
             vu.flags_read = 1;
+        }
+        in->uwreg = in->lwreg = REG_SCRATCH;
+        if (in->uwrite != REG_NONE && in->uwrite != 0) {
+            in->uwreg = in->uwrite;
+            in->uwmask = in->udest;
+        }
+        if (in->lwrite != REG_NONE && in->lwrite != 0 && in->lwrite != in->uwrite) {
+            in->lwreg = in->lwrite;
+            in->lwmask = in->ldest;
+        }
+    }
+    for (n = 0; n < MICRO_INSNS; n++) {
+        int k;
+
+        for (k = 1; k <= 3; k++) {
+            if (reads_written(&code[n], &code[(n - k) & (MICRO_INSNS - 1)])) {
+                code[n].hazard |= (uint8_t)(1 << (k - 1));
+            }
         }
     }
     vu.decoded = 1;
@@ -871,6 +906,12 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
        only that is kept: the last FMAC instruction's result and Z U O, and the Z S U O of them all
        for the sticky bits. */
     int flags_read;
+    uint64_t cycle; /* vu.cycle, kept in a register: the helpers read vu.cycle, set before each */
+    /* the last three instructions run (the newest first), and the cycles they issued */
+    const VuInsn *last[3] = {NULL, NULL, NULL};
+    uint64_t issued[3] = {0, 0, 0};
+    uint32_t last_pc = pc; /* not the one before pc: nothing ran before it */
+    int in_line = 0; /* how many of them ran in a line before this one, up to 3 */
     int fmac_seen = 0;
     V4 last_value = {0, 0, 0, 0}, signs_seen = {0, 0, 0, 0};
     unsigned last_dest = 0, last_zuo = 0, zuo_seen = 0;
@@ -886,28 +927,35 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     flags_read = vu.flags_read;
     memset(vu.vi_writes, 0, sizeof(vu.vi_writes));
     fesetround(FE_TOWARDZERO);
+    cycle = vu.cycle;
     for (;;) {
         const VuInsn *in = &code[pc & (MICRO_INSNS - 1)];
-        uint64_t need = vu.cycle;
+        uint64_t need = cycle;
         V4 uval = {0, 0, 0, 0};
         V4 lval = {0, 0, 0, 0};
         unsigned mac = 0; /* the Z, U and O bits of the MAC flag the upper sets */
-        int lmask = 0;
         int n, f;
         int branch_now = 0;
         int stalled;
         uint32_t target = 0;
 
-        /* stalls */
-        for (n = 0; n < in->nreads; n++) {
-            const VfUse *use = &in->reads[n];
-
-            if (vu.reg_ready[use->reg] <= need) {
-                continue; /* none of its fields is still due */
+        /* stalls. A VF write is due 4 cycles after it issues, and an instruction issues a cycle or
+           more after the one before, so only the last three instructions' writes can still be due.
+           When they are the three before this one in memory, decode has said which of them it
+           reads from (hazard); after a branch they are looked at. */
+        in_line = (pc & (MICRO_INSNS - 1)) == ((last_pc + 1) & (MICRO_INSNS - 1)) ? (in_line < 3 ? in_line + 1 : 3) : 0;
+        if (in_line == 3) {
+            if (in->hazard) {
+                for (n = 0; n < 3; n++) {
+                    if ((in->hazard & (1 << n)) && issued[n] + 4 > need) {
+                        need = issued[n] + 4;
+                    }
+                }
             }
-            for (f = 0; f < 4; f++) {
-                if ((use->mask & (8 >> f)) && vu.ready[use->reg][f] > need) {
-                    need = vu.ready[use->reg][f];
+        } else {
+            for (n = 0; n < 3; n++) {
+                if (last[n] && issued[n] + 4 > need && reads_written(in, last[n])) {
+                    need = issued[n] + 4;
                 }
             }
         }
@@ -928,12 +976,13 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         if (in->pwait && vu.p_pending && vu.p_due - 1 > need) {
             need = vu.p_due - 1;
         }
-        stalled = need > vu.cycle;
-        vu.cycle = need;
-        if (vu.cycle >= vu.next_due) {
+        stalled = need > cycle;
+        cycle = need;
+        vu.cycle = cycle; /* for the helpers below */
+        if (cycle >= vu.next_due) {
             settle();
         }
-        if (in->pwait && vu.p_pending && vu.cycle + 1 >= vu.p_due) {
+        if (in->pwait && vu.p_pending && cycle + 1 >= vu.p_due) {
             /* the stall ends a cycle before P is due, with P written */
             vu.p = vu.p_next;
             vu.p_pending = 0;
@@ -957,10 +1006,10 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             case A_SUB: uval = v4_op(A_SUB, a, b, lanes, &mac); break;
             case A_MUL: uval = v4_op(A_MUL, a, b, lanes, &mac); break;
             case A_MADD:
-                uval = v4_op(A_ADD, v4_load(vu.acc), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
+                uval = v4_op(A_ADD, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
                 break;
             case A_MSUB:
-                uval = v4_op(A_SUB, v4_load(vu.acc), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
+                uval = v4_op(A_SUB, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
                 break;
             case A_MAX: uval = v4_max(a, b); break;
             default: uval = v4_mini(a, b); break;
@@ -1007,7 +1056,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 if (in->uop == U_OPMULA) {
                     uval[f] = vf_op(A_MUL, s[i1[f]], t[i2[f]], &fl);
                 } else {
-                    uval[f] = vf_op(A_SUB, vu.acc[f], vf_mul(s[i1[f]], t[i2[f]]), &fl);
+                    uval[f] = vf_op(A_SUB, vu.vf[REG_ACC][f], vf_mul(s[i1[f]], t[i2[f]]), &fl);
                 }
                 mac |= fl << (3 - f);
             }
@@ -1039,7 +1088,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     do {                                                                                           \
         if (r_) {                                                                                  \
             ViWrite *w_ = &vu.vi_writes[vu.vi_write_count++ & 7];                                  \
-            w_->cycle = vu.cycle;                                                                  \
+            w_->cycle = cycle;                                                                     \
             w_->reg = (uint8_t)(r_);                                                               \
             w_->flag_read = (flag_read_);                                                          \
             w_->old = vu.vi[r_];                                                                   \
@@ -1065,7 +1114,6 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 address = vu.vi[in->ls];
             }
             lval = v4_load(mem_qword(address));
-            lmask = in->ldest;
             if (in->lop == L_LQI) {
                 SET_VI(in->ls, vu.vi[in->ls] + 1, 0);
             }
@@ -1106,7 +1154,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 }
             }
             if (in->lt) {
-                vu.vi_ready[in->lt] = vu.vi_ready_last = vu.cycle + 4;
+                vu.vi_ready[in->lt] = vu.vi_ready_last = cycle + 4;
             }
             break;
         }
@@ -1129,21 +1177,18 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         case L_IOR: SET_VI(in->ld, vu.vi[in->ls] | vu.vi[in->lt], 0); break;
         case L_MOVE:
             lval = v4_load(vu.vf[in->ls]);
-            lmask = in->ldest;
             break;
         case L_MR32:
             lval[0] = vu.vf[in->ls][1];
             lval[1] = vu.vf[in->ls][2];
             lval[2] = vu.vf[in->ls][3];
             lval[3] = vu.vf[in->ls][0];
-            lmask = in->ldest;
             break;
         case L_MTIR: SET_VI(in->lt, vu.vf[in->ls][in->fsf], 0); break;
         case L_MFIR:
             for (f = 0; f < 4; f++) {
                 lval[f] = (uint32_t)(int32_t)(int16_t)vu.vi[in->ls];
             }
-            lmask = in->ldest;
             break;
         case L_DIV: {
             uint32_t s = vu.vf[in->ls][in->fsf], t = vu.vf[in->lt][in->ftf];
@@ -1241,7 +1286,6 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             for (f = 0; f < 4; f++) {
                 lval[f] = vu.p;
             }
-            lmask = in->ldest;
             break;
         case L_ESADD:
         case L_ERSADD:
@@ -1271,47 +1315,34 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             for (f = 0; f < 4; f++) {
                 lval[f] = vu.r;
             }
-            lmask = in->ldest;
             break;
         default:
             PORT_FATAL("VU1: unknown lower instruction %08X at 0x%03X", micro_word(pc, 0), pc);
         }
 #undef SET_VI
 
-        /* write back: the upper first; the lower's VF write is dropped if it is the same register */
-        if (in->uwrite != REG_NONE && in->uwrite != 0) {
-            V4 lanes = field_lanes[in->udest];
+        /* write back: the upper first, then the lower (decode dropped it if it is the same register) */
+        if (in->uwmask) {
+            V4 lanes = field_lanes[in->uwmask];
 
-            if (in->uwrite == REG_ACC) {
-                v4_store(vu.acc, (v4_load(vu.acc) & ~lanes) | (uval & lanes));
-            } else {
-                uint32_t *d = vu.vf[in->uwrite];
-
-                v4_store(d, (v4_load(d) & ~lanes) | (uval & lanes));
-                for (f = 0; f < 4; f++) {
-                    if (in->udest & (8 >> f)) {
-                        vu.ready[in->uwrite][f] = vu.cycle + 4;
-                    }
-                }
-                vu.reg_ready[in->uwrite] = vu.cycle + 4;
-            }
+            v4_store(vu.vf[in->uwreg], (v4_load(vu.vf[in->uwreg]) & ~lanes) | (uval & lanes));
         }
-        if (lmask && in->lwrite != REG_NONE && in->lwrite != 0 && in->uwrite != in->lwrite) {
-            V4 lanes = field_lanes[lmask];
-            uint32_t *d = vu.vf[in->lwrite];
+        if (in->lwmask) {
+            V4 lanes = field_lanes[in->lwmask];
 
-            v4_store(d, (v4_load(d) & ~lanes) | (lval & lanes));
-            for (f = 0; f < 4; f++) {
-                if (lmask & (8 >> f)) {
-                    vu.ready[in->lwrite][f] = vu.cycle + 4;
-                }
-            }
-            vu.reg_ready[in->lwrite] = vu.cycle + 4;
+            v4_store(vu.vf[in->lwreg], (v4_load(vu.vf[in->lwreg]) & ~lanes) | (lval & lanes));
         }
+        last[2] = last[1];
+        last[1] = last[0];
+        last[0] = in;
+        issued[2] = issued[1];
+        issued[1] = issued[0];
+        issued[0] = cycle;
+        last_pc = pc;
         if (in->lop == L_LOI) {
             vu.i = in->i_value;
         }
-        vu.cycle++;
+        cycle++;
 
         /* where next */
         if (end_next) {
@@ -1335,6 +1366,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             PORT_FATAL("VU1 ran 50 million instructions without ending (at 0x%03X)", pc);
         }
     }
+    vu.cycle = cycle;
     drain();
     if (fmac_seen) {
         /* the flag writes not queued, landed: the last one's flags, and the sticky bits of all */
