@@ -96,13 +96,19 @@ the reference the native renderer is compared against.
 Result:
 - The game is drawn from boot through the logos, the title menu, New Game, the brightness screen and
   the opening, to the first map with its HUD, in an SDL2 window at 59.94 vblanks a second, with a
-  pad or the keyboard. `tools/frame_test.py` dumps five of those pictures twice and checks they are
-  the same byte for byte; gcc and clang give the same pictures. `tools/boot_test.py`'s log is the same
-  as step 1's.
+  pad or the keyboard. `tools/frame_test.py` dumps five of those pictures, and every picture of
+  vblanks 990 to 1010, twice and checks they are the same byte for byte; gcc and clang give the same
+  pictures. `tools/boot_test.py`'s log is the same as step 1's.
 - `port/platform/dmac.c` reads channel 1 and 2 transfers, in normal mode and as source chains (all
   eight tag IDs, TTE, TIE). A chain started with QWC set sends those qwords first and goes on only
   if CHCR's TAG says so; the game starts some with TAG 0, a REFE. Channel 2 ignores DIR:
-  `ui/title.c` starts it with STR alone.
+  `ui/title.c` starts it with STR alone. A tag's address keeps all 32 bits: the program's sections
+  have EE addresses from 0x40000000, and the menus' font is sent from one of them.
+- A transfer takes no EE time, so the GS gets the transfers whole, in the order the game started
+  them, whatever the controller's thread's timing: each start goes into a work queue, claimed by the
+  game's thread at its next call into the host or by the controller if the game spins on STR first.
+  PATH3 waits while it is masked (VIF1's MSKPATH3, GIF_MODE's M3R) and then goes between the other
+  paths' GIF packets. A channel's end interrupt runs at the first kernel call after its start.
 - `port/platform/vif1.c` reads every VIF code the game sends, and every UNPACK format, with masks,
   modes, skipping writes and double buffering. `port/platform/vu1.c` interprets VU1 cycle by cycle,
   because the programs are software-pipelined and rely on when each result lands: FMAC results 4
@@ -113,16 +119,19 @@ Result:
 - `port/sdk/libgraph.c` is Sony's libgraph from the decomp. On the PC: CSR keeps FIELD, a packet on
   the stack (`Vram_Clear`'s image) goes by DMA from a copy, and `sceGsExecStoreImage` reads the GS
   back for the screen effects that copy the frame into a texture.
-- Each vblank's scanout is ordered with the packets: the kernel waits for the channels started
-  before the vblank, and the controller scans out before it reads one started after. Without that,
-  `--fast` showed the buffer the game had already cleared for the next frame.
+- Each vblank's scanout is ordered with the packets: it goes into the controller's queue after the
+  channels started before the vblank. Without that, `--fast` showed the buffer the game had already
+  cleared for the next frame.
 
 Still open:
 - The opening shows no message text. That may be how it is on the PS2; it has not been checked
   against it.
 - The VU1 interpreter runs on the CPU. It keeps up at full speed (3000 vblanks in about 25 s with
   `--fast`), and step 3 replaces it.
-- PATH3 masking is not modelled: the paths are taken in the order the game starts them.
+- The GIF's arbitration is modelled only as far as it decides an order with transfers that take no
+  time: PATH3 never goes in the middle of a channel 1 chain unless VIF1 unmasks it there.
+- The game's write-1-to-clear stores (CSR's FINISH, T0_MODE's EQUF) set the bit instead: nothing sees
+  a store into the register page. The game never reads either bit where that would show.
 
 ## Step 3: graphics, stage 2 (native renderer)
 
