@@ -27,8 +27,15 @@ static int channel_number(DmaChan *channel) {
     PORT_FATAL("libdma: %p is not a DMA channel", (void *)channel);
 }
 
+/* On the PC this also waits for the channel's transfer to end: the game changes CHCR with a plain
+   read-modify-write (packet_buffer.c sets TTE), which must not race the controller's thread clearing
+   STR, or it would store STR again and start the chain a second time. */
 DmaChan *sceDmaGetChan(unsigned int id) {
-    return id < 10 ? EE_HW(DmaChan *, channel_base[id]) : NULL;
+    if (id >= 10) {
+        return NULL;
+    }
+    port_dmac_wait((int)id);
+    return EE_HW(DmaChan *, channel_base[id]);
 }
 
 /* Clears the channels and the controller's status, and with mode 1 turns the controller on. Returns
