@@ -73,11 +73,18 @@ add_library(kf4_port STATIC
     port/sdk/libmc.c
     port/sdk/libpad.c
     port/sdk/sif.c
-    port/sdk/fssnd.c
     port/sdk/stubs.c
     port/sdk/game_stubs.c
-    port/sdk/libc_ps2.c)
+    port/sdk/libc_ps2.c
+    port/audio/iop.c
+    port/audio/sd.c
+    port/audio/libsd_irx.c
+    port/audio/output.c
+    port/audio/fsiopsnd.c
+    port/audio/modmidi.c
+    port/audio/modhsyn.c)
 target_include_directories(kf4_port PUBLIC port/include)
+target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
@@ -106,6 +113,13 @@ else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
 endif()
 # paraLLEl-GS, the GS in Vulkan compute; without it the game runs and draws nothing
+# The software SPU2 (third_party/ico-audio, from ico-pc) and its tests
+option(KF4_TESTS "Build the unit tests (ctest)" ON)
+if(KF4_TESTS)
+    enable_testing()
+endif()
+add_subdirectory(third_party/ico-audio)
+
 option(KF4_USE_PARALLEL_GS "Draw with paraLLEl-GS (third_party/parallel-gs)" ON)
 if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/volk/volk.h)
     enable_language(CXX)

@@ -1,15 +1,15 @@
 /* The IOP side for the PC port (port/include/sifdev.h, port/include/sifrpc.h): file calls on cdrom0:
    and host0:, the IOP's modules and heap, SIF DMA and RPC.
 
-   There is no IOP. Its modules "load" (each is checked to be on the disc), its heap hands out IOP
-   addresses that nothing reads back, a SIF transfer is done as soon as it is set, and an RPC is answered
-   before sceSifCallRpc returns. The one RPC server the game binds is FromSoftware's sound driver,
-   FSIOPSND (server 0x1010, port/sdk/fssnd.c): until sound (step 4) it takes every command and answers
-   as the driver would when all goes well, without making a sound. */
+   There is no IOP CPU. Its modules "load" (each is checked to be on the disc), its heap hands out
+   addresses in the IOP memory of port/audio, a SIF transfer copies into that memory as soon as it is
+   set, and an RPC is answered before sceSifCallRpc returns. The one RPC server the game binds is
+   FromSoftware's sound driver, FSIOPSND (server 0x1010), which port/audio runs. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "port/audio.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "sifdev.h"
@@ -199,6 +199,53 @@ int sceSifSyncIop(void) {
     return 1;
 }
 
+/* ---- The SIF trace (KF4_SIF_TRACE=path) ---------------------------------------------------------
+   A development aid for the sound driver: one text line per thing the EE asks of the IOP, so a run
+   can be replayed into another implementation of the driver and the two compared. Each line starts
+   with the vblank and the EE cycle; payloads are hex.
+     L <path>                          module load
+     H <path> <iop address>            sceSifLoadIopHeap
+     A <size> <iop address>            heap allocation (the address returned)
+     F <iop address>                   heap free
+     D <iop address> <size> <hex>      one SIF DMA transfer to the IOP
+     C <server> <function> <mode> <receive size> <hex sent>   an RPC call
+     R <hex received>                  the reply to the call before it */
+static FILE *sif_trace;
+static int sif_trace_checked;
+
+static FILE *trace_file(void) {
+    if (!sif_trace_checked) {
+        const char *path = getenv("KF4_SIF_TRACE");
+
+        sif_trace_checked = 1;
+        if (path != NULL && *path != '\0') {
+            sif_trace = fopen(path, "w");
+            if (sif_trace == NULL) {
+                port_event("KF4_SIF_TRACE: cannot write %s", path);
+            }
+        }
+    }
+    return sif_trace;
+}
+
+static void trace_head(FILE *f, char kind) {
+    fprintf(f, "%llu %llu %c", (unsigned long long)port_vblank_count(), (unsigned long long)port_ee_cycles(), kind);
+}
+
+static void trace_hex(FILE *f, const void *data, int size) {
+    const unsigned char *bytes = data;
+    int i;
+
+    fputc(' ', f);
+    if (data == NULL || size <= 0) {
+        fputc('-', f);
+        return;
+    }
+    for (i = 0; i < size; i++) {
+        fprintf(f, "%02x", bytes[i]);
+    }
+}
+
 static int next_module_id = 1;
 
 int sceSifLoadModule(const char *path, int arg_length, const char *args) {
@@ -212,6 +259,10 @@ int sceSifLoadModule(const char *path, int arg_length, const char *args) {
         return -1;
     }
     port_event("IOP module %s", path);
+    if (trace_file() != NULL) {
+        trace_head(sif_trace, 'L');
+        fprintf(sif_trace, " %s\n", path);
+    }
     return next_module_id++;
 }
 
@@ -251,6 +302,10 @@ int sceSifAllocIopHeap(int size) {
             iop_blocks[i].address = start;
             iop_blocks[i].size = want;
             iop_block_count++;
+            if (trace_file() != NULL) {
+                trace_head(sif_trace, 'A');
+                fprintf(sif_trace, " %d 0x%x\n", size, start);
+            }
             return (int)start;
         }
         if (i < iop_block_count) {
@@ -264,6 +319,10 @@ int sceSifAllocIopHeap(int size) {
 int sceSifFreeIopHeap(int iop_address) {
     int i;
 
+    if (trace_file() != NULL) {
+        trace_head(sif_trace, 'F');
+        fprintf(sif_trace, " 0x%x\n", (unsigned)iop_address);
+    }
     for (i = 0; i < iop_block_count; i++) {
         if (iop_blocks[i].address == (uint32_t)iop_address) {
             memmove(&iop_blocks[i], &iop_blocks[i + 1], (size_t)(iop_block_count - i - 1) * sizeof(IopBlock));
@@ -277,22 +336,58 @@ int sceSifFreeIopHeap(int iop_address) {
 int sceSifLoadIopHeap(const char *path, int iop_address) {
     int on_disc = 0;
     const char *name = split_device(path, &on_disc);
+    uint32_t lsn;
+    uint32_t size;
 
-    (void)iop_address;
-    if (name == NULL || !on_disc || !port_disc_find(name, NULL, NULL)) {
+    if (name == NULL || !on_disc || !port_disc_find(name, &lsn, &size)) {
         port_event("sceSifLoadIopHeap: %s is not on the disc", path);
         return -1;
     }
     port_event("IOP load %s", path);
+    {
+        uint8_t sector[DISC_SECTOR_SIZE];
+        uint32_t done;
+
+        for (done = 0; done < size; done += DISC_SECTOR_SIZE) {
+            uint32_t n = size - done < DISC_SECTOR_SIZE ? size - done : DISC_SECTOR_SIZE;
+
+            if (!port_disc_read(lsn + done / DISC_SECTOR_SIZE, 1, sector)) {
+                return -1;
+            }
+            memcpy(port_iop_ptr((uint32_t)iop_address + done), sector, n);
+        }
+    }
+    if (trace_file() != NULL) {
+        trace_head(sif_trace, 'H');
+        fprintf(sif_trace, " %s 0x%x\n", path, (unsigned)iop_address);
+    }
     return 0;
 }
 
-/* ---- SIF DMA: done as soon as it is set ------------------------------------------------------- */
+/* ---- SIF DMA: copied into IOP memory as soon as it is set -------------------------------------- */
 static unsigned int next_dma_id = 1;
 
 unsigned int sceSifSetDma(sceSifDmaData *transfers, int count) {
-    (void)transfers;
-    (void)count;
+    int i;
+
+    for (i = 0; trace_file() != NULL && i < count; i++) {
+        trace_head(sif_trace, 'D');
+        fprintf(sif_trace, " 0x%x %d", transfers[i].addr, transfers[i].size);
+        trace_hex(sif_trace, transfers[i].data, transfers[i].size);
+        fputc('\n', sif_trace);
+    }
+    for (i = 0; i < count; i++) {
+        uint32_t address = transfers[i].addr & (IOP_RAM_SIZE - 1);
+        uint32_t size = (uint32_t)transfers[i].size;
+
+        if (transfers[i].data == NULL || transfers[i].size <= 0) {
+            continue;
+        }
+        if (address + size > IOP_RAM_SIZE) {
+            PORT_FATAL("SIF DMA past the end of IOP memory: 0x%X + 0x%X", address, size);
+        }
+        memcpy(port_iop_ptr(address), transfers[i].data, size);
+    }
     if (++next_dma_id == 0) {
         next_dma_id = 1;
     }
@@ -305,9 +400,6 @@ int sceSifDmaStat(unsigned int id) {
 }
 
 /* ---- RPC -------------------------------------------------------------------------------------- */
-int port_fssnd_call(unsigned int function, void *send_buffer, int send_size, void *receive_buffer,
-                    int receive_size);
-
 typedef struct {
     unsigned int id;
     int (*call)(unsigned int function, void *send_buffer, int send_size, void *receive_buffer,
@@ -315,7 +407,7 @@ typedef struct {
 } RpcServer;
 
 static RpcServer rpc_servers[] = {
-    {0x1010, port_fssnd_call},
+    {0x1010, port_fsiopsnd_call},
 };
 
 void sceSifInitRpc(int mode) {
@@ -342,11 +434,22 @@ int sceSifCallRpc(sceSifClientData *cd, unsigned int function, unsigned int mode
                   void *end_param) {
     RpcServer *server = cd->server;
 
-    (void)mode;
     if (server == NULL) {
         PORT_FATAL("sceSifCallRpc on a client that is not bound");
     }
+    if (trace_file() != NULL) {
+        trace_head(sif_trace, 'C');
+        fprintf(sif_trace, " 0x%x 0x%x 0x%x %d", server->id, function, mode, receive_size);
+        trace_hex(sif_trace, send_buffer, send_size);
+        fputc('\n', sif_trace);
+    }
     server->call(function, send_buffer, send_size, receive_buffer, receive_size);
+    if (trace_file() != NULL) {
+        trace_head(sif_trace, 'R');
+        trace_hex(sif_trace, receive_buffer, receive_size);
+        fputc('\n', sif_trace);
+        fflush(sif_trace);
+    }
     if (end_function != NULL) {
         end_function(end_param);
     }

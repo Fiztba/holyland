@@ -35,6 +35,8 @@ typedef struct {
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */
+    const char *audio_dump;  /* --audio-dump: write the sound as a WAV file */
+    int no_audio;            /* --no-audio: no sound device (the sound is still made) */
     int clock_fields[6];     /* year, month, day, hour, minute, second */
     int stats;               /* --stats: print where the controller's time went at exit */
 } PortOptions;

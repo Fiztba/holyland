@@ -18,12 +18,15 @@
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default)
        --stats           at exit, print the time the DMA controller's thread spent in VU1, in
-                         handing GIF packets to the GS and in vsyncs, and VU1's runs and instructions */
+                         handing GIF packets to the GS and in vsyncs, and VU1's runs and instructions
+       --audio-dump FILE write the sound as a 48 kHz WAV file
+       --no-audio        play no sound (it is still made, for --audio-dump) */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "port/audio.h"
 #include "port/host.h"
 #include "port/platform.h"
 
@@ -36,7 +39,8 @@ static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
-            "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n",
+            "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
+            "          [--audio-dump FILE] [--no-audio]\n",
             program);
     exit(2);
 }
@@ -61,6 +65,10 @@ static void parse_options(int argc, char **argv) {
         const char *option = argv[i];
         const char *value = i + 1 < argc ? argv[i + 1] : NULL;
 
+        if (strcmp(option, "--no-audio") == 0) {
+            port_options.no_audio = 1;
+            continue;
+        }
         if (strcmp(option, "--fast") == 0) {
             port_options.fast = 1;
             continue;
@@ -115,6 +123,8 @@ static void parse_options(int argc, char **argv) {
             port_options.host_dir = value;
         } else if (strcmp(option, "--dump-frames") == 0) {
             port_options.dump_frames = value;
+        } else if (strcmp(option, "--audio-dump") == 0) {
+            port_options.audio_dump = value;
         } else if (strcmp(option, "--dump-dir") == 0) {
             port_options.dump_dir = value;
         } else {
@@ -222,6 +232,7 @@ int main(int argc, char **argv) {
     port_gs_init();
     port_pad_init();
     port_video_init();
+    port_audio_init();
     fprintf(stderr, "[port] game RAM at %p, running the game\n", (void *)ee_ram);
     return kf4_game_main();
 }
