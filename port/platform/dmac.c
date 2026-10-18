@@ -200,7 +200,9 @@ static uint32_t run_chain(int channel, int value) {
         uint32_t tag_qwc = tag[0] & 0xFFFF;
         uint32_t id = (tag[0] >> 28) & 7;
         int irq = (int)(tag[0] >> 31);
-        uint32_t address = tag[1] & 0x8FFFFFF0u;
+        /* all 32 bits: the program's sections have EE addresses from 0x40000000 (ee_address.c), and
+           the menus' font (menu_heap_area) is one of them */
+        uint32_t address = tag[1] & 0xFFFFFFF0u;
         int end = 0;
 
         if (channel == 1 && (value & CHCR_TTE)) {
