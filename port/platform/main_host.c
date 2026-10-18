@@ -20,7 +20,9 @@
        --stats           at exit, print the time the DMA controller's thread spent in VU1, in
                          handing GIF packets to the GS and in vsyncs, and VU1's runs and instructions
        --audio-dump FILE write the sound as a 48 kHz WAV file
-       --no-audio        play no sound (it is still made, for --audio-dump) */
+       --no-audio        play no sound (it is still made, for --audio-dump)
+       --controls NAME   the keyboard and mouse layout: ps2 (the default) or verdite (mouse look,
+                         port/sdk/controls.c) */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,7 +42,7 @@ static void usage(const char *program) {
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
-            "          [--audio-dump FILE] [--no-audio]\n",
+            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite]\n",
             program);
     exit(2);
 }
@@ -125,6 +127,8 @@ static void parse_options(int argc, char **argv) {
             port_options.dump_frames = value;
         } else if (strcmp(option, "--audio-dump") == 0) {
             port_options.audio_dump = value;
+        } else if (strcmp(option, "--controls") == 0) {
+            port_options.controls = value;
         } else if (strcmp(option, "--dump-dir") == 0) {
             port_options.dump_dir = value;
         } else {

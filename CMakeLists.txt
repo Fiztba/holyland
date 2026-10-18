@@ -72,6 +72,7 @@ add_library(kf4_port STATIC
     port/sdk/libgraph.c
     port/sdk/libmc.c
     port/sdk/libpad.c
+    port/sdk/controls.c
     port/sdk/sif.c
     port/sdk/stubs.c
     port/sdk/game_stubs.c

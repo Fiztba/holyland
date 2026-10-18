@@ -34,6 +34,7 @@ typedef struct {
     int adapt_width;         /* the picture's width follows the game's, not the 640 of the TV */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
+    const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */
     const char *audio_dump;  /* --audio-dump: write the sound as a WAV file */
     int no_audio;            /* --no-audio: no sound device (the sound is still made) */
