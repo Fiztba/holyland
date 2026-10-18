@@ -46,6 +46,16 @@
 #include "port/host.h"
 #include "port/platform.h"
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <xmmintrin.h>
+/* run() sets the SSE unit's denormals-are-zero (DAZ): IEEE's operands then read as the VU's, a
+   denormal as +-0, without masking them */
+#define VU_DAZ 1
+#define MXCSR_DAZ 0x0040u
+#else
+#define VU_DAZ 0
+#endif
+
 #define MICRO_INSNS 2048 /* 16 KB of micro memory */
 #define DATA_QWORDS 1024 /* 16 KB of data memory */
 #define REG_ACC 32       /* VF write target: the accumulator */
@@ -269,20 +279,27 @@ static inline int v4_any(V4 v) {
 /* vf_op on the lanes set in `lanes` (the others are left undefined), with their flags added to *flags
    (x << 3 ... w) if flags: four at once in IEEE floats as vf_op's fast path, and vf_op itself for a
    lane where the VU and IEEE part (an operand of exponent 255, or a result at the largest IEEE float).
-   A result of exponent 0 is done here too: its value is +-0 with IEEE's sign, which is the exact
-   result's, as vf_round's; it sets Z, and U when the exact result was not zero. A sum of two floats
-   is a multiple of 2^-149, so it is zero exactly when IEEE's is; a product, when an operand is. */
+   An operand of exponent 255 is an infinity or a NaN to IEEE, and so is the result, so the result
+   alone tells. A result of exponent 0 is done here too: its value is +-0 with IEEE's sign, which is
+   the exact result's, as vf_round's; it sets Z, and U when the exact result was not zero. A sum of
+   two floats is a multiple of 2^-149, so it is zero exactly when IEEE's is; a product, when an
+   operand is. */
 static inline V4 v4_op(int op, V4 a, V4 b, V4 lanes, unsigned *flags) {
     const V4 exp = v4_splat(0x7F800000u);
-    V4 ea = a & exp, eb = b & exp, r, slow, zero;
-    V4f x = (V4f)(a & ((V4)(ea != 0) | SIGN)), y = (V4f)(b & ((V4)(eb != 0) | SIGN));
+    V4 r, magnitude, slow, zero;
+#if VU_DAZ
+    V4f x = (V4f)a, y = (V4f)b;
+#else
+    V4f x = (V4f)(a & ((V4)((a & exp) != 0) | SIGN)), y = (V4f)(b & ((V4)((b & exp) != 0) | SIGN));
+#endif
     int f;
 
     r = (V4)(op == A_ADD ? x + y : op == A_SUB ? x - y : x * y);
-    slow = ((V4)(ea == exp) | (V4)(eb == exp) | (V4)((r & 0x7FFFFFFFu) == 0x7F7FFFFFu)) & lanes;
-    zero = (V4)((r & exp) == 0) & lanes & ~slow;
+    magnitude = r & 0x7FFFFFFFu;
+    slow = (V4)((V4i)magnitude >= 0x7F7FFFFF) & lanes;
+    zero = (V4)((V4i)magnitude < 0x00800000) & lanes & ~slow;
     if (flags && v4_any(zero)) {
-        V4 under = zero & (op == A_MUL ? (V4)(ea != 0) & (V4)(eb != 0) : (V4)((r & 0x7FFFFFFFu) != 0));
+        V4 under = zero & (op == A_MUL ? (V4)((a & exp) != 0) & (V4)((b & exp) != 0) : (V4)(magnitude != 0));
         V4 bits = (zero & (V4){FL_Z << 3, FL_Z << 2, FL_Z << 1, FL_Z}) |
                   (under & (V4){FL_U << 3, FL_U << 2, FL_U << 1, FL_U});
 
@@ -899,6 +916,9 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int end_next = 0;
     int guard = 0;
     int saved_round = fegetround();
+#if VU_DAZ
+    unsigned csr; /* MXCSR rounding toward zero */
+#endif
     uint64_t start = 0, gif_before = 0;
     /* When no instruction in micro memory reads the MAC or status flag (FSxxx, FMxxx) or sets the
        sticky bits (FSSET), the flag writes are not queued: nothing can see them while the program
@@ -927,6 +947,10 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     flags_read = vu.flags_read;
     memset(vu.vi_writes, 0, sizeof(vu.vi_writes));
     fesetround(FE_TOWARDZERO);
+#if VU_DAZ
+    csr = _mm_getcsr();
+    _mm_setcsr(csr | MXCSR_DAZ);
+#endif
     cycle = vu.cycle;
     for (;;) {
         const VuInsn *in = &code[pc & (MICRO_INSNS - 1)];
@@ -1280,7 +1304,13 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         case L_XTOP: SET_VI(in->lt, top, 0); break;
         case L_XITOP: SET_VI(in->lt, itop, 0); break;
         case L_XGKICK:
+#if VU_DAZ
+            _mm_setcsr(csr); /* the GS as before: rounding toward zero, without DAZ */
+#endif
             port_gif_path1_kick(vu.vi[in->ls]);
+#if VU_DAZ
+            _mm_setcsr(csr | MXCSR_DAZ);
+#endif
             break;
         case L_MFP:
             for (f = 0; f < 4; f++) {
@@ -1378,6 +1408,9 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         vu.mac_queued = (int32_t)mac;
         vu.status = (vu.status & ~0xFu) | mac_zsuo(mac) | (seen << 6);
     }
+#if VU_DAZ
+    _mm_setcsr(csr);
+#endif
     fesetround(saved_round);
     if (port_options.stats) {
         /* the GIF hand-offs of its XGKICKs (and the PATH3 they let go on) are counted there */

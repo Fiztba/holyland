@@ -156,7 +156,7 @@ static int run(void) {
     pair(UNOP, LNOP);
     port_vu1_micro_written();
     if (setjmp(fatal_jump)) {
-        fesetround(FE_TONEAREST); /* run() set round toward zero */
+        fesetenv(FE_DFL_ENV); /* run() set round toward zero (and DAZ) */
         return 1;
     }
     port_vu1_start(0, 0, 0);
