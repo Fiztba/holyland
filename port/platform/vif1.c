@@ -123,7 +123,7 @@ static void do_unpack(void) {
     uint32_t address = vif.code & 0x3FF;
     const uint8_t *bytes = (const uint8_t *)pending;
     uint8_t *vu_data = port_vu1_data();
-    uint32_t written, read = 0;
+    uint32_t written, read = 0, vectors;
     uint32_t cl = vif.cl, wl = vif.wl;
 
     if (num == 0) {
@@ -136,6 +136,7 @@ static void do_unpack(void) {
         PORT_TODO("VIF1 UNPACK with WL 0");
         return;
     }
+    vectors = unpack_vectors_read(num);
     for (written = 0; written < num; written++) {
         uint32_t block = written / wl, in_block = written % wl;
         uint32_t qaddr = cl >= wl ? address + block * cl + in_block : address + written;
@@ -145,8 +146,11 @@ static void do_unpack(void) {
         uint32_t value[4];
         int f;
 
-        if (has_data) {
-            uint32_t i = read++;
+        /* Filling (CL < WL): the qwords past CL in each cycle take no data of their own. They are
+           written as if they unpacked the next vector, without using it up, masks and mode as usual
+           (PCSX2's model); past the last vector, as if it were zeros. */
+        if (has_data || read < vectors) {
+            uint32_t i = has_data ? read++ : read;
 
             if (vl == 3) {
                 uint16_t v;
@@ -174,15 +178,11 @@ static void do_unpack(void) {
                 value[3] = element(bytes, i * 4 + 3, vl, usn);
             }
         } else {
-            PORT_TODO("VIF1 UNPACK in filling mode");
             value[0] = value[1] = value[2] = value[3] = 0;
         }
         for (f = 0; f < 4; f++) {
             uint32_t m = masked ? (vif.mask >> (row_index * 8 + f * 2)) & 3 : 0;
 
-            if (!has_data && m == 0) {
-                m = 1;
-            }
             switch (m) {
             case 0:
                 if (vif.mode == 1) {
