@@ -118,10 +118,8 @@ void port_gs_post_vsync(void) {
     }
     /* The scanout goes between the packets started before the vblank and those after: the game
        (and --fast all the more) runs ahead of the controller, and would have cleared the buffer
-       shown by the time it was read. So the ones before are finished first, and the controller
-       scans out before it reads a channel it finds started while this is queued (dmac.c). */
-    port_dmac_wait(1);
-    port_dmac_wait(2);
+       shown by the time it was read. So it goes into the controller's queue after the channels
+       started so far (dmac.c). */
     head = __atomic_load_n(&queue_head, __ATOMIC_RELAXED);
     while (head - __atomic_load_n(&queue_tail, __ATOMIC_ACQUIRE) >= VSYNC_QUEUE) {
         port_dmac_wake(); /* the GS is a whole queue behind: let it catch up */
@@ -131,7 +129,7 @@ void port_gs_post_vsync(void) {
     request->vblank = port_vblank_count();
     request->field = (int)((*(volatile uint64_t *)ee_hw_ptr(0x12001000) >> 13) & 1);
     __atomic_store_n(&queue_head, head + 1, __ATOMIC_RELEASE);
-    port_dmac_wake();
+    port_dmac_post_vsync();
 }
 
 void port_gs_finish(void) {

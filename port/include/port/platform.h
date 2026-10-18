@@ -62,17 +62,22 @@ void port_vsync(void);
 void port_kernel_spend(uint32_t cycles);
 /* Runs the interrupt handlers that came due (the DMA controller's ends). Every kernel call does. */
 void port_kernel_poll(void);
-/* Posts a DMA channel's end for its handler (any host thread may call it). */
-void port_kernel_post_dmac(int channel);
 
 /* ---- The DMA controller (port/platform/dmac.c) ----------------------------------------------
    A host thread that plays the EE's DMA controller: a channel the game starts (STR set in its
-   CHCR) is finished, and its STR cleared, as the hardware would. */
+   CHCR) is finished, and its STR cleared, as the hardware would. The transfers reach the GS in the
+   order the game started them. */
 void port_dmac_start(void);
-/* Wakes the controller: the game is about to start a channel. */
+/* (the game's thread, at every call into the host) Queues the channels the game has started since the
+   last call, and wakes the controller: the game may be about to start one. */
 void port_dmac_wake(void);
 /* Waits until a channel's STR is clear. */
 void port_dmac_wait(int channel);
+/* (the kernel) The channels among `wanted` started since the last call, once their transfers are done:
+   their end interrupts are due. */
+uint32_t port_dmac_ends(uint32_t wanted);
+/* (port_gs_post_vsync) Queues a vblank's scanout after the transfers started before it. */
+void port_dmac_post_vsync(void);
 /* The channel's CHCR as the game sees it, and transfers finished so far. */
 volatile int *port_dmac_chcr(int channel);
 uint64_t port_dmac_transfers(int channel);

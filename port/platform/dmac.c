@@ -13,8 +13,13 @@
    talks to: it also scans out the vblanks the kernel queues, and runs what port_dmac_call asks for.
    The other channels finish at once: the disc, sound and movies are done by their libraries.
 
+   A transfer takes no EE time: it is done at its start. So the GS gets the transfers whole, one after
+   another, in the order the game started them (the work queue below), and how fast this thread runs
+   never changes what is drawn.
+
    The game's EE time does not move while it spins on a register (port/platform/kernel.c), so how soon
-   this thread clears STR never changes what the game does, only how long the host takes.
+   this thread clears STR never changes what the game does, only how long the host takes. The end
+   interrupts are the kernel's to time (port_dmac_ends).
 
    The thread spins while the game is starting channels, and naps once it has been idle for a while.
    The calls that come before a game's own channel start (FlushCache, the libgraph and libdma calls)
@@ -72,9 +77,6 @@ static const uint32_t chcr_address[10] = {
 static volatile int *chcr[10];
 static volatile uint64_t transfers[10];
 static volatile int wake_requested;
-
-static void (*volatile call_fn)(void *);
-static void *call_arg;
 static volatile int call_done;
 
 #ifdef _WIN32
@@ -271,36 +273,167 @@ done:
     return tag_bits;
 }
 
-/* Finishes the channels that are started; 1 when there was one. */
-static int run_channels(void) {
-    int found = 0;
+/* ---- The work queue ---------------------------------------------------------------------------
+   What the controller does, in the order the game asked for it: the channels it started, the calls
+   port_dmac_call makes, and the vblanks' scanouts. A start is taken into the queue ("claimed") by
+   whichever thread sees its STR first:
+   - the game's thread, at every call into the host (port_dmac_wake, which FlushCache and the
+     libraries call, and every kernel call), takes the starts it made since the last one;
+   - this thread takes the starts made since, for a game that spins on STR with no call.
+   Two channels started between two calls are seen together, and taken in the order of their
+   numbers, after reading the CHCRs from the last to the first. That is the game's order: it starts
+   channel 1 only right after a call (FlushCache, sceDmaSend), so a channel 2 started before it has
+   been taken already; and on an x86 the game's stores are seen in the order it made them, so channel
+   2's STR is never seen before the channel 1 STR stored ahead of it. */
+#define QUEUE_SIZE 1024
+
+typedef enum { WORK_CHANNEL, WORK_CALL, WORK_VSYNC } WorkKind;
+
+typedef struct {
+    WorkKind kind;
+    int channel;
+    void (*fn)(void *);
+    void *arg;
+} Work;
+
+static Work queue[QUEUE_SIZE];
+static uint64_t queue_head; /* under queue_lock */
+static uint64_t queue_tail; /* under queue_lock */
+static volatile int queue_lock;
+static int claimed[10];              /* under queue_lock: the channel's start is in the queue */
+static volatile uint64_t starts[10]; /* starts claimed */
+static volatile uint64_t ends[10];   /* transfers finished */
+static uint64_t ends_reported[10];   /* the game's thread: the starts port_dmac_ends has gone past */
+
+static void lock_queue(void) {
+    while (__atomic_exchange_n(&queue_lock, 1, __ATOMIC_ACQUIRE)) {
+        cpu_relax();
+    }
+}
+
+static void unlock_queue(void) {
+    __atomic_store_n(&queue_lock, 0, __ATOMIC_RELEASE);
+}
+
+/* Claims the channels found started, then queues `work` if there is some. Returns how much it
+   queued, or -1 when the queue has no room for all of it. */
+static int claim_starts(const Work *work) {
+    uint64_t head;
+    int seen[10];
     int channel;
 
+    lock_queue();
+    head = queue_head;
+    if (QUEUE_SIZE - (head - queue_tail) < 11) {
+        unlock_queue();
+        return -1;
+    }
+    for (channel = 9; channel >= 0; channel--) {
+        seen[channel] = !claimed[channel] && (__atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE) & CHCR_STR);
+    }
     for (channel = 0; channel < 10; channel++) {
-        int value = __atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE);
+        if (seen[channel]) {
+            Work *start = &queue[queue_head++ % QUEUE_SIZE];
 
-        if (value & CHCR_STR) {
-            /* a vblank queued now came before this start (port_gs_post_vsync) */
-            while ((channel == 1 || channel == 2) && port_gs_vsync_pending()) {
-                port_gs_run_vsync();
-            }
-            if ((channel == 1 || channel == 2) && ((value >> CHCR_MOD_SHIFT) & 3) == 1) {
-                uint32_t tag = run_chain(channel, value);
-
-                /* STR and ASP clear, and TAG the last tag's upper half */
-                __atomic_store_n(chcr[channel], (int)((value & 0xFFCF & ~CHCR_STR) | (tag << 16)), __ATOMIC_RELEASE);
-            } else {
-                if (channel == 1 || channel == 2) {
-                    run_normal(channel, value);
-                }
-                __atomic_fetch_and(chcr[channel], ~CHCR_STR, __ATOMIC_RELEASE);
-            }
-            __atomic_fetch_add(&transfers[channel], 1, __ATOMIC_RELAXED);
-            port_kernel_post_dmac(channel);
-            found = 1;
+            start->kind = WORK_CHANNEL;
+            start->channel = channel;
+            claimed[channel] = 1;
+            __atomic_store_n(&starts[channel], starts[channel] + 1, __ATOMIC_RELEASE);
         }
     }
+    if (work != NULL) {
+        queue[queue_head++ % QUEUE_SIZE] = *work;
+    }
+    head = queue_head - head;
+    unlock_queue();
+    return (int)head;
+}
+
+static int take_work(Work *work) {
+    int found = 0;
+
+    lock_queue();
+    if (queue_tail != queue_head) {
+        *work = queue[queue_tail++ % QUEUE_SIZE];
+        found = 1;
+    }
+    unlock_queue();
     return found;
+}
+
+static void wake_thread(void) {
+    if (__atomic_exchange_n(&wake_requested, 1, __ATOMIC_ACQ_REL)) {
+        return;
+    }
+#ifdef _WIN32
+    EnterCriticalSection(&nap_lock);
+    WakeConditionVariable(&nap_signal);
+    LeaveCriticalSection(&nap_lock);
+#else
+    pthread_mutex_lock(&nap_lock);
+    pthread_cond_signal(&nap_signal);
+    pthread_mutex_unlock(&nap_lock);
+#endif
+}
+
+/* The game's thread: claims its starts and queues `work`, waiting for room. It wakes this thread when
+   that queued something, or with `wake` always (the game is about to start a channel). */
+static void queue_from_game(const Work *work, int wake) {
+    int queued;
+
+    if (chcr[0] == NULL) {
+        return; /* (the kernel's calls before the controller starts) */
+    }
+    while ((queued = claim_starts(work)) < 0) {
+        wake_thread();
+        cpu_relax();
+    }
+    if (queued > 0 || wake) {
+        wake_thread();
+    }
+}
+
+/* The channel's transfer is done: STR clears (with the rest of CHCR as `value`). */
+static void finish(int channel, int value) {
+    lock_queue();
+    claimed[channel] = 0;
+    __atomic_store_n(chcr[channel], value, __ATOMIC_RELEASE);
+    unlock_queue();
+    __atomic_fetch_add(&transfers[channel], 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&ends[channel], ends[channel] + 1, __ATOMIC_RELEASE);
+}
+
+/* A started channel's transfer, all of it. */
+static void run_transfer(int channel) {
+    int value = __atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE);
+
+    if ((channel == 1 || channel == 2) && ((value >> CHCR_MOD_SHIFT) & 3) == 1) {
+        uint32_t tag = run_chain(channel, value);
+
+        /* STR and ASP clear, and TAG the last tag's upper half */
+        value = (int)((value & 0xFFCF & ~CHCR_STR) | (tag << 16));
+    } else {
+        if (channel == 1 || channel == 2) {
+            run_normal(channel, value);
+        }
+        value &= ~CHCR_STR;
+    }
+    finish(channel, value);
+}
+
+static void run_work(const Work *work) {
+    switch (work->kind) {
+    case WORK_CHANNEL:
+        run_transfer(work->channel);
+        break;
+    case WORK_CALL:
+        work->fn(work->arg);
+        __atomic_store_n(&call_done, 1, __ATOMIC_RELEASE);
+        break;
+    case WORK_VSYNC:
+        port_gs_run_vsync();
+        break;
+    }
 }
 
 #ifdef _WIN32
@@ -313,19 +446,11 @@ static void *dmac_thread(void *unused)
 
     (void)unused;
     for (;;) {
-        if (run_channels()) {
-            idle = 0;
-            continue;
-        }
-        if (__atomic_load_n(&call_fn, __ATOMIC_ACQUIRE) != NULL) {
-            call_fn(call_arg);
-            __atomic_store_n(&call_fn, NULL, __ATOMIC_RELAXED);
-            __atomic_store_n(&call_done, 1, __ATOMIC_RELEASE);
-            idle = 0;
-            continue;
-        }
-        if (port_gs_vsync_pending()) {
-            port_gs_run_vsync();
+        Work work;
+
+        claim_starts(NULL);
+        if (take_work(&work)) {
+            run_work(&work);
             idle = 0;
             continue;
         }
@@ -368,18 +493,7 @@ void port_dmac_start(void) {
 }
 
 void port_dmac_wake(void) {
-    if (__atomic_exchange_n(&wake_requested, 1, __ATOMIC_ACQ_REL)) {
-        return;
-    }
-#ifdef _WIN32
-    EnterCriticalSection(&nap_lock);
-    WakeConditionVariable(&nap_signal);
-    LeaveCriticalSection(&nap_lock);
-#else
-    pthread_mutex_lock(&nap_lock);
-    pthread_cond_signal(&nap_signal);
-    pthread_mutex_unlock(&nap_lock);
-#endif
+    queue_from_game(NULL, 1);
 }
 
 void port_dmac_wait(int channel) {
@@ -387,6 +501,30 @@ void port_dmac_wait(int channel) {
     while (__atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE) & CHCR_STR) {
         cpu_relax();
     }
+}
+
+/* A channel's transfer takes no EE time, so it has ended by the first kernel call after its start:
+   that is where its handler runs, whenever this thread gets to it. */
+uint32_t port_dmac_ends(uint32_t wanted) {
+    uint32_t ended = 0;
+    int channel;
+
+    queue_from_game(NULL, 0);
+    for (channel = 0; channel < 10; channel++) {
+        uint64_t started = __atomic_load_n(&starts[channel], __ATOMIC_ACQUIRE);
+
+        if (started == ends_reported[channel]) {
+            continue;
+        }
+        ends_reported[channel] = started;
+        if (wanted & (1u << channel)) {
+            while (__atomic_load_n(&ends[channel], __ATOMIC_ACQUIRE) < started) {
+                cpu_relax();
+            }
+            ended |= 1u << channel;
+        }
+    }
+    return ended;
 }
 
 volatile int *port_dmac_chcr(int channel) {
@@ -398,11 +536,17 @@ uint64_t port_dmac_transfers(int channel) {
 }
 
 void port_dmac_call(void (*fn)(void *), void *arg) {
-    call_arg = arg;
+    Work work = {WORK_CALL, 0, fn, arg};
+
     __atomic_store_n(&call_done, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&call_fn, fn, __ATOMIC_RELEASE);
-    port_dmac_wake();
+    queue_from_game(&work, 1);
     while (!__atomic_load_n(&call_done, __ATOMIC_ACQUIRE)) {
         cpu_relax();
     }
+}
+
+void port_dmac_post_vsync(void) {
+    Work work = {WORK_VSYNC, 0, NULL, NULL};
+
+    queue_from_game(&work, 1);
 }

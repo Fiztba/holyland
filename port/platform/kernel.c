@@ -88,7 +88,6 @@ static HandlerChain intc_chains[16];
 static HandlerChain dmac_chains[16];
 static int next_handler_id = 1;
 static int in_interrupt;
-static volatile uint32_t dmac_pending; /* channels whose end the DMA controller's thread posted */
 
 static uint64_t ee_cycle;
 static uint64_t vblank_count;
@@ -203,34 +202,39 @@ static void run_chain(HandlerChain *chain, int cause) {
     }
 }
 
-/* Runs the handlers of the interrupts that are pending; what they make ready runs afterwards. */
+/* Runs the handlers of the interrupts that are pending; what they make ready runs afterwards. A DMA
+   channel's end is pending from the first call after its start (port_dmac_ends): a transfer takes no
+   EE time, so its handler runs at the same place on every run, however soon the controller got to it. */
 static void deliver_interrupts(void) {
     uint32_t dmac;
+    uint32_t wanted = 0;
     int cause;
 
     if (in_interrupt) {
         return;
     }
     in_interrupt = 1;
-    while (intc_pending != 0 || dmac_pending != 0) {
+    for (cause = 0; cause < 10; cause++) {
+        if (dmac_chains[cause].enabled && dmac_chains[cause].count > 0) {
+            wanted |= 1u << cause;
+        }
+    }
+    dmac = port_dmac_ends(wanted);
+    while (intc_pending != 0 || dmac != 0) {
         for (cause = 0; cause < 16; cause++) {
             if (intc_pending & (1u << cause)) {
                 intc_pending &= ~(1u << cause);
                 run_chain(&intc_chains[cause], cause);
             }
         }
-        dmac = __atomic_exchange_n(&dmac_pending, 0, __ATOMIC_ACQ_REL);
         for (cause = 0; cause < 16; cause++) {
             if (dmac & (1u << cause)) {
                 run_chain(&dmac_chains[cause], cause);
             }
         }
+        dmac = 0;
     }
     in_interrupt = 0;
-}
-
-void port_kernel_post_dmac(int channel) {
-    __atomic_fetch_or(&dmac_pending, 1u << channel, __ATOMIC_ACQ_REL);
 }
 
 static int add_handler(HandlerChain *chain, int (*handler)(int), int next) {
