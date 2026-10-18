@@ -109,6 +109,7 @@ typedef struct {
     uint8_t ebit;
     uint8_t qwait; /* DIV, SQRT, RSQRT, WAITQ: waits for a divide in flight */
     uint8_t pwait; /* the EFU's and WAITP: wait for P */
+    uint8_t qpwait; /* either */
     /* the write-back, worked out at decode: the register each result goes to (vf01..vf31, REG_ACC)
        and its fields, none if it writes nothing or vf00, or if it is the lower's and the upper
        writes the same register */
@@ -674,6 +675,7 @@ static void decode_all(void) {
         in->ebit = (hi >> 30) & 1;
         in->qwait = in->lop == L_DIV || in->lop == L_SQRT || in->lop == L_RSQRT || in->lop == L_WAITQ;
         in->pwait = IS_EFU(in->lop) || in->lop == L_WAITP;
+        in->qpwait = in->qwait | in->pwait;
         if ((in->lop >= L_FSAND && in->lop <= L_FMOR)) {
             vu.flags_read = 1;
         }
@@ -959,9 +961,8 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int flags_read;
     uint64_t cycle; /* vu.cycle, kept in a register: the helpers read vu.cycle, set before each */
     /* the last three instructions run (the newest first), and the cycles they issued */
-    const VuInsn *last[3] = {NULL, NULL, NULL};
-    uint64_t issued[3] = {0, 0, 0};
-    uint32_t last_pc = pc; /* not the one before pc: nothing ran before it */
+    const VuInsn *last0 = NULL, *last1 = NULL, *last2 = NULL;
+    uint64_t issued0 = 0, issued1 = 0, issued2 = 0;
     int in_line = 0; /* how many of them ran in a line before this one, up to 3 */
     int fmac_seen = 0;
     V4 last_value = {0, 0, 0, 0}, signs_seen = {0, 0, 0, 0};
@@ -998,35 +999,44 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
            issues a cycle or more after the one before, so only the last three instructions' writes
            can still be due. When they are the three before this one in memory, decode has said
            which of them it reads from (hazard); after a branch they are looked at. */
-        in_line = (pc & (MICRO_INSNS - 1)) == ((last_pc + 1) & (MICRO_INSNS - 1)) ? (in_line < 3 ? in_line + 1 : 3) : 0;
-        if (in_line == 3) {
-            if (in->hazard) {
-                for (n = 0; n < 3; n++) {
-                    if ((in->hazard & (1 << n)) && issued[n] + 4 > need) {
-                        need = issued[n] + 4;
-                    }
+        if (__builtin_expect(in_line == 3, 1)) {
+            if (__builtin_expect(in->hazard, 0)) {
+                if ((in->hazard & 1) && issued0 + 4 > need) {
+                    need = issued0 + 4;
+                }
+                if ((in->hazard & 2) && issued1 + 4 > need) {
+                    need = issued1 + 4;
+                }
+                if ((in->hazard & 4) && issued2 + 4 > need) {
+                    need = issued2 + 4;
                 }
             }
         } else {
-            for (n = 0; n < 3; n++) {
-                if (last[n] && issued[n] + 4 > need && reads_written(in, last[n])) {
-                    need = issued[n] + 4;
-                }
+            if (last0 && issued0 + 4 > need && reads_written(in, last0)) {
+                need = issued0 + 4;
+            }
+            if (last1 && issued1 + 4 > need && reads_written(in, last1)) {
+                need = issued1 + 4;
+            }
+            if (last2 && issued2 + 4 > need && reads_written(in, last2)) {
+                need = issued2 + 4;
             }
         }
-        if (in->qwait && vu.q_pending && vu.q_due > need) {
-            need = vu.q_due;
-        }
-        if (in->pwait && vu.p_pending && vu.p_due - 1 > need) {
-            need = vu.p_due - 1;
+        if (__builtin_expect(in->qpwait, 0)) {
+            if (in->qwait && vu.q_pending && vu.q_due > need) {
+                need = vu.q_due;
+            }
+            if (in->pwait && vu.p_pending && vu.p_due - 1 > need) {
+                need = vu.p_due - 1;
+            }
         }
         stalled = need > cycle;
         cycle = need;
         vu.cycle = cycle; /* for the helpers below */
-        if (cycle >= vu.next_due) {
+        if (__builtin_expect(cycle >= vu.next_due, 0)) {
             settle();
         }
-        if (in->pwait && vu.p_pending && cycle + 1 >= vu.p_due) {
+        if (in->qpwait && in->pwait && vu.p_pending && cycle + 1 >= vu.p_due) {
             /* the stall ends a cycle before P is due, with P written */
             vu.p = vu.p_next;
             vu.p_pending = 0;
@@ -1368,13 +1378,12 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
 
             v4_store(vu.vf[in->lwreg], (v4_load(vu.vf[in->lwreg]) & ~lanes) | (lval & lanes));
         }
-        last[2] = last[1];
-        last[1] = last[0];
-        last[0] = in;
-        issued[2] = issued[1];
-        issued[1] = issued[0];
-        issued[0] = cycle;
-        last_pc = pc;
+        last2 = last1;
+        last1 = last0;
+        last0 = in;
+        issued2 = issued1;
+        issued1 = issued0;
+        issued0 = cycle;
         if (in->lop == L_LOI) {
             vu.i = in->i_value;
         }
@@ -1391,8 +1400,10 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         if (branch_pending) {
             pc = branch_target & (MICRO_INSNS - 1);
             branch_pending = 0;
+            in_line = 0;
         } else {
             pc = (pc + 1) & (MICRO_INSNS - 1);
+            in_line += in_line < 3;
         }
         if (branch_now) {
             branch_pending = 1;
