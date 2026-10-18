@@ -66,7 +66,8 @@
 
 enum {
     /* upper: the generic arithmetic ones (op, second operand, destination) */
-    U_NOP, U_ARITH, U_ITOF, U_FTOI, U_ABS, U_CLIP, U_OPMULA, U_OPMSUB, U_UNKNOWN,
+    U_NOP, U_ITOF, U_FTOI, U_ABS, U_CLIP, U_OPMULA, U_OPMSUB, U_UNKNOWN,
+    U_ARITH, /* + arith * 4 + bsrc (decode_upper), so that one jump picks both */
 };
 enum { A_ADD, A_SUB, A_MUL, A_MADD, A_MSUB, A_MAX, A_MINI };
 enum { B_FT, B_BC, B_Q, B_I };
@@ -509,6 +510,7 @@ static void decode_upper(VuInsn *in, uint32_t w) {
         return;
     }
     in->uflags = in->arith != A_MAX && in->arith != A_MINI;
+    in->uop = (uint8_t)(U_ARITH + in->arith * 4 + in->bsrc);
     add_read(in, fs, dest);
     if (in->bsrc == B_FT) {
         add_read(in, ft, dest);
@@ -908,6 +910,29 @@ static uint16_t branch_vi(int reg, int stalled) {
 }
 
 /* ---- Running --------------------------------------------------------------------------------- */
+/* An upper instruction of the arithmetic kind; each pair of arith and bsrc is its own copy, so the
+   two are one jump. */
+static inline __attribute__((always_inline)) V4 upper_arith(const VuInsn *in, int arith, int bsrc,
+                                                             unsigned *mac) {
+    V4 a = v4_load(vu.vf[in->fs]), b, lanes = field_lanes[in->udest];
+
+    switch (bsrc) {
+    case B_FT: b = v4_load(vu.vf[in->ft]); break;
+    case B_BC: b = v4_splat(vu.vf[in->ft][in->bc]); break;
+    case B_Q: b = v4_splat(vu.q); break;
+    default: b = v4_splat(vu.i); break;
+    }
+    switch (arith) {
+    case A_ADD: return v4_op(A_ADD, a, b, lanes, mac);
+    case A_SUB: return v4_op(A_SUB, a, b, lanes, mac);
+    case A_MUL: return v4_op(A_MUL, a, b, lanes, mac);
+    case A_MADD: return v4_op(A_ADD, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, mac);
+    case A_MSUB: return v4_op(A_SUB, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, mac);
+    case A_MAX: return v4_max(a, b);
+    default: return v4_mini(a, b);
+    }
+}
+
 /* the lower (0) or upper (1) word of the instruction pair at pc, for messages */
 static uint32_t micro_word(uint32_t pc, int upper) {
     uint32_t w;
@@ -1011,30 +1036,19 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         switch (in->uop) {
         case U_NOP:
             break;
-        case U_ARITH: {
-            V4 a = v4_load(vu.vf[in->fs]), b, lanes = field_lanes[in->udest];
-
-            switch (in->bsrc) {
-            case B_FT: b = v4_load(vu.vf[in->ft]); break;
-            case B_BC: b = v4_splat(vu.vf[in->ft][in->bc]); break;
-            case B_Q: b = v4_splat(vu.q); break;
-            default: b = v4_splat(vu.i); break;
-            }
-            switch (in->arith) {
-            case A_ADD: uval = v4_op(A_ADD, a, b, lanes, &mac); break;
-            case A_SUB: uval = v4_op(A_SUB, a, b, lanes, &mac); break;
-            case A_MUL: uval = v4_op(A_MUL, a, b, lanes, &mac); break;
-            case A_MADD:
-                uval = v4_op(A_ADD, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
-                break;
-            case A_MSUB:
-                uval = v4_op(A_SUB, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
-                break;
-            case A_MAX: uval = v4_max(a, b); break;
-            default: uval = v4_mini(a, b); break;
-            }
-            break;
-        }
+#define ARITH(arith_)                                                                              \
+    case U_ARITH + (arith_) * 4 + B_FT: uval = upper_arith(in, arith_, B_FT, &mac); break;        \
+    case U_ARITH + (arith_) * 4 + B_BC: uval = upper_arith(in, arith_, B_BC, &mac); break;        \
+    case U_ARITH + (arith_) * 4 + B_Q: uval = upper_arith(in, arith_, B_Q, &mac); break;          \
+    case U_ARITH + (arith_) * 4 + B_I: uval = upper_arith(in, arith_, B_I, &mac); break
+        ARITH(A_ADD);
+        ARITH(A_SUB);
+        ARITH(A_MUL);
+        ARITH(A_MADD);
+        ARITH(A_MSUB);
+        ARITH(A_MAX);
+        ARITH(A_MINI);
+#undef ARITH
         case U_ITOF:
             uval = v4_itof(v4_load(vu.vf[in->fs]), fixed_shift[in->bc]);
             break;
