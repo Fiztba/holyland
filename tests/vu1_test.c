@@ -31,6 +31,13 @@ void port_gif_path1_kick(uint32_t address) {
     (void)address;
 }
 
+PortOptions port_options; /* no --stats */
+PortStats port_stats;
+
+uint64_t port_ticks(void) {
+    return 0;
+}
+
 void port_todo(const char *what, const char *file, int line) {
     printf("todo: %s (%s:%d)\n", what, file, line);
 }
@@ -149,7 +156,7 @@ static int run(void) {
     pair(UNOP, LNOP);
     port_vu1_micro_written();
     if (setjmp(fatal_jump)) {
-        fesetround(FE_TONEAREST); /* run() set round toward zero */
+        fesetenv(FE_DFL_ENV); /* run() set round toward zero (and DAZ) */
         return 1;
     }
     port_vu1_start(0, 0, 0);
@@ -183,6 +190,22 @@ static void check_near(const char *what, uint32_t got, float want, float toleran
 }
 
 /* ---- The tests ---------------------------------------------------------------------------------- */
+/* a new program at 0, VU1's registers and data memory as the last one left them */
+static void reupload(void) {
+    memset(micro_mem, 0, sizeof(micro_mem));
+    count = 0;
+}
+
+/* stores the MAC flag at qword 2 x and the status flag at qword 2 y */
+static void read_flags(void) {
+    pair(UNOP, ISUBIU(2, 0, 1));
+    pair(UNOP, FMAND(3, 2));
+    pair(UNOP, FSAND(4, 0xFFF));
+    pair(UNOP, ISW(X, 3, 0, 2));
+    pair(UNOP, ISW(Y, 4, 0, 2));
+    run();
+}
+
 /* vf1 = qword 0, vf2 = qword 1, loaded and waited for */
 static void load12(void) {
     pair(UNOP, LQ(XYZW, 1, 0, 0));
@@ -301,6 +324,26 @@ static void test_flags(void) {
     run();
     check("MAC flag: O for x, U and Z for y", word(2, 0), 0x8404);
     check("status: Z U O and their sticky bits", word(2, 1), 0x034D);
+
+    /* A program that reads no flags leaves them as one that does would (vu1.c skips the flag
+       pipeline then), for the next program to read: S for y, O for z, U and Z for w */
+    begin();
+    set_qword(0, 0x3F800000u, 0xBF800000u, 0x7F000000u, 0x00800000u);
+    set_qword(1, 0x3F800000u, 0x3F800000u, 0x7F000000u, 0x00800000u);
+    load12();
+    pair(up(U_MUL, XYZW, 2, 1, 3), LNOP);
+    run();
+    reupload();
+    read_flags();
+    check("flags left by a program that reads none: MAC", word(2, 0), 0x2141);
+    check("flags left by a program that reads none: status", word(2, 1), 0x03CF);
+    reupload();
+    pair(up(U_ADD, X, 0, 1, 4), LNOP); /* 1 + 0: no flags, but the sticky bits stay */
+    run();
+    reupload();
+    read_flags();
+    check("a later program's flags, and the sticky bits: MAC", word(2, 0), 0x0000);
+    check("a later program's flags, and the sticky bits: status", word(2, 1), 0x03C0);
 }
 
 static void test_q(void) {

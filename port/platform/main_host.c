@@ -16,7 +16,9 @@
        --ps2-scanout     turn them all off
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
-       --host-dir DIR    where host0: files go (the current directory by default) */
+       --host-dir DIR    where host0: files go (the current directory by default)
+       --stats           at exit, print the time the DMA controller's thread spent in VU1, in
+                         handing GIF packets to the GS and in vsyncs, and VU1's runs and instructions */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +28,7 @@
 #include "port/platform.h"
 
 PortOptions port_options;
+PortStats port_stats;
 
 static FILE *log_file;
 
@@ -33,7 +36,7 @@ static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
-            "          [--dump-frames N,N,...] [--dump-dir DIR]\n",
+            "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n",
             program);
     exit(2);
 }
@@ -88,6 +91,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--no-adapt-width") == 0) {
             port_options.adapt_width = 0;
+            continue;
+        }
+        if (strcmp(option, "--stats") == 0) {
+            port_options.stats = 1;
             continue;
         }
         if (strcmp(option, "--help") == 0 || strcmp(option, "-h") == 0 || value == NULL) {
@@ -173,12 +180,40 @@ static void close_log(void) {
     log_file = NULL;
 }
 
+/* ---- --stats ---------------------------------------------------------------------------------- */
+static double start_seconds;
+
+static void drained(void *unused) {
+    (void)unused;
+}
+
+static void print_stats(void) {
+    double per_second = port_ticks_per_second();
+    double vu1 = (double)port_stats.vu1_ticks / per_second;
+
+    /* the controller's thread finishes what the game started first, so the counts are the same
+       every run */
+    port_dmac_call(drained, NULL);
+    fprintf(stderr, "[stats] wall %.3f s\n", port_wall_seconds() - start_seconds);
+    fprintf(stderr, "[stats] VU1 %.3f s: %llu runs, %llu instructions (%.2f ns each)\n", vu1,
+            (unsigned long long)port_stats.vu1_runs, (unsigned long long)port_stats.vu1_insns,
+            port_stats.vu1_insns ? vu1 * 1e9 / (double)port_stats.vu1_insns : 0.0);
+    fprintf(stderr, "[stats] GIF hand-off %.3f s, vsync %.3f s\n", (double)port_stats.gif_ticks / per_second,
+            (double)port_stats.vsync_ticks / per_second);
+    fprintf(stderr, "[stats] VU1 cycles %llu, PATH1 hash %016llx\n",
+            (unsigned long long)port_stats.vu1_cycles, (unsigned long long)port_stats.path1_hash);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     parse_options(argc, argv);
+    start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);
+    if (port_options.stats) {
+        atexit(print_stats);
+    }
     port_memory_init();
     port_address_init();
     port_disc_open(port_options.disc);

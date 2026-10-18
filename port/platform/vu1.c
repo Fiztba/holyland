@@ -46,16 +46,28 @@
 #include "port/host.h"
 #include "port/platform.h"
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <xmmintrin.h>
+/* run() sets the SSE unit's denormals-are-zero (DAZ): IEEE's operands then read as the VU's, a
+   denormal as +-0, without masking them */
+#define VU_DAZ 1
+#define MXCSR_DAZ 0x0040u
+#else
+#define VU_DAZ 0
+#endif
+
 #define MICRO_INSNS 2048 /* 16 KB of micro memory */
 #define DATA_QWORDS 1024 /* 16 KB of data memory */
 #define REG_ACC 32       /* VF write target: the accumulator */
+#define REG_SCRATCH 33   /* where a write that goes nowhere goes */
 #define REG_NONE 0xFF
 #define VU_MAX 0x7FFFFFFFu /* the largest VU float */
 #define SIGN 0x80000000u
 
 enum {
     /* upper: the generic arithmetic ones (op, second operand, destination) */
-    U_NOP, U_ARITH, U_ITOF, U_FTOI, U_ABS, U_CLIP, U_OPMULA, U_OPMSUB, U_UNKNOWN,
+    U_NOP, U_ITOF, U_FTOI, U_ABS, U_CLIP, U_OPMULA, U_OPMSUB, U_UNKNOWN,
+    U_ARITH, /* + arith * 4 + bsrc (decode_upper), so that one jump picks both */
 };
 enum { A_ADD, A_SUB, A_MUL, A_MADD, A_MSUB, A_MAX, A_MINI };
 enum { B_FT, B_BC, B_Q, B_I };
@@ -95,6 +107,16 @@ typedef struct {
     int32_t imm;
     uint32_t i_value; /* LOI */
     uint8_t ebit;
+    uint8_t qwait; /* DIV, SQRT, RSQRT, WAITQ: waits for a divide in flight */
+    uint8_t pwait; /* the EFU's and WAITP: wait for P */
+    uint8_t qpwait; /* either */
+    /* the write-back, worked out at decode: the register each result goes to (vf01..vf31, REG_ACC)
+       and its fields, none if it writes nothing or vf00, or if it is the lower's and the upper
+       writes the same register */
+    uint8_t uwreg, uwmask, lwreg, lwmask;
+    uint16_t ilw_write; /* ILW, ILWR: the VI register it loads (bit n: vi n), due 4 cycles on */
+    uint8_t hazard; /* bit k - 1: it reads a VF field or VI register the instruction k before it in
+                       memory writes with a latency (ilw_write, the VF writes) */
     uint8_t nreads;
     VfUse reads[4];
 } VuInsn;
@@ -117,9 +139,8 @@ typedef struct {
 } ViWrite;
 
 static struct {
-    uint32_t vf[32][4];
+    uint32_t vf[34][4]; /* vf00..vf31, ACC (REG_ACC), and REG_SCRATCH */
     uint16_t vi[16];
-    uint32_t acc[4];
     uint32_t q, p, i, r;
     uint32_t q_next, p_next;
     uint64_t q_due, p_due;
@@ -132,14 +153,13 @@ static struct {
     FlagWrite flag_queue[16]; /* in issue order, so in due order */
     unsigned flag_head, flag_count;
     int32_t mac_queued; /* the MAC flag of the last FMAC write queued, -1 after an FSSET */
-    uint64_t ready[32][4]; /* the cycle each VF field's last write is due */
-    uint64_t vi_ready[16]; /* the cycle each VI register's last ILW is due */
-    uint64_t vi_ready_last; /* the latest of them */
+    uint64_t next_due;     /* the earliest cycle settle() has something to do (Q, P, a flag write) */
     ViWrite vi_writes[8]; /* the last few, the newest at vi_write_count - 1 */
     unsigned vi_write_count;
     uint64_t cycle;
     uint32_t pc;           /* where MSCNT continues */
     int decoded;           /* micro memory decoded since the last upload */
+    int flags_read;        /* micro memory has an FSxxx or FMxxx (see run) */
 } vu;
 
 static uint8_t *micro;    /* 0x11008000 */
@@ -224,6 +244,100 @@ static inline uint32_t vf_op(int op, uint32_t a, uint32_t b, unsigned *flags) {
     return vf_round(vf_value(a) * vf_value(b), flags);
 }
 
+/* ---- Four fields at once (GCC's vector extensions) ------------------------------------------ */
+typedef uint32_t V4 __attribute__((vector_size(16)));
+typedef int32_t V4i __attribute__((vector_size(16)));
+typedef float V4f __attribute__((vector_size(16)));
+
+/* a field mask (x = 8 .. w = 1) as lanes of all ones */
+static const V4 field_lanes[16] = {
+    {0, 0, 0, 0}, {0, 0, 0, ~0u}, {0, 0, ~0u, 0}, {0, 0, ~0u, ~0u},
+    {0, ~0u, 0, 0}, {0, ~0u, 0, ~0u}, {0, ~0u, ~0u, 0}, {0, ~0u, ~0u, ~0u},
+    {~0u, 0, 0, 0}, {~0u, 0, 0, ~0u}, {~0u, 0, ~0u, 0}, {~0u, 0, ~0u, ~0u},
+    {~0u, ~0u, 0, 0}, {~0u, ~0u, 0, ~0u}, {~0u, ~0u, ~0u, 0}, {~0u, ~0u, ~0u, ~0u}};
+
+static inline V4 v4_load(const uint32_t *p) {
+    V4 v;
+
+    memcpy(&v, p, 16);
+    return v;
+}
+
+static inline void v4_store(uint32_t *p, V4 v) {
+    memcpy(p, &v, 16);
+}
+
+static inline V4 v4_splat(uint32_t x) {
+    return (V4){x, x, x, x};
+}
+
+static inline int v4_any(V4 v) {
+    uint64_t h[2];
+
+    memcpy(h, &v, 16);
+    return (h[0] | h[1]) != 0;
+}
+
+/* vf_op on the lanes set in `lanes` (the others are left undefined), with their flags added to *flags
+   (x << 3 ... w) if flags: four at once in IEEE floats as vf_op's fast path, and vf_op itself for a
+   lane where the VU and IEEE part (an operand of exponent 255, or a result at the largest IEEE float).
+   An operand of exponent 255 is an infinity or a NaN to IEEE, and so is the result, so the result
+   alone tells. A result of exponent 0 is done here too: its value is +-0 with IEEE's sign, which is
+   the exact result's, as vf_round's; it sets Z, and U when the exact result was not zero. A sum of
+   two floats is a multiple of 2^-149, so it is zero exactly when IEEE's is; a product, when an
+   operand is. */
+static inline V4 v4_op(int op, V4 a, V4 b, V4 lanes, unsigned *flags) {
+    const V4 exp = v4_splat(0x7F800000u);
+    V4 r, magnitude, slow, zero;
+#if VU_DAZ
+    V4f x = (V4f)a, y = (V4f)b;
+#else
+    V4f x = (V4f)(a & ((V4)((a & exp) != 0) | SIGN)), y = (V4f)(b & ((V4)((b & exp) != 0) | SIGN));
+#endif
+    int f;
+
+    r = (V4)(op == A_ADD ? x + y : op == A_SUB ? x - y : x * y);
+    magnitude = r & 0x7FFFFFFFu;
+    slow = (V4)((V4i)magnitude >= 0x7F7FFFFF) & lanes;
+    zero = (V4)((V4i)magnitude < 0x00800000) & lanes & ~slow;
+    if (flags && v4_any(zero)) {
+        V4 under = zero & (op == A_MUL ? (V4)((a & exp) != 0) & (V4)((b & exp) != 0) : (V4)(magnitude != 0));
+        V4 bits = (zero & (V4){FL_Z << 3, FL_Z << 2, FL_Z << 1, FL_Z}) |
+                  (under & (V4){FL_U << 3, FL_U << 2, FL_U << 1, FL_U});
+
+        *flags |= bits[0] | bits[1] | bits[2] | bits[3];
+    }
+    r &= ~zero | SIGN;
+    if (v4_any(slow)) {
+        for (f = 0; f < 4; f++) {
+            if (slow[f]) {
+                unsigned fl = 0;
+
+                r[f] = vf_op(op, a[f], b[f], &fl);
+                if (flags) {
+                    *flags |= fl << (3 - f);
+                }
+            }
+        }
+    }
+    return r;
+}
+
+/* vf_max and vf_mini, four at once */
+static inline V4 v4_max(V4 a, V4 b) {
+    V4i sa = (V4i)a, sb = (V4i)b;
+    V4 both_negative = (V4)((sa < 0) & (sb < 0));
+    V4 take_a = (both_negative & (V4)(sa < sb)) | (~both_negative & (V4)(sa > sb));
+
+    return (a & take_a) | (b & ~take_a);
+}
+
+static inline V4 v4_mini(V4 a, V4 b) {
+    V4 a_is_max = (V4)(v4_max(a, b) == a);
+
+    return (b & a_is_max) | (a & ~a_is_max);
+}
+
 static inline uint32_t vf_add(uint32_t a, uint32_t b) {
     return vf_op(A_ADD, a, b, NULL);
 }
@@ -272,23 +386,27 @@ static inline uint32_t vf_mini(uint32_t a, uint32_t b) {
     return vf_max(a, b) == a ? b : a;
 }
 
-static uint32_t ftoi(uint32_t bits, int shift) {
-    double v = vf_value(bits) * (double)(1 << shift);
+/* FTOIn of four fields: each VU float times 2^shift, truncated, or the integer's limit with its
+   sign at 2^31 and beyond. Below that, IEEE floats scale it exactly (a power of two, no overflow)
+   and truncate it as the VU does; a denormal is +-0. */
+static inline V4 v4_ftoi(V4 a, int shift) {
+    V4 e = a & 0x7F800000u;
+    V4 big = (V4)(e >= (uint32_t)(158 - shift) << 23); /* |a| >= 2^(31 - shift) */
+    V4f x = (V4f)(a & ((V4)(e != 0) | SIGN) & ~big);
+    V4 r = (V4)__builtin_convertvector(x * (float)(1 << shift), V4i);
 
-    if (v >= 2147483648.0) {
-        return 0x7FFFFFFFu;
-    }
-    if (v <= -2147483648.0) {
-        return 0x80000000u;
-    }
-    return (uint32_t)(int32_t)v;
+    return (r & ~big) | (((a >> 31) + 0x7FFFFFFFu) & big);
 }
 
 /* ITOF0/4/12/15 and FTOI0/4/12/15: the fraction bits of the fixed-point side */
 static const int fixed_shift[4] = {0, 4, 12, 15};
 
-static uint32_t itof(uint32_t bits, int shift) {
-    return vf_round((double)(int32_t)bits / (double)(1 << shift), NULL);
+/* ITOFn of four fields: each integer as a float rounded toward zero, over 2^shift. The IEEE
+   conversion rounds as the VU does (in the current rounding mode), and the scale is exact. */
+static inline V4 v4_itof(V4 a, int shift) {
+    V4f x = __builtin_convertvector((V4i)a, V4f);
+
+    return (V4)(x * (1.0f / (float)(1 << shift)));
 }
 
 /* ---- Decoding ------------------------------------------------------------------------------- */
@@ -393,6 +511,7 @@ static void decode_upper(VuInsn *in, uint32_t w) {
         return;
     }
     in->uflags = in->arith != A_MAX && in->arith != A_MINI;
+    in->uop = (uint8_t)(U_ARITH + in->arith * 4 + in->bsrc);
     add_read(in, fs, dest);
     if (in->bsrc == B_FT) {
         add_read(in, ft, dest);
@@ -518,6 +637,23 @@ static void decode_lower(VuInsn *in, uint32_t w) {
     }
 }
 
+/* in reads a VF field w writes, or a VI register w's ILW loads */
+static int reads_written(const VuInsn *in, const VuInsn *w) {
+    int n;
+
+    if (in->vireads & w->ilw_write) {
+        return 1;
+    }
+    for (n = 0; n < in->nreads; n++) {
+        const VfUse *use = &in->reads[n];
+
+        if ((use->reg == w->uwreg && (use->mask & w->uwmask)) || (use->reg == w->lwreg && (use->mask & w->lwmask))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void decode_all(void) {
     int n;
 
@@ -537,8 +673,41 @@ static void decode_all(void) {
             decode_lower(in, lo);
         }
         in->ebit = (hi >> 30) & 1;
+        in->qwait = in->lop == L_DIV || in->lop == L_SQRT || in->lop == L_RSQRT || in->lop == L_WAITQ;
+        in->pwait = IS_EFU(in->lop) || in->lop == L_WAITP;
+        in->qpwait = in->qwait | in->pwait;
+        if ((in->lop >= L_FSAND && in->lop <= L_FMOR)) {
+            vu.flags_read = 1;
+        }
+        if ((in->lop == L_ILW || in->lop == L_ILWR) && in->lt != 0 && in->lt < 16) {
+            in->ilw_write = (uint16_t)(1u << in->lt);
+        }
+        in->uwreg = in->lwreg = REG_SCRATCH;
+        if (in->uwrite != REG_NONE && in->uwrite != 0) {
+            in->uwreg = in->uwrite;
+            in->uwmask = in->udest;
+        }
+        if (in->lwrite != REG_NONE && in->lwrite != 0 && in->lwrite != in->uwrite) {
+            in->lwreg = in->lwrite;
+            in->lwmask = in->ldest;
+        }
+    }
+    for (n = 0; n < MICRO_INSNS; n++) {
+        int k;
+
+        for (k = 1; k <= 3; k++) {
+            if (reads_written(&code[n], &code[(n - k) & (MICRO_INSNS - 1)])) {
+                code[n].hazard |= (uint8_t)(1 << (k - 1));
+            }
+        }
     }
     vu.decoded = 1;
+}
+
+/* The MAC flag's Z S U O, as the status flag has them */
+static inline unsigned mac_zsuo(unsigned mac) {
+    return ((mac & 0x000F) ? 1u : 0) | ((mac & 0x00F0) ? 2u : 0) | ((mac & 0x0F00) ? 4u : 0) |
+           ((mac & 0xF000) ? 8u : 0);
 }
 
 /* ---- State ---------------------------------------------------------------------------------- */
@@ -547,6 +716,7 @@ void port_vu1_reset(void) {
     data = ee_hw_ptr(0x1100C000);
     memset(&vu, 0, sizeof(vu));
     vu.vf[0][3] = 0x3F800000u;
+    vu.next_due = UINT64_MAX;
 }
 
 void port_vu1_micro_written(void) {
@@ -570,12 +740,18 @@ static void set_q(uint32_t value, int latency, uint32_t status) {
     vu.q_due = vu.cycle + (uint64_t)latency;
     vu.q_pending = 1;
     vu.q_status_next = status;
+    if (vu.q_due < vu.next_due) {
+        vu.next_due = vu.q_due;
+    }
 }
 
 static void set_p(uint32_t value, int latency) {
     vu.p_next = value;
     vu.p_due = vu.cycle + (uint64_t)latency;
     vu.p_pending = 1;
+    if (vu.p_due < vu.next_due) {
+        vu.next_due = vu.p_due;
+    }
 }
 
 /* At most two writes issue a cycle (an upper and a lower instruction), and each is due 4 cycles
@@ -587,6 +763,9 @@ static inline void push_flags(int kind, uint16_t mac, uint32_t value) {
     fw->kind = (uint8_t)kind;
     fw->mac = mac;
     fw->value = value;
+    if (fw->due < vu.next_due) {
+        vu.next_due = fw->due;
+    }
 }
 
 static void settle(void) {
@@ -618,6 +797,13 @@ static void settle(void) {
             vu.status = (vu.status & 0x3Fu) | fw->value;
             break;
         }
+    }
+    vu.next_due = vu.flag_count ? vu.flag_queue[vu.flag_head].due : UINT64_MAX;
+    if (vu.q_pending && vu.q_due < vu.next_due) {
+        vu.next_due = vu.q_due;
+    }
+    if (vu.p_pending && vu.p_due < vu.next_due) {
+        vu.next_due = vu.p_due;
     }
 }
 
@@ -726,6 +912,29 @@ static uint16_t branch_vi(int reg, int stalled) {
 }
 
 /* ---- Running --------------------------------------------------------------------------------- */
+/* An upper instruction of the arithmetic kind; each pair of arith and bsrc is its own copy, so the
+   two are one jump. */
+static inline __attribute__((always_inline)) V4 upper_arith(const VuInsn *in, int arith, int bsrc,
+                                                             unsigned *mac) {
+    V4 a = v4_load(vu.vf[in->fs]), b, lanes = field_lanes[in->udest];
+
+    switch (bsrc) {
+    case B_FT: b = v4_load(vu.vf[in->ft]); break;
+    case B_BC: b = v4_splat(vu.vf[in->ft][in->bc]); break;
+    case B_Q: b = v4_splat(vu.q); break;
+    default: b = v4_splat(vu.i); break;
+    }
+    switch (arith) {
+    case A_ADD: return v4_op(A_ADD, a, b, lanes, mac);
+    case A_SUB: return v4_op(A_SUB, a, b, lanes, mac);
+    case A_MUL: return v4_op(A_MUL, a, b, lanes, mac);
+    case A_MADD: return v4_op(A_ADD, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, mac);
+    case A_MSUB: return v4_op(A_SUB, v4_load(vu.vf[REG_ACC]), v4_op(A_MUL, a, b, lanes, NULL), lanes, mac);
+    case A_MAX: return v4_max(a, b);
+    default: return v4_mini(a, b);
+    }
+}
+
 /* the lower (0) or upper (1) word of the instruction pair at pc, for messages */
 static uint32_t micro_word(uint32_t pc, int upper) {
     uint32_t w;
@@ -740,52 +949,94 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int end_next = 0;
     int guard = 0;
     int saved_round = fegetround();
+#if VU_DAZ
+    unsigned csr; /* MXCSR rounding toward zero */
+#endif
+    uint64_t start = 0, gif_before = 0;
+    /* When no instruction in micro memory reads the MAC or status flag (FSxxx, FMxxx) or sets the
+       sticky bits (FSSET), the flag writes are not queued: nothing can see them while the program
+       runs. What a later program could see is what is left once they have all landed (drain), so
+       only that is kept: the last FMAC instruction's result and Z U O, and the Z S U O of them all
+       for the sticky bits. */
+    int flags_read;
+    uint64_t cycle; /* vu.cycle, kept in a register: the helpers read vu.cycle, set before each */
+    /* the last three instructions run (the newest first), and the cycles they issued */
+    const VuInsn *last0 = NULL, *last1 = NULL, *last2 = NULL;
+    uint64_t issued0 = 0, issued1 = 0, issued2 = 0;
+    int in_line = 0; /* how many of them ran in a line before this one, up to 3 */
+    int fmac_seen = 0;
+    V4 last_value = {0, 0, 0, 0}, signs_seen = {0, 0, 0, 0};
+    unsigned last_dest = 0, last_zuo = 0, zuo_seen = 0;
 
+    if (port_options.stats) {
+        start = port_ticks();
+        gif_before = port_stats.gif_ticks;
+    }
     if (!vu.decoded) {
+        vu.flags_read = 0;
         decode_all();
     }
+    flags_read = vu.flags_read;
     memset(vu.vi_writes, 0, sizeof(vu.vi_writes));
     fesetround(FE_TOWARDZERO);
+#if VU_DAZ
+    csr = _mm_getcsr();
+    _mm_setcsr(csr | MXCSR_DAZ);
+#endif
+    cycle = vu.cycle;
     for (;;) {
         const VuInsn *in = &code[pc & (MICRO_INSNS - 1)];
-        uint64_t need = vu.cycle;
-        uint32_t uval[4];
-        uint32_t lval[4];
+        uint64_t need = cycle;
+        V4 uval = {0, 0, 0, 0};
+        V4 lval = {0, 0, 0, 0};
         unsigned mac = 0; /* the Z, U and O bits of the MAC flag the upper sets */
-        int lmask = 0;
-        int n, f;
+        int f;
         int branch_now = 0;
         int stalled;
         uint32_t target = 0;
 
-        /* stalls */
-        for (n = 0; n < in->nreads; n++) {
-            const VfUse *use = &in->reads[n];
-
-            for (f = 0; f < 4; f++) {
-                if ((use->mask & (8 >> f)) && vu.ready[use->reg][f] > need) {
-                    need = vu.ready[use->reg][f];
+        /* stalls. A VF write, and an ILW's, is due 4 cycles after it issues, and an instruction
+           issues a cycle or more after the one before, so only the last three instructions' writes
+           can still be due. When they are the three before this one in memory, decode has said
+           which of them it reads from (hazard); after a branch they are looked at. */
+        if (__builtin_expect(in_line == 3, 1)) {
+            if (__builtin_expect(in->hazard, 0)) {
+                if ((in->hazard & 1) && issued0 + 4 > need) {
+                    need = issued0 + 4;
+                }
+                if ((in->hazard & 2) && issued1 + 4 > need) {
+                    need = issued1 + 4;
+                }
+                if ((in->hazard & 4) && issued2 + 4 > need) {
+                    need = issued2 + 4;
                 }
             }
-        }
-        if (in->vireads && vu.vi_ready_last > need) {
-            for (n = 1; n < 16; n++) {
-                if ((in->vireads & (1u << n)) && vu.vi_ready[n] > need) {
-                    need = vu.vi_ready[n];
-                }
+        } else {
+            if (last0 && issued0 + 4 > need && reads_written(in, last0)) {
+                need = issued0 + 4;
+            }
+            if (last1 && issued1 + 4 > need && reads_written(in, last1)) {
+                need = issued1 + 4;
+            }
+            if (last2 && issued2 + 4 > need && reads_written(in, last2)) {
+                need = issued2 + 4;
             }
         }
-        if ((in->lop == L_DIV || in->lop == L_SQRT || in->lop == L_RSQRT || in->lop == L_WAITQ) &&
-            vu.q_pending && vu.q_due > need) {
-            need = vu.q_due;
+        if (__builtin_expect(in->qpwait, 0)) {
+            if (in->qwait && vu.q_pending && vu.q_due > need) {
+                need = vu.q_due;
+            }
+            if (in->pwait && vu.p_pending && vu.p_due - 1 > need) {
+                need = vu.p_due - 1;
+            }
         }
-        if ((IS_EFU(in->lop) || in->lop == L_WAITP) && vu.p_pending && vu.p_due - 1 > need) {
-            need = vu.p_due - 1;
+        stalled = need > cycle;
+        cycle = need;
+        vu.cycle = cycle; /* for the helpers below */
+        if (__builtin_expect(cycle >= vu.next_due, 0)) {
+            settle();
         }
-        stalled = need > vu.cycle;
-        vu.cycle = need;
-        settle();
-        if ((IS_EFU(in->lop) || in->lop == L_WAITP) && vu.p_pending && vu.cycle + 1 >= vu.p_due) {
+        if (in->qpwait && in->pwait && vu.p_pending && cycle + 1 >= vu.p_due) {
             /* the stall ends a cycle before P is due, with P written */
             vu.p = vu.p_next;
             vu.p_pending = 0;
@@ -795,51 +1046,24 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         switch (in->uop) {
         case U_NOP:
             break;
-        case U_ARITH: {
-            const uint32_t *a = vu.vf[in->fs];
-            for (f = 0; f < 4; f++) {
-                uint32_t b;
-                unsigned fl = 0;
-
-                if (!(in->udest & (8 >> f))) {
-                    continue;
-                }
-                switch (in->bsrc) {
-                case B_FT: b = vu.vf[in->ft][f]; break;
-                case B_BC: b = vu.vf[in->ft][in->bc]; break;
-                case B_Q: b = vu.q; break;
-                default: b = vu.i; break;
-                }
-                switch (in->arith) {
-                case A_ADD: uval[f] = vf_op(A_ADD, a[f], b, &fl); break;
-                case A_SUB: uval[f] = vf_op(A_SUB, a[f], b, &fl); break;
-                case A_MUL: uval[f] = vf_op(A_MUL, a[f], b, &fl); break;
-                case A_MADD:
-                    uval[f] = vf_op(A_ADD, vu.acc[f], vf_mul(a[f], b), &fl);
-                    break;
-                case A_MSUB:
-                    uval[f] = vf_op(A_SUB, vu.acc[f], vf_mul(a[f], b), &fl);
-                    break;
-                case A_MAX: uval[f] = vf_max(a[f], b); break;
-                default: uval[f] = vf_mini(a[f], b); break;
-                }
-                mac |= fl << (3 - f);
-            }
-            break;
-        }
+#define ARITH(arith_)                                                                              \
+    case U_ARITH + (arith_) * 4 + B_FT: uval = upper_arith(in, arith_, B_FT, &mac); break;        \
+    case U_ARITH + (arith_) * 4 + B_BC: uval = upper_arith(in, arith_, B_BC, &mac); break;        \
+    case U_ARITH + (arith_) * 4 + B_Q: uval = upper_arith(in, arith_, B_Q, &mac); break;          \
+    case U_ARITH + (arith_) * 4 + B_I: uval = upper_arith(in, arith_, B_I, &mac); break
+        ARITH(A_ADD);
+        ARITH(A_SUB);
+        ARITH(A_MUL);
+        ARITH(A_MADD);
+        ARITH(A_MSUB);
+        ARITH(A_MAX);
+        ARITH(A_MINI);
+#undef ARITH
         case U_ITOF:
-            for (f = 0; f < 4; f++) {
-                if (in->udest & (8 >> f)) {
-                    uval[f] = itof(vu.vf[in->fs][f], fixed_shift[in->bc]);
-                }
-            }
+            uval = v4_itof(v4_load(vu.vf[in->fs]), fixed_shift[in->bc]);
             break;
         case U_FTOI:
-            for (f = 0; f < 4; f++) {
-                if (in->udest & (8 >> f)) {
-                    uval[f] = ftoi(vu.vf[in->fs][f], fixed_shift[in->bc]);
-                }
-            }
+            uval = v4_ftoi(v4_load(vu.vf[in->fs]), fixed_shift[in->bc]);
             break;
         case U_ABS:
             for (f = 0; f < 4; f++) {
@@ -875,7 +1099,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 if (in->uop == U_OPMULA) {
                     uval[f] = vf_op(A_MUL, s[i1[f]], t[i2[f]], &fl);
                 } else {
-                    uval[f] = vf_op(A_SUB, vu.acc[f], vf_mul(s[i1[f]], t[i2[f]]), &fl);
+                    uval[f] = vf_op(A_SUB, vu.vf[REG_ACC][f], vf_mul(s[i1[f]], t[i2[f]]), &fl);
                 }
                 mac |= fl << (3 - f);
             }
@@ -884,20 +1108,21 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         default:
             PORT_FATAL("VU1: unknown upper instruction %08X at 0x%03X", micro_word(pc, 1), pc);
         }
-        if (in->uflags) {
-            unsigned zsuo;
+        if (in->uflags && !flags_read) {
+            fmac_seen = 1;
+            last_value = uval;
+            last_dest = in->udest;
+            last_zuo = mac;
+            zuo_seen |= mac;
+            signs_seen |= uval & field_lanes[in->udest];
+        } else if (in->uflags) {
+            V4 sign = (uval >> 31) & field_lanes[in->udest];
 
-            for (f = 0; f < 4; f++) {
-                if (in->udest & (8 >> f)) {
-                    mac |= (uval[f] >> 31) << (7 - f); /* S */
-                }
-            }
-            zsuo = ((mac & 0x000F) ? 1u : 0) | ((mac & 0x00F0) ? 2u : 0) | ((mac & 0x0F00) ? 4u : 0) |
-                   ((mac & 0xF000) ? 8u : 0);
+            mac |= (sign[0] << 7) | (sign[1] << 6) | (sign[2] << 5) | (sign[3] << 4); /* S */
             /* the same flags again change nothing (unless an FSSET came between) */
             if ((int32_t)mac != vu.mac_queued) {
                 vu.mac_queued = (int32_t)mac;
-                push_flags(FW_FMAC, (uint16_t)mac, zsuo);
+                push_flags(FW_FMAC, (uint16_t)mac, mac_zsuo(mac));
             }
         }
 
@@ -906,7 +1131,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     do {                                                                                           \
         if (r_) {                                                                                  \
             ViWrite *w_ = &vu.vi_writes[vu.vi_write_count++ & 7];                                  \
-            w_->cycle = vu.cycle;                                                                  \
+            w_->cycle = cycle;                                                                     \
             w_->reg = (uint8_t)(r_);                                                               \
             w_->flag_read = (flag_read_);                                                          \
             w_->old = vu.vi[r_];                                                                   \
@@ -931,8 +1156,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             } else {
                 address = vu.vi[in->ls];
             }
-            memcpy(lval, mem_qword(address), 16);
-            lmask = in->ldest;
+            lval = v4_load(mem_qword(address));
             if (in->lop == L_LQI) {
                 SET_VI(in->ls, vu.vi[in->ls] + 1, 0);
             }
@@ -972,9 +1196,6 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                     break;
                 }
             }
-            if (in->lt) {
-                vu.vi_ready[in->lt] = vu.vi_ready_last = vu.cycle + 4;
-            }
             break;
         }
         case L_ISW:
@@ -995,22 +1216,19 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         case L_IAND: SET_VI(in->ld, vu.vi[in->ls] & vu.vi[in->lt], 0); break;
         case L_IOR: SET_VI(in->ld, vu.vi[in->ls] | vu.vi[in->lt], 0); break;
         case L_MOVE:
-            memcpy(lval, vu.vf[in->ls], 16);
-            lmask = in->ldest;
+            lval = v4_load(vu.vf[in->ls]);
             break;
         case L_MR32:
             lval[0] = vu.vf[in->ls][1];
             lval[1] = vu.vf[in->ls][2];
             lval[2] = vu.vf[in->ls][3];
             lval[3] = vu.vf[in->ls][0];
-            lmask = in->ldest;
             break;
         case L_MTIR: SET_VI(in->lt, vu.vf[in->ls][in->fsf], 0); break;
         case L_MFIR:
             for (f = 0; f < 4; f++) {
                 lval[f] = (uint32_t)(int32_t)(int16_t)vu.vi[in->ls];
             }
-            lmask = in->ldest;
             break;
         case L_DIV: {
             uint32_t s = vu.vf[in->ls][in->fsf], t = vu.vf[in->lt][in->ftf];
@@ -1102,13 +1320,18 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         case L_XTOP: SET_VI(in->lt, top, 0); break;
         case L_XITOP: SET_VI(in->lt, itop, 0); break;
         case L_XGKICK:
+#if VU_DAZ
+            _mm_setcsr(csr); /* the GS as before: rounding toward zero, without DAZ */
+#endif
             port_gif_path1_kick(vu.vi[in->ls]);
+#if VU_DAZ
+            _mm_setcsr(csr | MXCSR_DAZ);
+#endif
             break;
         case L_MFP:
             for (f = 0; f < 4; f++) {
                 lval[f] = vu.p;
             }
-            lmask = in->ldest;
             break;
         case L_ESADD:
         case L_ERSADD:
@@ -1138,40 +1361,33 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             for (f = 0; f < 4; f++) {
                 lval[f] = vu.r;
             }
-            lmask = in->ldest;
             break;
         default:
             PORT_FATAL("VU1: unknown lower instruction %08X at 0x%03X", micro_word(pc, 0), pc);
         }
 #undef SET_VI
 
-        /* write back: the upper first; the lower's VF write is dropped if it is the same register */
-        if (in->uwrite != REG_NONE) {
-            uint32_t *d = in->uwrite == REG_ACC ? vu.acc : vu.vf[in->uwrite];
+        /* write back: the upper first, then the lower (decode dropped it if it is the same register) */
+        if (in->uwmask) {
+            V4 lanes = field_lanes[in->uwmask];
 
-            if (in->uwrite != 0) {
-                for (f = 0; f < 4; f++) {
-                    if (in->udest & (8 >> f)) {
-                        d[f] = uval[f];
-                        if (in->uwrite != REG_ACC) {
-                            vu.ready[in->uwrite][f] = vu.cycle + 4;
-                        }
-                    }
-                }
-            }
+            v4_store(vu.vf[in->uwreg], (v4_load(vu.vf[in->uwreg]) & ~lanes) | (uval & lanes));
         }
-        if (lmask && in->lwrite != REG_NONE && in->lwrite != 0 && in->uwrite != in->lwrite) {
-            for (f = 0; f < 4; f++) {
-                if (lmask & (8 >> f)) {
-                    vu.vf[in->lwrite][f] = lval[f];
-                    vu.ready[in->lwrite][f] = vu.cycle + 4;
-                }
-            }
+        if (in->lwmask) {
+            V4 lanes = field_lanes[in->lwmask];
+
+            v4_store(vu.vf[in->lwreg], (v4_load(vu.vf[in->lwreg]) & ~lanes) | (lval & lanes));
         }
+        last2 = last1;
+        last1 = last0;
+        last0 = in;
+        issued2 = issued1;
+        issued1 = issued0;
+        issued0 = cycle;
         if (in->lop == L_LOI) {
             vu.i = in->i_value;
         }
-        vu.cycle++;
+        cycle++;
 
         /* where next */
         if (end_next) {
@@ -1184,8 +1400,10 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         if (branch_pending) {
             pc = branch_target & (MICRO_INSNS - 1);
             branch_pending = 0;
+            in_line = 0;
         } else {
             pc = (pc + 1) & (MICRO_INSNS - 1);
+            in_line += in_line < 3;
         }
         if (branch_now) {
             branch_pending = 1;
@@ -1195,8 +1413,29 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             PORT_FATAL("VU1 ran 50 million instructions without ending (at 0x%03X)", pc);
         }
     }
+    vu.cycle = cycle;
     drain();
+    if (fmac_seen) {
+        /* the flag writes not queued, landed: the last one's flags, and the sticky bits of all */
+        V4 sign = (last_value >> 31) & field_lanes[last_dest];
+        unsigned mac = last_zuo | (sign[0] << 7) | (sign[1] << 6) | (sign[2] << 5) | (sign[3] << 4);
+        unsigned seen = mac_zsuo(zuo_seen) | (v4_any(signs_seen & SIGN) ? 2u : 0);
+
+        vu.mac = mac;
+        vu.mac_queued = (int32_t)mac;
+        vu.status = (vu.status & ~0xFu) | mac_zsuo(mac) | (seen << 6);
+    }
+#if VU_DAZ
+    _mm_setcsr(csr);
+#endif
     fesetround(saved_round);
+    if (port_options.stats) {
+        /* the GIF hand-offs of its XGKICKs (and the PATH3 they let go on) are counted there */
+        port_stats.vu1_ticks += port_ticks() - start - (port_stats.gif_ticks - gif_before);
+        port_stats.vu1_runs++;
+        port_stats.vu1_insns += (uint64_t)guard + 1;
+        port_stats.vu1_cycles = vu.cycle;
+    }
 }
 
 void port_vu1_start(uint32_t address, uint32_t top, uint32_t itop) {
