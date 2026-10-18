@@ -88,9 +88,13 @@ building it does not.
 **Windows:** use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw), or LLVM's clang, on the PATH:
 
 ```sh
-cmake --preset windows-clang
+cmake --preset windows-clang -DSDL2_DIR=C:/path/to/SDL2-2.30.9/x86_64-w64-mingw32/lib/cmake/SDL2
 cmake --build out/windows-clang
 ```
+
+SDL2 on Windows comes from its mingw development package (`SDL2-devel-2.x.y-mingw.tar.gz` from
+[SDL's releases](https://github.com/libsdl-org/SDL/releases)); `SDL2_DIR` points into it. The build
+copies `SDL2.dll` and llvm-mingw's `libc++.dll` and `libunwind.dll` next to `kf4.exe`.
 
 **Linux:**
 

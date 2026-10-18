@@ -246,3 +246,21 @@ endforeach()
 add_executable(kf4 port/platform/main_host.c ${KF4_GAME_OBJECTS})
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
 target_link_libraries(kf4 PRIVATE kf4_port)
+
+# Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
+# llvm-mingw's C++ runtime, which paraLLEl-GS needs)
+if(WIN32)
+    get_filename_component(KF4_COMPILER_BIN ${CMAKE_C_COMPILER} DIRECTORY)
+    set(KF4_RUNTIME_DLLS)
+    foreach(dll libc++.dll libunwind.dll)
+        find_file(KF4_DLL_${dll} ${dll} PATHS ${KF4_COMPILER_BIN} ${KF4_COMPILER_BIN}/../x86_64-w64-mingw32/bin
+            NO_DEFAULT_PATH)
+        if(KF4_DLL_${dll})
+            list(APPEND KF4_RUNTIME_DLLS ${KF4_DLL_${dll}})
+        endif()
+    endforeach()
+    add_custom_command(TARGET kf4 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:kf4> ${KF4_RUNTIME_DLLS}
+            $<TARGET_FILE_DIR:kf4>
+        COMMAND_EXPAND_LISTS)
+endif()
