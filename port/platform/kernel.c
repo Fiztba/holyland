@@ -20,6 +20,7 @@
 
 #include "eekernel.h"
 #include "port/host.h"
+#include "port/audio.h"
 #include "port/platform.h"
 
 #define MAX_THREADS 64
@@ -296,6 +297,7 @@ static void vblank_start(void) {
     __atomic_fetch_or(csr, (uint64_t)1 << 3, __ATOMIC_RELAXED);
     raise_intc(INTC_VBLANK_S);
     wake_vsync_waiters();
+    port_audio_sync(ee_cycle);
     if (!port_options.fast) {
         double due = pace_start_wall + (double)ee_cycle / (double)EE_BUS_HZ;
         double now = port_wall_seconds();
@@ -326,13 +328,24 @@ static void advance_to(uint64_t until) {
                 timer_due = n;
             }
         }
+        /* the sound driver's timer on the IOP (port/audio) */
+        {
+            uint64_t t = port_audio_next_event();
+
+            if (t < next) {
+                next = t;
+                timer_due = -2;
+            }
+        }
         if (next > until) {
             break;
         }
         ee_cycle = next;
         timer_sync(0, ee_cycle);
         timer_sync(1, ee_cycle);
-        if (timer_due < 0) {
+        if (timer_due == -2) {
+            port_audio_event(ee_cycle);
+        } else if (timer_due < 0) {
             if (next == next_vblank_start) {
                 next_vblank_end = next_vblank_start + VBLANK_LINES * LINE_CYCLES;
                 next_vblank_start = (uint64_t)(vblank_count + 2) * FIELD_CYCLES_X5 / 5;

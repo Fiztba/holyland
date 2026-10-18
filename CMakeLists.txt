@@ -73,11 +73,17 @@ add_library(kf4_port STATIC
     port/sdk/libmc.c
     port/sdk/libpad.c
     port/sdk/sif.c
-    port/sdk/fssnd.c
     port/sdk/stubs.c
     port/sdk/game_stubs.c
-    port/sdk/libc_ps2.c)
+    port/sdk/libc_ps2.c
+    port/audio/iop.c
+    port/audio/sd.c
+    port/audio/output.c
+    port/audio/fsiopsnd.c
+    port/audio/modmidi.c
+    port/audio/modhsyn.c)
 target_include_directories(kf4_port PUBLIC port/include)
+target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
