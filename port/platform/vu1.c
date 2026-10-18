@@ -112,7 +112,9 @@ typedef struct {
        and its fields, none if it writes nothing or vf00, or if it is the lower's and the upper
        writes the same register */
     uint8_t uwreg, uwmask, lwreg, lwmask;
-    uint8_t hazard; /* bit k - 1: it reads a field the instruction k before it in memory writes */
+    uint16_t ilw_write; /* ILW, ILWR: the VI register it loads (bit n: vi n), due 4 cycles on */
+    uint8_t hazard; /* bit k - 1: it reads a VF field or VI register the instruction k before it in
+                       memory writes with a latency (ilw_write, the VF writes) */
     uint8_t nreads;
     VfUse reads[4];
 } VuInsn;
@@ -150,8 +152,6 @@ static struct {
     unsigned flag_head, flag_count;
     int32_t mac_queued; /* the MAC flag of the last FMAC write queued, -1 after an FSSET */
     uint64_t next_due;     /* the earliest cycle settle() has something to do (Q, P, a flag write) */
-    uint64_t vi_ready[16]; /* the cycle each VI register's last ILW is due */
-    uint64_t vi_ready_last; /* the latest of them */
     ViWrite vi_writes[8]; /* the last few, the newest at vi_write_count - 1 */
     unsigned vi_write_count;
     uint64_t cycle;
@@ -634,10 +634,13 @@ static void decode_lower(VuInsn *in, uint32_t w) {
     }
 }
 
-/* in reads a VF field w writes */
+/* in reads a VF field w writes, or a VI register w's ILW loads */
 static int reads_written(const VuInsn *in, const VuInsn *w) {
     int n;
 
+    if (in->vireads & w->ilw_write) {
+        return 1;
+    }
     for (n = 0; n < in->nreads; n++) {
         const VfUse *use = &in->reads[n];
 
@@ -671,6 +674,9 @@ static void decode_all(void) {
         in->pwait = IS_EFU(in->lop) || in->lop == L_WAITP;
         if ((in->lop >= L_FSAND && in->lop <= L_FMOR)) {
             vu.flags_read = 1;
+        }
+        if ((in->lop == L_ILW || in->lop == L_ILWR) && in->lt != 0 && in->lt < 16) {
+            in->ilw_write = (uint16_t)(1u << in->lt);
         }
         in->uwreg = in->lwreg = REG_SCRATCH;
         if (in->uwrite != REG_NONE && in->uwrite != 0) {
@@ -963,10 +969,10 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         int stalled;
         uint32_t target = 0;
 
-        /* stalls. A VF write is due 4 cycles after it issues, and an instruction issues a cycle or
-           more after the one before, so only the last three instructions' writes can still be due.
-           When they are the three before this one in memory, decode has said which of them it
-           reads from (hazard); after a branch they are looked at. */
+        /* stalls. A VF write, and an ILW's, is due 4 cycles after it issues, and an instruction
+           issues a cycle or more after the one before, so only the last three instructions' writes
+           can still be due. When they are the three before this one in memory, decode has said
+           which of them it reads from (hazard); after a branch they are looked at. */
         in_line = (pc & (MICRO_INSNS - 1)) == ((last_pc + 1) & (MICRO_INSNS - 1)) ? (in_line < 3 ? in_line + 1 : 3) : 0;
         if (in_line == 3) {
             if (in->hazard) {
@@ -980,17 +986,6 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             for (n = 0; n < 3; n++) {
                 if (last[n] && issued[n] + 4 > need && reads_written(in, last[n])) {
                     need = issued[n] + 4;
-                }
-            }
-        }
-        if (in->vireads && vu.vi_ready_last > need) {
-            unsigned reads = in->vireads;
-
-            while (reads) {
-                n = __builtin_ctz(reads);
-                reads &= reads - 1;
-                if (vu.vi_ready[n] > need) {
-                    need = vu.vi_ready[n];
                 }
             }
         }
@@ -1176,9 +1171,6 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                     SET_VI(in->lt, q[f], 0);
                     break;
                 }
-            }
-            if (in->lt) {
-                vu.vi_ready[in->lt] = vu.vi_ready_last = cycle + 4;
             }
             break;
         }
