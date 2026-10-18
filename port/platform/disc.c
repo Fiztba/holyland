@@ -20,6 +20,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+/* the 32-bit stat fails on files over 2 GB, such as the disc image */
+#define stat _stat64
 #else
 #include <dirent.h>
 #endif

@@ -139,7 +139,7 @@ static const uint8_t *dma_ptr(uint32_t address) {
 }
 
 /* The memory side of a transfer of qwords. */
-static void send(int channel, uint32_t address, uint32_t qwords) {
+static void channel_send(int channel, uint32_t address, uint32_t qwords) {
     const uint8_t *data;
 
     if (qwords == 0) {
@@ -162,7 +162,7 @@ static void run_normal(int channel, int value) {
         port_gs_read_fifo((void *)dma_ptr(madr), qwc);
     } else {
         /* the GIF's channel only goes to the GS, whatever DIR says (ui/title.c leaves it 0) */
-        send(channel, madr, qwc);
+        channel_send(channel, madr, qwc);
     }
     *CHANNEL_REG(channel, D_MADR) = madr + qwc * 16;
     *CHANNEL_REG(channel, D_QWC) = 0;
@@ -187,7 +187,7 @@ static uint32_t run_chain(int channel, int value) {
     if (qwc != 0) {
         uint32_t id = (tag_bits >> 12) & 7;
 
-        send(channel, madr, qwc);
+        channel_send(channel, madr, qwc);
         madr += qwc * 16;
         qwc = 0;
         if (id == TAG_REFE || id == TAG_END || ((tag_bits & 0x8000) && (value & CHCR_TIE))) {
@@ -209,29 +209,29 @@ static uint32_t run_chain(int channel, int value) {
         tag_bits = tag[0] >> 16;
         switch (id) {
         case TAG_REFE:
-            send(channel, address, tag_qwc);
+            channel_send(channel, address, tag_qwc);
             madr = address + tag_qwc * 16;
             tadr += 16;
             end = 1;
             break;
         case TAG_CNT:
-            send(channel, tadr + 16, tag_qwc);
+            channel_send(channel, tadr + 16, tag_qwc);
             madr = tadr + 16 + tag_qwc * 16;
             tadr = madr;
             break;
         case TAG_NEXT:
-            send(channel, tadr + 16, tag_qwc);
+            channel_send(channel, tadr + 16, tag_qwc);
             madr = tadr + 16 + tag_qwc * 16;
             tadr = address;
             break;
         case TAG_REF:
         case TAG_REFS:
-            send(channel, address, tag_qwc);
+            channel_send(channel, address, tag_qwc);
             madr = address + tag_qwc * 16;
             tadr += 16;
             break;
         case TAG_CALL:
-            send(channel, tadr + 16, tag_qwc);
+            channel_send(channel, tadr + 16, tag_qwc);
             madr = tadr + 16 + tag_qwc * 16;
             if (asp >= 2) {
                 PORT_FATAL("DMA channel %d: a CALL tag three deep", channel);
@@ -240,7 +240,7 @@ static uint32_t run_chain(int channel, int value) {
             tadr = address;
             break;
         case TAG_RET:
-            send(channel, tadr + 16, tag_qwc);
+            channel_send(channel, tadr + 16, tag_qwc);
             madr = tadr + 16 + tag_qwc * 16;
             if (asp > 0) {
                 tadr = asr[--asp];
@@ -249,7 +249,7 @@ static uint32_t run_chain(int channel, int value) {
             }
             break;
         case TAG_END:
-            send(channel, tadr + 16, tag_qwc);
+            channel_send(channel, tadr + 16, tag_qwc);
             madr = tadr + 16 + tag_qwc * 16;
             end = 1;
             break;

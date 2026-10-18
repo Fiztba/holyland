@@ -50,7 +50,12 @@ int iDisableDmac(int channel);
 int DIntr(void);
 int EIntr(void);
 
-/* Threads and semaphores. */
+/* Threads and semaphores. Windows' kernel32 exports a CreateThread, ExitThread and TerminateThread of
+   its own, so the EE's are linked under other names (on every platform, to keep them the same). Don't
+   include <windows.h> after this header. */
+#define CreateThread ee_CreateThread
+#define ExitThread ee_ExitThread
+#define TerminateThread ee_TerminateThread
 int CreateThread(struct ThreadParam *param);
 int DeleteThread(int id);
 int StartThread(int id, void *arg);
