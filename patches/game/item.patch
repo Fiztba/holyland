@@ -103,7 +103,7 @@ index 0594b38176e84720f45364fd6332ff2ec1cbb15c..269c10ab4d7dbd97a10bd25fe11ee901
 +GameDefinition *const weapon_name_defs = item_name_defs + 150;
 +GameDefinition *const worn_name_defs = item_name_defs + 220;
 diff --git a/src/game/item/map_item.c b/src/game/item/map_item.c
-index 2ee95737a736c28f019ae010355d1f3e29f4f7df..05f2b15e1d906effcf3eb7a7b8eadf4a5bbd80ae 100644
+index 2ee95737a736c28f019ae010355d1f3e29f4f7df..0c0e8f4659462d078da67315daa02a9ee1308d15 100644
 --- a/src/game/item/map_item.c
 +++ b/src/game/item/map_item.c
 @@ -8,6 +8,7 @@
@@ -292,7 +292,15 @@ index 2ee95737a736c28f019ae010355d1f3e29f4f7df..05f2b15e1d906effcf3eb7a7b8eadf4a
      if (object != NULL && (object->state_flags & MAP_OBJECT_IN_USE) && object->definition->kind == 3) {
          MapItem_Unlink(pickup_item);
      }
-@@ -894,16 +900,17 @@ void *MapItem_FindModelSource(int slot, int key) {
+@@ -888,22 +894,24 @@ void *MapItem_FindModelSource(int slot, int key) {
+             return NULL;
+         }
+         if (value == key) {
+-            return (char *)item_model_sources + (slot << 8) + i * 8;
++            /* PORT: was a byte offset by the PS2 size (8 bytes, 0x100 a map); the struct holds pointers */
++            return &item_model_sources[slot][i];
+         }
+     }
      return NULL;
  }
  
@@ -314,7 +322,7 @@ index 2ee95737a736c28f019ae010355d1f3e29f4f7df..05f2b15e1d906effcf3eb7a7b8eadf4a
  }
  
  /* Takes an item off the list of items lying about, frees its object and drop record links, and returns
-@@ -983,7 +990,7 @@ int MapItem_UniqueNotDropped(int item) {
+@@ -983,7 +991,7 @@ int MapItem_UniqueNotDropped(int item) {
  
      common = item_common_defs + item;
      for (i = 0; i < 0x80; i++) {
