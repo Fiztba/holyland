@@ -16,7 +16,7 @@ decomp's, pinned in `decomp/` and never edited here; the PC edits to it are kept
 ## The decomp and the patches
 
 `decomp/` is a git submodule of [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp.git), pinned
-to one commit (currently `90dad42`).
+to one commit (currently `88b0978`).
 
 > **The decomp is read-only here.** Never edit `decomp/` or the compiled copy in
 > `out/<preset>/decomp_src/`; this goes for people and agents alike. Configure fails if `decomp/` has
