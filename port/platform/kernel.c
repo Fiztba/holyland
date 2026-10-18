@@ -285,12 +285,15 @@ static void vblank_start(void) {
     volatile uint64_t *csr = EE_HW(volatile uint64_t *, 0x12001000);
 
     vblank_count++;
+    /* the GS scans out the field the display registers say, alongside the game. It is the field
+       CSR's FIELD names until now: the GS turns FIELD over a few lines into the vblank, after the
+       picture is handed on (as PCSX2 has it). Reading FIELD after the turn shows each of a
+       field-rendered game's pictures in the other field's lines, which breaks up text. */
+    port_gs_post_vsync();
     /* FIELD (bit 13) turns over each field; VSINT (bit 3) is set (atomically: the GS sets FINISH
        from the DMA controller's thread) */
     __atomic_fetch_xor(csr, (uint64_t)1 << 13, __ATOMIC_RELAXED);
     __atomic_fetch_or(csr, (uint64_t)1 << 3, __ATOMIC_RELAXED);
-    /* the GS scans out the field the display registers say, alongside the game */
-    port_gs_post_vsync();
     raise_intc(INTC_VBLANK_S);
     wake_vsync_waiters();
     if (!port_options.fast) {
