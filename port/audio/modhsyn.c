@@ -222,7 +222,7 @@ static uint8_t midiVoices;         /* 0x10ECB1 */
 static uint8_t seVoices;           /* 0x10EC90 */
 static uint32_t randState = 0x02CEE9D7u; /* 0x10B410, set when the module loads */
 
-/* 0x10B280: one period of a sine, LFO wave 6 */
+/* 0x10B280: one period of a sine, LFO wave 6: trunc(32767 * sin(2 * pi * i / 200)), every entry */
 static const int16_t sine200[200] = {
     0, 1029, 2057, 3083, 4106, 5125, 6139, 7147, 8148, 9141,
     10125, 11099, 12062, 13013, 13951, 14875, 15785, 16679, 17557, 18417,

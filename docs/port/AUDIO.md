@@ -29,6 +29,7 @@ The game (EE) talks to one RPC server on the IOP, `0x1010`: FromSoftware's drive
 | `port/audio/modmidi.c` | the sequencer (Sony's API names, `csl.h`) |
 | `port/audio/modhsyn.c` | the synthesizer: voice allocation, pitch, volume, pan, envelopes, LFOs, reverb |
 | `port/audio/sd.c`, `sd.h` | libsd: its calls and encodings, on the SPU2 below; `sceSdNote2Pitch`; the sound data input |
+| `port/audio/libsd_irx.c` | reads libsd's reverb presets and idle voice block from the disc's `LIBSD.IRX` at start-up |
 | `port/audio/iop.c` | the IOP's 2 MB of memory: where SIF DMA, `sceSifLoadIopHeap` and the IOP heap put the sound data |
 | `port/audio/output.c` | renders the SPU2 on EE time; the WAV dump and the SDL2 sound device |
 | `third_party/ico-audio/` | ico-pc's software SPU2 (MIT), unchanged: see its `UPSTREAM.md` |
@@ -44,11 +45,18 @@ The driver and the two CSL modules were written from the code of the user's own 
 - The CSL modules have no symbols. Their functions are named from the public CSL API
   (`csl.h`, `modmidi.h`, `modhsyn.h`): the export ordinals match those of Sony's import libraries.
 
-No code of Sony's, FromSoftware's or an emulator's is in this repository. Numeric tables are facts
-of the hardware or of the formats:
-- `sceSdNote2Pitch`'s two tables are 0x8000·2^(i/12) and 0x8000·2^(i/1536), rounded as LIBSD.IRX
-  holds them;
-- MODHSYN's sine and velocity tables are written out in `modhsyn.c`.
+No code or data of Sony's, FromSoftware's or an emulator's is in this repository.
+
+**Read from the disc.** libsd's reverb presets, their work area sizes and the block idle voices
+play are its own data. `port/audio/libsd_irx.c` reads them from the disc's `LIBSD.IRX` at
+start-up, as ico-pc does, and logs one line. Without the file, ico-audio's built-in presets
+(psx-spx's) are used.
+
+**Written out in the code.** The only numeric tables there are mathematical:
+- `sceSdNote2Pitch`'s: 0x8000·2^(i/12) and 0x8000·2^(i/1536), as LIBSD.IRX rounds them;
+- MODHSYN's sine wave: trunc(32767·sin(2πi/200)).
+
+MODHSYN's velocity curves are formulas, written as code.
 
 ## Threads become steps on EE time
 
@@ -144,3 +152,4 @@ The port writes the same logs (`KF4_SD_TRACE`, `KF4_STREAM_DUMP`, `--audio-dump`
 | `KF4_SIF_TRACE=path` | what the EE asks of the IOP: module loads, heap, SIF DMA payloads, RPC calls and replies |
 | `KF4_SD_TRACE=path` | every libsd call, by module, with the driver's RPC calls and ticks between |
 | `KF4_STREAM_DUMP=path` | the synthesizer's input streams at each tick |
+| `KF4_AUDIO_FIRST_TICK=cycle` | puts the driver's ticks on that EE cycle's phase, to line them up with a reference |

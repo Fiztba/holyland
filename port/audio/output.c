@@ -138,6 +138,7 @@ void port_audio_finish(void) {
 
 void port_audio_init(void) {
     spu2_reset();
+    port_audio_load_libsd();
     sd_reset();
     fsiopsnd_reset();
     open_outputs();

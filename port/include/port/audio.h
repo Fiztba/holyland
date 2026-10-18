@@ -21,6 +21,8 @@ void *port_iop_ptr(uint32_t iop_address);
    The SPU2 renders 48 kHz frames; one frame is 3072 EE bus cycles (147.456 MHz / 48 kHz). */
 #define AUDIO_EE_CYCLES_PER_FRAME 3072u
 void port_audio_init(void);
+/* Reads libsd's reverb presets and idle voice block from the disc's LIBSD.IRX (port/audio/libsd_irx.c) */
+void port_audio_load_libsd(void);
 /* The EE cycle of the driver's next timer tick (UINT64_MAX: none). The kernel runs it at that time. */
 uint64_t port_audio_next_event(void);
 void port_audio_event(uint64_t now);

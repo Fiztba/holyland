@@ -78,6 +78,7 @@ add_library(kf4_port STATIC
     port/sdk/libc_ps2.c
     port/audio/iop.c
     port/audio/sd.c
+    port/audio/libsd_irx.c
     port/audio/output.c
     port/audio/fsiopsnd.c
     port/audio/modmidi.c
