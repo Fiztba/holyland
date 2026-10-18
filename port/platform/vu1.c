@@ -990,7 +990,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         V4 uval = {0, 0, 0, 0};
         V4 lval = {0, 0, 0, 0};
         unsigned mac = 0; /* the Z, U and O bits of the MAC flag the upper sets */
-        int n, f;
+        int f;
         int branch_now = 0;
         int stalled;
         uint32_t target = 0;
