@@ -144,6 +144,7 @@ static struct {
     uint64_t cycle;
     uint32_t pc;           /* where MSCNT continues */
     int decoded;           /* micro memory decoded since the last upload */
+    int flags_read;        /* micro memory has an FSxxx or FMxxx (see run) */
 } vu;
 
 static uint8_t *micro;    /* 0x11008000 */
@@ -630,8 +631,17 @@ static void decode_all(void) {
         in->ebit = (hi >> 30) & 1;
         in->qwait = in->lop == L_DIV || in->lop == L_SQRT || in->lop == L_RSQRT || in->lop == L_WAITQ;
         in->pwait = IS_EFU(in->lop) || in->lop == L_WAITP;
+        if ((in->lop >= L_FSAND && in->lop <= L_FMOR)) {
+            vu.flags_read = 1;
+        }
     }
     vu.decoded = 1;
+}
+
+/* The MAC flag's Z S U O, as the status flag has them */
+static inline unsigned mac_zsuo(unsigned mac) {
+    return ((mac & 0x000F) ? 1u : 0) | ((mac & 0x00F0) ? 2u : 0) | ((mac & 0x0F00) ? 4u : 0) |
+           ((mac & 0xF000) ? 8u : 0);
 }
 
 /* ---- State ---------------------------------------------------------------------------------- */
@@ -851,14 +861,25 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int guard = 0;
     int saved_round = fegetround();
     uint64_t start = 0, gif_before = 0;
+    /* When no instruction in micro memory reads the MAC or status flag (FSxxx, FMxxx) or sets the
+       sticky bits (FSSET), the flag writes are not queued: nothing can see them while the program
+       runs. What a later program could see is what is left once they have all landed (drain), so
+       only that is kept: the last FMAC instruction's result and Z U O, and the Z S U O of them all
+       for the sticky bits. */
+    int flags_read;
+    int fmac_seen = 0;
+    V4 last_value = {0, 0, 0, 0}, signs_seen = {0, 0, 0, 0};
+    unsigned last_dest = 0, last_zuo = 0, zuo_seen = 0;
 
     if (port_options.stats) {
         start = port_ticks();
         gif_before = port_stats.gif_ticks;
     }
     if (!vu.decoded) {
+        vu.flags_read = 0;
         decode_all();
     }
+    flags_read = vu.flags_read;
     memset(vu.vi_writes, 0, sizeof(vu.vi_writes));
     fesetround(FE_TOWARDZERO);
     for (;;) {
@@ -999,17 +1020,21 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         default:
             PORT_FATAL("VU1: unknown upper instruction %08X at 0x%03X", micro_word(pc, 1), pc);
         }
-        if (in->uflags) {
+        if (in->uflags && !flags_read) {
+            fmac_seen = 1;
+            last_value = uval;
+            last_dest = in->udest;
+            last_zuo = mac;
+            zuo_seen |= mac;
+            signs_seen |= uval & field_lanes[in->udest];
+        } else if (in->uflags) {
             V4 sign = (uval >> 31) & field_lanes[in->udest];
-            unsigned zsuo;
 
             mac |= (sign[0] << 7) | (sign[1] << 6) | (sign[2] << 5) | (sign[3] << 4); /* S */
-            zsuo = ((mac & 0x000F) ? 1u : 0) | ((mac & 0x00F0) ? 2u : 0) | ((mac & 0x0F00) ? 4u : 0) |
-                   ((mac & 0xF000) ? 8u : 0);
             /* the same flags again change nothing (unless an FSSET came between) */
             if ((int32_t)mac != vu.mac_queued) {
                 vu.mac_queued = (int32_t)mac;
-                push_flags(FW_FMAC, (uint16_t)mac, zsuo);
+                push_flags(FW_FMAC, (uint16_t)mac, mac_zsuo(mac));
             }
         }
 
@@ -1315,6 +1340,16 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         }
     }
     drain();
+    if (fmac_seen) {
+        /* the flag writes not queued, landed: the last one's flags, and the sticky bits of all */
+        V4 sign = (last_value >> 31) & field_lanes[last_dest];
+        unsigned mac = last_zuo | (sign[0] << 7) | (sign[1] << 6) | (sign[2] << 5) | (sign[3] << 4);
+        unsigned seen = mac_zsuo(zuo_seen) | (v4_any(signs_seen & SIGN) ? 2u : 0);
+
+        vu.mac = mac;
+        vu.mac_queued = (int32_t)mac;
+        vu.status = (vu.status & ~0xFu) | mac_zsuo(mac) | (seen << 6);
+    }
     fesetround(saved_round);
     if (port_options.stats) {
         /* the GIF hand-offs of its XGKICKs (and the PATH3 they let go on) are counted there */
