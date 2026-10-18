@@ -364,23 +364,27 @@ static inline uint32_t vf_mini(uint32_t a, uint32_t b) {
     return vf_max(a, b) == a ? b : a;
 }
 
-static uint32_t ftoi(uint32_t bits, int shift) {
-    double v = vf_value(bits) * (double)(1 << shift);
+/* FTOIn of four fields: each VU float times 2^shift, truncated, or the integer's limit with its
+   sign at 2^31 and beyond. Below that, IEEE floats scale it exactly (a power of two, no overflow)
+   and truncate it as the VU does; a denormal is +-0. */
+static inline V4 v4_ftoi(V4 a, int shift) {
+    V4 e = a & 0x7F800000u;
+    V4 big = (V4)(e >= (uint32_t)(158 - shift) << 23); /* |a| >= 2^(31 - shift) */
+    V4f x = (V4f)(a & ((V4)(e != 0) | SIGN) & ~big);
+    V4 r = (V4)__builtin_convertvector(x * (float)(1 << shift), V4i);
 
-    if (v >= 2147483648.0) {
-        return 0x7FFFFFFFu;
-    }
-    if (v <= -2147483648.0) {
-        return 0x80000000u;
-    }
-    return (uint32_t)(int32_t)v;
+    return (r & ~big) | (((a >> 31) + 0x7FFFFFFFu) & big);
 }
 
 /* ITOF0/4/12/15 and FTOI0/4/12/15: the fraction bits of the fixed-point side */
 static const int fixed_shift[4] = {0, 4, 12, 15};
 
-static uint32_t itof(uint32_t bits, int shift) {
-    return vf_round((double)(int32_t)bits / (double)(1 << shift), NULL);
+/* ITOFn of four fields: each integer as a float rounded toward zero, over 2^shift. The IEEE
+   conversion rounds as the VU does (in the current rounding mode), and the scale is exact. */
+static inline V4 v4_itof(V4 a, int shift) {
+    V4f x = __builtin_convertvector((V4i)a, V4f);
+
+    return (V4)(x * (1.0f / (float)(1 << shift)));
 }
 
 /* ---- Decoding ------------------------------------------------------------------------------- */
@@ -964,18 +968,10 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             break;
         }
         case U_ITOF:
-            for (f = 0; f < 4; f++) {
-                if (in->udest & (8 >> f)) {
-                    uval[f] = itof(vu.vf[in->fs][f], fixed_shift[in->bc]);
-                }
-            }
+            uval = v4_itof(v4_load(vu.vf[in->fs]), fixed_shift[in->bc]);
             break;
         case U_FTOI:
-            for (f = 0; f < 4; f++) {
-                if (in->udest & (8 >> f)) {
-                    uval[f] = ftoi(vu.vf[in->fs][f], fixed_shift[in->bc]);
-                }
-            }
+            uval = v4_ftoi(v4_load(vu.vf[in->fs]), fixed_shift[in->bc]);
             break;
         case U_ABS:
             for (f = 0; f < 4; f++) {
