@@ -887,8 +887,12 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             }
         }
         if (in->vireads && vu.vi_ready_last > need) {
-            for (n = 1; n < 16; n++) {
-                if ((in->vireads & (1u << n)) && vu.vi_ready[n] > need) {
+            unsigned reads = in->vireads;
+
+            while (reads) {
+                n = __builtin_ctz(reads);
+                reads &= reads - 1;
+                if (vu.vi_ready[n] > need) {
                     need = vu.vi_ready[n];
                 }
             }
