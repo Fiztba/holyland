@@ -16,7 +16,9 @@
        --ps2-scanout     turn them all off
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
-       --host-dir DIR    where host0: files go (the current directory by default) */
+       --host-dir DIR    where host0: files go (the current directory by default)
+       --controls NAME   the keyboard and mouse layout: ps2 (the default) or verdite (mouse look,
+                         port/sdk/controls.c) */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,7 +35,7 @@ static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
-            "          [--dump-frames N,N,...] [--dump-dir DIR]\n",
+            "          [--dump-frames N,N,...] [--dump-dir DIR] [--controls ps2|verdite]\n",
             program);
     exit(2);
 }
@@ -108,6 +110,8 @@ static void parse_options(int argc, char **argv) {
             port_options.host_dir = value;
         } else if (strcmp(option, "--dump-frames") == 0) {
             port_options.dump_frames = value;
+        } else if (strcmp(option, "--controls") == 0) {
+            port_options.controls = value;
         } else if (strcmp(option, "--dump-dir") == 0) {
             port_options.dump_dir = value;
         } else {

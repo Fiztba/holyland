@@ -27,6 +27,7 @@
 #endif
 
 #include "libpad.h"
+#include "port/controls.h"
 #include "port/host.h"
 #include "port/platform.h"
 
@@ -279,7 +280,11 @@ static void sdl_read(void) {
 
     memset(&live, 0, sizeof(live));
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
-    keyboard_read();
+    if (port_controls_verdite()) {
+        port_controls_read(&live.buttons);
+    } else {
+        keyboard_read();
+    }
     if (controller == NULL) {
         return;
     }
@@ -327,6 +332,7 @@ static int use_sdl;
 
 void port_pad_init(void) {
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
+    port_controls_init(port_options.controls);
     if (port_options.input) {
         load_script(port_options.input);
     }
@@ -359,6 +365,7 @@ void port_pad_poll(void) {
             }
             continue;
         }
+        port_controls_event(&event);
         if (event.type == SDL_CONTROLLERDEVICEADDED && controller == NULL) {
             sdl_open_first();
         } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && controller != NULL &&

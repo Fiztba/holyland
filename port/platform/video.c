@@ -17,6 +17,7 @@
 #include <SDL.h>
 #endif
 
+#include "port/controls.h"
 #include "port/host.h"
 #include "port/platform.h"
 
@@ -144,6 +145,7 @@ void port_video_present(void) {
         dst.y = (out_h - dst.h) / 2;
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, &dst);
+        port_controls_draw(renderer, dst.x, dst.y, dst.w, dst.h);
         SDL_RenderPresent(renderer);
     }
 #endif
