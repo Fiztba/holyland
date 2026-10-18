@@ -150,6 +150,22 @@ A renderer under the game's draw layer, as ico-pc has:
   effects: the screen wobble, and the frame copied into a texture at TBP 0x1180.
 - Each piece is checked frame by frame against stage 1.
 
+### Where the PC picture differs from the GS's output
+
+Each of these is on by default and has a switch, so the native renderer can be compared with both
+the PC picture and the PS2's raw output (`--ps2-scanout` turns them all off; see the README):
+
+| Switch | What the PC does | Why |
+|---|---|---|
+| `--no-deinterlace` | weaves the two fields of an interlaced picture | The game draws each field as its own 224-line picture, half a line from the other (`Display_SwapBuffers`, `sceGsSetHalfOffset`), and draws both each frame. One field alone has half the lines, which breaks up text; a TV (or PCSX2's deinterlacing) shows the two together. |
+| `--no-progressive` | reads a frame-mode picture whole | paraLLEl-GS's `force_progressive`. |
+| `--no-anti-blur` | undoes the blur of blended read circuits | paraLLEl-GS's `anti_blur`. |
+| `--no-adapt-width` | scans out at the game's width | paraLLEl-GS's `adapt_to_internal_horizontal_resolution`. |
+
+The native renderer has to give the same picture with each switch, and add a switch for anything
+else it does differently. Its natural form is the woven one: it can draw the frame once at 448 lines
+(or more) instead of two half-line-offset 224-line fields, which is what the weave reconstructs.
+
 Then, all opt-in:
 - higher resolution;
 - widescreen (we own the projection code);

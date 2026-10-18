@@ -77,9 +77,11 @@ extern "C" int port_gs_backend_vsync(const uint64_t *privileged, int field, int 
     info.dst_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     info.dst_stage = VK_PIPELINE_STAGE_2_COPY_BIT;
     info.dst_access = VK_ACCESS_2_TRANSFER_READ_BIT;
-    info.force_progressive = true;
-    info.anti_blur = true;
-    info.adapt_to_internal_horizontal_resolution = true;
+    // the PC's ways from the GS's raw output, each of which can be turned off to compare (main_host.c)
+    info.force_progressive = port_options.progressive != 0;
+    info.anti_blur = port_options.anti_blur != 0;
+    info.adapt_to_internal_horizontal_resolution = port_options.adapt_width != 0;
+    info.skip_deinterlace = !port_options.deinterlace;
 
     gs->flush();
     ScanoutResult result = gs->vsync(info);

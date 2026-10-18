@@ -119,6 +119,11 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--fast` | run as fast as possible instead of at 60 vblanks a second |
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
+| `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
+| `--no-progressive` | read a frame-mode interlaced picture a field at a time |
+| `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
+| `--no-adapt-width` | scan out at the TV's width, not the game's |
+| `--ps2-scanout` | all four of the above: the GS's raw output, for comparing with the PS2 or PCSX2 |
 | `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
 | `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
 | `--frames N` | stop after N vblanks |

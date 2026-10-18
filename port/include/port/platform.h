@@ -26,6 +26,12 @@ typedef struct {
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
     int headless;            /* --headless: no SDL at all, and no window */
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
+    /* How the GS's output becomes a PC picture (port/gs/gs_parallel.cpp). Each is on by default and
+       turned off by --no-<name>; --ps2-scanout turns them all off (the GS's raw output). */
+    int deinterlace;         /* weave the two fields of an interlaced picture into one */
+    int progressive;         /* a frame-mode interlaced picture is read whole, not a field at a time */
+    int anti_blur;           /* undo the blur of a game that blends its two read circuits */
+    int adapt_width;         /* the picture's width follows the game's, not the 640 of the TV */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */

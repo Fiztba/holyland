@@ -11,6 +11,9 @@
        --clock DATE      the disc drive's clock, YYYY-MM-DDTHH:MM:SS (Japan's time), not the host's
        --headless        no SDL at all: no window, and the GS draws only for --dump-frames
        --no-gs           draw nothing (VIF1 and VU1 still run)
+       --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
+                         turn off one of the ways the PC picture differs from the GS's raw output
+       --ps2-scanout     turn them all off
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default) */
@@ -29,7 +32,7 @@ static FILE *log_file;
 static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
-            "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--host-dir DIR]\n"
+            "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR]\n",
             program);
     exit(2);
@@ -50,6 +53,7 @@ static void parse_options(int argc, char **argv) {
     int i;
 
     port_options.disc = getenv("KF4_DISC");
+    port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
         const char *value = i + 1 < argc ? argv[i + 1] : NULL;
@@ -64,6 +68,26 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--no-gs") == 0) {
             port_options.no_gs = 1;
+            continue;
+        }
+        if (strcmp(option, "--ps2-scanout") == 0) {
+            port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 0;
+            continue;
+        }
+        if (strcmp(option, "--no-deinterlace") == 0) {
+            port_options.deinterlace = 0;
+            continue;
+        }
+        if (strcmp(option, "--no-progressive") == 0) {
+            port_options.progressive = 0;
+            continue;
+        }
+        if (strcmp(option, "--no-anti-blur") == 0) {
+            port_options.anti_blur = 0;
+            continue;
+        }
+        if (strcmp(option, "--no-adapt-width") == 0) {
+            port_options.adapt_width = 0;
             continue;
         }
         if (strcmp(option, "--help") == 0 || strcmp(option, "-h") == 0 || value == NULL) {
