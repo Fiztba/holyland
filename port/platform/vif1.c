@@ -74,6 +74,18 @@ void port_gif_path1_kick(uint32_t address) {
             memcpy(path1_buffer + qwords * 16, vu_data + ((address + qwords) & (VU1_QWORDS - 1)) * 16, 16);
         }
     }
+    if (port_options.stats) {
+        uint64_t hash = port_stats.path1_hash;
+        uint32_t n;
+
+        for (n = 0; n < qwords * 2; n++) {
+            uint64_t word;
+
+            memcpy(&word, path1_buffer + n * 8, 8);
+            hash = (hash ^ word) * 0x100000001B3ull; /* FNV-1a's prime, a word at a time */
+        }
+        port_stats.path1_hash = hash;
+    }
     port_gs_gif(1, path1_buffer, (size_t)qwords * 16);
 }
 

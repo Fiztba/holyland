@@ -740,7 +740,12 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int end_next = 0;
     int guard = 0;
     int saved_round = fegetround();
+    uint64_t start = 0, gif_before = 0;
 
+    if (port_options.stats) {
+        start = port_ticks();
+        gif_before = port_stats.gif_ticks;
+    }
     if (!vu.decoded) {
         decode_all();
     }
@@ -1197,6 +1202,12 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     }
     drain();
     fesetround(saved_round);
+    if (port_options.stats) {
+        /* the GIF hand-offs of its XGKICKs (and the PATH3 they let go on) are counted there */
+        port_stats.vu1_ticks += port_ticks() - start - (port_stats.gif_ticks - gif_before);
+        port_stats.vu1_runs++;
+        port_stats.vu1_insns += (uint64_t)guard + 1;
+    }
 }
 
 void port_vu1_start(uint32_t address, uint32_t top, uint32_t itop) {

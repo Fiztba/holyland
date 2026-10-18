@@ -31,6 +31,13 @@ void port_gif_path1_kick(uint32_t address) {
     (void)address;
 }
 
+PortOptions port_options; /* no --stats */
+PortStats port_stats;
+
+uint64_t port_ticks(void) {
+    return 0;
+}
+
 void port_todo(const char *what, const char *file, int line) {
     printf("todo: %s (%s:%d)\n", what, file, line);
 }

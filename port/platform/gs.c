@@ -171,12 +171,17 @@ int port_gs_path_idle(int path) {
 }
 
 void port_gs_gif(int path, const void *data, size_t bytes) {
+    uint64_t start = port_options.stats ? port_ticks() : 0;
+
     read_gif(path, data, bytes / 16);
 #ifdef KF4_HAVE_PARALLEL_GS
     if (backend) {
         port_gs_backend_gif(path, data, bytes);
     }
 #endif
+    if (port_options.stats) {
+        port_stats.gif_ticks += port_ticks() - start;
+    }
     if (path != 3 && !gif_paths[path].in_packet) {
         port_gif_path3_poll();
     }
@@ -228,6 +233,7 @@ int port_gs_vsync_pending(void) {
 
 void port_gs_run_vsync(void) {
     uint64_t tail = __atomic_load_n(&queue_tail, __ATOMIC_RELAXED);
+    uint64_t start = port_options.stats ? port_ticks() : 0;
 #ifdef KF4_HAVE_PARALLEL_GS
     VsyncRequest *request = &queue[tail % VSYNC_QUEUE];
     int dump = 0;
@@ -253,5 +259,8 @@ void port_gs_run_vsync(void) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
     }
 #endif
+    if (port_options.stats) {
+        port_stats.vsync_ticks += port_ticks() - start;
+    }
     __atomic_store_n(&queue_tail, tail + 1, __ATOMIC_RELEASE);
 }

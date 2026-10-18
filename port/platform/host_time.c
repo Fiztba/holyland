@@ -21,6 +21,20 @@ double port_wall_seconds(void) {
     return (double)(now.QuadPart - start.QuadPart) / (double)frequency.QuadPart;
 }
 
+uint64_t port_ticks(void) {
+    LARGE_INTEGER now;
+
+    QueryPerformanceCounter(&now);
+    return (uint64_t)now.QuadPart;
+}
+
+double port_ticks_per_second(void) {
+    LARGE_INTEGER frequency;
+
+    QueryPerformanceFrequency(&frequency);
+    return (double)frequency.QuadPart;
+}
+
 void port_sleep(double seconds) {
     static int period_set;
     DWORD ms;
@@ -46,6 +60,17 @@ double port_wall_seconds(void) {
     }
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (double)(now.tv_sec - start.tv_sec) + (double)(now.tv_nsec - start.tv_nsec) * 1e-9;
+}
+
+uint64_t port_ticks(void) {
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+}
+
+double port_ticks_per_second(void) {
+    return 1e9;
 }
 
 void port_sleep(double seconds) {

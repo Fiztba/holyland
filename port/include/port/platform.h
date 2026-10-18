@@ -36,8 +36,21 @@ typedef struct {
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */
     int clock_fields[6];     /* year, month, day, hour, minute, second */
+    int stats;               /* --stats: print where the controller's time went at exit */
 } PortOptions;
 extern PortOptions port_options;
+
+/* --stats: what the DMA controller's thread spent its time on (port_ticks), counted only when
+   port_options.stats is set; main_host.c prints it at exit. */
+typedef struct {
+    uint64_t vu1_ticks;   /* in VU1's run, the GIF hand-offs it made excluded */
+    uint64_t gif_ticks;   /* handing GIF packets to the GS (all three paths) */
+    uint64_t vsync_ticks; /* the GS's scanouts, with the picture to the window and --dump-frames */
+    uint64_t vu1_runs;    /* MSCAL, MSCALF and MSCNT */
+    uint64_t vu1_insns;   /* instruction pairs run */
+    uint64_t path1_hash;  /* of every packet VU1's XGKICK sent: two runs that drew the same agree */
+} PortStats;
+extern PortStats port_stats;
 
 /* ---- Fibers (port/platform/fiber.c) ---------------------------------------------------------
    Each EE thread is a fiber of the host's main thread: one runs at a time, and a switch happens
@@ -179,5 +192,8 @@ void port_pad_poll(void);
 double port_wall_seconds(void);
 /* Sleeps for about the given seconds. */
 void port_sleep(double seconds);
+/* The host's fastest monotonic counter (for --stats), and its ticks a second. */
+uint64_t port_ticks(void);
+double port_ticks_per_second(void);
 
 #endif /* PORT_PLATFORM_H */
