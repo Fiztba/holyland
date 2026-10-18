@@ -106,6 +106,13 @@ else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
 endif()
 # paraLLEl-GS, the GS in Vulkan compute; without it the game runs and draws nothing
+# The software SPU2 (third_party/ico-audio, from ico-pc) and its tests
+option(KF4_TESTS "Build the unit tests (ctest)" ON)
+if(KF4_TESTS)
+    enable_testing()
+endif()
+add_subdirectory(third_party/ico-audio)
+
 option(KF4_USE_PARALLEL_GS "Draw with paraLLEl-GS (third_party/parallel-gs)" ON)
 if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/volk/volk.h)
     enable_language(CXX)

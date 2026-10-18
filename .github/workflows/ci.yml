@@ -24,6 +24,8 @@ jobs:
         run: cmake --build out/linux-gcc
       - name: VU1 self-test
         run: out/linux-gcc/vu1_test
+      - name: Unit tests
+        run: ctest --test-dir out/linux-gcc --output-on-failure
       - name: Census must be zero
         run: |
           python3 tools/port_census.py out/linux-gcc > census.txt
