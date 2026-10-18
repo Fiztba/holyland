@@ -114,6 +114,11 @@ Result:
   because the programs are software-pipelined and rely on when each result lands: FMAC results 4
   cycles on (with stalls), Q and P late with no stall, the clip flag 4 cycles on, and a branch that
   reads the VI register the instruction before it wrote. `tools/vu1_disasm.py` prints the programs.
+- `vu1.c` knows the whole VU1 instruction set, with the MAC, status and clip flags and their delay,
+  each EFU op's latency and VU floats (exponent 255 is a number, overflow and division by zero give
+  0x7FFFFFFF); an encoding that is no instruction stops the program. The game's programs use about
+  forty of the instructions. `tests/vu1_test.c` (the target `vu1_test`) checks it against
+  hand-written microcode.
 - The program at 0x700 is used after all. No C code starts it, so data from the disc must, and its
   loop relies on that branch timing.
 - `port/sdk/libgraph.c` is Sony's libgraph from the decomp. On the PC: CSR keeps FIELD, a packet on
@@ -126,12 +131,14 @@ Result:
 Still open:
 - The opening shows no message text. That may be how it is on the PS2; it has not been checked
   against it.
-- The VU1 interpreter runs on the CPU. It keeps up at full speed (3000 vblanks in about 25 s with
+- The VU1 interpreter runs on the CPU. It keeps up at full speed (3000 vblanks in about 30 s with
   `--fast`), and step 3 replaces it.
 - The GIF's arbitration is modelled only as far as it decides an order with transfers that take no
   time: PATH3 never goes in the middle of a channel 1 chain unless VIF1 unmasks it there.
 - The game's write-1-to-clear stores (CSR's FINISH, T0_MODE's EQUF) set the bit instead: nothing sees
   a store into the register page. The game never reads either bit where that would show.
+- The VU's adder can differ from IEEE's rounding toward zero in the last bit; the interpreter does
+  not model that.
 
 ## Step 3: graphics, stage 2 (native renderer)
 
