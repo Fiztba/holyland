@@ -626,7 +626,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (; j < count; j++) {
              char *block = cursor;
 diff --git a/src/game/model/model.h b/src/game/model/model.h
-index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678abdf289c 100644
+index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..2aad9b4c37e5f32494cd9c192cbfc9fc21ef4677 100644
 --- a/src/game/model/model.h
 +++ b/src/game/model/model.h
 @@ -44,29 +44,37 @@ typedef struct __attribute__((packed)) {
@@ -958,8 +958,13 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
      void *fog_block;                /* 0x14C pointer to the model's fog block (near, far, colour) */
      f32 colour_red;                 /* 0x150 the model's red tint */
      f32 colour_green;               /* 0x154 the model's green tint */
-@@ -407,18 +453,18 @@ typedef struct ModelInstance {
-     int found_record[4];            /* 0x180 a copy of that record, its id bits replaced; a quadword sent after it */
+@@ -404,21 +450,22 @@ typedef struct ModelInstance {
+     char pad170[0x08];
+     void *chunk_skip_mask;          /* 0x178 passed to TextureTable_QueueEnabled with texture_data: bit n set skips chunk n (a mask, but not stored as an int) */
+     int found_record_id;            /* 0x17C the id Effect_FindModelRecord last found; sent after the colour at unk150 by Model_DrawPosed, in its alpha slot */
+-    int found_record[4];            /* 0x180 a copy of that record, its id bits replaced; a quadword sent after it */
++    VuIntVector found_record;       /* 0x180 a copy of that record, its id bits replaced; a quadword sent after it.
++                                       PORT: 16-byte aligned, as at 0x180: Effect_FindModelRecord clears it with one 128-bit store */
      u16 texture_slot;               /* 0x190 slot of unk194 in texture_slots (0..2), 3: always sent */
      s16 shared_texture_slot;        /* 0x192 which entry of the shared last-sent texture record applies */
 -    int texture_data;               /* 0x194 the model's texture: a chunk table, or a raw packet */
@@ -984,7 +989,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
  
  /* a 0x40-byte vertex of four vectors; ModelScreen_StepFloatVertices fills the steps between two of them */
  typedef struct {
-@@ -428,15 +474,6 @@ typedef struct {
+@@ -428,15 +475,6 @@ typedef struct {
      f32 colour[4];                  /* 0x30 r, g, b, a */
  } BlendVertex;
  
@@ -1000,7 +1005,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
  /* where a vertex lands on the screen, as Vu0_ProjectToScreen and Vu0_ProjectToScreen3 write it */
  typedef struct {
      s32 x;                          /* 0x00 12.4 fixed point; the screen is 0x6C00 to 0x9400 across */
-@@ -468,43 +505,43 @@ typedef struct {
+@@ -468,43 +506,43 @@ typedef struct {
      s32 screen[4];                  /* 0x1010 */
  } ModelProjectScratch;
  
@@ -1062,7 +1067,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
  
  /* what MapObject.source points at */
  typedef struct {
-@@ -609,34 +646,15 @@ typedef struct {
+@@ -609,34 +647,15 @@ typedef struct {
  /* MapObjectUnk04.kind read as the byte it is, where retail compares it that way (Collision_PushOutOfMeshObj) */
  #define MAP_OBJECT_DEF_KIND(def) (*(u8 *)(def))
  
@@ -1098,7 +1103,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
      u32 state_flags;                /* 0x10 flags, MAP_OBJECT_BITS */
      f32 reach_radius;               /* 0x14 how far around its position it reaches, 0: nothing to hit */
      f32 tested_point_distance;      /* 0x18 how far it is from the point last tested against the map objects (Collision_PushOutOfObjects, Collision_StandOnObjects) */
-@@ -763,29 +781,16 @@ typedef struct {
+@@ -763,29 +782,16 @@ typedef struct {
  #define MAP_OBJECT_BITS_LOW(object) ((MapObjectBitsLow *)&(object)->state_flags)
  
  /* the props of a map, looked up by Map_GetRecordById(map, id) */
@@ -1132,7 +1137,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
  
  /* one of a map's fixed items: where it lies and what it is (0x40 bytes, map_item_defs[map]) */
  typedef struct {
-@@ -818,12 +823,12 @@ typedef struct {
+@@ -818,12 +824,12 @@ typedef struct {
      DroppedItemRecord records[16];  /* 0x00 */
  } DroppedItemRecords;
  
@@ -1147,7 +1152,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
      u32 flags;                      /* 0x0C ItemNodeBits */
      char pad10[0x04];
      void *map_record;               /* 0x14 the MapRecordInfo (map/map.h) it lies in, looked up before it is drawn */
-@@ -848,7 +853,6 @@ typedef struct {
+@@ -848,7 +854,6 @@ typedef struct {
  
  /* ItemNode with all of its flags as bit-fields (MapItem_Drop) */
  typedef struct {
@@ -1155,7 +1160,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
      u32 map : 1;                    /* 0x0C which of the two loaded maps it lies in */
      u32 bit1 : 1;
      u32 bit2 : 1;                   /* set on a dropped item */
-@@ -856,7 +860,7 @@ typedef struct {
+@@ -856,7 +861,7 @@ typedef struct {
      u32 bits7 : 25;
  } ItemNodeBits;
  
@@ -1164,7 +1169,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
  
  /* item_model_sources[map][32]: what is loaded for each kind of item a map holds (MapItem_FindModelSource finds one) */
  typedef struct {
-@@ -867,9 +871,11 @@ typedef struct {
+@@ -867,9 +872,11 @@ typedef struct {
  /* the object Collision_HitCapsuleQuadObj tests against a model's points */
  typedef struct {
      ModelInstance *model;           /* 0x00 */
@@ -1177,7 +1182,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
  
  /* ChannelOwner.channel: the playback state Motion_Start resets */
  typedef struct {
-@@ -884,6 +890,15 @@ typedef struct {
+@@ -884,6 +891,15 @@ typedef struct {
      u8 blend_speed;                 /* 0x8F nonzero: a blend moves 255/blend_speed of the way each frame (ModelMotion_StepBlend) */
  } ModelChannel;
  
@@ -1193,7 +1198,7 @@ index bf2bf5a1b248f2480bfdd9b2bccdc8ef99498a7b..64f27e81839f4e9b7891d4bf827cf678
  /* ModelInstance.level_tables points at the model's ModelChannel, whose first 0x80 bytes are the tables */
  #define MODEL_CHANNEL(model) (*(ModelChannel **)&(model)->level_tables)
  
-@@ -903,11 +918,11 @@ typedef struct {
+@@ -903,11 +919,11 @@ typedef struct {
      f32 z;                          /* 0x48 */
  } ChannelVector;
  
