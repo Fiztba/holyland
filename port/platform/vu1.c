@@ -228,6 +228,93 @@ static inline uint32_t vf_op(int op, uint32_t a, uint32_t b, unsigned *flags) {
     return vf_round(vf_value(a) * vf_value(b), flags);
 }
 
+/* ---- Four fields at once (GCC's vector extensions) ------------------------------------------ */
+typedef uint32_t V4 __attribute__((vector_size(16)));
+typedef int32_t V4i __attribute__((vector_size(16)));
+typedef float V4f __attribute__((vector_size(16)));
+
+/* a field mask (x = 8 .. w = 1) as lanes of all ones */
+static const V4 field_lanes[16] = {
+    {0, 0, 0, 0}, {0, 0, 0, ~0u}, {0, 0, ~0u, 0}, {0, 0, ~0u, ~0u},
+    {0, ~0u, 0, 0}, {0, ~0u, 0, ~0u}, {0, ~0u, ~0u, 0}, {0, ~0u, ~0u, ~0u},
+    {~0u, 0, 0, 0}, {~0u, 0, 0, ~0u}, {~0u, 0, ~0u, 0}, {~0u, 0, ~0u, ~0u},
+    {~0u, ~0u, 0, 0}, {~0u, ~0u, 0, ~0u}, {~0u, ~0u, ~0u, 0}, {~0u, ~0u, ~0u, ~0u}};
+
+static inline V4 v4_load(const uint32_t *p) {
+    V4 v;
+
+    memcpy(&v, p, 16);
+    return v;
+}
+
+static inline void v4_store(uint32_t *p, V4 v) {
+    memcpy(p, &v, 16);
+}
+
+static inline V4 v4_splat(uint32_t x) {
+    return (V4){x, x, x, x};
+}
+
+static inline int v4_any(V4 v) {
+    uint64_t h[2];
+
+    memcpy(h, &v, 16);
+    return (h[0] | h[1]) != 0;
+}
+
+/* vf_op on the lanes set in `lanes` (the others are left undefined), with their flags added to *flags
+   (x << 3 ... w) if flags: four at once in IEEE floats as vf_op's fast path, and vf_op itself for a
+   lane where the VU and IEEE part (an operand of exponent 255, or a result at the largest IEEE float).
+   A result of exponent 0 is done here too: its value is +-0 with IEEE's sign, which is the exact
+   result's, as vf_round's; it sets Z, and U when the exact result was not zero. A sum of two floats
+   is a multiple of 2^-149, so it is zero exactly when IEEE's is; a product, when an operand is. */
+static inline V4 v4_op(int op, V4 a, V4 b, V4 lanes, unsigned *flags) {
+    const V4 exp = v4_splat(0x7F800000u);
+    V4 ea = a & exp, eb = b & exp, r, slow, zero;
+    V4f x = (V4f)(a & ((V4)(ea != 0) | SIGN)), y = (V4f)(b & ((V4)(eb != 0) | SIGN));
+    int f;
+
+    r = (V4)(op == A_ADD ? x + y : op == A_SUB ? x - y : x * y);
+    slow = ((V4)(ea == exp) | (V4)(eb == exp) | (V4)((r & 0x7FFFFFFFu) == 0x7F7FFFFFu)) & lanes;
+    zero = (V4)((r & exp) == 0) & lanes & ~slow;
+    if (flags && v4_any(zero)) {
+        V4 under = zero & (op == A_MUL ? (V4)(ea != 0) & (V4)(eb != 0) : (V4)((r & 0x7FFFFFFFu) != 0));
+        V4 bits = (zero & (V4){FL_Z << 3, FL_Z << 2, FL_Z << 1, FL_Z}) |
+                  (under & (V4){FL_U << 3, FL_U << 2, FL_U << 1, FL_U});
+
+        *flags |= bits[0] | bits[1] | bits[2] | bits[3];
+    }
+    r &= ~zero | SIGN;
+    if (v4_any(slow)) {
+        for (f = 0; f < 4; f++) {
+            if (slow[f]) {
+                unsigned fl = 0;
+
+                r[f] = vf_op(op, a[f], b[f], &fl);
+                if (flags) {
+                    *flags |= fl << (3 - f);
+                }
+            }
+        }
+    }
+    return r;
+}
+
+/* vf_max and vf_mini, four at once */
+static inline V4 v4_max(V4 a, V4 b) {
+    V4i sa = (V4i)a, sb = (V4i)b;
+    V4 both_negative = (V4)((sa < 0) & (sb < 0));
+    V4 take_a = (both_negative & (V4)(sa < sb)) | (~both_negative & (V4)(sa > sb));
+
+    return (a & take_a) | (b & ~take_a);
+}
+
+static inline V4 v4_mini(V4 a, V4 b) {
+    V4 a_is_max = (V4)(v4_max(a, b) == a);
+
+    return (b & a_is_max) | (a & ~a_is_max);
+}
+
 static inline uint32_t vf_add(uint32_t a, uint32_t b) {
     return vf_op(A_ADD, a, b, NULL);
 }
@@ -777,8 +864,8 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     for (;;) {
         const VuInsn *in = &code[pc & (MICRO_INSNS - 1)];
         uint64_t need = vu.cycle;
-        uint32_t uval[4];
-        uint32_t lval[4];
+        V4 uval = {0, 0, 0, 0};
+        V4 lval = {0, 0, 0, 0};
         unsigned mac = 0; /* the Z, U and O bits of the MAC flag the upper sets */
         int lmask = 0;
         int n, f;
@@ -828,34 +915,26 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         case U_NOP:
             break;
         case U_ARITH: {
-            const uint32_t *a = vu.vf[in->fs];
-            for (f = 0; f < 4; f++) {
-                uint32_t b;
-                unsigned fl = 0;
+            V4 a = v4_load(vu.vf[in->fs]), b, lanes = field_lanes[in->udest];
 
-                if (!(in->udest & (8 >> f))) {
-                    continue;
-                }
-                switch (in->bsrc) {
-                case B_FT: b = vu.vf[in->ft][f]; break;
-                case B_BC: b = vu.vf[in->ft][in->bc]; break;
-                case B_Q: b = vu.q; break;
-                default: b = vu.i; break;
-                }
-                switch (in->arith) {
-                case A_ADD: uval[f] = vf_op(A_ADD, a[f], b, &fl); break;
-                case A_SUB: uval[f] = vf_op(A_SUB, a[f], b, &fl); break;
-                case A_MUL: uval[f] = vf_op(A_MUL, a[f], b, &fl); break;
-                case A_MADD:
-                    uval[f] = vf_op(A_ADD, vu.acc[f], vf_mul(a[f], b), &fl);
-                    break;
-                case A_MSUB:
-                    uval[f] = vf_op(A_SUB, vu.acc[f], vf_mul(a[f], b), &fl);
-                    break;
-                case A_MAX: uval[f] = vf_max(a[f], b); break;
-                default: uval[f] = vf_mini(a[f], b); break;
-                }
-                mac |= fl << (3 - f);
+            switch (in->bsrc) {
+            case B_FT: b = v4_load(vu.vf[in->ft]); break;
+            case B_BC: b = v4_splat(vu.vf[in->ft][in->bc]); break;
+            case B_Q: b = v4_splat(vu.q); break;
+            default: b = v4_splat(vu.i); break;
+            }
+            switch (in->arith) {
+            case A_ADD: uval = v4_op(A_ADD, a, b, lanes, &mac); break;
+            case A_SUB: uval = v4_op(A_SUB, a, b, lanes, &mac); break;
+            case A_MUL: uval = v4_op(A_MUL, a, b, lanes, &mac); break;
+            case A_MADD:
+                uval = v4_op(A_ADD, v4_load(vu.acc), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
+                break;
+            case A_MSUB:
+                uval = v4_op(A_SUB, v4_load(vu.acc), v4_op(A_MUL, a, b, lanes, NULL), lanes, &mac);
+                break;
+            case A_MAX: uval = v4_max(a, b); break;
+            default: uval = v4_mini(a, b); break;
             }
             break;
         }
@@ -917,13 +996,10 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             PORT_FATAL("VU1: unknown upper instruction %08X at 0x%03X", micro_word(pc, 1), pc);
         }
         if (in->uflags) {
+            V4 sign = (uval >> 31) & field_lanes[in->udest];
             unsigned zsuo;
 
-            for (f = 0; f < 4; f++) {
-                if (in->udest & (8 >> f)) {
-                    mac |= (uval[f] >> 31) << (7 - f); /* S */
-                }
-            }
+            mac |= (sign[0] << 7) | (sign[1] << 6) | (sign[2] << 5) | (sign[3] << 4); /* S */
             zsuo = ((mac & 0x000F) ? 1u : 0) | ((mac & 0x00F0) ? 2u : 0) | ((mac & 0x0F00) ? 4u : 0) |
                    ((mac & 0xF000) ? 8u : 0);
             /* the same flags again change nothing (unless an FSSET came between) */
@@ -963,7 +1039,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             } else {
                 address = vu.vi[in->ls];
             }
-            memcpy(lval, mem_qword(address), 16);
+            lval = v4_load(mem_qword(address));
             lmask = in->ldest;
             if (in->lop == L_LQI) {
                 SET_VI(in->ls, vu.vi[in->ls] + 1, 0);
@@ -1027,7 +1103,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         case L_IAND: SET_VI(in->ld, vu.vi[in->ls] & vu.vi[in->lt], 0); break;
         case L_IOR: SET_VI(in->ld, vu.vi[in->ls] | vu.vi[in->lt], 0); break;
         case L_MOVE:
-            memcpy(lval, vu.vf[in->ls], 16);
+            lval = v4_load(vu.vf[in->ls]);
             lmask = in->ldest;
             break;
         case L_MR32:
@@ -1178,27 +1254,34 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
 #undef SET_VI
 
         /* write back: the upper first; the lower's VF write is dropped if it is the same register */
-        if (in->uwrite != REG_NONE) {
-            uint32_t *d = in->uwrite == REG_ACC ? vu.acc : vu.vf[in->uwrite];
+        if (in->uwrite != REG_NONE && in->uwrite != 0) {
+            V4 lanes = field_lanes[in->udest];
 
-            if (in->uwrite != 0) {
+            if (in->uwrite == REG_ACC) {
+                v4_store(vu.acc, (v4_load(vu.acc) & ~lanes) | (uval & lanes));
+            } else {
+                uint32_t *d = vu.vf[in->uwrite];
+
+                v4_store(d, (v4_load(d) & ~lanes) | (uval & lanes));
                 for (f = 0; f < 4; f++) {
                     if (in->udest & (8 >> f)) {
-                        d[f] = uval[f];
-                        if (in->uwrite != REG_ACC) {
-                            vu.ready[in->uwrite][f] = vu.reg_ready[in->uwrite] = vu.cycle + 4;
-                        }
+                        vu.ready[in->uwrite][f] = vu.cycle + 4;
                     }
                 }
+                vu.reg_ready[in->uwrite] = vu.cycle + 4;
             }
         }
         if (lmask && in->lwrite != REG_NONE && in->lwrite != 0 && in->uwrite != in->lwrite) {
+            V4 lanes = field_lanes[lmask];
+            uint32_t *d = vu.vf[in->lwrite];
+
+            v4_store(d, (v4_load(d) & ~lanes) | (lval & lanes));
             for (f = 0; f < 4; f++) {
                 if (lmask & (8 >> f)) {
-                    vu.vf[in->lwrite][f] = lval[f];
-                    vu.ready[in->lwrite][f] = vu.reg_ready[in->lwrite] = vu.cycle + 4;
+                    vu.ready[in->lwrite][f] = vu.cycle + 4;
                 }
             }
+            vu.reg_ready[in->lwrite] = vu.cycle + 4;
         }
         if (in->lop == L_LOI) {
             vu.i = in->i_value;
