@@ -171,13 +171,34 @@ Then, all opt-in:
 - widescreen (we own the projection code);
 - higher frame rates, with interpolation while the game itself keeps its 30 Hz.
 
-## Step 4: sound
+## Step 4: sound (first version done)
 
-One of two ways:
-- Run FromSoftware's IOP sound driver (FSIOPSND) under an IOP emulator with an SPU2 model, as the
-  old recomp-based holyland did. This is quicker.
-- Rewrite the driver on the PC: its command switch (`fsSndrFunc`), the BD/HD/SQ sequencer and a
-  software SPU2. This is cleaner, and it is what ico-pc did for its driver.
+Of the two ways (run FromSoftware's IOP sound driver under an IOP emulator, or rewrite it on the PC),
+the driver is rewritten, as ico-pc did for ICO's. [AUDIO.md](AUDIO.md) has the design.
+
+What there is:
+- **The driver.** FSIOPSND (`port/audio/fsiopsnd.c`) and the two Sony CSL modules it drives:
+  - modmidi, the sequencer;
+  - modhsyn, the synthesizer.
+  All three were written from the disc's IRXs.
+- **Libraries and output.** libsd, on ico-pc's software SPU2 (`third_party/ico-audio`). The SPU2 is
+  rendered on EE time to a WAV dump (`--audio-dump`) and to the sound device (SDL2).
+- **Determinism.** The driver's timer, replies and transfers all run on EE time, so a run is
+  deterministic to the sample. `tools/boot_test.py`'s log is unchanged.
+
+How it was checked: against the disc's own modules run on an IOP emulator, with the same input.
+- **FSIOPSND's libsd calls:** the same, call for call.
+- **The streamed title music:** sample-identical.
+- **modmidi's output:** byte-identical.
+- **modhsyn's writes:** the same once both see the same values from the SPU2.
+
+Still open:
+- **The SPU2's exponential envelopes.** They round differently from the emulator used as the
+  reference: ico-audio rounds down, the reference toward zero. Neither has been checked against
+  a PS2.
+- **The tick and the game's commands never overlap.** On the PS2 an RPC can land in the middle of
+  the driver's tick, so a message can be played a tick later here.
+- **Not heard on Windows yet.** The SDL output was tested on Linux only.
 
 ## Step 5: saves and movies
 
