@@ -95,6 +95,8 @@ typedef struct {
     int32_t imm;
     uint32_t i_value; /* LOI */
     uint8_t ebit;
+    uint8_t qwait; /* DIV, SQRT, RSQRT, WAITQ: waits for a divide in flight */
+    uint8_t pwait; /* the EFU's and WAITP: wait for P */
     uint8_t nreads;
     VfUse reads[4];
 } VuInsn;
@@ -133,6 +135,8 @@ static struct {
     unsigned flag_head, flag_count;
     int32_t mac_queued; /* the MAC flag of the last FMAC write queued, -1 after an FSSET */
     uint64_t ready[32][4]; /* the cycle each VF field's last write is due */
+    uint64_t reg_ready[32]; /* the latest of each register's four */
+    uint64_t next_due;     /* the earliest cycle settle() has something to do (Q, P, a flag write) */
     uint64_t vi_ready[16]; /* the cycle each VI register's last ILW is due */
     uint64_t vi_ready_last; /* the latest of them */
     ViWrite vi_writes[8]; /* the last few, the newest at vi_write_count - 1 */
@@ -537,6 +541,8 @@ static void decode_all(void) {
             decode_lower(in, lo);
         }
         in->ebit = (hi >> 30) & 1;
+        in->qwait = in->lop == L_DIV || in->lop == L_SQRT || in->lop == L_RSQRT || in->lop == L_WAITQ;
+        in->pwait = IS_EFU(in->lop) || in->lop == L_WAITP;
     }
     vu.decoded = 1;
 }
@@ -547,6 +553,7 @@ void port_vu1_reset(void) {
     data = ee_hw_ptr(0x1100C000);
     memset(&vu, 0, sizeof(vu));
     vu.vf[0][3] = 0x3F800000u;
+    vu.next_due = UINT64_MAX;
 }
 
 void port_vu1_micro_written(void) {
@@ -570,12 +577,18 @@ static void set_q(uint32_t value, int latency, uint32_t status) {
     vu.q_due = vu.cycle + (uint64_t)latency;
     vu.q_pending = 1;
     vu.q_status_next = status;
+    if (vu.q_due < vu.next_due) {
+        vu.next_due = vu.q_due;
+    }
 }
 
 static void set_p(uint32_t value, int latency) {
     vu.p_next = value;
     vu.p_due = vu.cycle + (uint64_t)latency;
     vu.p_pending = 1;
+    if (vu.p_due < vu.next_due) {
+        vu.next_due = vu.p_due;
+    }
 }
 
 /* At most two writes issue a cycle (an upper and a lower instruction), and each is due 4 cycles
@@ -587,6 +600,9 @@ static inline void push_flags(int kind, uint16_t mac, uint32_t value) {
     fw->kind = (uint8_t)kind;
     fw->mac = mac;
     fw->value = value;
+    if (fw->due < vu.next_due) {
+        vu.next_due = fw->due;
+    }
 }
 
 static void settle(void) {
@@ -618,6 +634,13 @@ static void settle(void) {
             vu.status = (vu.status & 0x3Fu) | fw->value;
             break;
         }
+    }
+    vu.next_due = vu.flag_count ? vu.flag_queue[vu.flag_head].due : UINT64_MAX;
+    if (vu.q_pending && vu.q_due < vu.next_due) {
+        vu.next_due = vu.q_due;
+    }
+    if (vu.p_pending && vu.p_due < vu.next_due) {
+        vu.next_due = vu.p_due;
     }
 }
 
@@ -767,6 +790,9 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         for (n = 0; n < in->nreads; n++) {
             const VfUse *use = &in->reads[n];
 
+            if (vu.reg_ready[use->reg] <= need) {
+                continue; /* none of its fields is still due */
+            }
             for (f = 0; f < 4; f++) {
                 if ((use->mask & (8 >> f)) && vu.ready[use->reg][f] > need) {
                     need = vu.ready[use->reg][f];
@@ -780,17 +806,18 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                 }
             }
         }
-        if ((in->lop == L_DIV || in->lop == L_SQRT || in->lop == L_RSQRT || in->lop == L_WAITQ) &&
-            vu.q_pending && vu.q_due > need) {
+        if (in->qwait && vu.q_pending && vu.q_due > need) {
             need = vu.q_due;
         }
-        if ((IS_EFU(in->lop) || in->lop == L_WAITP) && vu.p_pending && vu.p_due - 1 > need) {
+        if (in->pwait && vu.p_pending && vu.p_due - 1 > need) {
             need = vu.p_due - 1;
         }
         stalled = need > vu.cycle;
         vu.cycle = need;
-        settle();
-        if ((IS_EFU(in->lop) || in->lop == L_WAITP) && vu.p_pending && vu.cycle + 1 >= vu.p_due) {
+        if (vu.cycle >= vu.next_due) {
+            settle();
+        }
+        if (in->pwait && vu.p_pending && vu.cycle + 1 >= vu.p_due) {
             /* the stall ends a cycle before P is due, with P written */
             vu.p = vu.p_next;
             vu.p_pending = 0;
@@ -1159,7 +1186,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
                     if (in->udest & (8 >> f)) {
                         d[f] = uval[f];
                         if (in->uwrite != REG_ACC) {
-                            vu.ready[in->uwrite][f] = vu.cycle + 4;
+                            vu.ready[in->uwrite][f] = vu.reg_ready[in->uwrite] = vu.cycle + 4;
                         }
                     }
                 }
@@ -1169,7 +1196,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
             for (f = 0; f < 4; f++) {
                 if (lmask & (8 >> f)) {
                     vu.vf[in->lwrite][f] = lval[f];
-                    vu.ready[in->lwrite][f] = vu.cycle + 4;
+                    vu.ready[in->lwrite][f] = vu.reg_ready[in->lwrite] = vu.cycle + 4;
                 }
             }
         }
