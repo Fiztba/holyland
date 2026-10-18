@@ -263,6 +263,9 @@ static int begin(uint32_t code) {
         return 0;
     case 0x06: /* MSKPATH3 */
         vif.mskpath3 = (imm >> 15) & 1;
+        if (!vif.mskpath3) {
+            port_gif_path3_poll();
+        }
         return 0;
     case 0x07: /* MARK */
         vif.mark = imm;
@@ -290,6 +293,8 @@ static int begin(uint32_t code) {
         return 1;
     case 0x50: /* DIRECT */
     case 0x51: /* DIRECTHL */
+        /* DIRECTHL waits while PATH3 is in the middle of an IMAGE packet; here PATH3's transfers go
+           whole, between VIF codes (port/platform/dmac.c), so it never has to */
         vif.need = (imm ? imm : 0x10000) * 4;
         return 1;
     }

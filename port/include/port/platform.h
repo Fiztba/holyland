@@ -78,6 +78,8 @@ void port_dmac_wait(int channel);
 uint32_t port_dmac_ends(uint32_t wanted);
 /* (port_gs_post_vsync) Queues a vblank's scanout after the transfers started before it. */
 void port_dmac_post_vsync(void);
+/* (the controller) PATH3 may go on: it was unmasked, or a PATH1 or PATH2 packet ended. */
+void port_gif_path3_poll(void);
 /* The channel's CHCR as the game sees it, and transfers finished so far. */
 volatile int *port_dmac_chcr(int channel);
 uint64_t port_dmac_transfers(int channel);
@@ -117,6 +119,8 @@ void port_gs_init(void);
 int port_gs_enabled(void);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
+/* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */
+int port_gs_path_idle(int path);
 /* Reads qwords of a local-to-host transfer (BITBLTBUF/TRXDIR 1) from the GS. */
 void port_gs_read_fifo(void *dst, uint32_t qwords);
 /* At vblank start (the game thread): queues the display registers for a scanout. */

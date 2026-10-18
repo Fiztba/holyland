@@ -148,6 +148,9 @@ static void timer_sync(int n, uint64_t now) {
         count = (count + step) & 0xFFFF;
         if (count == compare) {
             if (mode & T_MODE_CMPE) {
+                /* The hardware interrupts as EQUF goes from 0 to 1, and the game's handler clears it
+                   by writing 1 (core/timer.c). That store is not seen here, so the bit stays set and
+                   each match interrupts, as it does on the PS2 with the handler clearing it. */
                 *TIMER_MODE(n) |= T_MODE_EQUF;
                 raise_intc(INTC_TIM0 + n);
             }
@@ -282,8 +285,10 @@ static void vblank_start(void) {
     volatile uint64_t *csr = EE_HW(volatile uint64_t *, 0x12001000);
 
     vblank_count++;
-    /* FIELD (bit 13) turns over each field; VSINT (bit 3) is set */
-    *csr = (*csr ^ (1u << 13)) | (1u << 3);
+    /* FIELD (bit 13) turns over each field; VSINT (bit 3) is set (atomically: the GS sets FINISH
+       from the DMA controller's thread) */
+    __atomic_fetch_xor(csr, (uint64_t)1 << 13, __ATOMIC_RELAXED);
+    __atomic_fetch_or(csr, (uint64_t)1 << 3, __ATOMIC_RELAXED);
     /* the GS scans out the field the display registers say, alongside the game */
     port_gs_post_vsync();
     raise_intc(INTC_VBLANK_S);

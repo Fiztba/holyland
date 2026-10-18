@@ -86,16 +86,100 @@ int port_gs_enabled(void) {
     return backend;
 }
 
+/* ---- The GIF ----------------------------------------------------------------------------------
+   Each path's place in its GIF packet, read from the tags as the packets go by, with or without the
+   backend: where the packets end (the GIF switches paths only there, port/platform/dmac.c), and the
+   FINISH register, which sets CSR's FINISH once the GS has had it.
+
+   The game clears FINISH as the hardware wants, by writing 1 to it (packet_buffer.c's GS_CSR |= 2),
+   but nothing on the PC sees a store into the register page, so that sets the bit instead. It makes
+   no difference to the game: it reads FINISH only after waiting for the channel whose chain ends with
+   the FINISH register, and the GS has had it by then. */
+#define GS_REG_FINISH 0x61
+#define GS_CSR_FINISH 2
+
+typedef struct {
+    uint32_t left;   /* qwords of the current tag's data still to come */
+    uint32_t flg;    /* its FLG: 0 PACKED, 1 REGLIST, 2 and 3 IMAGE */
+    uint32_t nreg;   /* its NREG (1..16) */
+    uint64_t regs;   /* its REGS */
+    uint32_t reg;    /* PACKED: the register of the next qword */
+    int ad;          /* PACKED: one of the registers is A+D */
+    int eop;         /* the current tag ends its packet */
+    int in_packet;   /* between a packet's first tag and its end */
+} GifPath;
+
+static GifPath gif_paths[4];
+
+static void read_gif(int path, const uint64_t *qwords, size_t count) {
+    GifPath *p = &gif_paths[path];
+    size_t i = 0;
+
+    while (i < count) {
+        if (p->left == 0) {
+            uint64_t tag = qwords[i * 2];
+            uint32_t nloop = (uint32_t)(tag & 0x7FFF);
+            uint32_t n;
+
+            p->eop = (int)((tag >> 15) & 1);
+            p->flg = (uint32_t)((tag >> 58) & 3);
+            p->nreg = (uint32_t)(tag >> 60);
+            if (p->nreg == 0) {
+                p->nreg = 16;
+            }
+            p->regs = qwords[i * 2 + 1];
+            p->reg = 0;
+            p->ad = 0;
+            if (p->flg == 0) {
+                p->left = nloop * p->nreg;
+                for (n = 0; n < p->nreg; n++) {
+                    if (((p->regs >> (n * 4)) & 0xF) == 0xE) {
+                        p->ad = 1;
+                    }
+                }
+            } else if (p->flg == 1) {
+                p->left = (nloop * p->nreg + 1) / 2;
+            } else {
+                p->left = nloop;
+            }
+            p->in_packet = !(p->eop && p->left == 0);
+            i++;
+            continue;
+        }
+        if (p->ad) {
+            /* the A+D qwords: the one that writes FINISH */
+            if (((p->regs >> (p->reg * 4)) & 0xF) == 0xE && (qwords[i * 2 + 1] & 0xFF) == GS_REG_FINISH) {
+                __atomic_fetch_or(EE_HW(volatile uint64_t *, 0x12001000), (uint64_t)GS_CSR_FINISH, __ATOMIC_RELEASE);
+            }
+            p->reg = p->reg + 1 == p->nreg ? 0 : p->reg + 1;
+            p->left--;
+            i++;
+        } else {
+            size_t n = count - i < p->left ? count - i : p->left;
+
+            p->left -= (uint32_t)n;
+            i += n;
+        }
+        if (p->left == 0 && p->eop) {
+            p->in_packet = 0;
+        }
+    }
+}
+
+int port_gs_path_idle(int path) {
+    return !gif_paths[path].in_packet;
+}
+
 void port_gs_gif(int path, const void *data, size_t bytes) {
+    read_gif(path, data, bytes / 16);
 #ifdef KF4_HAVE_PARALLEL_GS
     if (backend) {
         port_gs_backend_gif(path, data, bytes);
     }
-#else
-    (void)path;
-    (void)data;
-    (void)bytes;
 #endif
+    if (path != 3 && !gif_paths[path].in_packet) {
+        port_gif_path3_poll();
+    }
 }
 
 void port_gs_read_fifo(void *dst, uint32_t qwords) {

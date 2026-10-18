@@ -5,8 +5,8 @@
 
    Where the PC differs:
    - the GS's CSR is plain memory that the kernel keeps FIELD in (port/platform/kernel.c), so the
-     writes that reset or flush the GS, or clear FINISH, leave it alone; FINISH is set when the
-     transfer that ends with one is done, as the GS would;
+     writes that reset or flush the GS leave it alone, and clearing FINISH clears the bit; the GS
+     sets FINISH when it has had the register (port/platform/gs.c);
    - a DMA address is an EE address (port/platform/ee_address.c), not a physical one masked from a
      pointer; a packet on the stack, which has none, is sent from a copy;
    - the VIF1 FIFO reads and writes go to VIF1 and the GS on the DMA controller's thread;
@@ -49,6 +49,11 @@ static void start_channel(volatile int *chcr, int value) {
     port_dmac_wake();
     *chcr = value;
     port_dmac_wake();
+}
+
+/* CSR = FINISH: the write clears the flag */
+static void clear_finish(void) {
+    __atomic_fetch_and(GS_CSR, ~(uint64_t)GS_CSR_FINISH, __ATOMIC_RELAXED);
 }
 
 /* Sony's waits give up after 0x1000000 polls; on the PC the controller always finishes */
@@ -644,14 +649,15 @@ int sceGsExecStoreImage(void *pkt, void *img) {
     }
 
     wait_channel(1);
-    /* (GsPutIMR: the FINISH interrupt masked; CSR = FINISH clears the flag) */
-    *GS_CSR &= ~(uint64_t)GS_CSR_FINISH;
+    /* (GsPutIMR: the FINISH interrupt masked) */
+    clear_finish();
     *D1_QWC = 7;
     *D1_MADR = (int)dma_address(pkt, store_image_copy, sizeof(store_image_copy), 0x70);
     start_channel(D1_CHCR, 0x101);
     wait_channel(1);
     /* the packet's FINISH has been through the GS */
-    *GS_CSR |= GS_CSR_FINISH;
+    while (!(*GS_CSR & GS_CSR_FINISH)) {
+    }
 
     *VIF1_STAT = 0x800000;
     *GS_BUSDIR = 1;
@@ -695,7 +701,7 @@ int sceGsExecStoreImage(void *pkt, void *img) {
     *VIF1_STAT = 0;
     *GS_BUSDIR = 0;
     /* (GsPutIMR(imr)) */
-    *GS_CSR &= ~(uint64_t)GS_CSR_FINISH;
+    clear_finish();
     port_dmac_call(feed_vif1, sceGsUnmaskPath3Packet);
     return 0;
 }

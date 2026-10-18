@@ -15,7 +15,10 @@
 
    A transfer takes no EE time: it is done at its start. So the GS gets the transfers whole, one after
    another, in the order the game started them (the work queue below), and how fast this thread runs
-   never changes what is drawn.
+   never changes what is drawn. The GIF's arbitration is what is left of the hardware's: PATH3 waits
+   while it is masked (MSKPATH3, GIF_MODE's M3R), and then goes between other paths' packets. With
+   no time between them, a PATH1 or PATH2 packet never waits for PATH3, and GIF_STAT's APATH reads 0
+   (idle) whenever the game looks.
 
    The game's EE time does not move while it spins on a register (port/platform/kernel.c), so how soon
    this thread clears STR never changes what the game does, only how long the host takes. The end
@@ -273,6 +276,16 @@ done:
     return tag_bits;
 }
 
+/* ---- PATH3 ------------------------------------------------------------------------------------- */
+#define GIF_MODE_M3R 1
+
+/* PATH3 is masked: by VIF1's MSKPATH3, or by GIF_MODE's M3R (which the game writes). */
+static int path3_masked(void) {
+    return port_vif1_path3_masked() || (*EE_HW(volatile uint32_t *, 0x10003010) & GIF_MODE_M3R);
+}
+
+static void run_transfer(int channel);
+
 /* ---- The work queue ---------------------------------------------------------------------------
    What the controller does, in the order the game asked for it: the channels it started, the calls
    port_dmac_call makes, and the vblanks' scanouts. A start is taken into the queue ("claimed") by
@@ -304,6 +317,7 @@ static int claimed[10];              /* under queue_lock: the channel's start is
 static volatile uint64_t starts[10]; /* starts claimed */
 static volatile uint64_t ends[10];   /* transfers finished */
 static uint64_t ends_reported[10];   /* the game's thread: the starts port_dmac_ends has gone past */
+static int path3_parked;             /* this thread: channel 2 waits for PATH3 to be unmasked */
 
 static void lock_queue(void) {
     while (__atomic_exchange_n(&queue_lock, 1, __ATOMIC_ACQUIRE)) {
@@ -403,10 +417,15 @@ static void finish(int channel, int value) {
     __atomic_store_n(&ends[channel], ends[channel] + 1, __ATOMIC_RELEASE);
 }
 
-/* A started channel's transfer, all of it. */
+/* A started channel's transfer, all of it. Channel 2 waits while PATH3 is masked, as the GIF stops
+   taking it: its STR stays set, and the rest of the queue goes on (port_gif_path3_poll). */
 static void run_transfer(int channel) {
     int value = __atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE);
 
+    if (channel == 2 && path3_masked()) {
+        path3_parked = 1;
+        return;
+    }
     if ((channel == 1 || channel == 2) && ((value >> CHCR_MOD_SHIFT) & 3) == 1) {
         uint32_t tag = run_chain(channel, value);
 
@@ -419,6 +438,16 @@ static void run_transfer(int channel) {
         value &= ~CHCR_STR;
     }
     finish(channel, value);
+}
+
+/* PATH3 goes on where the GIF would let it: once it is unmasked, and between PATH1's and PATH2's GIF
+   packets (an IMAGE packet among them is never cut). VIF1 asks at MSKPATH3 0, the GS when a PATH1 or
+   PATH2 packet ends. */
+void port_gif_path3_poll(void) {
+    if (path3_parked && !path3_masked() && port_gs_path_idle(1) && port_gs_path_idle(2)) {
+        path3_parked = 0;
+        run_transfer(2);
+    }
 }
 
 static void run_work(const Work *work) {
@@ -453,6 +482,9 @@ static void *dmac_thread(void *unused)
             run_work(&work);
             idle = 0;
             continue;
+        }
+        if (path3_parked) {
+            port_gif_path3_poll(); /* (GIF_MODE's M3R) */
         }
         if (__atomic_exchange_n(&wake_requested, 0, __ATOMIC_ACQ_REL)) {
             idle = 0;
