@@ -145,8 +145,8 @@ int port_gs_vsync_pending(void) {
 }
 
 void port_gs_run_vsync(void) {
-#ifdef KF4_HAVE_PARALLEL_GS
     uint64_t tail = __atomic_load_n(&queue_tail, __ATOMIC_RELAXED);
+#ifdef KF4_HAVE_PARALLEL_GS
     VsyncRequest *request = &queue[tail % VSYNC_QUEUE];
     int dump = 0;
     int shown = !port_options.headless;
