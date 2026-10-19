@@ -629,7 +629,7 @@ index ca054c573605bde5b17c6ee461546e57ae2b8ca8..473a721394423f884cc9071937b2caae
  } SoundStartInfo;
  
 diff --git a/src/game/sound/sound_game.c b/src/game/sound/sound_game.c
-index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0edcb86fc 100644
+index 4878b3533ef657dd879c637f5e00262899d04c95..b881b796650368d96878c881294e6d99db2e085b 100644
 --- a/src/game/sound/sound_game.c
 +++ b/src/game/sound/sound_game.c
 @@ -10,6 +10,14 @@
@@ -1011,7 +1011,32 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
  }
  
  /* Each frame, updates the voice of every positioned tagged sound: stops it out of range, else sets its
-@@ -1003,6 +1030,7 @@ static int Sound_TaggedNearestPoint(s32 index, Vector4 *nearest) {
+@@ -864,7 +891,12 @@ void Sound_UpdateTagged(void) {
+             if (sound_channels[i].volume < distance) {
+                 if (sound_channels[i].note_slot > 0) {
+                     SoundDriver_NoteOff(sound_channels[i].note_slot);
+-                    tagged_voice_flags[sound_channels[i].note_slot - 0x54] = sound_channels[i].note_slot = -1;
++                    /* PC: in the order ee-gcc did it. As one statement (a[x - 0x54] = x = -1) the read of x
++                       for the index is unsequenced against its store, and clang stored first: the flag
++                       stayed claimed, the 16 voices ran out and every ambient loop then piled up on
++                       slot 0, which nothing keys off */
++                    tagged_voice_flags[sound_channels[i].note_slot - 0x54] = -1;
++                    sound_channels[i].note_slot = -1;
+                 }
+             } else {
+                 if (positional_sounds_muted == 0) {
+@@ -888,7 +920,9 @@ void Sound_UpdateTagged(void) {
+                     if (volume <= 0) {
+                         if (sound_channels[i].note_slot > 0) {
+                             SoundDriver_NoteOff(sound_channels[i].note_slot);
+-                            tagged_voice_flags[sound_channels[i].note_slot - 0x54] = sound_channels[i].note_slot = -1;
++                            /* PC: in ee-gcc's order, as above */
++                            tagged_voice_flags[sound_channels[i].note_slot - 0x54] = -1;
++                            sound_channels[i].note_slot = -1;
+                         }
+                         continue;
+                     } else {
+@@ -1003,6 +1037,7 @@ static int Sound_TaggedNearestPoint(s32 index, Vector4 *nearest) {
      case 3:
          break;
      }
@@ -1019,7 +1044,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
  }
  
  /* Finds the point on the segment start..end nearest the player (x/z only) and returns its distance; the
-@@ -1117,6 +1145,7 @@ int Sound_StopTagged(char sound) {
+@@ -1117,6 +1152,7 @@ int Sound_StopTagged(char sound) {
      } else {
          (sound_channels + i)->sound_id = -1;
      }
@@ -1027,7 +1052,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
  }
  
  /* Silences every sound voice and marks all channels (and optionally all queued requests) free. */
-@@ -1161,7 +1190,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
+@@ -1161,7 +1197,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
      if (SoundDriver_StepUpload() == 0) {
          return -1;
      }
@@ -1036,7 +1061,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      job->buffers[0] = sound_heap_next = load_addr;
      sound_heap_next = load_addr + 0x80000;
      sprintf(name, job->name, index);
-@@ -1169,7 +1198,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
+@@ -1169,7 +1205,7 @@ int Sound_BgmReadBody(LoadJob *job, int index) {
      job->file_handle = handle;
      bgm_bd_size = File_GetSize(handle);
      File_Lock();
@@ -1045,7 +1070,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      bgm_load_step += 1;
      return 0;
  }
-@@ -1256,7 +1285,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
+@@ -1256,7 +1292,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
          return -1;
      }
      heap_top = sound_heap_next;
@@ -1054,7 +1079,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      sound_heap_next = ((u32)(heap_top + 0x2003F) >> 6) << 6;
      sprintf(name, job->header_format, index);
      file = File_Open(name, 1, 1);
-@@ -1264,7 +1293,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
+@@ -1264,7 +1300,7 @@ int Sound_BgmReadHeader(LoadJob *job, int index) {
      bgm_hd_size = File_GetSize(file);
      File_Lock();
      buffers = job->buffers;
@@ -1063,7 +1088,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      bgm_load_step += 1;
      return 0;
  }
-@@ -1297,7 +1326,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
+@@ -1297,7 +1333,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
          return -1;
      }
      heap_top = sound_heap_next;
@@ -1072,7 +1097,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      sound_heap_next = ((u32)(heap_top + 0x2003F) >> 6) << 6;
      sprintf(name, job->name_format, index);
      handle = File_Open(name, TRUE, TRUE);
-@@ -1305,7 +1334,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
+@@ -1305,7 +1341,7 @@ int Sound_BgmReadSequence(LoadJob *job, int index) {
      bgm_sq_size = File_GetSize(handle);
      File_Lock();
      buffers = job->buffers;
@@ -1081,7 +1106,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      bgm_load_step += 1;
      return 0;
  }
-@@ -1403,14 +1432,14 @@ static int Sound_ReadHeapFileStep(LoadJob *job, int index) {
+@@ -1403,14 +1439,14 @@ static int Sound_ReadHeapFileStep(LoadJob *job, int index) {
      if (SoundDriver_StepUpload() != 0) {
          switch (heap_file_read_step) {
          case 0:
@@ -1098,7 +1123,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
              heap_file_read_step += 1;
              break;
          case 1:
-@@ -1435,9 +1464,9 @@ s32 Sound_ReadMapBankFileStep(LoadRequest *request) {
+@@ -1435,9 +1471,9 @@ s32 Sound_ReadMapBankFileStep(LoadRequest *request) {
          switch (map_bank_file_read_step) {
          case 0:
              buffer = sound_heap_next;
@@ -1110,7 +1135,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
              map_bank_file_handle = File_Open(map_bank_file_path, TRUE, TRUE);
              File_Read(map_bank_file_handle, request->target->buffer, -1);
              map_bank_file_read_step += 1;
-@@ -1546,7 +1575,7 @@ int Sound_ReadJobFile(LoadJob *job) {
+@@ -1546,7 +1582,7 @@ int Sound_ReadJobFile(LoadJob *job) {
          return -1;
      }
      file_handle = File_Open(job->name, 0, 1);
@@ -1119,7 +1144,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      File_Close(file_handle);
      return 1;
  }
-@@ -1637,7 +1666,7 @@ void Sound_PlayLinear(u8 sound, int bank, float range, float distance, float ang
+@@ -1637,7 +1673,7 @@ void Sound_PlayLinear(u8 sound, int bank, float range, float distance, float ang
          if (volume >= 128) {
              volume = 127;
          }
@@ -1128,7 +1153,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          SoundDriver_NoteOn(Sound_NextVoice(2), bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
  }
-@@ -1660,7 +1689,7 @@ void Sound_PlaySteep(u8 sound, int bank, float range, float distance, float angl
+@@ -1660,7 +1696,7 @@ void Sound_PlaySteep(u8 sound, int bank, float range, float distance, float angl
          if (volume >= 128) {
              volume = 127;
          }
@@ -1137,7 +1162,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          slot = Sound_NextVoice(2);
          SoundDriver_NoteOn(slot, bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
-@@ -1683,7 +1712,7 @@ void Sound_PlayRound(u8 sound, int bank, float range, float distance, float angl
+@@ -1683,7 +1719,7 @@ void Sound_PlayRound(u8 sound, int bank, float range, float distance, float angl
          if (volume >= 128) {
              volume = 127;
          }
@@ -1146,7 +1171,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          slot = Sound_NextVoice(2);
          SoundDriver_NoteOn(slot, bank, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
-@@ -1769,7 +1798,7 @@ void Sound_PlaySfxLinear(u8 sound, float range, float distance, float angle) {
+@@ -1769,7 +1805,7 @@ void Sound_PlaySfxLinear(u8 sound, float range, float distance, float angle) {
          if (volume >= 128) {
              volume = 127;
          }
@@ -1155,7 +1180,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          SoundDriver_NoteOn(Sound_NextVoice(2), sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
  }
-@@ -1793,7 +1822,7 @@ void Sound_PlaySfxSteep(u8 sound, float range, float distance, float angle) {
+@@ -1793,7 +1829,7 @@ void Sound_PlaySfxSteep(u8 sound, float range, float distance, float angle) {
          if (volume >= 128) {
              volume = 127;
          }
@@ -1164,7 +1189,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          SoundDriver_NoteOn(Sound_NextVoice(2), sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
  }
-@@ -1815,7 +1844,7 @@ void Sound_PlaySfxRound(u8 sound, float range, float distance, float angle) {
+@@ -1815,7 +1851,7 @@ void Sound_PlaySfxRound(u8 sound, float range, float distance, float angle) {
          if (volume >= 128) {
              volume = 127;
          }
@@ -1173,7 +1198,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          slot = Sound_NextVoice(2);
          SoundDriver_NoteOn(slot, sfx_com_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
-@@ -1838,7 +1867,7 @@ void Sound_PlayMapLinear(u8 sound, float range, float distance, float angle) {
+@@ -1838,7 +1874,7 @@ void Sound_PlayMapLinear(u8 sound, float range, float distance, float angle) {
          if (volume >= 128) {
              volume = 127;
          }
@@ -1182,7 +1207,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          slot = Sound_NextVoice(2);
          SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
-@@ -1864,7 +1893,7 @@ void Sound_PlayMapSteep(u8 sound, float range, float distance, float angle) {
+@@ -1864,7 +1900,7 @@ void Sound_PlayMapSteep(u8 sound, float range, float distance, float angle) {
          if (volume >= 128) {
              volume = 127;
          }
@@ -1191,7 +1216,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          slot = Sound_NextVoice(2);
          SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
-@@ -1887,7 +1916,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
+@@ -1887,7 +1923,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
          if (volume >= 128) {
              volume = 127;
          }
@@ -1200,7 +1225,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          slot = Sound_NextVoice(2);
          SoundDriver_NoteOn(slot, map_bank_job.result, 0, sound, 0x3C, volume, pan, (char) pan_pos);
      }
-@@ -1897,7 +1926,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
+@@ -1897,7 +1933,7 @@ void Sound_PlayMapRound(u8 sound, float range, float distance, float angle) {
     the job; moves on once it is loaded. */
  int Sound_EntityBankLoadVoice(SoundJob *job) {
      SoundJobSpec *spec = job->spec;
@@ -1209,7 +1234,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
  
      job->result = result;
      if (result >= 0) {
-@@ -1922,8 +1951,8 @@ int Sound_EntityBankFreeSampleBuffer(SoundJob *job) {
+@@ -1922,8 +1958,8 @@ int Sound_EntityBankFreeSampleBuffer(SoundJob *job) {
  }
  
  /* Runs the current step of the entity bank load (entity_bank_load_steps); 0 when it reports done, else 1. */
@@ -1220,7 +1245,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          entity_bank_load_step = 0;
          return 0;
      }
-@@ -1933,14 +1962,14 @@ static int Sound_RunEntityBankLoad(void *sequence, int index) {
+@@ -1933,14 +1969,14 @@ static int Sound_RunEntityBankLoad(void *sequence, int index) {
  /* Loads the sound bank of the entity type file just read (args: its header, the two buffers and their
     sizes) into voice index + 6 (index: the entity pool slot), at 0x138810 + index * 0x11800 in sound
     memory, a step a call; 0 and the voice in *voice_out once done, else 1. */
@@ -1238,7 +1263,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      sound_load_spec.size_a = args->size_a;
      sound_load_spec.size_b = args->size_b;
      sound_load_job.spec = (SoundJobSpec *)&sound_load_spec;
-@@ -1953,14 +1982,19 @@ int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out) {
+@@ -1953,14 +1989,19 @@ int Sound_LoadEntityBankStep(int args_addr, int index, int voice_out) {
  }
  
  /* Plays sound from bank with the falloff player kind of falloff_sound_players while distance is within range, panned by
@@ -1263,7 +1288,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      map_bank_load_step += 1;
      return 0;
  }
-@@ -1978,7 +2012,7 @@ int Sound_MapBankLoadVoice(SoundJob *job) {
+@@ -1978,7 +2019,7 @@ int Sound_MapBankLoadVoice(SoundJob *job) {
          reverb_change_pending = 0;
      }
      spec = job->spec;
@@ -1272,7 +1297,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      job->result = result;
      if (result >= 0) {
          map_bank_load_step += 1;
-@@ -2003,7 +2037,7 @@ int Sound_MapBankFreeSampleBuffer(SoundJob *job) {
+@@ -2003,7 +2044,7 @@ int Sound_MapBankFreeSampleBuffer(SoundJob *job) {
  
  /* Map bank load step: frees the reverb slot of the last map and stores the map's reverb settings (the
     entry map_reverb_cue_indices names in map_bank_cues) for core 1. */
@@ -1281,7 +1306,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      SoundScriptState state;
      SoundCue *cue;
  
-@@ -2019,7 +2053,7 @@ int Sound_MapBankAddReverb(void) {
+@@ -2019,7 +2060,7 @@ int Sound_MapBankAddReverb(void) {
  
  /* Map bank load step: once the upload is done, sends the map's reverb settings (SoundDriver_ApplyReverb)
     and sets map_sounds_enabled (map sounds may start); 1 (done). */
@@ -1290,7 +1315,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      if (SoundDriver_StepUpload() == 0) {
          return 0;
      }
-@@ -2034,7 +2068,7 @@ int Sound_MapBankApplyReverb(void) {
+@@ -2034,7 +2075,7 @@ int Sound_MapBankApplyReverb(void) {
  
  /* Map bank load step: the first time after Sound_Init sets map_reverb_set and moves on to the reverb steps;
     after that sets map_sounds_enabled (map sounds may start) and ends the load (1), so the reverb stays. */
@@ -1299,7 +1324,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      map_bank_load_step += 1;
      D_004468B4 = 0;
      if (map_reverb_set != 0) {
-@@ -2046,8 +2080,8 @@ int Sound_MapBankFinishUnlessFirst(void) {
+@@ -2046,8 +2087,8 @@ int Sound_MapBankFinishUnlessFirst(void) {
  }
  
  /* Runs the current step of the map bank load (map_bank_load_steps); 0 when it reports done, else 1. */
@@ -1310,7 +1335,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          map_bank_load_step = 0;
          return 0;
      }
-@@ -2055,8 +2089,7 @@ static int Sound_RunMapBankLoad(void *sequence, int kind) {
+@@ -2055,8 +2096,7 @@ static int Sound_RunMapBankLoad(void *sequence, int kind) {
  }
  
  /* Loads the sound bank of a map slot (MapSlot.sound_bank) a step a call while pending; returns 0 once it is done. */
@@ -1320,7 +1345,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      SoundBankInfo *bank;
  
      if (pending == 0) {
-@@ -2105,7 +2138,7 @@ void Sound_LoadSwBank(int file_id) {
+@@ -2105,7 +2145,7 @@ void Sound_LoadSwBank(int file_id) {
      file_number = file_id + 0x96;
      sprintf(path_a, sw_bank_job.name_a, file_number);
      sprintf(path_b, sw_bank_job.name_b, file_number);
@@ -1329,7 +1354,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      sw_bank.base = buffer_base;
      buffer_limit = buffer_base + 0x20000;
      sw_bank.limit = buffer_limit;
-@@ -2132,7 +2165,7 @@ void Sound_LoadMgBank(int file_number) {
+@@ -2132,7 +2172,7 @@ void Sound_LoadMgBank(int file_number) {
  
      sprintf(path_a, mg_bank_job.name_a, file_number);
      sprintf(path_b, mg_bank_job.name_b, file_number);
@@ -1338,7 +1363,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
      mg_bank.base = heap_start;
      buffer_end = heap_start + 0x10000;
      mg_bank.limit = buffer_end;
-@@ -2156,16 +2189,16 @@ static int Sound_LoadFilePair(char *name_a, char *name_b, SoundJobSpec *spec, in
+@@ -2156,16 +2196,16 @@ static int Sound_LoadFilePair(char *name_a, char *name_b, SoundJobSpec *spec, in
          File_Close(handle);
          return 0;
      }
@@ -1358,7 +1383,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
  }
  
  /* Keeps the driver's upload going (SoundDriver_StepUpload); 1 once it is done. */
-@@ -2191,7 +2224,7 @@ static int Sound_UpdateMapReverbVolume(void) {
+@@ -2191,7 +2231,7 @@ static int Sound_UpdateMapReverbVolume(void) {
      int cached;
      int wanted;
  
@@ -1367,7 +1392,7 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..dd92e313e552be94bc2a1de50647a3e0
          slot = &map_slots[current_map_slot];
          cached = map_reverb_volume;
          if ((u8)slot->records[(player_state.map_index << 7) + 0x4D] != cached) {
-@@ -2206,6 +2239,7 @@ static int Sound_UpdateMapReverbVolume(void) {
+@@ -2206,6 +2246,7 @@ static int Sound_UpdateMapReverbVolume(void) {
              return SoundDriver_Remote(1, 0xD0, 0xC81, map_reverb_volume << 8);
          }
      }

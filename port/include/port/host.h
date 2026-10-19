@@ -126,6 +126,15 @@ int port_widescreen(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 
+/* ---- Opt-in mods the game code reads ---------------------------------------------------------
+   Each changes the game, so each is off by default; while it is off the game does what it did on
+   the PS2.
+
+   port_myus_necklace(): 1 while the Myu's Necklace mod is on (--myus-necklace, or the overlay's Mods
+   page; port/platform/main_host.c). The map objects then glow as if the necklace were worn, whatever
+   the amulet slot holds. */
+int port_myus_necklace(void);
+
 /* Checks a struct's size and a field's offset against the PS2 layout written in its comments, for
    overlay and save structs: LAYOUT_SIZE(ModelHeader, 0x40); LAYOUT_OFFSET(ModelHeader, parts, 0x10); */
 #define LAYOUT_SIZE(T, size) _Static_assert(sizeof(T) == (size), #T " is not its PS2 size")

@@ -29,6 +29,14 @@ typedef struct {
     int32_t hp, hp_max, mp, mp_max;
     int32_t level, gold;
     uint32_t play_seconds; /* the game's play time */
+    /* The neighbouring map the game had loaded, or was loading, into its other map slot: which of the
+       current map's 32 origins (MapSlot.origins) leads to it, its map number, and whether it was set
+       up (in play) or only read. A file older than these has neighbour_known 0, and the game works
+       the neighbour out from the position instead. */
+    int32_t neighbour_known;
+    int32_t neighbour_origin; /* 0..31, or -1: none */
+    int32_t neighbour_map;    /* MapLoadRequest.map, or -1 */
+    int32_t neighbour_set_up; /* 1: set up (MapLoad_SetUpMap on), 0: read, or being read, only */
 } PortQuickInfo;
 
 /* Asks for a quick save to `slot`, or a load from it, taken where the game can (in play for a save;

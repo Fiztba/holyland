@@ -143,6 +143,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
+| `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 
 The window shows the game at 4:3 (16:9 with widescreen). A game controller is the pad; so is the keyboard (the PS2 layout,
@@ -177,8 +178,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
-| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; and a button that copies them for a bug report |
-| Save states | the ten slots (0 is the quick slot of F2 and F4), save, load, and what the last request did (`port/include/port/savestate.h`) |
+| Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
 | Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
 
@@ -193,7 +193,7 @@ the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
-`--widescreen` keeps widescreen on,
+`--widescreen` keeps widescreen on, `--myus-necklace` keeps that mod on,
 and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
@@ -203,7 +203,7 @@ player has chosen. Built without SDL there is no overlay at all.
 `KF4_OVERLAY_SHOT=page@vblank,...` is for checking the overlay without anyone at the screen: it opens
 the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
 window's whole picture a few vblanks later as `overlay_<page>.png` in `--dump-dir`. The pages are
-`display`, `audio`, `controls`, `savestates`, `debug` and `interface`, and `closed` is the game alone;
+`display`, `audio`, `controls`, `savestates`, `mods`, `debug` and `interface`, and `closed` is the game alone;
 list them in vblank order. Use it with `KF4_DATA_DIR`, as it reads and, after the last picture,
 writes back settings.json:
 
@@ -230,6 +230,18 @@ that none is blank (`--keep DIR` keeps them to look at).
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
+
+## Mods
+
+Optional changes to how the game plays. All are off by default; with them off, the game plays as it
+does on the PS2. Each is a switch on the command line and on the overlay's Mods page (live), kept in `settings.json`'s `"mods"`, and read by the
+game's patches through a function of `port/include/port/host.h`; off, the game code does exactly what
+it does without it.
+
+- **Myu's Necklace effect without wearing it** (`--myus-necklace`, `port_myus_necklace()`).
+  `MapObject_DrawAll` decides each frame whether the necklace is worn, from the amulet slot; with the
+  mod on it counts as worn whatever the slot holds, so the objects it makes glow always glow (their
+  pulse starts when the mod is turned on), and the slot is free for another amulet.
 
 ## Widescreen
 
@@ -302,22 +314,39 @@ How it works (`game/quicksave.c`, `port/platform/quicksave.c`):
   the title screen, `Title_Run` returns as the title's own Load does after a load (`TitleMenu_Run`'s
   case 5). The first vblank of play then checks where the player is against the file, and the log says
   so (`quick loaded: ... (as saved)`).
+- **The neighbouring map.** The game keeps two maps: the one the player is in and the one next to it,
+  which it streams in as he walks (`MapLoad_Update`, `map/map_load.c`). A map record that names one of
+  the map's origins (`neighbour_origin_index`) asks for that neighbour, which is then read in the
+  background; a record at the join (`needs_neighbour_map`) has it set up, so that it is drawn and walked
+  on. The records in between name nothing and keep whatever was loaded last, so what is loaded depends
+  on the way the player came, which the save image does not hold (a card save is taken at a save point,
+  where it does not matter). A quick save keeps it in its PC block: which origin led to the neighbour,
+  and whether it was set up or only read (or being read). Loading asks the game's own loader for it
+  once the saved map is set up (`Quick_RestoreNeighbour`, called from `GameLoop_Run`) and runs its steps
+  as far as they had gone, before the first picture. A quick save from before this was kept (a 64-byte
+  PC block) is given the neighbour named by the record the player stands in (read only, as the game has
+  it there), or else by the nearest record that names one (set up). The log says which
+  (`quick load: neighbouring map 08 (origin 3) set up`).
 - **The file** is a 40-byte header (`KF4QUICK`, the format's version, the save image's version word
   0x15400, sizes, a hash), a PC block (when, the map, position, rotation, HP, MP, level, gold, play
-  time: what the overlay lists) and the save image. Every number is written byte by byte, little-endian,
+  time: what the overlay lists; then the neighbouring map) and the save image. The PC block's size is
+  the format's minor version: a reader takes what it knows and skips the rest, so older and newer
+  files of format version 1 load in every build. Every number is written byte by byte, little-endian,
   so nothing in it depends on the build. A file that is not a quick save, is of another format version,
   is cut short, fails its hash or fails the game's own check is refused with a message, and the game goes
   on as it was. Nothing is ever read from or written to the memory card.
 
 What a quick load restores is what loading a memory card save restores, at the place it was taken:
 - **Restored:** the map, the exact position, heading and look; HP and MP; everything else in the
-  save image (above).
+  save image (above); and the neighbouring map, read or set up as it was (above): a quick save taken
+  just outside a cave's entrance, or just inside it, loads with the other side there.
 - **Not restored, as after any load of a save:** the map is entered afresh, so enemies are back as when
   you enter a map, and map objects that move (lifts, platforms) are where the map starts them (doors,
-  chests and switches keep their flags). What lasts a while starts afresh: the power and magic gauges,
-  the timers of ailments and of magic and items in effect, the Power Seed and the Widda Needle. A map's
-  own counters that count its loads move on as on any load. The neighbouring map is loaded again as you
-  walk.
+  chests and switches keep their flags). The neighbouring map is entered afresh in the same way. What
+  lasts a while starts afresh: the power and magic gauges, the timers of ailments and of magic and items
+  in effect, the Power Seed and the Widda Needle. A map's own counters that count its loads move on as
+  on any load. The record the player stands in is found again from the position, as on a card load (it
+  is found from the floor once he moves).
 - A quick save taken on a moving platform or in a hazard puts you back on the same spot, where the
   platform may not be (you fall) or the hazard hurts you again.
 
@@ -335,7 +364,13 @@ walk:
 - loaded while the player burns to death (HP falling, and after it reached 0, before the game over
   screen): he is back where it was saved, with its HP;
 - a damaged, cut short, other-version or foreign file is refused, and the game goes on;
-- the memory card folder is the same before and after.
+- the memory card folder is the same before and after;
+- the neighbouring map, from a quick save taken outside the poison cave's entrance (map 0x63, the cave
+  is map 08): through the entrance the cave is there (it was dark, and the player fell through it,
+  before); saves taken on the way in on both sides of the join (map 0x63 with 08 set up, map 08 with
+  0x63 set up, looking back out shows the outside), at the new game's start on a record that asks for
+  map 00 and while that load was running (restored read only, as the game had it), all restore what
+  the game had; each of them with its PC block cut to the old 64 bytes works out the same neighbour.
 
 ## Save states
 
