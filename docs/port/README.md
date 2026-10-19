@@ -138,7 +138,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--state-save-at VBLANK[:SLOT\|:FILE],...` | save a state at these vblanks, to a slot (0 when left out) or a file (see "Save states") |
 | `--state-load [VBLANK:]SLOT\|FILE` | load a state before the game starts, or once the run reaches that vblank |
 | `--quick-save-at VBLANK[:SLOT\|:FILE],...` | take a quick save (slot 0 when left out) at these vblanks, or as soon after as the player is in control (see "Quick saves") |
-| `--quick-load [VBLANK:]SLOT\|FILE` | load a quick save on the title screen, or in play once the run reaches that vblank |
+| `--quick-load [VBLANK:]SLOT\|FILE,...` | load a quick save on the title screen, or in play once the run reaches that vblank; several (in vblank order) are loaded one after another, as `tools/map_tour.py` does |
 | `--memcard DIR\|none` | the folder that is the memory card in slot 1 (by default `memcard` in the data folder, beside settings.json); `none` leaves the slot empty, as the tests do |
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
@@ -335,6 +335,11 @@ How it works (`game/quicksave.c`, `port/platform/quicksave.c`):
   so nothing in it depends on the build. A file that is not a quick save, is of another format version,
   is cut short, fails its hash or fails the game's own check is refused with a message, and the game goes
   on as it was. Nothing is ever read from or written to the memory card.
+- **Made-up files.** `tools/map_tour.py` writes quick saves for any map and place itself (from a real
+  one, with the map and position changed) and marks them with bit 1 of the PC block's flags byte. Such
+  a file loads as any other; then the player is put on the floor nearest under the position (or else
+  over it: `Collision_FindFloorBelow`) and the neighbouring map is worked out from there. The game's own
+  quick saves never have the bit.
 
 What a quick load restores is what loading a memory card save restores, at the place it was taken:
 - **Restored:** the map, the exact position, heading and look; HP and MP; everything else in the
@@ -514,7 +519,7 @@ Next:
 | `port/math/` | libvu0 in C |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
 | `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |
-| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
+| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `map_tour.py` (every map pictured, with a GS census), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
 | `tests/` | pad scripts for headless runs (`newgame.pad`); `vu1_test.c`, the VU1 interpreter's self-test, which also checks that VU0's arithmetic (`port/include/port/vu_float.h`) gives VU1's bits (`out/<preset>/vu1_test`) |
 | `.github/workflows/ci.yml` | CI: configure (the patches apply), build with paraLLEl-GS, `port_census.py` reports 0 errors |
 | `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |
