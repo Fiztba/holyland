@@ -37,6 +37,10 @@ typedef struct {
     int widescreen;
     int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
     int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
+    /* The opt-in mods (port/include/port/host.h): off by default, turned on by their switch or
+       settings.json, live from the overlay. */
+    int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */
+    int myus_necklace_forced; /* --myus-necklace: on for this run whatever settings.json says */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
