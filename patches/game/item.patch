@@ -103,7 +103,7 @@ index 0594b38176e84720f45364fd6332ff2ec1cbb15c..269c10ab4d7dbd97a10bd25fe11ee901
 +GameDefinition *const weapon_name_defs = item_name_defs + 150;
 +GameDefinition *const worn_name_defs = item_name_defs + 220;
 diff --git a/src/game/item/map_item.c b/src/game/item/map_item.c
-index 2ee95737a736c28f019ae010355d1f3e29f4f7df..0c0e8f4659462d078da67315daa02a9ee1308d15 100644
+index 2ee95737a736c28f019ae010355d1f3e29f4f7df..76ced334ae82482314846c711345ded9535bcd60 100644
 --- a/src/game/item/map_item.c
 +++ b/src/game/item/map_item.c
 @@ -8,6 +8,7 @@
@@ -274,6 +274,15 @@ index 2ee95737a736c28f019ae010355d1f3e29f4f7df..0c0e8f4659462d078da67315daa02a9e
      result = 1;
      if (object != 0) {
          result = MAP_OBJECT_DEF_KIND(object->definition) != 4;
+@@ -748,7 +754,7 @@ void MapItem_PickupAim(void) {
+     pickup_target_position[3] = 0.0f;
+     pickup_view_pitch = atan2f(view_ray_status.view_origin[1] - pickup_target_position[1], 150.0f);
+     Vector_Subtract(delta, pickup_target_position, pickup_start_position);
+-    distance = sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
++    distance = ps2_dtof(sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]));
+     if (distance < 75.0f) {
+         Vector_Scale(pickup_velocity, delta, 1.0f / distance);
+         Vector_Scale(pickup_velocity, pickup_velocity, 5.0f);
 @@ -819,7 +825,7 @@ void MapItem_PickupTake(void) {
      if (node->def != NULL && node->def->required_flag != 0) {
          map_item_pickup_counts[map_slots[node->flags & 1].tag][node->index]++;

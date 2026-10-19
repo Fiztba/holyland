@@ -1393,7 +1393,7 @@ index 7b0dbb7560de4032f9a76cae8843975c56e184ba..f24e3165308d2b13c73d05100e430a24
              part->rotation_x += (vectors[key->rotation].x - part->rotation_x) / divisor;
              part->rotation_y += (vectors[key->rotation].y - part->rotation_y) / divisor;
 diff --git a/src/game/model/model_screen.c b/src/game/model/model_screen.c
-index e7a0a153a5609bb86d4007ce9a267be54eedfed8..eb3406016a153506d7ddb84452e73ce33cc47396 100644
+index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136dd41da825 100644
 --- a/src/game/model/model_screen.c
 +++ b/src/game/model/model_screen.c
 @@ -1,4 +1,7 @@
@@ -1511,6 +1511,15 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..eb3406016a153506d7ddb84452e73ce3
          packet += 0x10;
          *packet = 0x10000003;
          packet += 4;
+@@ -605,7 +598,7 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
+ 
+     screen_uv_frame_copy = screen_uv_frame = (screen_uv_frame + 1) % 60;
+     for (i = 0; i < 60; i++) {
+-        sines[i] = sin((f32)i * 6.2831855f / 60.0f) * 10.0;
++        sines[i] = ps2_dtof(sin((f32)i * 6.2831855f / 60.0f) * 10.0);
+     }
+     part = model->parts;
+     part_count = model->part_count;
 @@ -613,9 +606,9 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
          FlushCache(0);
          sceVu0MulMatrix(matrix, world_screen_matrix, part);

@@ -1,5 +1,5 @@
 diff --git a/src/game/collision/collision.c b/src/game/collision/collision.c
-index 3ff37e8f458c785217c37780db3d99d329cda113..f950e81f71f10fad41ade62742442b982526a401 100644
+index 3ff37e8f458c785217c37780db3d99d329cda113..fcd5794e91cb0e27825b90ddb41e07c1b1f73e8b 100644
 --- a/src/game/collision/collision.c
 +++ b/src/game/collision/collision.c
 @@ -106,25 +106,7 @@ void Collision_PointTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *p
@@ -244,6 +244,15 @@ index 3ff37e8f458c785217c37780db3d99d329cda113..f950e81f71f10fad41ade62742442b98
      denominator = (from_b[0] + from_b[1] + from_b[2]) / denominator;
      if (denominator < D_00446FC4[0]) {
          return;
+@@ -1169,7 +1068,7 @@ void Collision_CylinderEdgeExtended(Vector4 *start, Vector4 *end, f32 height, Ve
+     along = to_x * edge_x + to_z * edge_z;
+     along /= edge_x * edge_x + edge_z * edge_z;
+     margin = -reach / sqrtf(edge_x * edge_x + edge_z * edge_z);
+-    upper = 1.0 - margin;
++    upper = ps2_dtof(1.0 - margin);
+     if (along < margin) {
+         return;
+     }
 diff --git a/src/game/collision/collision.h b/src/game/collision/collision.h
 index 44c06a84fefb615410f42dccd55917452a577331..fdd4ee4713ea0bd17bae93924a045e82120f06d9 100644
 --- a/src/game/collision/collision.h

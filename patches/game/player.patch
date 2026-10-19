@@ -1213,7 +1213,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e
      }
  }
 diff --git a/src/game/player/player_update.c b/src/game/player/player_update.c
-index 0bb4b0efa70e9591ff4b71939f79236f831481a0..d9ea1408e44b917ce32ecab8532c5af816fb9181 100644
+index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f75ed6a025177f6bc976d13970a2b9f0bdd3d327 100644
 --- a/src/game/player/player_update.c
 +++ b/src/game/player/player_update.c
 @@ -8,9 +8,14 @@
@@ -1361,6 +1361,15 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..d9ea1408e44b917ce32ecab8532c5af8
      player_state.rotation.y = Angle_Wrap(player_state.rotation.y + delta.y);
      player_state.rotation.x += delta.x;
      if (player_state.rotation.x > 1.012291f) {
+@@ -1447,7 +1457,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+     }
+ 
+     if ((s32)(player_state.status_bits >> 37) & 1) {
+-        player_state.landing_dip_offset = (f32)sin((f32)player_state.landing_dip_frame * 3.1415927f / (f32)player_state.landing_dip_frames) * player_state.landing_dip_depth;
++        player_state.landing_dip_offset = ps2_dtof(sin((f32)player_state.landing_dip_frame * 3.1415927f / (f32)player_state.landing_dip_frames)) * player_state.landing_dip_depth;
+         if (player_state.landing_dip_frame++ >= player_state.landing_dip_frames) {
+             player_state.status_bits &= ~PLAYER_FLAG_37;
+             player_state.landing_dip_offset = 0.0f;
 @@ -1575,7 +1585,7 @@ void Player_TakeFallDamage(float speed) {
      if (player_state.stepped_on_entity != 0) {
          amount = amount * 60 / 100;

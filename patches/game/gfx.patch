@@ -1658,7 +1658,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
      return cursor;
  }
 diff --git a/src/game/gfx/wobble.c b/src/game/gfx/wobble.c
-index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..a675b9a169e86cd247c8abba1aaf0e5be05a5280 100644
+index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e07dbfb2ab 100644
 --- a/src/game/gfx/wobble.c
 +++ b/src/game/gfx/wobble.c
 @@ -2,16 +2,11 @@
@@ -1680,6 +1680,15 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..a675b9a169e86cd247c8abba1aaf0e5b
  int rand(void);
  void srand(u32);
  
+@@ -36,7 +31,7 @@ void Wobble_AdvanceSines(void) {
+     }
+     x = wobble_base_phase;
+     for (i = 0; i < 32; i++) {
+-        wobble_sines[i] = sin(x);
++        wobble_sines[i] = ps2_dtof(sin(x));
+         x += wobble_sine_spacing;
+         if (x > wobble_phase_period) {
+             x -= wobble_phase_period;
 @@ -128,7 +123,7 @@ void Wobble_DrawRippledModel(ModelInstance *model, int unk1, int unk2, int unk3,
              Matrix_Multiply(matrix, world_screen_matrix, matrix);
              Vu0_LoadMatrix(matrix);

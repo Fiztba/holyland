@@ -629,7 +629,7 @@ index ca054c573605bde5b17c6ee461546e57ae2b8ca8..473a721394423f884cc9071937b2caae
  } SoundStartInfo;
  
 diff --git a/src/game/sound/sound_game.c b/src/game/sound/sound_game.c
-index 4878b3533ef657dd879c637f5e00262899d04c95..b881b796650368d96878c881294e6d99db2e085b 100644
+index 4878b3533ef657dd879c637f5e00262899d04c95..52c02faa221ec724d79447379a893c84e8064539 100644
 --- a/src/game/sound/sound_game.c
 +++ b/src/game/sound/sound_game.c
 @@ -10,6 +10,14 @@
@@ -1036,6 +1036,17 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..b881b796650368d96878c881294e6d99
                          }
                          continue;
                      } else {
+@@ -983,8 +1017,8 @@ static int Sound_TaggedNearestPoint(s32 index, Vector4 *nearest) {
+         to_end_y = player_state.position.y - end.y;
+         to_end_z = player_state.position.z - end.z;
+         dot_start = to_start_x * seg_x + to_start_y * seg_y + to_start_z * seg_z;
+-        cos_start = dot_start / (sqrt(to_start_x * to_start_x + to_start_y * to_start_y + to_start_z * to_start_z) * sqrt(seg_x * seg_x + seg_y * seg_y + seg_z * seg_z));
+-        cos_end = (to_end_x * back_x + to_end_y * back_y + to_end_z * back_z) / (sqrt(to_end_x * to_end_x + to_end_y * to_end_y + to_end_z * to_end_z) * sqrt(back_x * back_x + back_y * back_y + back_z * back_z));
++        cos_start = ps2_dtof(dot_start / (sqrt(to_start_x * to_start_x + to_start_y * to_start_y + to_start_z * to_start_z) * sqrt(seg_x * seg_x + seg_y * seg_y + seg_z * seg_z)));
++        cos_end = ps2_dtof((to_end_x * back_x + to_end_y * back_y + to_end_z * back_z) / (sqrt(to_end_x * to_end_x + to_end_y * to_end_y + to_end_z * to_end_z) * sqrt(back_x * back_x + back_y * back_y + back_z * back_z)));
+         if (cos_start > 0.0f && cos_start < 1.0f && cos_end > 0.0f && cos_end < 1.0f) {
+             along = dot_start / (seg_x * seg_x + seg_y * seg_y + seg_z * seg_z);
+             nearest->x = start.x + seg_x * along;
 @@ -1003,6 +1037,7 @@ static int Sound_TaggedNearestPoint(s32 index, Vector4 *nearest) {
      case 3:
          break;
@@ -1044,6 +1055,27 @@ index 4878b3533ef657dd879c637f5e00262899d04c95..b881b796650368d96878c881294e6d99
  }
  
  /* Finds the point on the segment start..end nearest the player (x/z only) and returns its distance; the
+@@ -1015,9 +1050,9 @@ static f32 Sound_SegmentNearestPointXZ(Vector4 *start, Vector4 *end, Vector4 *ne
+     f32 along;
+ 
+     dot_start = start_dx * seg_dx + start_dz * seg_dz;
+-    cos_start = dot_start / (sqrt(start_dx * start_dx + start_dz * start_dz) * sqrt(seg_dx * seg_dx + seg_dz * seg_dz));
++    cos_start = ps2_dtof(dot_start / (sqrt(start_dx * start_dx + start_dz * start_dz) * sqrt(seg_dx * seg_dx + seg_dz * seg_dz)));
+     dot_end = end_dx * back_dx + end_dz * back_dz;
+-    cos_end = dot_end / (sqrt(end_dx * end_dx + end_dz * end_dz) * sqrt(back_dx * back_dx + back_dz * back_dz));
++    cos_end = ps2_dtof(dot_end / (sqrt(end_dx * end_dx + end_dz * end_dz) * sqrt(back_dx * back_dx + back_dz * back_dz)));
+     if (cos_start > 0.0f && cos_start < 1.0f && cos_end > 0.0f && cos_end < 1.0f) {
+         along = dot_start / (seg_dx * seg_dx + seg_dz * seg_dz);
+         nearest->x = start->x + seg_dx * along;
+@@ -1032,7 +1067,7 @@ static f32 Sound_SegmentNearestPointXZ(Vector4 *start, Vector4 *end, Vector4 *ne
+         nearest->y = end->y;
+         nearest->z = end->z;
+     }
+-    return sqrt((player_state.position.x - nearest->x) * (player_state.position.x - nearest->x) + (player_state.position.z - nearest->z) * (player_state.position.z - nearest->z));
++    return ps2_dtof(sqrt((player_state.position.x - nearest->x) * (player_state.position.x - nearest->x) + (player_state.position.z - nearest->z) * (player_state.position.z - nearest->z)));
+ }
+ 
+ /* Starts the sounds queued in tagged_requests once map_sounds_enabled is set, freeing each request. */
 @@ -1117,6 +1152,7 @@ int Sound_StopTagged(char sound) {
      } else {
          (sound_channels + i)->sound_id = -1;
