@@ -49,4 +49,11 @@ int sceCdStRead(unsigned int sectors, void *buffer, unsigned int mode, unsigned 
 int sceCdStSeek(unsigned int lsn);
 int sceCdStStop(void);
 
+/* PC only: sceCdRead of `sectors` sectors into a buffer of `size` bytes, for File_Read (core/file.c).
+   The PS2 wrote every sector whole, up to 0x7FF bytes past the buffer, where retail's layout of its
+   globals made that harmless. Into game RAM (laid out as on the PS2) this still reads whole sectors;
+   into the program's globals (laid out by the PC's compiler) only `size` bytes reach buf, the last
+   sector going through a buffer of its own. */
+int port_cd_read_bytes(unsigned int lsn, unsigned int sectors, void *buf, int size, sceCdRMode *mode);
+
 #endif /* SCE_LIBCDVD_LIBCDVD_H */

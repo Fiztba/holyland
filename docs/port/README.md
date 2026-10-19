@@ -145,6 +145,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
+| `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
 
 The window shows the game at 4:3 (16:9 with widescreen). A game controller is the pad; so is the keyboard (the PS2 layout,
 the default):
@@ -474,6 +475,33 @@ those differ from the recorded ones.
 tools without anyone at the keyboard (in a run that draws; with `KF4_DATA_DIR`, as they write into its
 `captures` folder).
 
+## Sanitizers
+
+`-DKF4_SANITIZE=address,undefined` (any `-fsanitize=` list) builds everything with AddressSanitizer
+and UBSan; left empty, the build is as it was. Use it on Linux with gcc, without the GS and SDL:
+
+```sh
+cmake -S . -B out/asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=gcc \
+  -DKF4_USE_PARALLEL_GS=OFF -DKF4_USE_SDL=OFF -DKF4_SANITIZE=address,undefined
+cmake --build out/asan
+ASAN_OPTIONS=halt_on_error=0 out/asan/kf4 --disc kfiv_us.iso --fast --headless --frames 3000 \
+  --memcard none --input tests/newgame.pad --log run.log 2> run.err
+```
+
+- The checks are recoverable: `ASAN_OPTIONS=halt_on_error=0` lists every report of a run instead of
+  stopping at the first. UBSan goes on by itself.
+- The fibers tell ASan of each stack switch (`port/platform/fiber.c`, `port/include/port/sanitize.h`),
+  and a fiber's stack is cleared of old poison when it is made or a save state puts it back.
+- The program sets `detect_stack_use_after_return=0` (ASan's fake stacks would keep locals outside the
+  fibers' stacks, where a save state does not see them) and `detect_leaks=0`; `ASAN_OPTIONS` overrides.
+- Game RAM moves to 0x100400000000, above ASan's shadow memory (which covers the usual address), so save
+  states still work. ASan does not check game RAM: it is one block of the program's, and the game's own
+  allocator hands it out. Only the program's globals, the stacks and the C heap are checked.
+- Save states copy the globals' image and the stacks with their redzones, without ASan's checks.
+- Known reports, all harmless and as on the PS2: `title.c` reads `key_frames[4]` and `key_values[4]`
+  (the next fields of the same `BootSpriteTrack`), and `movie.c` passes NULL to `memcpy` with a size
+  of 0.
+
 ## Status
 
 The steps, in order: [PLAN.md](PLAN.md).
@@ -508,14 +536,14 @@ Next:
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
 | `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, the IPU's input DMA, VIF1, VU1, the GS's front end, the window and frame dumps, the disc, save states, quick saves |
 | `port/gs/` | the GS backend: paraLLEl-GS behind a small C interface |
-| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc, libsdr, and libmpeg on the port's MPEG-2 decoder (`mpeg2.c`) |
+| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc, libsdr, libmpeg on the port's MPEG-2 decoder (`mpeg2.c`), and the PS2's math library (`libm_ps2.c`: newlib's, from the decomp's sources) |
 | `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |
 | `port/debug/` | the debugging tools: the GS frame capture (`gs_capture.c`, F9), the game's state as JSON (`game_dump.c`, F10), the sound's last 20 seconds and the captures folder (`debug.c`, F12) |
-| `port/math/` | libvu0 in C |
+| `port/math/` | libvu0 in C, computing what the SDK's VU0 code does, bit for bit (VU arithmetic from `port/include/port/vu_float.h`) |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
 | `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |
-| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
-| `tests/` | pad scripts for headless runs (`newgame.pad`); `vu1_test.c`, the VU1 interpreter's self-test, which also checks that VU0's arithmetic (`port/include/port/vu_float.h`) gives VU1's bits (`out/<preset>/vu1_test`) |
+| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `ee_libm_ref.py` (the retail program's math functions run on a model of the EE: `tests/libm_ref.txt`), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
+| `tests/` | pad scripts for headless runs (`newgame.pad`, `walk.pad`); `libm_test.c`, the PS2's math library against the retail program's results; `int_divide_test.c`, integer division as the EE does it; `vu1_test.c`, the VU1 interpreter's self-test, which also checks that VU0's arithmetic (`port/include/port/vu_float.h`) gives VU1's bits and that `port/math/libvu0.c` matches the SDK's VU0 code run as microcode (`out/<preset>/vu1_test`) |
 | `.github/workflows/ci.yml` | CI: configure (the patches apply), build with paraLLEl-GS, `port_census.py` reports 0 errors |
 | `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |
 | `docs/port/` | these notes |

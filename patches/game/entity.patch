@@ -835,7 +835,7 @@ index c44b5a78c545a33d19d04a8c6a0c28b694f80594..7facba7eb11ae694d2bfae44786799e9
  void Entity_ResetAllLists(void);
  void Entity_FreeAllInGroup(int group_id);
 diff --git a/src/game/entity/entity_ai.c b/src/game/entity/entity_ai.c
-index 26e563eb1b3443ffb1440f955b1e647836ac1320..49010f8743f4515fad4eedc2ff55c1e4f69b292d 100644
+index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef02d503589 100644
 --- a/src/game/entity/entity_ai.c
 +++ b/src/game/entity/entity_ai.c
 @@ -8,15 +8,17 @@
@@ -960,8 +960,9 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..49010f8743f4515fad4eedc2ff55c1e4
  /* As func_00196200, at the player's position 115 above his feet; FALSE without the part.
     Nothing calls it. */
 -static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate) {
+-    float position[2]; // match: Vector_Copy writes four floats, but retail reserves room for two
 +static int func_00196248(Entity *entity, f32 *angles, int mode, f32 *limits, float rate) {
-     float position[2]; // match: Vector_Copy writes four floats, but retail reserves room for two
++    float position[4]; /* PC: [2] (retail reserved room for two); Vector_Copy stores a quadword */
      EntityModel *model;
  
      Vector_Copy(position, &player_state.position);
@@ -1097,7 +1098,7 @@ index 94806291e6060684310b2af73d4896051d5a8563..e681dedc472aa684c42325c264742282
  int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32 range);
  /* Once the model is below y 10000 (fallen out of the map): frees its effects, clears flag bit 1 and returns
 diff --git a/src/game/entity/entity_ai_choice.c b/src/game/entity/entity_ai_choice.c
-index d76332a9d43b6ada15c9e45887fa745db51bea90..1bd81606b16a30dc85ef42af1b49d5b89d1014ad 100644
+index d76332a9d43b6ada15c9e45887fa745db51bea90..0ca78fda40c361e90bd5e2d852da4614d9291730 100644
 --- a/src/game/entity/entity_ai_choice.c
 +++ b/src/game/entity/entity_ai_choice.c
 @@ -3,6 +3,7 @@
@@ -1117,6 +1118,15 @@ index d76332a9d43b6ada15c9e45887fa745db51bea90..1bd81606b16a30dc85ef42af1b49d5b8
  extern EntityModel *held_item_model_ptr;
  int rand(void);
  extern PlayerState player_state;
+@@ -233,7 +234,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
+     if (angle >= 0.0f) {
+         return 0;
+     }
+-    angle = (f32)acos(angle) - 1.5707964f;
++    angle = ps2_dtof(acos(angle)) - 1.5707964f;
+     Vector_Cross(facing, push, facing);
+     if (facing[1] <= 0.0f) {
+         angle = entity->model->rotation[1] + angle + 0.017453292f;
 @@ -829,18 +830,8 @@ s32 EntityAi_MoveCommand3D(Entity *entity, s32 mark_far, f32 range) {
      if (entity->params->max_speed < (0.0f <= diff ? diff : -diff)) {
          result |= 0.0f <= diff ? 0x20 : 0x10;
@@ -1263,7 +1273,7 @@ index b22aa66f2ed9edc85f193a3b86644bd5918d8771..406fcc3d95f51cfa8f3e898d0baf44a0
  /* The think function of state 1 (the player was noticed and is no longer): keeps walking to the player. */
  void EntityAi_ThinkPursue(Entity *entity, int extra);
 diff --git a/src/game/entity/entity_aim.c b/src/game/entity/entity_aim.c
-index b9b00213c82ca0a5d4136fba07f8d6f2c7d2f594..3db1f73b91fd8e4a2cbee19729d51be2e611eca2 100644
+index b9b00213c82ca0a5d4136fba07f8d6f2c7d2f594..fdd5984549a892739062522e1221fc7899cb2e7b 100644
 --- a/src/game/entity/entity_aim.c
 +++ b/src/game/entity/entity_aim.c
 @@ -2,9 +2,11 @@
@@ -1326,6 +1336,24 @@ index b9b00213c82ca0a5d4136fba07f8d6f2c7d2f594..3db1f73b91fd8e4a2cbee19729d51be2
      if ((s32)(distance_out[0] * 100.0f / range) > 50) {
          for (i = 0; i < 5; i++) {
              table.weights[i + 5] *= 2;
+@@ -311,7 +297,7 @@ static s32 Bone_ClampDirection(f32 *direction, f32 *limits, f32 heading) {
+ 
+     sceVu0RotMatrixY(matrix, identity_matrix, -heading);
+     Vector_ApplyMatrix(local, matrix, direction);
+-    length = sqrt(local[0] * local[0] + local[2] * local[2]);
++    length = ps2_dtof(sqrt(local[0] * local[0] + local[2] * local[2]));
+     pitch = atan2f(-local[1], length);
+     yaw = atan2f(local[0], local[2]);
+     if (pitch < limits[0]) {
+@@ -334,7 +320,7 @@ static s32 Bone_ClampDirection(f32 *direction, f32 *limits, f32 heading) {
+         sceVu0RotMatrixX(matrix, identity_matrix, pitch);
+         sceVu0RotMatrixY(matrix, matrix, yaw);
+         sceVu0RotMatrixY(matrix, matrix, heading);
+-        length = sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
++        length = ps2_dtof(sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]));
+         local[0] = matrix[8];
+         local[1] = matrix[9];
+         local[2] = matrix[10];
 @@ -398,18 +384,8 @@ s32 EntitySight_ObjectInWay(Entity *entity) {
      position[1] -= entity->collision_height * 0.5f;
      Vector_Copy(target, &player_state);
@@ -1377,6 +1405,15 @@ index b9b00213c82ca0a5d4136fba07f8d6f2c7d2f594..3db1f73b91fd8e4a2cbee19729d51be2
      distance = distance_out[0];
      Vector_Subtract(target, target, position);
      Vector_Normalize(target, target);
+@@ -553,7 +519,7 @@ s32 EntitySight_WallInWay(Entity *entity) {
+         bounds[3] = position[2];
+     }
+     Vector_Subtract(target, target, position);
+-    distance = sqrt(target[0] * target[0] + target[1] * target[1] + target[2] * target[2]);
++    distance = ps2_dtof(sqrt(target[0] * target[0] + target[1] * target[1] + target[2] * target[2]));
+     Vector_Normalize(target, target);
+     return EntityCollision_RayHitsPropWall(position, target, distance, bounds);
+ }
 @@ -570,17 +536,8 @@ s32 EntityAim_AilPlayerInArc(void *target, f32 *point, f32 max_angle, f32 max_he
      if (player_state.position.y < point[1] - max_height) {
          return FALSE;
@@ -1398,7 +1435,7 @@ index b9b00213c82ca0a5d4136fba07f8d6f2c7d2f594..3db1f73b91fd8e4a2cbee19729d51be2
          return FALSE;
      }
 diff --git a/src/game/entity/entity_collision.c b/src/game/entity/entity_collision.c
-index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3d6a8ec73 100644
+index 844612f8499f68ec1f052a2e71d11b62e655762c..00409ae09edd99e6251b768989fe786dde500598 100644
 --- a/src/game/entity/entity_collision.c
 +++ b/src/game/entity/entity_collision.c
 @@ -5,12 +5,13 @@
@@ -1466,7 +1503,7 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 +        for (lane_ = 0; lane_ < 4; lane_++) {                                                      \
 +            start[lane_] = from_[lane_];                                                           \
 +            end[lane_] = to_[lane_];                                                               \
-+            edge[lane_] = from_[lane_] - to_[lane_];                                               \
++            edge[lane_] = Vu_FSub(from_[lane_], to_[lane_]);                                       \
 +            flat[lane_] = edge[lane_];                                                             \
 +        }                                                                                          \
 +    } while (0)
@@ -1483,16 +1520,16 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 +
 +/* x + y + z of a vector the way VU0 sums it: vaddy.x, then vaddz.x */
 +static inline f32 vu0_sum_xyz(const f32 *v) {
-+    f32 sum = v[0] + v[1];
++    f32 sum = Vu_FAdd(v[0], v[1]);
 +
-+    return sum + v[2];
++    return Vu_FAdd(sum, v[2]);
 +}
 +
 +/* vopmula.xyz ACC, a, b then vopmsub.xyz out, b, a: the cross product a x b */
 +static inline void vu0_cross(f32 *out, const f32 *a, const f32 *b) {
-+    f32 x = a[1] * b[2] - b[1] * a[2];
-+    f32 y = a[2] * b[0] - b[2] * a[0];
-+    f32 z = a[0] * b[1] - b[0] * a[1];
++    f32 x = Vu_FSub(Vu_FMul(a[1], b[2]), Vu_FMul(b[1], a[2]));
++    f32 y = Vu_FSub(Vu_FMul(a[2], b[0]), Vu_FMul(b[2], a[0]));
++    f32 z = Vu_FSub(Vu_FMul(a[0], b[1]), Vu_FMul(b[0], a[1]));
 +
 +    out[0] = x;
 +    out[1] = y;
@@ -1503,31 +1540,31 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 +static inline f32 vu0_dot_xyz(const f32 *a, const f32 *b) {
 +    f32 product[3];
 +
-+    product[0] = a[0] * b[0];
-+    product[1] = a[1] * b[1];
-+    product[2] = a[2] * b[2];
++    product[0] = Vu_FMul(a[0], b[0]);
++    product[1] = Vu_FMul(a[1], b[1]);
++    product[2] = Vu_FMul(a[2], b[2]);
 +    return vu0_sum_xyz(product);
 +}
 +
 +/* the length of the x, y and z of v as VU0 takes it: the dot product, vsqrt Q, vaddq.x from vf0 */
 +static inline f32 vu0_length_xyz(const f32 *v) {
-+    return 0.0f + sqrtf(vu0_dot_xyz(v, v));
++    return Vu_FAdd(0.0f, Vu_FSqrt(vu0_dot_xyz(v, v)));
 +}
 +
 +/* v's x, y and z scaled to unit length: the length, then vdiv Q, vf0w, length and vmulq.xyz */
 +static inline void vu0_normalize_xyz(f32 *out, const f32 *v) {
-+    f32 scale = 1.0f / vu0_length_xyz(v);
++    f32 scale = Vu_FDiv(1.0f, vu0_length_xyz(v));
 +
-+    out[0] = v[0] * scale;
-+    out[1] = v[1] * scale;
-+    out[2] = v[2] * scale;
++    out[0] = Vu_FMul(v[0], scale);
++    out[1] = Vu_FMul(v[1], scale);
++    out[2] = Vu_FMul(v[2], scale);
 +}
 +
 +/* vsub.xyz: out = a - b on x, y and z */
 +static inline void vu0_sub_xyz(f32 *out, const f32 *a, const f32 *b) {
-+    out[0] = a[0] - b[0];
-+    out[1] = a[1] - b[1];
-+    out[2] = a[2] - b[2];
++    out[0] = Vu_FSub(a[0], b[0]);
++    out[1] = Vu_FSub(a[1], b[1]);
++    out[2] = Vu_FSub(a[2], b[2]);
 +}
 +
 +/* the three cross products of the corners seen from `point` and their dot products in turn: all three of
@@ -1555,6 +1592,42 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
  static void EntityCollision_CylinderCylinder(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius, f32 other_height);
  static void EntityCollision_CylinderSphere(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius);
  static void EntityCollision_SphereCylinder(f32 *position, f32 *other, f32 radius, f32 other_radius, f32 other_height);
+@@ -230,7 +304,7 @@ static void EntityCollision_CylinderCylinder(f32 *position, f32 *other, f32 radi
+     below = ABS(below);
+     above = top - other[1];
+     above = ABS(above);
+-    depth = reach - sqrt(distance_squared);
++    depth = ps2_dtof(reach - sqrt(distance_squared));
+     if (below <= above && below <= depth) {
+         result->normal[0] = result->normal[1] = result->normal[2] = 0.0f;
+         result->hit = 2;
+@@ -275,7 +349,7 @@ static void EntityCollision_CylinderSphere(f32 *position, f32 *other, f32 radius
+         return;
+     }
+     result->hit = 1;
+-    distance = sqrt(distance);
++    distance = ps2_dtof(sqrt(distance));
+     if ((position[1] - height <= other[1] && other[1] <= position[1]) || distance <= radius) {
+         below = position[1] - (other[1] - other_radius);
+         below = ABS(below);
+@@ -309,7 +383,7 @@ static void EntityCollision_CylinderSphere(f32 *position, f32 *other, f32 radius
+             nearest[1] -= height;
+         }
+         Vector_Subtract(delta, nearest, other);
+-        distance = sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
++        distance = ps2_dtof(sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]));
+         if (other_radius <= distance) {
+             result->hit = 0;
+             return;
+@@ -351,7 +425,7 @@ static void EntityCollision_SphereCylinder(f32 *position, f32 *other, f32 radius
+         return;
+     }
+     result->hit = 1;
+-    distance = sqrt(distance);
++    distance = ps2_dtof(sqrt(distance));
+     if ((other[1] - other_height <= position[1] && position[1] <= other[1]) || distance <= other_radius) {
+         below = (position[1] + radius) - (other[1] - other_height);
+         below = ABS(below);
 @@ -494,13 +568,13 @@ s32 EntityCollision_WalkAgainstMesh(Entity *entity, ModelInstance *model, f32 *p
      period = 30;
      mesh = (CollisionMesh *)model->strips;
@@ -1691,18 +1764,18 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 +        vu0_sub_xyz(offset, corner_c, corner_a);
 +        vu0_cross(face, edge, flat);
 +        face[3] = corner_a[3];
-+        squares[0] = face[0] * face[0];
-+        squares[1] = face[1] * face[1];
-+        squares[2] = face[2] * face[2];
++        squares[0] = Vu_FMul(face[0], face[0]);
++        squares[1] = Vu_FMul(face[1], face[1]);
++        squares[2] = Vu_FMul(face[2], face[2]);
 +        /* vaddx.xyz then vaddy.xyz, and the z lane taken: x is counted twice in the length (retail; the
 +           function is never called) */
-+        squares[2] = squares[2] + squares[0];
-+        squares[1] = squares[1] + squares[0];
-+        squares[2] = squares[2] + squares[1];
-+        scale = 1.0f / sqrtf(squares[2]);
-+        face[0] = face[0] * scale;
-+        face[1] = face[1] * scale;
-+        face[2] = face[2] * scale;
++        squares[2] = Vu_FAdd(squares[2], squares[0]);
++        squares[1] = Vu_FAdd(squares[1], squares[0]);
++        squares[2] = Vu_FAdd(squares[2], squares[1]);
++        scale = Vu_FRsqrt(1.0f, squares[2]);
++        face[0] = Vu_FMul(face[0], scale);
++        face[1] = Vu_FMul(face[1], scale);
++        face[2] = Vu_FMul(face[2], scale);
 +        for (i = 0; i < 4; i++) {
 +            normal[i] = face[i];
 +            result_normal[i] = face[i];
@@ -1829,7 +1902,7 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 +    result = COLLISION_RESULT;
 +    vu0_sub_xyz(direction, end, start);
 +    vu0_sub_xyz(to_centre, centre, start);
-+    along = 0.0f + vu0_dot_xyz(direction, to_centre) / vu0_dot_xyz(direction, direction);
++    along = Vu_FAdd(0.0f, Vu_FDiv(vu0_dot_xyz(direction, to_centre), vu0_dot_xyz(direction, direction)));
  
      if (0.0f <= along && along <= 1.0f) {
 -        __asm__ volatile(
@@ -1853,9 +1926,9 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 -            : "=f"(distance), "=&r"(float_bits)
 -            : "f"(along), "r"(start), "r"(centre), "r"(result), "m"(direction[0]));
 +        /* the nearest point of the segment goes to the result's point (vmulx.xyzw, vadd.xyz, sqc2) */
-+        result->point[0] = direction[0] * along + ((f32 *)start)[0];
-+        result->point[1] = direction[1] * along + ((f32 *)start)[1];
-+        result->point[2] = direction[2] * along + ((f32 *)start)[2];
++        result->point[0] = Vu_FAdd(Vu_FMul(direction[0], along), ((f32 *)start)[0]);
++        result->point[1] = Vu_FAdd(Vu_FMul(direction[1], along), ((f32 *)start)[1]);
++        result->point[2] = Vu_FAdd(Vu_FMul(direction[2], along), ((f32 *)start)[2]);
 +        vu0_sub_xyz(to_centre, centre, result->point);
 +        distance = vu0_length_xyz(to_centre);
  
@@ -1985,13 +2058,13 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 +        vu0_normalize_xyz(normal, face);
 +        /* vsubx.x, vsuby.x, vsubz.x: the plane's distance less each term of the centre's */
 +        distance = vu0_dot_xyz(normal, corner_b);
-+        distance = distance - normal[0] * centre_point[0];
-+        distance = distance - normal[1] * centre_point[1];
-+        distance = distance - normal[2] * centre_point[2];
++        distance = Vu_FSub(distance, Vu_FMul(normal[0], centre_point[0]));
++        distance = Vu_FSub(distance, Vu_FMul(normal[1], centre_point[1]));
++        distance = Vu_FSub(distance, Vu_FMul(normal[2], centre_point[2]));
 +        /* the centre moved onto the plane goes to the result's point (vmulx.xyz, vadd.xyz) */
-+        result->point[0] = normal[0] * distance + centre_point[0];
-+        result->point[1] = normal[1] * distance + centre_point[1];
-+        result->point[2] = normal[2] * distance + centre_point[2];
++        result->point[0] = Vu_FAdd(Vu_FMul(normal[0], distance), centre_point[0]);
++        result->point[1] = Vu_FAdd(Vu_FMul(normal[1], distance), centre_point[1]);
++        result->point[2] = Vu_FAdd(Vu_FMul(normal[2], distance), centre_point[2]);
 +    }
  
      result->distance = distance;
@@ -2105,7 +2178,7 @@ index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3
 +        f32 to_plane[3];
 +
 +        vu0_sub_xyz(to_plane, corner_b, origin);
-+        distance = 0.0f + vu0_dot_xyz(to_plane, normal) / facing;
++        distance = Vu_FAdd(0.0f, Vu_FDiv(vu0_dot_xyz(to_plane, normal), facing));
 +    }
  
      if (length < distance) {
@@ -2439,10 +2512,18 @@ index ec4439c89563faa6065889b01343678e84d49ae4..e405525f86bc4871cf9a281e83145e84
  /* The height of the ground of the loaded maps at `point` less the point's own. */
  f32 EntityCollision_DistanceToGround(f32 *point);
 diff --git a/src/game/entity/entity_events.c b/src/game/entity/entity_events.c
-index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533cfd028b3 100644
+index 488715a1070f0be1c6606005b37e62ae59d64374..57dc4e1146ae5c17f7b246af023789e873a20e3d 100644
 --- a/src/game/entity/entity_events.c
 +++ b/src/game/entity/entity_events.c
-@@ -17,8 +17,9 @@ void Vector_Copy(void *, void *);
+@@ -8,6 +8,7 @@
+ #include "entity/entity_world.h"
+ #include "item/gold.h"
+ #include "map/map.h"
++#include "port/vu_float.h" /* PC: the VU0 blocks' arithmetic */
+ 
+ float sqrtf(float);
+ float atan2f(float, float);
+@@ -17,8 +18,9 @@ void Vector_Copy(void *, void *);
  int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
  extern char *entity_params;
  extern PlayerState player_state;
@@ -2454,7 +2535,7 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
  extern EntitySpawnInfo *map_spawn_infos[2];
  extern MapSlot map_slots[];
  extern int current_map_slot;
-@@ -40,20 +41,15 @@ static inline f32 wrap_angle(f32 angle) {
+@@ -40,20 +42,15 @@ static inline f32 wrap_angle(f32 angle) {
  
  /* EntityMath_DistanceXZ inlined: the distance between two points, height left out */
  static inline f32 flat_distance(f32 *from, f32 *target) {
@@ -2475,15 +2556,24 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
 -        : : "r"(from), "r"(target), "r"(distance_out) : "memory");
 -    return distance_out[0];
 +    /* vsub.xyz, vmul.xz, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
-+    delta_x = from[0] - target[0];
-+    delta_z = from[2] - target[2];
-+    delta_x = delta_x * delta_x;
-+    delta_z = delta_z * delta_z;
-+    return 0.0f + sqrtf(delta_x + delta_z);
++    delta_x = Vu_FSub(from[0], target[0]);
++    delta_z = Vu_FSub(from[2], target[2]);
++    delta_x = Vu_FMul(delta_x, delta_x);
++    delta_z = Vu_FMul(delta_z, delta_z);
++    return Vu_FAdd(0.0f, Vu_FSqrt(Vu_FAdd(delta_x, delta_z)));
  }
  
  /* EntityMath_Approach inlined: `current` moved one step of `rate` towards `goal` */
-@@ -192,12 +188,12 @@ int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from
+@@ -152,7 +149,7 @@ int EntityShot_LaunchAimed(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame
+                     angles[1] = wrap_angle(angles[1] + 3.1415927f);
+                 }
+                 if (target != NULL) {
+-                    pitch = wrap_angle(-atan2(target[1] - from[1], flat_distance(from, target)));
++                    pitch = wrap_angle(ps2_dtof(-atan2(target[1] - from[1], flat_distance(from, target))));
+                     yaw = atan2f(target[0] - from[0], target[2] - from[2]);
+                     angles[0] = approach_angle(angles[0], pitch, pitch_rate);
+                     angles[1] = approach_angle(angles[1], yaw, yaw_rate);
+@@ -192,12 +189,12 @@ int EntityShot_Launch(Entity *entity, EntityParamsUnk3D8 *unk3D8, s32 frame_from
  }
  
  /* Starts effect `effect_id` at point `point_id` of the entity's model, turned by `rotation`. */
@@ -2498,7 +2588,7 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
      }
  }
  
-@@ -286,7 +282,7 @@ void EntityEvent_StartFrameCues(Entity *entity, s32 animation, s32 frame_from, s
+@@ -286,7 +283,7 @@ void EntityEvent_StartFrameCues(Entity *entity, s32 animation, s32 frame_from, s
              if (entity->ailment_4_frames != 0 && record->skip_while_ailing != 0) {
                  continue;
              }
@@ -2507,7 +2597,7 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
          }
      }
  }
-@@ -306,7 +302,7 @@ void EntityEvent_StartCue(Entity *entity, s32 unknown1, s32 unknown2, s32 skip_i
+@@ -306,7 +303,7 @@ void EntityEvent_StartCue(Entity *entity, s32 unknown1, s32 unknown2, s32 skip_i
      if (entity->ailment_4_frames != 0 && skip_if_unk2A != 0) {
          return;
      }
@@ -2516,7 +2606,7 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
  }
  
  /* As EntityEvent_StartCue, without the unk2A test. */
-@@ -322,7 +318,7 @@ void EntityEvent_StartCueAlways(Entity *entity, s32 unknown1, s32 unknown2) {
+@@ -322,7 +319,7 @@ void EntityEvent_StartCueAlways(Entity *entity, s32 unknown1, s32 unknown2) {
      } else if (wrapped < -3.1415927f) {
          wrapped += 6.2831855f;
      }
@@ -2525,7 +2615,7 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
  }
  
  /* Puts the entity back at its spawn point (Entity_ResetToSpawn), sets flag bits 1 and 8 and clears bits 2-3,
-@@ -336,7 +332,7 @@ void EntityEvent_Respawn(Entity *entity) {
+@@ -336,7 +333,7 @@ void EntityEvent_Respawn(Entity *entity) {
      if (entity->params->respawn_effect_id != 0) {
          if (entity->params->respawn_effect_id != 0xFFFF) {
              bone = Model_GetSkinnedBonePoint((char *)entity->model, entity->params->respawn_effect_bone);
@@ -2534,7 +2624,7 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
          }
      }
  }
-@@ -350,7 +346,7 @@ void EntityEvent_OnDeath(Entity *entity) {
+@@ -350,7 +347,7 @@ void EntityEvent_OnDeath(Entity *entity) {
      if ((s32)(entity->flags >> 38) & 3) {
          Player_AddExperience(entity->params->experience_reward);
      }
@@ -2543,7 +2633,7 @@ index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533
      Effect_FreeForOwner(entity);
      if (entity->spawn_info->death_script_id != 0 && entity->group_id == current_map_slot) {
          Script_Start(entity->spawn_info->death_script_id, 0);
-@@ -396,16 +392,14 @@ s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits
+@@ -396,16 +393,14 @@ s32 Bone_TurnPart(ModelPart *part, f32 *angles, s32 mode, f32 *goal, f32 *limits
  
  /* Bone_TurnPart for a part that is to look at a point: in mode 1 `angles` turn towards what Bone_LookAngles
     gives for `target` (FALSE if it gives none). FALSE: no model or no part. */
@@ -2584,10 +2674,18 @@ index 1554dc342028144d35028aae701e57224835b396..94b50a47f7d00c296438ead48daf7be5
  
  #endif
 diff --git a/src/game/entity/entity_math.c b/src/game/entity/entity_math.c
-index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..65e750d81957439a436d31bf77ef9220ffec20f4 100644
+index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..f9c5d8b5f360b456601ca521ea49e61163741010 100644
 --- a/src/game/entity/entity_math.c
 +++ b/src/game/entity/entity_math.c
-@@ -29,37 +29,45 @@ s32 EntityMath_SubtractClamped(s32 value, s32 amount, s32 low, s32 high) {
+@@ -1,6 +1,7 @@
+ /* Small sums the entity code shares: clamps, distances, and angles wrapped to -pi..pi, stepped or eased
+    towards a goal. */
+ #include "entity/entity_math.h"
++#include "port/vu_float.h" /* PC: the VU0 blocks' arithmetic */
+ 
+ float atan2f(float, float);
+ float sinf(float);
+@@ -29,37 +30,45 @@ s32 EntityMath_SubtractClamped(s32 value, s32 amount, s32 low, s32 high) {
  
  /* dst = a * (1 - t) + b * t across the xyz lanes, on the VU0. */
  void EntityMath_LerpVector(void *dst, void *src_a, void *src_b, float ratio) {
@@ -2613,16 +2711,16 @@ index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..65e750d81957439a436d31bf77ef9220
 +    /* qmtc2 of the float in a GPR: on the PS2 it also sets vf3.y to the word's sign extension and vf3.zw to the
 +       GPR's upper half, whatever that held; the PC leaves vf3.yzw as they were */
 +    ee_vu0.vf[3][0] = ratio;                                    /* qmtc2 */
-+    ee_vu0.vf[4][3] = ee_vu0.vf[0][3] - ee_vu0.vf[3][0];        /* vsubx.w */
++    ee_vu0.vf[4][3] = Vu_FSub(ee_vu0.vf[0][3], ee_vu0.vf[3][0]); /* vsubx.w */
 +    for (i = 0; i < 4; i++) {
 +        ee_vu0.vf[1][i] = a[i];                                 /* lqc2 */
 +        ee_vu0.vf[2][i] = b[i];
 +    }
 +    for (i = 0; i < 3; i++) {
-+        ee_vu0.acc[i] = ee_vu0.vf[2][i] * ee_vu0.vf[3][0];      /* vmulax.xyz */
++        ee_vu0.acc[i] = Vu_FMul(ee_vu0.vf[2][i], ee_vu0.vf[3][0]); /* vmulax.xyz */
 +    }
 +    for (i = 0; i < 3; i++) {
-+        ee_vu0.vf[1][i] = ee_vu0.acc[i] + ee_vu0.vf[1][i] * ee_vu0.vf[4][3]; /* vmaddw.xyz */
++        ee_vu0.vf[1][i] = Vu_FAdd(ee_vu0.acc[i], Vu_FMul(ee_vu0.vf[1][i], ee_vu0.vf[4][3])); /* vmaddw.xyz */
 +    }
 +    for (i = 0; i < 4; i++) {
 +        out[i] = ee_vu0.vf[1][i];                               /* sqc2 */
@@ -2646,19 +2744,19 @@ index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..65e750d81957439a436d31bf77ef9220
 -        "sqc2 $vf16, 0(%2)\n"
 -        : : "r"(point_a), "r"(point_b), "r"(result) : "memory");
 +    /* vsub.xyz, vmul.xyz, vaddy.x, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
-+    result[0] = point_a[0] - point_b[0];
-+    result[1] = point_a[1] - point_b[1];
-+    result[2] = point_a[2] - point_b[2];
-+    result[0] = result[0] * result[0];
-+    result[1] = result[1] * result[1];
-+    result[2] = result[2] * result[2];
-+    result[0] = result[0] + result[1];
-+    result[0] = result[0] + result[2];
-+    result[0] = 0.0f + sqrtf(result[0]);
++    result[0] = Vu_FSub(point_a[0], point_b[0]);
++    result[1] = Vu_FSub(point_a[1], point_b[1]);
++    result[2] = Vu_FSub(point_a[2], point_b[2]);
++    result[0] = Vu_FMul(result[0], result[0]);
++    result[1] = Vu_FMul(result[1], result[1]);
++    result[2] = Vu_FMul(result[2], result[2]);
++    result[0] = Vu_FAdd(result[0], result[1]);
++    result[0] = Vu_FAdd(result[0], result[2]);
++    result[0] = Vu_FAdd(0.0f, Vu_FSqrt(result[0]));
      return result[0];
  }
  
-@@ -67,17 +75,13 @@ f32 EntityMath_Distance(f32 *point_a, f32 *point_b) {
+@@ -67,17 +76,13 @@ f32 EntityMath_Distance(f32 *point_a, f32 *point_b) {
  float EntityMath_DistanceXZ(float *point_a, float *point_b) {
      float result[4];
  
@@ -2674,12 +2772,12 @@ index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..65e750d81957439a436d31bf77ef9220
 -        "sqc2 $vf16, 0(%2)\n"
 -        : : "r"(point_a), "r"(point_b), "r"(result) : "memory");
 +    /* vsub.xyz, vmul.xz, vaddz.x, vsqrt, vaddq.x (vf0.x + Q) */
-+    result[0] = point_a[0] - point_b[0];
-+    result[2] = point_a[2] - point_b[2];
-+    result[0] = result[0] * result[0];
-+    result[2] = result[2] * result[2];
-+    result[0] = result[0] + result[2];
-+    result[0] = 0.0f + sqrtf(result[0]);
++    result[0] = Vu_FSub(point_a[0], point_b[0]);
++    result[2] = Vu_FSub(point_a[2], point_b[2]);
++    result[0] = Vu_FMul(result[0], result[0]);
++    result[2] = Vu_FMul(result[2], result[2]);
++    result[0] = Vu_FAdd(result[0], result[2]);
++    result[0] = Vu_FAdd(0.0f, Vu_FSqrt(result[0]));
      return result[0];
  }
  

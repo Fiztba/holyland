@@ -1,7 +1,16 @@
 diff --git a/src/game/collision/collision.c b/src/game/collision/collision.c
-index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a214479f68973 100644
+index 3ff37e8f458c785217c37780db3d99d329cda113..97b8264cf403643dbb13032a6f2a5b6e3aebbccc 100644
 --- a/src/game/collision/collision.c
 +++ b/src/game/collision/collision.c
+@@ -72,7 +72,7 @@ static void Collision_PointCapsule(f32 *point, f32 *base, f32 *axis, f32 reach_s
+ 
+ /* Tests a sphere against a sphere: a hit when the two overlap. */
+ void Collision_SphereSphere(void *center_a, void *center_b, float radius_a, float radius_b) {
+-    float offset[3];
++    float offset[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+     float distance;
+     float reach;
+ 
 @@ -106,25 +106,7 @@ void Collision_PointTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *p
      f32 weight_c;
  
@@ -46,9 +55,9 @@ index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a2144
 -        :
 -        : "r"(normal));
 +    /* vmul.xyz: the normal's components squared (its w is kept) */
-+    normal[0] = normal[0] * normal[0];
-+    normal[1] = normal[1] * normal[1];
-+    normal[2] = normal[2] * normal[2];
++    normal[0] = Vu_FMul(normal[0], normal[0]);
++    normal[1] = Vu_FMul(normal[1], normal[1]);
++    normal[2] = Vu_FMul(normal[2], normal[2]);
      if (normal[0] > normal[1]) {
          if (normal[2] < normal[0]) {
              denominator = edge_c[2] * edge_a[1] - edge_c[1] * edge_a[2];
@@ -91,17 +100,17 @@ index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a2144
 +        f32 summed[3];
 +        f32 q;
 +
-+        squared[0] = normal[0] * normal[0];
-+        squared[1] = normal[1] * normal[1];
-+        squared[2] = normal[2] * normal[2];
-+        summed[0] = squared[0] + squared[0];
-+        summed[1] = squared[1] + squared[0];
-+        summed[2] = squared[2] + squared[0];
-+        summed[2] = summed[2] + summed[1];
-+        q = 1.0f / sqrtf(summed[2]);
-+        normal[0] = normal[0] * q;
-+        normal[1] = normal[1] * q;
-+        normal[2] = normal[2] * q;
++        squared[0] = Vu_FMul(normal[0], normal[0]);
++        squared[1] = Vu_FMul(normal[1], normal[1]);
++        squared[2] = Vu_FMul(normal[2], normal[2]);
++        summed[0] = Vu_FAdd(squared[0], squared[0]);
++        summed[1] = Vu_FAdd(squared[1], squared[0]);
++        summed[2] = Vu_FAdd(squared[2], squared[0]);
++        summed[2] = Vu_FAdd(summed[2], summed[1]);
++        q = Vu_FRsqrt(1.0f, summed[2]);
++        normal[0] = Vu_FMul(normal[0], q);
++        normal[1] = Vu_FMul(normal[1], q);
++        normal[2] = Vu_FMul(normal[2], q);
 +        result_normal[0] = normal[0];
 +        result_normal[1] = normal[1];
 +        result_normal[2] = normal[2];
@@ -156,12 +165,12 @@ index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a2144
 -        :
 -        : "r"(normal), "r"(foot), "r"(corner_b), "r"(from_b));
 +    /* vmul.xyz: the normal's components squared (its w is kept); vsub.xyz: from_b = foot - corner_b */
-+    normal[0] = normal[0] * normal[0];
-+    normal[1] = normal[1] * normal[1];
-+    normal[2] = normal[2] * normal[2];
-+    from_b[0] = foot[0] - corner_b[0];
-+    from_b[1] = foot[1] - corner_b[1];
-+    from_b[2] = foot[2] - corner_b[2];
++    normal[0] = Vu_FMul(normal[0], normal[0]);
++    normal[1] = Vu_FMul(normal[1], normal[1]);
++    normal[2] = Vu_FMul(normal[2], normal[2]);
++    from_b[0] = Vu_FSub(foot[0], corner_b[0]);
++    from_b[1] = Vu_FSub(foot[1], corner_b[1]);
++    from_b[2] = Vu_FSub(foot[2], corner_b[2]);
      if (normal[0] > normal[1]) {
          if (normal[2] < normal[0]) {
              denominator = edge_c[2] * edge_a[1] - edge_c[1] * edge_a[2];
@@ -238,17 +247,43 @@ index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a2144
 -        :
 -        : "r"(corner_a), "r"(point), "r"(normal), "r"(from_b));
 +    /* vsub.xyz then vmul.xyz: (corner_a - point) times the normal, component by component */
-+    from_b[0] = (corner_a[0] - point[0]) * normal[0];
-+    from_b[1] = (corner_a[1] - point[1]) * normal[1];
-+    from_b[2] = (corner_a[2] - point[2]) * normal[2];
++    from_b[0] = Vu_FMul(Vu_FSub(corner_a[0], point[0]), normal[0]);
++    from_b[1] = Vu_FMul(Vu_FSub(corner_a[1], point[1]), normal[1]);
++    from_b[2] = Vu_FMul(Vu_FSub(corner_a[2], point[2]), normal[2]);
      denominator = (from_b[0] + from_b[1] + from_b[2]) / denominator;
      if (denominator < D_00446FC4[0]) {
          return;
+@@ -686,7 +585,7 @@ void Collision_CylinderCylinder(f32 *base, f32 radius, f32 height, f32 *other_ba
+ /* Tests a point against an upright cylinder: its base at `origin`, its radius squared and its height.
+    Nothing calls it. */
+ static void Collision_PointCylinder(f32 *point, f32 *origin, f32 radius_squared, f32 height) {
+-    f32 delta[3];
++    f32 delta[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+ 
+     if (point[1] > origin[1]) {
+         return;
+@@ -1169,7 +1068,7 @@ void Collision_CylinderEdgeExtended(Vector4 *start, Vector4 *end, f32 height, Ve
+     along = to_x * edge_x + to_z * edge_z;
+     along /= edge_x * edge_x + edge_z * edge_z;
+     margin = -reach / sqrtf(edge_x * edge_x + edge_z * edge_z);
+-    upper = 1.0 - margin;
++    upper = ps2_dtof(1.0 - margin);
+     if (along < margin) {
+         return;
+     }
 diff --git a/src/game/collision/collision.h b/src/game/collision/collision.h
-index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195e2545118 100644
+index 44c06a84fefb615410f42dccd55917452a577331..fdd4ee4713ea0bd17bae93924a045e82120f06d9 100644
 --- a/src/game/collision/collision.h
 +++ b/src/game/collision/collision.h
-@@ -15,11 +15,11 @@ typedef struct {
+@@ -4,6 +4,7 @@
+ 
+ #include "common.h"
+ #include "model/model.h"
++#include "port/vu_float.h" /* PC: VU0 arithmetic for Collision_TriangleEdges */
+ 
+ /* what every collision test leaves at the start of the scratchpad */
+ typedef struct {
+@@ -15,11 +16,11 @@ typedef struct {
      f32 normal[4];                  /* 0x20 unit vector away from what was hit */
  } CollisionResult;
  
@@ -262,7 +297,7 @@ index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195
  
  /* the scratchpad as Player_PushOutOfWalls uses it. Reached as fields of one block at 0x70000000, retail forms each
     address anew (`lui $1`); a pointer constant such as (Vector4 *)0x70000080 is kept in a register instead. */
-@@ -31,7 +31,7 @@ typedef struct {
+@@ -31,7 +32,7 @@ typedef struct {
      Vector4 wall_point;             /* 0x90 the point Player_CollideWithMap keeps away from the walls */
  } CollisionScratch;
  
@@ -271,7 +306,7 @@ index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195
  
  /* a CollisionResult kept aside and put back (Collision_FindFloorBelow): retail moves it by doublewords */
  typedef union {
-@@ -39,7 +39,7 @@ typedef union {
+@@ -39,7 +40,7 @@ typedef union {
      s64 doublewords[6];
  } CollisionResultCopy;
  
@@ -280,7 +315,7 @@ index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195
  
  /* a CollisionResult aligned to 8 bytes: copied whole it moves by doublewords, and its members
     keep their own types (Collision_CastSegmentAtMap, where the union above does not match) */
-@@ -52,37 +52,44 @@ typedef struct {
+@@ -52,37 +53,44 @@ typedef struct {
      f32 normal[4];                  /* 0x20 */
  } __attribute__((aligned(8))) CollisionResultAligned;
  
@@ -336,7 +371,7 @@ index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195
      char pad30[0x08];
      u16 wall_strip_count;           /* 0x38 how many strips unk18 has */
      u16 floor_strip_count;          /* 0x3A */
-@@ -91,17 +98,28 @@ typedef struct {
+@@ -91,17 +99,28 @@ typedef struct {
      u16 hazard_strip_count;         /* 0x40 how many strips unk28 has */
      u16 water_strip_count;          /* 0x42 how many strips unk2C has */
  } CollisionMesh;
@@ -366,7 +401,7 @@ index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195
  typedef struct {
      f32 position[4];                /* 0x00 */
      f32 rotation[4];                /* 0x10 */
-@@ -116,8 +134,12 @@ typedef struct {
+@@ -116,8 +135,12 @@ typedef struct {
      f32 box_highest[4];             /* 0x50 a point, moved with the record */
      f32 lowest[4];                  /* 0x60 lowest x, y, z it covers */
      f32 highest[3];                 /* 0x70 highest x, y, z it covers */
@@ -380,7 +415,7 @@ index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195
  
  /* which of a mesh's strip lists (CollisionMeshLists) a hit is tested against: local tables
     that Attack_TestMapModel, Attack_TestMapModelFloors and Attack_TestMapModelWalls copy whole from read-only data */
-@@ -161,4 +183,28 @@ void Collision_BallSwing(void *ball_centre, void *swing_origin, f32 radius, f32
+@@ -161,4 +184,28 @@ void Collision_BallSwing(void *ball_centre, void *swing_origin, f32 radius, f32
  void Collision_BallSwingPitch(void *ball_centre, void *swing_origin, f32 radius, f32 range, f32 lowest, f32 highest,
                                f32 half_angle, f32 facing, f32 half_pitch, f32 pitch);
  
@@ -393,18 +428,18 @@ index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195
 +    f32 acc[3];
 +    f32 w = corner_a[3];
 +
-+    edge_a[0] = corner_a[0] - corner_b[0];
-+    edge_a[1] = corner_a[1] - corner_b[1];
-+    edge_a[2] = corner_a[2] - corner_b[2];
-+    edge_c[0] = corner_c[0] - corner_b[0];
-+    edge_c[1] = corner_c[1] - corner_b[1];
-+    edge_c[2] = corner_c[2] - corner_b[2];
-+    acc[0] = edge_a[1] * edge_c[2];
-+    acc[1] = edge_a[2] * edge_c[0];
-+    acc[2] = edge_a[0] * edge_c[1];
-+    normal[0] = acc[0] - edge_c[1] * edge_a[2];
-+    normal[1] = acc[1] - edge_c[2] * edge_a[0];
-+    normal[2] = acc[2] - edge_c[0] * edge_a[1];
++    edge_a[0] = Vu_FSub(corner_a[0], corner_b[0]);
++    edge_a[1] = Vu_FSub(corner_a[1], corner_b[1]);
++    edge_a[2] = Vu_FSub(corner_a[2], corner_b[2]);
++    edge_c[0] = Vu_FSub(corner_c[0], corner_b[0]);
++    edge_c[1] = Vu_FSub(corner_c[1], corner_b[1]);
++    edge_c[2] = Vu_FSub(corner_c[2], corner_b[2]);
++    acc[0] = Vu_FMul(edge_a[1], edge_c[2]);
++    acc[1] = Vu_FMul(edge_a[2], edge_c[0]);
++    acc[2] = Vu_FMul(edge_a[0], edge_c[1]);
++    normal[0] = Vu_FSub(acc[0], Vu_FMul(edge_c[1], edge_a[2]));
++    normal[1] = Vu_FSub(acc[1], Vu_FMul(edge_c[2], edge_a[0]));
++    normal[2] = Vu_FSub(acc[2], Vu_FMul(edge_c[0], edge_a[1]));
 +    normal[3] = w;
 +}
 +
@@ -454,7 +489,7 @@ index 2875894e804e3ea12ae8d956556ca2ba805f2973..1c7d547d28a629f13c59ea61d52c30b7
  }
  
 diff --git a/src/game/collision/world_collision.c b/src/game/collision/world_collision.c
-index 5c3c401795223d6a610b1a7adff740c9194d6889..92eecbb9defc732823d64bff496d41ae46a175ac 100644
+index 5c3c401795223d6a610b1a7adff740c9194d6889..661de5df569e66bda9c5b88ccbe5a8e329ba99e3 100644
 --- a/src/game/collision/world_collision.c
 +++ b/src/game/collision/world_collision.c
 @@ -12,7 +12,7 @@ typedef void (*MapObjectCircleTest)(MapObject *, f32 *, f32, f32);
@@ -830,10 +865,10 @@ index 5c3c401795223d6a610b1a7adff740c9194d6889..92eecbb9defc732823d64bff496d41ae
 +    int k;
 +
 +    for (k = 0; k < 4; k++) {
-+        acc = ee_vu0.vf[1][k] * x;
-+        acc = acc + ee_vu0.vf[2][k] * y;
-+        acc = acc + ee_vu0.vf[3][k] * z;
-+        result[k] = acc + ee_vu0.vf[4][k] * w;
++        acc = Vu_FMul(ee_vu0.vf[1][k], x);
++        acc = Vu_FAdd(acc, Vu_FMul(ee_vu0.vf[2][k], y));
++        acc = Vu_FAdd(acc, Vu_FMul(ee_vu0.vf[3][k], z));
++        result[k] = Vu_FAdd(acc, Vu_FMul(ee_vu0.vf[4][k], w));
 +    }
 +    world->x = result[0];
 +    world->y = result[1];

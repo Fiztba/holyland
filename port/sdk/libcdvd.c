@@ -87,6 +87,27 @@ int sceCdRead(unsigned int lsn, unsigned int sectors, void *buf, sceCdRMode *mod
     return 1;
 }
 
+int port_cd_read_bytes(unsigned int lsn, unsigned int sectors, void *buf, int size, sceCdRMode *mode) {
+    unsigned int whole = (unsigned int)size / 0x800; /* the sectors that fit in buf */
+    unsigned char tail[0x800];
+    unsigned char *p = buf;
+
+    /* Game RAM is laid out as on the PS2, so there it gets the whole sectors, as on the PS2 (the
+       disc's bytes after a file's end are zeros, which a parser may stop at). The program's globals
+       are laid out by the PC's compiler: what follows a buffer there is not what followed it on the
+       PS2, so it gets only size bytes. */
+    if (size < 0 || whole >= sectors || sectors != whole + 1 ||
+        (p >= ee_ram && p + (size_t)sectors * 0x800 <= ee_ram + EE_RAM_SIZE)) {
+        return sceCdRead(lsn, sectors, buf, mode);
+    }
+    log_read(lsn, sectors);
+    if ((whole != 0 && !port_disc_read(lsn, whole, buf)) || !port_disc_read(lsn + whole, 1, tail)) {
+        PORT_FATAL("sceCdRead: sectors %u..%u are not on the disc", lsn, lsn + sectors - 1);
+    }
+    memcpy((unsigned char *)buf + (size_t)whole * 0x800, tail, (size_t)size % 0x800);
+    return 1;
+}
+
 int sceCdSeek(unsigned int lsn) {
     (void)lsn;
     return 1;

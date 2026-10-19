@@ -36,9 +36,33 @@ What changed:
     definition.
 
 Still open:
-- No tree-wide check yet for integer division by zero (x86 traps, the EE does not).
 - Model work areas are sized for the PS2's worst case, not for the real part counts.
-- PS2 float rounding is not modelled beyond the division and square-root edge cases.
+
+PS2 numbers (done since; RULES.md, "PS2 numbers"):
+- **The EE's FPU.** The game's threads run with MXCSR rounding toward zero, denormals flushed (FTZ,
+  DAZ), as COP1 does (`port/platform/fiber.c`; `--fpu-round nearest` for IEEE). Left different: the
+  EE has no infinities or NaNs (exponent 255 is a number, overflow and division by zero give
+  +-0x7FFFFFFF, SSE +-FLT_MAX, +-inf or NaN), and its adder and multiplier may differ from IEEE's
+  rounding toward zero in the last bit (not modelled, as on VU1). No run of `tests/newgame.pad` or
+  `tests/walk.pad` divides a float by zero or converts one out of range (gcc's UBSan).
+- **VU0.** Every VU0 instruction the game's C does (the macro-mode blocks, `math/vu0.h`, libvu0) is
+  VU arithmetic (`port/include/port/vu_float.h`), bit for bit as VU1's interpreter.
+- **The math library.** The game calls newlib's sinf, cosf, atan2f, atanf, asinf, sqrtf and sin, cos,
+  sqrt, atan2, atan, acos as the SDK built them (`port/sdk/libm_ps2.c`), checked against the retail
+  program's own run on a model of the EE (`tools/ee_libm_ref.py`, `tests/libm_test.c`). Its doubles
+  are dp-bit's software doubles, rounding to nearest: each double the game turns into a float goes
+  through `ps2_dtof`. The double arithmetic itself still rounds toward zero on the PC (the last bit
+  of a double; it reaches a float only at a rounding boundary).
+- **Integer division.** ee-gcc checks every divisor that is not a constant (`break 7`, 808 checks in
+  the retail program), so a division by zero stops the PS2 too; it ends the PC's run with a message.
+  INT_MIN / -1 gives INT_MIN and remainder 0, as the EE's DIV, instead of x86's trap
+  (`port/platform/int_divide.c`). No shift by 32 or more, no division by zero in the test runs.
+- **Evaluation order.** The game has no other statement like the tagged-voice one (a store and a read
+  of the same object unsequenced): gcc's -Wsequence-point, clang's -Wunsequenced and a scan of the
+  game code find none; no call's arguments depend on each other's side effects.
+- **Not done:** float to int conversions out of range give 0x80000000 on the PC where the EE
+  saturates by sign (none happen in the test runs); script commands 9 and 10 hand the script an
+  uninitialised value, as retail does with whatever its register holds.
 
 ## Step 1: boot to a new game, headless (done, branch `port/step1`)
 
@@ -73,8 +97,11 @@ Result:
   is a safeguard only.
 - Three game bugs the PC exposed, fixed in `patches/`:
   - `File_Read` reads whole sectors, so a file read into a static table runs past its end. Retail
-    lays the tables out so that is harmless. The save icon buffer is enlarged to whole sectors.
-    GCC builds with `-fno-toplevel-reorder` so globals keep the order they are defined in.
+    lays the tables out so that is harmless. Into the program's globals the PC reads only the bytes
+    asked for, the last sector through a buffer of its own (`port_cd_read_bytes`, `libcdvd.h`); into
+    game RAM, laid out as on the PS2, whole sectors as before. (Before, the save icon buffer was
+    enlarged and GCC's `-fno-toplevel-reorder` kept `item_nam.prm`'s overrun in `item_common_defs`;
+    the flag stays, so gcc and clang lay globals out alike.)
   - An effect with no magic reads `fx_table[0xFFFF]`, 17 MB past the table: that is game RAM on
     the PS2, and is read there (`EE_RAM_AT`).
   - `ModelInstance.found_record` takes an aligned 128-bit store, so it is 16-byte aligned.

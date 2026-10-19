@@ -302,6 +302,7 @@ static void frame_end(void);
 
 static void vblank_start(void) {
     volatile uint64_t *csr = EE_HW(volatile uint64_t *, 0x12001000);
+    uint32_t mode;
 
     vblank_count++;
     /* the GS scans out the field the display registers say, alongside the game. It is the field
@@ -327,17 +328,22 @@ static void vblank_start(void) {
             pace_start_wall = now - (double)ee_cycle / (double)EE_BUS_HZ;
         }
     }
+    /* the pad (mouse look), the window and the overlay are the host's: its float mode */
+    mode = port_host_float_begin();
     port_pad_poll();
     port_video_present();
+    port_host_float_end(mode);
     port_quick_vblank();
     /* the settings overlay can hold the game while it is open: EE time stands still, and the pacing
        starts again from here. A save state asked for meanwhile is taken below, at once. */
     if (port_overlay_paused()) {
+        mode = port_host_float_begin();
         while (port_overlay_paused() && !port_state_wanted()) {
             port_sleep(1.0 / 60.0);
             port_pad_poll();
             port_video_present();
         }
+        port_host_float_end(mode);
         pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
     }
     /* A save state is taken here, between two fields, with every thread in a kernel call: the host's
@@ -968,9 +974,11 @@ void InvalidDCache(void *start, void *end) {
 static void frame_end(void) {
     if (port_log_enabled()) {
         char line[512];
+        uint32_t mode = port_host_float_begin(); /* (printf rounds as MXCSR says) */
 
         kf4_game_state(line, sizeof(line));
         port_log("%llu %s", (unsigned long long)vblank_count, line);
+        port_host_float_end(mode);
     }
     if (port_options.frames > 0 && vblank_count >= (uint64_t)port_options.frames) {
         port_event("stop: %lld vblanks run", port_options.frames);
