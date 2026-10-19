@@ -299,6 +299,10 @@ PortFiber *port_fiber_create(size_t stack_size, void (*entry)(void *), void *arg
     mxcsr = port_ee_mxcsr();
     __asm__ volatile("fnstcw %0" : "=m"(control));
     top = slot_top(slot);
+    /* A slot keeps its stack when reused (the movie's threads are made for each movie), so the stack
+       starts zeroed: what a game function reads of a local it did not set is then the same on every
+       run, whatever ran on the slot before. */
+    memset(top - stack_size, 0, stack_size);
     frame = (uint64_t *)(top - 16 - SWAP_FRAME_SIZE);
     memset(frame, 0, SWAP_FRAME_SIZE);
 #ifdef _WIN32
@@ -360,6 +364,8 @@ void port_fiber_state(PortStateIo *io) {
 #if PORT_ASAN
                 asan_fresh_stack(fiber, top);
 #endif
+                /* below the live part, what a fresh stack has, whatever this run left there */
+                memset(top - fiber->stack_size, 0, (size_t)(sp - (top - fiber->stack_size)));
             }
             port_state_bytes(io, sp, (size_t)(top - sp));
             if (io->loading) {

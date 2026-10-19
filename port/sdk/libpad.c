@@ -5,8 +5,8 @@
    C square, V triangle, Q E 1 3 for L1 R1 L2 R2, Enter start and Backspace select).
 
    The pad behaves as a DualShock 2 does for libpad: digital (id 4, report type 0x41) or analog (id 7,
-   0x73), pressure-sensitive (0x79) when the game asks, two motors, and each request finished at once
-   (scePadGetReqState is always "done"). It starts analog, as a pad with its ANALOG light on: the title
+   0x73), pressure-sensitive (0x79) when the game asks, two motors (the SDL controller's rumble), and
+   each request finished at once (scePadGetReqState is always "done"). It starts analog, as a pad with its ANALOG light on: the title
    screen reads the left stick before the game asks for analog mode (Input_Update), and a digital pad
    sends no stick bytes, which the game reads as 0, the stick held up.
 
@@ -503,14 +503,61 @@ int scePadInfoAct(int port, int slot, int actno, int term) {
     }
 }
 
+/* Which motor each of the six bytes of scePadSetActDirect drives (0 small, 1 big, 0xFF none); a pad
+   starts with none, as libpad's does until the game aligns them. */
+static unsigned char act_align[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
 int scePadSetActAlign(int port, int slot, const unsigned char *data) {
-    (void)data;
-    return is_our_pad(port, slot);
+    int i;
+
+    if (!is_our_pad(port, slot)) {
+        return 0;
+    }
+    for (i = 0; i < 6; i++) {
+        act_align[i] = data[i];
+    }
+    return 1;
+}
+
+/* The motors, on the SDL controller: the small motor is on or off (the game sends 0 or 1) and the big
+   one has a speed (0..255). Input_Update drives them (Pad_SetRumble) when the game's vibration option is
+   on, and Pad_Update sends them each frame while the pad is stable (Pad_Update), so a change is applied at once; the motors are re-armed now and then,
+   with a time-out, so they stop if the game stops sending. Nothing here reaches the game. */
+static void set_motors(int small, int big) {
+#ifdef KF4_HAVE_SDL
+    static int last_small = -1, last_big = -1, calls;
+
+    if (controller == NULL || port_options.input) {
+        return;
+    }
+    if (small == last_small && big == last_big && ++calls < 30) {
+        return;
+    }
+    calls = 0;
+    last_small = small;
+    last_big = big;
+    SDL_GameControllerRumble(controller, (Uint16)(big * 257), small ? 0xFFFF : 0, 1000);
+#else
+    (void)small;
+    (void)big;
+#endif
 }
 
 int scePadSetActDirect(int port, int slot, const unsigned char *data) {
-    (void)data;
-    return is_our_pad(port, slot);
+    int small = 0, big = 0, i;
+
+    if (!is_our_pad(port, slot)) {
+        return 0;
+    }
+    for (i = 0; i < 6; i++) {
+        if (act_align[i] == 0) {
+            small = data[i] != 0;
+        } else if (act_align[i] == 1) {
+            big = data[i];
+        }
+    }
+    set_motors(small, big);
+    return 1;
 }
 
 int scePadInfoPressMode(int port, int slot) {

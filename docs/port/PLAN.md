@@ -106,10 +106,10 @@ Result:
     the PS2, and is read there (`EE_RAM_AT`).
   - `ModelInstance.found_record` takes an aligned 128-bit store, so it is 16-byte aligned.
 
-Still open:
-- Movies are not played: each one ends at once (`sceMpeg*`).
-- The memory card is always empty, so saving and loading are untested.
-- The sound driver's RPC answers every command with "done" and plays nothing.
+Still open (at step 1; all three are done since, in steps 4 and 5):
+- ~~Movies are not played: each one ends at once (`sceMpeg*`).~~
+- ~~The memory card is always empty, so saving and loading are untested.~~
+- ~~The sound driver's RPC answers every command with "done" and plays nothing.~~
 
 ## Step 2: graphics, stage 1 (the first picture)
 
@@ -163,7 +163,11 @@ Still open:
 - The GIF's arbitration is modelled only as far as it decides an order with transfers that take no
   time: PATH3 never goes in the middle of a channel 1 chain unless VIF1 unmasks it there.
 - The game's write-1-to-clear stores (CSR's FINISH, T0_MODE's EQUF) set the bit instead: nothing sees
-  a store into the register page. The game never reads either bit where that would show.
+  a store into the register page, and catching one would take a page fault per store. Not modelled, on
+  purpose: the game reads CSR only for FIELD and, in `Packet_WaitForSend`, FINISH after waiting for
+  channel 1 and `sceGsSyncPath`, when the GS has had the chain's FINISH; it never reads T0_MODE, and the
+  kernel raises timer 0's interrupt at each compare match whatever EQUF holds. The same goes for the
+  other flags `GS_CSR |= 2` would clear on the PS2 (VSINT, HSINT, SIGNAL): nothing reads them.
 - The VU's adder can differ from IEEE's rounding toward zero in the last bit; the interpreter does
   not model that.
 
@@ -319,11 +323,41 @@ Still open:
     - The player's pause and resume (`MovieAudio_Pause`, `MovieAudio_Resume`) need a block transfer
       from a start address, which libsd here does not do. Nothing calls them.
 
+## The stand-ins: what the game can still reach
+
+An audit of every `PORT_TODO`, stub and logged-once path in `port/` and `patches/` against the decomp's
+callers (map scripts, menus, saves, shops, magic, the endings, the staff roll, the movies, the card, the
+pad, the clock):
+- **Fixed:** the pad's motors (`scePadSetActDirect`) drive the SDL controller's rumble, as the game asks
+  for with its vibration option on (damage, map script command 198, the forest golem, the giant
+  beetle). A `--clock` clock runs on with EE time, so the play time counts in repeatable runs. Every EE
+  thread's stack starts zeroed, also below the live part after a state load. The DMA-wait `PORT_TODO`s
+  that printed on every run are gone.
+- **Not reachable, kept as a message:** FSIOPSND's 0x30C0 (`SoundDriver_SetStreamSector`, no caller),
+  0x3010 (`adsPreset`, never sent) and closing a playing stream (the title stops its music first);
+  MODHSYN's sound-effect ports and Setb banks (FSIOPSND sets every port to MIDI and VAG banks); SDRDRV's
+  mid-ring block transfer (`MovieAudio_Resume`, no caller); `SetGsCrt` modes other than NTSC (every
+  `sceGsResetGraph` and `Movie_Play` passes 2); libgraph's own vblank handler (never installed);
+  `sceMpegSetDecodeMode` (`MovieVideo_SetDecodeMode`, no caller); libdev (VU0 never runs a micro
+  program).
+- **Data guards, kept:** VIF1 UNPACK with WL 0 and unknown VIF codes; FSIOPSND's 0x2070 port past the
+  sequence states and an overflowing sound-effect stream; modmidi's sequence with a division or tick
+  length of 0; MODHSYN's division by zero and bank with no Sset or Smpl.
+- **The EE kernel** (`port/platform/kernel.c`, its header comment): the game's threads all run at
+  priority 1 and every interrupt or DMA cause has at most one handler, so the rules not checked against
+  a PS2 (a preempted thread's place, handler return values, Enable/Disable results, a full semaphore,
+  WakeupThread on the caller, alarms) never decide anything.
+
+Still open:
+- The memory card cannot be pulled out or swapped while the game runs.
+- `sceMcFormat` keeps the folder (step 5).
+
 ## Step 6: PC features and releases
 
 - Features: a settings menu, rebinding, mouse look.
 - First run extracts the game from the user's ISO.
-- Builds and releases come from CI.
+- Builds and releases come from CI. CI builds and tests on Linux (gcc) and on Windows (llvm-mingw
+  20260616 and 20261006, SDL2 2.30.9): `.github/workflows/ci.yml`. Releases do not yet.
 - Before binaries are shipped, the game's data tables are loaded from the user's own ELF instead of
   being compiled in, as ico-pc does.
 

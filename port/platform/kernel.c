@@ -13,7 +13,20 @@
    host's clock to catch up.
 
    Interrupt handlers run in the kernel calls, on the stack of the thread that made the call, as the
-   EE runs them on the interrupted thread's. What they make ready runs once they return. */
+   EE runs them on the interrupted thread's. What they make ready runs once they return.
+
+   What the game reaches of the kernel (the decomp's callers; the Sony libraries the decomp has in
+   src/sce are not built, port/sdk stands in for them): the main thread and the movie player's idle and
+   decode threads, all at priority 1, which take turns only through RotateThreadReadyQueue(1) and the
+   stream semaphore (max count 1); timer 0's compare handler (core/timer.c, a void function) and the
+   movie's vblank (INTC 2) and GIF end (DMAC 2) handlers (returning 0), each alone on its cause; DIntr
+   and EIntr, whose results it ignores. So these EE rules are modelled but never decide anything here:
+   - where a preempted thread goes in its ready queue (all at one priority, none preempts another);
+   - what a handler's return value does to the rest of its chain (no chain has two handlers);
+   - Enable/Disable's results, SignalSema's on a full semaphore (KE_SEMA_OVF on the EE, the count
+     unchanged as here), a deleted semaphore's waiters, WakeupThread on the caller, iWakeupThread
+     on the interrupted thread (counted, as Sony's libkernel patch does), and alarms (none set):
+     the game never reads or reaches them. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
