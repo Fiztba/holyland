@@ -363,7 +363,7 @@ target_include_directories(libm_test PRIVATE port/include)
 target_compile_options(libm_test PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS})
 
 # The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone
-add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c)
+add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c port/math/libvu0.c)
 target_include_directories(vu1_test PRIVATE port/include)
 target_compile_options(vu1_test PRIVATE -frounding-math)
 if(NOT WIN32)
