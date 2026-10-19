@@ -411,7 +411,8 @@ static void sync_all(PortStateIo *io) {
 /* ---- On the DMA controller's thread ------------------------------------------------------------- */
 typedef struct {
     StateBuffer buffer;
-    const char *busy; /* save: why not now */
+    const char *busy;     /* save: why not now */
+    uint64_t spu2_frame;  /* the SPU2's time in the state (the WAV dump's frame, on the game's clock) */
 } Job;
 
 static void save_on_controller(void *arg) {
@@ -423,6 +424,7 @@ static void save_on_controller(void *arg) {
     }
     port_audio_lock();
     sync_all(&job->buffer.io);
+    job->spu2_frame = spu2_time();
     port_audio_unlock();
     memset(&port_stats, 0, sizeof(port_stats));
 }
@@ -432,6 +434,7 @@ static void load_on_controller(void *arg) {
 
     port_audio_lock();
     sync_all(&job->buffer.io);
+    job->spu2_frame = spu2_time();
     port_audio_unlock();
     if (job->buffer.at != job->buffer.size) {
         PORT_FATAL("the save state has %zu bytes more than this program reads", job->buffer.size - job->buffer.at);
@@ -744,7 +747,7 @@ static int save(int slot, const char *file) {
         port_event("state saved to %s", name);
         set_message("saved to %s at vblank %llu (%.1f MB, SPU2 frame %llu, %.0f ms)", name,
                     (unsigned long long)port_vblank_count(), (double)job.buffer.size / 1048576.0,
-                    (unsigned long long)spu2_time(), (port_wall_seconds() - start) * 1000.0);
+                    (unsigned long long)job.spu2_frame, (port_wall_seconds() - start) * 1000.0);
     }
     free(job.buffer.data);
     return 1;
@@ -785,7 +788,7 @@ static int load(int slot, const char *file) {
     }
     port_event("state loaded from %s", name);
     set_message("loaded %s, saved at vblank %llu (SPU2 frame %llu, %.0f ms)", name,
-                (unsigned long long)header.vblank, (unsigned long long)spu2_time(),
+                (unsigned long long)header.vblank, (unsigned long long)job.spu2_frame,
                 (port_wall_seconds() - start) * 1000.0);
     return 1;
 }
