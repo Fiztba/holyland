@@ -51,7 +51,8 @@ bool overlay_open;
 bool show_settings = true;
 bool show_about;
 int page;
-float applied_scale = 1.0f; // the layout's scale; the slider's value is taken when it is let go
+float applied_scale = 1.0f; // the layout's scale: the slider's value, taken when it is let go, times the screen's
+float applied_ui_scale = 1.0f; // the slider's value in applied_scale
 std::string ini_path;
 Uint32 toast_until;
 
@@ -97,6 +98,17 @@ void load_font() {
     io.Fonts->AddFontDefault();
 }
 
+// Windows' display scaling (150% is 1.5), as the window is in the screen's own pixels
+// (port/platform/video.c); 1 elsewhere
+float screen_scale() {
+#ifdef _WIN32
+    float dpi = 0.0f;
+    if (window != NULL && SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(window), NULL, &dpi, NULL) == 0 && dpi > 96.0f)
+        return dpi / 96.0f;
+#endif
+    return 1.0f;
+}
+
 void apply_style() {
     ImGuiStyle &style = ImGui::GetStyle();
     style = ImGuiStyle();
@@ -106,7 +118,8 @@ void apply_style() {
     style.GrabRounding = 4.0f;
     style.WindowBorderSize = 1.0f;
     style.Colors[ImGuiCol_WindowBg].w = 0.94f;
-    applied_scale = port_settings.ui_scale;
+    applied_ui_scale = port_settings.ui_scale;
+    applied_scale = applied_ui_scale * screen_scale();
     style.ScaleAllSizes(applied_scale);
     style.FontScaleMain = applied_scale;
 }
@@ -134,41 +147,65 @@ void changed() {
 // ---- Display -------------------------------------------------------------------------------------
 void display_page() {
     PortSettings &s = port_settings;
-    // window heights: the common screen heights, and the PS2's 448 lines once and twice
-    static const int heights[] = {448, 720, 896, 900, 1080, 1440, 2160};
-    static const char *const notes[] = {" (PS2 lines)", "", " (PS2 lines x2)", "", "", "", ""};
-    const int count = (int)(sizeof(heights) / sizeof(heights[0]));
+    // window sizes: the common screen heights, and the PS2's 448 lines once and twice, as wide as
+    // the picture's shape (width 0); then monitors' own sizes, wide (16:9), 16:10 and ultrawide
+    // (21:9), which the picture is fitted into
+    struct Size {
+        int width, height;
+        const char *note;
+    };
+    static const Size sizes[] = {
+        {0, 448, " (PS2 lines)"}, {0, 720, ""},   {0, 896, " (PS2 lines x2)"}, {0, 900, ""},
+        {0, 1080, ""},            {0, 1440, ""},  {0, 2160, ""},               {2560, 1440, " (16:9)"},
+        {2560, 1600, " (16:10)"}, {3440, 1440, " (21:9)"}, {3840, 2160, " (16:9)"}, {3840, 2400, " (16:10)"},
+    };
+    const int count = (int)(sizeof(sizes) / sizeof(sizes[0]));
     const bool wide = port_options.widescreen != 0;
-    SDL_Rect usable = {0, 0, 0, 0};
+    SDL_Rect screen = {0, 0, 0, 0};
     char label[64];
-    int current = 0;
+    int current = -1;
 
-    SDL_GetDisplayUsableBounds(0, &usable);
+    SDL_GetDisplayBounds(window != NULL ? SDL_GetWindowDisplayIndex(window) : 0, &screen);
+    auto width_of = [&](int w, int h) { return w > 0 ? w : wide ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3; };
+    // a height whose width the shape gives is left out where a monitor's size is the same
+    auto duplicate = [&](int i) {
+        for (int j = 0; sizes[i].width == 0 && j < count; j++) {
+            if (sizes[j].width != 0 && sizes[j].width == width_of(0, sizes[i].height) &&
+                sizes[j].height == sizes[i].height) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const int window_width = width_of(s.window_width, s.window_height);
     for (int i = 0; i < count; i++) {
-        if (heights[i] <= s.window_height) {
+        if (!duplicate(i) && width_of(sizes[i].width, sizes[i].height) == window_width &&
+            sizes[i].height == s.window_height) {
             current = i;
         }
     }
-    auto width_of = [&](int h) { return wide ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3; };
     auto size_label = [&](int i) {
-        snprintf(label, sizeof(label), "%d x %d%s", width_of(heights[i]), heights[i], notes[i]);
+        snprintf(label, sizeof(label), "%d x %d%s", width_of(sizes[i].width, sizes[i].height), sizes[i].height,
+                 sizes[i].note);
         return label;
     };
     ImGui::BeginDisabled(s.fullscreen != 0);
     char shown[64];
-    if (heights[current] == s.window_height) {
+    if (current >= 0) {
         snprintf(shown, sizeof(shown), "%s", size_label(current));
     } else {
-        snprintf(shown, sizeof(shown), "%d x %d", width_of(s.window_height), s.window_height);
+        snprintf(shown, sizeof(shown), "%d x %d", window_width, s.window_height);
     }
     if (ImGui::BeginCombo("Window size", shown)) {
         for (int i = 0; i < count; i++) {
             // sizes bigger than the screen are left out: full screen is for those
-            if (i != current && usable.h > 0 && (heights[i] > usable.h || width_of(heights[i]) > usable.w)) {
+            if (i != current && (duplicate(i) || (screen.h > 0 && (sizes[i].height > screen.h ||
+                                                                    width_of(sizes[i].width, sizes[i].height) > screen.w)))) {
                 continue;
             }
             if (ImGui::Selectable(size_label(i), i == current)) {
-                s.window_height = heights[i];
+                s.window_width = sizes[i].width;
+                s.window_height = sizes[i].height;
                 port_video_apply_settings();
                 changed();
             }
@@ -876,7 +913,7 @@ extern "C" void port_overlay_draw(void) {
     shot_open();
     if (!port_overlay_visible())
         return;
-    if (port_settings.ui_scale != applied_scale)
+    if (port_settings.ui_scale != applied_ui_scale)
         apply_style();
 
     // the controller does not steer the overlay while a slot waits for its button, nor until that
