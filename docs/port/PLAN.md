@@ -249,9 +249,10 @@ Still open:
     0x63 from vblank 755. `tools/frame_test.py` also dumps a picture of the movie (vblank 740). The
     logs are as before up to the movie, and gcc's and clang's are the same.
   - **Still open.**
-    - A whole movie takes about 13 ms of host time a field with `--fast`, headless (WSL): the
-      player's three threads rotate the ready queue about 9600 times a field, at 256 EE cycles each.
-      That keeps up with 59.94 fields a second, without much room.
+    - The player's three threads rotate the ready queue about 9600 times a field (256 EE cycles
+      each), so a movie costs host time: headless with `--fast`, the opening takes 22 s on Windows
+      (4 ms a field) but 72 s on Linux (13 ms a field), where each switch of the ucontext fibers is
+      a system call. Both keep up with 59.94 fields a second; Linux without much room.
     - The ending and the staff roll were checked decoded on their own, not yet played in the game.
     - `--frames` stops the run at a VSync, which the player never calls: a run that reaches a movie
       plays it to its end.
