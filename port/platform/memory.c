@@ -12,11 +12,18 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/sanitize.h"
 #include "port/savestate.h"
 
 /* Game RAM goes at a fixed address when it can, so that the pointers into it the game keeps in its
    own structs and on its threads' stacks mean the same in the next run (save states) */
+#if PORT_ASAN && !defined(_WIN32)
+/* ASan's shadow memory on x86-64 Linux ends at 0x10007FFF7FFF, over the usual address: go above it
+   and the fibers' stacks (port/platform/fiber.c) */
+#define EE_RAM_FIXED_ADDRESS ((uintptr_t)0x100400000000ull)
+#else
 #define EE_RAM_FIXED_ADDRESS ((uintptr_t)0x100000000000ull)
+#endif
 
 unsigned char *ee_ram;
 static int ram_fixed;

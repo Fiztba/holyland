@@ -30,11 +30,14 @@ endif()
 # overflow, no fused multiply-add, signed char, GCC's bit-field layout (also on Windows). Retail reads
 # past the ends of some arrays on purpose and tests some pointers after using them: keep the compiler
 # from optimising on either. A file's globals keep the order they are defined in, as ee-gcc laid them
-# out: the game reads files in whole sectors, so a read into a table runs on into the next one
-# (item_nam.prm into item_common_defs), which retail then loads. clang keeps that order by itself.
+# out and as clang does by itself, so gcc and clang builds have the same neighbours. Nothing known
+# relies on it any more: File_Read's whole sectors no longer run past a global (port_cd_read_bytes,
+# libcdvd.h), and the sanitizer build (KF4_SANITIZE) finds a read or write that crosses into the next.
+# No stack protector (on by default in many Linux gccs): a save state puts back the EE threads' stacks
+# in another process, whose canary is not the one their frames hold (port/platform/savestate.c).
 set(KF4_GAME_FLAGS
     -fno-strict-aliasing -fwrapv -ffp-contract=off -fno-fast-math -fsigned-char -fno-common
-    -fgnu89-inline -fno-delete-null-pointer-checks)
+    -fgnu89-inline -fno-delete-null-pointer-checks -fno-stack-protector)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     list(APPEND KF4_GAME_FLAGS -fno-aggressive-loop-optimizations -fno-toplevel-reorder)
 endif()
@@ -51,6 +54,17 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     list(APPEND KF4_GAME_ERRORS -Werror=incompatible-function-pointer-types -Werror=shorten-64-to-32
          -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function
          -Wno-missing-braces -Wno-parentheses-equality)
+endif()
+
+# ---- Sanitizers (docs/port/README.md, "Sanitizers") -----------------------------------------------
+# -DKF4_SANITIZE=address,undefined builds everything (the game, port/, ico-audio, the tests) with
+# those sanitizers. Empty (the default) leaves the build as it is.
+set(KF4_SANITIZE "" CACHE STRING "Build with these sanitizers (-fsanitize=...), e.g. address,undefined")
+if(KF4_SANITIZE)
+    # recoverable, so ASAN_OPTIONS=halt_on_error=0 can list every report of a run
+    add_compile_options(-fsanitize=${KF4_SANITIZE} -fsanitize-recover=all -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=${KF4_SANITIZE})
+    message(STATUS "Sanitizers: ${KF4_SANITIZE}")
 endif()
 
 # ---- The PS2 side ---------------------------------------------------------------------------------

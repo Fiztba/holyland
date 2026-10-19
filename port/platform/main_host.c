@@ -57,6 +57,15 @@
 #include "port/settings.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
+#include "port/sanitize.h"
+
+#if PORT_ASAN
+/* ASan's defaults for this program (ASAN_OPTIONS overrides them): no fake stacks, which would keep
+   locals outside the EE threads' stacks, where a save state does not see them; no leak check at exit */
+const char *__asan_default_options(void) {
+    return "detect_stack_use_after_return=0:detect_leaks=0";
+}
+#endif
 
 PortOptions port_options;
 PortStats port_stats;

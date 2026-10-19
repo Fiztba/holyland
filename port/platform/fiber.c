@@ -13,6 +13,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/sanitize.h"
 #include "port/savestate.h"
 
 #ifdef _WIN32
@@ -34,6 +35,11 @@ struct PortFiber {
     void (*entry)(void *);
     void *arg;
     int used;
+#if PORT_ASAN
+    /* the stack's bounds, for ASan's fiber switches (the host's are learned at its first switch) */
+    const void *asan_bottom;
+    size_t asan_size;
+#endif
 };
 
 static PortFiber host_fiber;
@@ -53,7 +59,7 @@ void port_fiber_start(PortFiber *fiber);
    as if it had switched away, with the trampoline as its return address and itself in r12. */
 #ifdef _WIN32
 #define SWAP_FRAME_SIZE 264 /* the xmm block (168), the TEB's three, eight registers, the return */
-__asm__(".text\n"
+__asm__(".pushsection .text\n" /* and back to the section the compiler was in, after */
         ".globl port_fiber_swap\n"
         ".def port_fiber_swap; .scl 2; .type 32; .endef\n"
         ".p2align 4\n"
@@ -117,10 +123,11 @@ __asm__(".text\n"
         "    andq $-16, %rsp\n"
         "    subq $32, %rsp\n"
         "    call port_fiber_start\n"
-        "    ud2\n");
+        "    ud2\n"
+        ".popsection\n");
 #else
 #define SWAP_FRAME_SIZE 64 /* MXCSR and the control word (8), six registers, the return */
-__asm__(".text\n"
+__asm__(".pushsection .text\n" /* and back to the section the compiler was in, after */
         ".globl port_fiber_swap\n"
         ".type port_fiber_swap, @function\n"
         ".p2align 4\n"
@@ -155,10 +162,42 @@ __asm__(".text\n"
         "    andq $-16, %rsp\n"
         "    call port_fiber_start\n"
         "    ud2\n"
-        ".size port_fiber_trampoline, .-port_fiber_trampoline\n");
+        ".size port_fiber_trampoline, .-port_fiber_trampoline\n"
+        ".popsection\n");
+#endif
+
+/* ---- ASan (port/include/port/sanitize.h) ----------------------------------------------------
+   Each switch tells ASan which stack it is moving to, so its reports and its checks of stack
+   accesses follow the fiber that runs. */
+#if PORT_ASAN
+static PortFiber *asan_from; /* the fiber the last switch left */
+
+/* on the fiber a switch arrived on: finish the switch ASan was told of, and keep the stack bounds
+   of the fiber it came from (the host's, the first time) */
+static void asan_arrived(void *fake_stack) {
+    const void *bottom;
+    size_t size;
+
+    __sanitizer_finish_switch_fiber(fake_stack, &bottom, &size);
+    if (asan_from != NULL && asan_from->asan_bottom == NULL) {
+        asan_from->asan_bottom = bottom;
+        asan_from->asan_size = size;
+    }
+}
+
+/* a stack about to be used afresh: what a call chain left on it (one a thread abandoned, or one a
+   save state replaced) is not ASan's to check any more */
+static void asan_fresh_stack(PortFiber *fiber, unsigned char *top) {
+    fiber->asan_bottom = top - fiber->stack_size;
+    fiber->asan_size = fiber->stack_size;
+    port_unpoison(top - fiber->stack_size, fiber->stack_size);
+}
 #endif
 
 void port_fiber_start(PortFiber *fiber) {
+#if PORT_ASAN
+    asan_arrived(NULL);
+#endif
     fiber->entry(fiber->arg);
     PORT_FATAL("a fiber's entry returned");
 }
@@ -241,6 +280,9 @@ PortFiber *port_fiber_create(size_t stack_size, void (*entry)(void *), void *arg
     fiber->stack_size = stack_size;
     fiber->entry = entry;
     fiber->arg = arg;
+#if PORT_ASAN
+    asan_fresh_stack(fiber, slot_top(slot));
+#endif
 
     /* the frame port_fiber_swap pops: the host's float modes, the fiber in r12, the trampoline */
     __asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
@@ -269,7 +311,16 @@ void port_fiber_delete(PortFiber *fiber) {
 }
 
 void port_fiber_switch(PortFiber *from, PortFiber *to) {
+#if PORT_ASAN
+    void *fake_stack = NULL;
+
+    asan_from = from;
+    __sanitizer_start_switch_fiber(&fake_stack, to->asan_bottom, to->asan_size);
     port_fiber_swap(&from->sp, to->sp);
+    asan_arrived(fake_stack);
+#else
+    port_fiber_swap(&from->sp, to->sp);
+#endif
 }
 
 /* ---- Save states -----------------------------------------------------------------------------
@@ -295,6 +346,9 @@ void port_fiber_state(PortStateIo *io) {
             }
             if (io->loading) {
                 commit_stack(slot, fiber->stack_size);
+#if PORT_ASAN
+                asan_fresh_stack(fiber, top);
+#endif
             }
             port_state_bytes(io, sp, (size_t)(top - sp));
         }
