@@ -168,8 +168,14 @@ else it does differently. Its natural form is the woven one: it can draw the fra
 
 Then, all opt-in:
 - higher resolution;
-- widescreen (we own the projection code);
+- widescreen (done ahead of the native renderer, on stage 1's path; below);
 - higher frame rates, with interpolation while the game itself keeps its 30 Hz.
+
+The opt-in switches, each off by default (the PS2's picture), which the native renderer has to keep:
+
+| Switch | What it changes in the game code | What the PC does |
+|---|---|---|
+| `--widescreen` (overlay: Display, live) | Under `port_widescreen()` only: `GameLoop_SetCameraMatrices` (case 0) and `MapViewer_RunKingsMap` build the view-to-screen matrix three quarters as wide (`ax` 0.75), a 16:9 horizontal field of view in the same 640x448. `Hud_Draw`, `Hud_DrawPaused`, `Message_Draw`, `Splash_Draw`, `MapViewer_DrawPictureMap` and `MapViewer_DrawKingsMap` call `Widescreen_Mark` (`game/widescreen.c`) around their 2D: a GS register list writing `PORT_GS_REG_WIDESCREEN`, an address the GS does not have. | `port/platform/gs.c` squeezes the X of 2D vertices to three quarters about the screen's middle (the HUD about its left edge, or the middle with `--widescreen-hud-centred`): all of PATH3, and the marked 2D of the packet chain; it leaves pictures of the frame, full-screen fades and untextured fills reaching the edge at full width. The window is 16:9; `--dump-frames` keeps the GS's 640x448. No culling needed widening: the map records are culled by a half-plane, the rest in screen space. |
 
 ## Step 4: sound (first version done)
 
@@ -224,6 +230,10 @@ Still open:
   into a repeatable test. While recording, the sound stays on the game's clock and mouse look is off,
   so the recording replays.
 - Movies are decoded with libmpeg2 or FFmpeg from the PSS files, keeping the PS2's timing.
+  With `--widescreen` they should show at 4:3, pillarboxed. `gfx/movie.c` draws its frames as textured
+  sprites by PATH3, which the GS front end squeezes, so that should come by itself; but a frame
+  uploaded 640 wide counts there as a picture of the frame (the grabbed menu backdrop is one) and
+  would be left full width, stretched. Check it, and mark the movie as 2D if so.
 
 ## Step 6: PC features and releases
 

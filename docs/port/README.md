@@ -139,8 +139,10 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--state-load [VBLANK:]SLOT\|FILE` | load a state before the game starts, or once the run reaches that vblank |
 | `--memcard DIR\|none` | the folder that is the memory card in slot 1 (by default `memcard` in the data folder, beside settings.json); `none` leaves the slot empty, as the tests do |
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
+| `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
+| `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
 
-The window shows the game at 4:3. A game controller is the pad; so is the keyboard (the PS2 layout,
+The window shows the game at 4:3 (16:9 with widescreen). A game controller is the pad; so is the keyboard (the PS2 layout,
 the default):
 
 | Keys | Pad |
@@ -166,7 +168,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (640x448 times 1 to 4), full screen (borderless; F11), picture shape (4:3 or stretched), smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
+| Display | window size (640x448 times 1 to 4), full screen (borderless; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | the ten slots (0 is the quick slot of F2 and F4), save, load, and what the last request did (`port/include/port/savestate.h`) |
@@ -184,6 +186,7 @@ the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
+`--widescreen` keeps widescreen on,
 and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
@@ -220,6 +223,35 @@ that none is blank (`--keep DIR` keeps them to look at).
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
+
+## Widescreen
+
+Off by default, so the picture is the PS2's. `--widescreen`, or the overlay's Display page (live),
+turns it on:
+- **The 3D view is 16:9.** The game's projection (`GameLoop_SetCameraMatrices`, and the King's Map's
+  in `MapViewer_RunKingsMap`) is three quarters as wide, so the GS still draws 640x448, now holding a
+  16:9 view at the same height (vertical field of view unchanged), squeezed. The window shows it at
+  16:9 (and a window that is not full screen is made 16:9). Nothing pops in at the sides: the game
+  culls its map records with a half-plane in front of the player, and everything else by where it
+  lands on the screen, which the wider projection takes care of.
+- **The 2D keeps its 4:3 shape.** The GS front end (`port/platform/gs.c`) squeezes it to three quarters
+  of its width as the packets go by: everything drawn by PATH3 (the menus with their item models, the
+  title, the memory card notice), and the 2D of the packet chain that the game's patches mark with a
+  write to `PORT_GS_REG_WIDESCREEN` (`game/widescreen.c`): the message text, the pause label, the
+  splash pictures, the map viewers' pictures, and the HUD, which goes into the 16:9 picture's top-left
+  corner or (`--widescreen-hud-centred`, or the overlay) stays where it is at 4:3.
+- **Left full width:** pictures of the frame itself (the dimmed world behind the menus, the screen
+  wobble, the frame copied at TBP 0x1180 or 0x2BC0, every screen effect that redraws the frame),
+  full-screen fades and flashes, and untextured panels that reach the screen's edge.
+- **`--dump-frames` writes the GS's picture as it is**: 640x448, squeezed. Stretch it to 16:9 (for
+  example to 796x448) to see it as the window shows it. `KF4_OVERLAY_SHOT` writes the window, so its
+  pictures are 16:9.
+- Off, the game code does exactly what it does without the switch (`port_widescreen()` is 0, nothing is
+  marked, and the GS front end does not touch the packets): the frame and boot tests, `--stats`' VU1
+  counts and PATH1 hash are main's.
+- Not done: the 2D is squeezed into 480 of the 640 columns, so it is a little softer than at 4:3 (a
+  higher internal resolution, step 3, would mend that). Anything the game sizes in screen pixels around
+  a projected point would come out a third wider; none has been seen yet.
 
 ## Save states
 
