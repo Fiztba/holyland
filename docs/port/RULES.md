@@ -137,11 +137,13 @@ If the same memory is viewed both ways, the overlay rule wins.
 - a fixed-size area of game RAM that holds runtime structs may now overflow. Leave the size, and add
   `/* PORT: holds runtime structs, may need more room on the PC */`.
 
-**Reads past the end of a buffer.** `File_Read` reads whole sectors (0x800 bytes), so a file read
-into a buffer runs up to 0x7FF bytes past its end. Retail lays its buffers out so the overrun lands
-on something harmless. On the PC that order is not kept, so make the buffer whole sectors and say so
-in a `/* PORT: */` comment. In the same way, an index past the end of a table read game RAM at the
-EE address on the PS2: read it there with `EE_RAM_AT`.
+**Reads past the end of a buffer.** On the PS2 `File_Read` reads whole sectors (0x800 bytes), so a
+file read into a buffer runs up to 0x7FF bytes past its end, where retail's layout put something
+harmless. The PC's `File_Read` stops at the buffer's end when the buffer is one of the program's
+globals (`port_cd_read_bytes`), so nothing is needed for it. Other code that writes past a buffer
+on purpose needs the buffer made bigger, with a `/* PORT: */` comment; the sanitizer build
+(README.md, "Sanitizers") finds it. An index past the end of a table read game RAM at the EE
+address on the PS2: read it there with `EE_RAM_AT`.
 
 **128-bit stores.** Code that stores a `Uint128` or `VuIntVector` into a runtime struct needs the field
 16-byte aligned. The PS2 layout put such fields on a 16-byte boundary, and the PC layout may not: give

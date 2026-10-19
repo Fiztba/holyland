@@ -73,8 +73,11 @@ Result:
   is a safeguard only.
 - Three game bugs the PC exposed, fixed in `patches/`:
   - `File_Read` reads whole sectors, so a file read into a static table runs past its end. Retail
-    lays the tables out so that is harmless. The save icon buffer is enlarged to whole sectors.
-    GCC builds with `-fno-toplevel-reorder` so globals keep the order they are defined in.
+    lays the tables out so that is harmless. Into the program's globals the PC reads only the bytes
+    asked for, the last sector through a buffer of its own (`port_cd_read_bytes`, `libcdvd.h`); into
+    game RAM, laid out as on the PS2, whole sectors as before. (Before, the save icon buffer was
+    enlarged and GCC's `-fno-toplevel-reorder` kept `item_nam.prm`'s overrun in `item_common_defs`;
+    the flag stays, so gcc and clang lay globals out alike.)
   - An effect with no magic reads `fx_table[0xFFFF]`, 17 MB past the table: that is game RAM on
     the PS2, and is read there (`EE_RAM_AT`).
   - `ModelInstance.found_record` takes an aligned 128-bit store, so it is 16-byte aligned.
