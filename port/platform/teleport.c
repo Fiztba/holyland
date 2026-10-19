@@ -493,6 +493,109 @@ static void read_places(MapEntry *m) {
     free(data);
 }
 
+/* ---- Dead-end maps --------------------------------------------------------------------------- */
+typedef struct {
+    int asks;        /* its records name one of its origins */
+    int from;        /* a dead end: the map whose link leads to it, or -1 */
+    float position[3];
+} WayIn;
+
+static WayIn way_in[MAX_MAPS];
+static int way_in_read;
+
+/* The start of the map's file, through its origins (Map_ParseFile: the records, the flag blocks, the
+   32 origins): NULL when it cannot be read. *origins_at is where the origins are. */
+static uint8_t *read_head(const MapEntry *m, uint32_t *origins_at) {
+    uint8_t first[DISC_SECTOR_SIZE];
+    uint32_t need, sectors;
+    uint8_t *data;
+
+    if (m->size < MAP_RECORDS || !port_disc_read(m->lsn, 1, first)) {
+        return NULL;
+    }
+    *origins_at = MAP_RECORDS + le16(first + 0x3C) * MAP_RECORD_SIZE + le16(first + 0x3E) * 0x40u;
+    need = *origins_at + 0x200;
+    if (need > m->size) {
+        return NULL;
+    }
+    sectors = (need + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE;
+    data = malloc((size_t)sectors * DISC_SECTOR_SIZE);
+    if (data != NULL && !port_disc_read(m->lsn, sectors, data)) {
+        free(data);
+        data = NULL;
+    }
+    return data;
+}
+
+static void read_ways_in(void) {
+    int i, j;
+
+    way_in_read = 1;
+    port_teleport_map_count();
+    for (i = 0; i < map_count; i++) {
+        way_in[i].asks = 1; /* unread: left alone */
+        way_in[i].from = -1;
+    }
+    for (i = 0; i < map_count; i++) {
+        uint32_t origins_at, named = 0;
+        uint8_t *data = read_head(&maps[i], &origins_at);
+        uint16_t records, r;
+
+        if (data == NULL) {
+            continue;
+        }
+        records = le16(data + 0x3C);
+        for (r = 0; r < records; r++) {
+            uint8_t origin = data[MAP_RECORDS + r * MAP_RECORD_SIZE + 0x3A];
+
+            if (origin < 32) {
+                named |= 1u << origin;
+            }
+        }
+        way_in[i].asks = named != 0;
+        /* where its named origins lead: a map that asks for nothing is entered from here */
+        for (r = 0; r < 32; r++) {
+            const uint8_t *link = data + origins_at + r * 16u;
+            int to = le16(link + 12);
+
+            if (!(named & (1u << r))) {
+                continue;
+            }
+            for (j = 0; j < map_count; j++) {
+                if (maps[j].map == to && j != i && way_in[j].from < 0) {
+                    way_in[j].from = maps[i].map;
+                    way_in[j].position[0] = -lef(link);
+                    way_in[j].position[1] = -lef(link + 4);
+                    way_in[j].position[2] = -lef(link + 8);
+                }
+            }
+        }
+        free(data);
+    }
+}
+
+int port_map_way_in(int map, int *from, float position[3]) {
+    int i;
+
+    if (!way_in_read) {
+        uint32_t mode = port_host_float_begin();
+
+        read_ways_in();
+        port_host_float_end(mode);
+    }
+    for (i = 0; i < map_count; i++) {
+        if (maps[i].map == map) {
+            if (way_in[i].asks || way_in[i].from < 0) {
+                return 0;
+            }
+            *from = way_in[i].from;
+            memcpy(position, way_in[i].position, sizeof(way_in[i].position));
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* ---- The interface --------------------------------------------------------------------------- */
 int port_teleport_map_count(void) {
     if (map_count < 0) {

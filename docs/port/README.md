@@ -355,6 +355,14 @@ the disc: the map's start (where a map change without a link puts the player), t
 that lie on a floor, then the middles of the biggest floors. A map the story has not reached yet may
 not behave as it does in a real playthrough (its doors, events and enemies follow the world's flags).
 
+**Dead ends.** 19 maps never ask for a neighbouring map themselves (their records name none of their
+links: 009, 011, 014, 021, 025, 030, 034, 036, 038, 040, 041, 042, 043, 044, 097, 106, 110, 114, 116).
+The game enters each from the one map whose link leads to it, and that map stays loaded in the other
+slot: 040's entrance looks back into 039, and walking out of it walks onto 039's floor. A quick load
+in such a map (a teleport, or a quick save taken there) finds no neighbour of the map's own, so it
+loads that map, set up, where its link puts it (`port_map_way_in`, read from the map files); without
+it the way out is black and the player falls through the world there.
+
 What a quick load restores is what loading a memory card save restores, at the place it was taken:
 - **Restored:** the map, the exact position, heading and look; HP and MP; everything else in the
   save image (above); and the neighbouring map, read or set up as it was (above): a quick save taken

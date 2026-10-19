@@ -31,6 +31,14 @@ const char *port_teleport_map_name(int map);
    PORT_TELEPORT_PLACES, written to places */
 int port_teleport_places(int map, PortTeleportPlace *places);
 
+/* The way into a dead-end map: one whose records never ask for a neighbouring map (040, the Dark
+   Reality's Conclusion, and 18 more). The game enters such a map only from the one map whose link
+   leads to it, and that map stays loaded in the other slot (040's entrance looks back into 039, and its
+   floor is 039's): 1 and that map's number, with the MapLoadRequest position that puts it where it
+   joins (the link's position negated: the link's map seen from this one), or 0 when the map asks for
+   neighbours itself or no link leads to it. Read from the disc's map files once, then kept. */
+int port_map_way_in(int map, int *from, float position[3]);
+
 /* Asks for the player to be put in the map at its place-th place (0: the map's start), as a quick
    load: taken in play, with a message in port_quick_message. 0 when the map or place does not exist. */
 int port_teleport_request(int map, int place);

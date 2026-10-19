@@ -27,6 +27,7 @@
 #include "collision/collision.h"
 #include "port/platform.h"
 #include "port/quicksave.h"
+#include "port/teleport.h"
 
 #define SAVE_IMAGE_SIZE 0x20000
 #define SAVE_IMAGE_MAGIC 0x15400
@@ -61,6 +62,8 @@ static int placed_check;
 /* and the neighbouring map is to be loaded again (Quick_RestoreNeighbour) */
 static int neighbour_due;
 static PortQuickInfo loaded_info;
+/* a dead end's way in (port_map_way_in): the request the game's load steps read while it loads */
+static MapLoadRequest way_in;
 
 /* The neighbouring map. The game keeps the map the player is in in one slot (current_map_slot) and
    the map next to it in the other, and MapLoad_Update (map/map_load.c) streams it in two stages:
@@ -196,6 +199,26 @@ static void put_on_floor(void) {
                player_state.position.y, player_state.position.z, asked);
 }
 
+/* Runs the game's load steps for map_load_state.request to where they rest (step 5, read), or on through
+   the set-up, as MapLoad_Update does when the player stands where the neighbour is needed (without
+   drawing: the screen is black, about to fade in) */
+static void run_neighbour_load(int set_up) {
+    int steps = 0;
+
+    while (map_load_state.step != 5 && steps++ < 100000) {
+        map_load_steps[map_load_state.step]();
+        Entity_UpdatePool();
+        GameLoop_RunSoundLoads();
+        Sound_Update();
+    }
+    if (map_load_state.step == 5 && set_up) {
+        map_load_state.step = 6;
+        while (map_load_state.step != 0) {
+            map_load_steps[map_load_state.step]();
+        }
+    }
+}
+
 /* (GameLoop_Run, once a loaded save's map is set up, before the first frame) a quick load asks for
    the neighbouring map the game had, as MapLoad_Update asks for one, and runs the game's load steps to
    where they were: read (resting at step 5), or on through the set-up, as MapLoad_Update does when the
@@ -204,7 +227,7 @@ static void put_on_floor(void) {
 void Quick_RestoreNeighbour(void) {
     MapSlot *current = &map_slots[current_map_slot & 1];
     MapLoadRequest *origins = (MapLoadRequest *)current->origins;
-    int origin, map, set_up, steps = 0;
+    int origin, map, set_up;
 
     if (!neighbour_due) {
         return;
@@ -221,28 +244,35 @@ void Quick_RestoreNeighbour(void) {
         origin = neighbour_from_position(&set_up);
         map = origin >= 0 && origins != NULL ? origins[origin].map : -1;
     }
+    if (origin < 0 && map_load_state.step == 0) {
+        /* a dead end (port_map_way_in): the map the game came from stays loaded, set up */
+        int from;
+        float position[3];
+
+        if (port_map_way_in(current->tag, &from, position)) {
+            way_in.x = position[0];
+            way_in.y = position[1];
+            way_in.z = position[2];
+            way_in.map = (u16)from;
+            map_load_state.request = &way_in;
+            run_neighbour_load(1);
+            port_event("quick load: map %02X is a dead end: the map it is entered from, %02X, %s", current->tag, from,
+                       map_load_state.step == 0 ? "set up" : "not read (the drive stayed busy)");
+            return;
+        }
+    }
     if (origin < 0 || origin >= MAP_ORIGIN_COUNT || origins == NULL || origins[origin].map != map ||
         (u8)map == current->tag || map_load_state.step != 0) {
         port_event("quick load: no neighbouring map%s", origin >= 0 ? " (the saved one is not this map's)" : "");
         return;
     }
     map_load_state.request = &origins[origin];
-    while (map_load_state.step != 5 && steps++ < 100000) {
-        map_load_steps[map_load_state.step]();
-        Entity_UpdatePool();
-        GameLoop_RunSoundLoads();
-        Sound_Update();
-    }
-    if (map_load_state.step == 5 && set_up) {
-        map_load_state.step = 6;
-        while (map_load_state.step != 0) {
-            map_load_steps[map_load_state.step]();
-        }
-    }
+    run_neighbour_load(set_up);
     port_event("quick load: neighbouring map %02X (origin %d%s) %s", map, origin,
                loaded_info.neighbour_known ? "" : ", from the position",
                map_load_state.step == 0 ? "set up" : map_load_state.step == 5 ? "read" : "not read (the drive stayed busy)");
 }
+
 
 static void fill_info(PortQuickInfo *info) {
     memset(info, 0, sizeof(*info));
