@@ -1,7 +1,7 @@
 /* settings.json (port/include/port/settings.h): the player's settings, in the user's data folder.
 
      {
-       "display":  {"window_height": 896, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
+       "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "widescreen": false, "widescreen_hud": "corner"},
        "audio":    {"volume": 100, "mute": false},
@@ -245,6 +245,7 @@ void port_settings_load(void) {
     /* the first settings files kept a multiple of 448 */
     s->window_height = (int)read_number(display, "window_scale", s->window_height / 448, 1, 4) * 448;
     s->window_height = (int)read_number(display, "window_height", s->window_height, 448, 4320);
+    s->window_width = (int)read_number(display, "window_width", s->window_width, 0, 7680);
     s->fullscreen = read_bool(display, "fullscreen", s->fullscreen);
     aspect = read_string(display, "aspect");
     if (aspect != NULL) {
@@ -384,6 +385,7 @@ void port_settings_save(void) {
     }
     display = section("display");
     put(display, "window_height", cJSON_CreateNumber(s->window_height));
+    put(display, "window_width", cJSON_CreateNumber(s->window_width));
     cJSON_DeleteItemFromObjectCaseSensitive(display, "window_scale");
     put(display, "fullscreen", cJSON_CreateBool(s->fullscreen));
     put(display, "aspect", cJSON_CreateString(s->aspect == ASPECT_STRETCH ? "stretch" : "4:3"));

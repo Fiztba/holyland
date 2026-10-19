@@ -62,12 +62,15 @@ static uint32_t texture_width, texture_height;
 static int texture_smooth;
 static uint32_t *shown;
 
-/* the window's size in windowed mode: the height the settings say, and as wide as the picture's
-   shape (4:3, or 16:9 with --widescreen) at that height */
+/* the window's size in windowed mode: the height the settings say, and the width they say (a
+   monitor's size, which the picture is fitted into) or as wide as the picture's shape (4:3, or 16:9
+   with --widescreen) at that height */
 static void window_size(int *width, int *height) {
     int h = port_settings.window_height < 448 ? 448 : port_settings.window_height;
 
-    *width = port_options.widescreen ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3;
+    *width = port_settings.window_width > 0 ? port_settings.window_width
+             : port_options.widescreen     ? (h * 16 + 8) / 9
+                                            : (h * 4 + 2) / 3;
     *height = h;
 }
 #endif
@@ -94,6 +97,9 @@ void port_video_init(void) {
     if (port_options.headless || !port_gs_enabled()) {
         return;
     }
+    /* the window's sizes are the screen's own pixels: without this, Windows at 150% scaling shows a
+       2560 x 1440 monitor as 1707 x 960 and stretches the window's picture up to it */
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return;

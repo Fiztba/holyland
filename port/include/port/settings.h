@@ -16,7 +16,9 @@ extern "C" {
 
 typedef struct {
     /* Display */
-    int window_height;     /* the window's height in pixels (its width follows the picture's shape); 896 by default */
+    int window_height;     /* the window's height in pixels; 896 by default */
+    int window_width;      /* its width in pixels (a monitor's size: 2560 x 1600, 3440 x 1440...), or 0 to follow
+                              the picture's shape (4:3, or 16:9 with widescreen); 0 by default */
     int fullscreen;        /* borderless, on the whole screen */
     int aspect;            /* ASPECT_ */
     int vsync;             /* wait for the screen's refresh to show each picture */
