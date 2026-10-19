@@ -17,7 +17,7 @@
 #include "port/platform.h"
 #include "port/settings.h"
 
-void port_gs_capture_init(const char *list);
+int port_gs_capture_init(const char *list); /* how many captures it asks for */
 
 /* ---- The message ------------------------------------------------------------------------------ */
 static char message[1400] = "nothing written yet";
@@ -76,13 +76,14 @@ const char *port_debug_capture_path(const char *stem, uint64_t vblank, const cha
 
 /* KF4_DEBUG_AT=state@VBLANK,audio@VBLANK,gs@VBLANK,...: press F10, F12 or F9 at those vblanks, for
    checking the tools without anyone at the keyboard (in vblank order). Run on the game's thread at the
-   vblank, from the GS capture's per-vblank note (port/platform/gs.c), so only in a run that draws. */
+   vblank, from the GS capture's per-vblank note (port/platform/gs.c): a --headless run draws for it. */
 #define DEBUG_AT 16
 static struct {
     uint64_t vblank;
     char what;
 } debug_at[DEBUG_AT];
 static int debug_at_count, debug_at_next;
+static int gs_captures_asked; /* --gs-capture-at's */
 
 int port_debug_at_pending(void) {
     return debug_at_next < debug_at_count;
@@ -105,7 +106,7 @@ void port_debug_at_vblank(uint64_t vblank) {
 void port_debug_init(const char *gs_capture_at) {
     const char *p = getenv("KF4_DEBUG_AT");
 
-    port_gs_capture_init(gs_capture_at);
+    gs_captures_asked = port_gs_capture_init(gs_capture_at);
     while (p != NULL && *p && debug_at_count < DEBUG_AT) {
         const char *at = strchr(p, '@');
 
@@ -123,6 +124,11 @@ void port_debug_init(const char *gs_capture_at) {
     if (debug_at_count) {
         port_gs_capture_armed = 1;
     }
+}
+
+/* KF4_DEBUG_AT's presses are made from the GS's per-vblank hook, so they want it as a capture does */
+int port_debug_wants_gs(void) {
+    return gs_captures_asked > 0 || debug_at_count > 0;
 }
 
 /* ---- F10: the game's state as JSON ------------------------------------------------------------- */

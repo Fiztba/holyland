@@ -30,8 +30,11 @@ const char *port_debug_message(void);
 int port_debug_gs_capture_busy(void);
 
 /* ---- Set-up (port/platform/main_host.c) ------------------------------------------------------- */
-/* --gs-capture-at VBLANK[:N],... */
+/* --gs-capture-at VBLANK[:N],...; called before port_gs_init, which asks port_debug_wants_gs */
 void port_debug_init(const char *gs_capture_at);
+/* 1 if a GS capture is asked for at a vblank (--gs-capture-at, KF4_DEBUG_AT's gs@): a --headless
+   run then draws, as for --dump-frames, or there would be nothing to capture */
+int port_debug_wants_gs(void);
 /* each port_event line (files read, movies, the memory card), kept for F10's dump */
 void port_debug_note_event(uint64_t vblank, const char *fmt, va_list args);
 

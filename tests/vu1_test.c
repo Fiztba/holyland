@@ -16,6 +16,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/vu_float.h"
 
 static uint8_t micro_mem[16384];
 static uint8_t data_mem[16384];
@@ -488,6 +489,97 @@ static void test_shuffles(void) {
     check("opmula/opmsub cross z", word(3, 2), f_bits(1 * 6 - 2 * 5));
 }
 
+/* port/vu_float.h, the arithmetic of the EE's VU0 macro-mode instructions (the game's math/vu0.h),
+   gives the bits VU1 gives: ADD, SUB, MUL, DIV, FTOI4 and ITOF4 on random operands, with exponents
+   near each other and far apart, denormals and exponent 255. The game projects some vertices on VU0
+   and the same ones again on VU1, and depth-tests one pass against the other. */
+static uint32_t rng_state = 0x2545F491u;
+
+static uint32_t rng(void) {
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return rng_state;
+}
+
+/* a float with an exponent near `near` most of the time, else anywhere (0, 255 and denormals too) */
+static uint32_t random_float(uint32_t near) {
+    uint32_t r = rng(), e;
+
+    switch (r & 7) {
+    case 0: e = (rng() >> 8) & 0xFF; break;
+    case 1: e = (r >> 3) & 1 ? 0 : 255; break;
+    default: e = near + ((r >> 3) & 63) - 32; break;
+    }
+    return (rng() & 0x807FFFFFu) | (e & 0xFF) << 23;
+}
+
+static void test_vu0_float(void) {
+    int round, lane, bad_add = 0, bad_sub = 0, bad_mul = 0, bad_div = 0, bad_ftoi = 0, bad_itof = 0;
+
+    for (round = 0; round < 3000; round++) {
+        uint32_t a[4], b[4], n[4];
+
+        for (lane = 0; lane < 4; lane++) {
+            uint32_t near = 96 + rng() % 64;
+
+            a[lane] = random_float(near);
+            b[lane] = random_float(near);
+            n[lane] = rng() >> (rng() & 31);
+        }
+        begin();
+        set_qword(0, a[0], a[1], a[2], a[3]);
+        set_qword(1, b[0], b[1], b[2], b[3]);
+        set_qword(2, n[0], n[1], n[2], n[3]);
+        load12();
+        pair(UNOP, LQ(XYZW, 7, 0, 2));
+        pair(up(U_ADD, XYZW, 2, 1, 3), LNOP);
+        pair(up(U_SUB, XYZW, 2, 1, 4), LNOP);
+        pair(up(U_MUL, XYZW, 2, 1, 5), DIV(1, 0, 2, 0));  /* a.x / b.x */
+        pair(up2(0x15, XYZW, 6, 1), WAITQ);             /* ftoi4(a) */
+        pair(up(0x1C, W, 0, 0, 8), LNOP);                /* mulq: vf0.w (1) * Q, which keeps -0 */
+        pair(up2(0x11, XYZW, 9, 7), LNOP);              /* itof4(n) */
+        nops(3);
+        pair(UNOP, SQ(XYZW, 3, 0, 3));
+        pair(UNOP, SQ(XYZW, 4, 0, 4));
+        pair(UNOP, SQ(XYZW, 5, 0, 5));
+        pair(UNOP, SQ(XYZW, 6, 0, 6));
+        pair(UNOP, SQ(XYZW, 8, 0, 7));
+        pair(UNOP, SQ(XYZW, 9, 0, 8));
+        run();
+        for (lane = 0; lane < 4; lane++) {
+            int add = word(3, lane) != vu_float_add(a[lane], b[lane]);
+            int sub = word(4, lane) != vu_float_sub(a[lane], b[lane]);
+            int mul = word(5, lane) != vu_float_mul(a[lane], b[lane]);
+
+            if ((add || sub || mul) && bad_add + bad_sub + bad_mul == 0) {
+                printf("     the first that differs: %08X, %08X: add %08X (VU1) %08X, sub %08X %08X, mul %08X %08X\n",
+                       a[lane], b[lane], word(3, lane), vu_float_add(a[lane], b[lane]), word(4, lane),
+                       vu_float_sub(a[lane], b[lane]), word(5, lane), vu_float_mul(a[lane], b[lane]));
+            }
+            bad_add += add;
+            bad_sub += sub;
+            bad_mul += mul;
+            bad_ftoi += word(6, lane) != (uint32_t)vu_float_ftoi(a[lane], 4);
+            bad_itof += word(8, lane) != vu_float_itof((int32_t)n[lane], 4);
+        }
+        if (word(7, 3) != vu_float_div(a[0], b[0]) && bad_div++ == 0) {
+            printf("     the first divide that differs: %08X / %08X: %08X (VU1) %08X\n", a[0], b[0], word(7, 3),
+                   vu_float_div(a[0], b[0]));
+        }
+    }
+    check("VU0's add is VU1's (12000 random pairs)", (uint32_t)bad_add, 0);
+    check("VU0's sub is VU1's", (uint32_t)bad_sub, 0);
+    check("VU0's mul is VU1's", (uint32_t)bad_mul, 0);
+    check("VU0's div is VU1's (3000)", (uint32_t)bad_div, 0);
+    check("VU0's ftoi4 is VU1's", (uint32_t)bad_ftoi, 0);
+    check("VU0's itof4 is VU1's", (uint32_t)bad_itof, 0);
+    /* the cases the double path cannot do: exponents more than 28 apart */
+    check("1 - 2^-40 rounds toward zero", vu_float_sub(0x3F800000u, 0x2B800000u), 0x3F7FFFFFu);
+    check("1 + 2^-40 is 1", vu_float_add(0x3F800000u, 0x2B800000u), 0x3F800000u);
+    check("-2^100 + 2^60 rounds toward zero", vu_float_add(0xF1800000u, 0x5D800000u), 0xF17FFFFFu);
+}
+
 /* A branch right after an integer write sees the old value; one instruction later, the new one. */
 static void test_branch_vi(void) {
     begin();
@@ -570,6 +662,7 @@ int main(void) {
     test_p();
     test_convert();
     test_shuffles();
+    test_vu0_float();
     test_branch_vi();
     test_unknown();
     printf("%d of %d checks failed\n", failures, checks);

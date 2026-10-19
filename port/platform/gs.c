@@ -7,7 +7,7 @@
    it, then has the backend scan the frame out, and hands the picture to the window
    (port/platform/video.c) and to --dump-frames.
 
-   Without the backend (no Vulkan, or a --headless run that dumps nothing) the packets are read all
+   Without the backend (no Vulkan, or a --headless run that neither dumps nor captures) the packets are read all
    the same, so VIF1 and VU1 run, and then dropped. What the game does never depends on it: the
    picture is all the GS gives back, apart from the textures sceGsExecStoreImage reads, which the
    game only sends to the GS again. */
@@ -77,7 +77,7 @@ static void open_backend(void *unused) {
 
 void port_gs_init(void) {
     parse_dumps();
-    if (port_options.no_gs || (port_options.headless && dump_count == 0)) {
+    if (port_options.no_gs || (port_options.headless && dump_count == 0 && !port_debug_wants_gs())) {
         return;
     }
     port_dmac_call(open_backend, NULL);

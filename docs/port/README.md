@@ -117,7 +117,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 |---|---|
 | `--disc PATH` | the game's disc image (or set `KF4_DISC`) |
 | `--fast` | run as fast as possible instead of at 60 vblanks a second |
-| `--headless` | no window, no SDL; the GS draws only for `--dump-frames` |
+| `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
@@ -373,7 +373,7 @@ in game RAM and its globals. So:
 
 A state loads into a run with other options:
 - On the device's clock or the game's: the sound goes on from where it was.
-- Without the GS (`--headless` with no `--dump-frames`, or `--no-gs`): a state taken without it has no
+- Without the GS (`--headless` with no `--dump-frames` or capture, or `--no-gs`): a state taken without it has no
   VRAM, and one loaded without it skips its VRAM.
 
 The same input gives the same run after a load as without one. Checked on `tests/newgame.pad`, with
@@ -480,7 +480,7 @@ Next:
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
 | `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |
 | `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
-| `tests/` | pad scripts for headless runs (`newgame.pad`); `vu1_test.c`, the VU1 interpreter's self-test (`out/<preset>/vu1_test`) |
+| `tests/` | pad scripts for headless runs (`newgame.pad`); `vu1_test.c`, the VU1 interpreter's self-test, which also checks that VU0's arithmetic (`port/include/port/vu_float.h`) gives VU1's bits (`out/<preset>/vu1_test`) |
 | `.github/workflows/ci.yml` | CI: configure (the patches apply), build with paraLLEl-GS, `port_census.py` reports 0 errors |
 | `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |
 | `docs/port/` | these notes |

@@ -63,11 +63,11 @@ static int compare_at(const void *a, const void *b) {
     return x->vblank < y->vblank ? -1 : x->vblank > y->vblank;
 }
 
-void port_gs_capture_init(const char *list) {
+int port_gs_capture_init(const char *list) {
     const char *p = list;
 
     if (p == NULL) {
-        return;
+        return 0;
     }
     while (*p && capture_at_count < MAX_AT) {
         char *end;
@@ -99,6 +99,7 @@ void port_gs_capture_init(const char *list) {
     if (capture_at_count) {
         port_gs_capture_armed = 1;
     }
+    return capture_at_count;
 }
 
 void port_debug_request_gs_capture(void) {

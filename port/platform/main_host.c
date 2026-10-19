@@ -9,7 +9,8 @@
        --input FILE      press the buttons a pad script says (port/sdk/libpad.c) instead of SDL's
        --log FILE        write the game's state each vblank, and what happens between ("-": stderr)
        --clock DATE      the disc drive's clock, YYYY-MM-DDTHH:MM:SS (Japan's time), not the host's
-       --headless        no SDL at all: no window, and the GS draws only for --dump-frames
+       --headless        no SDL at all: no window, and the GS draws only for --dump-frames and
+                         GS captures (--gs-capture-at, KF4_DEBUG_AT)
        --no-gs           draw nothing (VIF1 and VU1 still run)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
@@ -289,13 +290,13 @@ int main(int argc, char **argv) {
     port_mc_init();
     port_kernel_init();
     port_dmac_start();
+    port_debug_init(gs_capture_at); /* before the GS: a capture asked for makes a --headless run draw */
     port_gs_init();
     port_pad_init();
     port_video_init();
     port_audio_init();
     port_state_init();
     port_quick_init();
-    port_debug_init(gs_capture_at);
     fprintf(stderr, "[port] game RAM at %p, running the game\n", (void *)ee_ram);
     return port_kernel_run(kf4_game_main);
 }
