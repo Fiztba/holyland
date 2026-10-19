@@ -1,7 +1,7 @@
 /* settings.json (port/include/port/settings.h): the player's settings, in the user's data folder.
 
      {
-       "display":  {"window_scale": 2, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
+       "display":  {"window_height": 896, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "widescreen": false, "widescreen_hud": "corner"},
        "audio":    {"volume": 100, "mute": false},
@@ -33,7 +33,7 @@
 #include "port/settings.h"
 
 PortSettings port_settings = {
-    .window_scale = 2,
+    .window_height = 896,
     .smooth = 1,
     .deinterlace = 1,
     .progressive = 1,
@@ -242,7 +242,9 @@ void port_settings_load(void) {
     }
 
     display = cJSON_GetObjectItemCaseSensitive(document, "display");
-    s->window_scale = (int)read_number(display, "window_scale", s->window_scale, 1, 4);
+    /* the first settings files kept a multiple of 448 */
+    s->window_height = (int)read_number(display, "window_scale", s->window_height / 448, 1, 4) * 448;
+    s->window_height = (int)read_number(display, "window_height", s->window_height, 448, 4320);
     s->fullscreen = read_bool(display, "fullscreen", s->fullscreen);
     aspect = read_string(display, "aspect");
     if (aspect != NULL) {
@@ -380,7 +382,8 @@ void port_settings_save(void) {
         return; /* a broken file is left for the player to mend */
     }
     display = section("display");
-    put(display, "window_scale", cJSON_CreateNumber(s->window_scale));
+    put(display, "window_height", cJSON_CreateNumber(s->window_height));
+    cJSON_DeleteItemFromObjectCaseSensitive(display, "window_scale");
     put(display, "fullscreen", cJSON_CreateBool(s->fullscreen));
     put(display, "aspect", cJSON_CreateString(s->aspect == ASPECT_STRETCH ? "stretch" : "4:3"));
     put(display, "vsync", cJSON_CreateBool(s->vsync));

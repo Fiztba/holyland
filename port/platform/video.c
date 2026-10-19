@@ -62,13 +62,13 @@ static uint32_t texture_width, texture_height;
 static int texture_smooth;
 static uint32_t *shown;
 
-/* the window's size in windowed mode: the GS's 640x448 picture times the scale (--widescreen: as
-   wide as 16:9 at that height) */
+/* the window's size in windowed mode: the height the settings say, and as wide as the picture's
+   shape (4:3, or 16:9 with --widescreen) at that height */
 static void window_size(int *width, int *height) {
-    int scale = port_settings.window_scale < 1 ? 1 : port_settings.window_scale > 4 ? 4 : port_settings.window_scale;
+    int h = port_settings.window_height < 448 ? 448 : port_settings.window_height;
 
-    *width = port_options.widescreen ? (448 * scale * 16 + 8) / 9 : 640 * scale;
-    *height = 448 * scale;
+    *width = port_options.widescreen ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3;
+    *height = h;
 }
 #endif
 
