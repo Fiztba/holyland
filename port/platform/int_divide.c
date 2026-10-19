@@ -9,6 +9,9 @@
    A division by zero is different: ee-gcc checks every divisor that is not a constant and executes
    `break 7` for zero (808 such checks in SLUS_203.18), so the PS2 stops there too. That still ends the
    program here, after saying where. */
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE /* (glibc's REG_RIP and the rest) */
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
