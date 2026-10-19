@@ -237,7 +237,7 @@ static void start(uint64_t vblank, int vblanks) {
     buffer_size = 0;
     records = 0;
     snprintf(meta, sizeof(meta),
-             "format=kf4gs %d\nstart_vblank=%llu\nvblanks=%d\ngame_vblank=%llu\ngame=%s\nbuild=%s (%s %s)\n"
+             "format=kf4gs %d\nstart_vblank=%llu\nvblanks=%d\ngame_vblank=%llu\ngame=%.511s\nbuild=%s (%s %s)\n"
              "deinterlace=%d\nprogressive=%d\nanti_blur=%d\nadapt_width=%d\nwidescreen=%d\n"
              "widescreen_hud_centred=%d\n",
              KF4GS_VERSION, (unsigned long long)vblank, vblanks, (unsigned long long)best, game, KF4_BUILD_REV,
