@@ -5,7 +5,7 @@
 
 Plays tests/newgame.pad as tools/boot_test.py does, headless with a fixed clock, and writes the picture
 shown at a few vblanks (--dump-frames): the Agetec logo, the title menu, the brightness screen, the
-opening, and the first map. Runs twice (--runs) and compares the pictures byte for byte, then checks none
+opening movie, the opening, and the first map. Runs twice (--runs) and compares the pictures byte for byte, then checks none
 of them is a single colour. It also writes every picture of a stretch of the opening (--dense, "none"
 for none), where the frame's clear, its scene and its overlays come by both DMA channels, so the order
 the GS gets them in is checked frame by frame. Needs a Vulkan GPU that paraLLEl-GS runs on. The pictures
@@ -22,8 +22,8 @@ import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAD = os.path.join(ROOT, "tests", "newgame.pad")
-# the logo, the title menu, the brightness screen, the opening, the first map
-FRAMES = "200,500,700,1000,2000"
+# the logo, the title menu, the brightness screen, the opening movie, the opening, the first map
+FRAMES = "200,500,700,740,1000,2000"
 # every vblank of a stretch of the opening
 DENSE = "990-1010"
 

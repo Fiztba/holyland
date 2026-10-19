@@ -334,9 +334,9 @@ Next:
 | `game/` | PC-only game code, compiled with the patched decomp (`game/data/`: the data sections in C; `state_log.c`: the per-frame log) |
 | `work/` | git-ignored: the decomp with the patches applied, for editing (`tools/patches.py apply`) |
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
-| `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, VIF1, VU1, the GS's front end, the window and frame dumps, the disc, save states |
+| `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, the IPU's input DMA, VIF1, VU1, the GS's front end, the window and frame dumps, the disc, save states |
 | `port/gs/` | the GS backend: paraLLEl-GS behind a small C interface |
-| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc; stand-ins for libmpeg and libsdr |
+| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc, libsdr, and libmpeg on the port's MPEG-2 decoder (`mpeg2.c`) |
 | `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |
 | `port/math/` | libvu0 in C |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |

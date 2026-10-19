@@ -224,7 +224,9 @@ static void image_data(size_t qwords) {
    - a vertex of an untextured primitive at or past the frame's left or right edge: full-screen fades
      and fills, and panels that reach the edge, stay reaching the 16:9 picture's edge;
    - a primitive textured with a picture of the frame (TBP0 0 or 0x1180, the two frame buffers, or
-     0x2BC0, where the game copies the frame): the dimmed world behind the menus, the screen effects. 
+     0x2BC0, where the game copies the frame): the dimmed world behind the menus, the screen effects.
+   A movie draws into a frame of its own, at a draw offset of 0: its pictures are squeezed about the
+   middle of that frame, and its black clear, which reaches the edges, becomes the bars.
    With the switch off nothing here runs, and the packets go to the GS untouched. */
 static uint32_t draw_offset_x = 0x6C00; /* XYOFFSET_1's X as last written, 12.4 */
 
@@ -269,7 +271,11 @@ static void squeeze_x(int path, uint8_t *data) {
     int x = data[0] | (data[1] << 8);
     int anchor = 0x8000;
 
-    if (mode == PORT_WIDESCREEN_3D || (draw_offset_x >> 4) != 0x6C0) {
+    if (path == 3 && draw_offset_x == 0 && port_movie_playing()) {
+        /* a movie (gfx/movie.c) draws its pictures into its own frame, with a draw offset of 0:
+           squeezed about that frame's middle, between the bars of its black clear */
+        anchor = 320 << 4;
+    } else if (mode == PORT_WIDESCREEN_3D || (draw_offset_x >> 4) != 0x6C0) {
         return;
     }
     if (!(p->prim & 0x10) && (x <= 0x6C00 || x >= 0x9400)) {

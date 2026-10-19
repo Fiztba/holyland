@@ -57,7 +57,7 @@ int sd_voice_trans_status(int channel, int flag);
    halves; each finished half calls the channel's transfer callback. */
 int sd_block_trans(int channel, uint16_t mode, uint32_t iop, uint32_t size);
 /* sceSdBlockTransStatus: the half being transferred in bits 24 and up, and the address the transfer
-   has reached in the low 24. */
+   has reached in the low 24 (the next byte it reads). */
 uint32_t sd_block_trans_status(int channel, int flag);
 typedef int (*sd_trans_callback)(void *data);
 void sd_set_trans_callback(int channel, sd_trans_callback callback);

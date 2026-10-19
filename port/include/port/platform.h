@@ -120,6 +120,19 @@ uint64_t port_dmac_transfers(int channel);
 /* Runs fn(arg) on the controller's thread, which owns the GS, and returns when it has. */
 void port_dmac_call(void (*fn)(void *), void *arg);
 
+/* ---- The IPU's input (port/platform/ipu.c) --------------------------------------------------
+   DMA channel 4, which the controller's thread leaves alone: it moves on the game's thread, as the
+   movie decoder (port/sdk/libmpeg.c) takes the stream. */
+/* Sees what the game wrote into D4_CHCR: a start, or a stop (the kernel calls it at EIntr, which
+   ends the movie player's writes). */
+void port_ipu_dma_sync(void);
+/* The next quadword channel 4 sends; 0 while it is stopped or its chain has ended. */
+int port_ipu_read_qword(uint8_t qword[16]);
+/* Sets IPU_BP for a decoder that holds `unused_bits` bits it has read and not used. */
+void port_ipu_set_bp(int unused_bits);
+/* 1 while a movie plays (port/sdk/libmpeg.c: a decoder exists), from any thread */
+int port_movie_playing(void);
+
 /* ---- VIF1 and VU1 (port/platform/vif1.c, port/platform/vu1.c) -------------------------------
    Run on the controller's thread as DMA channel 1 feeds them. */
 void port_vif1_reset(void);

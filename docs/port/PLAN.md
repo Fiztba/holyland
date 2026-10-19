@@ -229,11 +229,66 @@ Still open:
 - `--record-input FILE` records the live pad as a pad script for `--input`, to turn a played session
   into a repeatable test. While recording, the sound stays on the game's clock and mouse look is off,
   so the recording replays.
-- Movies are decoded with libmpeg2 or FFmpeg from the PSS files, keeping the PS2's timing.
-  With `--widescreen` they should show at 4:3, pillarboxed. `gfx/movie.c` draws its frames as textured
-  sprites by PATH3, which the GS front end squeezes, so that should come by itself; but a frame
-  uploaded 640 wide counts there as a picture of the frame (the grabbed menu backdrop is one) and
-  would be left full width, stretched. Check it, and mark the movie as 2D if so.
+- **The movies play (done).** The opening (`KF4OP.PSS`, after New Game), the ending (`KF4ED.PSS`)
+  and the staff roll (`KF4STAFF.PSS`) play with picture and sound, and Start skips the opening from
+  its eleventh picture on, as on the PS2.
+  - **The game's player runs as it is.** `gfx/movie.c` (FromSoftware's `fslibmpg.c`, built after the
+    SDK's streaming sample) reads the file, splits it with libmpeg, feeds the video to the IPU by DMA
+    channel 4 and shows each picture on two fields from its vblank handler. One patch: the decode
+    thread waits for the last pictures to be shown by spinning on memory, so the loop lets EE time
+    pass (`PORT_SPIN`, port/host.h).
+  - **libmpeg** (`port/sdk/libmpeg.c`) is written for the port, at the level of the calls the player
+    makes:
+    - the PSS demultiplexer is libmpeg's (`pack.o`), packet for packet;
+    - pictures come out in display order, and `frameCount`, `sceMpegIsEnd` and
+      `sceMpegIsRefBuffEmpty` change as libmpeg's do;
+    - the callbacks (no data, background, time stamp) run where libmpeg runs them;
+    - the RGB32 picture is in libmpeg's macroblock order (down each column, then across), with the
+      IPU's CSC coefficients.
+    It never suspends the IPU (the stop and restart DMA callbacks): there is no IPU to suspend.
+  - **The decoder** (`port/sdk/mpeg2.c`, about 900 lines) is the port's own, MIT like the rest:
+    - libmpeg2 is GPL-2, which would make the program GPL;
+    - FFmpeg is LGPL, and a large dependency to build with three toolchains;
+    - the PSS files use a small part of MPEG-2 (Main Profile, 640x448 at 30 pictures a second,
+      progressive frame pictures with frame prediction and frame DCT), which a small decoder covers.
+    It is integer arithmetic only, so a picture is the same with every compiler.
+  - **Checked against FFmpeg** (a development check, not in the repository), all 9432 pictures of the
+    three files: the first picture is identical, and the others differ only by the IDCT's rounding
+    (mostly 58 dB and up). The exception is three damaged macroblocks in the retail files, two in
+    `KF4OP.PSS` and one in `KF4ED.PSS` (an invalid macroblock type, a run of coefficients past the
+    64th). The decoder drops the rest of that slice, which keeps the buffer's older picture there;
+    FFmpeg conceals them. What the PS2's IPU and libmpeg show there has not been checked.
+  - **The stream's DMA.** Channel 4 is not the DMA controller thread's. `port/platform/ipu.c` moves it
+    as the decoder reads, and keeps CHCR's TAG and `IPU_BP` as the hardware does. So the player's
+    ring of blocks reads where the IPU is, as on the PS2.
+  - **Sound.** The player streams the PCM through SDRDRV (`sceSdRemote`) into an IOP ring that core
+    0's sound data input plays. `port/sdk/libsdr.c` and `port/audio/sdrdrv.c` run those calls on the
+    port's libsd, at the EE time of the call. `sceSdBlockTransStatus` now gives where the input's DMA
+    is in the ring, which the player keeps its writes behind; it gave the end of the half being
+    played, so the player would have written over sound not yet played. Checked: the WAV dump of the
+    opening is the PSS's PCM at a gain of 0.9998, 70.7 dB SNR over the 92 seconds.
+  - **Timing.** Decoding takes no EE time. The vblank handler shows a picture every two fields, so a
+    movie runs at the PS2's pace: the opening's 2772 pictures take 5545 fields, 92.5 s (the stream
+    is 30 pictures a second, NTSC shows 29.97). The sound plays at the SPU2's 48 kHz.
+  - **With `--widescreen`** the movies show at 4:3, pillarboxed. The player draws into a frame of
+    its own, with a draw offset of 0, which the GS front end leaves alone, so while a movie plays it
+    squeezes what PATH3 draws at that offset about the frame's middle (`port/platform/gs.c`); the
+    black clear reaches the edges and becomes the bars.
+  - **Save states** wait for the end of a movie: the decoder is the host's, not in a state.
+  - **The tests.** `tests/newgame.pad` presses Start at vblank 740 and skips the opening after 17
+    pictures. New Game's movie now ends at 751, `099.map` loads at 754, and the player stands in map
+    0x63 from vblank 755. `tools/frame_test.py` also dumps a picture of the movie (vblank 740). The
+    logs are as before up to the movie, and gcc's and clang's are the same.
+  - **Still open.**
+    - The player's three threads rotate the ready queue about 9600 times a field (256 EE cycles
+      each), so a movie costs host time: headless with `--fast`, the opening takes 22 s on Windows
+      (4 ms a field) but 72 s on Linux (13 ms a field), where each switch of the ucontext fibers is
+      a system call. Both keep up with 59.94 fields a second; Linux without much room.
+    - The ending and the staff roll were checked decoded on their own, not yet played in the game.
+    - `--frames` stops the run at a VSync, which the player never calls: a run that reaches a movie
+      plays it to its end.
+    - The player's pause and resume (`MovieAudio_Pause`, `MovieAudio_Resume`) need a block transfer
+      from a start address, which libsd here does not do. Nothing calls them.
 
 ## Step 6: PC features and releases
 

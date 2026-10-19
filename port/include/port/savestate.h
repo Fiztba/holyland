@@ -71,6 +71,8 @@ void port_audio_state(PortStateIo *io);   /* the sound's clock: last, after the 
 const char *port_sif_state_busy(void);
 const char *port_mc_state_busy(void);
 const char *port_gs_state_busy(void);
+/* (port/sdk/libmpeg.c) a movie plays: its decoder is the host's, not in a state */
+const char *port_mpeg_state_busy(void);
 
 /* 1 when game RAM (memory.c) and the EE threads' stacks (fiber.c) are at their fixed addresses, which
    save states need */

@@ -1,8 +1,8 @@
 /*
  * port/include/libmpeg.h
  *
- * libmpeg for the PC port (port/sdk/libmpeg.c): until movies are decoded on the PC, every movie ends
- * at once.
+ * libmpeg for the PC port (port/sdk/libmpeg.c): the movies' video decoded on the PC, behind the
+ * calls the movie player makes.
  */
 #ifndef SCE_LIBMPEG_LIBMPEG_H
 #define SCE_LIBMPEG_LIBMPEG_H
@@ -18,12 +18,25 @@ typedef struct {
     void *sys;
 } sceMpeg;
 
+/* what a callback is handed: each record starts with the type (sceMpegCbType) */
 typedef struct {
     int type;
-    void *data;
-    int len;
+} sceMpegCbData;
+
+/* a stream callback's (type 6): one PES packet of the stream, still in the read ring */
+typedef struct {
+    int type;
+    unsigned char *header;
+    unsigned char *data;
+    unsigned int len;
     int64_t pts, dts;
 } sceMpegCbDataStr;
+
+/* the time stamp callback's (type 5): it fills in the times of the picture being decoded */
+typedef struct {
+    int type;
+    int64_t pts, dts;
+} sceMpegCbDataTimeStamp;
 
 typedef int (*sceMpegCallback)(sceMpeg *mp, void *cbdata, void *anyData);
 

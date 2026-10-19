@@ -65,14 +65,18 @@ add_library(kf4_port STATIC
     port/platform/gs.c
     port/platform/video.c
     port/platform/disc.c
+    port/platform/ipu.c
     port/platform/host_time.c
     port/math/libvu0.c
     port/sdk/libcdvd.c
     port/sdk/libdma.c
     port/sdk/libgraph.c
     port/sdk/libmc.c
+    port/sdk/libmpeg.c
+    port/sdk/mpeg2.c
     port/sdk/libpad.c
     port/sdk/controls.c
+    port/sdk/libsdr.c
     port/platform/savestate.c
     port/overlay/settings.c
     third_party/cjson/cJSON.c
@@ -86,7 +90,8 @@ add_library(kf4_port STATIC
     port/audio/output.c
     port/audio/fsiopsnd.c
     port/audio/modmidi.c
-    port/audio/modhsyn.c)
+    port/audio/modhsyn.c
+    port/audio/sdrdrv.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_include_directories(kf4_port PRIVATE third_party/cjson)
 target_link_libraries(kf4_port PUBLIC ico_audio)

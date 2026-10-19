@@ -577,6 +577,10 @@ void port_kernel_spend(uint32_t cycles) {
     port_kernel_poll();
 }
 
+void port_spin(void) {
+    port_kernel_spend(256);
+}
+
 void port_vsync(void) {
     if (in_interrupt) {
         PORT_FATAL("VSync in an interrupt handler");
@@ -917,6 +921,8 @@ int DIntr(void) {
 }
 
 int EIntr(void) {
+    /* the movie player writes D4_CHCR between DIntr and EIntr, and reads it back right after */
+    port_ipu_dma_sync();
     return 1;
 }
 

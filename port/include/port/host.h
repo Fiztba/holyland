@@ -98,6 +98,14 @@ void port_todo(const char *what, const char *file, int line);
         }                                                                                          \
     } while (0)
 
+/* ---- Waiting on an interrupt handler ---------------------------------------------------------
+   PORT_SPIN() is the body of a loop that waits, with no kernel call, for memory an interrupt handler
+   changes. On the EE the interrupt comes while the loop spins; on the PC handlers run only in kernel
+   calls (port/platform/kernel.c), so this lets EE time pass and runs the handlers that come due. No
+   other thread of the same priority runs, as on the EE. */
+void port_spin(void);
+#define PORT_SPIN() port_spin()
+
 /* Stops the game with a message: for states the PC port cannot go on from. */
 void port_fatal(const char *file, int line, const char *fmt, ...) __attribute__((noreturn, format(printf, 3, 4)));
 #define PORT_FATAL(...) port_fatal(__FILE__, __LINE__, __VA_ARGS__)
