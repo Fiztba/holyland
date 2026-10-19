@@ -302,6 +302,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     parse_options(argc, argv);
+    port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();
     open_log();

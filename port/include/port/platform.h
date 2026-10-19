@@ -85,6 +85,11 @@ void port_fiber_delete(PortFiber *fiber);
 /* Saves the running fiber in from and runs to. */
 void port_fiber_switch(PortFiber *from, PortFiber *to);
 
+/* ---- The EE's integer division (port/platform/int_divide.c) --------------------------------
+   INT_MIN / -1 gives INT_MIN and remainder 0, as the EE's DIV does, where x86's IDIV traps; a division
+   by zero says where it was before the program ends (the PS2 stops there too: ee-gcc's break 7). */
+void port_int_divide_init(void);
+
 /* ---- The EE's float unit -------------------------------------------------------------------
    The EE's FPU (COP1) rounds toward zero, reads denormals as zero and flushes results that would be
    one to zero. The EE threads' fibers run with the SSE unit set the same way (MXCSR, which each fiber

@@ -74,6 +74,7 @@ add_library(kf4_port STATIC
     port/platform/disc.c
     port/platform/ipu.c
     port/platform/host_time.c
+    port/platform/int_divide.c
     port/math/libvu0.c
     port/sdk/libcdvd.c
     port/sdk/libdma.c
@@ -357,6 +358,11 @@ if(TARGET kf4_gs)
         target_link_libraries(kf4-gsreplay PRIVATE m)
     endif()
 endif()
+
+# INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)
+add_executable(int_divide_test tests/int_divide_test.c port/platform/int_divide.c)
+target_include_directories(int_divide_test PRIVATE port/include)
+target_compile_options(int_divide_test PRIVATE ${KF4_GAME_FLAGS})
 
 # The PS2's math library against the retail program's results (tools/ee_libm_ref.py)
 add_executable(libm_test tests/libm_test.c port/sdk/libm_ps2.c $<TARGET_OBJECTS:ps2_libm>)
