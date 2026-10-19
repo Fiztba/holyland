@@ -347,8 +347,12 @@ void controls_page() {
         ImGui::TextColored(colour_note, "Waiting for %s, slot %d...", port_controls_action_label(listen_action),
                            listen_slot + 1);
     }
+    // the table scrolls in what is left of the page, and the page scrolls when that is too little
+    float table_height = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 1.4f;
+    if (table_height < ImGui::GetFrameHeightWithSpacing() * 8)
+        table_height = ImGui::GetFrameHeightWithSpacing() * 8;
     if (ImGui::BeginTable("bindings", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY,
-                          ImVec2(0, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 1.4f))) {
+                          ImVec2(0, table_height))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 1.6f);
         ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -540,7 +544,7 @@ void interface_page() {
         s.show_fps = fps;
         changed();
     }
-    tooltip("Pictures shown a second, in the window's top left corner.");
+    tooltip("Pictures shown a second, in the window's bottom left corner.");
     static float scale = -1.0f;
     if (!ImGui::IsAnyItemActive() || scale < 0.0f)
         scale = s.ui_scale;
@@ -818,13 +822,32 @@ extern "C" void port_overlay_draw(void) {
     if (port_settings.ui_scale != applied_scale)
         apply_style();
 
+    // the controller does not steer the overlay while a slot waits for its button, nor until that
+    // button is let go (else the press that binds it would also press the slot again)
+    static bool pad_quiet;
+    bool listening = port_controls_listening(nullptr, nullptr) != 0;
+    ImGuiIO &io = ImGui::GetIO();
+    if (listening)
+        pad_quiet = true;
+    if (pad_quiet)
+        io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+    else
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
+    if (pad_quiet && !listening) {
+        bool held = false;
+        for (int key = ImGuiKey_GamepadStart; key <= ImGuiKey_GamepadRStickDown; key++)
+            held |= ImGui::IsKeyDown((ImGuiKey)key);
+        pad_quiet = held;
+    }
     if (port_settings.show_fps) {
         char text[32];
         std::snprintf(text, sizeof(text), "%.0f fps", pictures_per_second);
-        ImGui::GetForegroundDrawList()->AddText(ImVec2(8, open ? 30.0f * applied_scale : 6.0f),
+        // the bottom left corner, clear of the game's HUD and the menu bar
+        ImGui::GetForegroundDrawList()->AddText(ImVec2(8, ImGui::GetMainViewport()->Size.y - ImGui::GetFontSize() - 6),
                                                 IM_COL32(255, 255, 120, 255), text);
     }
     draw_toast();

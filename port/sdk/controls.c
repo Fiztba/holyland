@@ -565,7 +565,8 @@ static void listened(int binding) {
     pc.listen_action = -1;
 }
 
-/* While a slot waits: the keyboard, the mouse and the controller go to it, not to the overlay */
+/* While a slot waits: the keyboard, the mouse and the controller go to it, not to the overlay. The
+   releases still reach the overlay, which saw the presses before. */
 static int listen_event(const SDL_Event *event) {
     int pad_slot = pc.listen_slot == BINDING_PAD_SLOT;
 
@@ -602,11 +603,8 @@ static int listen_event(const SDL_Event *event) {
             listened(BINDING_TRIGGER | event->caxis.axis);
         }
         return 1;
-    case SDL_KEYUP:
     case SDL_TEXTINPUT:
-    case SDL_MOUSEBUTTONUP:
     case SDL_MOUSEWHEEL:
-    case SDL_CONTROLLERBUTTONUP:
         return 1;
     default:
         return 0;
