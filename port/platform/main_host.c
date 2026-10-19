@@ -19,6 +19,7 @@
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
+       --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default)
@@ -91,7 +92,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]]\n",
             program);
     exit(2);
@@ -162,6 +163,10 @@ static void parse_options(int argc, char **argv) {
             }
             continue;
         }
+        if (strcmp(option, "--invincible") == 0) {
+            port_options.invincible = 1;
+            continue;
+        }
         if (strcmp(option, "--myus-necklace") == 0) {
             port_options.myus_necklace = port_options.myus_necklace_forced = 1;
             continue;
@@ -227,6 +232,10 @@ static void parse_options(int argc, char **argv) {
 
 int port_myus_necklace(void) {
     return port_options.myus_necklace != 0;
+}
+
+int port_invincible(void) {
+    return port_options.invincible != 0;
 }
 
 /* ---- The log ---------------------------------------------------------------------------------- */

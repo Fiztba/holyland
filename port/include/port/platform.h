@@ -41,6 +41,7 @@ typedef struct {
        settings.json, live from the overlay. */
     int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */
     int myus_necklace_forced; /* --myus-necklace: on for this run whatever settings.json says */
+    int invincible;          /* --invincible, or the Debug page: no HP lost (port_invincible()); never saved */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */

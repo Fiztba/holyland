@@ -393,7 +393,7 @@ index 1d6ebfbbeabe340b2485e2b989f5f579b956e6f4..d20bcfb6b1a058045f00476c74afd592
      game_status, camera_state, player_state, view_ray_status,
      item_counts, trade_stock_1, trade_stock_2, trade_stock_3,
 diff --git a/src/game/script/script_world.c b/src/game/script/script_world.c
-index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef35883997ede 100644
+index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..ac0ad97f2f2c8b1f84797f2bcca09f787b598f32 100644
 --- a/src/game/script/script_world.c
 +++ b/src/game/script/script_world.c
 @@ -13,9 +13,9 @@
@@ -434,7 +434,17 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
              }
          } else {
              if (item_counts[item] >= 2) {
-@@ -837,7 +837,7 @@ void ScriptCmd_SetPropColor(ScriptObjectValuesCommand *command) {
+@@ -656,6 +656,9 @@ void ScriptCmd_AddPlayerHp(ScriptValueCommand *command) {
+     s32 amount;
+ 
+     amount = command->value.value + player->hp_now;
++    if (command->value.value < 0 && port_invincible()) {
++        amount = player->hp_now; /* PC: no scripted damage with --invincible */
++    }
+     if (amount < 0) {
+         player->hp_now = 0;
+     } else if (player->hp_max < amount) {
+@@ -837,7 +840,7 @@ void ScriptCmd_SetPropColor(ScriptObjectValuesCommand *command) {
  
      prop = Map_GetRecordById(current_map_slot, command->target_id.value);
      if (prop != NULL) {
@@ -443,7 +453,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
                        command->values[3].value);
      }
      command->active = 0;
-@@ -902,8 +902,8 @@ void ScriptCmd_MovePropTo(ScriptMoveCommand *command) {
+@@ -902,8 +905,8 @@ void ScriptCmd_MovePropTo(ScriptMoveCommand *command) {
          command->active = 0;
          return;
      }
@@ -454,7 +464,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
          command->z.value == model->position.z) {
          command->active = 0;
          return;
-@@ -914,9 +914,9 @@ void ScriptCmd_MovePropTo(ScriptMoveCommand *command) {
+@@ -914,9 +917,9 @@ void ScriptCmd_MovePropTo(ScriptMoveCommand *command) {
          frames = 1;
      }
      divisor = (f32)frames;
@@ -467,7 +477,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
      offset[3] = 0.0f;
      Map_OffsetRecord(prop, offset);
      if (--command->frames.value == 0) {
-@@ -933,17 +933,17 @@ void ScriptCmd_TurnPropTo(ScriptMoveCommand *command) {
+@@ -933,17 +936,17 @@ void ScriptCmd_TurnPropTo(ScriptMoveCommand *command) {
          command->active = 0;
          return;
      }
@@ -490,7 +500,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
      if (--command->frames.value == 0) {
          command->active = 0;
      }
-@@ -974,9 +974,9 @@ void ScriptCmd_TurnPropBy(ScriptMoveCommand *command) {
+@@ -974,9 +977,9 @@ void ScriptCmd_TurnPropBy(ScriptMoveCommand *command) {
          command->active = 0;
          return;
      }
@@ -503,7 +513,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
      steps_left = command->frames.value - 1;
      command->frames.value = steps_left;
      if (steps_left < 0) {
-@@ -991,9 +991,9 @@ void ScriptCmd_GetPropPosition(ScriptPointCommand *command) {
+@@ -991,9 +994,9 @@ void ScriptCmd_GetPropPosition(ScriptPointCommand *command) {
  
      prop = Map_GetRecordById(current_map_slot, command->object_id.value);
      if (prop != NULL) {
@@ -516,7 +526,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
      }
      command->active = 0;
  }
-@@ -1005,9 +1005,9 @@ void ScriptCmd_GetPropRotation(ScriptMoveCommand *command) {
+@@ -1005,9 +1008,9 @@ void ScriptCmd_GetPropRotation(ScriptMoveCommand *command) {
  
      prop = Map_GetRecordById(current_map_slot, command->target_id.value);
      if (prop != NULL) {
@@ -529,7 +539,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
      }
      command->active = 0;
  }
-@@ -1039,8 +1039,7 @@ void ScriptCmd_SetMapFog(ScriptFogCommand *command) {
+@@ -1039,8 +1042,7 @@ void ScriptCmd_SetMapFog(ScriptFogCommand *command) {
      blue = command->blue.value;
      if (block_index < 0x20) {
          span = far - near;
@@ -539,7 +549,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
          block->unk10 = (s64)((blue << 16) + (green << 8) + red);
          block->unk00 = block->unk04 = 0.0f;
          block->unk0C = far * near * (far_value - near_value) / span;
-@@ -1057,8 +1056,7 @@ void ScriptCmd_SetMapLight(ScriptLightCommand *command) {
+@@ -1057,8 +1059,7 @@ void ScriptCmd_SetMapLight(ScriptLightCommand *command) {
      MapLightBlockLights *lights;
  
      if ((u32)command->block.value < 0x20 && command->light.value >= 0 && command->light.value < 3) {
@@ -549,7 +559,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
          lights->directions[0][command->light.value] = command->dir_x.value;
          lights->directions[1][command->light.value] = command->dir_y.value;
          lights->directions[2][command->light.value] = command->dir_z.value;
-@@ -1079,8 +1077,7 @@ void ScriptCmd_SetMapAmbientLight(ScriptColorCommand *command) {
+@@ -1079,8 +1080,7 @@ void ScriptCmd_SetMapAmbientLight(ScriptColorCommand *command) {
      slot = &map_slots[current_map_slot];
      block_index = command->block.value;
      if (block_index < 0x20) {
@@ -559,7 +569,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
          lights->colors[3].x = (f32)command->red.value / 255.0f;
          lights->colors[3].y = (f32)command->green.value / 255.0f;
          lights->colors[3].z = (f32)command->blue.value / 255.0f;
-@@ -1120,7 +1117,7 @@ void ScriptCmd_PlaySoundAtPoint(ScriptPointSoundCommand *command) {
+@@ -1120,7 +1120,7 @@ void ScriptCmd_PlaySoundAtPoint(ScriptPointSoundCommand *command) {
  void ScriptCmd_PlayVoiceSoundAt(ScriptVoiceSoundCommand *command) {
      Vector4Arg position = { command->x.value, command->y.value, command->z.value, 1.0f };
  
@@ -568,7 +578,7 @@ index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef358
      command->active = 0;
  }
  
-@@ -1129,7 +1126,7 @@ void ScriptCmd_PlayVoiceSoundAt(ScriptVoiceSoundCommand *command) {
+@@ -1129,7 +1129,7 @@ void ScriptCmd_PlayVoiceSoundAt(ScriptVoiceSoundCommand *command) {
  void ScriptCmd_PlayVoiceSoundAtWithMode(ScriptVoiceSoundModeCommand *command) {
      Vector4Arg position = { command->x.value, command->y.value, command->z.value, 1.0f };
  

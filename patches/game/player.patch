@@ -1132,7 +1132,7 @@ index 96836aaddc6a6e0c72785357643b2c0d1c2851c3..5891f8d9a776cd0b4b6885acea7595a7
 -asm(".globl player_status_bits\nplayer_status_bits = player_previous + 0x1C8\n");  /* unk1C8 status bits */
 -asm(".globl player_previous_fade_level\nplayer_previous_fade_level = player_previous + 0x2A4\n");  /* fade_area: the map record byte 0x4C under the player, the frame before */
 diff --git a/src/game/player/player_status.c b/src/game/player/player_status.c
-index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e6087d7d8 100644
+index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360649ee520 100644
 --- a/src/game/player/player_status.c
 +++ b/src/game/player/player_status.c
 @@ -21,13 +21,12 @@ int ModelMotion_BlendInto(ModelInstance *model, u8 index, u16 speed);
@@ -1161,7 +1161,17 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e
          if (tint >= 0x100)
              tint = 0xFF;
          Input_StartRumble(tint, 4, 0);
-@@ -253,7 +252,10 @@ void Player_TiltViewFromHit(int damage) {
+@@ -193,6 +192,9 @@ void Player_TakeDamageNoRumble(int value) {
+    (GameStatus.player_control clear or bit 0 of unk30 set). */
+ int Player_LoseHp(int amount) {
+     if (amount > 0 && game_status.player_control != 0 && !(game_status.update_hold_flags & 1)) {
++        if (port_invincible()) {
++            return 1; /* PC: the debug option (--invincible): hit, with the flash, but no HP lost */
++        }
+         if (amount < player_state.hp_now) {
+             player_state.hp_now -= amount;
+         } else {
+@@ -253,7 +255,10 @@ void Player_TiltViewFromHit(int damage) {
      if (game_status.player_control != 0 && !(game_status.update_hold_flags & 1)) {
          player = &player_state;
          if (!((float)damage * 100.0f / (float)player->hp_max < 10.0f)) {
@@ -1173,7 +1183,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e
              if (player->view_tilt_frames < frames) {
                  float angle = player->view_tilt_pitch;
  
-@@ -265,7 +267,7 @@ void Player_TiltViewFromHit(int damage) {
+@@ -265,7 +270,7 @@ void Player_TiltViewFromHit(int damage) {
      }
  }
  
@@ -1182,7 +1192,16 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e
  
  /* Stops the last footstep sound (footstep_voice), if one plays. */
  void Player_StopFootstepSound(void) {
-@@ -368,9 +370,9 @@ void Player_UpdateScreenFade(void) {
+@@ -277,7 +282,7 @@ void Player_StopFootstepSound(void) {
+ 
+ /* Kills the player: HP and the drawn bar to 0, and the dying starts. */
+ void Player_Kill(void) {
+-    if (player_state.death_timer == 0) {
++    if (player_state.death_timer == 0 && !port_invincible()) { /* PC: not with --invincible */
+         player_state.hp_now = 0;
+         player_state.hp_bar_level = 0;
+         Player_UpdateDying();
+@@ -368,9 +373,9 @@ void Player_UpdateScreenFade(void) {
  
      slot = &map_slots[current_map_slot];
      player = &player_state;
@@ -1194,7 +1213,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e
          player->screen_fade_step = -0x30;
      }
      step = player->screen_fade_step;
-@@ -401,7 +403,7 @@ void Player_DrawScreenFade(void) {
+@@ -401,7 +406,7 @@ void Player_DrawScreenFade(void) {
      if (player_state.screen_fade != 0.0f) {
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -1203,7 +1222,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e
          Packet_EndGsRegisters();
          if (player_state.screen_fade > 0.0f) {
              GsDraw_FillScreen(0xFF, 0xFF, 0xFF, (int)player_state.screen_fade, 0x48);
-@@ -409,7 +411,7 @@ void Player_DrawScreenFade(void) {
+@@ -409,7 +414,7 @@ void Player_DrawScreenFade(void) {
              GsDraw_FillScreen(0, 0, 0, (int)-player_state.screen_fade, 0x44);
          }
          Packet_BeginGsRegisters();
@@ -1213,7 +1232,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e
      }
  }
 diff --git a/src/game/player/player_update.c b/src/game/player/player_update.c
-index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f75ed6a025177f6bc976d13970a2b9f0bdd3d327 100644
+index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a74071716d 100644
 --- a/src/game/player/player_update.c
 +++ b/src/game/player/player_update.c
 @@ -8,9 +8,14 @@
@@ -1370,6 +1389,24 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f75ed6a025177f6bc976d13970a2b9f0
          if (player_state.landing_dip_frame++ >= player_state.landing_dip_frames) {
              player_state.status_bits &= ~PLAYER_FLAG_37;
              player_state.landing_dip_offset = 0.0f;
+@@ -1500,7 +1510,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+         }
+     }
+ 
+-    if (player_state.death_timer == 0 && player_state.fall_speed > 1000.0f) {
++    if (player_state.death_timer == 0 && player_state.fall_speed > 1000.0f && !port_invincible()) { /* PC: --invincible */
+         player_state.hp_now = 0;
+         player_state.hp_bar_level = 0;
+         Player_UpdateDying();
+@@ -1509,7 +1519,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+ 
+ /* What the ground under the player does to him: death, poison (by chance or at once), damage, or experience. */
+ void Player_ApplyGroundEffects(void) {
+-    if (player_state.ground_kills != 0) {
++    if (player_state.ground_kills != 0 && !port_invincible()) { /* PC: --invincible */
+         player_state.hp_now = 0;
+         player_state.hp_bar_level = 0;
+         if (player_state.death_timer == 0) {
 @@ -1575,7 +1585,7 @@ void Player_TakeFallDamage(float speed) {
      if (player_state.stepped_on_entity != 0) {
          amount = amount * 60 / 100;

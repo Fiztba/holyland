@@ -822,6 +822,14 @@ void debug_page() {
     if (ImGui::Button("Copy for a bug report"))
         ImGui::SetClipboardText(bug_report().c_str());
     tooltip("Copies the numbers above, the map and position, and this run's options.");
+    ImGui::SeparatorText("Cheats for testing");
+    bool invincible = port_options.invincible != 0;
+    if (ImGui::Checkbox("Invincible", &invincible))
+        port_options.invincible = invincible;
+    tooltip("You lose no HP: hits still land, flash and knock you back, but take nothing, and falls,\n"
+            "deadly ground and scripted deaths do not kill. Poison and other ailments still show.\n"
+            "For testing areas a new character could not survive. Not saved: off at the next start\n"
+            "(--invincible turns it on from the start).");
     teleport_section();
     debug_tools();
 }
