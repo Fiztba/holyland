@@ -81,6 +81,43 @@ void port_fiber_delete(PortFiber *fiber);
 /* Saves the running fiber in from and runs to. */
 void port_fiber_switch(PortFiber *from, PortFiber *to);
 
+/* ---- The EE's float unit -------------------------------------------------------------------
+   The EE's FPU (COP1) rounds toward zero, reads denormals as zero and flushes results that would be
+   one to zero. The EE threads' fibers run with the SSE unit set the same way (MXCSR, which each fiber
+   keeps as its own), so the game's float C computes as on the PS2 (docs/port/RULES.md, "PS2 numbers").
+   --fpu-round nearest leaves them in the host's IEEE mode (round to nearest, denormals), to compare.
+   What is left different: the EE has no infinities or NaNs (an exponent of 255 is a number, a
+   result too large is +-0x7FFFFFFF and a division by zero +-0x7FFFFFFF, where SSE gives +-FLT_MAX,
+   +-inf or a NaN).
+   Host code on the game's fibers that formats or parses numbers runs in the host's mode: the C
+   library's printf and strtod round as MXCSR says (UCRT's do). */
+#define PORT_MXCSR_EE 0xFFC0u   /* exceptions masked, round toward zero, FTZ, DAZ */
+#define PORT_MXCSR_HOST 0x1F80u /* exceptions masked, round to nearest */
+#define PORT_MXCSR_FLAGS 0x003Fu
+extern int port_fpu_round_nearest; /* --fpu-round nearest */
+/* The MXCSR an EE thread's fiber starts with. */
+uint32_t port_ee_mxcsr(void);
+#if defined(__x86_64__) || defined(__i386__)
+#include <xmmintrin.h>
+/* Host code that must compute or format in the host's mode: begin returns what end puts back. */
+static inline uint32_t port_host_float_begin(void) {
+    uint32_t saved = _mm_getcsr();
+
+    _mm_setcsr(PORT_MXCSR_HOST);
+    return saved;
+}
+static inline void port_host_float_end(uint32_t saved) {
+    _mm_setcsr(saved);
+}
+#else
+static inline uint32_t port_host_float_begin(void) {
+    return 0;
+}
+static inline void port_host_float_end(uint32_t saved) {
+    (void)saved;
+}
+#endif
+
 /* ---- The EE kernel and its clock (port/platform/kernel.c) -----------------------------------
    Time is the EE's bus clock (147.456 MHz), counted by the host: it moves only at vblank waits and
    at the calls a game polls in a loop, so the same input gives the same run. */
