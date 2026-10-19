@@ -226,6 +226,8 @@ Still open:
   - **Checked by playing.** Saved at a save point and loaded from the title, on Windows.
   - **Not done.** `sceMcFormat` keeps the folder as it is, since a card here is always formatted.
     Importing a raw `.ps2` card image is left for a tool.
+- **Quick saves (done).** F2 / F4 take and load the game's own save image anywhere in play, as a file
+  any build can read (`game/quicksave.c`; README.md, "Quick saves"). Save states moved to F5 / F7.
 - `--record-input FILE` records the live pad as a pad script for `--input`, to turn a played session
   into a repeatable test. While recording, the sound stays on the game's clock and mouse look is off,
   so the recording replays.
