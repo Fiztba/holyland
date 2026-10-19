@@ -1,5 +1,5 @@
 /* VU float arithmetic, bit for bit as VU1 does it in port/platform/vu1.c, for the EE's VU0 macro-mode
-   instructions (the Vu_* helpers of the game's math/vu0.h).
+   instructions (the Vu_F* operations below, the Vu_* helpers of the game's math/vu0.h, and libvu0).
 
    On the PS2, VU0 and VU1 are the same floating-point units. The game relies on that: it draws some
    models twice, once with vertices the EE projects on VU0 (a PATH2 packet) and once with the same
@@ -159,5 +159,22 @@ static inline float vu_float_from_bits(uint32_t bits) {
     memcpy(&f, &bits, 4);
     return f;
 }
+
+/* The same operations on the floats the game's VU0 code keeps (math/vu0.h's register helpers, and the
+   VU0 blocks of the game files written out in C): one VU instruction's lane each. A float holding a VU
+   value with exponent 255 is an infinity or NaN to the host, so only these touch it, never host
+   arithmetic. */
+static inline float Vu_FAdd(float a, float b) { return vu_float_from_bits(vu_float_add(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FSub(float a, float b) { return vu_float_from_bits(vu_float_sub(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FMul(float a, float b) { return vu_float_from_bits(vu_float_mul(vu_float_bits(a), vu_float_bits(b))); }
+/* DIV: a / b, by zero the largest float with the quotient's sign */
+static inline float Vu_FDiv(float a, float b) { return vu_float_from_bits(vu_float_div(vu_float_bits(a), vu_float_bits(b))); }
+/* SQRT: the square root of |a| */
+static inline float Vu_FSqrt(float a) { return vu_float_from_bits(vu_float_sqrt(vu_float_bits(a))); }
+/* RSQRT: a / sqrt(|b|), one operation */
+static inline float Vu_FRsqrt(float a, float b) { return vu_float_from_bits(vu_float_rsqrt(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FMax(float a, float b) { return vu_float_from_bits(vu_float_max(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FMini(float a, float b) { return vu_float_from_bits(vu_float_mini(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FAbs(float a) { return vu_float_from_bits(vu_float_abs(vu_float_bits(a))); }
 
 #endif

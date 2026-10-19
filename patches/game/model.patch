@@ -1569,7 +1569,7 @@ index c42a21ff7f50e7b5edd8b006bfc054ecd993ed45..5f207e2bb2bbe65ca1151cc1e4760ee5
              case 3:
                  Map_QueuePacket((int *)model->texture_data);
 diff --git a/src/game/model/motion.c b/src/game/model/motion.c
-index 47b0e5bcc915db6242dbac63264b920996364920..73913ef952b308242241b0227e1d88d3143e4f39 100644
+index 47b0e5bcc915db6242dbac63264b920996364920..69306642a90665d5eb50d31001b870e8dac0e022 100644
 --- a/src/game/model/motion.c
 +++ b/src/game/model/motion.c
 @@ -3,11 +3,8 @@
@@ -1608,7 +1608,7 @@ index 47b0e5bcc915db6242dbac63264b920996364920..73913ef952b308242241b0227e1d88d3
 +        u32 ones = 0xFFFFFFFF;
 +        memcpy(&ee_vu0.vf[3][1], &ones, 4);
 +    }
-+    ee_vu0.vf[4][3] = VF(0)[3] - VF(3)[0]; /* vsubx.w */
++    ee_vu0.vf[4][3] = Vu_FSub(VF(0)[3], VF(3)[0]); /* vsubx.w */
 +    Vu_Lqc2(1, src_a);
 +    Vu_Lqc2(2, src_b);
 +    Vu_MulA(VU_XYZ, 2, VF(3)[0]);

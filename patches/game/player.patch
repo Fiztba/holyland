@@ -1,5 +1,5 @@
 diff --git a/src/game/player/attack.c b/src/game/player/attack.c
-index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..36d0a3942741c9cbe83fb49789965ac710f1e799 100644
+index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a320ce296 100644
 --- a/src/game/player/attack.c
 +++ b/src/game/player/attack.c
 @@ -6,6 +6,10 @@
@@ -123,10 +123,10 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..36d0a3942741c9cbe83fb49789965ac7
 +    int c;
 +
 +    for (c = 0; c < 4; c++) {
-+        acc = ee_vu0.vf[1][c] * in[0];
-+        acc = acc + ee_vu0.vf[2][c] * in[1];
-+        acc = acc + ee_vu0.vf[3][c] * in[2];
-+        ee_vu0.vf[16][c] = acc + ee_vu0.vf[4][c] * in[3];
++        acc = Vu_FMul(ee_vu0.vf[1][c], in[0]);
++        acc = Vu_FAdd(acc, Vu_FMul(ee_vu0.vf[2][c], in[1]));
++        acc = Vu_FAdd(acc, Vu_FMul(ee_vu0.vf[3][c], in[2]));
++        ee_vu0.vf[16][c] = Vu_FAdd(acc, Vu_FMul(ee_vu0.vf[4][c], in[3]));
 +    }
 +    out[0] = ee_vu0.vf[16][0];
 +    out[1] = ee_vu0.vf[16][1];

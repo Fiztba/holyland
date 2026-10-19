@@ -807,7 +807,7 @@ index a6feffd7fbb0f42c1de1dabf06beddf3c70243d8..c6903aca2e6046572f678d6cec7a4f88
 +    Vu_Sqc2(dst, 16);
  }
 diff --git a/src/game/math/vu0.h b/src/game/math/vu0.h
-index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..aa566bb015080cbd030da3c4f7ce208079528ea0 100755
+index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..5eb973285107011da74845e33f1c6e8b056c0351 100755
 --- a/src/game/math/vu0.h
 +++ b/src/game/math/vu0.h
 @@ -90,4 +90,114 @@ void Vector_WeightedSum4(void *dst, void *vector0, void *vector1, void *vector2,
@@ -841,10 +841,8 @@ index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..aa566bb015080cbd030da3c4f7ce2080
 +   rounded toward zero, without IEEE's denormals, infinities or NaNs. The game draws some models twice,
 +   projected once here and once by a VU1 program, and depth-tests the second pass GEQUAL against the
 +   first; host floats rounding to nearest put a vertex 1/16 pixel off now and then, and the second pass
-+   then drops lines of pixels. */
-+static inline float Vu_FAdd(float a, float b) { return vu_float_from_bits(vu_float_add(vu_float_bits(a), vu_float_bits(b))); }
-+static inline float Vu_FSub(float a, float b) { return vu_float_from_bits(vu_float_sub(vu_float_bits(a), vu_float_bits(b))); }
-+static inline float Vu_FMul(float a, float b) { return vu_float_from_bits(vu_float_mul(vu_float_bits(a), vu_float_bits(b))); }
++   then drops lines of pixels. Vu_FAdd, Vu_FSub, Vu_FMul, Vu_FDiv, Vu_FSqrt, Vu_FRsqrt, Vu_FMax ... (one lane of
++   one instruction) are port/vu_float.h's. */
 +
 +/* vmula(bc): ACC = fs * t */
 +static inline void Vu_MulA(int mask, int fs, float t) {
@@ -923,6 +921,8 @@ index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..aa566bb015080cbd030da3c4f7ce2080
 +}
 +/* vsqrt: Q = sqrt(|t|) */
 +static inline void Vu_Sqrt(float t) { ee_vu0.q = vu_float_from_bits(vu_float_sqrt(vu_float_bits(t))); }
++/* vrsqrt: Q = num / sqrt(|den|), one operation */
++static inline void Vu_Rsqrt(float num, float den) { ee_vu0.q = Vu_FRsqrt(num, den); }
 +
  #endif
 diff --git a/src/game/math/vu0_macro.c b/src/game/math/vu0_macro.c
