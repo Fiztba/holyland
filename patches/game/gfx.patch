@@ -1182,10 +1182,10 @@ index 7e713c82bf342d08c684c940eee9f846d35a9fce..c273360f77d9fd746c04ece28dbc0f63
  
  #endif
 diff --git a/src/game/gfx/packet_buffer.c b/src/game/gfx/packet_buffer.c
-index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414ef9d76090 100644
+index dcf2a52beaaf10c4a77004b85984e517627efa29..b9736c39e823080615ae07151b8c086a2400a766 100644
 --- a/src/game/gfx/packet_buffer.c
 +++ b/src/game/gfx/packet_buffer.c
-@@ -3,26 +3,27 @@
+@@ -3,26 +3,26 @@
  #include "common.h"
  #include <eeregs.h>
  #include <libdma.h>
@@ -1200,7 +1200,6 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
      channel->chcr |= D_CHCR_TTE;                \
 -    sceDmaSend(channel, (u32)(packet));         \
 +    sceDmaSend(channel, (packet));              \
-+    PORT_TODO("waits for D1_CHCR STR (bit 8)"); \
      while (*D1_CHCR & D_CHCR_STR) {             \
      }
  
@@ -1217,7 +1216,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
  extern char packet_overflow_message[];   /* a line of 70 '!', printed when a packet overruns the buffer */
  extern u32 *gs_register_list;       /* the register list being built, NULL: none */
  extern int gs_register_count;       /* registers in it */
-@@ -47,7 +48,7 @@ static int gs_send_pending[2];       /* 0x447028 [0] set while the GS reads a bu
+@@ -47,7 +47,7 @@ static int gs_send_pending[2];       /* 0x447028 [0] set while the GS reads a bu
  static void *packet_buffer[2];        /* 0x447030 start of each buffer */
  static void *packet_next;             /* 0x447038 next free quadword */
  static int packet_overflowed;        /* 0x44703C the buffer overflowed: everything after goes to its start */
@@ -1226,7 +1225,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
  static int spare_area_size;          /* 0x447044 its size */
  
  /* Lays out the largest packet buffers and uploads the VU1 microprograms. */
-@@ -93,7 +94,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
+@@ -93,7 +93,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
      packet_head = &packet_chain_head[packet_fill_index];
      packet_tail = &packet_chain_tail[packet_fill_index];
      if (packet_overflowed == 0) {
@@ -1235,7 +1234,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
              puts(packet_overflow_message);
              while (1) {
              }
-@@ -101,7 +102,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
+@@ -101,7 +101,7 @@ void Packet_AppendToChain(u32 *packet, u32 *packet_end) {
              if (*packet_head != 0) {
                  DmaTag *tail_tag = *packet_tail;
                  tail_tag->id_and_qwc = 0x20000000;
@@ -1244,7 +1243,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
                  tail_tag->unk0C = tail_tag->unk08 = 0;
              } else {
                  *packet_head = packet;
-@@ -122,7 +123,7 @@ void Packet_SendChain(void) {
+@@ -122,7 +122,7 @@ void Packet_SendChain(void) {
          if (packet_overflowed == 0) {
              gs_send_pending[0] = 1;
              Packet_BeginGsRegisters();
@@ -1253,14 +1252,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
              Packet_EndGsRegisters();
              end_tag = packet_chain_tail[packet_fill_index];
              end_tag->id_and_qwc = 0x70000000;
-@@ -130,13 +131,14 @@ void Packet_SendChain(void) {
-             end_tag->unk08 = 0;
-             end_tag->unk0C = 0;
-             FlushCache(0);
-+            PORT_TODO("waits for D1_CHCR STR (bit 8)");
-             do {
-             } while (*D1_CHCR & D_CHCR_STR);
-             *GS_CSR |= 2;
+@@ -136,7 +136,7 @@ void Packet_SendChain(void) {
              FlushCache(0);
              *D1_QWC = 0;
              *D1_MADR = 0;
@@ -1269,15 +1261,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
              *D1_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
          }
      }
-@@ -146,6 +148,7 @@ void Packet_SendChain(void) {
- void Packet_WaitForSend(void) {
-     if (gs_send_pending[0] != 0) {
-         gs_send_pending[0] = 0;
-+        PORT_TODO("waits for D1_CHCR STR (bit 8)");
-         do {
-         } while (*D1_CHCR & D_CHCR_STR);
-         sceGsSyncPath(0, 0);
-@@ -157,7 +160,7 @@ void Packet_WaitForSend(void) {
+@@ -157,7 +157,7 @@ void Packet_WaitForSend(void) {
  /* Lays out the packet buffers in the packet area for the given size (0 = largest). */
  void Packet_LayOutBuffers(int size_index) {
      u32 size;
@@ -1286,7 +1270,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414e
      int half;
  
      packet_fill_index = 0;
-@@ -218,8 +221,8 @@ u32 *Packet_Alloc(int quadwords) {
+@@ -218,8 +218,8 @@ u32 *Packet_Alloc(int quadwords) {
  }
  
  /* Returns the spare area's address and size. */
@@ -1457,7 +1441,7 @@ index 8e5ea08fee4640c973fefc3c3f848c4a5dd20558..f488456f6221b87c07dfa67baacd75a3
          *packet++ = 0;
          Packet_AppendToChain(packet_start, packet);
 diff --git a/src/game/gfx/texture_upload.c b/src/game/gfx/texture_upload.c
-index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc297adf68b 100644
+index d8869c0a8b27e662dcaee7efda81a6440c416385..3ca29ea2032057cebc3d03030ec16ff8153c1cc7 100644
 --- a/src/game/gfx/texture_upload.c
 +++ b/src/game/gfx/texture_upload.c
 @@ -3,7 +3,9 @@
@@ -1479,30 +1463,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
  
  static void Texture_LoadTm2(TextureHeader *header);
  static void Texture_BuildPacket(char **texture, char **packet);
-@@ -64,6 +64,7 @@ static void Texture_LoadTm2(TextureHeader *header) {
-     sceGsSetDefLoadImage(&load_image, (u16)(header->tex0 & 0x3FFF), buffer_width, image_format, 0, 0, width, height);
-     FlushCache(0);
-     sceGsExecLoadImage(&load_image, (char *)header + sizeof(TextureHeader));
-+    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
-     while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
-     }
-     pixel_format = (header->tex0 >> 20) & 0x3F;
-@@ -71,12 +72,14 @@ static void Texture_LoadTm2(TextureHeader *header) {
-         sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 16, 16);
-         FlushCache(0);
-         sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
-+        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
-         while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
-         }
-     } else if (pixel_format == 0x14 || pixel_format == 0x24 || pixel_format == 0x2C) {
-         sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 8, 2);
-         FlushCache(0);
-         sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
-+        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
-         while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
-         }
-     }
-@@ -110,13 +113,13 @@ static void Texture_BuildPacketTable(char **textures, char **packets) {
+@@ -110,13 +110,13 @@ static void Texture_BuildPacketTable(char **textures, char **packets) {
      target_cursor += target->entry_count * sizeof(TextureTableEntry);
      for (i = 0; i < source->entry_count; i++) {
          source_cursor = *textures + source_entry[i].offset;
@@ -1518,7 +1479,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
      *packets = target_cursor;
  }
  
-@@ -207,34 +210,54 @@ static void Texture_BuildPacket(char **texture, char **packet) {
+@@ -207,34 +207,54 @@ static void Texture_BuildPacket(char **texture, char **packet) {
      } else {
          total = quadwords + 6;
      }
@@ -1595,7 +1556,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
      bytes = cursor;
      memcpy(bytes, (char *)header + sizeof(TextureHeader), size);
      bytes += size;
-@@ -245,7 +268,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
+@@ -245,7 +265,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
          tags = (u64 *)bytes;
          tags[0] = 0x1000000000000004;
          tags[1] = 0xE;
@@ -1604,7 +1565,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
          tags[3] = 0x50;
          tags[4] = 0;
          tags[5] = 0x51;
-@@ -253,7 +276,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
+@@ -253,7 +273,7 @@ static void Texture_BuildPacket(char **texture, char **packet) {
          tags[7] = 0x52;
          tags[8] = 0;
          tags[9] = 0x53;
@@ -1613,11 +1574,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
          tags[11] = 0;
          bytes += 12 * sizeof(u64);
          clut_offset = header->image_size + sizeof(TextureHeader);   // match: its own variable, as above
-@@ -299,10 +322,11 @@ void Texture_SendTexFlush(void) {
-     *cursor++ = 0x3F;
-     *cursor = 0;
-     FlushCache(0);
-+    PORT_TODO("waits for D2_CHCR STR (bit 8)");
+@@ -302,7 +322,7 @@ void Texture_SendTexFlush(void) {
      while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_MADR = 0;
@@ -1626,7 +1583,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
      *D2_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
  }
  
-@@ -325,7 +349,7 @@ char *Texture_UploadTable(char *base, int upload) {
+@@ -325,7 +345,7 @@ char *Texture_UploadTable(char *base, int upload) {
      entry = (TextureTableEntry *)cursor;
      cursor += header->entry_count * sizeof(TextureTableEntry);
      for (i = 0; i < header->entry_count; i++) {
@@ -1635,7 +1592,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
      }
      return cursor;
  }
-@@ -338,10 +362,10 @@ static void *Texture_MoveBasePointers(TextureHeader *header, int tbp_delta, int
+@@ -338,10 +358,10 @@ static void *Texture_MoveBasePointers(TextureHeader *header, int tbp_delta, int
      int cbp;
  
      tbp = ((int) (bits & 0x3FFF) + tbp_delta) & 0x3FFF;
@@ -1648,7 +1605,7 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc2
      bits |= (u64) ((cbp + cbp_delta) & 0x3FFF) << 37;
      header->tex0 = bits;
      return (char *) header + header->data_offset;
-@@ -361,7 +385,7 @@ static char *Texture_MoveTableBasePointers(char *base, int tbp_delta, int cbp_de
+@@ -361,7 +381,7 @@ static char *Texture_MoveTableBasePointers(char *base, int tbp_delta, int cbp_de
      entry = (TextureTableEntry *)cursor;
      cursor += header->entry_count * sizeof(TextureTableEntry);
      for (i = 0; i < header->entry_count; i++) {
