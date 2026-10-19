@@ -135,6 +135,9 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--controls ps2\|verdite` | the keyboard and mouse layout (see below) |
 | `--audio-dump FILE` | write the sound as a 48 kHz WAV file |
 | `--no-audio` | open no sound device (the sound is still made) |
+| `--stats` | at exit, print where the DMA controller's thread spent its time: VU1 (its runs and instructions too), handing GIF packets to the GS, and vsyncs; and a hash of every packet VU1 sent, which two runs that drew the same share. For A/B timings. It counts from the last save state saved or loaded |
+| `--state-save-at VBLANK[:SLOT\|:FILE],...` | save a state at these vblanks, to a slot (0 when left out) or a file (see "Save states") |
+| `--state-load [VBLANK:]SLOT\|FILE` | load a state before the game starts, or once the run reaches that vblank |
 
 The window shows the game at 4:3. A game controller is the pad; so is the keyboard (the PS2 layout,
 the default):
@@ -217,6 +220,55 @@ that none is blank (`--keep DIR` keeps them to look at).
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
 
+## Save states
+
+A save state is the whole running game in a file: loaded, the game goes on exactly where it was.
+They are for testing and debugging (the game's own saves are its memory card's). The settings
+overlay's keys save and load slot 0; the command line drives them for tests:
+- `--state-save-at 900:1` saves slot 1 at vblank 900; `--state-save-at 400:a.kf4state,2000:b.kf4state`
+  saves two files in one run.
+- `--state-load 1` loads slot 1 before the game's first instruction; `--state-load 300:b.kf4state` loads
+  a file once the run reaches vblank 300, while it runs (in a window too).
+
+Slots are `slot<N>.kf4state` in `%APPDATA%\holyland\states` on Windows, and in
+`$XDG_DATA_HOME/holyland/states` (or `~/.local/share/holyland/states`) elsewhere. A file is about 5 to
+15 MB (LZ4-compressed; 80 MB in memory).
+
+How it works (`port/platform/savestate.c`):
+- A state is taken at a vblank, where every EE thread is parked in a kernel call. It is not taken
+  while a GIF packet or an image transfer to the GS is half sent, or a `host0:` file is open: the
+  request then waits for the next vblank, and says so.
+- It holds:
+  - game RAM, the scratchpad, VU0 and the register pages;
+  - the globals of the game and of ico-audio's SPU2, which are linked as one block between two
+    markers (`port/platform/state_begin.c`, `state_end.c`);
+  - the EE threads' fibers and their stacks, and the kernel, DMA controller, VIF1, VU1 and GIF;
+  - the GS's VRAM and registers, and what paraLLEl-GS's scanout keeps from the last pictures;
+  - the libraries, the IOP's memory, libsd, FSIOPSND, modmidi, modhsyn and the sound's clock.
+- Not in a state: what is the host's (the window, the sound device, the log, files, the options) and
+  `--stats`' counts.
+
+**Same build only.** The stacks hold return addresses into the program, and the game keeps pointers
+in game RAM and its globals. So:
+- game RAM and the stacks are at fixed addresses;
+- the program is linked without ASLR;
+- a state carries a hash of the program's code, and another build refuses it.
+
+A state loads into a run with other options:
+- On the device's clock or the game's: the sound goes on from where it was.
+- Without the GS (`--headless` with no `--dump-frames`, or `--no-gs`): a state taken without it has no
+  VRAM, and one loaded without it skips its VRAM.
+
+The same input gives the same run after a load as without one. Checked on `tests/newgame.pad`, with
+states at vblanks 400, 900 and 2000, the GS and the sound on, to vblank 2300. A run that saves
+against one that loads the state in a new process:
+- the per-frame log after the "state saved" line is the same as after the "state loaded" line;
+- the `--audio-dump` WAV is the same from the state's SPU2 frame on;
+- `--stats`' VU1 runs, instructions and cycles and the PATH1 hash are the same;
+- the frames dumped after the state's vblank are the same, byte for byte;
+- the run that saved is the same as one that does not (log, WAV, frames);
+- a state saved again right after it is loaded is the same file (but the time in its header).
+
 ## Status
 
 The steps, in order: [PLAN.md](PLAN.md).
@@ -249,7 +301,7 @@ Next:
 | `game/` | PC-only game code, compiled with the patched decomp (`game/data/`: the data sections in C; `state_log.c`: the per-frame log) |
 | `work/` | git-ignored: the decomp with the patches applied, for editing (`tools/patches.py apply`) |
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
-| `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, VIF1, VU1, the GS's front end, the window and frame dumps, the disc |
+| `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, VIF1, VU1, the GS's front end, the window and frame dumps, the disc, save states |
 | `port/gs/` | the GS backend: paraLLEl-GS behind a small C interface |
 | `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc; stand-ins for libmpeg and libsdr |
 | `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |

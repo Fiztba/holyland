@@ -8,6 +8,7 @@
 #include "libmc.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define MC_NO_CARD -11
 
@@ -26,6 +27,7 @@
 
 static int pending_function; /* 0: no call in flight */
 static int pending_result;
+static int no_card_logged[2]; /* the log says once per slot that it is empty */
 
 static int start_call(int function, int result) {
     pending_function = function;
@@ -38,10 +40,8 @@ int sceMcInit(void) {
 }
 
 int sceMcGetInfo(int port, int slot, int *type, int *free, int *format) {
-    static int logged[2];
-
-    if (port >= 0 && port < 2 && !logged[port]) {
-        logged[port] = 1;
+    if (port >= 0 && port < 2 && !no_card_logged[port]) {
+        no_card_logged[port] = 1;
         port_event("memory card: no card in slot %d", port + 1);
     }
     (void)slot;
@@ -143,4 +143,11 @@ int sceMcSync(int mode, int *cmd, int *result) {
     }
     pending_function = 0;
     return 1;
+}
+
+/* ---- Save states ------------------------------------------------------------------------------ */
+void port_mc_state(PortStateIo *io) {
+    PORT_STATE(io, pending_function);
+    PORT_STATE(io, pending_result);
+    PORT_STATE(io, no_card_logged);
 }

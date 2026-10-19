@@ -17,9 +17,12 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #ifdef KF4_HAVE_PARALLEL_GS
 int port_gs_backend_open(void);
+size_t port_gs_backend_state_size(void);
+void port_gs_backend_state(PortStateIo *io);
 void port_gs_backend_gif(int path, const void *data, size_t bytes);
 void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
@@ -97,6 +100,9 @@ int port_gs_enabled(void) {
    the FINISH register, and the GS has had it by then. */
 #define GS_REG_FINISH 0x61
 #define GS_CSR_FINISH 2
+#define GS_REG_BITBLTBUF 0x50
+#define GS_REG_TRXREG 0x52
+#define GS_REG_TRXDIR 0x53
 
 typedef struct {
     uint32_t left;   /* qwords of the current tag's data still to come */
@@ -110,6 +116,53 @@ typedef struct {
 } GifPath;
 
 static GifPath gif_paths[4];
+
+/* A host-to-local transfer (TRXDIR 0) takes its pixels from IMAGE packets, maybe across several:
+   the bits still to come, so that a save state waits until none are (the GS's own count cannot be
+   saved). BITBLTBUF and TRXREG as last written say how many a transfer takes. */
+static uint64_t image_bitbltbuf;
+static uint64_t image_trxreg;
+static uint64_t image_bits_left;
+
+static uint32_t psm_bits(uint32_t psm) {
+    switch (psm) {
+    case 0x01: /* PSMCT24 */
+    case 0x31: /* PSMZ24 */
+        return 24;
+    case 0x02: /* PSMCT16 */
+    case 0x0A: /* PSMCT16S */
+    case 0x32: /* PSMZ16 */
+    case 0x3A: /* PSMZ16S */
+        return 16;
+    case 0x13: /* PSMT8 */
+        return 8;
+    case 0x14: /* PSMT4 */
+        return 4;
+    default: /* the 32-bit formats, PSMT8H, PSMT4HL, PSMT4HH */
+        return 32;
+    }
+}
+
+static void image_register(uint32_t reg, uint64_t value) {
+    if (reg == GS_REG_BITBLTBUF) {
+        image_bitbltbuf = value;
+    } else if (reg == GS_REG_TRXREG) {
+        image_trxreg = value;
+    } else if (reg == GS_REG_TRXDIR) {
+        if ((value & 3) == 0) {
+            image_bits_left = (image_trxreg & 0xFFF) * ((image_trxreg >> 32) & 0xFFF) *
+                              psm_bits((uint32_t)(image_bitbltbuf >> 56) & 0x3F);
+        } else {
+            image_bits_left = 0;
+        }
+    }
+}
+
+static void image_data(size_t qwords) {
+    uint64_t bits = (uint64_t)qwords * 128;
+
+    image_bits_left = bits < image_bits_left ? image_bits_left - bits : 0;
+}
 
 static void read_gif(int path, const uint64_t *qwords, size_t count) {
     GifPath *p = &gif_paths[path];
@@ -148,8 +201,14 @@ static void read_gif(int path, const uint64_t *qwords, size_t count) {
         }
         if (p->ad) {
             /* the A+D qwords: the one that writes FINISH */
-            if (((p->regs >> (p->reg * 4)) & 0xF) == 0xE && (qwords[i * 2 + 1] & 0xFF) == GS_REG_FINISH) {
-                __atomic_fetch_or(EE_HW(volatile uint64_t *, 0x12001000), (uint64_t)GS_CSR_FINISH, __ATOMIC_RELEASE);
+            if (((p->regs >> (p->reg * 4)) & 0xF) == 0xE) {
+                uint32_t reg = (uint32_t)(qwords[i * 2 + 1] & 0xFF);
+
+                if (reg == GS_REG_FINISH) {
+                    __atomic_fetch_or(EE_HW(volatile uint64_t *, 0x12001000), (uint64_t)GS_CSR_FINISH, __ATOMIC_RELEASE);
+                } else if (reg >= GS_REG_BITBLTBUF && reg <= GS_REG_TRXDIR) {
+                    image_register(reg, qwords[i * 2]);
+                }
             }
             p->reg = p->reg + 1 == p->nreg ? 0 : p->reg + 1;
             p->left--;
@@ -157,6 +216,9 @@ static void read_gif(int path, const uint64_t *qwords, size_t count) {
         } else {
             size_t n = count - i < p->left ? count - i : p->left;
 
+            if (p->flg >= 2) {
+                image_data(n);
+            }
             p->left -= (uint32_t)n;
             i += n;
         }
@@ -263,4 +325,48 @@ void port_gs_run_vsync(void) {
         port_stats.vsync_ticks += port_ticks() - start;
     }
     __atomic_store_n(&queue_tail, tail + 1, __ATOMIC_RELEASE);
+}
+
+/* ---- Save states -------------------------------------------------------------------------------
+   On the controller's thread, between GIF packets: the paths' places, and the GS's VRAM, registers
+   and recent fields when there is a renderer, after their size (a state taken without one has none,
+   and a run without one skips them). */
+const char *port_gs_state_busy(void) {
+    int path;
+
+    for (path = 1; path < 4; path++) {
+        if (gif_paths[path].in_packet) {
+            return "a GIF packet is half sent";
+        }
+    }
+    if (image_bits_left != 0) {
+        return "an image transfer to the GS is half sent";
+    }
+    return NULL;
+}
+
+void port_gs_state(PortStateIo *io) {
+    uint64_t backend_bytes = 0;
+
+    PORT_STATE(io, gif_paths);
+    PORT_STATE(io, image_bitbltbuf);
+    PORT_STATE(io, image_trxreg);
+    PORT_STATE(io, image_bits_left);
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (backend) {
+        backend_bytes = port_gs_backend_state_size();
+    }
+#endif
+    PORT_STATE(io, backend_bytes);
+    if (backend_bytes == 0) {
+        return;
+    }
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (backend) {
+        port_gs_backend_state(io);
+        return;
+    }
+#endif
+    /* a loaded state's GS, and no renderer to take it */
+    port_state_bytes(io, NULL, (size_t)backend_bytes);
 }

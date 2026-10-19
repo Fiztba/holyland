@@ -94,6 +94,10 @@ target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
 set_source_files_properties(port/platform/vu1.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
+# The fibers switch stacks by hand (port/platform/fiber.c), which a shadow stack would refuse
+if(NOT WIN32)
+    set_source_files_properties(port/platform/fiber.c PROPERTIES COMPILE_OPTIONS "-fcf-protection=none")
+endif()
 find_package(Threads REQUIRED)
 target_link_libraries(kf4_port PUBLIC Threads::Threads)
 if(WIN32)
@@ -280,9 +284,21 @@ set(KF4_GAME_OBJECTS)
 foreach(target ${KF4_GAME_TARGETS})
     list(APPEND KF4_GAME_OBJECTS $<TARGET_OBJECTS:${target}>)
 endforeach()
-add_executable(kf4 port/platform/main_host.c ${KF4_GAME_OBJECTS})
+# Save states (port/platform/savestate.c) copy the globals of the game and of ico-audio's SPU2 as one
+# block of the program's image: their objects are linked between two markers, which the linker keeps
+# in that order. The program is linked at a fixed address (no ASLR), so that a state's pointers to the
+# program's code and data hold in the next run of the same build.
+add_library(kf4_state_begin OBJECT port/platform/state_begin.c)
+add_library(kf4_state_end OBJECT port/platform/state_end.c)
+add_executable(kf4 port/platform/main_host.c $<TARGET_OBJECTS:kf4_state_begin> ${KF4_GAME_OBJECTS}
+    $<TARGET_OBJECTS:ico_audio> $<TARGET_OBJECTS:kf4_state_end>)
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
 target_link_libraries(kf4 PRIVATE kf4_port)
+if(WIN32)
+    target_link_options(kf4 PRIVATE -Wl,--disable-dynamicbase)
+else()
+    target_link_options(kf4 PRIVATE -no-pie)
+endif()
 
 # The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone
 add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c)

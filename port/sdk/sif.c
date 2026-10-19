@@ -12,6 +12,7 @@
 #include "port/audio.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 #include "sifdev.h"
 #include "sifrpc.h"
 
@@ -459,4 +460,26 @@ int sceSifCallRpc(sceSifClientData *cd, unsigned int function, unsigned int mode
 int sceSifCheckStatRpc(sceSifClientData *cd) {
     (void)cd;
     return 0;
+}
+
+/* ---- Save states -------------------------------------------------------------------------------
+   The files open on the disc, the modules loaded and the IOP heap. A host0: file is the host's: no
+   state is taken while one is open. */
+const char *port_sif_state_busy(void) {
+    int fd;
+
+    for (fd = 0; fd < MAX_FILES; fd++) {
+        if (open_files[fd].used && !open_files[fd].on_disc) {
+            return "a host0: file is open";
+        }
+    }
+    return NULL;
+}
+
+void port_sif_state(PortStateIo *io) {
+    PORT_STATE(io, open_files);
+    PORT_STATE(io, next_module_id);
+    PORT_STATE(io, iop_blocks);
+    PORT_STATE(io, iop_block_count);
+    PORT_STATE(io, next_dma_id);
 }

@@ -18,6 +18,7 @@
 #include "libgraph.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define GS_SMODE1 EE_HW(volatile int64_t *, 0x12000010)
 #define CHCR_STR 0x100
@@ -731,4 +732,15 @@ void sceGsSetHalfOffset(void *draw, short x, short y, short half) {
 
 void sceGsSetHalfOffset2(void *draw, short x, short y, short half) {
     set_half_offset(draw, x, y, half);
+}
+
+/* ---- Save states: the mode, and the copies of packets that DMA channel 2 may still have to send (one
+   that waits for PATH3) ---------------------------------------------------------------------------- */
+void port_libgraph_state(PortStateIo *io) {
+    PORT_STATE(io, gsGParam);
+    PORT_STATE(io, put_draw_env_copy);
+    PORT_STATE(io, load_image_copy);
+    PORT_STATE(io, image_copy);
+    PORT_STATE(io, store_image_copy);
+    PORT_STATE(io, store_image_tail);
 }

@@ -40,6 +40,8 @@ typedef struct {
     int no_audio;            /* --no-audio: no sound device (the sound is still made) */
     int clock_fields[6];     /* year, month, day, hour, minute, second */
     int stats;               /* --stats: print where the controller's time went at exit */
+    const char *state_save_at; /* --state-save-at: VBLANK[:SLOT|:FILE],... (port/platform/savestate.c) */
+    const char *state_load;    /* --state-load: [VBLANK:]SLOT|FILE */
 } PortOptions;
 extern PortOptions port_options;
 
@@ -76,6 +78,8 @@ void port_fiber_switch(PortFiber *from, PortFiber *to);
 #define EE_BUS_HZ 147456000u
 /* The kernel's first steps, before the game's main runs. */
 void port_kernel_init(void);
+/* Runs the game's main as the EE's main thread, on a fiber; does not return. */
+int port_kernel_run(int (*game_main)(void));
 /* The current EE time in bus cycles, and the vblanks so far. */
 uint64_t port_ee_cycles(void);
 uint64_t port_vblank_count(void);
