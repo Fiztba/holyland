@@ -201,7 +201,36 @@ About 800 small globals are not yet defined in C on the PS2 side; their definiti
 data files. One agent defines them all in C, under `game/data/`. When your folder declares one of
 them `extern`, keep the declaration (fixing its type by rule 2), and don't define it yourself.
 
-## 8. Checking your work
+## 8. PS2 numbers
+
+The game's numbers must come out as the PS2's, bit for bit where the hardware is known. What the port
+gives, and how game code (and PC edits to it) must be written:
+
+- **Float C is the EE's FPU.** The game's threads round toward zero and flush denormals (MXCSR, set
+  per fiber in `port/platform/fiber.c`). Write float maths as plain C on `float`/`f32`, in the source's
+  order: no `-ffast-math`, no fused multiply-add (the build has `-ffp-contract=off`), no `double`
+  intermediates the original did not have. Host code that the game's threads run and that formats or
+  parses numbers (printf, strtod round as MXCSR says) wraps itself in `port_host_float_begin`/`end`.
+- **VU0 is VU arithmetic.** Each VU0 instruction (macro mode, inline asm turned into C, libvu0) is the
+  matching op of `port/include/port/vu_float.h` (`vu_float_*`, or the `Vu_F*` float wrappers), in the
+  instruction's order and fields: never host `+ - * /` or `sqrtf` for a VU0 instruction. RSQRT is one
+  op (`Vu_FRsqrt`), not `1.0f / sqrtf(x)`; SQRT takes `|x|`; a division by zero gives +-0x7FFFFFFF.
+- **The math library is the PS2's.** Every game file includes `port/libm_ps2.h` first (the build
+  does it): `sinf`, `sqrt` and the rest go to newlib's (`port/sdk/libm_ps2.c`). Don't call the host's
+  libm from game code, and don't add a math function the game calls without adding it there (check
+  the retail program calls it: `tools/ee_libm_ref.py` can check its results).
+- **Doubles are software doubles.** On the EE `double` is dp-bit, rounding to nearest. Where game code
+  turns a double into a float (assignment, argument, return, cast), write `ps2_dtof(...)`: a C
+  conversion would round toward zero. `clang -Wimplicit-float-conversion` finds the implicit ones.
+- **Integer division.** INT_MIN / -1 is INT_MIN (`port/platform/int_divide.c`); a division by zero
+  ends the run, as it stops the PS2 (ee-gcc's `break 7`). Don't add guards the original did not have.
+- **Evaluation order.** C leaves the order of a statement's side effects open, and ee-gcc's order is
+  not clang's or gcc's: where a statement stores to an object and reads it elsewhere (`a[x] = x = -1`),
+  or a call's arguments depend on each other's side effects, write it as sequential statements in the
+  order the retail assembly does it, with a `/* PC: */` note. gcc's `-Wsequence-point` finds the plain
+  cases, struct members included.
+
+## 9. Checking your work
 
 ```sh
 cmake --preset windows-clang                      # once (or linux-gcc)

@@ -43,6 +43,10 @@
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
+       --fpu-round zero|nearest
+                         how the game's float maths rounds: as the EE's FPU (zero, the default:
+                         toward zero, no denormals) or as the PC's IEEE floats (nearest), to compare
+                         (port/include/port/platform.h)
    With a window and no pad script, settings.json (port/overlay/settings.c, the overlay's F1) fills in
    what the command line does not say. */
 #include <stdarg.h>
@@ -72,7 +76,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace]\n",
+            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--fpu-round zero|nearest]\n",
             program);
     exit(2);
 }
@@ -188,6 +192,11 @@ static void parse_options(int argc, char **argv) {
             port_options.quick_load = value;
         } else if (strcmp(option, "--gs-capture-at") == 0) {
             gs_capture_at = value;
+        } else if (strcmp(option, "--fpu-round") == 0) {
+            if (strcmp(value, "zero") != 0 && strcmp(value, "nearest") != 0) {
+                usage(argv[0]);
+            }
+            port_fpu_round_nearest = strcmp(value, "nearest") == 0;
         } else {
             usage(argv[0]);
         }
@@ -207,32 +216,37 @@ int port_log_enabled(void) {
     return log_file != NULL;
 }
 
+/* (both format in the host's float mode: they are called from the game's threads) */
 void port_log(const char *fmt, ...) {
     va_list args;
+    uint32_t mode;
 
     if (log_file == NULL) {
         return;
     }
+    mode = port_host_float_begin();
     va_start(args, fmt);
     vfprintf(log_file, fmt, args);
     va_end(args);
     fputc('\n', log_file);
+    port_host_float_end(mode);
 }
 
 void port_event(const char *fmt, ...) {
     va_list args;
+    uint32_t mode = port_host_float_begin();
 
     va_start(args, fmt);
     port_debug_note_event(port_vblank_count(), fmt, args); /* F10's last events (port/debug/debug.c) */
     va_end(args);
-    if (log_file == NULL) {
-        return;
+    if (log_file != NULL) {
+        fprintf(log_file, "%llu event: ", (unsigned long long)port_vblank_count());
+        va_start(args, fmt);
+        vfprintf(log_file, fmt, args);
+        va_end(args);
+        fputc('\n', log_file);
     }
-    fprintf(log_file, "%llu event: ", (unsigned long long)port_vblank_count());
-    va_start(args, fmt);
-    vfprintf(log_file, fmt, args);
-    va_end(args);
-    fputc('\n', log_file);
+    port_host_float_end(mode);
 }
 
 static void open_log(void) {
@@ -266,6 +280,7 @@ static void drained(void *unused) {
 }
 
 static void print_stats(void) {
+    uint32_t mode = port_host_float_begin(); /* (at exit, which the game's thread may call) */
     double per_second = port_ticks_per_second();
     double vu1 = (double)port_stats.vu1_ticks / per_second;
 
@@ -280,12 +295,14 @@ static void print_stats(void) {
             (double)port_stats.vsync_ticks / per_second);
     fprintf(stderr, "[stats] VU1 cycles %llu, PATH1 hash %016llx\n",
             (unsigned long long)port_stats.vu1_cycles, (unsigned long long)port_stats.path1_hash);
+    port_host_float_end(mode);
 }
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     parse_options(argc, argv);
+    port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();
     open_log();

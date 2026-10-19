@@ -325,7 +325,7 @@ index 8e01e7fb35a0a30bb234e4915cf2f4392274d672..96d78d2cf6fdc0f4a651e5855001617f
  int Script_Start(int script_id, int argument);
  /* TRUE if a thread is running the script. */
 diff --git a/src/game/script/script_entity.c b/src/game/script/script_entity.c
-index abcc6eafddb32a44163faaa6051d0ab8b62876af..609906553af2e8902b1e891b586466c5d2ffe26a 100644
+index abcc6eafddb32a44163faaa6051d0ab8b62876af..98168b1c372f86826be58aa3edee1982c8acdc15 100644
 --- a/src/game/script/script_entity.c
 +++ b/src/game/script/script_entity.c
 @@ -9,7 +9,7 @@
@@ -359,6 +359,24 @@ index abcc6eafddb32a44163faaa6051d0ab8b62876af..609906553af2e8902b1e891b586466c5
  }
  
  /* Command 238: turns the entity `target_id` to face the player (state 4, EntityAi_SetState: on the spot for
+@@ -645,7 +646,7 @@ void ScriptCmd_Distance2D(ScriptDistance2DCommand *command) {
+     delta_x = command->a_x.value - command->b_x.value;
+     delta_y = command->a_y.value - command->b_y.value;
+     distance_sq = delta_x * delta_x + delta_y * delta_y;
+-    distance = sqrt(distance_sq);
++    distance = ps2_dtof(sqrt(distance_sq));
+     Script_StoreFloatResult(&command->result, distance);
+     command->active = 0;
+ }
+@@ -663,7 +664,7 @@ void ScriptCmd_Distance(ScriptDistanceCommand *command) {
+     delta_y = command->a_y.value - command->b_y.value;
+     delta_z = command->a_z.value - command->b_z.value;
+     distance_sq = delta_x * delta_x + delta_y * delta_y + delta_z * delta_z;
+-    distance = sqrt(distance_sq);
++    distance = ps2_dtof(sqrt(distance_sq));
+     Script_StoreFloatResult(&command->result, distance);
+     command->active = 0;
+ }
 diff --git a/src/game/script/script_tables.c b/src/game/script/script_tables.c
 index 1d6ebfbbeabe340b2485e2b989f5f579b956e6f4..d20bcfb6b1a058045f00476c74afd5924bf807aa 100644
 --- a/src/game/script/script_tables.c

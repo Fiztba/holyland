@@ -36,6 +36,14 @@ struct PortFiber {
     int used;
 };
 
+int port_fpu_round_nearest;
+
+/* The game's threads compute as the EE's FPU does (port/include/port/platform.h); with --fpu-round
+   nearest, in the host's mode */
+uint32_t port_ee_mxcsr(void) {
+    return port_fpu_round_nearest ? PORT_MXCSR_HOST : PORT_MXCSR_EE;
+}
+
 static PortFiber host_fiber;
 static PortFiber fibers[MAX_FIBERS];
 static unsigned char *region;
@@ -53,6 +61,7 @@ void port_fiber_start(PortFiber *fiber);
    as if it had switched away, with the trampoline as its return address and itself in r12. */
 #ifdef _WIN32
 #define SWAP_FRAME_SIZE 264 /* the xmm block (168), the TEB's three, eight registers, the return */
+#define SWAP_MXCSR_AT 160
 __asm__(".text\n"
         ".globl port_fiber_swap\n"
         ".def port_fiber_swap; .scl 2; .type 32; .endef\n"
@@ -120,6 +129,7 @@ __asm__(".text\n"
         "    ud2\n");
 #else
 #define SWAP_FRAME_SIZE 64 /* MXCSR and the control word (8), six registers, the return */
+#define SWAP_MXCSR_AT 0
 __asm__(".text\n"
         ".globl port_fiber_swap\n"
         ".type port_fiber_swap, @function\n"
@@ -242,8 +252,9 @@ PortFiber *port_fiber_create(size_t stack_size, void (*entry)(void *), void *arg
     fiber->entry = entry;
     fiber->arg = arg;
 
-    /* the frame port_fiber_swap pops: the host's float modes, the fiber in r12, the trampoline */
-    __asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+    /* the frame port_fiber_swap pops: the EE's float mode and the host's x87 control word, the fiber
+       in r12, the trampoline */
+    mxcsr = port_ee_mxcsr();
     __asm__ volatile("fnstcw %0" : "=m"(control));
     top = slot_top(slot);
     frame = (uint64_t *)(top - 16 - SWAP_FRAME_SIZE);
@@ -297,6 +308,14 @@ void port_fiber_state(PortStateIo *io) {
                 commit_stack(slot, fiber->stack_size);
             }
             port_state_bytes(io, sp, (size_t)(top - sp));
+            if (io->loading) {
+                /* the float mode this run asked for, whichever the state was saved with */
+                uint32_t mxcsr;
+
+                memcpy(&mxcsr, sp + SWAP_MXCSR_AT, 4);
+                mxcsr = (mxcsr & PORT_MXCSR_FLAGS) | port_ee_mxcsr();
+                memcpy(sp + SWAP_MXCSR_AT, &mxcsr, 4);
+            }
         }
     }
 }

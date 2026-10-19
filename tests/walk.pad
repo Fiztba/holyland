@@ -1,0 +1,27 @@
+# New Game, then walk and turn in the first map (099.map): for numeric checks of movement and collision,
+# played with --input tests/walk.pad --frames 4200 (and the options tools/boot_test.py passes).
+# <vblank> <buttons or axes> [vblanks held, default 6]; axes 0..255, 128 centred, ly=0 is forward
+100 CROSS 4     # the memory card notice ("no card")
+300 START 4     # skip the logos
+400 START 4     # Press Start
+500 CROSS 4     # New Game (the cursor starts on it)
+740 START 4     # skip the opening movie
+700 CROSS 4
+800 CROSS 4
+900 CROSS 4
+1000 CROSS 4
+1100 CROSS 4
+1200 CROSS 4
+1300 CROSS 4
+1400 CROSS 4
+# the player has control from about vblank 1500
+1700 ly=0 400           # walk forward (into the walls of the first room: collision)
+2100 rx=255 90          # right stick right
+2190 ly=0 300           # forward again
+2490 lx=0 200           # left stick left (turns)
+2690 rx=0 150           # right stick left
+2840 rx=255 200         # right stick right
+3040 ly=0 150           # forward (back the way it came)
+3190 rx=255 ly=0 200    # forward, right stick right
+3390 ry=0 60            # look up
+3450 ry=255 120         # look down
