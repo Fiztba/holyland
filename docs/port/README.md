@@ -178,7 +178,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
-| Mods | the opt-in changes to the game, live: Myu's Necklace, always (see "Mods") |
+| Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
 | Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
 
@@ -233,15 +233,15 @@ compiles just the `ui` folder (`src/game/ui`, with the patches applied).
 
 ## Mods
 
-Changes to the game itself, each off by default, so the game is the PS2's. Each is a switch on the
-command line and on the overlay's Mods page (live), kept in `settings.json`'s `"mods"`, and read by the
+Optional changes to how the game plays. All are off by default; with them off, the game plays as it
+does on the PS2. Each is a switch on the command line and on the overlay's Mods page (live), kept in `settings.json`'s `"mods"`, and read by the
 game's patches through a function of `port/include/port/host.h`; off, the game code does exactly what
 it does without it.
 
-- **Myu's Necklace, always** (`--myus-necklace`, `port_myus_necklace()`). `MapObject_DrawAll` decides
-  each frame whether the necklace is worn, from the amulet slot; with the mod on it is always worn, so
-  the things it makes glow glow (their pulse starts when it is turned on) whatever the amulet slot holds,
-  and the slot is free for another amulet.
+- **Myu's Necklace effect without wearing it** (`--myus-necklace`, `port_myus_necklace()`).
+  `MapObject_DrawAll` decides each frame whether the necklace is worn, from the amulet slot; with the
+  mod on it counts as worn whatever the slot holds, so the objects it makes glow always glow (their
+  pulse starts when the mod is turned on), and the slot is free for another amulet.
 
 ## Widescreen
 

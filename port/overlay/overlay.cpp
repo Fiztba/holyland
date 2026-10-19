@@ -697,15 +697,15 @@ void debug_tools() {
 void mods_page() {
     PortSettings &s = port_settings;
 
-    ImGui::TextWrapped("Changes to the game itself. Each is off by default, and the game is the PS2's while it is.");
+    ImGui::TextWrapped("Optional changes to how the game plays. All are off by default; with them off, the game plays as it does on the PS2.");
     ImGui::Spacing();
     bool necklace = port_options.myus_necklace != 0;
-    if (ImGui::Checkbox("Myu's Necklace, always", &necklace)) {
+    if (ImGui::Checkbox("Myu's Necklace effect without wearing it", &necklace)) {
         s.myus_necklace = port_options.myus_necklace = necklace;
         changed();
     }
-    tooltip("The necklace's effect without wearing it: the things it makes glow glow,\nwhatever amulet you "
-            "wear. Applies at once. (--myus-necklace)");
+    tooltip("Objects that glow while Myu's Necklace is worn always glow, so the amulet slot\nis free for another "
+            "amulet. Applies at once. (--myus-necklace)");
     if (port_options.myus_necklace != s.myus_necklace) {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(on for this run: command line)");
