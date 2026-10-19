@@ -302,11 +302,12 @@ add_custom_target(game DEPENDS ${KF4_GAME_TARGETS})
 
 # ---- The PS2's math library -----------------------------------------------------------------------
 # newlib's libm as the SDK built it, from the decomp's own sources (read, never edited), its names made
-# ps2_* (port/sdk/libm_ps2_names.h); port/sdk/libm_ps2.c has the rest. ef_sqrt.c and wf_sqrt.c are
-# port/sdk's (the rounding ee-gcc folded, and dp-bit's NaN, written out), and atanf is wrapped there.
+# ps2_* (port/sdk/libm_ps2_names.h); port/sdk/libm_ps2.c has the rest. ef_sqrt.c, wf_sqrt.c and
+# w_sqrt.c are port/sdk's (the rounding ee-gcc folded, and dp-bit's NaN, written out), and atanf is
+# wrapped there.
 file(GLOB KF4_PS2_LIBM_SOURCES ${CMAKE_SOURCE_DIR}/decomp/src/sce/libm/math/*.c
      ${CMAKE_SOURCE_DIR}/decomp/src/sce/libm/common/*.c)
-list(FILTER KF4_PS2_LIBM_SOURCES EXCLUDE REGEX "/(ef|wf)_sqrt\\.c$")
+list(FILTER KF4_PS2_LIBM_SOURCES EXCLUDE REGEX "/(ef|wf|w)_sqrt\\.c$")
 add_library(ps2_libm OBJECT ${KF4_PS2_LIBM_SOURCES})
 target_include_directories(ps2_libm PRIVATE decomp/src/sce/libm decomp/src/sce/libc)
 target_compile_options(ps2_libm PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS} -w

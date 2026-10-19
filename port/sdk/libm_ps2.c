@@ -17,7 +17,8 @@
    atan2f's pi_o_2 + 0.5f * pi_lo) and no others. clang folds those too, and one more: atanf's
    atanhi[3] + atanlo[3], array elements that ee-gcc left to the FPU. So atanf is wrapped below.
 
-   What is the port's own: sqrtf and its __ieee754_sqrtf, atanf's wrapper, isnan, errno. */
+   What is the port's own: sqrtf and its __ieee754_sqrtf, sqrt's wrapper, atanf's wrapper, isnan,
+   errno. */
 #include <stdint.h>
 #include <string.h>
 
@@ -151,6 +152,27 @@ float ps2_sqrtf(float x) {
         memcpy(&nan, &nan_bits, 8);
         ps2_errno = 33; /* EDOM */
         return ps2_dtof(nan);
+    }
+    return z;
+}
+
+/* sqrt, newlib's w_sqrt.c: for a negative x the same NaN (0.0 / 0.0, which gcc leaves to the run
+   time, where SSE's is negative) */
+double ps2___ieee754_sqrt(double x);
+
+double ps2_soft_sqrt(double x) {
+    double z = ps2___ieee754_sqrt(x);
+
+    if (ps2_isnan(x)) {
+        return z;
+    }
+    if (x < 0.0) {
+        uint64_t nan_bits = 0x7FF8000000000000ull;
+        double nan;
+
+        memcpy(&nan, &nan_bits, 8);
+        ps2_errno = 33; /* EDOM */
+        return nan;
     }
     return z;
 }
