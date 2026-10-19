@@ -1,0 +1,17 @@
+# Dear ImGui
+
+[Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut, release `v1.92.9b`, copied from the
+release's source archive. MIT licence: see `LICENSE.txt`.
+
+It draws the settings overlay (`port/overlay/overlay.cpp`, F1) over the game's picture.
+
+| file | what it is |
+| --- | --- |
+| `imgui*.cpp`, `imgui*.h`, `imconfig.h`, `imstb_*.h` | the library |
+| `backends/imgui_impl_sdl2.*` | the platform backend: SDL2's events, the mouse, the keyboard and game controllers |
+| `backends/imgui_impl_sdlrenderer2.*` | the renderer backend: draws with the window's `SDL_Renderer` (SDL 2.0.17 or newer) |
+
+Not copied: the demo, the examples, the misc folder and the other backends.
+
+Keep these files as they are upstream, so they can be updated by copying a newer release over them.
+holyland's own code goes in `port/overlay/`.

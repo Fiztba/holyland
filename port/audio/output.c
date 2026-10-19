@@ -20,6 +20,7 @@
 
 #include "port/audio.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 #include "sd.h"
 #include "spu2.h"
 
@@ -48,6 +49,8 @@ static int device_clock;      /* the IOP side runs on the sound device's clock *
 static int64_t frame_offset;  /* the SPU2 frame at EE time 0, after a change of clock */
 static FILE *wav;
 static uint32_t wav_frames;
+/* the player's volume (port_audio_set_volume), for the sound device only: 0x10000 is the sound as made */
+static volatile int32_t device_gain = 0x10000;
 
 /* ---- The lock over the SPU2, libsd and the driver (the game's thread against SDL's audio thread) - */
 #ifdef _WIN32
@@ -103,6 +106,26 @@ static void wav_header(uint8_t header[44], uint32_t frames) {
     wav_put32(header + 40, bytes);
 }
 
+/* ---- The player's volume -------------------------------------------------------------------------- */
+void port_audio_set_volume(float gain) {
+    device_gain = gain <= 0.0f ? 0 : gain >= 1.0f ? 0x10000 : (int32_t)(gain * 65536.0f + 0.5f);
+}
+
+#ifdef KF4_HAVE_SDL
+/* Scales frames for the device (the WAV dump keeps the sound as made) */
+static void apply_volume(int16_t *frames, int count) {
+    int32_t gain = device_gain;
+    int i;
+
+    if (gain == 0x10000) {
+        return;
+    }
+    for (i = 0; i < count * 2; i++) {
+        frames[i] = (int16_t)(((int32_t)frames[i] * gain) >> 16);
+    }
+}
+#endif
+
 /* ---- The device's clock --------------------------------------------------------------------------- */
 #ifdef KF4_HAVE_SDL
 /* SDL's audio thread: the frames the device asks for, with the driver's ticks between them */
@@ -132,6 +155,7 @@ static void device_callback(void *user, Uint8 *stream, int length) {
             count = (int)((tick_due_x64 - now_x64 + 63u) / 64u);
         }
         spu2_render(out, count);
+        apply_volume(out, count);
         out += count * 2;
         frames -= count;
     }
@@ -169,7 +193,8 @@ static void open_outputs(void) {
     if (!port_options.headless && !port_options.no_audio) {
         SDL_AudioSpec want;
         SDL_AudioSpec have;
-        int pull = (port_options.audio_dump == NULL && port_options.input == NULL && !port_options.fast) ||
+        int pull = (port_options.audio_dump == NULL && port_options.input == NULL && !port_options.fast &&
+                    port_options.record_input == NULL) ||
                    getenv("KF4_AUDIO_DEVICE_CLOCK") != NULL;
 
         if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
@@ -234,7 +259,18 @@ static void output(const int16_t *frames, int count) {
             stats_drops++;
             SDL_ClearQueuedAudio(device);
         }
-        SDL_QueueAudio(device, frames, (Uint32)count * 4u);
+        if (device_gain != 0x10000) {
+            int16_t scaled[CHUNK_FRAMES * 2];
+
+            if (count > CHUNK_FRAMES) {
+                count = CHUNK_FRAMES;
+            }
+            memcpy(scaled, frames, (size_t)count * 4u);
+            apply_volume(scaled, count);
+            SDL_QueueAudio(device, scaled, (Uint32)count * 4u);
+        } else {
+            SDL_QueueAudio(device, frames, (Uint32)count * 4u);
+        }
         if (!device_playing && SDL_GetQueuedAudioSize(device) >= DEVICE_START_BYTES) {
             SDL_PauseAudioDevice(device, 0);
             device_playing = 1;
@@ -315,4 +351,46 @@ uint64_t port_audio_next_event(void) {
 void port_audio_event(uint64_t now) {
     port_audio_sync(now);
     fsiopsnd_tick(now);
+}
+
+/* ---- Save states -------------------------------------------------------------------------------
+   The SPU2 (ico-audio's, saved whole with the program's image) and the driver come back as they were;
+   this is the clock between them and the EE. The clock is this run's own: a state taken on the
+   game's clock goes on on the device's, and the other way round, from where the SPU2 and the
+   driver's next tick were. */
+void port_audio_state(PortStateIo *io) {
+    int state_device_clock = device_clock;
+    int64_t state_frame_offset = frame_offset;
+    uint64_t state_tick_due_x64 = 0;
+    uint64_t now = port_ee_cycles();
+
+#ifdef KF4_HAVE_SDL
+    state_tick_due_x64 = tick_due_x64;
+#endif
+    PORT_STATE(io, state_device_clock);
+    PORT_STATE(io, state_frame_offset);
+    PORT_STATE(io, state_tick_due_x64);
+    if (!io->loading) {
+        return;
+    }
+    if (!device_clock) {
+        frame_offset = state_device_clock ? (int64_t)spu2_time() - (int64_t)(now / AUDIO_EE_CYCLES_PER_FRAME)
+                                          : state_frame_offset;
+        sd_set_clock(0, frame_offset);
+        if (state_device_clock) {
+            fsiopsnd_resume_ticks(now);
+        }
+        return;
+    }
+#ifdef KF4_HAVE_SDL
+    if (state_device_clock) {
+        tick_due_x64 = state_tick_due_x64;
+    } else {
+        uint64_t next = fsiopsnd_next_tick();
+        uint64_t ahead = next != UINT64_MAX && next > now ? next - now : 0;
+
+        tick_due_x64 = spu2_time() * 64u + (ahead * 64u + AUDIO_EE_CYCLES_PER_FRAME - 1) / AUDIO_EE_CYCLES_PER_FRAME;
+    }
+    sd_set_clock(1, 0);
+#endif
 }

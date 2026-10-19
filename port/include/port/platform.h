@@ -32,14 +32,23 @@ typedef struct {
     int progressive;         /* a frame-mode interlaced picture is read whole, not a field at a time */
     int anti_blur;           /* undo the blur of a game that blends its two read circuits */
     int adapt_width;         /* the picture's width follows the game's, not the 640 of the TV */
+    /* The opt-in 16:9 picture (port_widescreen(), port/platform/gs.c): off by default, turned on by
+       --widescreen or settings.json, live from the overlay. */
+    int widescreen;
+    int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
+    int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
+    const char *memcard;     /* --memcard: the folder that is the memory card in slot 1, or "none" */
+    const char *record_input; /* --record-input: write the live pad as a pad script */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */
     const char *audio_dump;  /* --audio-dump: write the sound as a WAV file */
     int no_audio;            /* --no-audio: no sound device (the sound is still made) */
     int clock_fields[6];     /* year, month, day, hour, minute, second */
     int stats;               /* --stats: print where the controller's time went at exit */
+    const char *state_save_at; /* --state-save-at: VBLANK[:SLOT|:FILE],... (port/platform/savestate.c) */
+    const char *state_load;    /* --state-load: [VBLANK:]SLOT|FILE */
 } PortOptions;
 extern PortOptions port_options;
 
@@ -76,6 +85,8 @@ void port_fiber_switch(PortFiber *from, PortFiber *to);
 #define EE_BUS_HZ 147456000u
 /* The kernel's first steps, before the game's main runs. */
 void port_kernel_init(void);
+/* Runs the game's main as the EE's main thread, on a fiber; does not return. */
+int port_kernel_run(int (*game_main)(void));
 /* The current EE time in bus cycles, and the vblanks so far. */
 uint64_t port_ee_cycles(void);
 uint64_t port_vblank_count(void);
@@ -119,6 +130,8 @@ void port_ipu_dma_sync(void);
 int port_ipu_read_qword(uint8_t qword[16]);
 /* Sets IPU_BP for a decoder that holds `unused_bits` bits it has read and not used. */
 void port_ipu_set_bp(int unused_bits);
+/* 1 while a movie plays (port/sdk/libmpeg.c: a decoder exists), from any thread */
+int port_movie_playing(void);
 
 /* ---- VIF1 and VU1 (port/platform/vif1.c, port/platform/vu1.c) -------------------------------
    Run on the controller's thread as DMA channel 1 feeds them. */
@@ -171,6 +184,8 @@ void port_video_init(void);
 void port_video_submit(const PortGsFrame *frame);
 /* (the controller's thread) writes the picture as <dump-dir>/frame_<vblank>.png */
 void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
+/* writes RGBA pixels (R in the low byte) as an RGB PNG: 1 when it was written */
+int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture and keeps the window alive */
 void port_video_present(void);
 
@@ -196,6 +211,10 @@ int port_log_enabled(void);
 
 /* The game's state in one line (game/state_log.c), written to the log once a frame. */
 void kf4_game_state(char *line, size_t size);
+
+/* ---- The memory card (port/sdk/libmc.c) ----------------------------------------------------- */
+/* Opens the card folder of --memcard (by default <host-dir>/memcard), making it if it is missing */
+void port_mc_init(void);
 
 /* ---- The pad (port/sdk/libpad.c) ------------------------------------------------------------ */
 void port_pad_init(void);

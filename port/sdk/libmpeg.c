@@ -27,6 +27,7 @@
 #include "mpeg2.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 /* the callback types (sceMpegCbType) */
 #define CB_ERROR 0
@@ -63,6 +64,17 @@ typedef struct {
     int pictures;   /* pictures shown since sceMpegCreate */
     int64_t pts[3], dts[3]; /* each picture buffer's time stamps */
 } MpegState;
+
+/* decoders made and not deleted */
+static int decoders;
+
+const char *port_mpeg_state_busy(void) {
+    return port_movie_playing() ? "a movie is playing" : NULL;
+}
+
+int port_movie_playing(void) {
+    return __atomic_load_n(&decoders, __ATOMIC_ACQUIRE) > 0;
+}
 
 static MpegState *state_of(sceMpeg *mp) {
     if (mp == NULL || mp->sys == NULL) {
@@ -114,6 +126,7 @@ int sceMpegCreate(sceMpeg *mp, void *work_area, int size) {
     mp->pts = mp->dts = -1;
     mp->pts2nd = mp->dts2nd = -1;
     mpeg2_init(&s->decoder, read_qword, mp);
+    __atomic_fetch_add(&decoders, 1, __ATOMIC_RELEASE);
     sceMpegReset(mp);
     port_event("movie: decoder created");
     return 1;
@@ -124,6 +137,7 @@ int sceMpegDelete(sceMpeg *mp) {
 
     port_event("movie: decoder deleted after %d pictures", s->pictures);
     mpeg2_free(&s->decoder);
+    __atomic_fetch_sub(&decoders, 1, __ATOMIC_RELEASE);
     free(s);
     mp->sys = NULL;
     return 1;

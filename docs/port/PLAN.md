@@ -168,8 +168,14 @@ else it does differently. Its natural form is the woven one: it can draw the fra
 
 Then, all opt-in:
 - higher resolution;
-- widescreen (we own the projection code);
+- widescreen (done ahead of the native renderer, on stage 1's path; below);
 - higher frame rates, with interpolation while the game itself keeps its 30 Hz.
+
+The opt-in switches, each off by default (the PS2's picture), which the native renderer has to keep:
+
+| Switch | What it changes in the game code | What the PC does |
+|---|---|---|
+| `--widescreen` (overlay: Display, live) | Under `port_widescreen()` only: `GameLoop_SetCameraMatrices` (case 0) and `MapViewer_RunKingsMap` build the view-to-screen matrix three quarters as wide (`ax` 0.75), a 16:9 horizontal field of view in the same 640x448. `Hud_Draw`, `Hud_DrawPaused`, `Message_Draw`, `Splash_Draw`, `MapViewer_DrawPictureMap` and `MapViewer_DrawKingsMap` call `Widescreen_Mark` (`game/widescreen.c`) around their 2D: a GS register list writing `PORT_GS_REG_WIDESCREEN`, an address the GS does not have. | `port/platform/gs.c` squeezes the X of 2D vertices to three quarters about the screen's middle (the HUD about its left edge, or the middle with `--widescreen-hud-centred`): all of PATH3, and the marked 2D of the packet chain; it leaves pictures of the frame, full-screen fades and untextured fills reaching the edge at full width. The window is 16:9; `--dump-frames` keeps the GS's 640x448. No culling needed widening: the map records are culled by a half-plane, the rest in screen space. |
 
 ## Step 4: sound (first version done)
 
@@ -202,7 +208,27 @@ Still open:
 
 ## Step 5: saves and movies
 
-- The memory card becomes a folder.
+- **The memory card is a folder (done).** `port/sdk/libmc.c` implements libmc over a host folder.
+  - **Where it is.** By default the card in slot 1 is `memcard` in the data folder (`%APPDATA%\holyland`, beside settings.json and the save states). `--memcard DIR`
+    picks another folder and `--memcard none` empties the slot; `tools/boot_test.py` and
+    `tools/frame_test.py` pass `--memcard none`, so their logs are as before.
+  - **Its layout.** The game's folder `/BASLUS-20318S/` holds real files: the save files, the list
+    file, `icon.sys` and the icon. That is the layout of PCSX2's folder memory cards, so one can be
+    used here; PCSX2's own `_pcsx2_*` files are hidden from the game.
+  - **What the game sees.** It answers as Sony's libmc and mcman do: an 8 MB formatted PS2 card,
+    -1 on the first check of the slot, free space in 1 KB clusters (writes past it fail with "card
+    full"), `.` and `..` in listings, mcman's attributes and error codes. The dates are the file's,
+    in Japan's time.
+  - **The save image is the PS2's byte for byte.** `Game_WriteSaveImage` copies `PlayerState` only
+    below 0x100, ahead of the pointer fields where the PC layout starts to differ (0x204). Every other
+    block it writes (`EntityGroupRecord`, `LevelRecord`, `DefinitionByteSet`, `SaveInfo`, `McIconSys`)
+    has its PS2 size.
+  - **Checked by playing.** Saved at a save point and loaded from the title, on Windows.
+  - **Not done.** `sceMcFormat` keeps the folder as it is, since a card here is always formatted.
+    Importing a raw `.ps2` card image is left for a tool.
+- `--record-input FILE` records the live pad as a pad script for `--input`, to turn a played session
+  into a repeatable test. While recording, the sound stays on the game's clock and mouse look is off,
+  so the recording replays.
 - **The movies play (done).** The opening (`KF4OP.PSS`, after New Game), the ending (`KF4ED.PSS`)
   and the staff roll (`KF4STAFF.PSS`) play with picture and sound, and Start skips the opening from
   its eleventh picture on, as on the PS2.
@@ -244,6 +270,11 @@ Still open:
   - **Timing.** Decoding takes no EE time. The vblank handler shows a picture every two fields, so a
     movie runs at the PS2's pace: the opening's 2772 pictures take 5545 fields, 92.5 s (the stream
     is 30 pictures a second, NTSC shows 29.97). The sound plays at the SPU2's 48 kHz.
+  - **With `--widescreen`** the movies show at 4:3, pillarboxed. The player draws into a frame of
+    its own, with a draw offset of 0, which the GS front end leaves alone, so while a movie plays it
+    squeezes what PATH3 draws at that offset about the frame's middle (`port/platform/gs.c`); the
+    black clear reaches the edges and becomes the bars.
+  - **Save states** wait for the end of a movie: the decoder is the host's, not in a state.
   - **The tests.** `tests/newgame.pad` presses Start at vblank 740 and skips the opening after 17
     pictures. New Game's movie now ends at 751, `099.map` loads at 754, and the player stands in map
     0x63 from vblank 755. `tools/frame_test.py` also dumps a picture of the movie (vblank 740). The

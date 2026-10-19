@@ -23,6 +23,7 @@
 
 #include "csl.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 static uint32_t tick_add; /* Init's interval << 7: the clock's advance per ATick, in us * 128 */
 static int reported_bad_time;
@@ -731,4 +732,10 @@ unsigned short sceMidi_MidiGetRelativeTempo(CslCtx *ctx, unsigned int port) {
         return 0;
     }
     return (unsigned short)e->rel_tempo;
+}
+
+/* Save states (the ports' state is in the driver's, port/audio/fsiopsnd.c) */
+void port_modmidi_state(PortStateIo *io) {
+    PORT_STATE(io, tick_add);
+    PORT_STATE(io, reported_bad_time);
 }

@@ -77,6 +77,9 @@ add_library(kf4_port STATIC
     port/sdk/libpad.c
     port/sdk/controls.c
     port/sdk/libsdr.c
+    port/platform/savestate.c
+    port/overlay/settings.c
+    third_party/cjson/cJSON.c
     port/sdk/sif.c
     port/sdk/stubs.c
     port/sdk/game_stubs.c
@@ -90,11 +93,16 @@ add_library(kf4_port STATIC
     port/audio/modhsyn.c
     port/audio/sdrdrv.c)
 target_include_directories(kf4_port PUBLIC port/include)
+target_include_directories(kf4_port PRIVATE third_party/cjson)
 target_link_libraries(kf4_port PUBLIC ico_audio)
-target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
+target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
 set_source_files_properties(port/platform/vu1.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
+# The fibers switch stacks by hand (port/platform/fiber.c), which a shadow stack would refuse
+if(NOT WIN32)
+    set_source_files_properties(port/platform/fiber.c PROPERTIES COMPILE_OPTIONS "-fcf-protection=none")
+endif()
 find_package(Threads REQUIRED)
 target_link_libraries(kf4_port PUBLIC Threads::Threads)
 if(WIN32)
@@ -110,11 +118,29 @@ endif()
 if(KF4_USE_SDL AND SDL2_FOUND)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_SDL)
     if(TARGET SDL2::SDL2)
-        target_link_libraries(kf4_port PRIVATE SDL2::SDL2)
+        set(KF4_SDL2_LINK SDL2::SDL2)
     else()
         target_include_directories(kf4_port PRIVATE ${SDL2_INCLUDE_DIRS})
-        target_link_libraries(kf4_port PRIVATE ${SDL2_LIBRARIES})
+        set(KF4_SDL2_LINK ${SDL2_LIBRARIES})
     endif()
+    target_link_libraries(kf4_port PRIVATE ${KF4_SDL2_LINK})
+    # The settings overlay (F1): Dear ImGui (third_party/imgui) on the window's SDL_Renderer
+    enable_language(CXX)
+    add_library(imgui STATIC
+        third_party/imgui/imgui.cpp
+        third_party/imgui/imgui_draw.cpp
+        third_party/imgui/imgui_tables.cpp
+        third_party/imgui/imgui_widgets.cpp
+        third_party/imgui/backends/imgui_impl_sdl2.cpp
+        third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+    target_include_directories(imgui PUBLIC third_party/imgui)
+    if(NOT TARGET SDL2::SDL2)
+        target_include_directories(imgui PRIVATE ${SDL2_INCLUDE_DIRS})
+    endif()
+    target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
+    set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
+    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp)
+    target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
 endif()
@@ -246,7 +272,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c)
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
@@ -263,9 +289,21 @@ set(KF4_GAME_OBJECTS)
 foreach(target ${KF4_GAME_TARGETS})
     list(APPEND KF4_GAME_OBJECTS $<TARGET_OBJECTS:${target}>)
 endforeach()
-add_executable(kf4 port/platform/main_host.c ${KF4_GAME_OBJECTS})
+# Save states (port/platform/savestate.c) copy the globals of the game and of ico-audio's SPU2 as one
+# block of the program's image: their objects are linked between two markers, which the linker keeps
+# in that order. The program is linked at a fixed address (no ASLR), so that a state's pointers to the
+# program's code and data hold in the next run of the same build.
+add_library(kf4_state_begin OBJECT port/platform/state_begin.c)
+add_library(kf4_state_end OBJECT port/platform/state_end.c)
+add_executable(kf4 port/platform/main_host.c $<TARGET_OBJECTS:kf4_state_begin> ${KF4_GAME_OBJECTS}
+    $<TARGET_OBJECTS:ico_audio> $<TARGET_OBJECTS:kf4_state_end>)
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
 target_link_libraries(kf4 PRIVATE kf4_port)
+if(WIN32)
+    target_link_options(kf4 PRIVATE -Wl,--disable-dynamicbase)
+else()
+    target_link_options(kf4 PRIVATE -no-pie)
+endif()
 
 # The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone
 add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c)

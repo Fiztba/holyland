@@ -2,7 +2,10 @@
 
    The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread and left here;
    at each vblank the game's thread shows the newest one in an SDL window, scaled to fit it at the
-   picture's own aspect. A dumped frame is written as a PNG, uncompressed, so no library is needed. */
+   TV's 4:3 (or stretched, by the settings), with the settings overlay (F1) over it. A dumped frame is
+   written as a PNG, uncompressed, so no library is needed. It is the GS's own picture, 640x448 (or
+   the scanout's size) whatever the window shows: with --widescreen it is the squeezed picture, to be
+   shown at 16:9. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +22,9 @@
 
 #include "port/controls.h"
 #include "port/host.h"
+#include "port/overlay.h"
 #include "port/platform.h"
+#include "port/settings.h"
 
 /* ---- The newest picture, between the two threads --------------------------------------------- */
 #ifdef _WIN32
@@ -54,8 +59,35 @@ static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *texture;
 static uint32_t texture_width, texture_height;
+static int texture_smooth;
 static uint32_t *shown;
+
+/* the window's size in windowed mode: the height the settings say, and as wide as the picture's
+   shape (4:3, or 16:9 with --widescreen) at that height */
+static void window_size(int *width, int *height) {
+    int h = port_settings.window_height < 448 ? 448 : port_settings.window_height;
+
+    *width = port_options.widescreen ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3;
+    *height = h;
+}
 #endif
+
+void port_video_apply_settings(void) {
+#ifdef KF4_HAVE_SDL
+    int width, height;
+
+    if (window == NULL) {
+        return;
+    }
+    SDL_SetWindowFullscreen(window, port_settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    if (!port_settings.fullscreen) {
+        window_size(&width, &height);
+        SDL_SetWindowSize(window, width, height);
+        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+    SDL_RenderSetVSync(renderer, port_settings.vsync);
+#endif
+}
 
 void port_video_init(void) {
 #ifdef KF4_HAVE_SDL
@@ -66,13 +98,27 @@ void port_video_init(void) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return;
     }
-    window = SDL_CreateWindow("King's Field IV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 896,
-                              SDL_WINDOW_RESIZABLE);
+    {
+        int width, height;
+        Uint32 flags = SDL_WINDOW_RESIZABLE;
+
+        window_size(&width, &height);
+        if (port_settings.fullscreen) {
+            flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        }
+        /* pictures of the overlay for tests (KF4_OVERLAY_SHOT) need no window on the screen */
+        if (getenv("KF4_OVERLAY_SHOT") != NULL) {
+            flags |= SDL_WINDOW_HIDDEN;
+        }
+        window = SDL_CreateWindow("King's Field IV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height,
+                                  flags);
+    }
     if (window == NULL) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return;
     }
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    renderer = SDL_CreateRenderer(window, -1,
+                                  SDL_RENDERER_ACCELERATED | (port_settings.vsync ? SDL_RENDERER_PRESENTVSYNC : 0));
     if (renderer == NULL) {
         renderer = SDL_CreateRenderer(window, -1, 0);
     }
@@ -87,6 +133,7 @@ void port_video_init(void) {
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
     shown = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+    port_overlay_init(window, renderer);
 #else
     if (!port_options.headless && port_gs_enabled()) {
         fprintf(stderr, "[video] built without SDL2: no window\n");
@@ -111,10 +158,11 @@ void port_video_present(void) {
         latest_new = 0;
     }
     UNLOCK();
-    if (!fresh) {
+    /* with nothing new, the window is drawn again only for the overlay */
+    if (!fresh && (texture == NULL || !port_overlay_visible())) {
         return;
     }
-    if (texture == NULL || texture_width != width || texture_height != height) {
+    if (fresh && (texture == NULL || texture_width != width || texture_height != height)) {
         if (texture != NULL) {
             SDL_DestroyTexture(texture);
         }
@@ -122,19 +170,30 @@ void port_video_present(void) {
                                     (int)height);
         texture_width = width;
         texture_height = height;
+        texture_smooth = -1;
         if (texture == NULL) {
             return;
         }
     }
-    SDL_UpdateTexture(texture, NULL, shown, (int)(width * 4));
+    if (fresh) {
+        SDL_UpdateTexture(texture, NULL, shown, (int)(width * 4));
+    }
+    if (texture_smooth != port_settings.smooth) {
+        texture_smooth = port_settings.smooth;
+        SDL_SetTextureScaleMode(texture, texture_smooth ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+    }
     {
         int out_w, out_h;
         SDL_Rect dst;
-        /* the TV's 4:3, whatever the scanout's size */
-        double aspect = 4.0 / 3.0;
+        /* the TV's 4:3, whatever the scanout's size; with --widescreen a 16:9 TV's (the game drew its
+           picture squeezed for it, port/platform/gs.c) */
+        double aspect = port_options.widescreen ? 16.0 / 9.0 : 4.0 / 3.0;
 
         SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
-        if ((double)out_w / out_h > aspect) {
+        if (port_settings.aspect == ASPECT_STRETCH) {
+            dst.w = out_w;
+            dst.h = out_h;
+        } else if ((double)out_w / out_h > aspect) {
             dst.h = out_h;
             dst.w = (int)(out_h * aspect + 0.5);
         } else {
@@ -146,6 +205,7 @@ void port_video_present(void) {
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, &dst);
         port_controls_draw(renderer, dst.x, dst.y, dst.w, dst.h);
+        port_overlay_draw();
         SDL_RenderPresent(renderer);
     }
 #endif
@@ -199,10 +259,9 @@ static void write_chunk(FILE *f, const char *type, const uint8_t *data, size_t s
 }
 
 /* RGB rows, each after its filter byte (0), in a zlib stream of stored blocks */
-void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
-    char path[4096];
-    size_t row = (size_t)frame->width * 3 + 1;
-    size_t raw_size = row * frame->height;
+int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height) {
+    size_t row = (size_t)width * 3 + 1;
+    size_t raw_size = row * height;
     size_t blocks = (raw_size + 65534) / 65535;
     size_t z_size = 2 + raw_size + blocks * 5 + 4;
     uint8_t *raw = malloc(raw_size);
@@ -212,13 +271,14 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
     size_t i, at, done;
     uint32_t x, y;
     FILE *f;
+    int ok = 0;
 
-    for (y = 0; y < frame->height; y++) {
+    for (y = 0; y < height; y++) {
         uint8_t *out = raw + row * y;
 
         *out++ = 0;
-        for (x = 0; x < frame->width; x++) {
-            uint32_t p = frame->rgba[(size_t)y * frame->width + x];
+        for (x = 0; x < width; x++) {
+            uint32_t p = rgba[(size_t)y * width + x];
 
             *out++ = (uint8_t)p;
             *out++ = (uint8_t)(p >> 8);
@@ -247,16 +307,14 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
     put32(z + at, (b << 16) | a);
     at += 4;
 
-    put32(header, frame->width);
-    put32(header + 4, frame->height);
+    put32(header, width);
+    put32(header + 4, height);
     header[8] = 8;  /* bits */
     header[9] = 2;  /* RGB */
     header[10] = 0; /* deflate */
     header[11] = 0; /* filters */
     header[12] = 0; /* not interlaced */
 
-    snprintf(path, sizeof(path), "%s/frame_%06llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
-             (unsigned long long)vblank);
     f = fopen(path, "wb");
     if (f == NULL) {
         fprintf(stderr, "[video] cannot write %s\n", path);
@@ -266,9 +324,20 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
         write_chunk(f, "IDAT", z, at);
         write_chunk(f, "IEND", NULL, 0);
         fclose(f);
-        fprintf(stderr, "[video] vblank %llu: %ux%u, %s\n", (unsigned long long)vblank, frame->width,
-                frame->height, path);
+        ok = 1;
     }
     free(raw);
     free(z);
+    return ok;
+}
+
+void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
+    char path[4096];
+
+    snprintf(path, sizeof(path), "%s/frame_%06llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
+             (unsigned long long)vblank);
+    if (port_png_write(path, frame->rgba, frame->width, frame->height)) {
+        fprintf(stderr, "[video] vblank %llu: %ux%u, %s\n", (unsigned long long)vblank, frame->width,
+                frame->height, path);
+    }
 }

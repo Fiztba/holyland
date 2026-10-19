@@ -14,6 +14,9 @@
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off
+       --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
+       --widescreen-hud-centred
+                         the same, with the HUD in the 4:3 middle instead of the 16:9 corner
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default)
@@ -22,7 +25,17 @@
        --audio-dump FILE write the sound as a 48 kHz WAV file
        --no-audio        play no sound (it is still made, for --audio-dump)
        --controls NAME   the keyboard and mouse layout: ps2 (the default) or verdite (mouse look,
-                         port/sdk/controls.c) */
+                         port/sdk/controls.c)
+       --memcard DIR     the folder that is the memory card in slot 1 (by default memcard in the
+                         data folder, next to settings.json); "none" leaves the slot empty
+       --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
+                         (the sound then follows the game's clock and mouse look is off, so it replays)
+       --state-save-at VBLANK[:SLOT|:FILE],...
+                         save a state at these vblanks (port/platform/savestate.c)
+       --state-load [VBLANK:]SLOT|FILE
+                         load a state before the game starts, or at that vblank
+   With a window and no pad script, settings.json (port/overlay/settings.c, the overlay's F1) fills in
+   what the command line does not say. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +44,8 @@
 #include "port/audio.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/settings.h"
+#include "port/savestate.h"
 
 PortOptions port_options;
 PortStats port_stats;
@@ -42,7 +57,9 @@ static void usage(const char *program) {
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
-            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite]\n",
+            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]\n"
+            "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
+            "          [--state-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n",
             program);
     exit(2);
 }
@@ -103,6 +120,13 @@ static void parse_options(int argc, char **argv) {
             port_options.adapt_width = 0;
             continue;
         }
+        if (strcmp(option, "--widescreen") == 0 || strcmp(option, "--widescreen-hud-centred") == 0) {
+            port_options.widescreen = port_options.widescreen_forced = 1;
+            if (strcmp(option, "--widescreen-hud-centred") == 0) {
+                port_options.widescreen_hud_centred = 1;
+            }
+            continue;
+        }
         if (strcmp(option, "--stats") == 0) {
             port_options.stats = 1;
             continue;
@@ -127,10 +151,18 @@ static void parse_options(int argc, char **argv) {
             port_options.dump_frames = value;
         } else if (strcmp(option, "--audio-dump") == 0) {
             port_options.audio_dump = value;
+        } else if (strcmp(option, "--record-input") == 0) {
+            port_options.record_input = value;
+        } else if (strcmp(option, "--memcard") == 0) {
+            port_options.memcard = value;
         } else if (strcmp(option, "--controls") == 0) {
             port_options.controls = value;
         } else if (strcmp(option, "--dump-dir") == 0) {
             port_options.dump_dir = value;
+        } else if (strcmp(option, "--state-save-at") == 0) {
+            port_options.state_save_at = value;
+        } else if (strcmp(option, "--state-load") == 0) {
+            port_options.state_load = value;
         } else {
             usage(argv[0]);
         }
@@ -222,6 +254,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     parse_options(argc, argv);
+    port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);
@@ -231,12 +264,14 @@ int main(int argc, char **argv) {
     port_memory_init();
     port_address_init();
     port_disc_open(port_options.disc);
+    port_mc_init();
     port_kernel_init();
     port_dmac_start();
     port_gs_init();
     port_pad_init();
     port_video_init();
     port_audio_init();
+    port_state_init();
     fprintf(stderr, "[port] game RAM at %p, running the game\n", (void *)ee_ram);
-    return kf4_game_main();
+    return port_kernel_run(kf4_game_main);
 }

@@ -1,5 +1,5 @@
 diff --git a/src/game/ui/hud.c b/src/game/ui/hud.c
-index d79d710ef4f6fb968c6227cb8f2efef747e9e26d..5b7438577406590cf535fb324021977197ed5c04 100644
+index d79d710ef4f6fb968c6227cb8f2efef747e9e26d..2673591f4839ee0a4ddb013b13434828b031b2cf 100644
 --- a/src/game/ui/hud.c
 +++ b/src/game/ui/hud.c
 @@ -4,6 +4,7 @@
@@ -10,8 +10,11 @@ index d79d710ef4f6fb968c6227cb8f2efef747e9e26d..5b7438577406590cf535fb3240219771
  
  void TextureTable_SetBasePointers(char *, int, int);
  void Hud_InitSprite(ScreenSprite *, s64, u64, u64, u8, u8, u8, u8, s32, s32, u32, s32, s32, s32, s32, s32, s32);
-@@ -14,7 +15,7 @@ void Packet_EndGsRegisters(void);
+@@ -12,9 +13,10 @@ void Packet_BeginGsRegisters(void);
+ void Packet_AddGsRegister(int, s64);
+ void Packet_EndGsRegisters(void);
  void GsDraw_QueueTexturedSprite(void *);
++void Widescreen_Mark(int); /* PC: --widescreen (game/widescreen.c) */
  
  extern char game_options[0x10]; // match: read as a signed byte here
 -extern s32 hud_visible[];
@@ -19,7 +22,7 @@ index d79d710ef4f6fb968c6227cb8f2efef747e9e26d..5b7438577406590cf535fb3240219771
  extern PlayerState player_state;
  extern char *hud_area;          /* the HUD area, where gage.tx2 is loaded */
  
-@@ -26,7 +27,7 @@ static ScreenSprite pause_sprite;               /* 0x5CE098 the pause label */
+@@ -26,7 +28,7 @@ static ScreenSprite pause_sprite;               /* 0x5CE098 the pause label */
  void Hud_InitSprite(ScreenSprite *sprite, s64 prim, u64 tex0, u64 tex1, u8 red, u8 green, u8 blue, u8 alpha,
                     s32 pos_x, s32 pos_y, u32 depth, s32 width, s32 height, s32 first_s, s32 first_t, s32 second_s,
                     s32 second_t) {
@@ -28,7 +31,7 @@ index d79d710ef4f6fb968c6227cb8f2efef747e9e26d..5b7438577406590cf535fb3240219771
      sprite->tex0 = tex0;
      sprite->tex1 = tex1;
      sprite->rgba[0] = red;
-@@ -50,8 +51,8 @@ void Hud_InitSprite(ScreenSprite *sprite, s64 prim, u64 tex0, u64 tex1, u8 red,
+@@ -50,8 +52,8 @@ void Hud_InitSprite(ScreenSprite *sprite, s64 prim, u64 tex0, u64 tex1, u8 red,
  }
  
  static inline char *align16(char *address) {
@@ -39,7 +42,7 @@ index d79d710ef4f6fb968c6227cb8f2efef747e9e26d..5b7438577406590cf535fb3240219771
      }
      return address;
  }
-@@ -99,6 +100,7 @@ void Hud_Load(void) {
+@@ -99,6 +101,7 @@ void Hud_Load(void) {
  
  /* Per-frame HUD update; empty in retail. */
  int Hud_Update(void) { // match: callers read $2 after it, so it is declared to return a value
@@ -47,15 +50,32 @@ index d79d710ef4f6fb968c6227cb8f2efef747e9e26d..5b7438577406590cf535fb3240219771
  }
  
  /* Draws the HUD: the frame, the two bars that fill from the left, the one that fills from the bottom, and the
-@@ -107,7 +109,7 @@ void Hud_Draw(void) {
+@@ -107,8 +110,9 @@ void Hud_Draw(void) {
      ScreenSprite sprite;
      s32 fade;
  
 -    if (game_options[9] != 0 && hud_visible[0] != 0) {
 +    if (game_options[9] != 0 && map_draw_state.hud_shown != 0) {
          TextureTable_QueueAll((TextureTableHeader *)hud_area);
++        Widescreen_Mark(PORT_WIDESCREEN_HUD_LEFT); /* PC */
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
+         Packet_AddGsRegister(GS_REG_TEST_1, 0x31001);
+@@ -184,11 +188,14 @@ void Hud_Draw(void) {
+         Packet_EndGsRegisters();
+         sprite = hud_sprites[9];
+         GsDraw_QueueTexturedSprite(&sprite);
++        Widescreen_Mark(PORT_WIDESCREEN_3D); /* PC */
+     }
+ }
+ 
+ /* Draws the pause label over the paused game. */
+ void Hud_DrawPaused(void) {
+     TextureTable_QueueAll(pause_texture_table);
++    Widescreen_Mark(PORT_WIDESCREEN_2D); /* PC */
+     GsDraw_QueueTexturedSprite(&pause_sprite);
++    Widescreen_Mark(PORT_WIDESCREEN_3D); /* PC */
+ }
 diff --git a/src/game/ui/link.h b/src/game/ui/link.h
 index 304150659bbc58d3906b3f06ea4d296c605830b6..7bf73550a34875ee71c43c3c49921af077ee7a4c 100644
 --- a/src/game/ui/link.h
@@ -94,7 +114,7 @@ index 304150659bbc58d3906b3f06ea4d296c605830b6..7bf73550a34875ee71c43c3c49921af0
  
  #endif
 diff --git a/src/game/ui/map_viewer.c b/src/game/ui/map_viewer.c
-index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e11f200ee5 100644
+index bf418608acb7435fefdee97b9c274838dc07670e..7d32ecb4a24f5cc32aabc5227f0f197cd5c8b0f0 100644
 --- a/src/game/ui/map_viewer.c
 +++ b/src/game/ui/map_viewer.c
 @@ -12,6 +12,10 @@
@@ -133,9 +153,11 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
  void Game_ApplyBrightness(int);
  void Packet_AppendToChain(u32 *, u32 *);
  u32 *Packet_Alloc(int);
-@@ -59,11 +59,6 @@ void GsDraw_QueueFlush(void);
+@@ -58,12 +58,8 @@ void Packet_EndGsRegisters(void);
+ void GsDraw_QueueFlush(void);
  void GsDraw_QueueTexFlush(void);
  void GsDraw_QueueTexturedSprite(void *);
++void Widescreen_Mark(int); /* PC: --widescreen (game/widescreen.c) */
  void TextureTable_QueueOne(TextureTableHeader *, s32);
 -void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
 -void sceVu0TransMatrix(float *, float *, float *);
@@ -145,7 +167,7 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
  void Vector_Scale(float *, float *, float);
  void Vector_Subtract(void *, void *, void *);
  void GsDraw_QueueVu1Matrix(void *);
-@@ -99,8 +94,10 @@ extern MapDrawState map_draw_state;
+@@ -99,8 +95,10 @@ extern MapDrawState map_draw_state;
  extern MapLightBlock viewer_default_lights;
  extern char kings_map_overlay_rect[0x40];
  extern char kings_map_corner_rect[0x40];
@@ -158,7 +180,7 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
  
  /* the map viewer: the picture data read into the spare area, the viewer picked, and its animation */
  static char *viewer_data;                   /* 0x44705C the spare area the viewer's textures are read into */
-@@ -126,7 +123,7 @@ void MapViewer_OpenForItem(int viewer_number) {
+@@ -126,7 +124,7 @@ void MapViewer_OpenForItem(int viewer_number) {
  
      if (!(((u32)game_status[9] >> 8) & 1) && ((viewer_index = viewer_number - 1) < 5U)) {
          if (viewer_number == 5) {
@@ -167,7 +189,7 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
              if (MapViewer_IsKingsMapUsable(row[1]) == 0) {
                  Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_UNABLE_TO_USE_HERE);
                  return;
-@@ -177,8 +174,8 @@ static void MapViewer_RestorePacketBuffers(void) {
+@@ -177,8 +175,8 @@ static void MapViewer_RestorePacketBuffers(void) {
  }
  
  static inline char *align16(char *address) {
@@ -178,7 +200,7 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
      }
      return address;
  }
-@@ -205,7 +202,7 @@ static int MapViewer_Load(void) {
+@@ -205,7 +203,7 @@ static int MapViewer_Load(void) {
      Packet_LayOutBuffers(2);
      viewer_data = NULL;
      viewer_data_size = 0;
@@ -187,7 +209,7 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
      memset(viewer_data, 0, viewer_data_size);
      size = File_Read(file, viewer_data, -1);
      File_Close(file);
-@@ -321,7 +318,7 @@ void MapViewer_DrawPictureMap(void) {
+@@ -321,11 +319,12 @@ void MapViewer_DrawPictureMap(void) {
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -196,7 +218,12 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
      Packet_EndGsRegisters();
      TextureTable_QueueOne((TextureTableHeader *)viewer_data, viewer_picture);
      GsDraw_QueueTexFlush();
-@@ -362,11 +359,11 @@ void MapViewer_DrawPictureMap(void) {
+     GsDraw_QueueFlush();
++    Widescreen_Mark(PORT_WIDESCREEN_2D); /* PC */
+     GsDraw_QueueTexturedSprite(&viewer_picture_rect);
+     found = ((int (*)(int *, int *))entry->locate_player_fn)(&x, &y);
+     if (found == 1) {
+@@ -362,11 +361,11 @@ void MapViewer_DrawPictureMap(void) {
          *packet++ = 0;
          *packet++ = 0;
          *packet++ = 0x6C0FC000;
@@ -211,7 +238,15 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
          packet += 2;
          *packet++ = 6;
          *packet++ = 0;
-@@ -594,7 +591,7 @@ int MapViewer_LocateOnEarthFolksMap(int *map_x, int *map_y) {
+@@ -436,6 +435,7 @@ void MapViewer_DrawPictureMap(void) {
+     Packet_BeginGsRegisters();
+     Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+     Packet_EndGsRegisters();
++    Widescreen_Mark(PORT_WIDESCREEN_3D); /* PC */
+     Game_ApplyBrightness(game_options[10]);
+ }
+ 
+@@ -594,7 +594,7 @@ int MapViewer_LocateOnEarthFolksMap(int *map_x, int *map_y) {
      int area;
      char *entry;
  
@@ -220,7 +255,18 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
      area = ((u8 *)entry)[1];
      if (area >= 0x11) {
          if (area < 0x14) {
-@@ -774,16 +771,16 @@ static void MapViewer_DrawKingsMap(void) {
+@@ -650,7 +650,9 @@ void MapViewer_RunKingsMap(void) {
+         int held;
+         int pressed;
+ 
+-        sceVu0ViewScreenMatrix(view_screen, 512.0f, 1.0f, 1.0f, 2048.0f, 2048.0f, 1.0f, 1048560.0f, 1.0f, 65535.0f);
++        /* PC: --widescreen: the map is as wide as the world's view; its frame stretches, its panel does not */
++        sceVu0ViewScreenMatrix(view_screen, 512.0f, port_widescreen() ? 0.75f : 1.0f, 1.0f, 2048.0f, 2048.0f, 1.0f,
++                               1048560.0f, 1.0f, 65535.0f);
+         do {
+             VuVector4 move;
+ 
+@@ -774,16 +776,16 @@ static void MapViewer_DrawKingsMap(void) {
      Packet_AddGsRegister(GS_REG_TEST_2, 0x51001);
      Packet_AddGsRegister(GS_REG_ALPHA_2, ((s64)alpha << 32) | 0x68);
      Packet_EndGsRegisters();
@@ -240,7 +286,7 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
      Packet_EndGsRegisters();
      GsDraw_QueueFlush();
      for (map = 0; map < 2; map++) {
-@@ -812,16 +809,16 @@ static void MapViewer_DrawKingsMap(void) {
+@@ -812,16 +814,16 @@ static void MapViewer_DrawKingsMap(void) {
                              continue;
                          }
                          if (flags & 0x10) {
@@ -265,6 +311,22 @@ index bf418608acb7435fefdee97b9c274838dc07670e..2d0a4a90a15748182783c62c1a92d4e1
                      }
                      break;
              }
+@@ -855,6 +857,7 @@ static void MapViewer_DrawKingsMap(void) {
+     Packet_EndGsRegisters();
+     GsDraw_QueueFlush();
+     GsDraw_QueueTexturedSprite(kings_map_overlay_rect);
++    Widescreen_Mark(PORT_WIDESCREEN_2D); /* PC */
+     TextureTable_QueueOne((TextureTableHeader *)viewer_data, 2);
+     GsDraw_QueueTexFlush();
+     GsDraw_QueueFlush();
+@@ -874,6 +877,7 @@ static void MapViewer_DrawKingsMap(void) {
+     Packet_EndGsRegisters();
+     GsDraw_QueueFlush();
+     GsDraw_QueueTexturedSprite(kings_map_corner_rect);
++    Widescreen_Mark(PORT_WIDESCREEN_3D); /* PC */
+     Game_ApplyBrightness(game_options[10]);
+ }
+ 
 diff --git a/src/game/ui/map_viewer_tables.c b/src/game/ui/map_viewer_tables.c
 index 5c908ede4d62a32959f2b5d8a9cc97f8420de923..5ec27526969f8ff0e462051e7c1e02c4b14c9c71 100644
 --- a/src/game/ui/map_viewer_tables.c
@@ -3512,7 +3574,7 @@ index b6f81dfc3ac840762c4812d748779b5ebca327da..b4f8432669d0c8a93a7060f28c9abdf3
  /* Puts every load buffer back on the free list, keeping a load still in progress. */
  void Menu_ResetLoadBuffers(void);
 diff --git a/src/game/ui/message.c b/src/game/ui/message.c
-index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4739e1b77 100644
+index 900c0bc7148f07247f3919bffcf126775bd08779..b0be2c36944630c4ee87e965585c46abf22781b4 100644
 --- a/src/game/ui/message.c
 +++ b/src/game/ui/message.c
 @@ -1,13 +1,11 @@
@@ -3532,12 +3594,13 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
  
  #define NOTICE_COUNT 6
  #define DEBUG_LOG_LINES 0x80
-@@ -29,11 +27,10 @@ void GsDraw_QueueTexFlush(void);
+@@ -29,11 +27,11 @@ void GsDraw_QueueTexFlush(void);
  u32 *Packet_Alloc(int);
  void Packet_AppendToChain(u32 *, u32 *);
  int Message_SplitDigits(int, u8 *);
 -void *memset(void *, int, u32);
 -int vsprintf(char *, const char *, char *);
++void Widescreen_Mark(int); /* PC: --widescreen (game/widescreen.c) */
  
 -extern s32 menu_heap;
 -extern u16 pad_pressed[];
@@ -3547,7 +3610,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
  extern u16 action_button;
  
  static TextColor text_colours[10] = {     /* 0x420B40 */
-@@ -109,9 +106,9 @@ void Message_Init(void) {
+@@ -109,9 +107,9 @@ void Message_Init(void) {
      notices[NOTICE_COUNT - 1].next = notices;
      // match: the callee returns a value here; $2 is then taken when the table address is formed
      ((int (*)(void *, u32))Memory_ClearWords)(glyph_alphas, 0x200);
@@ -3559,7 +3622,15 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
      font_tex0[1].second = GS_REG_TEX0_1;
  }
  
-@@ -242,7 +239,7 @@ static void Message_Draw(void) {
+@@ -199,6 +197,7 @@ static void Message_Draw(void) {
+     if (box_open != 0 || notices_active != 0 || debug_line_count != 0) {
+         TextureTable_QueueAll((TextureTableHeader *)Message_GetFontTexture(menu_heap));
+         GsDraw_QueueTexFlush();
++        Widescreen_Mark(PORT_WIDESCREEN_2D); /* PC */
+         if (box_open != 0) {
+             glyph_count += message_box.typed;
+         } else if (notices_active != 0) {
+@@ -242,7 +241,7 @@ static void Message_Draw(void) {
              texture = (u64 *)words;
              texture[0] = 0;
              texture[1] = 0; /* PRIM */
@@ -3568,7 +3639,15 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
              texture[5] = GS_REG_TEX0_1;
              texture[2] = 0;
              texture[3] = GS_REG_TEX1_1;
-@@ -280,10 +277,10 @@ int Message_IsBoxOpen(void) {
+@@ -266,6 +265,7 @@ static void Message_Draw(void) {
+             Message_DrawDebugLog();
+         }
+         Packet_AppendToChain(packet, glyph_packet);
++        Widescreen_Mark(PORT_WIDESCREEN_3D); /* PC */
+         glyph_count = 0;
+         debug_line_count = 0;
+     }
+@@ -280,10 +280,10 @@ int Message_IsBoxOpen(void) {
     It types out a glyph every `delay` frames; `centred` centres each line. */
  void Message_OpenBox(int x, int y, int font, int centred, int delay, int message_id, ...) {
      va_list args;
@@ -3581,7 +3660,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
      if (box_open == 0) {
          box_open = 1;
          Message_Format((u16 *)format, (u16 *)box_text, args);
-@@ -302,6 +299,7 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
+@@ -302,6 +302,7 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
          message_box.closing = 0;
          message_box.end = Message_LayoutPage(box_text, font);
      }
@@ -3589,7 +3668,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
  }
  
  /* Formats message `message_id` into a notice of the ring for `frames` frames, centred on (x + 320, y + 400).
-@@ -309,7 +307,7 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
+@@ -309,7 +310,7 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
     ring is full. */
  void Message_ShowNotice(int x, int y, int font, int kind, int frames, int message_id, ...) {
      va_list args;
@@ -3598,7 +3677,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
      int width;
  
      format = Message_GetText(message_id);
-@@ -317,8 +315,9 @@ void Message_ShowNotice(int x, int y, int font, int kind, int frames, int messag
+@@ -317,8 +318,9 @@ void Message_ShowNotice(int x, int y, int font, int kind, int frames, int messag
          int left; // match: the two branches have their own left and top
          int top;
  
@@ -3609,7 +3688,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
          width = Message_GetTextWidth(notice_shown->text, font);
          left = x + 0x140;
          top = y + 0x190;
-@@ -335,8 +334,9 @@ void Message_ShowNotice(int x, int y, int font, int kind, int frames, int messag
+@@ -335,8 +337,9 @@ void Message_ShowNotice(int x, int y, int font, int kind, int frames, int messag
          if (notice_free->next == notice_shown) {
              return;
          }
@@ -3620,7 +3699,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
          width = Message_GetTextWidth(notice_free->text, font);
          left = x + 0x140;
          top = y + 0x190;
-@@ -356,8 +356,9 @@ void Message_DebugPrintf(char *format, ...) {
+@@ -356,8 +359,9 @@ void Message_DebugPrintf(char *format, ...) {
      va_list args;
      int length;
  
@@ -3631,7 +3710,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
      glyph_count += length;
      debug_line_count++;
  }
-@@ -369,12 +370,12 @@ void Message_DebugSetColor(char colour) {
+@@ -369,12 +373,12 @@ void Message_DebugSetColor(char colour) {
  }
  
  /* Where font.tmr, the font texture, is loaded in the font buffer. */
@@ -3646,7 +3725,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
      return font_base + 0x1A0400;
  }
  
-@@ -586,9 +587,11 @@ static void Message_DrawGlyph(int pos_x, int pos_y, int glyph, int colour, int a
+@@ -586,9 +590,11 @@ static void Message_DrawGlyph(int pos_x, int pos_y, int glyph, int colour, int a
      *glyph_packet++ = 0;
      *glyph_packet++ = 0;
      if (first_page && kind == 0) {
@@ -3660,7 +3739,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..1ed3fd5652f678e8caea8fbedc7871a4
      }
      rgb = &text_colours[colour];
      *glyph_packet++ = rgb->red;
-@@ -682,7 +685,7 @@ int Message_SplitDigits(int value, u8 *digits) {
+@@ -682,7 +688,7 @@ int Message_SplitDigits(int value, u8 *digits) {
  }
  
  /* Address of message message_id: the offset table entry after the table's first word, then the text it points to. */
@@ -3689,7 +3768,7 @@ index df766951e5e83792583982317358f949b5d5f12a..c43669166e88a57f1cf141889b6b3bb3
  
  #endif
 diff --git a/src/game/ui/splash.c b/src/game/ui/splash.c
-index fddc7986c53181049f608b2fed7b478623121bde..e39eca9e0369f8dc8e84510ce81b5bfbcbcf1334 100644
+index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47b9d24b87 100644
 --- a/src/game/ui/splash.c
 +++ b/src/game/ui/splash.c
 @@ -3,14 +3,16 @@
@@ -3715,16 +3794,17 @@ index fddc7986c53181049f608b2fed7b478623121bde..e39eca9e0369f8dc8e84510ce81b5bfb
  extern u16 action_button;
  extern u32 *splash_image_packet;
  
-@@ -26,7 +28,7 @@ void Packet_AddGsRegister(int, s64);
+@@ -26,7 +28,8 @@ void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
  void GsDraw_QueueTexFlush(void);
  void GsDraw_QueueTexturedSprite(void *);
 -void GsDraw_FillScreen(int, int, int, int, int);
++void Widescreen_Mark(int); /* PC: --widescreen (game/widescreen.c) */
 +void GsDraw_FillScreen(int, int, int, int, s64);
  void Player_StopWalking(void);
  static void Splash_BuildImagePacket(int tbp, int cbp);
  
-@@ -239,14 +241,14 @@ void Splash_Draw(void) {
+@@ -239,23 +242,25 @@ void Splash_Draw(void) {
          GsDraw_FillScreen(0, 0, 0, splash_brightness / 2, 0x44);
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_TEST_1, 0x3000D);
@@ -3741,16 +3821,19 @@ index fddc7986c53181049f608b2fed7b478623121bde..e39eca9e0369f8dc8e84510ce81b5bfb
          *cursor++ = 0;
          *cursor++ = 0;
          Packet_AppendToChain(packet, cursor);
-@@ -255,7 +257,7 @@ void Splash_Draw(void) {
+         GsDraw_QueueTexFlush();
+ 
          splash_sprite.alpha = splash_brightness;
++        Widescreen_Mark(PORT_WIDESCREEN_2D); /* PC */
          GsDraw_QueueTexturedSprite(&splash_sprite);
++        Widescreen_Mark(PORT_WIDESCREEN_3D); /* PC */
          Packet_BeginGsRegisters();
 -        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
 +        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
          Packet_AddGsRegister(8, 0);
          Packet_EndGsRegisters();
      }
-@@ -267,17 +269,17 @@ void Splash_BuildSprite(void) {
+@@ -267,17 +272,17 @@ void Splash_BuildSprite(void) {
      int width;
      u64 tex0;
  
@@ -3775,7 +3858,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..e39eca9e0369f8dc8e84510ce81b5bfb
      splash_sprite.gif_reg = 0x156;
      splash_sprite.red = 0x80;
      splash_sprite.green = 0x80;
-@@ -295,8 +297,8 @@ void Splash_BuildSprite(void) {
+@@ -295,8 +300,8 @@ void Splash_BuildSprite(void) {
  }
  
  static inline char *align16(char *address) {
@@ -3786,7 +3869,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..e39eca9e0369f8dc8e84510ce81b5bfb
      }
      return address;
  }
-@@ -363,7 +365,7 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
+@@ -363,7 +368,7 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
      *cursor++ = 0;
      *cursor++ = 0;
      *cursor++ = total | 0x51000000;
@@ -3795,7 +3878,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..e39eca9e0369f8dc8e84510ce81b5bfb
      *cursor++ = 0xE;
      *cursor++ = 0;
      *cursor++ = 0xFFFFFFFF;
-@@ -371,22 +373,22 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
+@@ -371,22 +376,22 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
      *cursor++ = 0x3F;
      *cursor++ = 0;
      format = image->tex0.psm;

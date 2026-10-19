@@ -1,116 +1,302 @@
-/* Fibers for the EE threads (port/include/port/platform.h): Windows' own fibers, ucontext elsewhere.
-   Every fiber lives on the host's main thread; port/platform/kernel.c decides when to switch. */
-#include <stdlib.h>
+/* Fibers for the EE threads (port/include/port/platform.h). Every fiber lives on the host's main
+   thread; port/platform/kernel.c decides when to switch.
+
+   A switch is a few instructions of our own (port_fiber_swap below): it pushes the registers the
+   host's ABI keeps across a call, leaves the stack pointer in the fiber, and pops the other fiber's.
+   So a fiber that is not running is its stack and one pointer into it, which a save state can copy
+   and put back (port/platform/savestate.c). For that the stacks are at a fixed address (FIBER_REGION),
+   each fiber in its own slot, and the fibers themselves are in a fixed table: a pointer to a fiber or
+   into its stack means the same in the next run of the same program. */
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
+#define MAX_FIBERS 64
+/* each fiber's address space: its stack at the top, a gap that is never committed below it */
+#define FIBER_SLOT_SIZE 0x800000u
+#define FIBER_GAP 0x10000u
+/* where the slots go: far above anything the host puts in memory by itself */
+#define FIBER_REGION ((uintptr_t)0x100100000000ull)
 
 struct PortFiber {
-    void *handle;
+    void *sp; /* while it is not running: where port_fiber_swap left its registers */
+    size_t stack_size;
     void (*entry)(void *);
     void *arg;
+    int used;
 };
 
-static void CALLBACK fiber_start(void *param) {
-    PortFiber *fiber = param;
+static PortFiber host_fiber;
+static PortFiber fibers[MAX_FIBERS];
+static unsigned char *region;
+static int region_fixed;
 
+void port_fiber_swap(void **save_sp, void *load_sp);
+void port_fiber_trampoline(void);
+void port_fiber_start(PortFiber *fiber);
+
+/* ---- The switch ------------------------------------------------------------------------------
+   Windows x64 keeps rbx, rbp, rdi, rsi, r12..r15 and xmm6..xmm15 across a call, and a thread's
+   stack bounds in its TEB (gs:0x08 StackBase, gs:0x10 StackLimit, gs:0x1478 DeallocationStack),
+   which exception dispatch checks frames against: each fiber carries its own. System V keeps rbx,
+   rbp, r12..r15. Both keep MXCSR's and the x87 control word's modes. A new fiber's stack is laid out
+   as if it had switched away, with the trampoline as its return address and itself in r12. */
+#ifdef _WIN32
+#define SWAP_FRAME_SIZE 264 /* the xmm block (168), the TEB's three, eight registers, the return */
+__asm__(".text\n"
+        ".globl port_fiber_swap\n"
+        ".def port_fiber_swap; .scl 2; .type 32; .endef\n"
+        ".p2align 4\n"
+        "port_fiber_swap:\n"
+        "    pushq %rbp\n"
+        "    pushq %rbx\n"
+        "    pushq %rdi\n"
+        "    pushq %rsi\n"
+        "    pushq %r12\n"
+        "    pushq %r13\n"
+        "    pushq %r14\n"
+        "    pushq %r15\n"
+        "    pushq %gs:0x08\n"
+        "    pushq %gs:0x10\n"
+        "    pushq %gs:0x1478\n"
+        "    subq $168, %rsp\n"
+        "    movdqu %xmm6, 0(%rsp)\n"
+        "    movdqu %xmm7, 16(%rsp)\n"
+        "    movdqu %xmm8, 32(%rsp)\n"
+        "    movdqu %xmm9, 48(%rsp)\n"
+        "    movdqu %xmm10, 64(%rsp)\n"
+        "    movdqu %xmm11, 80(%rsp)\n"
+        "    movdqu %xmm12, 96(%rsp)\n"
+        "    movdqu %xmm13, 112(%rsp)\n"
+        "    movdqu %xmm14, 128(%rsp)\n"
+        "    movdqu %xmm15, 144(%rsp)\n"
+        "    stmxcsr 160(%rsp)\n"
+        "    fnstcw 164(%rsp)\n"
+        "    movq %rsp, (%rcx)\n"
+        "    movq %rdx, %rsp\n"
+        "    ldmxcsr 160(%rsp)\n"
+        "    fldcw 164(%rsp)\n"
+        "    movdqu 0(%rsp), %xmm6\n"
+        "    movdqu 16(%rsp), %xmm7\n"
+        "    movdqu 32(%rsp), %xmm8\n"
+        "    movdqu 48(%rsp), %xmm9\n"
+        "    movdqu 64(%rsp), %xmm10\n"
+        "    movdqu 80(%rsp), %xmm11\n"
+        "    movdqu 96(%rsp), %xmm12\n"
+        "    movdqu 112(%rsp), %xmm13\n"
+        "    movdqu 128(%rsp), %xmm14\n"
+        "    movdqu 144(%rsp), %xmm15\n"
+        "    addq $168, %rsp\n"
+        "    popq %gs:0x1478\n"
+        "    popq %gs:0x10\n"
+        "    popq %gs:0x08\n"
+        "    popq %r15\n"
+        "    popq %r14\n"
+        "    popq %r13\n"
+        "    popq %r12\n"
+        "    popq %rsi\n"
+        "    popq %rdi\n"
+        "    popq %rbx\n"
+        "    popq %rbp\n"
+        "    ret\n"
+        ".globl port_fiber_trampoline\n"
+        ".def port_fiber_trampoline; .scl 2; .type 32; .endef\n"
+        ".p2align 4\n"
+        "port_fiber_trampoline:\n"
+        "    movq %r12, %rcx\n"
+        "    andq $-16, %rsp\n"
+        "    subq $32, %rsp\n"
+        "    call port_fiber_start\n"
+        "    ud2\n");
+#else
+#define SWAP_FRAME_SIZE 64 /* MXCSR and the control word (8), six registers, the return */
+__asm__(".text\n"
+        ".globl port_fiber_swap\n"
+        ".type port_fiber_swap, @function\n"
+        ".p2align 4\n"
+        "port_fiber_swap:\n"
+        "    pushq %rbp\n"
+        "    pushq %rbx\n"
+        "    pushq %r12\n"
+        "    pushq %r13\n"
+        "    pushq %r14\n"
+        "    pushq %r15\n"
+        "    subq $8, %rsp\n"
+        "    stmxcsr (%rsp)\n"
+        "    fnstcw 4(%rsp)\n"
+        "    movq %rsp, (%rdi)\n"
+        "    movq %rsi, %rsp\n"
+        "    ldmxcsr (%rsp)\n"
+        "    fldcw 4(%rsp)\n"
+        "    addq $8, %rsp\n"
+        "    popq %r15\n"
+        "    popq %r14\n"
+        "    popq %r13\n"
+        "    popq %r12\n"
+        "    popq %rbx\n"
+        "    popq %rbp\n"
+        "    ret\n"
+        ".size port_fiber_swap, .-port_fiber_swap\n"
+        ".globl port_fiber_trampoline\n"
+        ".type port_fiber_trampoline, @function\n"
+        ".p2align 4\n"
+        "port_fiber_trampoline:\n"
+        "    movq %r12, %rdi\n"
+        "    andq $-16, %rsp\n"
+        "    call port_fiber_start\n"
+        "    ud2\n"
+        ".size port_fiber_trampoline, .-port_fiber_trampoline\n");
+#endif
+
+void port_fiber_start(PortFiber *fiber) {
     fiber->entry(fiber->arg);
     PORT_FATAL("a fiber's entry returned");
 }
 
-PortFiber *port_fiber_main(void) {
-    static PortFiber main_fiber;
+/* ---- The slots ------------------------------------------------------------------------------- */
+static void reserve_region(void) {
+    size_t size = (size_t)MAX_FIBERS * FIBER_SLOT_SIZE;
 
-    if (main_fiber.handle == NULL) {
-        main_fiber.handle = ConvertThreadToFiber(NULL);
-        if (main_fiber.handle == NULL) {
-            PORT_FATAL("ConvertThreadToFiber failed (%lu)", GetLastError());
+#ifdef _WIN32
+    region = VirtualAlloc((void *)FIBER_REGION, size, MEM_RESERVE, PAGE_READWRITE);
+    if (region == NULL) {
+        region = VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_READWRITE);
+    }
+#else
+    region = mmap((void *)FIBER_REGION, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+                  -1, 0);
+    if (region == MAP_FAILED) {
+        region = NULL;
+    }
+#endif
+    if (region == NULL) {
+        PORT_FATAL("cannot reserve %u MB of address space for the EE threads' stacks", (unsigned)(size >> 20));
+    }
+    region_fixed = (uintptr_t)region == FIBER_REGION;
+    if (!region_fixed) {
+        fprintf(stderr, "[port] the EE threads' stacks are not at their fixed address: no save states\n");
+    }
+}
+
+static unsigned char *slot_top(int slot) {
+    return region + (size_t)(slot + 1) * FIBER_SLOT_SIZE;
+}
+
+/* Makes the top `stack_size` bytes of a slot usable (once; a slot keeps its stack when reused). */
+static void commit_stack(int slot, size_t stack_size) {
+#ifdef _WIN32
+    if (VirtualAlloc(slot_top(slot) - stack_size, stack_size, MEM_COMMIT, PAGE_READWRITE) == NULL) {
+        PORT_FATAL("cannot commit a %u KB stack for an EE thread", (unsigned)(stack_size >> 10));
+    }
+#else
+    (void)slot;
+    (void)stack_size;
+#endif
+}
+
+int port_fiber_fixed(void) {
+    if (region == NULL) {
+        reserve_region();
+    }
+    return region_fixed;
+}
+
+PortFiber *port_fiber_main(void) {
+    return &host_fiber;
+}
+
+PortFiber *port_fiber_create(size_t stack_size, void (*entry)(void *), void *arg) {
+    PortFiber *fiber;
+    unsigned char *top;
+    uint64_t *frame;
+    uint32_t mxcsr;
+    uint16_t control;
+    int slot;
+
+    if (region == NULL) {
+        reserve_region();
+    }
+    stack_size = (stack_size + 0xFFFF) & ~(size_t)0xFFFF;
+    if (stack_size > FIBER_SLOT_SIZE - FIBER_GAP) {
+        PORT_FATAL("an EE thread wants a %u KB stack, more than the PC gives one", (unsigned)(stack_size >> 10));
+    }
+    for (slot = 0; slot < MAX_FIBERS && fibers[slot].used; slot++) {
+    }
+    if (slot == MAX_FIBERS) {
+        PORT_FATAL("more than %d fibers", MAX_FIBERS);
+    }
+    commit_stack(slot, stack_size);
+    fiber = &fibers[slot];
+    fiber->used = 1;
+    fiber->stack_size = stack_size;
+    fiber->entry = entry;
+    fiber->arg = arg;
+
+    /* the frame port_fiber_swap pops: the host's float modes, the fiber in r12, the trampoline */
+    __asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+    __asm__ volatile("fnstcw %0" : "=m"(control));
+    top = slot_top(slot);
+    frame = (uint64_t *)(top - 16 - SWAP_FRAME_SIZE);
+    memset(frame, 0, SWAP_FRAME_SIZE);
+#ifdef _WIN32
+    frame[20] = (uint64_t)mxcsr | ((uint64_t)control << 32); /* at 160 and 164 */
+    frame[21] = (uint64_t)(uintptr_t)(top - stack_size);      /* DeallocationStack */
+    frame[22] = (uint64_t)(uintptr_t)(top - stack_size);      /* StackLimit */
+    frame[23] = (uint64_t)(uintptr_t)top;                     /* StackBase */
+    frame[27] = (uint64_t)(uintptr_t)fiber;                   /* r12 */
+    frame[32] = (uint64_t)(uintptr_t)port_fiber_trampoline;
+#else
+    frame[0] = (uint64_t)mxcsr | ((uint64_t)control << 32);
+    frame[4] = (uint64_t)(uintptr_t)fiber; /* r12 */
+    frame[7] = (uint64_t)(uintptr_t)port_fiber_trampoline;
+#endif
+    fiber->sp = frame;
+    return fiber;
+}
+
+void port_fiber_delete(PortFiber *fiber) {
+    fiber->used = 0;
+}
+
+void port_fiber_switch(PortFiber *from, PortFiber *to) {
+    port_fiber_swap(&from->sp, to->sp);
+}
+
+/* ---- Save states -----------------------------------------------------------------------------
+   The fibers as they are, and the live part of each stack, from where it switched away to its top.
+   The host's own fiber is not in a state: a state is taken and loaded on it. */
+void port_fiber_state(PortStateIo *io) {
+    int slot;
+
+    for (slot = 0; slot < MAX_FIBERS; slot++) {
+        PortFiber *fiber = &fibers[slot];
+
+        PORT_STATE(io, fiber->used);
+        PORT_STATE(io, fiber->sp);
+        PORT_STATE(io, fiber->stack_size);
+        PORT_STATE(io, fiber->entry);
+        PORT_STATE(io, fiber->arg);
+        if (fiber->used) {
+            unsigned char *top = slot_top(slot);
+            unsigned char *sp = fiber->sp;
+
+            if (fiber->stack_size > FIBER_SLOT_SIZE - FIBER_GAP || sp < top - fiber->stack_size || sp > top) {
+                PORT_FATAL("a state's fiber %d has its stack pointer outside its stack", slot);
+            }
+            if (io->loading) {
+                commit_stack(slot, fiber->stack_size);
+            }
+            port_state_bytes(io, sp, (size_t)(top - sp));
         }
     }
-    return &main_fiber;
 }
-
-PortFiber *port_fiber_create(size_t stack_size, void (*entry)(void *), void *arg) {
-    PortFiber *fiber = calloc(1, sizeof(*fiber));
-
-    if (fiber == NULL) {
-        PORT_FATAL("out of memory for a fiber");
-    }
-    fiber->entry = entry;
-    fiber->arg = arg;
-    fiber->handle = CreateFiber(stack_size, fiber_start, fiber);
-    if (fiber->handle == NULL) {
-        PORT_FATAL("CreateFiber failed (%lu)", GetLastError());
-    }
-    return fiber;
-}
-
-void port_fiber_delete(PortFiber *fiber) {
-    DeleteFiber(fiber->handle);
-    free(fiber);
-}
-
-void port_fiber_switch(PortFiber *from, PortFiber *to) {
-    (void)from;
-    SwitchToFiber(to->handle);
-}
-
-#else
-#include <ucontext.h>
-
-struct PortFiber {
-    ucontext_t context;
-    void *stack;
-    void (*entry)(void *);
-    void *arg;
-};
-
-/* makecontext passes only ints: the fiber that starts is handed over here (one runs at a time) */
-static PortFiber *starting_fiber;
-
-static void fiber_start(void) {
-    PortFiber *fiber = starting_fiber;
-
-    fiber->entry(fiber->arg);
-    PORT_FATAL("a fiber's entry returned");
-}
-
-PortFiber *port_fiber_main(void) {
-    static PortFiber main_fiber;
-
-    return &main_fiber;
-}
-
-PortFiber *port_fiber_create(size_t stack_size, void (*entry)(void *), void *arg) {
-    PortFiber *fiber = calloc(1, sizeof(*fiber));
-
-    if (fiber == NULL || (fiber->stack = malloc(stack_size)) == NULL) {
-        PORT_FATAL("out of memory for a fiber");
-    }
-    fiber->entry = entry;
-    fiber->arg = arg;
-    if (getcontext(&fiber->context) != 0) {
-        PORT_FATAL("getcontext failed");
-    }
-    fiber->context.uc_stack.ss_sp = fiber->stack;
-    fiber->context.uc_stack.ss_size = stack_size;
-    fiber->context.uc_link = NULL;
-    makecontext(&fiber->context, fiber_start, 0);
-    return fiber;
-}
-
-void port_fiber_delete(PortFiber *fiber) {
-    free(fiber->stack);
-    free(fiber);
-}
-
-void port_fiber_switch(PortFiber *from, PortFiber *to) {
-    starting_fiber = to;
-    if (swapcontext(&from->context, &to->context) != 0) {
-        PORT_FATAL("swapcontext failed");
-    }
-}
-#endif

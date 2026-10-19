@@ -40,6 +40,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define CHCR_DIR 0x1 /* from memory */
 #define CHCR_MOD_SHIFT 2
@@ -583,4 +584,19 @@ void port_dmac_post_vsync(void) {
     Work work = {WORK_VSYNC, 0, NULL, NULL};
 
     queue_from_game(&work, 1);
+}
+
+/* ---- Save states -------------------------------------------------------------------------------
+   Taken on this thread (port_dmac_call), so the queue holds nothing: what the game started before is
+   done, but for a channel 2 that waits for PATH3 (still claimed, its STR still set). */
+void port_dmac_state(PortStateIo *io) {
+    if (queue_head != queue_tail) {
+        PORT_FATAL("a save state with the DMA controller's queue not empty");
+    }
+    port_state_bytes(io, (void *)transfers, sizeof(transfers));
+    PORT_STATE(io, claimed);
+    port_state_bytes(io, (void *)starts, sizeof(starts));
+    port_state_bytes(io, (void *)ends, sizeof(ends));
+    PORT_STATE(io, ends_reported);
+    PORT_STATE(io, path3_parked);
 }

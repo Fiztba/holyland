@@ -32,6 +32,9 @@ void port_audio_sync(uint64_t now);
 void port_audio_finish(void);
 /* 1 while the IOP side runs on the sound device's clock (a window and a device; port/audio/output.c) */
 int port_audio_device_clock(void);
+/* The player's volume, 0 to 1 (the settings overlay): scales what the sound device plays, not the
+   sound the game makes, nor --audio-dump */
+void port_audio_set_volume(float gain);
 /* The lock over the SPU2, libsd and the driver, taken by the game's calls and by the audio thread */
 void port_audio_lock(void);
 void port_audio_unlock(void);

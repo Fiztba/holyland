@@ -110,6 +110,22 @@ void port_spin(void);
 void port_fatal(const char *file, int line, const char *fmt, ...) __attribute__((noreturn, format(printf, 3, 4)));
 #define PORT_FATAL(...) port_fatal(__FILE__, __LINE__, __VA_ARGS__)
 
+/* ---- PC presentation switches the game code reads -------------------------------------------
+   Each is off by default, and the game code does exactly what it did on the PS2 while it is off.
+
+   port_widescreen(): 1 while the opt-in 16:9 picture is on (--widescreen, or the overlay's Display
+   page; port/platform/gs.c). The game's patches then widen the 3D projection, and tell the GS front
+   end which of the 2D they draw by PATH2 is the HUD and which is centred 2D, with an A+D write to
+   PORT_GS_REG_WIDESCREEN, a GS register address the GS does not have (the GS ignores it; with the
+   switch off it is never sent). The GS front end squeezes that 2D horizontally to keep its 4:3 shape;
+   everything drawn by PATH3 (the menus, the title) is 2D and squeezed without being told. */
+int port_widescreen(void);
+#define PORT_GS_REG_WIDESCREEN 0x7E
+#define PORT_WIDESCREEN_3D 0      /* what follows is the 3D world: drawn as it comes (the default) */
+#define PORT_WIDESCREEN_2D 1      /* 2D at 4:3, squeezed into the middle of the 16:9 picture */
+#define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
+                                      as PORT_WIDESCREEN_2D, by the player's choice */
+
 /* Checks a struct's size and a field's offset against the PS2 layout written in its comments, for
    overlay and save structs: LAYOUT_SIZE(ModelHeader, 0x40); LAYOUT_OFFSET(ModelHeader, parts, 0x10); */
 #define LAYOUT_SIZE(T, size) _Static_assert(sizeof(T) == (size), #T " is not its PS2 size")

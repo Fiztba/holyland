@@ -26,6 +26,7 @@
 #include "csl.h"
 #include "port/audio.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 #include "sd.h"
 #include "sifdev.h"
 #include "sifrpc.h"
@@ -1385,4 +1386,9 @@ int port_fsiopsnd_call(unsigned int function, void *send_buffer, int send_size, 
     }
     port_audio_unlock();
     return 0;
+}
+
+/* Save states: the driver's state, the two modules' contexts and streams with it */
+void port_fsiopsnd_state(PortStateIo *io) {
+    PORT_STATE(io, w);
 }
