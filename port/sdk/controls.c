@@ -810,6 +810,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_GAME_LOAD & 1u) {
         port_quick_request_load(port_quick_slot());
         port_overlay_notify_quick();
+    }
     if (edges >> ACTION_GS_CAPTURE & 1u) {
         port_debug_request_gs_capture();
     }
