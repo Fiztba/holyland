@@ -77,10 +77,12 @@ static void set_message(const char *fmt, ...) __attribute__((format(printf, 1, 2
 static void set_message(const char *fmt, ...) {
     char text[sizeof(message)];
     va_list args;
+    uint32_t mode = port_host_float_begin(); /* (printf rounds as MXCSR says) */
 
     va_start(args, fmt);
     vsnprintf(text, sizeof(text), fmt, args);
     va_end(args);
+    port_host_float_end(mode);
     if (strcmp(text, message) != 0) {
         memcpy(message, text, sizeof(message));
         fprintf(stderr, "[quick] %s\n", message);

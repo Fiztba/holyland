@@ -27,12 +27,14 @@ void port_debug_set_message(const char *fmt, ...) __attribute__((format(printf, 
 void port_debug_set_message(const char *fmt, ...) {
     char text[sizeof(message)];
     va_list args;
+    uint32_t mode = port_host_float_begin(); /* (printf rounds as MXCSR says) */
 
     va_start(args, fmt);
     vsnprintf(text, sizeof(text), fmt, args);
     va_end(args);
     memcpy(message, text, sizeof(message));
     fprintf(stderr, "[debug] %s\n", text);
+    port_host_float_end(mode);
 }
 
 const char *port_debug_message(void) {
@@ -164,6 +166,7 @@ void port_debug_write_state_dump(void) {
     char path[1200];
     FILE *file;
     uint64_t first = event_count > EVENTS ? event_count - EVENTS : 0, n;
+    uint32_t mode;
 
     port_debug_capture_path("state", port_vblank_count(), "json", path, sizeof(path));
     file = fopen(path, "w");
@@ -171,6 +174,7 @@ void port_debug_write_state_dump(void) {
         port_debug_set_message("cannot write %s", path);
         return;
     }
+    mode = port_host_float_begin(); /* the numbers as printf writes them in the host's mode */
     fprintf(file, "{\n  \"vblank\": %llu,\n  \"events\": [", (unsigned long long)port_vblank_count());
     for (n = first; n < event_count; n++) {
         fprintf(file, "%s\n    ", n == first ? "" : ",");
@@ -180,6 +184,7 @@ void port_debug_write_state_dump(void) {
     kf4_game_dump(file);
     fprintf(file, "}\n");
     fclose(file);
+    port_host_float_end(mode);
     port_debug_set_message("game state written: %s", path);
 }
 

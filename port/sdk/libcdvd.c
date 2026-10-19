@@ -6,6 +6,7 @@
 
 #include "libcdvd.h"
 #include "port/host.h"
+#include "port/libc_ps2.h"
 #include "port/platform.h"
 #include "port/savestate.h"
 
@@ -86,6 +87,27 @@ int sceCdRead(unsigned int lsn, unsigned int sectors, void *buf, sceCdRMode *mod
     return 1;
 }
 
+int port_cd_read_bytes(unsigned int lsn, unsigned int sectors, void *buf, int size, sceCdRMode *mode) {
+    unsigned int whole = (unsigned int)size / 0x800; /* the sectors that fit in buf */
+    unsigned char tail[0x800];
+    unsigned char *p = buf;
+
+    /* Game RAM is laid out as on the PS2, so there it gets the whole sectors, as on the PS2 (the
+       disc's bytes after a file's end are zeros, which a parser may stop at). The program's globals
+       are laid out by the PC's compiler: what follows a buffer there is not what followed it on the
+       PS2, so it gets only size bytes. */
+    if (size < 0 || whole >= sectors || sectors != whole + 1 ||
+        (p >= ee_ram && p + (size_t)sectors * 0x800 <= ee_ram + EE_RAM_SIZE)) {
+        return sceCdRead(lsn, sectors, buf, mode);
+    }
+    log_read(lsn, sectors);
+    if ((whole != 0 && !port_disc_read(lsn, whole, buf)) || !port_disc_read(lsn + whole, 1, tail)) {
+        PORT_FATAL("sceCdRead: sectors %u..%u are not on the disc", lsn, lsn + sectors - 1);
+    }
+    memcpy((unsigned char *)buf + (size_t)whole * 0x800, tail, (size_t)size % 0x800);
+    return 1;
+}
+
 int sceCdSeek(unsigned int lsn) {
     (void)lsn;
     return 1;
@@ -95,19 +117,31 @@ static unsigned char bcd(int value) {
     return (unsigned char)(((value / 10) << 4) | (value % 10));
 }
 
-/* The drive's clock, in BCD: the host's time, or the one --clock fixed. A PS2 keeps its clock in
-   Japan's time (UTC+9) whatever the console's region, and the game uses it as it is (no libscf time
-   zone), so the PC gives UTC+9 too. */
+/* The drive's clock, in BCD: the host's time, or the one --clock gives at boot. A fixed clock runs on
+   with the EE's time (port_ee_cycles), so a run is repeatable and the play time, which the game works
+   out from the clock (core/play_time.c), still counts. A PS2 keeps its clock in Japan's time (UTC+9)
+   whatever the console's region, and the game uses it as it is (no libscf time zone), so the PC gives
+   UTC+9 too. */
 int sceCdReadClock(sceCdCLOCK *clock) {
     int year, month, day, hour, minute, second;
 
     if (port_options.clock_fixed) {
-        year = port_options.clock_fields[0];
-        month = port_options.clock_fields[1];
-        day = port_options.clock_fields[2];
-        hour = port_options.clock_fields[3];
-        minute = port_options.clock_fields[4];
-        second = port_options.clock_fields[5];
+        /* newlib's mktime normalises the fields (port/sdk/libc_ps2.c) */
+        int fields[9] = {0};
+
+        fields[0] = port_options.clock_fields[5] + (int)(port_ee_cycles() / EE_BUS_HZ);
+        fields[1] = port_options.clock_fields[4];
+        fields[2] = port_options.clock_fields[3];
+        fields[3] = port_options.clock_fields[2];
+        fields[4] = port_options.clock_fields[1] - 1;
+        fields[5] = port_options.clock_fields[0] - 1900;
+        ps2_mktime(fields);
+        year = fields[5] + 1900;
+        month = fields[4] + 1;
+        day = fields[3];
+        hour = fields[2];
+        minute = fields[1];
+        second = fields[0];
     } else {
         time_t now = time(NULL) + 9 * 60 * 60;
         struct tm *local = gmtime(&now);

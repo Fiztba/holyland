@@ -5,7 +5,8 @@
     out/<preset>/vu1_test        prints each check, and exits 1 if any failed
 
    Each test assembles a few instruction pairs into micro memory, sets up data memory, runs the
-   program from 0 to its E bit and reads back what it stored. The program is linked with vu1.c alone;
+   program from 0 to its E bit and reads back what it stored. The program is linked with vu1.c alone
+   (and port/math/libvu0.c, which test_libvu0 checks against the SDK's VU0 code run here as microcode);
    the few host functions it calls are defined here. */
 #include <fenv.h>
 #include <math.h>
@@ -17,6 +18,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/vu_float.h"
+#include "libvu0.h"
 
 static uint8_t micro_mem[16384];
 static uint8_t data_mem[16384];
@@ -516,6 +518,7 @@ static uint32_t random_float(uint32_t near) {
 
 static void test_vu0_float(void) {
     int round, lane, bad_add = 0, bad_sub = 0, bad_mul = 0, bad_div = 0, bad_ftoi = 0, bad_itof = 0;
+    int bad_sqrt = 0, bad_rsqrt = 0, bad_max = 0, bad_mini = 0;
 
     for (round = 0; round < 3000; round++) {
         uint32_t a[4], b[4], n[4];
@@ -539,6 +542,13 @@ static void test_vu0_float(void) {
         pair(up2(0x15, XYZW, 6, 1), WAITQ);             /* ftoi4(a) */
         pair(up(0x1C, W, 0, 0, 8), LNOP);                /* mulq: vf0.w (1) * Q, which keeps -0 */
         pair(up2(0x11, XYZW, 9, 7), LNOP);              /* itof4(n) */
+        pair(UNOP, SQRT(1, 1));                          /* sqrt(|a.y|) */
+        pair(UNOP, WAITQ);
+        pair(up(0x1C, W, 0, 0, 10), RSQRT(1, 2, 2, 2));  /* a.z / sqrt(|b.z|) */
+        pair(UNOP, WAITQ);
+        pair(up(0x1C, W, 0, 0, 11), LNOP);
+        pair(up(U_MAX, XYZW, 2, 1, 12), LNOP);
+        pair(up(U_MINI, XYZW, 2, 1, 13), LNOP);
         nops(3);
         pair(UNOP, SQ(XYZW, 3, 0, 3));
         pair(UNOP, SQ(XYZW, 4, 0, 4));
@@ -546,6 +556,10 @@ static void test_vu0_float(void) {
         pair(UNOP, SQ(XYZW, 6, 0, 6));
         pair(UNOP, SQ(XYZW, 8, 0, 7));
         pair(UNOP, SQ(XYZW, 9, 0, 8));
+        pair(UNOP, SQ(XYZW, 10, 0, 9));
+        pair(UNOP, SQ(XYZW, 11, 0, 10));
+        pair(UNOP, SQ(XYZW, 12, 0, 11));
+        pair(UNOP, SQ(XYZW, 13, 0, 12));
         run();
         for (lane = 0; lane < 4; lane++) {
             int add = word(3, lane) != vu_float_add(a[lane], b[lane]);
@@ -562,6 +576,16 @@ static void test_vu0_float(void) {
             bad_mul += mul;
             bad_ftoi += word(6, lane) != (uint32_t)vu_float_ftoi(a[lane], 4);
             bad_itof += word(8, lane) != vu_float_itof((int32_t)n[lane], 4);
+            bad_max += word(11, lane) != vu_float_max(a[lane], b[lane]);
+            bad_mini += word(12, lane) != vu_float_mini(a[lane], b[lane]);
+        }
+        if (word(9, 3) != vu_float_sqrt(a[1]) && bad_sqrt++ == 0) {
+            printf("     the first square root that differs: %08X: %08X (VU1) %08X\n", a[1], word(9, 3),
+                   vu_float_sqrt(a[1]));
+        }
+        if (word(10, 3) != vu_float_rsqrt(a[2], b[2]) && bad_rsqrt++ == 0) {
+            printf("     the first rsqrt that differs: %08X / sqrt %08X: %08X (VU1) %08X\n", a[2], b[2],
+                   word(10, 3), vu_float_rsqrt(a[2], b[2]));
         }
         if (word(7, 3) != vu_float_div(a[0], b[0]) && bad_div++ == 0) {
             printf("     the first divide that differs: %08X / %08X: %08X (VU1) %08X\n", a[0], b[0], word(7, 3),
@@ -574,10 +598,271 @@ static void test_vu0_float(void) {
     check("VU0's div is VU1's (3000)", (uint32_t)bad_div, 0);
     check("VU0's ftoi4 is VU1's", (uint32_t)bad_ftoi, 0);
     check("VU0's itof4 is VU1's", (uint32_t)bad_itof, 0);
+    check("VU0's sqrt is VU1's (3000)", (uint32_t)bad_sqrt, 0);
+    check("VU0's rsqrt is VU1's (3000)", (uint32_t)bad_rsqrt, 0);
+    check("VU0's max is VU1's", (uint32_t)bad_max, 0);
+    check("VU0's mini is VU1's", (uint32_t)bad_mini, 0);
     /* the cases the double path cannot do: exponents more than 28 apart */
     check("1 - 2^-40 rounds toward zero", vu_float_sub(0x3F800000u, 0x2B800000u), 0x3F7FFFFFu);
     check("1 + 2^-40 is 1", vu_float_add(0x3F800000u, 0x2B800000u), 0x3F800000u);
     check("-2^100 + 2^60 rounds toward zero", vu_float_add(0xF1800000u, 0x5D800000u), 0xF17FFFFFu);
+}
+
+/* ---- libvu0 (port/math/libvu0.c) against the SDK's VU0 code run as VU1 microcode ------------------ */
+/* one instruction, then three NOPs so the next one reads its result whatever the latency */
+static void u_op(uint32_t upper) {
+    pair(upper, LNOP);
+    nops(3);
+}
+static void l_op(uint32_t lower) {
+    pair(UNOP, lower);
+    nops(3);
+}
+#define MOVE(dest, ft, fs) lo2(0x30, dest, ft, fs)
+#define U_MULA_BC(bc, dest, ft, fs) up2(0x18 | (bc), dest, ft, fs) /* ACC = fs * ft.bc */
+#define U_MADDA_BC(bc, dest, ft, fs) up2(0x08 | (bc), dest, ft, fs)
+#define U_MADD_BC(bc, dest, ft, fs, fd) up(0x08 | (bc), dest, ft, fs, fd)
+#define U_ADD_BC(bc, dest, ft, fs, fd) up(0x00 | (bc), dest, ft, fs, fd)
+#define U_SUB_BC(bc, dest, ft, fs, fd) up(0x04 | (bc), dest, ft, fs, fd)
+#define U_MUL_BC(bc, dest, ft, fs, fd) up(0x18 | (bc), dest, ft, fs, fd)
+#define U_MULQ(dest, fs, fd) up(0x1C, dest, 0, fs, fd)
+#define U_OPMULA up2(0x2E, X | Y | Z, 0, 0)
+enum { BX, BY, BZ, BW };
+
+/* vmulax, vmadday, vmaddaz, vmaddw.xyzw fd = (vf4-vf7) * vf[v] */
+static void emit_apply(int v, int fd) {
+    u_op(U_MULA_BC(BX, XYZW, v, 4));
+    u_op(U_MADDA_BC(BY, XYZW, v, 5));
+    u_op(U_MADDA_BC(BZ, XYZW, v, 6));
+    u_op(U_MADD_BC(BW, XYZW, v, 7, fd));
+}
+
+static uint32_t random_matrix_float(void) {
+    return random_float(110 + rng() % 40);
+}
+
+static int differs(const char *what, int *bad, const void *got, int address, int words) {
+    uint32_t g[16];
+    int i, d = 0;
+
+    memcpy(g, got, (size_t)words * 4);
+    for (i = 0; i < words; i++) {
+        d |= g[i] != word(address + i / 4, i % 4);
+    }
+    if (d && (*bad)++ == 0) {
+        printf("     the first %s that differs:", what);
+        for (i = 0; i < words; i++) {
+            printf(" %08X/%08X", g[i], word(address + i / 4, i % 4));
+        }
+        printf(" (libvu0/VU1)\n");
+    }
+    return d;
+}
+
+static void test_libvu0(void) {
+    static const float coeff[4] = {2.601887e-06f, -0.00019807414f, 0.0083330255f, -0.16666657f};
+    int round, i, j, axis;
+    int bad_apply = 0, bad_mul = 0, bad_inner = 0, bad_norm = 0, bad_outer = 0, bad_div = 0, bad_inv = 0;
+    int bad_rot[3] = {0, 0, 0};
+
+    for (round = 0; round < 1000; round++) {
+        uint32_t m[4][4], b[4][4], v[4], a[4], t[4][4];
+        float got[4][4], gotv[4], inner;
+        float q = as_f(random_matrix_float());
+
+        for (i = 0; i < 4; i++) {
+            for (j = 0; j < 4; j++) {
+                m[i][j] = random_matrix_float();
+                b[i][j] = random_matrix_float();
+            }
+            v[i] = random_matrix_float();
+            a[i] = random_matrix_float();
+        }
+
+        /* sceVu0ApplyMatrix (m at 0-3, v at 4, out at 5) and sceVu0MulMatrix (m1 at 6-9, out at 10-13) */
+        begin();
+        for (i = 0; i < 4; i++) {
+            set_qword(i, m[i][0], m[i][1], m[i][2], m[i][3]);
+            set_qword(6 + i, b[i][0], b[i][1], b[i][2], b[i][3]);
+        }
+        set_qword(4, v[0], v[1], v[2], v[3]);
+        for (i = 0; i < 4; i++) {
+            l_op(LQ(XYZW, 4 + i, 0, i));
+        }
+        l_op(LQ(XYZW, 8, 0, 4));
+        emit_apply(8, 9);
+        l_op(SQ(XYZW, 9, 0, 5));
+        for (i = 0; i < 4; i++) {
+            l_op(LQ(XYZW, 8, 0, 6 + i));
+            emit_apply(8, 9);
+            l_op(SQ(XYZW, 9, 0, 10 + i));
+        }
+        run();
+        sceVu0ApplyMatrix(gotv, m, v);
+        differs("ApplyMatrix", &bad_apply, gotv, 5, 4);
+        sceVu0MulMatrix(got, m, b);
+        differs("MulMatrix", &bad_mul, got, 10, 16);
+
+        /* sceVu0InnerProduct, sceVu0Normalize, sceVu0OuterProduct and sceVu0DivVector of a (0) and v (1) */
+        begin();
+        set_qword(0, a[0], a[1], a[2], a[3]);
+        set_qword(1, v[0], v[1], v[2], v[3]);
+        set_qword(6, f_bits(q), 0, 0, 0);
+        l_op(LQ(XYZW, 4, 0, 0));
+        l_op(LQ(XYZW, 5, 0, 1));
+        u_op(up(U_MUL, X | Y | Z, 5, 4, 10)); /* vmul.xyz vf10, vf4, vf5; vaddy.x; vaddz.x */
+        u_op(U_ADD_BC(BY, X, 10, 10, 10));
+        u_op(U_ADD_BC(BZ, X, 10, 10, 10));
+        l_op(SQ(XYZW, 10, 0, 2));
+        u_op(up(U_MUL, X | Y | Z, 4, 4, 11)); /* Normalize: the length squared */
+        u_op(U_ADD_BC(BY, X, 11, 11, 11));
+        u_op(U_ADD_BC(BZ, X, 11, 11, 11));
+        l_op(SQRT(11, BX));
+        l_op(WAITQ);
+        u_op(up(U_ADDQ, X, 0, 0, 11));         /* vaddq.x vf11, vf0, Q */
+        l_op(DIV(0, BW, 11, BX));              /* vdiv Q, vf0w, vf11x */
+        u_op(up(U_SUB, XYZW, 0, 0, 12));
+        l_op(WAITQ);
+        u_op(U_MULQ(X | Y | Z, 4, 12));
+        l_op(SQ(XYZW, 12, 0, 3));
+        u_op(U_OPMULA | 5 << 16 | 4 << 11);    /* vopmula.xyz ACC, vf4, vf5 */
+        u_op(up(U_OPMSUB, X | Y | Z, 4, 5, 13)); /* vopmsub.xyz vf13, vf5, vf4 */
+        u_op(up(U_SUB, W, 13, 13, 13));
+        l_op(SQ(XYZW, 13, 0, 4));
+        l_op(LQ(XYZW, 14, 0, 6));               /* DivVector(a, q): vdiv Q, vf0w, q; vmulq.xyzw */
+        l_op(DIV(0, BW, 14, BX));
+        l_op(WAITQ);
+        u_op(U_MULQ(XYZW, 4, 15));
+        l_op(SQ(XYZW, 15, 0, 5));
+        run();
+        inner = sceVu0InnerProduct(a, v);
+        differs("InnerProduct", &bad_inner, &inner, 2, 1);
+        sceVu0Normalize(gotv, a);
+        differs("Normalize", &bad_norm, gotv, 3, 4);
+        sceVu0OuterProduct(gotv, a, v);
+        differs("OuterProduct", &bad_outer, gotv, 4, 4);
+        sceVu0DivVector(gotv, a, q);
+        differs("DivVector", &bad_div, gotv, 5, 4);
+
+        /* sceVu0InversMatrix of m: the EE transposes the 3x3 part (rows 0-2 at 6-8 here), VU0 does row 3 */
+        begin();
+        for (i = 0; i < 4; i++) {
+            for (j = 0; j < 4; j++) {
+                t[i][j] = i < 3 && j < 3 ? m[j][i] : 0;
+            }
+        }
+        t[3][0] = m[3][0];
+        t[3][1] = m[3][1];
+        t[3][2] = m[3][2];
+        t[3][3] = m[3][3];
+        for (i = 0; i < 4; i++) {
+            set_qword(6 + i, t[i][0], t[i][1], t[i][2], t[i][3]);
+        }
+        l_op(LQ(XYZW, 4, 0, 9));
+        l_op(MOVE(XYZW, 5, 4));
+        u_op(up(U_SUB, X | Y | Z, 4, 4, 4));
+        l_op(MOVE(XYZW, 9, 4));
+        l_op(LQ(XYZW, 6, 0, 6));
+        l_op(LQ(XYZW, 7, 0, 7));
+        l_op(LQ(XYZW, 8, 0, 8));
+        u_op(U_MULA_BC(BX, X | Y | Z, 5, 6));
+        u_op(U_MADDA_BC(BY, X | Y | Z, 5, 7));
+        u_op(U_MADD_BC(BZ, X | Y | Z, 5, 8, 4));
+        u_op(up(U_SUB, X | Y | Z, 4, 9, 4));
+        l_op(SQ(XYZW, 4, 0, 9));
+        run();
+        sceVu0InversMatrix(got, m);
+        differs("InversMatrix", &bad_inv, got, 6, 16);
+
+        /* sceVu0RotMatrixX/Y/Z of b by an angle: the EE's prelude in host floats, _sceVu0ecossin, the
+           matrix built in vf6-vf9, then applied to each row (b at 2-5, out at 6-9) */
+        for (axis = 0; axis < 3; axis++) {
+            float angle = round < 8 ? (float)(round - 4) * 0.78539819f : (as_f(0x3F800000u | (rng() >> 9)) - 1.5f) * 6.2831855f;
+            int negative = angle < 0.0f;
+            float tt = negative ? 1.57079637f + angle : 1.57079637f - angle;
+
+            begin();
+            set_qword(0, f_bits(coeff[0]), f_bits(coeff[1]), f_bits(coeff[2]), f_bits(coeff[3]));
+            set_qword(1, f_bits(tt), 0, 0, 0);
+            for (i = 0; i < 4; i++) {
+                set_qword(2 + i, b[i][0], b[i][1], b[i][2], b[i][3]);
+            }
+            l_op(LQ(XYZW, 5, 0, 0));
+            l_op(LQ(XYZW, 6, 0, 1));
+            l_op(MR32(W, 6, 6));
+            u_op(U_ADD_BC(BX, X, 6, 0, 4));
+            u_op(up(U_MUL, X, 6, 6, 6));
+            u_op(U_MUL_BC(BX, Y | Z | W, 0, 4, 4));
+            u_op(U_MUL_BC(BW, XYZW, 6, 5, 8));
+            u_op(up(U_SUB, XYZW, 0, 0, 5));
+            u_op(U_MUL_BC(BX, XYZW, 6, 8, 8));
+            u_op(U_MUL_BC(BX, X | Y | Z, 6, 8, 8));
+            u_op(U_ADD_BC(BW, X, 8, 4, 4));
+            u_op(U_MUL_BC(BX, X | Y, 6, 8, 8));
+            u_op(U_ADD_BC(BZ, X, 8, 4, 4));
+            u_op(U_MUL_BC(BX, X, 6, 8, 8));
+            u_op(U_ADD_BC(BY, X, 8, 4, 4));
+            u_op(U_ADD_BC(BX, X, 8, 4, 4));
+            u_op(U_ADD_BC(BX, X | Y, 4, 5, 4));
+            u_op(up(U_MUL, X, 4, 4, 7));
+            u_op(U_SUB_BC(BX, W, 7, 0, 7));
+            l_op(SQRT(7, BW));
+            l_op(WAITQ);
+            u_op(up(U_ADDQ, X, 0, 0, 7));
+            u_op(negative ? U_SUB_BC(BX, X, 7, 5, 4) : U_ADD_BC(BX, X, 7, 5, 4));
+            if (axis == 2) {
+                l_op(MOVE(XYZW, 6, 5));
+                l_op(MOVE(XYZW, 7, 5));
+                l_op(MOVE(XYZW, 9, 0));
+                u_op(up(U_SUB, X | Y | Z, 9, 9, 9));
+                l_op(MR32(XYZW, 8, 9));
+                u_op(up(U_SUB, Z | W, 4, 4, 4));
+                u_op(U_ADD_BC(BX, Y, 4, 5, 6));
+                u_op(U_ADD_BC(BY, X, 4, 5, 6));
+                u_op(U_SUB_BC(BX, X, 4, 5, 7));
+                u_op(U_ADD_BC(BY, Y, 4, 5, 7));
+            } else {
+                for (i = 6; i < 10; i++) {
+                    l_op(MOVE(XYZW, i, 5));
+                }
+                u_op(U_ADD_BC(BW, axis == 0 ? X : Y, 0, 5, axis == 0 ? 6 : 7));
+                u_op(U_ADD_BC(BW, W, 0, 5, 9));
+                u_op(up(U_SUB, Z | W, 4, 4, 4));
+                if (axis == 0) {
+                    u_op(U_ADD_BC(BX, Z, 4, 5, 7));
+                    u_op(U_ADD_BC(BY, Y, 4, 5, 7));
+                    u_op(U_SUB_BC(BX, Y, 4, 5, 8));
+                    u_op(U_ADD_BC(BY, Z, 4, 5, 8));
+                } else {
+                    u_op(U_SUB_BC(BX, Z, 4, 5, 6));
+                    u_op(U_ADD_BC(BY, X, 4, 5, 6));
+                    u_op(U_ADD_BC(BX, X, 4, 5, 8));
+                    u_op(U_ADD_BC(BY, Z, 4, 5, 8));
+                }
+            }
+            for (i = 0; i < 4; i++) {
+                l_op(LQ(XYZW, 4, 0, 2 + i));
+                u_op(U_MULA_BC(BX, XYZW, 4, 6));
+                u_op(U_MADDA_BC(BY, XYZW, 4, 7));
+                u_op(U_MADDA_BC(BZ, XYZW, 4, 8));
+                u_op(U_MADD_BC(BW, XYZW, 4, 9, 5));
+                l_op(SQ(XYZW, 5, 0, 6 + i));
+            }
+            run();
+            (axis == 0 ? sceVu0RotMatrixX : axis == 1 ? sceVu0RotMatrixY : sceVu0RotMatrixZ)(got, b, angle);
+            differs(axis == 0 ? "RotMatrixX" : axis == 1 ? "RotMatrixY" : "RotMatrixZ", &bad_rot[axis], got, 6, 16);
+        }
+    }
+    check("libvu0 ApplyMatrix is the SDK's VU0 code, bit for bit (1000 random)", (uint32_t)bad_apply, 0);
+    check("libvu0 MulMatrix", (uint32_t)bad_mul, 0);
+    check("libvu0 InnerProduct", (uint32_t)bad_inner, 0);
+    check("libvu0 Normalize", (uint32_t)bad_norm, 0);
+    check("libvu0 OuterProduct", (uint32_t)bad_outer, 0);
+    check("libvu0 DivVector", (uint32_t)bad_div, 0);
+    check("libvu0 InversMatrix", (uint32_t)bad_inv, 0);
+    check("libvu0 RotMatrixX (and _sceVu0ecossin)", (uint32_t)bad_rot[0], 0);
+    check("libvu0 RotMatrixY", (uint32_t)bad_rot[1], 0);
+    check("libvu0 RotMatrixZ", (uint32_t)bad_rot[2], 0);
 }
 
 /* A branch right after an integer write sees the old value; one instruction later, the new one. */
@@ -663,6 +948,7 @@ int main(void) {
     test_convert();
     test_shuffles();
     test_vu0_float();
+    test_libvu0();
     test_branch_vi();
     test_unknown();
     printf("%d of %d checks failed\n", failures, checks);

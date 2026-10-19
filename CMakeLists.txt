@@ -30,16 +30,26 @@ endif()
 # overflow, no fused multiply-add, signed char, GCC's bit-field layout (also on Windows). Retail reads
 # past the ends of some arrays on purpose and tests some pointers after using them: keep the compiler
 # from optimising on either. A file's globals keep the order they are defined in, as ee-gcc laid them
-# out: the game reads files in whole sectors, so a read into a table runs on into the next one
-# (item_nam.prm into item_common_defs), which retail then loads. clang keeps that order by itself.
+# out and as clang does by itself, so gcc and clang builds have the same neighbours. Nothing known
+# relies on it any more: File_Read's whole sectors no longer run past a global (port_cd_read_bytes,
+# libcdvd.h), and the sanitizer build (KF4_SANITIZE) finds a read or write that crosses into the next.
+# No stack protector (on by default in many Linux gccs): a save state puts back the EE threads' stacks
+# in another process, whose canary is not the one their frames hold (port/platform/savestate.c).
 set(KF4_GAME_FLAGS
     -fno-strict-aliasing -fwrapv -ffp-contract=off -fno-fast-math -fsigned-char -fno-common
-    -fgnu89-inline -fno-delete-null-pointer-checks)
+    -fgnu89-inline -fno-delete-null-pointer-checks -fno-stack-protector)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     list(APPEND KF4_GAME_FLAGS -fno-aggressive-loop-optimizations -fno-toplevel-reorder)
 endif()
 if(WIN32)
     list(APPEND KF4_GAME_FLAGS -mno-ms-bitfields)
+endif()
+# The game's threads run with denormals flushed (MXCSR's FTZ and DAZ, as the EE's FPU: port/platform/
+# fiber.c), which the compiler is told, or it may turn a test of a float's bits into a comparison with
+# 0.0 that a denormal then passes (clang does in newlib's sqrtf). Only the code that runs there.
+set(KF4_EE_FLOAT_FLAGS)
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    set(KF4_EE_FLOAT_FLAGS -fdenormal-fp-math=preserve-sign,preserve-sign)
 endif()
 # The step-0 rules (docs/port/RULES.md) as errors: nothing may squeeze a 64-bit pointer into 32 bits
 # or call a function it has not declared.
@@ -51,6 +61,17 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     list(APPEND KF4_GAME_ERRORS -Werror=incompatible-function-pointer-types -Werror=shorten-64-to-32
          -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function
          -Wno-missing-braces -Wno-parentheses-equality)
+endif()
+
+# ---- Sanitizers (docs/port/README.md, "Sanitizers") -----------------------------------------------
+# -DKF4_SANITIZE=address,undefined builds everything (the game, port/, ico-audio, the tests) with
+# those sanitizers. Empty (the default) leaves the build as it is.
+set(KF4_SANITIZE "" CACHE STRING "Build with these sanitizers (-fsanitize=...), e.g. address,undefined")
+if(KF4_SANITIZE)
+    # recoverable, so ASAN_OPTIONS=halt_on_error=0 can list every report of a run
+    add_compile_options(-fsanitize=${KF4_SANITIZE} -fsanitize-recover=all -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=${KF4_SANITIZE})
+    message(STATUS "Sanitizers: ${KF4_SANITIZE}")
 endif()
 
 # ---- The PS2 side ---------------------------------------------------------------------------------
@@ -67,6 +88,7 @@ add_library(kf4_port STATIC
     port/platform/disc.c
     port/platform/ipu.c
     port/platform/host_time.c
+    port/platform/int_divide.c
     port/math/libvu0.c
     port/sdk/libcdvd.c
     port/sdk/libdma.c
@@ -88,6 +110,7 @@ add_library(kf4_port STATIC
     port/sdk/stubs.c
     port/sdk/game_stubs.c
     port/sdk/libc_ps2.c
+    port/sdk/libm_ps2.c
     port/audio/iop.c
     port/audio/sd.c
     port/audio/libsd_irx.c
@@ -103,6 +126,7 @@ target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
 set_source_files_properties(port/platform/vu1.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
+set_source_files_properties(port/sdk/libm_ps2.c port/math/libvu0.c PROPERTIES COMPILE_OPTIONS "${KF4_EE_FLOAT_FLAGS}")
 # The fibers switch stacks by hand (port/platform/fiber.c), which a shadow stack would refuse
 if(NOT WIN32)
     set_source_files_properties(port/platform/fiber.c PROPERTIES COMPILE_OPTIONS "-fcf-protection=none")
@@ -283,11 +307,29 @@ list(APPEND KF4_GAME_TARGETS game_data)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")
 
+# Every game file calls the PS2's math library, not the host's (port/include/port/libm_ps2.h)
 foreach(target ${KF4_GAME_TARGETS})
     target_include_directories(${target} PRIVATE ${KF4_SRC}/src/game port/include)
-    target_compile_options(${target} PRIVATE ${KF4_GAME_FLAGS} ${KF4_GAME_ERRORS})
+    target_compile_options(${target} PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS} ${KF4_GAME_ERRORS}
+        -include ${CMAKE_SOURCE_DIR}/port/include/port/libm_ps2.h)
 endforeach()
 add_custom_target(game DEPENDS ${KF4_GAME_TARGETS})
+
+# ---- The PS2's math library -----------------------------------------------------------------------
+# newlib's libm as the SDK built it, from the decomp's own sources (read, never edited), its names made
+# ps2_* (port/sdk/libm_ps2_names.h); port/sdk/libm_ps2.c has the rest. ef_sqrt.c, wf_sqrt.c and
+# w_sqrt.c are port/sdk's (the rounding ee-gcc folded, and dp-bit's NaN, written out), and atanf is
+# wrapped there.
+file(GLOB KF4_PS2_LIBM_SOURCES ${CMAKE_SOURCE_DIR}/decomp/src/sce/libm/math/*.c
+     ${CMAKE_SOURCE_DIR}/decomp/src/sce/libm/common/*.c)
+list(FILTER KF4_PS2_LIBM_SOURCES EXCLUDE REGEX "/(ef|wf|w)_sqrt\\.c$")
+add_library(ps2_libm OBJECT ${KF4_PS2_LIBM_SOURCES})
+target_include_directories(ps2_libm PRIVATE decomp/src/sce/libm decomp/src/sce/libc)
+target_compile_options(ps2_libm PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS} -w
+    -include ${CMAKE_SOURCE_DIR}/port/sdk/libm_ps2_names.h)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/decomp/src/sce/libm/math/sf_atan.c PROPERTIES
+    COMPILE_DEFINITIONS "atanf=ps2_atanf_newlib")
+target_link_libraries(kf4_port PUBLIC ps2_libm)
 
 # ---- The program ----------------------------------------------------------------------------------
 set(KF4_GAME_OBJECTS)
@@ -331,8 +373,18 @@ if(TARGET kf4_gs)
     endif()
 endif()
 
+# INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)
+add_executable(int_divide_test tests/int_divide_test.c port/platform/int_divide.c)
+target_include_directories(int_divide_test PRIVATE port/include)
+target_compile_options(int_divide_test PRIVATE ${KF4_GAME_FLAGS})
+
+# The PS2's math library against the retail program's results (tools/ee_libm_ref.py)
+add_executable(libm_test tests/libm_test.c port/sdk/libm_ps2.c $<TARGET_OBJECTS:ps2_libm>)
+target_include_directories(libm_test PRIVATE port/include)
+target_compile_options(libm_test PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS})
+
 # The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone
-add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c)
+add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c port/math/libvu0.c)
 target_include_directories(vu1_test PRIVATE port/include)
 target_compile_options(vu1_test PRIVATE -frounding-math)
 if(NOT WIN32)

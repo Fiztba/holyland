@@ -46,8 +46,17 @@
 #include "port/lz4_block.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/sanitize.h"
 #include "port/savestate.h"
 #include "spu2.h"
+
+/* The parts hand over whole regions: with ASan, the globals' image holds the redzones between them,
+   and a stack the redzones of its frames (port/include/port/sanitize.h) */
+#if PORT_ASAN
+#define state_copy port_raw_copy
+#else
+#define state_copy memcpy
+#endif
 
 #define STATE_MAGIC "KF4STATE"
 #define STATE_VERSION 1
@@ -101,10 +110,12 @@ static void set_message(const char *fmt, ...) __attribute__((format(printf, 1, 2
 static void set_message(const char *fmt, ...) {
     char text[sizeof(message)];
     va_list args;
+    uint32_t mode = port_host_float_begin(); /* (printf rounds as MXCSR says) */
 
     va_start(args, fmt);
     vsnprintf(text, sizeof(text), fmt, args);
     va_end(args);
+    port_host_float_end(mode);
     /* (a request that waits says so once, not at every vblank) */
     if (strcmp(text, message) != 0) {
         memcpy(message, text, sizeof(message));
@@ -337,7 +348,7 @@ static void buffer_bytes(PortStateIo *io, void *data, size_t size) {
             PORT_FATAL("the save state ends early");
         }
         if (data != NULL) {
-            memcpy(data, b->data + b->at, size);
+            state_copy(data, b->data + b->at, size);
         }
         b->at += size;
         return;
@@ -355,7 +366,7 @@ static void buffer_bytes(PortStateIo *io, void *data, size_t size) {
         b->capacity = capacity;
     }
     if (data != NULL) {
-        memcpy(b->data + b->size, data, size);
+        state_copy(b->data + b->size, data, size);
     } else {
         memset(b->data + b->size, 0, size);
     }

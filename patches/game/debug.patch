@@ -125,7 +125,7 @@ index 0dd4b5d966eb4393055ee7e0e73918552420ac51..d27d172e6b96059f6d0f6b61c85c044e
          sceGsSetDefStoreImage(store_image, base, 0xA, 1, 0, 0, 0x280, 0x1C0);
          FlushCache(0);
 diff --git a/src/game/debug/text_log.c b/src/game/debug/text_log.c
-index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd215ca627 100644
+index 0b81cd16bca797b1317c3aea99020df9154b52d4..5c46e20ebb53aff32da43aa0391809c3e55a5e2e 100644
 --- a/src/game/debug/text_log.c
 +++ b/src/game/debug/text_log.c
 @@ -3,11 +3,11 @@
@@ -155,17 +155,8 @@ index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd
  void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z);
  void TextLog_SendGsRegs(void);
  
-@@ -1068,14 +1064,16 @@ void TextLog_LoadFont(int font_base, int palette_base) {
-     sceGsSetDefLoadImage(&image, text_log.font_base, text_log.font_buffer_width, 0x14, 0, 0, 0x100, 0x80);
-     FlushCache(0);
-     sceGsExecLoadImage(&image, text_log_font);
-+    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT APATH (bits 10-11) to clear");
-     while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
-     }
-     sceGsSetDefLoadImage(&image, text_log.palette_base, 1, 0, 0, 0, 8, 2);
-     FlushCache(0);
+@@ -1075,7 +1071,7 @@ void TextLog_LoadFont(int font_base, int palette_base) {
      sceGsExecLoadImage(&image, text_log_font_palette);
-+    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT APATH (bits 10-11) to clear");
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
      }
 -    packet = (u32 *)((u32)font_flush_packet | 0x20000000);
@@ -173,11 +164,7 @@ index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd
      *packet++ = 0x8001;
      *packet++ = 0x10004000;
      *packet++ = 0xE;
-@@ -1084,10 +1082,11 @@ void TextLog_LoadFont(int font_base, int palette_base) {
-     *packet++ = 0;
-     *packet++ = 3;
-     *packet = 0;
-+    PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
+@@ -1087,7 +1083,7 @@ void TextLog_LoadFont(int font_base, int palette_base) {
      while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_QWC = 2;
@@ -186,7 +173,7 @@ index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -1151,7 +1150,7 @@ void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z) {
+@@ -1151,7 +1147,7 @@ void TextLog_PutChar(char character, int pos_x, int pos_y, int pos_z) {
  void TextLog_SendGsRegs(void) {
      int *packet;
  
@@ -195,11 +182,7 @@ index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd
      *packet++ = 0x8005;
      *packet++ = 0x10004000;
      *packet++ = 0xE;
-@@ -1177,15 +1176,16 @@ void TextLog_SendGsRegs(void) {
-     packet += 2;
-     *(u64 *)packet = 1;
-     ((u64 *)packet)[1] = 0x1C;
-+    PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
+@@ -1180,12 +1176,12 @@ void TextLog_SendGsRegs(void) {
      while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_QWC = 6;
@@ -214,7 +197,7 @@ index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd
      char line[0x400];
      TextLog *log;
      char *text;
-@@ -1193,7 +1193,7 @@ void TextLog_AppendV(char *format, char *args) {
+@@ -1193,7 +1189,7 @@ void TextLog_AppendV(char *format, char *args) {
      int used;
  
      vsprintf(line, format, args);
@@ -223,7 +206,7 @@ index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd
      log = &text_log;
      used = log->used;
      if (length + used >= 0x801) {
-@@ -1210,6 +1210,7 @@ void TextLog_Printf(char *format, ...) {
+@@ -1210,6 +1206,7 @@ void TextLog_Printf(char *format, ...) {
  
      va_start(args, format);
      TextLog_AppendV(format, args);
@@ -231,11 +214,8 @@ index 0b81cd16bca797b1317c3aea99020df9154b52d4..4faef6a49d0886ae1afaa5ebef18b5bd
  }
  
  /* Draws the text log in its window, wrapping at the right edge and stopping at the bottom, then empties it. */
-@@ -1249,10 +1250,11 @@ void TextLog_Flush(void) {
-         packet->tag[2] = 0x413;
-         packet->tag[3] = 0;
+@@ -1251,8 +1248,8 @@ void TextLog_Flush(void) {
          FlushCache(0);
-+        PORT_TODO("waits for D2_CHCR STR (bit 8) to clear");
          while (*D2_CHCR & D_CHCR_STR) {
          }
 -        *D2_QWC = ((int)text_log.packet - (int)&text_log_packet) >> 4;

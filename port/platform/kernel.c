@@ -13,7 +13,20 @@
    host's clock to catch up.
 
    Interrupt handlers run in the kernel calls, on the stack of the thread that made the call, as the
-   EE runs them on the interrupted thread's. What they make ready runs once they return. */
+   EE runs them on the interrupted thread's. What they make ready runs once they return.
+
+   What the game reaches of the kernel (the decomp's callers; the Sony libraries the decomp has in
+   src/sce are not built, port/sdk stands in for them): the main thread and the movie player's idle and
+   decode threads, all at priority 1, which take turns only through RotateThreadReadyQueue(1) and the
+   stream semaphore (max count 1); timer 0's compare handler (core/timer.c, a void function) and the
+   movie's vblank (INTC 2) and GIF end (DMAC 2) handlers (returning 0), each alone on its cause; DIntr
+   and EIntr, whose results it ignores. So these EE rules are modelled but never decide anything here:
+   - where a preempted thread goes in its ready queue (all at one priority, none preempts another);
+   - what a handler's return value does to the rest of its chain (no chain has two handlers);
+   - Enable/Disable's results, SignalSema's on a full semaphore (KE_SEMA_OVF on the EE, the count
+     unchanged as here), a deleted semaphore's waiters, WakeupThread on the caller, iWakeupThread
+     on the interrupted thread (counted, as Sony's libkernel patch does), and alarms (none set):
+     the game never reads or reaches them. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -289,6 +302,7 @@ static void frame_end(void);
 
 static void vblank_start(void) {
     volatile uint64_t *csr = EE_HW(volatile uint64_t *, 0x12001000);
+    uint32_t mode;
 
     vblank_count++;
     /* the GS scans out the field the display registers say, alongside the game. It is the field
@@ -314,17 +328,22 @@ static void vblank_start(void) {
             pace_start_wall = now - (double)ee_cycle / (double)EE_BUS_HZ;
         }
     }
+    /* the pad (mouse look), the window and the overlay are the host's: its float mode */
+    mode = port_host_float_begin();
     port_pad_poll();
     port_video_present();
+    port_host_float_end(mode);
     port_quick_vblank();
     /* the settings overlay can hold the game while it is open: EE time stands still, and the pacing
        starts again from here. A save state asked for meanwhile is taken below, at once. */
     if (port_overlay_paused()) {
+        mode = port_host_float_begin();
         while (port_overlay_paused() && !port_state_wanted()) {
             port_sleep(1.0 / 60.0);
             port_pad_poll();
             port_video_present();
         }
+        port_host_float_end(mode);
         pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
     }
     /* A save state is taken here, between two fields, with every thread in a kernel call: the host's
@@ -955,9 +974,11 @@ void InvalidDCache(void *start, void *end) {
 static void frame_end(void) {
     if (port_log_enabled()) {
         char line[512];
+        uint32_t mode = port_host_float_begin(); /* (printf rounds as MXCSR says) */
 
         kf4_game_state(line, sizeof(line));
         port_log("%llu %s", (unsigned long long)vblank_count, line);
+        port_host_float_end(mode);
     }
     if (port_options.frames > 0 && vblank_count >= (uint64_t)port_options.frames) {
         port_event("stop: %lld vblanks run", port_options.frames);

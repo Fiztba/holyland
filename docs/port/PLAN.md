@@ -36,9 +36,33 @@ What changed:
     definition.
 
 Still open:
-- No tree-wide check yet for integer division by zero (x86 traps, the EE does not).
 - Model work areas are sized for the PS2's worst case, not for the real part counts.
-- PS2 float rounding is not modelled beyond the division and square-root edge cases.
+
+PS2 numbers (done since; RULES.md, "PS2 numbers"):
+- **The EE's FPU.** The game's threads run with MXCSR rounding toward zero, denormals flushed (FTZ,
+  DAZ), as COP1 does (`port/platform/fiber.c`; `--fpu-round nearest` for IEEE). Left different: the
+  EE has no infinities or NaNs (exponent 255 is a number, overflow and division by zero give
+  +-0x7FFFFFFF, SSE +-FLT_MAX, +-inf or NaN), and its adder and multiplier may differ from IEEE's
+  rounding toward zero in the last bit (not modelled, as on VU1). No run of `tests/newgame.pad` or
+  `tests/walk.pad` divides a float by zero or converts one out of range (gcc's UBSan).
+- **VU0.** Every VU0 instruction the game's C does (the macro-mode blocks, `math/vu0.h`, libvu0) is
+  VU arithmetic (`port/include/port/vu_float.h`), bit for bit as VU1's interpreter.
+- **The math library.** The game calls newlib's sinf, cosf, atan2f, atanf, asinf, sqrtf and sin, cos,
+  sqrt, atan2, atan, acos as the SDK built them (`port/sdk/libm_ps2.c`), checked against the retail
+  program's own run on a model of the EE (`tools/ee_libm_ref.py`, `tests/libm_test.c`). Its doubles
+  are dp-bit's software doubles, rounding to nearest: each double the game turns into a float goes
+  through `ps2_dtof`. The double arithmetic itself still rounds toward zero on the PC (the last bit
+  of a double; it reaches a float only at a rounding boundary).
+- **Integer division.** ee-gcc checks every divisor that is not a constant (`break 7`, 808 checks in
+  the retail program), so a division by zero stops the PS2 too; it ends the PC's run with a message.
+  INT_MIN / -1 gives INT_MIN and remainder 0, as the EE's DIV, instead of x86's trap
+  (`port/platform/int_divide.c`). No shift by 32 or more, no division by zero in the test runs.
+- **Evaluation order.** The game has no other statement like the tagged-voice one (a store and a read
+  of the same object unsequenced): gcc's -Wsequence-point, clang's -Wunsequenced and a scan of the
+  game code find none; no call's arguments depend on each other's side effects.
+- **Not done:** float to int conversions out of range give 0x80000000 on the PC where the EE
+  saturates by sign (none happen in the test runs); script commands 9 and 10 hand the script an
+  uninitialised value, as retail does with whatever its register holds.
 
 ## Step 1: boot to a new game, headless (done, branch `port/step1`)
 
@@ -73,16 +97,19 @@ Result:
   is a safeguard only.
 - Three game bugs the PC exposed, fixed in `patches/`:
   - `File_Read` reads whole sectors, so a file read into a static table runs past its end. Retail
-    lays the tables out so that is harmless. The save icon buffer is enlarged to whole sectors.
-    GCC builds with `-fno-toplevel-reorder` so globals keep the order they are defined in.
+    lays the tables out so that is harmless. Into the program's globals the PC reads only the bytes
+    asked for, the last sector through a buffer of its own (`port_cd_read_bytes`, `libcdvd.h`); into
+    game RAM, laid out as on the PS2, whole sectors as before. (Before, the save icon buffer was
+    enlarged and GCC's `-fno-toplevel-reorder` kept `item_nam.prm`'s overrun in `item_common_defs`;
+    the flag stays, so gcc and clang lay globals out alike.)
   - An effect with no magic reads `fx_table[0xFFFF]`, 17 MB past the table: that is game RAM on
     the PS2, and is read there (`EE_RAM_AT`).
   - `ModelInstance.found_record` takes an aligned 128-bit store, so it is 16-byte aligned.
 
-Still open:
-- Movies are not played: each one ends at once (`sceMpeg*`).
-- The memory card is always empty, so saving and loading are untested.
-- The sound driver's RPC answers every command with "done" and plays nothing.
+Still open (at step 1; all three are done since, in steps 4 and 5):
+- ~~Movies are not played: each one ends at once (`sceMpeg*`).~~
+- ~~The memory card is always empty, so saving and loading are untested.~~
+- ~~The sound driver's RPC answers every command with "done" and plays nothing.~~
 
 ## Step 2: graphics, stage 1 (the first picture)
 
@@ -136,7 +163,11 @@ Still open:
 - The GIF's arbitration is modelled only as far as it decides an order with transfers that take no
   time: PATH3 never goes in the middle of a channel 1 chain unless VIF1 unmasks it there.
 - The game's write-1-to-clear stores (CSR's FINISH, T0_MODE's EQUF) set the bit instead: nothing sees
-  a store into the register page. The game never reads either bit where that would show.
+  a store into the register page, and catching one would take a page fault per store. Not modelled, on
+  purpose: the game reads CSR only for FIELD and, in `Packet_WaitForSend`, FINISH after waiting for
+  channel 1 and `sceGsSyncPath`, when the GS has had the chain's FINISH; it never reads T0_MODE, and the
+  kernel raises timer 0's interrupt at each compare match whatever EQUF holds. The same goes for the
+  other flags `GS_CSR |= 2` would clear on the PS2 (VSINT, HSINT, SIGNAL): nothing reads them.
 - The VU's adder can differ from IEEE's rounding toward zero in the last bit; the interpreter does
   not model that.
 
@@ -292,11 +323,41 @@ Still open:
     - The player's pause and resume (`MovieAudio_Pause`, `MovieAudio_Resume`) need a block transfer
       from a start address, which libsd here does not do. Nothing calls them.
 
+## The stand-ins: what the game can still reach
+
+An audit of every `PORT_TODO`, stub and logged-once path in `port/` and `patches/` against the decomp's
+callers (map scripts, menus, saves, shops, magic, the endings, the staff roll, the movies, the card, the
+pad, the clock):
+- **Fixed:** the pad's motors (`scePadSetActDirect`) drive the SDL controller's rumble, as the game asks
+  for with its vibration option on (damage, map script command 198, the forest golem, the giant
+  beetle). A `--clock` clock runs on with EE time, so the play time counts in repeatable runs. Every EE
+  thread's stack starts zeroed, also below the live part after a state load. The DMA-wait `PORT_TODO`s
+  that printed on every run are gone.
+- **Not reachable, kept as a message:** FSIOPSND's 0x30C0 (`SoundDriver_SetStreamSector`, no caller),
+  0x3010 (`adsPreset`, never sent) and closing a playing stream (the title stops its music first);
+  MODHSYN's sound-effect ports and Setb banks (FSIOPSND sets every port to MIDI and VAG banks); SDRDRV's
+  mid-ring block transfer (`MovieAudio_Resume`, no caller); `SetGsCrt` modes other than NTSC (every
+  `sceGsResetGraph` and `Movie_Play` passes 2); libgraph's own vblank handler (never installed);
+  `sceMpegSetDecodeMode` (`MovieVideo_SetDecodeMode`, no caller); libdev (VU0 never runs a micro
+  program).
+- **Data guards, kept:** VIF1 UNPACK with WL 0 and unknown VIF codes; FSIOPSND's 0x2070 port past the
+  sequence states and an overflowing sound-effect stream; modmidi's sequence with a division or tick
+  length of 0; MODHSYN's division by zero and bank with no Sset or Smpl.
+- **The EE kernel** (`port/platform/kernel.c`, its header comment): the game's threads all run at
+  priority 1 and every interrupt or DMA cause has at most one handler, so the rules not checked against
+  a PS2 (a preempted thread's place, handler return values, Enable/Disable results, a full semaphore,
+  WakeupThread on the caller, alarms) never decide anything.
+
+Still open:
+- The memory card cannot be pulled out or swapped while the game runs.
+- `sceMcFormat` keeps the folder (step 5).
+
 ## Step 6: PC features and releases
 
 - Features: a settings menu, rebinding, mouse look.
 - First run extracts the game from the user's ISO.
-- Builds and releases come from CI.
+- Builds and releases come from CI. CI builds and tests on Linux (gcc) and on Windows (llvm-mingw
+  20260616 and 20261006, SDL2 2.30.9): `.github/workflows/ci.yml`. Releases do not yet.
 - Before binaries are shipped, the game's data tables are loaded from the user's own ELF instead of
   being compiled in, as ico-pc does.
 

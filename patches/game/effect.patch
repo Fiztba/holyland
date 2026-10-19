@@ -540,7 +540,7 @@ index b838114fb1a612a884cf66b295fbcdea0816f8d7..84e8135d897b6c5a437b9b921a6fc8be
      { EffectFly_StartRaised, EffectFly_Update },
      { EffectAtTarget_Start, EffectAtTarget_Update },
 diff --git a/src/game/effect/effect_kinds_a.c b/src/game/effect/effect_kinds_a.c
-index 7d95e993232d8d027ae096a608cfb2a40174aa3f..e75449ae0e6437c5d0615014c11897f983172497 100644
+index 7d95e993232d8d027ae096a608cfb2a40174aa3f..3aa8d983aa57fb48c39034111bcedfa9cc51f6b0 100644
 --- a/src/game/effect/effect_kinds_a.c
 +++ b/src/game/effect/effect_kinds_a.c
 @@ -4,27 +4,21 @@
@@ -612,6 +612,24 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..e75449ae0e6437c5d0615014c11897f9
          }
      }
      if (actor->frame < actor->def->max_frames || actor->def->max_frames == 0) {
+@@ -672,7 +666,7 @@ void EffectFall_Update(EffectActor *effect) {
+ void EffectChase_Start(EffectActor *actor, EffectSlot *spawn_slot) {
+     ChaseMotion *motion;
+     ModelInstance *target;
+-    float offset[3];
++    float offset[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+     double remaining;
+ 
+     motion = (ChaseMotion *)&actor->motion;
+@@ -686,7 +680,7 @@ void EffectChase_Start(EffectActor *actor, EffectSlot *spawn_slot) {
+         target = *(ModelInstance **)actor->target_entity;
+         Vector_Subtract(offset, &target->position, &actor->model->position);
+         remaining = (double)(float)actor->def->interval - sqrt((double)(offset[0] * offset[0] + offset[2] * offset[2]));
+-        motion->turn = remaining / (double)((float)actor->def->interval + (float)actor->def->interval);
++        motion->turn = ps2_dtof(remaining / (double)((float)actor->def->interval + (float)actor->def->interval));
+         motion->turn *= actor->def->turn_rate;
+     } else {
+         motion->turn = 0;
 @@ -846,7 +840,7 @@ void EffectGroundRunWait_Update(EffectActor *actor) {
          return;
      }
@@ -621,6 +639,24 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..e75449ae0e6437c5d0615014c11897f9
              if (slot->def->kind_index == 0xE) {
                  actor->frame++;
                  return;
+@@ -936,7 +930,7 @@ void EffectFloorSkim_Update(EffectActor *effect) {
+    floor within 1.5 unkDC below, or ends next frame without one. */
+ void EffectGroundSway_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     GroundSwayMotion *motion;
+-    float point[3];
++    float point[4]; /* PC: [3]; Vector_Copy stores a quadword */
+ 
+     motion = (GroundSwayMotion *)&effect->motion;
+     EffectStart_PlaceModel(effect, spawn_slot);
+@@ -991,7 +985,7 @@ void EffectGroundSway_Update(EffectActor *effect) {
+         angle += 6.2831855f;
+     }
+     motion->angle = angle;
+-    sine = (float)sin((double)angle);
++    sine = ps2_dtof(sin((double)angle));
+     Vector_Scale(&offset, &offset, sine);
+     sceVu0AddVector(&effect->model->position, &effect->model->position, &offset);
+     sceVu0AddVector(&effect->model->position, &effect->model->position, &motion->velocity);
 @@ -1016,7 +1010,7 @@ void EffectGroundSway_Update(EffectActor *effect) {
          return;
      }
@@ -630,6 +666,15 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..e75449ae0e6437c5d0615014c11897f9
          EFFECT_FLAG_PARTS(effect)->sound_track = result;
          if ((s8)result > 0) {
              effect_sound_count += 1;
+@@ -1029,7 +1023,7 @@ void EffectGroundSway_Update(EffectActor *effect) {
+    and stands on the floor within 1.5 unkDC below, or ends next frame without one. */
+ void EffectGroundTrail_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     GroundTrailMotion *motion;
+-    float point[3];
++    float point[4]; /* PC: [3]; Vector_Copy stores a quadword */
+ 
+     motion = (GroundTrailMotion *)&effect->motion;
+     EffectStart_PlaceModel(effect, spawn_slot);
 @@ -1110,7 +1104,7 @@ void EffectGroundTrail_Update(EffectActor *effect) {
          return;
      }
@@ -657,6 +702,15 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..e75449ae0e6437c5d0615014c11897f9
          motion->turn = 0.0f;
      }
      if (effect->target_entity != 0) {
+@@ -1694,7 +1688,7 @@ void EffectBobHoming_Update(EffectActor *effect) {
+             if (effect->def->ground_height < motion->turn) {
+                 motion->turn = effect->def->ground_height;
+             } else {
+-                motion->turn += 0.1; /* the double is the .rodata one at 0x43EF50 */
++                motion->turn = ps2_dtof(motion->turn + 0.1); /* the double is the .rodata one at 0x43EF50 */
+             }
+             EffectSteer_Toward(&motion->velocity, &to_target, motion->turn, 100.0f);
+             sceVu0AddVector(&effect->model->position, &effect->model->position, &motion->velocity);
 @@ -1737,7 +1731,7 @@ void EffectBobFly_Start(EffectActor *effect, EffectSlot *spawn_slot) {
      float bob_limit;
  
@@ -666,8 +720,28 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..e75449ae0e6437c5d0615014c11897f9
      EffectStart_PlaceModel(effect, spawn_slot);
      EffectAngle_ToVector(effect->def->speed, &motion->velocity, &effect->model->rotation);
      effect->flags |= EFFECT_FLAG_HAS_TARGETERS;
+@@ -2076,7 +2070,7 @@ void EffectAimedChase_Start(EffectActor *actor, EffectSlot *spawn_slot) {
+         interval = (f32)actor->def->interval;
+         distance = sqrt(offset.x * offset.x + offset.z * offset.z);
+         remaining = interval - distance;
+-        motion->turn = (f32)(remaining / (double)(actor->def->interval * 2.0f));
++        motion->turn = ps2_dtof(remaining / (double)(actor->def->interval * 2.0f));
+         motion->turn *= actor->def->turn_rate;
+     } else {
+         motion->turn = 0.0f;
+@@ -2205,8 +2199,8 @@ void EffectSweep_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+         }
+         motion->has_aim = 1;
+     } else {
+-        sine = sin(-spawn_slot->rotation.y);
+-        cosine = cos(-spawn_slot->rotation.y);
++        sine = ps2_dtof(sin(-spawn_slot->rotation.y));
++        cosine = ps2_dtof(cos(-spawn_slot->rotation.y));
+         aim.x = 0.0f;
+         aim.y = 0.0f;
+         aim.w = 0.0f;
 diff --git a/src/game/effect/effect_query.c b/src/game/effect/effect_query.c
-index a4b196328036f49fbc2a50b6db0d2155acd6e646..a49d64153f8f0cc751f9c8945274e7b626ea2d45 100644
+index a4b196328036f49fbc2a50b6db0d2155acd6e646..59df4ec87d61e28743894131798bd83759bbc7e1 100644
 --- a/src/game/effect/effect_query.c
 +++ b/src/game/effect/effect_query.c
 @@ -5,6 +5,7 @@
@@ -685,9 +759,9 @@ index a4b196328036f49fbc2a50b6db0d2155acd6e646..a49d64153f8f0cc751f9c8945274e7b6
 -    f32 distance[4];
 +    f32 *a = from;
 +    f32 *b = target;
-+    f32 dx = b[0] - a[0];
-+    f32 dy = b[1] - a[1];
-+    f32 dz = b[2] - a[2];
++    f32 dx = Vu_FSub(b[0], a[0]);
++    f32 dy = Vu_FSub(b[1], a[1]);
++    f32 dz = Vu_FSub(b[2], a[2]);
 +    f32 sum;
  
 -    __asm__ volatile(
@@ -703,10 +777,10 @@ index a4b196328036f49fbc2a50b6db0d2155acd6e646..a49d64153f8f0cc751f9c8945274e7b6
 -        "sqc2 $vf16, 0(%2)\n"
 -        : : "r"(from), "r"(target), "r"(distance) : "memory");
 -    return distance[0];
-+    /* vsub, vmul, then z + x, then + y, and the square root (VU0) */
-+    sum = dz * dz + dx * dx;
-+    sum = sum + dy * dy;
-+    return sqrtf(sum);
++    /* vsub, vmul, then z + x, then + y, and the square root (VU0), vaddq.x from vf0.x */
++    sum = Vu_FAdd(Vu_FMul(dz, dz), Vu_FMul(dx, dx));
++    sum = Vu_FAdd(sum, Vu_FMul(dy, dy));
++    return Vu_FAdd(0.0f, Vu_FSqrt(sum));
  }
  
  // Horizontal (XZ-plane) distance between origin and target.
@@ -729,15 +803,15 @@ index a4b196328036f49fbc2a50b6db0d2155acd6e646..a49d64153f8f0cc751f9c8945274e7b6
 -        : "r"(origin), "r"(&target_at_origin_height), "r"(&out)
 -        : "memory");
 +    {
-+        f32 dx = target_at_origin_height.x - origin[0];
-+        f32 dy = target_at_origin_height.y - origin[1];
-+        f32 dz = target_at_origin_height.z - origin[2];
++        f32 dx = Vu_FSub(target_at_origin_height.x, origin[0]);
++        f32 dy = Vu_FSub(target_at_origin_height.y, origin[1]);
++        f32 dz = Vu_FSub(target_at_origin_height.z, origin[2]);
 +        f32 sum;
 +
-+        /* vsub, vmul, then z + x, then + y, and the square root (VU0) */
-+        sum = dz * dz + dx * dx;
-+        sum = sum + dy * dy;
-+        out.x = sqrtf(sum);
++        /* vsub, vmul, then z + x, then + y, and the square root (VU0), vaddq.x from vf0.x */
++        sum = Vu_FAdd(Vu_FMul(dz, dz), Vu_FMul(dx, dx));
++        sum = Vu_FAdd(sum, Vu_FMul(dy, dy));
++        out.x = Vu_FAdd(0.0f, Vu_FSqrt(sum));
 +    }
      return out.x;
  }
@@ -880,7 +954,7 @@ index 9b8b30281da303ac5cf091416e88ce12ab57a4b5..eebae5aaca5e7ac0080cc6be39979890
          effect->model->position.y = COLLISION_RESULT->point[1] - (f32)effect->def->radius_half;
      } else {
 diff --git a/src/game/effect/fx_shared.c b/src/game/effect/fx_shared.c
-index 4a6bbd258a4f189164f20bea79a7d2c8045c3d3d..7ccc176dd078b8b894052502ab76fbbe429ad2c8 100644
+index 4a6bbd258a4f189164f20bea79a7d2c8045c3d3d..bcdca52f85c3dcd11c85901f8237c8bcd2ce20d8 100644
 --- a/src/game/effect/fx_shared.c
 +++ b/src/game/effect/fx_shared.c
 @@ -4,10 +4,11 @@
@@ -922,6 +996,32 @@ index 4a6bbd258a4f189164f20bea79a7d2c8045c3d3d..7ccc176dd078b8b894052502ab76fbbe
  Entity *EffectHit_FindNearestEntity(EffectActor *effect, Vector4 *position, Vector4 *unused_rotation);
  
  /* Sets the model's scale from the definition's scale keys; returns the key reached, or -1 while it blends
+@@ -250,17 +243,17 @@ void EffectStart_PlaceModel(EffectActor *effect, EffectSlot *spawn_slot) {
+     if (EFFECT_DEF_FLAG_WORD(effect->def) & 0x10000) {
+         Vector_Copy(&effect->model->position, effect->def->offset_base);
+         Vector_Copy(&origin, effect->start_position);
+-        pitch_sine = sin(-effect->start_rotation->x);
+-        pitch_cosine = cos(-effect->start_rotation->x);
+-        heading_sine = sin(-effect->start_rotation->y);
+-        heading_cosine = cos(-effect->start_rotation->y);
++        pitch_sine = ps2_dtof(sin(-effect->start_rotation->x));
++        pitch_cosine = ps2_dtof(cos(-effect->start_rotation->x));
++        heading_sine = ps2_dtof(sin(-effect->start_rotation->y));
++        heading_cosine = ps2_dtof(cos(-effect->start_rotation->y));
+     } else {
+         Vector_Copy(&effect->model->position, &spawn_slot->position);
+         Vector_Copy(&origin, &spawn_slot->position);
+-        pitch_sine = sin(-spawn_slot->rotation.x);
+-        pitch_cosine = cos(-spawn_slot->rotation.x);
+-        heading_sine = sin(-spawn_slot->rotation.y);
+-        heading_cosine = cos(-spawn_slot->rotation.y);
++        pitch_sine = ps2_dtof(sin(-spawn_slot->rotation.x));
++        pitch_cosine = ps2_dtof(cos(-spawn_slot->rotation.x));
++        heading_sine = ps2_dtof(sin(-spawn_slot->rotation.y));
++        heading_cosine = ps2_dtof(cos(-spawn_slot->rotation.y));
+     }
+     offset.x = effect->def->offset_base[0] + ((rand() & 0xFFFF) * (1.0f / 32768.0f) - 1.0f) * effect->def->offset_spread[0];
+     offset.y = effect->def->offset_base[1] + ((rand() & 0xFFFF) * (1.0f / 32768.0f) - 1.0f) * effect->def->offset_spread[1];
 @@ -342,7 +335,7 @@ void EffectSteer_Toward(Vector4 *velocity, Vector4 *direction, float speed, floa
  
  /* The entity within def->interval of position that lies most nearly in the direction of the reference

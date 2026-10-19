@@ -1393,7 +1393,7 @@ index 7b0dbb7560de4032f9a76cae8843975c56e184ba..f24e3165308d2b13c73d05100e430a24
              part->rotation_x += (vectors[key->rotation].x - part->rotation_x) / divisor;
              part->rotation_y += (vectors[key->rotation].y - part->rotation_y) / divisor;
 diff --git a/src/game/model/model_screen.c b/src/game/model/model_screen.c
-index e7a0a153a5609bb86d4007ce9a267be54eedfed8..eb3406016a153506d7ddb84452e73ce33cc47396 100644
+index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136dd41da825 100644
 --- a/src/game/model/model_screen.c
 +++ b/src/game/model/model_screen.c
 @@ -1,4 +1,7 @@
@@ -1511,6 +1511,15 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..eb3406016a153506d7ddb84452e73ce3
          packet += 0x10;
          *packet = 0x10000003;
          packet += 4;
+@@ -605,7 +598,7 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
+ 
+     screen_uv_frame_copy = screen_uv_frame = (screen_uv_frame + 1) % 60;
+     for (i = 0; i < 60; i++) {
+-        sines[i] = sin((f32)i * 6.2831855f / 60.0f) * 10.0;
++        sines[i] = ps2_dtof(sin((f32)i * 6.2831855f / 60.0f) * 10.0);
+     }
+     part = model->parts;
+     part_count = model->part_count;
 @@ -613,9 +606,9 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
          FlushCache(0);
          sceVu0MulMatrix(matrix, world_screen_matrix, part);
@@ -1569,7 +1578,7 @@ index c42a21ff7f50e7b5edd8b006bfc054ecd993ed45..5f207e2bb2bbe65ca1151cc1e4760ee5
              case 3:
                  Map_QueuePacket((int *)model->texture_data);
 diff --git a/src/game/model/motion.c b/src/game/model/motion.c
-index 47b0e5bcc915db6242dbac63264b920996364920..73913ef952b308242241b0227e1d88d3143e4f39 100644
+index 47b0e5bcc915db6242dbac63264b920996364920..69306642a90665d5eb50d31001b870e8dac0e022 100644
 --- a/src/game/model/motion.c
 +++ b/src/game/model/motion.c
 @@ -3,11 +3,8 @@
@@ -1608,7 +1617,7 @@ index 47b0e5bcc915db6242dbac63264b920996364920..73913ef952b308242241b0227e1d88d3
 +        u32 ones = 0xFFFFFFFF;
 +        memcpy(&ee_vu0.vf[3][1], &ones, 4);
 +    }
-+    ee_vu0.vf[4][3] = VF(0)[3] - VF(3)[0]; /* vsubx.w */
++    ee_vu0.vf[4][3] = Vu_FSub(VF(0)[3], VF(3)[0]); /* vsubx.w */
 +    Vu_Lqc2(1, src_a);
 +    Vu_Lqc2(2, src_b);
 +    Vu_MulA(VU_XYZ, 2, VF(3)[0]);

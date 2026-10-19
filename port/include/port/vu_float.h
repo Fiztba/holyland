@@ -1,5 +1,5 @@
 /* VU float arithmetic, bit for bit as VU1 does it in port/platform/vu1.c, for the EE's VU0 macro-mode
-   instructions (the Vu_* helpers of the game's math/vu0.h).
+   instructions (the Vu_F* operations below, the Vu_* helpers of the game's math/vu0.h, and libvu0).
 
    On the PS2, VU0 and VU1 are the same floating-point units. The game relies on that: it draws some
    models twice, once with vertices the EE projects on VU0 (a PATH2 packet) and once with the same
@@ -100,7 +100,21 @@ static inline uint32_t vu_float_div(uint32_t a, uint32_t b) {
 
 /* the square root of |a| (as the division, a double's rounding never crosses a boundary) */
 static inline uint32_t vu_float_sqrt(uint32_t a) {
-    return vu_float_round(sqrt(fabs(vu_float_value(a))));
+    /* (the compiler's: game files map sqrt() to the PS2's, port/libm_ps2.h) */
+    return vu_float_round(__builtin_sqrt(__builtin_fabs(vu_float_value(a))));
+}
+
+/* RSQRT: a / sqrt(|b|); b zero gives the largest float with a's sign (as vu1.c's) */
+static inline uint32_t vu_float_rsqrt(uint32_t a, uint32_t b) {
+    if ((b & 0x7F800000u) == 0) {
+        return (a & VU_FLOAT_SIGN) | VU_FLOAT_MAX;
+    }
+    return vu_float_div(a, vu_float_sqrt(b));
+}
+
+/* ABS: the sign cleared, nothing else changed */
+static inline uint32_t vu_float_abs(uint32_t a) {
+    return a & 0x7FFFFFFFu;
 }
 
 /* MAX: sign and magnitude compared, so -0 < +0; an operand unchanged */
@@ -109,6 +123,11 @@ static inline uint32_t vu_float_max(uint32_t a, uint32_t b) {
         return (int32_t)a < (int32_t)b ? a : b;
     }
     return (int32_t)a > (int32_t)b ? a : b;
+}
+
+/* MINI: the other operand of MAX's */
+static inline uint32_t vu_float_mini(uint32_t a, uint32_t b) {
+    return vu_float_max(a, b) == a ? b : a;
 }
 
 /* FTOIn: times 2^shift, truncated; at 2^31 and beyond the integer's limit with the float's sign */
@@ -140,5 +159,22 @@ static inline float vu_float_from_bits(uint32_t bits) {
     memcpy(&f, &bits, 4);
     return f;
 }
+
+/* The same operations on the floats the game's VU0 code keeps (math/vu0.h's register helpers, and the
+   VU0 blocks of the game files written out in C): one VU instruction's lane each. A float holding a VU
+   value with exponent 255 is an infinity or NaN to the host, so only these touch it, never host
+   arithmetic. */
+static inline float Vu_FAdd(float a, float b) { return vu_float_from_bits(vu_float_add(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FSub(float a, float b) { return vu_float_from_bits(vu_float_sub(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FMul(float a, float b) { return vu_float_from_bits(vu_float_mul(vu_float_bits(a), vu_float_bits(b))); }
+/* DIV: a / b, by zero the largest float with the quotient's sign */
+static inline float Vu_FDiv(float a, float b) { return vu_float_from_bits(vu_float_div(vu_float_bits(a), vu_float_bits(b))); }
+/* SQRT: the square root of |a| */
+static inline float Vu_FSqrt(float a) { return vu_float_from_bits(vu_float_sqrt(vu_float_bits(a))); }
+/* RSQRT: a / sqrt(|b|), one operation */
+static inline float Vu_FRsqrt(float a, float b) { return vu_float_from_bits(vu_float_rsqrt(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FMax(float a, float b) { return vu_float_from_bits(vu_float_max(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FMini(float a, float b) { return vu_float_from_bits(vu_float_mini(vu_float_bits(a), vu_float_bits(b))); }
+static inline float Vu_FAbs(float a) { return vu_float_from_bits(vu_float_abs(vu_float_bits(a))); }
 
 #endif
