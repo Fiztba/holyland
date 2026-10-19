@@ -230,7 +230,7 @@ overlay's keys save and load slot 0; the command line drives them for tests:
   a file once the run reaches vblank 300, while it runs (in a window too).
 
 Slots are `slot<N>.kf4state` in `%APPDATA%\holyland\states` on Windows, and in
-`$XDG_DATA_HOME/holyland/states` (or `~/.local/share/holyland/states`) elsewhere. A file is about 5 to
+`$XDG_DATA_HOME/holyland/states` (or `~/.local/share/holyland/states`) elsewhere; with `KF4_DATA_DIR` set, in its `states` folder, next to settings.json. A file is about 5 to
 15 MB (LZ4-compressed; 80 MB in memory).
 
 How it works (`port/platform/savestate.c`):

@@ -146,8 +146,22 @@ static void make_folder(const char *path) {
 
 static void state_folder(char *out, size_t size, int create) {
     const char *parts[] = {"holyland", "states"};
+    const char *data_dir = getenv("KF4_DATA_DIR");
     size_t i;
 
+    /* KF4_DATA_DIR moves the settings (port/overlay/settings.c) and the states together */
+    if (data_dir != NULL && *data_dir) {
+        snprintf(out, size, "%s", data_dir);
+        if (create) {
+            make_folder(out);
+        }
+        i = strlen(out);
+        snprintf(out + i, size - i, "/states");
+        if (create) {
+            make_folder(out);
+        }
+        return;
+    }
 #ifdef _WIN32
     const char *base = getenv("APPDATA");
 
