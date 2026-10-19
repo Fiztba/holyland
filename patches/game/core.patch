@@ -760,7 +760,7 @@ index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e550
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 4e157dccb6c9fafec8f4f098024e3983189adf2e..de88f4ed7b4dfd4122fde05d55fd7f17a1ddd25b 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..f0261fa53c0fb85919f7d4b38c10f049e0c28324 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
 @@ -20,6 +20,12 @@
@@ -838,7 +838,11 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..de88f4ed7b4dfd4122fde05d55fd7f17
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -156,17 +148,21 @@ void Input_ResumeRumble(void);
+@@ -153,20 +145,25 @@ void GsDraw_QueueTexturedSprite(void *);
+ void PlayTime_Update(void);
+ void Input_PauseRumble(void);
+ void Input_ResumeRumble(void);
++void Quick_PollGame(void); /* PC: quick saves (game/quicksave.c) */
  extern PlayerState player_state;
  extern int save_loaded;          /* nonzero: a saved game was loaded */
  extern u8 game_options[0x10];
@@ -864,9 +868,11 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..de88f4ed7b4dfd4122fde05d55fd7f17
  extern MapDrawStateOverlays map_draw_state;
  extern int message_dim_alpha;
  extern int current_map_slot;
-@@ -303,10 +299,10 @@ void GameLoop_Run(int arg) {
+@@ -302,11 +299,12 @@ void GameLoop_Run(int arg) {
+         GameLoop_OpenRequestedMenu();
          MapChange_RunToEnd();
          GameLoop_UpdatePause();
++        Quick_PollGame(); /* PC: a quick save or load asked for (game/quicksave.c) */
      }
 -    game_dbuff_clear_color[0] = 0xC000L << 17;
 -    game_dbuff_clear_color[30] = 0xC000L << 17;
@@ -879,7 +885,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..de88f4ed7b4dfd4122fde05d55fd7f17
      Input_StopRumble();
      Message_CloseBox();
      Message_ClearNotices();
-@@ -332,7 +328,7 @@ void GameLoop_Run(int arg) {
+@@ -332,7 +330,7 @@ void GameLoop_Run(int arg) {
  
  /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
     tints, the overlays MapDrawState asks for, the fades and the pause shade. */
@@ -888,7 +894,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..de88f4ed7b4dfd4122fde05d55fd7f17
      int tinted = FALSE;
      f32 tint;
      int red;
-@@ -509,9 +505,8 @@ int GameLoop_DrawFrame(int arg) {
+@@ -509,9 +507,8 @@ int GameLoop_DrawFrame(int arg) {
      }
      Hud_Draw();
      if (map_draw_state.screen_fill_alpha > 0) {
@@ -900,7 +906,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..de88f4ed7b4dfd4122fde05d55fd7f17
      }
      Game_DrawFade();
      Splash_Draw();
-@@ -659,7 +654,9 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -659,7 +656,9 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
  
      switch (projection) {
      case 0:
@@ -911,7 +917,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..de88f4ed7b4dfd4122fde05d55fd7f17
          break;
      case 1:
          sceVu0ViewScreenMatrix(view_screen_matrix, 512.0f, 0.4f, 0.5714286f, 2048.0f, 2048.0f, 1.0f, 1048560.0f, 1.0f,
-@@ -729,7 +726,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +728,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:

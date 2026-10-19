@@ -19,7 +19,8 @@
    cross, right circle, middle cross (the menu mouse), the wheel up / down.
 
    In both, a controller's buttons are as the PS2 pad's (A cross, B circle, X square, Y triangle, the
-   shoulders and triggers L1 R1 L2 R2), and F2 / F4 save and load the quick save state.
+   shoulders and triggers L1 R1 L2 R2), F2 / F4 take and load a quick save (port/platform/quicksave.c), and
+   F5 / F7 save and load the quick slot's save state.
 
    Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look):
    each movement is applied once, so it neither coasts nor builds speed. Capture is manual (Escape),
@@ -33,6 +34,7 @@
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/savestate.h"
+#include "port/quicksave.h"
 
 #ifdef KF4_HAVE_SDL
 #include <SDL.h>
@@ -99,8 +101,10 @@ static const struct {
     [ACTION_RIGHT_STICK_LEFT] = {"right_stick_left", "Right stick left", 0},
     [ACTION_RIGHT_STICK_RIGHT] = {"right_stick_right", "Right stick right", 0},
     [ACTION_CAPTURE_MOUSE] = {"capture_mouse", "Capture / release the mouse", 0},
-    [ACTION_QUICK_SAVE] = {"quick_save", "Quick save (save state)", 0},
-    [ACTION_QUICK_LOAD] = {"quick_load", "Quick load (save state)", 0},
+    [ACTION_QUICK_SAVE] = {"quick_save", "Save state (debugging, same build)", 0},
+    [ACTION_QUICK_LOAD] = {"quick_load", "Load state (debugging, same build)", 0},
+    [ACTION_GAME_SAVE] = {"game_quick_save", "Quick save", 0},
+    [ACTION_GAME_LOAD] = {"game_quick_load", "Quick load", 0},
 };
 
 const char *port_controls_action_label(int action) {
@@ -157,8 +161,10 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_RIGHT_STICK_DOWN] = {KEY(K)},
         [ACTION_RIGHT_STICK_LEFT] = {KEY(J)},
         [ACTION_RIGHT_STICK_RIGHT] = {KEY(L)},
-        [ACTION_QUICK_SAVE] = {KEY(F2)},
-        [ACTION_QUICK_LOAD] = {KEY(F4)},
+        [ACTION_QUICK_SAVE] = {KEY(F5)},
+        [ACTION_QUICK_LOAD] = {KEY(F7)},
+        [ACTION_GAME_SAVE] = {KEY(F2)},
+        [ACTION_GAME_LOAD] = {KEY(F4)},
     },
     [CONTROLS_VERDITE] = {
         [ACTION_UP] = {KEY(W), KEY(UP), PAD(DPAD_UP)},
@@ -178,8 +184,10 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
         [ACTION_SELECT] = {KEY(RSHIFT), 0, PAD(BACK)},
         [ACTION_CAPTURE_MOUSE] = {KEY(ESCAPE)},
-        [ACTION_QUICK_SAVE] = {KEY(F2)},
-        [ACTION_QUICK_LOAD] = {KEY(F4)},
+        [ACTION_QUICK_SAVE] = {KEY(F5)},
+        [ACTION_QUICK_LOAD] = {KEY(F7)},
+        [ACTION_GAME_SAVE] = {KEY(F2)},
+        [ACTION_GAME_LOAD] = {KEY(F4)},
     },
 };
 /* Verdite's mouse outside play: left cross, right circle, middle cross */
@@ -784,6 +792,14 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_QUICK_LOAD & 1u) {
         port_state_request_load(0);
         port_overlay_notify_state();
+    }
+    if (edges >> ACTION_GAME_SAVE & 1u) {
+        port_quick_request_save(port_quick_slot());
+        port_overlay_notify_quick();
+    }
+    if (edges >> ACTION_GAME_LOAD & 1u) {
+        port_quick_request_load(port_quick_slot());
+        port_overlay_notify_quick();
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
         set_captured(!pc.captured);

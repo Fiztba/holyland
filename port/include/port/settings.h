@@ -37,6 +37,7 @@ typedef struct {
     int show_fps;
     float ui_scale;        /* the overlay's size, 0.75 to 2 */
     int save_slot;         /* the slot the Save states page has chosen */
+    int quick_slot;        /* the slot of the quick save and quick load keys (port/include/port/quicksave.h) */
 } PortSettings;
 extern PortSettings port_settings;
 

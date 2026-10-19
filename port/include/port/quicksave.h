@@ -1,0 +1,81 @@
+/* Quick saves (port/platform/quicksave.c, game/quicksave.c): the game's progress in the game's own save
+   format, taken anywhere in play and loaded through the game's own load path, so any build of the
+   program can read them (save states, port/include/port/savestate.h, load only in the build that
+   made them).
+
+   A quick save is the image Game_WriteSaveImage writes for a memory card save (it holds the map, the
+   player's position, heading and look, HP and MP, the stats, the items, the flags of the world), with
+   a small PC header. Loading puts that image where a memory card load puts it and leaves the game's
+   main loop as a card load does, so the game restarts the session from it (GameLoop_ResetSystems,
+   GameLoop_Run on the saved map). No memory card is read or written either way. */
+#ifndef PORT_QUICKSAVE_H
+#define PORT_QUICKSAVE_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define PORT_QUICK_SLOTS 10
+
+/* What a quick save says about itself (the file's PC block), for the overlay and the checks */
+typedef struct {
+    int64_t time;          /* when it was written, seconds since 1970 */
+    int32_t map_tag;       /* the map the player was in (MapSlot.tag of the current slot) */
+    float position[3];     /* the player's position in that map */
+    float rotation[3];     /* x the look up and down, y the heading */
+    int32_t hp, hp_max, mp, mp_max;
+    int32_t level, gold;
+    uint32_t play_seconds; /* the game's play time */
+} PortQuickInfo;
+
+/* Asks for a quick save to `slot`, or a load from it, taken where the game can (in play for a save;
+   in play or on the title screen for a load). Safe from the window's events and the overlay. A
+   request that the game has not taken within a second is dropped, with a message saying why. */
+void port_quick_request_save(int slot);
+void port_quick_request_load(int slot);
+
+/* 1 and what slot `slot` holds, or 0 when it is empty or not a quick save */
+int port_quick_info(int slot, PortQuickInfo *info);
+
+/* The last thing a request did, for the overlay and the log */
+const char *port_quick_message(void);
+
+/* The slot F2 and F4 use (the overlay's Quick saves choice) */
+int port_quick_slot(void);
+
+/* ---- The port's side ------------------------------------------------------------------------- */
+
+/* Reads --quick-save-at and --quick-load ([VBLANK:]SLOT|FILE) (port/platform/main_host.c) */
+void port_quick_init(void);
+/* (the kernel, at each vblank) moves the command line's requests on, and drops stale ones */
+void port_quick_vblank(void);
+
+/* ---- The game's side (game/quicksave.c calls these) ------------------------------------------ */
+#define PORT_QUICK_NONE 0
+#define PORT_QUICK_SAVE 1
+#define PORT_QUICK_LOAD 2
+
+/* What is asked for now (PORT_QUICK_) */
+int port_quick_wanted(void);
+/* The game cannot do it now: why. A key's request is dropped; the command line's waits. */
+void port_quick_refuse(const char *why);
+/* Writes the save image and the info as the requested slot or file: 1 when written */
+int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *info);
+/* Reads and checks the requested slot or file: the image (malloc'd, the caller frees it) and its info,
+   or NULL with the message set. */
+uint8_t *port_quick_read(size_t *size, PortQuickInfo *info);
+/* The game took the loaded image (ok) or refused it (the image's own check failed) */
+void port_quick_loaded(int ok);
+/* (the first vblank of play after a load) where the game put the player, checked against the info */
+void port_quick_placed(const PortQuickInfo *now);
+/* (game/quicksave.c, called by port_quick_vblank) does that check when it is due */
+void kf4_quick_vblank(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

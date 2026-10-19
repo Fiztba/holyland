@@ -40,6 +40,8 @@ int port_overlay_open(void);
 int port_overlay_paused(void);
 /* (port/sdk/controls.c) a save state was asked for by its key: shows port_state_message() a while */
 void port_overlay_notify_state(void);
+/* (port/sdk/controls.c) a quick save or load was asked for by its key: shows port_quick_message() a while */
+void port_overlay_notify_quick(void);
 #else
 static inline int port_overlay_open(void) {
     return 0;
@@ -48,6 +50,8 @@ static inline int port_overlay_paused(void) {
     return 0;
 }
 static inline void port_overlay_notify_state(void) {
+}
+static inline void port_overlay_notify_quick(void) {
 }
 #endif
 
