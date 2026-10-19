@@ -21,6 +21,7 @@
 #include "eekernel.h"
 #include "port/host.h"
 #include "port/audio.h"
+#include "port/overlay.h"
 #include "port/platform.h"
 
 #define MAX_THREADS 64
@@ -311,6 +312,16 @@ static void vblank_start(void) {
     }
     port_pad_poll();
     port_video_present();
+    /* the settings overlay can hold the game while it is open: EE time stands still, and the pacing
+       starts again from here */
+    if (port_overlay_paused()) {
+        while (port_overlay_paused()) {
+            port_sleep(1.0 / 60.0);
+            port_pad_poll();
+            port_video_present();
+        }
+        pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+    }
 }
 
 /* Moves EE time on to `until`, raising the vblank and timer interrupts it passes, in their order. */

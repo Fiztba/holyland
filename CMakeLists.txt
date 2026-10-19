@@ -90,7 +90,7 @@ add_library(kf4_port STATIC
 target_include_directories(kf4_port PUBLIC port/include)
 target_include_directories(kf4_port PRIVATE third_party/cjson)
 target_link_libraries(kf4_port PUBLIC ico_audio)
-target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
+target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
 set_source_files_properties(port/platform/vu1.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
@@ -109,11 +109,29 @@ endif()
 if(KF4_USE_SDL AND SDL2_FOUND)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_SDL)
     if(TARGET SDL2::SDL2)
-        target_link_libraries(kf4_port PRIVATE SDL2::SDL2)
+        set(KF4_SDL2_LINK SDL2::SDL2)
     else()
         target_include_directories(kf4_port PRIVATE ${SDL2_INCLUDE_DIRS})
-        target_link_libraries(kf4_port PRIVATE ${SDL2_LIBRARIES})
+        set(KF4_SDL2_LINK ${SDL2_LIBRARIES})
     endif()
+    target_link_libraries(kf4_port PRIVATE ${KF4_SDL2_LINK})
+    # The settings overlay (F1): Dear ImGui (third_party/imgui) on the window's SDL_Renderer
+    enable_language(CXX)
+    add_library(imgui STATIC
+        third_party/imgui/imgui.cpp
+        third_party/imgui/imgui_draw.cpp
+        third_party/imgui/imgui_tables.cpp
+        third_party/imgui/imgui_widgets.cpp
+        third_party/imgui/backends/imgui_impl_sdl2.cpp
+        third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+    target_include_directories(imgui PUBLIC third_party/imgui)
+    if(NOT TARGET SDL2::SDL2)
+        target_include_directories(imgui PRIVATE ${SDL2_INCLUDE_DIRS})
+    endif()
+    target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
+    set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
+    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp)
+    target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
 endif()

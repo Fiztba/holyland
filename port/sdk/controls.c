@@ -30,6 +30,7 @@
 
 #include "port/controls.h"
 #include "port/host.h"
+#include "port/overlay.h"
 #include "port/platform.h"
 #include "port/savestate.h"
 
@@ -780,9 +781,11 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     /* the PC's own keys */
     if (edges >> ACTION_QUICK_SAVE & 1u) {
         port_state_request_save(0);
+        port_overlay_notify_state();
     }
     if (edges >> ACTION_QUICK_LOAD & 1u) {
         port_state_request_load(0);
+        port_overlay_notify_state();
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
         set_captured(!pc.captured);

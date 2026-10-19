@@ -28,6 +28,7 @@
 #include "libpad.h"
 #include "port/controls.h"
 #include "port/host.h"
+#include "port/overlay.h"
 #include "port/platform.h"
 
 #define BUTTON_SELECT 0x0001
@@ -220,9 +221,9 @@ static void sdl_read(void) {
 
     memset(&live, 0, sizeof(live));
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
-    /* the buttons, and the sticks' keys */
+    /* the buttons, and the sticks' keys; nothing while the overlay is open */
     port_controls_read(&live.buttons, live.axis, controller);
-    if (controller == NULL) {
+    if (controller == NULL || port_overlay_open()) {
         return;
     }
     {
@@ -291,7 +292,7 @@ void port_pad_poll(void) {
             }
             continue;
         }
-        if (port_controls_event(&event)) {
+        if (port_controls_event(&event) || port_overlay_event(&event)) {
             continue;
         }
         if (event.type == SDL_CONTROLLERDEVICEADDED && controller == NULL) {

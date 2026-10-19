@@ -55,6 +55,8 @@ const char *port_data_dir(void);
 const char *port_settings_path(void);
 /* Puts the audio settings into the sound output (port_audio_set_volume) */
 void port_settings_apply_audio(void);
+/* Puts the display settings into the window: its size, full screen, vsync (port/platform/video.c) */
+void port_video_apply_settings(void);
 
 #ifdef __cplusplus
 }
