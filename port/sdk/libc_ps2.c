@@ -4,6 +4,8 @@
    undefined). */
 #include <stdint.h>
 
+#include "port/savestate.h"
+
 static int32_t rand_next = 1;
 
 void srand(unsigned int seed) {
@@ -98,4 +100,9 @@ int ps2_mktime(int *fields) {
     fields[ISDST] = 0;
     seconds = days * 86400 + fields[HOUR] * 3600 + fields[MIN] * 60 + fields[SEC];
     return (int)(uint32_t)seconds;
+}
+
+/* Save states: rand's seed */
+void port_libc_state(PortStateIo *io) {
+    PORT_STATE(io, rand_next);
 }

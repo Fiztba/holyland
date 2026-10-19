@@ -7,6 +7,7 @@
 #include "libcdvd.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define SCECD_COMPLETE 2
 
@@ -163,4 +164,9 @@ int sceCdStSeek(unsigned int lsn) {
 
 int sceCdStStop(void) {
     return 1;
+}
+
+/* ---- Save states: where the stream reads next ------------------------------------------------- */
+void port_cdvd_state(PortStateIo *io) {
+    PORT_STATE(io, stream_lsn);
 }

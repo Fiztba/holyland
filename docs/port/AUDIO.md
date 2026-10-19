@@ -167,6 +167,23 @@ loads a map. Here the same happens:
 
 `--no-audio` opens no device, and the sound is still made: the game reads the driver's state back.
 
+**The player's volume.** The overlay's Audio page (and settings.json) scales what the device plays
+(`port_audio_set_volume`), on either clock. The SPU2's output, what the game reads back and
+`--audio-dump` are not touched, and at full volume the samples go to the device as before.
+
+Music and sound effects have no volumes of their own yet. Nothing in the driver keeps them apart where
+the sound is mixed:
+- The sequences play through MODHSYN ports 0 to 3, but the game's sound-effect messages (`0x1080`)
+  name their own synthesizer streams, and which ones each effect uses has not been surveyed; both
+  kinds share the SPU2's voices, and a voice does not know which port started it once it plays.
+- Scaling the volumes MODHSYN writes per port would change the libsd writes that are compared with
+  the PS2 driver's, and scaling per voice needs a gain in the SPU2's mixer, in ico-audio, which is
+  kept as upstream has it.
+- Only the streamed music (`.ADS`, the sound data input) is apart from the rest.
+
+A clean split would be a per-voice gain in the SPU2's mixer, set by modhsyn from the port a note
+came from, once the effects' streams are known.
+
 ## Debugging
 
 | variable | writes |

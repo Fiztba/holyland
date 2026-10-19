@@ -1,9 +1,8 @@
 /* libpad for the PC port (port/include/libpad.h): a DualShock 2 in port 0, slot 0, and nothing in
    port 1. Its buttons come from a pad script (--input), for tests, or else from the first SDL game
-   controller and the keyboard (with the window focused):
-       arrows      the d-pad              W A S D    the left stick   I J K L   the right stick
-       Z or space  cross    X  circle     C  square  V  triangle
-       Q  L1    E  R1    1  L2    3  R2   Enter  start  Backspace  select
+   controller, the keyboard and the mouse, by the bindings of port/sdk/controls.c (by default the
+   keyboard has arrows for the d-pad, W A S D and I J K L for the sticks, Z or space cross, X circle,
+   C square, V triangle, Q E 1 3 for L1 R1 L2 R2, Enter start and Backspace select).
 
    The pad behaves as a DualShock 2 does for libpad: digital (id 4, report type 0x41) or analog (id 7,
    0x73), pressure-sensitive (0x79) when the game asks, two motors, and each request finished at once
@@ -29,7 +28,9 @@
 #include "libpad.h"
 #include "port/controls.h"
 #include "port/host.h"
+#include "port/overlay.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define BUTTON_SELECT 0x0001
 #define BUTTON_L3 0x0002
@@ -216,88 +217,15 @@ static int stick_byte(Sint16 value) {
     return (value + 32768) >> 8;
 }
 
-/* a stick from two pairs of keys: 0x00 or 0xFF along each axis held, 0x80 otherwise */
-static int key_axis(const Uint8 *keys, SDL_Scancode low, SDL_Scancode high) {
-    return keys[low] && !keys[high] ? 0x00 : keys[high] && !keys[low] ? 0xFF : 0x80;
-}
-
-static void keyboard_read(void) {
-    static const struct {
-        SDL_Scancode key;
-        unsigned int bit;
-    } map[] = {
-        {SDL_SCANCODE_BACKSPACE, BUTTON_SELECT},
-        {SDL_SCANCODE_RETURN, BUTTON_START},
-        {SDL_SCANCODE_UP, BUTTON_UP},
-        {SDL_SCANCODE_RIGHT, BUTTON_RIGHT},
-        {SDL_SCANCODE_DOWN, BUTTON_DOWN},
-        {SDL_SCANCODE_LEFT, BUTTON_LEFT},
-        {SDL_SCANCODE_1, BUTTON_L2},
-        {SDL_SCANCODE_3, BUTTON_R2},
-        {SDL_SCANCODE_Q, BUTTON_L1},
-        {SDL_SCANCODE_E, BUTTON_R1},
-        {SDL_SCANCODE_V, BUTTON_TRIANGLE},
-        {SDL_SCANCODE_X, BUTTON_CIRCLE},
-        {SDL_SCANCODE_Z, BUTTON_CROSS},
-        {SDL_SCANCODE_SPACE, BUTTON_CROSS},
-        {SDL_SCANCODE_C, BUTTON_SQUARE},
-    };
-    const Uint8 *keys = SDL_GetKeyboardState(NULL);
-    size_t i;
-
-    for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-        if (keys[map[i].key]) {
-            live.buttons |= map[i].bit;
-        }
-    }
-    live.axis[0] = key_axis(keys, SDL_SCANCODE_J, SDL_SCANCODE_L);
-    live.axis[1] = key_axis(keys, SDL_SCANCODE_I, SDL_SCANCODE_K);
-    live.axis[2] = key_axis(keys, SDL_SCANCODE_A, SDL_SCANCODE_D);
-    live.axis[3] = key_axis(keys, SDL_SCANCODE_W, SDL_SCANCODE_S);
-}
-
 static void sdl_read(void) {
-    static const struct {
-        SDL_GameControllerButton button;
-        unsigned int bit;
-    } map[] = {
-        {SDL_CONTROLLER_BUTTON_BACK, BUTTON_SELECT},
-        {SDL_CONTROLLER_BUTTON_LEFTSTICK, BUTTON_L3},
-        {SDL_CONTROLLER_BUTTON_RIGHTSTICK, BUTTON_R3},
-        {SDL_CONTROLLER_BUTTON_START, BUTTON_START},
-        {SDL_CONTROLLER_BUTTON_DPAD_UP, BUTTON_UP},
-        {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, BUTTON_RIGHT},
-        {SDL_CONTROLLER_BUTTON_DPAD_DOWN, BUTTON_DOWN},
-        {SDL_CONTROLLER_BUTTON_DPAD_LEFT, BUTTON_LEFT},
-        {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, BUTTON_L1},
-        {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, BUTTON_R1},
-        {SDL_CONTROLLER_BUTTON_Y, BUTTON_TRIANGLE},
-        {SDL_CONTROLLER_BUTTON_B, BUTTON_CIRCLE},
-        {SDL_CONTROLLER_BUTTON_A, BUTTON_CROSS},
-        {SDL_CONTROLLER_BUTTON_X, BUTTON_SQUARE},
-    };
     size_t i;
 
     memset(&live, 0, sizeof(live));
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
-    if (port_controls_verdite()) {
-        port_controls_read(&live.buttons);
-    } else {
-        keyboard_read();
-    }
-    if (controller == NULL) {
+    /* the buttons, and the sticks' keys; nothing while the overlay is open */
+    port_controls_read(&live.buttons, live.axis, controller);
+    if (controller == NULL || port_overlay_open()) {
         return;
-    }
-    for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-        if (SDL_GameControllerGetButton(controller, map[i].button)) {
-            live.buttons |= map[i].bit;
-        }
-    }
-    if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16384) {
-        live.buttons |= BUTTON_L2;
-    }
-    if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16384) {
-        live.buttons |= BUTTON_R2;
     }
     {
         static const SDL_GameControllerAxis axes[4] = {SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY,
@@ -365,7 +293,9 @@ void port_pad_poll(void) {
             }
             continue;
         }
-        port_controls_event(&event);
+        if (port_controls_event(&event) || port_overlay_event(&event)) {
+            continue;
+        }
         if (event.type == SDL_CONTROLLERDEVICEADDED && controller == NULL) {
             sdl_open_first();
         } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && controller != NULL &&
@@ -535,4 +465,10 @@ int scePadExitPressMode(int port, int slot) {
     }
     pressure = 0;
     return 1;
+}
+
+/* ---- Save states: the mode the game set (the buttons are the host's, or the script's at a vblank) - */
+void port_pad_state(PortStateIo *io) {
+    PORT_STATE(io, analog);
+    PORT_STATE(io, pressure);
 }

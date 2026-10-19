@@ -45,6 +45,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <xmmintrin.h>
@@ -729,6 +730,19 @@ uint8_t *port_vu1_micro(void) {
 
 uint8_t *port_vu1_data(void) {
     return data;
+}
+
+/* Save states: the registers, flags and timing. Micro memory is in the register pages (memory.c), and
+   a state says it is not decoded, so that it is decoded again from there after a load (and the same
+   state saved twice is the same). */
+void port_vu1_state(PortStateIo *io) {
+    int decoded = vu.decoded;
+
+    vu.decoded = 0;
+    PORT_STATE(io, vu);
+    if (!io->loading) {
+        vu.decoded = decoded;
+    }
 }
 
 static inline uint32_t *mem_qword(uint32_t address) {

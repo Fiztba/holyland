@@ -40,6 +40,8 @@ typedef struct {
     int no_audio;            /* --no-audio: no sound device (the sound is still made) */
     int clock_fields[6];     /* year, month, day, hour, minute, second */
     int stats;               /* --stats: print where the controller's time went at exit */
+    const char *state_save_at; /* --state-save-at: VBLANK[:SLOT|:FILE],... (port/platform/savestate.c) */
+    const char *state_load;    /* --state-load: [VBLANK:]SLOT|FILE */
 } PortOptions;
 extern PortOptions port_options;
 
@@ -76,6 +78,8 @@ void port_fiber_switch(PortFiber *from, PortFiber *to);
 #define EE_BUS_HZ 147456000u
 /* The kernel's first steps, before the game's main runs. */
 void port_kernel_init(void);
+/* Runs the game's main as the EE's main thread, on a fiber; does not return. */
+int port_kernel_run(int (*game_main)(void));
 /* The current EE time in bus cycles, and the vblanks so far. */
 uint64_t port_ee_cycles(void);
 uint64_t port_vblank_count(void);
@@ -160,6 +164,8 @@ void port_video_init(void);
 void port_video_submit(const PortGsFrame *frame);
 /* (the controller's thread) writes the picture as <dump-dir>/frame_<vblank>.png */
 void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
+/* writes RGBA pixels (R in the low byte) as an RGB PNG: 1 when it was written */
+int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture and keeps the window alive */
 void port_video_present(void);
 

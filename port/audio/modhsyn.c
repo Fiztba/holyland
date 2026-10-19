@@ -25,6 +25,7 @@
 
 #include "csl.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 #include "sd.h"
 
 /* libsd selectors: a voice's parameter is core | voice << 1 | parameter */
@@ -2465,4 +2466,29 @@ int sceHSyn_MSGetVoiceStateByID(CslCtx *ctx, unsigned int port, unsigned char id
         }
     }
     return found;
+}
+
+/* Save states: the voices and the module's globals (the ports' state is in the driver's) */
+void port_modhsyn_state(PortStateIo *io) {
+    PORT_STATE(io, voices);
+    PORT_STATE(io, freeList);
+    PORT_STATE(io, reservedList);
+    PORT_STATE(io, pendingList);
+    PORT_STATE(io, activeList);
+    PORT_STATE(io, freeCount);
+    PORT_STATE(io, reserveMask);
+    PORT_STATE(io, nonMask);
+    PORT_STATE(io, konMask);
+    PORT_STATE(io, koffMask);
+    PORT_STATE(io, vmixl);
+    PORT_STATE(io, vmixr);
+    PORT_STATE(io, vmixel);
+    PORT_STATE(io, vmixer);
+    PORT_STATE(io, tickUnit);
+    PORT_STATE(io, voiceStat);
+    PORT_STATE(io, pollPending);
+    PORT_STATE(io, mono);
+    PORT_STATE(io, midiVoices);
+    PORT_STATE(io, seVoices);
+    PORT_STATE(io, randState);
 }

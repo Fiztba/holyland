@@ -21,7 +21,9 @@
 #include "eekernel.h"
 #include "port/host.h"
 #include "port/audio.h"
+#include "port/overlay.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define MAX_THREADS 64
 #define MAX_SEMAS 64
@@ -29,6 +31,8 @@
 #define LOWEST_PRIORITY 127
 /* the host stack each EE thread gets: the PC's code needs more than the EE's */
 #define MIN_FIBER_STACK 0x40000
+/* the main thread's (the game's main runs on a fiber too, so that a save state can hold it) */
+#define MAIN_FIBER_STACK 0x400000
 
 /* NTSC interlaced: 59.94 fields a second, 262.5 lines a field */
 #define FIELD_CYCLES_X5 12300288u /* 5 x 147456000 / (60000 / 1001) */
@@ -311,6 +315,22 @@ static void vblank_start(void) {
     }
     port_pad_poll();
     port_video_present();
+    /* the settings overlay can hold the game while it is open: EE time stands still, and the pacing
+       starts again from here. A save state asked for meanwhile is taken below, at once. */
+    if (port_overlay_paused()) {
+        while (port_overlay_paused() && !port_state_wanted()) {
+            port_sleep(1.0 / 60.0);
+            port_pad_poll();
+            port_video_present();
+        }
+        pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+    }
+    /* A save state is taken here, between two fields, with every thread in a kernel call: the host's
+       thread takes it while this one waits (port_kernel_run), and a state loaded later goes on from
+       this point. */
+    if (port_state_wanted()) {
+        port_fiber_switch(threads[current].fiber, port_fiber_main());
+    }
 }
 
 /* Moves EE time on to `until`, raising the vblank and timer interrupts it passes, in their order. */
@@ -514,11 +534,32 @@ void port_kernel_init(void) {
     main_thread->status = THREAD_RUN;
     main_thread->priority = 1;
     main_thread->init_priority = 1;
-    main_thread->fiber = port_fiber_main();
     current = 1;
     next_vblank_start = FIELD_CYCLES_X5 / 5;
     next_vblank_end = UINT64_MAX;
     pace_start_wall = port_wall_seconds();
+}
+
+/* The main thread: the game's main, on a fiber of its own */
+static int (*game_main)(void);
+
+static void main_entry(void *unused) {
+    (void)unused;
+    exit(game_main());
+}
+
+int port_kernel_run(int (*main_function)(void)) {
+    PortFiber *host = port_fiber_main();
+
+    game_main = main_function;
+    threads[1].fiber = port_fiber_create(MAIN_FIBER_STACK, main_entry, NULL);
+    /* The host's thread runs the EE threads, and is back here only when a vblank asks for a save
+       state (or one is loaded before the game starts); then it runs the thread that is current,
+       which after a load is the state's. */
+    for (;;) {
+        port_state_host();
+        port_fiber_switch(host, threads[current].fiber);
+    }
 }
 
 void port_kernel_poll(void) {
@@ -914,5 +955,29 @@ static void frame_end(void) {
         port_event("stop: %lld vblanks run", port_options.frames);
         port_gs_finish();
         exit(0);
+    }
+}
+
+/* ---- Save states ------------------------------------------------------------------------------ */
+void port_kernel_state(PortStateIo *io) {
+    PORT_STATE(io, threads);
+    PORT_STATE(io, semas);
+    PORT_STATE(io, current);
+    PORT_STATE(io, order_tail);
+    PORT_STATE(io, order_head);
+    PORT_STATE(io, need_reschedule);
+    PORT_STATE(io, intc_chains);
+    PORT_STATE(io, dmac_chains);
+    PORT_STATE(io, next_handler_id);
+    PORT_STATE(io, in_interrupt);
+    PORT_STATE(io, ee_cycle);
+    PORT_STATE(io, vblank_count);
+    PORT_STATE(io, next_vblank_start);
+    PORT_STATE(io, next_vblank_end);
+    PORT_STATE(io, timer_synced);
+    PORT_STATE(io, intc_pending);
+    if (io->loading) {
+        /* the vblanks are paced from here on */
+        pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
     }
 }

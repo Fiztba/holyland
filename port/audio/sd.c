@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "port/audio.h"
+#include "port/savestate.h"
 #include "spu2.h"
 #include "spu2_internal.h"
 
@@ -346,4 +347,9 @@ void sd_set_trans_callback(int channel, sd_trans_callback callback) {
 
 void sd_reset(void) {
     memset(auto_dma, 0, sizeof(auto_dma));
+}
+
+/* Save states: the sound data inputs (the clock is output.c's) */
+void port_sd_state(PortStateIo *io) {
+    PORT_STATE(io, auto_dma);
 }
