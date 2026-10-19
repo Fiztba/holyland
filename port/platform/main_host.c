@@ -38,8 +38,9 @@
                          load a state before the game starts, or at that vblank
        --quick-save-at VBLANK[:SLOT|:FILE],...
                          take a quick save once in play from these vblanks (port/platform/quicksave.c)
-       --quick-load [VBLANK:]SLOT|FILE
-                         load a quick save on the title screen, or in play once the run reaches VBLANK
+       --quick-load [VBLANK:]SLOT|FILE,...
+                         load a quick save on the title screen, or in play once the run reaches VBLANK;
+                         several, in vblank order, are loaded one after another
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
@@ -71,7 +72,7 @@ static void usage(const char *program) {
             "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
-            "          [--quick-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n"
+            "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace]\n",
             program);
     exit(2);

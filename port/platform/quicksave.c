@@ -14,7 +14,9 @@
      40  the PC block: i64 time, i32 map, f32 x y z, f32 look heading roll, i32 hp hp_max mp mp_max
          level gold, u32 play seconds (64 bytes: the first files' whole block); then u16 the
          neighbouring map (0xFFFF: none), u8 the current map's origin that leads to it (0xFF: none),
-         u8 flags: bit 0 it was set up, not only read (QUICK_INFO_SIZE, 68 bytes). The block's size
+         u8 flags: bit 0 it was set up, not only read, bit 1 the file was made by a tool
+         (tools/map_tour.py), not by the game: the neighbour is worked out from the position, and
+         the player put on the floor there (QUICK_INFO_SIZE, 68 bytes). The block's size
          is the format's minor version: a later one may append more, and a reader takes what it knows
          and skips the rest, so a file of any block size loads in every build of format version 1 (a
          64-byte one with no neighbour known: the game works it out from the position).
@@ -45,6 +47,7 @@
 #define QUICK_IMAGE_MAX 0x20000u
 #define REQUEST_VBLANKS 60 /* a key's request that the game has not taken by then is dropped */
 #define MAX_SAVE_AT 16
+#define MAX_LOAD_AT 64
 
 typedef struct {
     int kind;          /* PORT_QUICK_ */
@@ -65,11 +68,9 @@ typedef struct {
 } SaveAt;
 static SaveAt save_at[MAX_SAVE_AT];
 static int save_at_count, save_at_next;
-/* --quick-load */
-static int load_pending;
-static uint64_t load_vblank;
-static int load_slot;
-static const char *load_path;
+/* --quick-load: one or more, in vblank order */
+static SaveAt load_at[MAX_LOAD_AT];
+static int load_at_count, load_at_next;
 
 static void set_message(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
@@ -217,8 +218,9 @@ static void unpack_info(const uint8_t *p, uint32_t size, PortQuickInfo *info) {
     info->play_seconds = get32(p + 60);
     info->neighbour_origin = info->neighbour_map = -1;
     if (size >= QUICK_INFO_SIZE) {
-        info->neighbour_known = 1;
-        if (p[66] != 0xFF) {
+        info->neighbour_known = !(p[67] & 2);
+        info->made_up = (p[67] & 2) != 0;
+        if (p[66] != 0xFF && !info->made_up) {
             info->neighbour_origin = p[66];
             info->neighbour_map = p[64] | p[65] << 8;
             info->neighbour_set_up = p[67] & 1;
@@ -363,9 +365,9 @@ void port_quick_vblank(void) {
         ask(PORT_QUICK_SAVE, save_at[save_at_next].slot, save_at[save_at_next].path, 1);
         save_at_next++;
     }
-    if (request.kind == PORT_QUICK_NONE && load_pending && load_vblank <= vblank) {
-        load_pending = 0;
-        ask(PORT_QUICK_LOAD, load_slot, load_path, 1);
+    if (request.kind == PORT_QUICK_NONE && load_at_next < load_at_count && load_at[load_at_next].vblank <= vblank) {
+        ask(PORT_QUICK_LOAD, load_at[load_at_next].slot, load_at[load_at_next].path, 1);
+        load_at_next++;
     }
 }
 
@@ -451,6 +453,10 @@ void port_quick_loaded(int ok) {
     set_message("loading %s: map %02X, level %d", name, expected.map_tag, expected.level);
 }
 
+void port_quick_moved(const float position[3]) {
+    memcpy(expected.position, position, sizeof(expected.position));
+}
+
 void port_quick_placed(const PortQuickInfo *now) {
     int i, exact = now->map_tag == expected.map_tag, near = exact;
 
@@ -516,16 +522,33 @@ void port_quick_init(void) {
         }
     }
     if (port_options.quick_load != NULL) {
-        const char *text = port_options.quick_load;
-        char *end;
-        unsigned long long vblank = strtoull(text, &end, 10);
+        /* [VBLANK:]SLOT|FILE,...: each waits for the one before it to be taken (a map tour loads
+           one after another in one run) */
+        char *list = malloc(strlen(port_options.quick_load) + 1);
+        char *item;
 
-        /* [VBLANK:]SLOT|FILE */
-        if (end != text && *end == ':') {
-            load_vblank = vblank;
-            text = end + 1;
+        strcpy(list, port_options.quick_load);
+        for (item = strtok(list, ","); item != NULL; item = strtok(NULL, ",")) {
+            SaveAt *point = &load_at[load_at_count];
+            const char *text = item;
+            char *end;
+            unsigned long long vblank = strtoull(text, &end, 10);
+
+            if (load_at_count == MAX_LOAD_AT) {
+                fprintf(stderr, "--quick-load: at most %d\n", MAX_LOAD_AT);
+                exit(2);
+            }
+            point->vblank = 0;
+            if (end != text && *end == ':') {
+                point->vblank = vblank;
+                text = end + 1;
+            }
+            if (load_at_count > 0 && point->vblank < point[-1].vblank) {
+                fprintf(stderr, "--quick-load wants [VBLANK:]SLOT|FILE,... in order, not %s\n", item);
+                exit(2);
+            }
+            parse_target(text, &point->slot, &point->path);
+            load_at_count++;
         }
-        parse_target(text, &load_slot, &load_path);
-        load_pending = 1;
     }
 }
