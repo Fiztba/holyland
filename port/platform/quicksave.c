@@ -12,7 +12,12 @@
      28  u32 0
      32  u64 FNV-1a hash of the PC block and the image
      40  the PC block: i64 time, i32 map, f32 x y z, f32 look heading roll, i32 hp hp_max mp mp_max
-         level gold, u32 play seconds (QUICK_INFO_SIZE bytes; a later version may append)
+         level gold, u32 play seconds (64 bytes: the first files' whole block); then u16 the
+         neighbouring map (0xFFFF: none), u8 the current map's origin that leads to it (0xFF: none),
+         u8 flags: bit 0 it was set up, not only read (QUICK_INFO_SIZE, 68 bytes). The block's size
+         is the format's minor version: a later one may append more, and a reader takes what it knows
+         and skips the rest, so a file of any block size loads in every build of format version 1 (a
+         64-byte one with no neighbour known: the game works it out from the position).
          then the save image, exactly as Game_WriteSaveImage made it (the memory card's bytes). */
 #include <math.h>
 #include <stdarg.h>
@@ -34,7 +39,8 @@
 #define QUICK_MAGIC "KF4QUICK"
 #define QUICK_VERSION 1u
 #define QUICK_HEADER_SIZE 40u
-#define QUICK_INFO_SIZE 64u
+#define QUICK_INFO_SIZE 68u     /* the PC block written now */
+#define QUICK_INFO_SIZE_MIN 64u /* the first files' (no neighbour) */
 #define QUICK_IMAGE_MAGIC 0x15400u
 #define QUICK_IMAGE_MAX 0x20000u
 #define REQUEST_VBLANKS 60 /* a key's request that the game has not taken by then is dropped */
@@ -186,9 +192,13 @@ static void pack_info(uint8_t *p, const PortQuickInfo *info) {
     put32(p + 52, (uint32_t)info->level);
     put32(p + 56, (uint32_t)info->gold);
     put32(p + 60, info->play_seconds);
+    p[64] = (uint8_t)(info->neighbour_origin < 0 ? 0xFF : info->neighbour_map);
+    p[65] = (uint8_t)(info->neighbour_origin < 0 ? 0xFF : info->neighbour_map >> 8);
+    p[66] = (uint8_t)(info->neighbour_origin < 0 ? 0xFF : info->neighbour_origin);
+    p[67] = (uint8_t)(info->neighbour_origin >= 0 && info->neighbour_set_up);
 }
 
-static void unpack_info(const uint8_t *p, PortQuickInfo *info) {
+static void unpack_info(const uint8_t *p, uint32_t size, PortQuickInfo *info) {
     int i;
 
     memset(info, 0, sizeof(*info));
@@ -205,6 +215,15 @@ static void unpack_info(const uint8_t *p, PortQuickInfo *info) {
     info->level = (int32_t)get32(p + 52);
     info->gold = (int32_t)get32(p + 56);
     info->play_seconds = get32(p + 60);
+    info->neighbour_origin = info->neighbour_map = -1;
+    if (size >= QUICK_INFO_SIZE) {
+        info->neighbour_known = 1;
+        if (p[66] != 0xFF) {
+            info->neighbour_origin = p[66];
+            info->neighbour_map = p[64] | p[65] << 8;
+            info->neighbour_set_up = p[67] & 1;
+        }
+    }
 }
 
 /* Checks a header: NULL, or why the file is not one this program reads */
@@ -220,7 +239,7 @@ static const char *check_header(const uint8_t *h, uint32_t *image_size, uint32_t
     }
     *image_size = get32(h + 20);
     *info_size = get32(h + 24);
-    if (*image_size < 0x100 || *image_size > QUICK_IMAGE_MAX || *info_size < QUICK_INFO_SIZE || *info_size > 0x10000) {
+    if (*image_size < 0x100 || *image_size > QUICK_IMAGE_MAX || *info_size < QUICK_INFO_SIZE_MIN || *info_size > 0x10000) {
         return "the file is damaged";
     }
     return NULL;
@@ -259,7 +278,7 @@ static uint8_t *read_file(const char *path, size_t *size, PortQuickInfo *info, c
         free(body);
         return NULL;
     }
-    unpack_info(body, info);
+    unpack_info(body, info_size, info);
     image = malloc(image_size);
     if (image == NULL) {
         free(body);
@@ -274,7 +293,7 @@ static uint8_t *read_file(const char *path, size_t *size, PortQuickInfo *info, c
 
 int port_quick_info(int slot, PortQuickInfo *info) {
     char path[1024];
-    uint8_t head[QUICK_HEADER_SIZE + QUICK_INFO_SIZE];
+    uint8_t head[QUICK_HEADER_SIZE + QUICK_INFO_SIZE_MIN]; /* what the overlay lists */
     uint32_t image_size, info_size;
     FILE *file;
     int ok;
@@ -287,7 +306,7 @@ int port_quick_info(int slot, PortQuickInfo *info) {
     ok = fread(head, sizeof(head), 1, file) == 1 && check_header(head, &image_size, &info_size) == NULL;
     fclose(file);
     if (ok) {
-        unpack_info(head + QUICK_HEADER_SIZE, info);
+        unpack_info(head + QUICK_HEADER_SIZE, QUICK_INFO_SIZE_MIN, info);
     }
     return ok;
 }
@@ -393,9 +412,10 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
         set_message("cannot write %s", path);
         return 0;
     }
-    port_event("quick saved to %s: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d", name,
-               stamped.map_tag, stamped.position[0], stamped.position[1], stamped.position[2], stamped.rotation[1],
-               stamped.rotation[0], stamped.hp, stamped.mp);
+    port_event("quick saved to %s: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d neighbour %02X "
+               "(origin %d, %s)", name, stamped.map_tag, stamped.position[0], stamped.position[1], stamped.position[2],
+               stamped.rotation[1], stamped.rotation[0], stamped.hp, stamped.mp, stamped.neighbour_map & 0xFFFF,
+               stamped.neighbour_origin, stamped.neighbour_set_up ? "set up" : "read");
     set_message("saved %s: map %02X, level %d, HP %d/%d", name, stamped.map_tag, stamped.level, stamped.hp,
                 stamped.hp_max);
     return 1;
