@@ -23,7 +23,7 @@ index 8641b62ac08d791a20f0004965fe1b2ffc195a2b..8a67666adef3b0ad7ee9e1469b751250
  
  f32 D_00432620[0x80] = { 0 };              /* 0x432620 */
 diff --git a/src/game/math/vu0.c b/src/game/math/vu0.c
-index a6feffd7fbb0f42c1de1dabf06beddf3c70243d8..e87852a3e8e92464f7a9bbb8b00c3287f56e5662 100644
+index a6feffd7fbb0f42c1de1dabf06beddf3c70243d8..c6903aca2e6046572f678d6cec7a4f885c264958 100644
 --- a/src/game/math/vu0.c
 +++ b/src/game/math/vu0.c
 @@ -6,502 +6,393 @@
@@ -744,13 +744,13 @@ index a6feffd7fbb0f42c1de1dabf06beddf3c70243d8..e87852a3e8e92464f7a9bbb8b00c3287
 +    memcpy(a, VF(16), 16);
 +    memcpy(b, VF(17), 16);
 +    /* vopmula.xyz ACC, vf16, vf17 */
-+    ee_vu0.acc[0] = a[1] * b[2];
-+    ee_vu0.acc[1] = a[2] * b[0];
-+    ee_vu0.acc[2] = a[0] * b[1];
++    ee_vu0.acc[0] = Vu_FMul(a[1], b[2]);
++    ee_vu0.acc[1] = Vu_FMul(a[2], b[0]);
++    ee_vu0.acc[2] = Vu_FMul(a[0], b[1]);
 +    /* vopmsub.xyz vf16, vf17, vf16 */
-+    ee_vu0.vf[16][0] = ee_vu0.acc[0] - b[1] * a[2];
-+    ee_vu0.vf[16][1] = ee_vu0.acc[1] - b[2] * a[0];
-+    ee_vu0.vf[16][2] = ee_vu0.acc[2] - b[0] * a[1];
++    ee_vu0.vf[16][0] = Vu_FSub(ee_vu0.acc[0], Vu_FMul(b[1], a[2]));
++    ee_vu0.vf[16][1] = Vu_FSub(ee_vu0.acc[1], Vu_FMul(b[2], a[0]));
++    ee_vu0.vf[16][2] = Vu_FSub(ee_vu0.acc[2], Vu_FMul(b[0], a[1]));
 +    Vu_Sqc2(dst, 16);
  }
  
@@ -807,10 +807,10 @@ index a6feffd7fbb0f42c1de1dabf06beddf3c70243d8..e87852a3e8e92464f7a9bbb8b00c3287
 +    Vu_Sqc2(dst, 16);
  }
 diff --git a/src/game/math/vu0.h b/src/game/math/vu0.h
-index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..4dc3d94dc2778a938d755890cfc8a06cb121cefa 100755
+index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..aa566bb015080cbd030da3c4f7ce208079528ea0 100755
 --- a/src/game/math/vu0.h
 +++ b/src/game/math/vu0.h
-@@ -90,4 +90,111 @@ void Vector_WeightedSum4(void *dst, void *vector0, void *vector1, void *vector2,
+@@ -90,4 +90,114 @@ void Vector_WeightedSum4(void *dst, void *vector0, void *vector1, void *vector2,
  /* dst = src scaled to length 1 (x, y, z). */
  void Vector_Normalize(void *dst, void *src);
  
@@ -822,6 +822,8 @@ index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..4dc3d94dc2778a938d755890cfc8a06c
 +   slots, as on VU0. */
 +#include <math.h>
 +#include <string.h>
++
++#include "port/vu_float.h"
 +
 +#define VU_X 1
 +#define VU_Y 2
@@ -835,58 +837,63 @@ index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..4dc3d94dc2778a938d755890cfc8a06c
 +static inline void Vu_Lqc2(int r, const void *src) { memcpy(ee_vu0.vf[r], src, 16); }
 +static inline void Vu_Sqc2(void *dst, int r) { memcpy(dst, ee_vu0.vf[r], 16); }
 +
++/* The arithmetic is VU arithmetic (port/vu_float.h), bit for bit as VU1's (port/platform/vu1.c):
++   rounded toward zero, without IEEE's denormals, infinities or NaNs. The game draws some models twice,
++   projected once here and once by a VU1 program, and depth-tests the second pass GEQUAL against the
++   first; host floats rounding to nearest put a vertex 1/16 pixel off now and then, and the second pass
++   then drops lines of pixels. */
++static inline float Vu_FAdd(float a, float b) { return vu_float_from_bits(vu_float_add(vu_float_bits(a), vu_float_bits(b))); }
++static inline float Vu_FSub(float a, float b) { return vu_float_from_bits(vu_float_sub(vu_float_bits(a), vu_float_bits(b))); }
++static inline float Vu_FMul(float a, float b) { return vu_float_from_bits(vu_float_mul(vu_float_bits(a), vu_float_bits(b))); }
++
 +/* vmula(bc): ACC = fs * t */
 +static inline void Vu_MulA(int mask, int fs, float t) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.acc[i] = ee_vu0.vf[fs][i] * t;
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.acc[i] = Vu_FMul(ee_vu0.vf[fs][i], t);
 +}
-+/* vmadda(bc): ACC = ACC + fs * t */
++/* vmadda(bc): ACC = ACC + fs * t (the product rounded, then the sum) */
 +static inline void Vu_MaddA(int mask, int fs, float t) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.acc[i] = ee_vu0.acc[i] + ee_vu0.vf[fs][i] * t;
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.acc[i] = Vu_FAdd(ee_vu0.acc[i], Vu_FMul(ee_vu0.vf[fs][i], t));
 +}
 +/* vmadd(bc): fd = ACC + fs * t */
 +static inline void Vu_Madd(int mask, int fd, int fs, float t) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.acc[i] + ee_vu0.vf[fs][i] * t;
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = Vu_FAdd(ee_vu0.acc[i], Vu_FMul(ee_vu0.vf[fs][i], t));
 +}
 +/* vmul(bc/q): fd = fs * t */
 +static inline void Vu_MulBc(int mask, int fd, int fs, float t) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] * t;
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = Vu_FMul(ee_vu0.vf[fs][i], t);
 +}
 +/* vmul: fd = fs * ft, by component */
 +static inline void Vu_Mul(int mask, int fd, int fs, int ft) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] * ee_vu0.vf[ft][i];
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = Vu_FMul(ee_vu0.vf[fs][i], ee_vu0.vf[ft][i]);
 +}
 +/* vadd: fd = fs + ft, by component */
 +static inline void Vu_Add(int mask, int fd, int fs, int ft) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] + ee_vu0.vf[ft][i];
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = Vu_FAdd(ee_vu0.vf[fs][i], ee_vu0.vf[ft][i]);
 +}
 +/* vadd(bc): fd = fs + t */
 +static inline void Vu_AddBc(int mask, int fd, int fs, float t) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] + t;
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = Vu_FAdd(ee_vu0.vf[fs][i], t);
 +}
 +/* vsub: fd = fs - ft, by component */
 +static inline void Vu_Sub(int mask, int fd, int fs, int ft) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] - ee_vu0.vf[ft][i];
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = Vu_FSub(ee_vu0.vf[fs][i], ee_vu0.vf[ft][i]);
 +}
-+/* vmax(bc): fd = max(fs, t) */
++/* vmax(bc): fd = max(fs, t), compared as the VU does (sign and magnitude) */
 +static inline void Vu_MaxBc(int mask, int fd, int fs, float t) {
 +    int i;
-+    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = ee_vu0.vf[fs][i] > t ? ee_vu0.vf[fs][i] : t;
++    for (i = 0; i < 4; i++) if (mask & (1 << i)) ee_vu0.vf[fd][i] = vu_float_from_bits(vu_float_max(vu_float_bits(ee_vu0.vf[fs][i]), vu_float_bits(t)));
 +}
 +/* One float to the integer vftoi gives: times 2^fraction_bits, truncated, saturated. */
 +static inline int32_t Vu_FloatToInt(float f, int fraction_bits) {
-+    float scaled = f * (float)(1 << fraction_bits);
-+    if (scaled >= 2147483648.0f) return INT32_MAX;
-+    if (scaled <= -2147483648.0f) return INT32_MIN;
-+    if (scaled != scaled) return 0; /* NaN: VU0 has none */
-+    return (int32_t)scaled;
++    return vu_float_ftoi(vu_float_bits(f), fraction_bits);
 +}
 +/* vftoi0 / vftoi4: fd = fs as integers with 0 or 4 fraction bits */
 +static inline void Vu_Ftoi(int mask, int fd, int fs, int fraction_bits) {
@@ -905,21 +912,17 @@ index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..4dc3d94dc2778a938d755890cfc8a06c
 +        if (mask & (1 << i)) {
 +            int32_t v;
 +            memcpy(&v, &ee_vu0.vf[fs][i], 4);
-+            ee_vu0.vf[fd][i] = (float)v / (float)(1 << fraction_bits);
++            ee_vu0.vf[fd][i] = vu_float_from_bits(vu_float_itof(v, fraction_bits));
 +        }
 +    }
 +}
 +
-+/* vdiv: Q = num / den; dividing by zero gives the largest float with the quotient's sign, as on VU0 */
++/* vdiv: Q = num / den; dividing by zero gives the largest VU float with the quotient's sign */
 +static inline void Vu_Div(float num, float den) {
-+    if (den == 0.0f) {
-+        ee_vu0.q = ((signbit(num) != 0) != (signbit(den) != 0)) ? -3.40282347e38f : 3.40282347e38f;
-+    } else {
-+        ee_vu0.q = num / den;
-+    }
++    ee_vu0.q = vu_float_from_bits(vu_float_div(vu_float_bits(num), vu_float_bits(den)));
 +}
 +/* vsqrt: Q = sqrt(|t|) */
-+static inline void Vu_Sqrt(float t) { ee_vu0.q = sqrtf(fabsf(t)); }
++static inline void Vu_Sqrt(float t) { ee_vu0.q = vu_float_from_bits(vu_float_sqrt(vu_float_bits(t))); }
 +
  #endif
 diff --git a/src/game/math/vu0_macro.c b/src/game/math/vu0_macro.c
