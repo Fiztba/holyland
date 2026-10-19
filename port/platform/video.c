@@ -199,10 +199,9 @@ static void write_chunk(FILE *f, const char *type, const uint8_t *data, size_t s
 }
 
 /* RGB rows, each after its filter byte (0), in a zlib stream of stored blocks */
-void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
-    char path[4096];
-    size_t row = (size_t)frame->width * 3 + 1;
-    size_t raw_size = row * frame->height;
+int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height) {
+    size_t row = (size_t)width * 3 + 1;
+    size_t raw_size = row * height;
     size_t blocks = (raw_size + 65534) / 65535;
     size_t z_size = 2 + raw_size + blocks * 5 + 4;
     uint8_t *raw = malloc(raw_size);
@@ -212,13 +211,14 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
     size_t i, at, done;
     uint32_t x, y;
     FILE *f;
+    int ok = 0;
 
-    for (y = 0; y < frame->height; y++) {
+    for (y = 0; y < height; y++) {
         uint8_t *out = raw + row * y;
 
         *out++ = 0;
-        for (x = 0; x < frame->width; x++) {
-            uint32_t p = frame->rgba[(size_t)y * frame->width + x];
+        for (x = 0; x < width; x++) {
+            uint32_t p = rgba[(size_t)y * width + x];
 
             *out++ = (uint8_t)p;
             *out++ = (uint8_t)(p >> 8);
@@ -247,16 +247,14 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
     put32(z + at, (b << 16) | a);
     at += 4;
 
-    put32(header, frame->width);
-    put32(header + 4, frame->height);
+    put32(header, width);
+    put32(header + 4, height);
     header[8] = 8;  /* bits */
     header[9] = 2;  /* RGB */
     header[10] = 0; /* deflate */
     header[11] = 0; /* filters */
     header[12] = 0; /* not interlaced */
 
-    snprintf(path, sizeof(path), "%s/frame_%06llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
-             (unsigned long long)vblank);
     f = fopen(path, "wb");
     if (f == NULL) {
         fprintf(stderr, "[video] cannot write %s\n", path);
@@ -266,9 +264,20 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
         write_chunk(f, "IDAT", z, at);
         write_chunk(f, "IEND", NULL, 0);
         fclose(f);
-        fprintf(stderr, "[video] vblank %llu: %ux%u, %s\n", (unsigned long long)vblank, frame->width,
-                frame->height, path);
+        ok = 1;
     }
     free(raw);
     free(z);
+    return ok;
+}
+
+void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
+    char path[4096];
+
+    snprintf(path, sizeof(path), "%s/frame_%06llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
+             (unsigned long long)vblank);
+    if (port_png_write(path, frame->rgba, frame->width, frame->height)) {
+        fprintf(stderr, "[video] vblank %llu: %ux%u, %s\n", (unsigned long long)vblank, frame->width,
+                frame->height, path);
+    }
 }

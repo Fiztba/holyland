@@ -160,6 +160,8 @@ void port_video_init(void);
 void port_video_submit(const PortGsFrame *frame);
 /* (the controller's thread) writes the picture as <dump-dir>/frame_<vblank>.png */
 void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
+/* writes RGBA pixels (R in the low byte) as an RGB PNG: 1 when it was written */
+int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture and keeps the window alive */
 void port_video_present(void);
 
