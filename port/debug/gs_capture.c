@@ -192,7 +192,7 @@ void port_gs_capture_read_fifo(uint32_t qwords) {
 }
 
 /* ---- Start and end ------------------------------------------------------------------------------ */
-static void emit(uint32_t type, const void *data, size_t size) {
+static __attribute__((unused)) void emit(uint32_t type, const void *data, size_t size) {
     put(type, data, size);
 }
 
@@ -241,7 +241,9 @@ static void start(uint64_t vblank, int vblanks) {
              __DATE__, __TIME__, port_options.deinterlace, port_options.progressive, port_options.anti_blur,
              port_options.adapt_width, port_options.widescreen, port_options.widescreen_hud_centred);
     put(KF4GS_META, meta, strlen(meta));
-    port_gs_backend_capture(emit);
+#ifdef KF4_HAVE_PARALLEL_GS
+    port_gs_backend_capture(emit); /* (without a renderer no capture starts: why_not_now) */
+#endif
     port_vu1_debug_regs(&vu, 0);
     port_vif1_debug_regs(&vif, 0);
     reserve(32768 + sizeof(vu) + 16);
