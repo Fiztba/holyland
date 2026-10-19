@@ -9,7 +9,9 @@
    (GameLoop_Run), and main (main.c) then runs GameLoop_ResetSystems, which reads the image back
    (Game_ReadSaveImage), and GameLoop_Run on the saved map (saved_map_tag), which leaves the player
    where the image says: the image holds the position and the rotation (PlayerState 0x00 to 0x20). On
-   the title screen, Title_Run returns as the title's own Load does when a save was loaded.
+   the title screen, Title_Run returns as the title's own Load does when a save was loaded. Once the
+   saved map is set up, GameLoop_Run calls Quick_RestoreNeighbour, which asks the game's background
+   load for the neighbouring map that was loaded when the save was taken (the file keeps which).
 
    The patched game calls Quick_PollGame once a frame at the end of the main loop, and Quick_PollTitle
    once a frame on the title screens; both return at once when nothing is asked for. */
@@ -22,10 +24,13 @@
 #include "player/player.h"
 #include "gfx/screen.h"
 #include "ui/message.h"
+#include "collision/collision.h"
+#include "port/platform.h"
 #include "port/quicksave.h"
 
 #define SAVE_IMAGE_SIZE 0x20000
 #define SAVE_IMAGE_MAGIC 0x15400
+#define MAP_ORIGIN_COUNT 32 /* MapSlot.origins: 0x200 bytes of the map file (Map_ParseFile) */
 
 extern u8 save_image[SAVE_IMAGE_SIZE];
 extern int save_loaded;
@@ -38,6 +43,13 @@ extern int map_load_committed;
 extern sptr D_00447000[4];
 extern int fade_frames_left;
 extern ClockTime current_play_time;
+extern MapLoadState map_load_state;
+
+extern void (*map_load_steps[])(void);
+
+void Entity_UpdatePool(void);
+void GameLoop_RunSoundLoads(void);
+void Sound_Update(void);
 
 void Game_WriteSaveImage(void);
 int Game_CheckSaveImage(void);
@@ -45,6 +57,166 @@ void PlayTime_Update(void);
 
 /* a load was handed to the game: the first vblank of play checks where the game put the player */
 static int placed_check;
+/* and the neighbouring map is to be loaded again (Quick_RestoreNeighbour) */
+static int neighbour_due;
+static PortQuickInfo loaded_info;
+
+/* The neighbouring map. The game keeps the map the player is in in one slot (current_map_slot) and
+   the map next to it in the other, and MapLoad_Update (map/map_load.c) streams it in two stages:
+   - it asks for a neighbour only when the record the player stands on (PlayerState.map_index) names
+     one of the current map's origins (MapRecordInfo.neighbour_origin_index: a map and where it
+     joins). The load frees the other slot and reads the file in the background (steps 0 to 4), then
+     rests at step 5;
+   - it sets the map up (steps 6 to 8: MapLoad_SetUpMap, MapLoad_ActivateMap; only then is it drawn
+     and walked on) when the player stands on a record that needs it (needs_neighbour_map), at the
+     joins, finishing the read there and then if it is not done.
+   The records between name no map and keep whatever was loaded last, so what is loaded depends on
+   the way the player came, which the save image does not hold: a memory card save is taken at a save
+   point, where it does not matter. A quick save keeps it in its PC block, and a quick load puts it
+   back through the same steps.
+
+   Which origin led to what the other slot holds or is loading (-1: none), and whether it is set up.
+   A load that is running or resting has its request (or the one queued after it); a finished one kept
+   the origin's position in map_load_state.position (MapLoad_ActivateMap), negated once the maps
+   swapped (Map_MakeCurrent): either way that is the current map's origin to it, as the two maps'
+   origins meet. */
+static int neighbour_origin(int *map, int *set_up) {
+    MapSlot *current = &map_slots[current_map_slot & 1];
+    MapSlot *other = &map_slots[!(current_map_slot & 1)];
+    MapLoadRequest *request = map_load_state.next_request != NULL ? map_load_state.next_request : map_load_state.request;
+    MapLoadRequest *origins = (MapLoadRequest *)current->origins;
+    int i, by_map = -1;
+
+    *map = -1;
+    *set_up = 0;
+    if (origins == NULL) {
+        return -1;
+    }
+    if (request != NULL) {
+        i = (int)(request - origins);
+        if (i < 0 || i >= MAP_ORIGIN_COUNT) {
+            return -1;
+        }
+        *map = request->map;
+        *set_up = map_load_state.next_request == NULL && map_load_state.step >= 6; /* being set up */
+        return i;
+    }
+    if (!other->loaded) {
+        return -1;
+    }
+    for (i = 0; i < MAP_ORIGIN_COUNT; i++) {
+        if ((u8)origins[i].map == other->tag) {
+            if (origins[i].x == map_load_state.position.x && origins[i].y == map_load_state.position.y &&
+                origins[i].z == map_load_state.position.z) {
+                by_map = i;
+                break;
+            }
+            if (by_map < 0) {
+                by_map = i;
+            }
+        }
+    }
+    if (by_map >= 0) {
+        *map = origins[by_map].map;
+        *set_up = 1;
+    }
+    return by_map;
+}
+
+/* Whether the point is in a record's box, grown by margin on every side */
+static int in_box(MapRecordInfo *record, f32 *point, f32 margin) {
+    MapRecordBounds *box = (MapRecordBounds *)record;
+    int axis;
+
+    for (axis = 0; axis < 3; axis++) {
+        if (point[axis] < box->lowest[axis] - margin || point[axis] > box->highest[axis] + margin) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A file from before the neighbour was kept: the origin named by the record the player stands in,
+   read only, as the game has it when he walks onto that record (the join's records further on set it
+   up); or else that of the nearest record that names one (box to point), the way he came, set up: past
+   those records the game has it set up, except between them and the join, where setting it up early
+   only puts it in place sooner. Records overlap (the joins' records are thin floors laid over the
+   room's), so all are looked at. */
+static int neighbour_from_position(int *set_up) {
+    MapSlot *slot = &map_slots[current_map_slot & 1];
+    f32 *point = &player_state.position.x;
+    f32 best = 0.0f;
+    int i, axis, found = -1, standing = -1;
+
+    for (i = 0; i < slot->header->record_count; i++) {
+        MapRecordInfo *record = (MapRecordInfo *)slot->records + i;
+        MapRecordBounds *box = (MapRecordBounds *)record;
+        f32 distance = 0.0f;
+
+        if (record->neighbour_origin_index == 0xFF) {
+            continue;
+        }
+        if (standing < 0 && in_box(record, point, 100.0f)) {
+            standing = record->neighbour_origin_index;
+        }
+        for (axis = 0; axis < 3; axis++) {
+            f32 out = point[axis] < box->lowest[axis] ? box->lowest[axis] - point[axis]
+                    : point[axis] > box->highest[axis] ? point[axis] - box->highest[axis] : 0.0f;
+            distance += out * out;
+        }
+        if (found < 0 || distance < best) {
+            best = distance;
+            found = record->neighbour_origin_index;
+        }
+    }
+    *set_up = standing < 0;
+    return standing >= 0 ? standing : found;
+}
+
+/* (GameLoop_Run, once a loaded save's map is set up, before the first frame) a quick load asks for
+   the neighbouring map the game had, as MapLoad_Update asks for one, and runs the game's load steps to
+   where they were: read (resting at step 5), or on through the set-up, as MapLoad_Update does when the
+   player stands where the neighbour is needed (without drawing: the screen is black, about to fade
+   in). A memory card load does nothing here. */
+void Quick_RestoreNeighbour(void) {
+    MapSlot *current = &map_slots[current_map_slot & 1];
+    MapLoadRequest *origins = (MapLoadRequest *)current->origins;
+    int origin, map, set_up, steps = 0;
+
+    if (!neighbour_due) {
+        return;
+    }
+    neighbour_due = 0;
+    if (loaded_info.neighbour_known) {
+        origin = loaded_info.neighbour_origin;
+        map = loaded_info.neighbour_map;
+        set_up = loaded_info.neighbour_set_up;
+    } else {
+        origin = neighbour_from_position(&set_up);
+        map = origin >= 0 && origins != NULL ? origins[origin].map : -1;
+    }
+    if (origin < 0 || origin >= MAP_ORIGIN_COUNT || origins == NULL || origins[origin].map != map ||
+        (u8)map == current->tag || map_load_state.step != 0) {
+        port_event("quick load: no neighbouring map%s", origin >= 0 ? " (the saved one is not this map's)" : "");
+        return;
+    }
+    map_load_state.request = &origins[origin];
+    while (map_load_state.step != 5 && steps++ < 100000) {
+        map_load_steps[map_load_state.step]();
+        Entity_UpdatePool();
+        GameLoop_RunSoundLoads();
+        Sound_Update();
+    }
+    if (map_load_state.step == 5 && set_up) {
+        map_load_state.step = 6;
+        while (map_load_state.step != 0) {
+            map_load_steps[map_load_state.step]();
+        }
+    }
+    port_event("quick load: neighbouring map %02X (origin %d%s) %s", map, origin,
+               loaded_info.neighbour_known ? "" : ", from the position",
+               map_load_state.step == 0 ? "set up" : map_load_state.step == 5 ? "read" : "not read (the drive stayed busy)");
+}
 
 static void fill_info(PortQuickInfo *info) {
     memset(info, 0, sizeof(*info));
@@ -63,6 +235,8 @@ static void fill_info(PortQuickInfo *info) {
     info->gold = player_state.gold;
     /* as PlayTime_AsSeconds counts it: mday is the hundreds of hours, in 99s */
     info->play_seconds = current_play_time.sec + (current_play_time.min + (current_play_time.hour + current_play_time.mday * 99u) * 60u) * 60u;
+    info->neighbour_known = 1;
+    info->neighbour_origin = neighbour_origin(&info->neighbour_map, &info->neighbour_set_up);
 }
 
 /* Why the player is not in control now (NULL: he is) */
@@ -150,6 +324,8 @@ static int quick_load_image(void) {
     free(kept);
     save_loaded = 1;
     placed_check = 1;
+    neighbour_due = 1;
+    loaded_info = info;
     port_quick_loaded(1);
     return 1;
 }

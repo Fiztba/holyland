@@ -302,22 +302,39 @@ How it works (`game/quicksave.c`, `port/platform/quicksave.c`):
   the title screen, `Title_Run` returns as the title's own Load does after a load (`TitleMenu_Run`'s
   case 5). The first vblank of play then checks where the player is against the file, and the log says
   so (`quick loaded: ... (as saved)`).
+- **The neighbouring map.** The game keeps two maps: the one the player is in and the one next to it,
+  which it streams in as he walks (`MapLoad_Update`, `map/map_load.c`). A map record that names one of
+  the map's origins (`neighbour_origin_index`) asks for that neighbour, which is then read in the
+  background; a record at the join (`needs_neighbour_map`) has it set up, so that it is drawn and walked
+  on. The records in between name nothing and keep whatever was loaded last, so what is loaded depends
+  on the way the player came, which the save image does not hold (a card save is taken at a save point,
+  where it does not matter). A quick save keeps it in its PC block: which origin led to the neighbour,
+  and whether it was set up or only read (or being read). Loading asks the game's own loader for it
+  once the saved map is set up (`Quick_RestoreNeighbour`, called from `GameLoop_Run`) and runs its steps
+  as far as they had gone, before the first picture. A quick save from before this was kept (a 64-byte
+  PC block) is given the neighbour named by the record the player stands in (read only, as the game has
+  it there), or else by the nearest record that names one (set up). The log says which
+  (`quick load: neighbouring map 08 (origin 3) set up`).
 - **The file** is a 40-byte header (`KF4QUICK`, the format's version, the save image's version word
   0x15400, sizes, a hash), a PC block (when, the map, position, rotation, HP, MP, level, gold, play
-  time: what the overlay lists) and the save image. Every number is written byte by byte, little-endian,
+  time: what the overlay lists; then the neighbouring map) and the save image. The PC block's size is
+  the format's minor version: a reader takes what it knows and skips the rest, so older and newer
+  files of format version 1 load in every build. Every number is written byte by byte, little-endian,
   so nothing in it depends on the build. A file that is not a quick save, is of another format version,
   is cut short, fails its hash or fails the game's own check is refused with a message, and the game goes
   on as it was. Nothing is ever read from or written to the memory card.
 
 What a quick load restores is what loading a memory card save restores, at the place it was taken:
 - **Restored:** the map, the exact position, heading and look; HP and MP; everything else in the
-  save image (above).
+  save image (above); and the neighbouring map, read or set up as it was (above): a quick save taken
+  just outside a cave's entrance, or just inside it, loads with the other side there.
 - **Not restored, as after any load of a save:** the map is entered afresh, so enemies are back as when
   you enter a map, and map objects that move (lifts, platforms) are where the map starts them (doors,
-  chests and switches keep their flags). What lasts a while starts afresh: the power and magic gauges,
-  the timers of ailments and of magic and items in effect, the Power Seed and the Widda Needle. A map's
-  own counters that count its loads move on as on any load. The neighbouring map is loaded again as you
-  walk.
+  chests and switches keep their flags). The neighbouring map is entered afresh in the same way. What
+  lasts a while starts afresh: the power and magic gauges, the timers of ailments and of magic and items
+  in effect, the Power Seed and the Widda Needle. A map's own counters that count its loads move on as
+  on any load. The record the player stands in is found again from the position, as on a card load (it
+  is found from the floor once he moves).
 - A quick save taken on a moving platform or in a hazard puts you back on the same spot, where the
   platform may not be (you fall) or the hazard hurts you again.
 
@@ -335,7 +352,13 @@ walk:
 - loaded while the player burns to death (HP falling, and after it reached 0, before the game over
   screen): he is back where it was saved, with its HP;
 - a damaged, cut short, other-version or foreign file is refused, and the game goes on;
-- the memory card folder is the same before and after.
+- the memory card folder is the same before and after;
+- the neighbouring map, from a quick save taken outside the poison cave's entrance (map 0x63, the cave
+  is map 08): through the entrance the cave is there (it was dark, and the player fell through it,
+  before); saves taken on the way in on both sides of the join (map 0x63 with 08 set up, map 08 with
+  0x63 set up, looking back out shows the outside), at the new game's start on a record that asks for
+  map 00 and while that load was running (restored read only, as the game had it), all restore what
+  the game had; each of them with its PC block cut to the old 64 bytes works out the same neighbour.
 
 ## Save states
 
