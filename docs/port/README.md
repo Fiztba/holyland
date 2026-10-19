@@ -352,6 +352,10 @@ draws compare against (TEX0's CLD 4 or 5) is loaded again from VRAM; with `--wid
 `--mode vif` makes the packets as the game sent them, before the GS front end squeezed the 2D, so
 those differ from the recorded ones.
 
+`KF4_DEBUG_AT=state@2290,audio@2290,gs@2295` presses F10, F12 and F9 at those vblanks, for checking the
+tools without anyone at the keyboard (in a run that draws; with `KF4_DATA_DIR`, as they write into its
+`captures` folder).
+
 ## Status
 
 The steps, in order: [PLAN.md](PLAN.md).
