@@ -54,12 +54,9 @@ static void usage(const char *program) {
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
-            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]
-"
-            "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]
-"
-            "          [--state-load [VBLANK:]SLOT|FILE]
-",
+            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]\n"
+            "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
+            "          [--state-load [VBLANK:]SLOT|FILE]\n",
             program);
     exit(2);
 }
