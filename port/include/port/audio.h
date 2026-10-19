@@ -40,4 +40,10 @@ void port_audio_unlock(void);
 int port_fsiopsnd_call(unsigned int function, void *send_buffer, int send_size, void *receive_buffer,
                        int receive_size);
 
+/* ---- SDRDRV, libsdr's server (port/audio/sdrdrv.c) -------------------------------------------
+   sceSdRemote's libsd calls (the movie player's sound). How many arguments a command takes (-1: not
+   one SDRDRV knows), and the call. */
+int port_sdrdrv_arg_count(int command);
+int port_sdrdrv_call(int command, const uint32_t *args);
+
 #endif

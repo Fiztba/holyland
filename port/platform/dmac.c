@@ -11,7 +11,9 @@
    has not taken. Channel 1 feeds VIF1 (port/platform/vif1.c), which runs VU1 and hands GIF packets
    on; channel 2 is the GIF's PATH3. Both end at the GS (port/platform/gs.c), which this thread alone
    talks to: it also scans out the vblanks the kernel queues, and runs what port_dmac_call asks for.
-   The other channels finish at once: the disc, sound and movies are done by their libraries.
+   Channel 4, the movie stream to the IPU, is left to the IPU (port/platform/ipu.c), which reads it
+   as the decoder takes it. The other channels finish at once: the disc and sound are done by their
+   libraries.
 
    A transfer takes no EE time: it is done at its start. So the GS gets the transfers whole, one after
    another, in the order the game started them (the work queue below), and how fast this thread runs
@@ -343,7 +345,7 @@ static int claim_starts(const Work *work) {
         return -1;
     }
     for (channel = 9; channel >= 0; channel--) {
-        seen[channel] = !claimed[channel] && (__atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE) & CHCR_STR);
+        seen[channel] = channel != 4 && !claimed[channel] && (__atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE) & CHCR_STR);
     }
     for (channel = 0; channel < 10; channel++) {
         if (seen[channel]) {

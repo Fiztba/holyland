@@ -333,7 +333,9 @@ uint32_t sd_block_trans_status(int channel, int flag) {
     uint32_t status = 0;
 
     if (dma->running) {
-        status = ((uint32_t)dma->half << 24) | ((dma->ring + (uint32_t)(dma->half + 1) * (dma->size / 2)) & 0xFFFFFFu);
+        /* the IOP DMA's MADR: the next byte of the ring it reads (the movie player keeps its writes
+           behind it) */
+        status = ((uint32_t)dma->half << 24) | ((dma->ring + dma->read) & 0xFFFFFFu);
     }
     TRACE(status, "sceSdBlockTransStatus", (unsigned)channel, (unsigned)flag);
     return status;

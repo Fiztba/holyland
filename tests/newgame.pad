@@ -4,6 +4,7 @@
 300 START 4     # skip the logos
 400 START 4     # Press Start
 500 CROSS 4     # New Game (the cursor starts on it)
+740 START 4     # skip the opening movie (from its eleventh picture on, as on the PS2)
 # the opening's messages
 700 CROSS 4
 800 CROSS 4
