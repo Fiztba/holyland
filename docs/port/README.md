@@ -132,8 +132,12 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--clock YYYY-MM-DDTHH:MM:SS` | the disc drive's clock at boot, in Japan's time, instead of the host's; for repeatable runs |
 | `--host-dir DIR` | the folder `host0:` paths are read from |
 | `--stats` | at exit, print where the DMA controller's thread spent its time: VU1 (its runs and instructions too), handing GIF packets to the GS, and vsyncs; and a hash of every packet VU1 sent, which two runs that drew the same share. For A/B timings |
+| `--controls ps2\|verdite` | the keyboard and mouse layout (see below) |
+| `--audio-dump FILE` | write the sound as a 48 kHz WAV file |
+| `--no-audio` | open no sound device (the sound is still made) |
 
-The window shows the game at 4:3. A game controller is the pad; so is the keyboard:
+The window shows the game at 4:3. A game controller is the pad; so is the keyboard (the PS2 layout,
+the default):
 
 | Keys | Pad |
 |---|---|
@@ -142,6 +146,57 @@ The window shows the game at 4:3. A game controller is the pad; so is the keyboa
 | Z or space, X, C, V | cross, circle, square, triangle |
 | Q, E, 1, 3 | L1, R1, L2, R2 |
 | Enter, Backspace | start, select |
+
+The Verdite layout (`--controls verdite`, or the overlay's Controls page) is that of the KF2/KF3 ports:
+W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks
+(`port/sdk/controls.c` lists it). In both, F1 opens the settings overlay, F2 saves a save state to the
+quick slot and F4 loads it, and F11 switches full screen. Every key, mouse button and controller
+button can be rebound.
+
+### The settings overlay (F1)
+
+F1 opens a menu bar and the Settings window over the game, drawn with Dear ImGui
+(`port/overlay/overlay.cpp`). While it is open the keyboard, the mouse and the controller go to it,
+not to the game; the game runs on behind it unless "Pause the game while the overlay is open" is on.
+F1 or Escape closes it. What is held as it closes does nothing in the game until it is let go.
+
+| Page | What |
+|---|---|
+| Display | window size (640x448 times 1 to 4), full screen (borderless; F11), picture shape (4:3 or stretched), smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
+| Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
+| Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
+| Save states | the ten slots (0 is the quick slot of F2 and F4), save, load, and what the last request did (`port/include/port/savestate.h`) |
+| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; and a button that copies them for a bug report |
+| Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
+
+Every way the PC differs from the PS2 is a switch that starts as the port has it.
+
+**settings.json** keeps the settings, in the user's data folder: `%APPDATA%\holyland` on Windows,
+`$XDG_CONFIG_HOME/holyland` (or `~/.config/holyland`) elsewhere; `KF4_DATA_DIR` names another folder.
+The overlay's window places go beside it in `overlay.ini`. It is written a second after a change, when
+the overlay closes and at exit; keys it does not know are kept, and a file that is not valid JSON is
+reported and left alone (the defaults are used). The controls keep only the bindings that differ from
+the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:lefttrigger"`.
+
+Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
+`--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
+and `--controls` picks the layout.
+
+**Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
+settings.json and has no overlay, so `boot_test.py` and `frame_test.py` run the same whatever the
+player has chosen. Built without SDL there is no overlay at all.
+
+`KF4_OVERLAY_SHOT=page@vblank,...` is for checking the overlay without anyone at the screen: it opens
+the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
+window's whole picture a few vblanks later as `overlay_<page>.png` in `--dump-dir`. The pages are
+`display`, `audio`, `controls`, `savestates`, `debug` and `interface`, and `closed` is the game alone;
+list them in vblank order. Use it with `KF4_DATA_DIR`, as it reads and, after the last picture,
+writes back settings.json:
+
+```sh
+KF4_DATA_DIR=/tmp/kf4-data KF4_OVERLAY_SHOT=display@1990,debug@2000 \
+  out/windows-clang/kf4 --fast --frames 2010 --input tests/newgame.pad --dump-dir /tmp/shots
+```
 
 A pad script has one press per line: `<vblank> <buttons> [vblanks held, default 6]`. The buttons are
 names such as `CROSS`, `START`, `UP`, joined with `+`, or `-` for none. A line `<vblank> lx=N ...` (or `ly`, `rx`,
@@ -196,9 +251,11 @@ Next:
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
 | `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, VIF1, VU1, the GS's front end, the window and frame dumps, the disc |
 | `port/gs/` | the GS backend: paraLLEl-GS behind a small C interface |
-| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad, libmc; stand-ins for libmpeg and libsdr |
+| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc; stand-ins for libmpeg and libsdr |
+| `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |
 | `port/math/` | libvu0 in C |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
+| `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |
 | `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text) |
 | `tests/` | pad scripts for headless runs (`newgame.pad`); `vu1_test.c`, the VU1 interpreter's self-test (`out/<preset>/vu1_test`) |
 | `.github/workflows/ci.yml` | CI: configure (the patches apply), build with paraLLEl-GS, `port_census.py` reports 0 errors |
