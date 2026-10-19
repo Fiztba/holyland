@@ -369,22 +369,84 @@ void kf4_quick_vblank(void) {
     }
 }
 
+/* Restarts the session from the image in save_image (save_loaded set): leaves the main loop as a card
+   load does, and main then restarts the session from the image. A dying player's game over and the
+   ending are not shown */
+static void leave_for_image(void) {
+    player_state.death_timer = 0;
+    game_status.bits10 = 0;
+    game_status.bit9 = 1;
+}
+
+/* A teleport (port/include/port/teleport.h): the game written into save_image as a quick save writes it,
+   but with the map and the player's place asked for, then taken as a made-up quick save is loaded:
+   the game restarts the session on that map, and the player is put on the floor under the place */
+static void teleport(void) {
+    PortQuickInfo info;
+    MapSlot *slot = &map_slots[current_map_slot];
+    f32 kept_position[3] = {player_state.position.x, player_state.position.y, player_state.position.z};
+    f32 kept_rotation[3] = {player_state.rotation.x, player_state.rotation.y, player_state.rotation.z};
+    u8 kept_tag = slot->tag;
+    const char *why = not_in_play();
+    float position[3], heading;
+    int map;
+
+    if (why != NULL) {
+        port_quick_refuse(why);
+        return;
+    }
+    port_quick_teleport_target(&map, position, &heading);
+    player_state.position.x = position[0];
+    player_state.position.y = position[1];
+    player_state.position.z = position[2];
+    player_state.rotation.x = 0.0f;
+    player_state.rotation.y = heading;
+    player_state.rotation.z = 0.0f;
+    slot->tag = (u8)map;
+    PlayTime_Update();
+    Game_WriteSaveImage();
+    fill_info(&info);
+    slot->tag = kept_tag;
+    player_state.position.x = kept_position[0];
+    player_state.position.y = kept_position[1];
+    player_state.position.z = kept_position[2];
+    player_state.rotation.x = kept_rotation[0];
+    player_state.rotation.y = kept_rotation[1];
+    player_state.rotation.z = kept_rotation[2];
+    if (!Game_CheckSaveImage()) {
+        port_quick_refuse("the game's check of the image failed");
+        return;
+    }
+    info.made_up = 1;
+    info.neighbour_known = 0;
+    info.neighbour_origin = -1;
+    info.neighbour_map = -1;
+    save_loaded = 1;
+    placed_check = 1;
+    neighbour_due = 1;
+    loaded_info = info;
+    port_quick_teleported(&info);
+    leave_for_image();
+}
+
 void Quick_PollGame(void) {
     int wanted = port_quick_wanted();
 
     if (wanted == PORT_QUICK_SAVE) {
         quick_save();
+    } else if (wanted == PORT_QUICK_TELEPORT) {
+        if (game_status.bit9) {
+            port_quick_refuse("the game is leaving play");
+            return;
+        }
+        teleport();
     } else if (wanted == PORT_QUICK_LOAD) {
         if (game_status.bit9) {
             port_quick_refuse("the game is leaving play");
             return;
         }
         if (quick_load_image()) {
-            /* leave the main loop as a card load does; main then restarts the session from the image.
-               A dying player's game over and the ending are not shown */
-            player_state.death_timer = 0;
-            game_status.bits10 = 0;
-            game_status.bit9 = 1;
+            leave_for_image();
         }
     }
 }
@@ -392,7 +454,7 @@ void Quick_PollGame(void) {
 int Quick_PollTitle(void) {
     int wanted = port_quick_wanted();
 
-    if (wanted == PORT_QUICK_SAVE) {
+    if (wanted == PORT_QUICK_SAVE || wanted == PORT_QUICK_TELEPORT) {
         port_quick_refuse("no game is being played");
     } else if (wanted == PORT_QUICK_LOAD) {
         return quick_load_image();

@@ -55,6 +55,7 @@ typedef struct {
     const char *state_load;    /* --state-load: [VBLANK:]SLOT|FILE */
     const char *quick_save_at; /* --quick-save-at: VBLANK[:SLOT|:FILE],... (port/platform/quicksave.c) */
     const char *quick_load;    /* --quick-load: [VBLANK:]SLOT|FILE */
+    const char *teleport;      /* --teleport: [VBLANK:]MAP[:PLACE] (port/platform/teleport.c) */
 } PortOptions;
 extern PortOptions port_options;
 

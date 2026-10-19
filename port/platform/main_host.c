@@ -41,6 +41,10 @@
        --quick-load [VBLANK:]SLOT|FILE,...
                          load a quick save on the title screen, or in play once the run reaches VBLANK;
                          several, in vblank order, are loaded one after another
+       --teleport [VBLANK:]MAP[:PLACE]
+                         once in play (from VBLANK), put the player in that map at its PLACE-th place
+                         (0, the map's start, when left out; VBLANK:MAP:PLACE with a vblank), keeping
+                         the game's progress, as the overlay's Debug page does (port/platform/teleport.c)
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
@@ -62,6 +66,7 @@
 #include "port/settings.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
+#include "port/teleport.h"
 #include "port/sanitize.h"
 
 #if PORT_ASAN
@@ -86,7 +91,8 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--fpu-round zero|nearest]\n",
+            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--fpu-round zero|nearest]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]]\n",
             program);
     exit(2);
 }
@@ -200,6 +206,8 @@ static void parse_options(int argc, char **argv) {
             port_options.quick_save_at = value;
         } else if (strcmp(option, "--quick-load") == 0) {
             port_options.quick_load = value;
+        } else if (strcmp(option, "--teleport") == 0) {
+            port_options.teleport = value;
         } else if (strcmp(option, "--gs-capture-at") == 0) {
             gs_capture_at = value;
         } else if (strcmp(option, "--fpu-round") == 0) {
@@ -333,6 +341,7 @@ int main(int argc, char **argv) {
     port_audio_init();
     port_state_init();
     port_quick_init();
+    port_teleport_init();
     fprintf(stderr, "[port] game RAM at %p, running the game\n", (void *)ee_ram);
     return port_kernel_run(kf4_game_main);
 }
