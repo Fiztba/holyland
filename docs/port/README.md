@@ -131,7 +131,6 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--log FILE` | the per-frame log (`-` for stdout) |
 | `--clock YYYY-MM-DDTHH:MM:SS` | the disc drive's clock at boot, in Japan's time, instead of the host's; for repeatable runs |
 | `--host-dir DIR` | the folder `host0:` paths are read from |
-| `--stats` | at exit, print where the DMA controller's thread spent its time: VU1 (its runs and instructions too), handing GIF packets to the GS, and vsyncs; and a hash of every packet VU1 sent, which two runs that drew the same share. For A/B timings |
 | `--controls ps2\|verdite` | the keyboard and mouse layout (see below) |
 | `--audio-dump FILE` | write the sound as a 48 kHz WAV file |
 | `--no-audio` | open no sound device (the sound is still made) |
