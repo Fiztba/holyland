@@ -117,7 +117,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 |---|---|
 | `--disc PATH` | the game's disc image (or set `KF4_DISC`) |
 | `--fast` | run as fast as possible instead of at 60 vblanks a second |
-| `--headless` | no window, no SDL; the GS draws only for `--dump-frames` |
+| `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
@@ -373,7 +373,7 @@ in game RAM and its globals. So:
 
 A state loads into a run with other options:
 - On the device's clock or the game's: the sound goes on from where it was.
-- Without the GS (`--headless` with no `--dump-frames`, or `--no-gs`): a state taken without it has no
+- Without the GS (`--headless` with no `--dump-frames` or capture, or `--no-gs`): a state taken without it has no
   VRAM, and one loaded without it skips its VRAM.
 
 The same input gives the same run after a load as without one. Checked on `tests/newgame.pad`, with
