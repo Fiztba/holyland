@@ -22,7 +22,9 @@
        --audio-dump FILE write the sound as a 48 kHz WAV file
        --no-audio        play no sound (it is still made, for --audio-dump)
        --controls NAME   the keyboard and mouse layout: ps2 (the default) or verdite (mouse look,
-                         port/sdk/controls.c) */
+                         port/sdk/controls.c)
+   With a window and no pad script, settings.json (port/overlay/settings.c, the overlay's F1) fills in
+   what the command line does not say. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +33,7 @@
 #include "port/audio.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/settings.h"
 
 PortOptions port_options;
 PortStats port_stats;
@@ -222,6 +225,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     parse_options(argc, argv);
+    port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);

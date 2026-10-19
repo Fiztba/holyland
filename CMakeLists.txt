@@ -74,6 +74,8 @@ add_library(kf4_port STATIC
     port/sdk/libpad.c
     port/sdk/controls.c
     port/platform/savestate.c
+    port/overlay/settings.c
+    third_party/cjson/cJSON.c
     port/sdk/sif.c
     port/sdk/stubs.c
     port/sdk/game_stubs.c
@@ -86,6 +88,7 @@ add_library(kf4_port STATIC
     port/audio/modmidi.c
     port/audio/modhsyn.c)
 target_include_directories(kf4_port PUBLIC port/include)
+target_include_directories(kf4_port PRIVATE third_party/cjson)
 target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
