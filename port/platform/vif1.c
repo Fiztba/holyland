@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "port/debug.h"
+#include "port/gs_capture_format.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/savestate.h"
@@ -222,6 +224,9 @@ static void do_unpack(void) {
 
 /* ---- Commands ------------------------------------------------------------------------------- */
 static void start_vu1(int cont) {
+    if (port_gs_capture_recording) {
+        port_gs_capture_vu1_run(cont ? KF4GS_MSCNT : vif.code & 0xFFFF, vif.tops, vif.itops);
+    }
     vif.top = vif.tops;
     vif.itop = vif.itops;
     if (vif.dbf) {
@@ -350,6 +355,10 @@ static void finish(void) {
 void port_vif1_feed(const uint32_t *words, size_t count) {
     size_t i = 0;
 
+    if (port_gs_capture_recording) {
+        port_gs_capture_vif1(words, count);
+    }
+
     while (i < count) {
         if (!vif.active) {
             uint32_t code = words[i++];
@@ -413,6 +422,47 @@ void port_vif1_feed(const uint32_t *words, size_t count) {
 
 int port_vif1_path3_masked(void) {
     return vif.mskpath3;
+}
+
+/* ---- The debugging tools (port/debug/gs_capture.c, tools/gsreplay): the registers, in the capture
+   file's layout; 0 when a command is half read (then they cannot be taken) -------------------- */
+int port_vif1_debug_regs(Kf4GsVif1Regs *regs, int set) {
+    if (set) {
+        memset(&vif, 0, sizeof(vif));
+        vif.cl = regs->cl;
+        vif.wl = regs->wl;
+        vif.mode = regs->mode;
+        vif.mask = regs->mask;
+        memcpy(vif.row, regs->row, sizeof(vif.row));
+        memcpy(vif.col, regs->col, sizeof(vif.col));
+        vif.base = regs->base;
+        vif.ofst = regs->ofst;
+        vif.tops = regs->tops;
+        vif.itops = regs->itops;
+        vif.top = regs->top;
+        vif.itop = regs->itop;
+        vif.dbf = (int)regs->dbf;
+        vif.mskpath3 = (int)regs->mskpath3;
+        vif.mark = regs->mark;
+        return 1;
+    }
+    memset(regs, 0, sizeof(*regs));
+    regs->cl = vif.cl;
+    regs->wl = vif.wl;
+    regs->mode = vif.mode;
+    regs->mask = vif.mask;
+    memcpy(regs->row, vif.row, sizeof(vif.row));
+    memcpy(regs->col, vif.col, sizeof(vif.col));
+    regs->base = vif.base;
+    regs->ofst = vif.ofst;
+    regs->tops = vif.tops;
+    regs->itops = vif.itops;
+    regs->top = vif.top;
+    regs->itop = vif.itop;
+    regs->dbf = (uint32_t)vif.dbf;
+    regs->mskpath3 = (uint32_t)vif.mskpath3;
+    regs->mark = vif.mark;
+    return !vif.active;
 }
 
 /* ---- Save states: the registers, and a command's data read so far ---------------------------- */

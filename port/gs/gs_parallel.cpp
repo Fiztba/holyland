@@ -284,3 +284,186 @@ extern "C" void port_gs_backend_state(PortStateIo *io) {
         }
     }
 }
+
+// ---- The debugging tools' GS capture (port/debug/gs_capture.c, tools/gsreplay) --------------------
+// The same state as a save state's, in the capture file's build-independent records
+// (port/include/port/gs_capture_format.h): VRAM as the GS lays it out, the registers by their GS
+// address, the privileged registers by theirs, and the scanout's history as plain pictures.
+extern "C" {
+#include "port/debug.h"
+}
+
+namespace {
+struct RegSlot {
+    uint32_t address;
+    uint64_t *bits;
+};
+
+std::vector<RegSlot> register_slots(RegisterState &r) {
+    std::vector<RegSlot> slots;
+    for (uint32_t c = 0; c < 2; c++) {
+        ContextState &ctx = r.ctx[c];
+        slots.push_back({0x06 + c, &ctx.tex0.bits});
+        slots.push_back({0x14 + c, &ctx.tex1.bits});
+        slots.push_back({0x08 + c, &ctx.clamp.bits});
+        slots.push_back({0x18 + c, &ctx.xyoffset.bits});
+        slots.push_back({0x34 + c, &ctx.miptbl_1_3.bits});
+        slots.push_back({0x36 + c, &ctx.miptbl_4_6.bits});
+        slots.push_back({0x40 + c, &ctx.scissor.bits});
+        slots.push_back({0x42 + c, &ctx.alpha.bits});
+        slots.push_back({0x47 + c, &ctx.test.bits});
+        slots.push_back({0x4A + c, &ctx.fba.bits});
+        slots.push_back({0x4C + c, &ctx.frame.bits});
+        slots.push_back({0x4E + c, &ctx.zbuf.bits});
+    }
+    slots.push_back({0x00, &r.prim.bits});
+    slots.push_back({0x01, &r.rgbaq.bits});
+    slots.push_back({0x02, &r.st.bits});
+    slots.push_back({0x03, &r.uv.bits});
+    slots.push_back({0x0A, &r.fog.bits});
+    slots.push_back({0x1A, &r.prmodecont.bits});
+    slots.push_back({0x1C, &r.texclut.bits});
+    slots.push_back({0x3B, &r.texa.bits});
+    slots.push_back({0x3D, &r.fogcol.bits});
+    slots.push_back({0x44, &r.dimx.bits});
+    slots.push_back({0x45, &r.dthe.bits});
+    slots.push_back({0x46, &r.colclamp.bits});
+    slots.push_back({0x49, &r.pabe.bits});
+    slots.push_back({0x50, &r.bitbltbuf.bits});
+    slots.push_back({0x51, &r.trxpos.bits});
+    slots.push_back({0x52, &r.trxreg.bits});
+    slots.push_back({0x53, &r.trxdir.bits});
+    slots.push_back({0x22, &r.scanmsk.bits});
+    return slots;
+}
+
+// A PortStateIo that appends to a buffer (save_field writes through one), or reads from one
+struct BufferIo {
+    PortStateIo io;
+    std::vector<uint8_t> *out;
+    const uint8_t *in;
+    size_t in_size, at;
+    bool ok;
+};
+
+void buffer_io_bytes(PortStateIo *io, void *data, size_t size) {
+    BufferIo *b = reinterpret_cast<BufferIo *>(io);
+    if (b->out) {
+        const uint8_t *p = static_cast<const uint8_t *>(data);
+        b->out->insert(b->out->end(), p, p + size);
+        return;
+    }
+    if (b->at + size > b->in_size) {
+        b->ok = false;
+        if (data)
+            memset(data, 0, size);
+        return;
+    }
+    if (data)
+        memcpy(data, b->in + b->at, size);
+    b->at += size;
+}
+} // namespace
+
+extern "C" const void *port_gs_backend_vram(void) {
+    gs->flush();
+    return gs->map_vram_read(0, vram_bytes);
+}
+
+extern "C" void port_gs_backend_capture(void (*emit)(uint32_t type, const void *data, size_t size)) {
+    emit(KF4GS_VRAM, port_gs_backend_vram(), vram_bytes);
+
+    RegisterState registers = gs->get_register_state();
+    std::vector<Kf4GsReg> regs;
+    for (const RegSlot &slot : register_slots(registers))
+        regs.push_back({slot.address, 0, *slot.bits});
+    uint32_t q_bits;
+    memcpy(&q_bits, &registers.internal_q, 4);
+    regs.push_back({KF4GS_REG_INTERNAL_Q, 0, q_bits});
+    regs.push_back({KF4GS_REG_CACHED_CBP0, 0, registers.cached_cbp[0]});
+    regs.push_back({KF4GS_REG_CACHED_CBP1, 0, registers.cached_cbp[1]});
+    emit(KF4GS_GS_REGS, regs.data(), regs.size() * sizeof(Kf4GsReg));
+
+    const PrivRegisterState &priv = gs->get_priv_register_state();
+    std::vector<uint64_t> privileged(0x400);
+    memcpy(privileged.data(), priv.qwords_lo, 0x200 * 8);
+    memcpy(privileged.data() + 0x200, priv.qwords_hi, 0x200 * 8);
+    emit(KF4GS_GS_PRIV, privileged.data(), privileged.size() * 8);
+
+    std::vector<uint8_t> history_bytes;
+    BufferIo b = {{buffer_io_bytes, 0}, &history_bytes, nullptr, 0, 0, true};
+    ImageHandle *fields = history();
+    uint32_t head[2] = {gs_scanmsk_timeout(*gs), uint32_t(history_fields)};
+    buffer_io_bytes(&b.io, head, sizeof(head));
+    for (int i = 0; i < history_fields; i++) {
+        FieldHeader h = field_header(fields, i);
+        Kf4GsField f = {h.same_as, h.width, h.height, h.present};
+        buffer_io_bytes(&b.io, &f, sizeof(f));
+        if (h.present && h.same_as < 0)
+            save_field(&b.io, *fields[i]);
+    }
+    emit(KF4GS_GS_HISTORY, history_bytes.data(), history_bytes.size());
+}
+
+extern "C" int port_gs_backend_restore(uint32_t type, const void *data, size_t size) {
+    switch (type) {
+    case KF4GS_VRAM:
+        if (size != vram_bytes)
+            return 0;
+        gs->reset_context_state();
+        memcpy(gs->map_vram_write(0, vram_bytes), data, vram_bytes);
+        gs->end_vram_write(0, vram_bytes);
+        return 1;
+    case KF4GS_GS_REGS: {
+        RegisterState &registers = gs->get_register_state();
+        std::vector<RegSlot> slots = register_slots(registers);
+        const Kf4GsReg *regs = static_cast<const Kf4GsReg *>(data);
+        for (size_t n = 0; n < size / sizeof(Kf4GsReg); n++) {
+            uint32_t low = uint32_t(regs[n].value);
+            switch (regs[n].address) {
+            case KF4GS_REG_INTERNAL_Q: memcpy(&registers.internal_q, &low, 4); continue;
+            // The GS's CLUT buffer is on the chip, not in VRAM, and is not in a capture: the CBP it
+            // last loaded is forgotten, so that the first TEX0 that compares (CLD 4, 5) loads the
+            // CLUT again from VRAM, which is what the buffer holds unless VRAM there changed since.
+            case KF4GS_REG_CACHED_CBP0: registers.cached_cbp[0] = UINT32_MAX; continue;
+            case KF4GS_REG_CACHED_CBP1: registers.cached_cbp[1] = UINT32_MAX; continue;
+            }
+            for (const RegSlot &slot : slots)
+                if (slot.address == regs[n].address)
+                    *slot.bits = regs[n].value;
+        }
+        gs->clobber_register_state();
+        gs->flush();
+        return 1;
+    }
+    case KF4GS_GS_PRIV: {
+        if (size != 0x400 * 8)
+            return 0;
+        PrivRegisterState &priv = gs->get_priv_register_state();
+        memcpy(priv.qwords_lo, data, 0x200 * 8);
+        memcpy(priv.qwords_hi, static_cast<const uint64_t *>(data) + 0x200, 0x200 * 8);
+        gs->clobber_register_state();
+        gs->flush();
+        return 1;
+    }
+    case KF4GS_GS_HISTORY: {
+        BufferIo b = {{buffer_io_bytes, 1}, nullptr, static_cast<const uint8_t *>(data), size, 0, true};
+        uint32_t head[2];
+        buffer_io_bytes(&b.io, head, sizeof(head));
+        gs_scanmsk_timeout(*gs) = head[0];
+        ImageHandle *fields = history();
+        for (int i = 0; i < history_fields && i < int(head[1]) && b.ok; i++) {
+            Kf4GsField f;
+            buffer_io_bytes(&b.io, &f, sizeof(f));
+            if (!f.present)
+                fields[i].reset();
+            else if (f.same_as >= 0 && f.same_as < i)
+                fields[i] = fields[f.same_as];
+            else
+                fields[i] = load_field(&b.io, f.width, f.height);
+        }
+        return b.ok;
+    }
+    }
+    return 0;
+}

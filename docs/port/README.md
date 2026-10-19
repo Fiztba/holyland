@@ -143,6 +143,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
+| `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 
 The window shows the game at 4:3 (16:9 with widescreen). A game controller is the pad; so is the keyboard (the PS2 layout,
 the default):
@@ -159,8 +160,9 @@ The Verdite layout (`--controls verdite`, or the overlay's Controls page) is tha
 W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks
 (`port/sdk/controls.c` lists it). In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
-loads it (exact, for debugging, same build only), and F11 switches full screen. Every key, mouse button and controller
-button can be rebound.
+loads it (exact, for debugging, same build only), F9, F10 and F12 are the debugging tools (see
+"Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
+rebound.
 
 ### The settings overlay (F1)
 
@@ -176,6 +178,8 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
 | Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; and a button that copies them for a bug report |
+| Save states | the ten slots (0 is the quick slot of F2 and F4), save, load, and what the last request did (`port/include/port/savestate.h`) |
+| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
 
 Every way the PC differs from the PS2 is a switch that starts as the port has it.
@@ -382,6 +386,59 @@ against one that loads the state in a new process:
 - the run that saved is the same as one that does not (log, WAV, frames);
 - a state saved again right after it is loaded is the same file (but the time in its header).
 
+## Debugging
+
+Tools for finding what is wrong while playing, in every build: they cost nothing until used, and
+change nothing the game does. Each writes a file into `captures` in the data folder (beside
+settings.json; `KF4_DATA_DIR` moves it), and the overlay's Debug page has a button for each, the
+folder and the last file written. The files are read by any build: a save state loads only in the
+build that saved it, these do not.
+
+| Key | What it writes |
+|---|---|
+| F9 | `gs_<vblank>_<time>.kf4gs`: a GS frame capture, for `kf4-gsreplay` (below) |
+| F10 | `state_<vblank>_<time>.json`: the game's state for a bug report: the map, the player (position, heading, HP, MP, stats, equipment, ailments and their timers, status bits), the game's status, the live entities (type, spawn, position, HP, AI state, flags), the map objects within 6000 units (kind, state, position), the story's flags that are set (story, visited maps, map script flags, recollections) and the port's last 32 events (files read, the memory card) |
+| F12 | `audio_<vblank>_<time>.wav`: the last 20 seconds of the sound, as the game made it (before the volume) |
+
+**A GS frame capture** holds, at the start of a frame, the GS (its 4 MB of VRAM, its registers and
+the scanout's last fields), VU1 (micro and data memory, registers and flags) and VIF1, then
+everything that reaches them until the frame ends, in order: every GIF packet with its path, every
+VIF1 word DMA channel 1 sent, each VU1 program started, the read-backs and the two vsyncs (both fields
+of the game's 30 Hz frame). And the vblank, the map and the player's position (the log's line), the
+build, and the picture options. It is taken right after a scanout, and waits a vblank if a packet
+is half sent. It is LZ4-compressed: 3 to 10 MB. `--gs-capture-at 2290` captures vblanks 2290 and
+2291 (`2290:4` four of them), the same pictures `--dump-frames 2290,2291` writes.
+`port/include/port/gs_capture_format.h` is the format.
+
+**kf4-gsreplay** (`out/<preset>/kf4-gsreplay`, built with paraLLEl-GS) draws a capture again with
+paraLLEl-GS, either from the GIF packets as recorded (`--mode gif`, the default) or from the VIF1
+stream run again through the VU1 interpreter (`--mode vif`), which makes PATH1 and PATH2 again and
+compares each packet with the recorded one. Both give the pictures `--dump-frames` gave, byte for
+byte. `tools/README.md` has its options and examples:
+
+```sh
+kf4-gsreplay gs.kf4gs --info                     # what and where: vblank, map, position, build
+kf4-gsreplay gs.kf4gs --frames --out pics        # the scanouts again: frame_NNNNNN.png
+kf4-gsreplay gs.kf4gs --list > draws.txt         # every draw: path, VU1 program, PRIM, box, Z range, GS state
+kf4-gsreplay gs.kf4gs --draws 400-420 --zbuf --out pics   # the frame buffer (and Z buffer) after each draw
+kf4-gsreplay gs.kf4gs --pixel 320,200            # the draws that cover a pixel, and its colour and Z after each
+kf4-gsreplay gs.kf4gs --vertices 412             # a draw's vertices
+kf4-gsreplay gs.kf4gs --mode vif --vu-round nearest   # VU floats rounded to nearest: which vertices move
+kf4-gsreplay a.kf4gs --compare b.kf4gs           # two captures, draw by draw
+```
+
+Without a GPU, `--info`, `--list`, `--vertices` and `--compare` still work. A draw is a run of vertices
+with no GS register written between them (other than the vertex's own colour and texture
+coordinates), within one GIF packet; pixel coordinates are the frame buffer's (as `--draws` writes
+it). Limits: the GS's CLUT buffer is on the chip and not in a capture, so the first CLUT a capture's
+draws compare against (TEX0's CLD 4 or 5) is loaded again from VRAM; with `--widescreen` on,
+`--mode vif` makes the packets as the game sent them, before the GS front end squeezed the 2D, so
+those differ from the recorded ones.
+
+`KF4_DEBUG_AT=state@2290,audio@2290,gs@2295` presses F10, F12 and F9 at those vblanks, for checking the
+tools without anyone at the keyboard (in a run that draws; with `KF4_DATA_DIR`, as they write into its
+`captures` folder).
+
 ## Status
 
 The steps, in order: [PLAN.md](PLAN.md).
@@ -418,10 +475,11 @@ Next:
 | `port/gs/` | the GS backend: paraLLEl-GS behind a small C interface |
 | `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc, libsdr, and libmpeg on the port's MPEG-2 decoder (`mpeg2.c`) |
 | `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |
+| `port/debug/` | the debugging tools: the GS frame capture (`gs_capture.c`, F9), the game's state as JSON (`game_dump.c`, F10), the sound's last 20 seconds and the captures folder (`debug.c`, F12) |
 | `port/math/` | libvu0 in C |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
 | `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |
-| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text) |
+| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
 | `tests/` | pad scripts for headless runs (`newgame.pad`); `vu1_test.c`, the VU1 interpreter's self-test (`out/<preset>/vu1_test`) |
 | `.github/workflows/ci.yml` | CI: configure (the patches apply), build with paraLLEl-GS, `port_census.py` reports 0 errors |
 | `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |

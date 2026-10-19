@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "port/audio.h"
+#include "port/debug.h"
 #include "port/platform.h"
 #include "port/savestate.h"
 #include "sd.h"
@@ -155,6 +156,7 @@ static void device_callback(void *user, Uint8 *stream, int length) {
             count = (int)((tick_due_x64 - now_x64 + 63u) / 64u);
         }
         spu2_render(out, count);
+        port_debug_audio_frames(out, count); /* F12's last 20 seconds (port/debug/debug.c) */
         apply_volume(out, count);
         out += count * 2;
         frames -= count;
@@ -340,6 +342,7 @@ void port_audio_sync(uint64_t now) {
         int count = left < CHUNK_FRAMES ? (int)left : CHUNK_FRAMES;
 
         spu2_render(chunk, count);
+        port_debug_audio_frames(chunk, count);
         output(chunk, count);
     }
 }

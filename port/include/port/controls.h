@@ -56,6 +56,9 @@ typedef enum {
     ACTION_QUICK_LOAD,
     ACTION_GAME_SAVE,     /* quick saves (port/include/port/quicksave.h), any build: F2, F4 */
     ACTION_GAME_LOAD,
+    ACTION_GS_CAPTURE,    /* the debugging tools (port/include/port/debug.h): F9, F10, F12 */
+    ACTION_STATE_DUMP,
+    ACTION_AUDIO_TAIL,
     ACTION_COUNT
 } PortAction;
 
