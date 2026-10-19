@@ -32,6 +32,11 @@ typedef struct {
     int progressive;         /* a frame-mode interlaced picture is read whole, not a field at a time */
     int anti_blur;           /* undo the blur of a game that blends its two read circuits */
     int adapt_width;         /* the picture's width follows the game's, not the 640 of the TV */
+    /* The opt-in 16:9 picture (port_widescreen(), port/platform/gs.c): off by default, turned on by
+       --widescreen or settings.json, live from the overlay. */
+    int widescreen;
+    int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
+    int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */

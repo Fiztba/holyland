@@ -16,7 +16,7 @@ extern "C" {
 
 typedef struct {
     /* Display */
-    int window_scale;      /* the window is 640x448 times this (1 to 4); 2 by default */
+    int window_height;     /* the window's height in pixels (its width follows the picture's shape); 896 by default */
     int fullscreen;        /* borderless, on the whole screen */
     int aspect;            /* ASPECT_ */
     int vsync;             /* wait for the screen's refresh to show each picture */
@@ -25,6 +25,8 @@ typedef struct {
     int progressive;
     int anti_blur;
     int adapt_width;
+    int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
+    int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
     /* Audio */
     int volume;            /* 0 to 100 */
     int mute;

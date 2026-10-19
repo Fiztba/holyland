@@ -134,18 +134,52 @@ void changed() {
 // ---- Display -------------------------------------------------------------------------------------
 void display_page() {
     PortSettings &s = port_settings;
-    static const char *const sizes[] = {"1x (640 x 448)", "2x (1280 x 896)", "3x (1920 x 1344)", "4x (2560 x 1792)"};
-    int size = s.window_scale - 1;
+    // window heights: the common screen heights, and the PS2's 448 lines once and twice
+    static const int heights[] = {448, 720, 896, 900, 1080, 1440, 2160};
+    static const char *const notes[] = {" (PS2 lines)", "", " (PS2 lines x2)", "", "", "", ""};
+    const int count = (int)(sizeof(heights) / sizeof(heights[0]));
+    const bool wide = port_options.widescreen != 0;
+    SDL_Rect usable = {0, 0, 0, 0};
+    char label[64];
+    int current = 0;
 
+    SDL_GetDisplayUsableBounds(0, &usable);
+    for (int i = 0; i < count; i++) {
+        if (heights[i] <= s.window_height) {
+            current = i;
+        }
+    }
+    auto width_of = [&](int h) { return wide ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3; };
+    auto size_label = [&](int i) {
+        snprintf(label, sizeof(label), "%d x %d%s", width_of(heights[i]), heights[i], notes[i]);
+        return label;
+    };
     ImGui::BeginDisabled(s.fullscreen != 0);
-    if (ImGui::Combo("Window size", &size, sizes, 4)) {
-        s.window_scale = size + 1;
-        port_video_apply_settings();
-        changed();
+    char shown[64];
+    if (heights[current] == s.window_height) {
+        snprintf(shown, sizeof(shown), "%s", size_label(current));
+    } else {
+        snprintf(shown, sizeof(shown), "%d x %d", width_of(s.window_height), s.window_height);
+    }
+    if (ImGui::BeginCombo("Window size", shown)) {
+        for (int i = 0; i < count; i++) {
+            // sizes bigger than the screen are left out: full screen is for those
+            if (i != current && usable.h > 0 && (heights[i] > usable.h || width_of(heights[i]) > usable.w)) {
+                continue;
+            }
+            if (ImGui::Selectable(size_label(i), i == current)) {
+                s.window_height = heights[i];
+                port_video_apply_settings();
+                changed();
+            }
+        }
+        ImGui::EndCombo();
     }
     ImGui::EndDisabled();
-    tooltip("The window's size, in steps of the PS2's 640 x 448 picture.\nThe window can also be resized by "
-            "dragging its edges.");
+    tooltip("The window's size; its width follows the picture's shape (4:3, or 16:9 with widescreen).\n"
+            "The window can also be resized by dragging its edges. Full screen always uses the monitor's\n"
+            "own resolution (1920 x 1080, 2560 x 1440, ...) and fits the picture to it.\n"
+            "The game itself draws 640 x 448, as on the PS2, and is scaled up to it.");
     bool fullscreen = s.fullscreen != 0;
     if (ImGui::Checkbox("Full screen (borderless)", &fullscreen)) {
         s.fullscreen = fullscreen;
@@ -153,11 +187,34 @@ void display_page() {
         changed();
     }
     tooltip("Also F11.");
-    static const char *const aspects[] = {"4:3, as on a TV (PS2)", "Stretch to the window"};
+    const char *const aspects[] = {port_options.widescreen ? "16:9, as on a widescreen TV" : "4:3, as on a TV (PS2)",
+                                   "Stretch to the window"};
     if (ImGui::Combo("Picture shape", &s.aspect, aspects, 2))
         changed();
     tooltip("4:3 keeps the picture's shape with black bars at the sides or top.\nStretch fills the window "
-            "and distorts the picture.");
+            "and distorts the picture.\nWith widescreen on, the shape kept is 16:9.");
+    bool widescreen = port_options.widescreen != 0;
+    if (ImGui::Checkbox("Widescreen (16:9)", &widescreen)) {
+        s.widescreen = port_options.widescreen = widescreen;
+        port_video_apply_settings();
+        changed();
+    }
+    tooltip("Off: the PS2's 4:3 picture.\nOn: the game's view is widened to 16:9 (the same height, more at the "
+            "sides), and the\nmenus, the message boxes and the HUD keep their 4:3 shape. Applies at once. "
+            "(--widescreen)");
+    if (port_options.widescreen != s.widescreen) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(on for this run: command line)");
+    }
+    ImGui::BeginDisabled(!widescreen);
+    static const char *const huds[] = {"In the corner of the 16:9 picture", "Centred, where it is at 4:3"};
+    int hud = port_options.widescreen_hud_centred != 0;
+    if (ImGui::Combo("HUD", &hud, huds, 2)) {
+        s.widescreen_hud_centred = port_options.widescreen_hud_centred = hud;
+        changed();
+    }
+    ImGui::EndDisabled();
+    tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
     bool smooth = s.smooth != 0;
     if (ImGui::Checkbox("Smooth scaling", &smooth)) {
         s.smooth = smooth;

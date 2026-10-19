@@ -3,7 +3,9 @@
    The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread and left here;
    at each vblank the game's thread shows the newest one in an SDL window, scaled to fit it at the
    TV's 4:3 (or stretched, by the settings), with the settings overlay (F1) over it. A dumped frame is
-   written as a PNG, uncompressed, so no library is needed. */
+   written as a PNG, uncompressed, so no library is needed. It is the GS's own picture, 640x448 (or
+   the scanout's size) whatever the window shows: with --widescreen it is the squeezed picture, to be
+   shown at 16:9. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,12 +62,13 @@ static uint32_t texture_width, texture_height;
 static int texture_smooth;
 static uint32_t *shown;
 
-/* the window's size in windowed mode: the GS's 640x448 picture times the scale */
+/* the window's size in windowed mode: the height the settings say, and as wide as the picture's
+   shape (4:3, or 16:9 with --widescreen) at that height */
 static void window_size(int *width, int *height) {
-    int scale = port_settings.window_scale < 1 ? 1 : port_settings.window_scale > 4 ? 4 : port_settings.window_scale;
+    int h = port_settings.window_height < 448 ? 448 : port_settings.window_height;
 
-    *width = 640 * scale;
-    *height = 448 * scale;
+    *width = port_options.widescreen ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3;
+    *height = h;
 }
 #endif
 
@@ -182,8 +185,9 @@ void port_video_present(void) {
     {
         int out_w, out_h;
         SDL_Rect dst;
-        /* the TV's 4:3, whatever the scanout's size */
-        double aspect = 4.0 / 3.0;
+        /* the TV's 4:3, whatever the scanout's size; with --widescreen a 16:9 TV's (the game drew its
+           picture squeezed for it, port/platform/gs.c) */
+        double aspect = port_options.widescreen ? 16.0 / 9.0 : 4.0 / 3.0;
 
         SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
         if (port_settings.aspect == ASPECT_STRETCH) {

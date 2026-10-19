@@ -14,6 +14,9 @@
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off
+       --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
+       --widescreen-hud-centred
+                         the same, with the HUD in the 4:3 middle instead of the 16:9 corner
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default)
@@ -56,7 +59,7 @@ static void usage(const char *program) {
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
             "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
-            "          [--state-load [VBLANK:]SLOT|FILE]\n",
+            "          [--state-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n",
             program);
     exit(2);
 }
@@ -115,6 +118,13 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--no-adapt-width") == 0) {
             port_options.adapt_width = 0;
+            continue;
+        }
+        if (strcmp(option, "--widescreen") == 0 || strcmp(option, "--widescreen-hud-centred") == 0) {
+            port_options.widescreen = port_options.widescreen_forced = 1;
+            if (strcmp(option, "--widescreen-hud-centred") == 0) {
+                port_options.widescreen_hud_centred = 1;
+            }
             continue;
         }
         if (strcmp(option, "--stats") == 0) {

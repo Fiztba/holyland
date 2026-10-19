@@ -1,8 +1,9 @@
 /* settings.json (port/include/port/settings.h): the player's settings, in the user's data folder.
 
      {
-       "display":  {"window_scale": 2, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
-                    "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true},
+       "display":  {"window_height": 896, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
+                    "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
+                    "widescreen": false, "widescreen_hud": "corner"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -32,7 +33,7 @@
 #include "port/settings.h"
 
 PortSettings port_settings = {
-    .window_scale = 2,
+    .window_height = 896,
     .smooth = 1,
     .deinterlace = 1,
     .progressive = 1,
@@ -241,7 +242,9 @@ void port_settings_load(void) {
     }
 
     display = cJSON_GetObjectItemCaseSensitive(document, "display");
-    s->window_scale = (int)read_number(display, "window_scale", s->window_scale, 1, 4);
+    /* the first settings files kept a multiple of 448 */
+    s->window_height = (int)read_number(display, "window_scale", s->window_height / 448, 1, 4) * 448;
+    s->window_height = (int)read_number(display, "window_height", s->window_height, 448, 4320);
     s->fullscreen = read_bool(display, "fullscreen", s->fullscreen);
     aspect = read_string(display, "aspect");
     if (aspect != NULL) {
@@ -253,6 +256,14 @@ void port_settings_load(void) {
     s->progressive = read_bool(display, "progressive", s->progressive);
     s->anti_blur = read_bool(display, "anti_blur", s->anti_blur);
     s->adapt_width = read_bool(display, "adapt_width", s->adapt_width);
+    s->widescreen = read_bool(display, "widescreen", s->widescreen);
+    {
+        const char *hud = read_string(display, "widescreen_hud");
+
+        if (hud != NULL) {
+            s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
+        }
+    }
     audio = cJSON_GetObjectItemCaseSensitive(document, "audio");
     s->volume = (int)read_number(audio, "volume", s->volume, 0, 100);
     s->mute = read_bool(audio, "mute", s->mute);
@@ -275,6 +286,10 @@ void port_settings_load(void) {
     }
     if (port_options.adapt_width) {
         port_options.adapt_width = s->adapt_width;
+    }
+    if (!port_options.widescreen_forced) {
+        port_options.widescreen = s->widescreen;
+        port_options.widescreen_hud_centred = s->widescreen_hud_centred;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -367,7 +382,8 @@ void port_settings_save(void) {
         return; /* a broken file is left for the player to mend */
     }
     display = section("display");
-    put(display, "window_scale", cJSON_CreateNumber(s->window_scale));
+    put(display, "window_height", cJSON_CreateNumber(s->window_height));
+    cJSON_DeleteItemFromObjectCaseSensitive(display, "window_scale");
     put(display, "fullscreen", cJSON_CreateBool(s->fullscreen));
     put(display, "aspect", cJSON_CreateString(s->aspect == ASPECT_STRETCH ? "stretch" : "4:3"));
     put(display, "vsync", cJSON_CreateBool(s->vsync));
@@ -376,6 +392,8 @@ void port_settings_save(void) {
     put(display, "progressive", cJSON_CreateBool(s->progressive));
     put(display, "anti_blur", cJSON_CreateBool(s->anti_blur));
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
+    put(display, "widescreen", cJSON_CreateBool(s->widescreen));
+    put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));
