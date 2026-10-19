@@ -475,6 +475,33 @@ those differ from the recorded ones.
 tools without anyone at the keyboard (in a run that draws; with `KF4_DATA_DIR`, as they write into its
 `captures` folder).
 
+## Sanitizers
+
+`-DKF4_SANITIZE=address,undefined` (any `-fsanitize=` list) builds everything with AddressSanitizer
+and UBSan; left empty, the build is as it was. Use it on Linux with gcc, without the GS and SDL:
+
+```sh
+cmake -S . -B out/asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=gcc \
+  -DKF4_USE_PARALLEL_GS=OFF -DKF4_USE_SDL=OFF -DKF4_SANITIZE=address,undefined
+cmake --build out/asan
+ASAN_OPTIONS=halt_on_error=0 out/asan/kf4 --disc kfiv_us.iso --fast --headless --frames 3000 \
+  --memcard none --input tests/newgame.pad --log run.log 2> run.err
+```
+
+- The checks are recoverable: `ASAN_OPTIONS=halt_on_error=0` lists every report of a run instead of
+  stopping at the first. UBSan goes on by itself.
+- The fibers tell ASan of each stack switch (`port/platform/fiber.c`, `port/include/port/sanitize.h`),
+  and a fiber's stack is cleared of old poison when it is made or a save state puts it back.
+- The program sets `detect_stack_use_after_return=0` (ASan's fake stacks would keep locals outside the
+  fibers' stacks, where a save state does not see them) and `detect_leaks=0`; `ASAN_OPTIONS` overrides.
+- Game RAM moves to 0x100400000000, above ASan's shadow memory (which covers the usual address), so save
+  states still work. ASan does not check game RAM: it is one block of the program's, and the game's own
+  allocator hands it out. Only the program's globals, the stacks and the C heap are checked.
+- Save states copy the globals' image and the stacks with their redzones, without ASan's checks.
+- Known reports, all harmless and as on the PS2: `title.c` reads `key_frames[4]` and `key_values[4]`
+  (the next fields of the same `BootSpriteTrack`), and `movie.c` passes NULL to `memcpy` with a size
+  of 0.
+
 ## Status
 
 The steps, in order: [PLAN.md](PLAN.md).

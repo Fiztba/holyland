@@ -835,7 +835,7 @@ index c44b5a78c545a33d19d04a8c6a0c28b694f80594..7facba7eb11ae694d2bfae44786799e9
  void Entity_ResetAllLists(void);
  void Entity_FreeAllInGroup(int group_id);
 diff --git a/src/game/entity/entity_ai.c b/src/game/entity/entity_ai.c
-index 26e563eb1b3443ffb1440f955b1e647836ac1320..49010f8743f4515fad4eedc2ff55c1e4f69b292d 100644
+index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef02d503589 100644
 --- a/src/game/entity/entity_ai.c
 +++ b/src/game/entity/entity_ai.c
 @@ -8,15 +8,17 @@
@@ -960,8 +960,9 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..49010f8743f4515fad4eedc2ff55c1e4
  /* As func_00196200, at the player's position 115 above his feet; FALSE without the part.
     Nothing calls it. */
 -static int func_00196248(Entity *entity, int angles, int mode, int limits, float rate) {
+-    float position[2]; // match: Vector_Copy writes four floats, but retail reserves room for two
 +static int func_00196248(Entity *entity, f32 *angles, int mode, f32 *limits, float rate) {
-     float position[2]; // match: Vector_Copy writes four floats, but retail reserves room for two
++    float position[4]; /* PC: [2] (retail reserved room for two); Vector_Copy stores a quadword */
      EntityModel *model;
  
      Vector_Copy(position, &player_state.position);
