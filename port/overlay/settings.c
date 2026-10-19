@@ -8,7 +8,7 @@
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"verdite": {"square": ["key:Space", "mouse:left", "pad:x"]}}},
-       "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0}
+       "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
    "bindings" holds only the actions that differ from their layout's defaults (port/sdk/controls.c),
@@ -273,6 +273,7 @@ void port_settings_load(void) {
     s->show_fps = read_bool(overlay, "show_fps", s->show_fps);
     s->ui_scale = (float)read_number(overlay, "scale", s->ui_scale, 0.75, 2.0);
     s->save_slot = (int)read_number(overlay, "save_slot", s->save_slot, 0, 9);
+    s->quick_slot = (int)read_number(overlay, "quick_slot", s->quick_slot, 0, 9);
 
     /* the command line wins for this run: a switch it turned off stays off */
     if (port_options.deinterlace) {
@@ -403,6 +404,7 @@ void port_settings_save(void) {
     put(overlay, "show_fps", cJSON_CreateBool(s->show_fps));
     put(overlay, "scale", cJSON_CreateNumber((double)(int)(s->ui_scale * 100.0f + 0.5f) / 100.0));
     put(overlay, "save_slot", cJSON_CreateNumber(s->save_slot));
+    put(overlay, "quick_slot", cJSON_CreateNumber(s->quick_slot));
 
     text = cJSON_Print(document);
     if (text == NULL) {

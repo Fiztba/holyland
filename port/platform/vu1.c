@@ -43,6 +43,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "port/gs_capture_format.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/savestate.h"
@@ -745,6 +746,57 @@ void port_vu1_state(PortStateIo *io) {
     }
 }
 
+/* The debugging tools (port/debug/gs_capture.c, tools/gsreplay): the registers between two programs,
+   when nothing is in flight, in the capture file's layout; and a hypothesis to test in kf4-gsreplay
+   (--vu-round nearest: the float arithmetic rounds to nearest instead of toward zero). The game never
+   sets it. */
+int port_vu1_round_nearest;
+
+void port_vu1_debug_regs(Kf4GsVu1Regs *regs, int set) {
+    if (!set) {
+        memset(regs, 0, sizeof(*regs));
+        memcpy(regs->vf, vu.vf, sizeof(regs->vf));
+        memcpy(regs->acc, vu.vf[REG_ACC], sizeof(regs->acc));
+        for (int n = 0; n < 16; n++) {
+            regs->vi[n] = vu.vi[n];
+        }
+        regs->q = vu.q;
+        regs->p = vu.p;
+        regs->i = vu.i;
+        regs->r = vu.r;
+        regs->mac = vu.mac;
+        regs->status = vu.status;
+        regs->clip = vu.clip;
+        regs->clip_visible = vu.clip_visible;
+        regs->mac_queued = vu.mac_queued;
+        regs->pc = vu.pc;
+        regs->cycle = vu.cycle;
+        return;
+    }
+    port_vu1_reset();
+    memcpy(vu.vf, regs->vf, sizeof(regs->vf));
+    memcpy(vu.vf[REG_ACC], regs->acc, sizeof(regs->acc));
+    for (int n = 0; n < 16; n++) {
+        vu.vi[n] = (uint16_t)regs->vi[n];
+    }
+    vu.q = regs->q;
+    vu.p = regs->p;
+    vu.i = regs->i;
+    vu.r = regs->r;
+    vu.mac = regs->mac;
+    vu.status = regs->status;
+    vu.clip = regs->clip;
+    vu.clip_visible = regs->clip_visible;
+    vu.mac_queued = regs->mac_queued;
+    vu.pc = regs->pc;
+    vu.cycle = regs->cycle;
+}
+
+/* 1 when nothing is in flight (between two programs, after their drain) */
+int port_vu1_debug_idle(void) {
+    return !vu.q_pending && !vu.p_pending && vu.flag_count == 0;
+}
+
 static inline uint32_t *mem_qword(uint32_t address) {
     return (uint32_t *)(data + (address & (DATA_QWORDS - 1)) * 16);
 }
@@ -992,7 +1044,7 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     }
     flags_read = vu.flags_read;
     memset(vu.vi_writes, 0, sizeof(vu.vi_writes));
-    fesetround(FE_TOWARDZERO);
+    fesetround(port_vu1_round_nearest ? FE_TONEAREST : FE_TOWARDZERO);
 #if VU_DAZ
     csr = _mm_getcsr();
     _mm_setcsr(csr | MXCSR_DAZ);

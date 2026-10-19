@@ -3977,10 +3977,28 @@ index 9158a8a2bd6b47784a7aaa33e7bd5e8787d6e157..a2f71653e166205babb740e9d138dab2
  /* the effect shown when item `kind` is used (files item_ms/...), item_effect_defs_by_kind[kind] (kinds 0x46 to 0x52 are used) */
  typedef struct {
 diff --git a/src/game/ui/title.c b/src/game/ui/title.c
-index cd2dcc4df93e39118ed42306e12844f72b8cf19d..8b63097cacb64deb4d6147b5e9624f58cd8f9fc3 100644
+index cd2dcc4df93e39118ed42306e12844f72b8cf19d..bcd13eb8bb857895db18f5fe1b61c5837a0de670 100644
 --- a/src/game/ui/title.c
 +++ b/src/game/ui/title.c
-@@ -209,30 +209,30 @@ int Title_DrawSprite(float scale, BootSprite *sprite, int blend) {
+@@ -18,6 +18,7 @@ int SoundDriver_PlayStreamFile(int, char *, int);
+ s32 Sound_PlayMenu(s32);
+ int SoundDriver_FlushCommands(void);
+ void Texture_SendTexFlush(void);
++int Quick_PollTitle(void); /* PC: quick saves (game/quicksave.c) */
+ 
+ typedef void (*TitleScreenInit)(void);
+ 
+@@ -103,6 +104,9 @@ int Title_Run(int screen) {
+     do {
+         result = current_screen_update();
+         Title_SwapBuffers();
++        if (result == 0 && Quick_PollTitle()) { /* PC: a quick save was loaded (game/quicksave.c) */
++            result = 5;
++        }
+     } while (result == 0);
+     Title_StopMusic();
+     return result;
+@@ -209,30 +213,30 @@ int Title_DrawSprite(float scale, BootSprite *sprite, int blend) {
      *packet_cursor++ = 0x20000000;
      *packet_cursor++ = 0xEE;
      *packet_cursor++ = 0;
@@ -4022,7 +4040,7 @@ index cd2dcc4df93e39118ed42306e12844f72b8cf19d..8b63097cacb64deb4d6147b5e9624f58
      sprite->frame++;
      if (sprite->track->length < sprite->frame) {
          sprite->frame = 0;
-@@ -466,7 +466,7 @@ int Title_InitGameOver(void) {
+@@ -466,7 +470,7 @@ int Title_InitGameOver(void) {
      sceGsSyncV(0);
      sceGsResetGraph(0, 1, 2, 1);
      sceGsSetDefDBuff(&title_dbuff, 0, 640, 224, 3, 0, 1);
@@ -4054,11 +4072,15 @@ index d2f5e8400d6b90650eee3a9655e84c6329a51bd7..2d741d35a5e232d8215604a8882257f3
  int Title_Run(int screen);
  int Title_Init(void);
 diff --git a/src/game/ui/title_menu.c b/src/game/ui/title_menu.c
-index 2d93d8ffe6c19858a638f7e6f0beb307be469ea1..538bf6931b5ae1ddba3737e95ce8bb41df865d68 100644
+index 2d93d8ffe6c19858a638f7e6f0beb307be469ea1..3adaa127017dca14e9b69bb4acce26c4fae003da 100644
 --- a/src/game/ui/title_menu.c
 +++ b/src/game/ui/title_menu.c
-@@ -30,6 +30,7 @@ int TitleMenu_Run(void) {
+@@ -28,8 +28,11 @@ int TitleMenu_Run(void) {
+             Menu_Run(3);
+             screen = 2;
              break;
++        case 5: /* PC: a quick save was loaded, as a save loaded by case 2 (game/quicksave.c) */
++            return 1;
          }
      } while (screen != -1);
 +    return 0; /* not reached: screen is never -1 (the PS2 fell off the end here) */

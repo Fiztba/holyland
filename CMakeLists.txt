@@ -78,6 +78,10 @@ add_library(kf4_port STATIC
     port/sdk/controls.c
     port/sdk/libsdr.c
     port/platform/savestate.c
+    port/platform/quicksave.c
+    port/platform/lz4_block.c
+    port/debug/debug.c
+    port/debug/gs_capture.c
     port/overlay/settings.c
     third_party/cjson/cJSON.c
     port/sdk/sif.c
@@ -272,7 +276,8 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c)
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/quicksave.c
+    port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
@@ -303,6 +308,27 @@ if(WIN32)
     target_link_options(kf4 PRIVATE -Wl,--disable-dynamicbase)
 else()
     target_link_options(kf4 PRIVATE -no-pie)
+endif()
+
+# The debugging tools (port/debug/, docs/port/README.md "Debugging"): the build a GS capture names,
+# from git at each build (build_rev.h)
+add_custom_target(kf4_build_rev
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/build_rev.h
+        -P ${CMAKE_SOURCE_DIR}/tools/build_rev.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/build_rev.h)
+add_dependencies(kf4_port kf4_build_rev)
+target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
+# kf4-gsreplay draws a GS frame capture again (tools/gsreplay): the GIF stream, or the VIF1 stream
+# through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
+if(TARGET kf4_gs)
+    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c port/platform/vif1.c port/platform/vu1.c
+        port/platform/video.c port/platform/lz4_block.c)
+    target_include_directories(kf4-gsreplay PRIVATE port/include)
+    target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})
+    target_link_libraries(kf4-gsreplay PRIVATE kf4_gs Threads::Threads)
+    if(NOT WIN32)
+        target_link_libraries(kf4-gsreplay PRIVATE m)
+    endif()
 endif()
 
 # The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone

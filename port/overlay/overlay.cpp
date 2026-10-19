@@ -29,8 +29,10 @@
 extern "C" {
 #include "port/audio.h"
 #include "port/controls.h"
+#include "port/debug.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/quicksave.h"
 #include "port/savestate.h"
 #include "port/settings.h"
 }
@@ -54,6 +56,7 @@ int page;
 float applied_scale = 1.0f; // the layout's scale; the slider's value is taken when it is let go
 std::string ini_path;
 Uint32 toast_until;
+const char *(*toast_text)(void) = port_state_message; // the message the toast shows
 
 // the Debug page's rates, sampled once a second
 struct Rates {
@@ -443,15 +446,82 @@ void controls_page() {
 }
 
 // ---- Save states ---------------------------------------------------------------------------------
+void key_name(int action, char *out, size_t size) {
+    port_controls_binding_label(port_controls_binding(port_controls_layout(), action, 0), out, size);
+}
+
+void quick_saves_section() {
+    PortSettings &s = port_settings;
+    char save_key[64], load_key[64];
+
+    key_name(ACTION_GAME_SAVE, save_key, sizeof(save_key));
+    key_name(ACTION_GAME_LOAD, load_key, sizeof(load_key));
+    ImGui::SeparatorText("Quick saves (for playing)");
+    ImGui::TextWrapped("Use these to play: they load in any build of the program, so they survive updates. %s "
+                       "saves to the chosen slot and %s loads it, in play (not in menus, messages or events); "
+                       "a load works on the title screen too.",
+                       save_key, load_key);
+    tooltip("A quick save is the game's own save (what a save point writes to the memory card), taken where you "
+            "stand: the map, your position, heading and look, HP and MP, level, stats, items, magic, gold and the "
+            "world's flags (doors, chests, events, items picked up).\n"
+            "Loading restarts the map from it, as loading a memory card save does: enemies come back as when "
+            "you enter a map, and what lasts only a while (ailments' timers, the power and magic gauges, "
+            "spell effects) starts afresh. Nothing is written to the memory card.");
+    if (ImGui::BeginTable("quick", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthStretch, 0.7f);
+        ImGui::TableSetupColumn("Where", ImGuiTableColumnFlags_WidthStretch, 1.3f);
+        ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+        ImGui::TableHeadersRow();
+        for (int slot = 0; slot < PORT_QUICK_SLOTS; slot++) {
+            char label[32];
+            PortQuickInfo info;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            std::snprintf(label, sizeof(label), "Quick %d##quick", slot);
+            if (ImGui::Selectable(label, s.quick_slot == slot, ImGuiSelectableFlags_SpanAllColumns)) {
+                s.quick_slot = slot;
+                changed();
+            }
+            ImGui::TableNextColumn();
+            if (port_quick_info(slot, &info)) {
+                ImGui::Text("map %02X, level %d, HP %d/%d", info.map_tag, info.level, info.hp, info.hp_max);
+                ImGui::TableNextColumn();
+                char when[64] = "saved";
+                time_t time = (time_t)info.time;
+                if (struct tm *local = std::localtime(&time))
+                    std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", local);
+                ImGui::TextUnformatted(when);
+            } else {
+                ImGui::TextDisabled("empty");
+                ImGui::TableNextColumn();
+            }
+        }
+        ImGui::EndTable();
+    }
+    if (ImGui::Button("Quick save"))
+        port_quick_request_save(s.quick_slot);
+    ImGui::SameLine();
+    PortQuickInfo info;
+    ImGui::BeginDisabled(!port_quick_info(s.quick_slot, &info));
+    if (ImGui::Button("Quick load"))
+        port_quick_request_load(s.quick_slot);
+    ImGui::EndDisabled();
+    if (port_overlay_paused())
+        ImGui::TextColored(colour_note, "The game is paused: a request is taken when the overlay closes.");
+    ImGui::TextDisabled("%s", port_quick_message());
+}
+
 void save_states_page() {
     PortSettings &s = port_settings;
     char save_key[64], load_key[64];
 
-    port_controls_binding_label(port_controls_binding(port_controls_layout(), ACTION_QUICK_SAVE, 0), save_key,
-                                sizeof(save_key));
-    port_controls_binding_label(port_controls_binding(port_controls_layout(), ACTION_QUICK_LOAD, 0), load_key,
-                                sizeof(load_key));
-    ImGui::TextWrapped("A save state is the whole running game, written to a file and read back. %s saves to the "
+    quick_saves_section();
+    ImGui::Spacing();
+    key_name(ACTION_QUICK_SAVE, save_key, sizeof(save_key));
+    key_name(ACTION_QUICK_LOAD, load_key, sizeof(load_key));
+    ImGui::SeparatorText("Save states (for debugging)");
+    ImGui::TextWrapped("A save state is the whole running game, written to a file and read back: exact, but it "
+                       "loads only in the build that made it, so an update makes it useless. %s saves to the "
                        "quick slot and %s loads it (Controls rebinds them).",
                        save_key, load_key);
     ImGui::Spacing();
@@ -552,6 +622,40 @@ std::string bug_report() {
     return text;
 }
 
+// The debugging tools (port/include/port/debug.h): files for a bug report, in the captures folder
+void debug_tools() {
+    char keys[3][64];
+    const int actions[3] = {ACTION_GS_CAPTURE, ACTION_STATE_DUMP, ACTION_AUDIO_TAIL};
+    for (int i = 0; i < 3; i++)
+        port_controls_binding_label(port_controls_binding(port_controls_layout(), actions[i], 0), keys[i],
+                                    sizeof(keys[i]));
+
+    ImGui::SeparatorText("Debugging tools");
+    ImGui::BeginDisabled(!port_gs_enabled() || port_debug_gs_capture_busy());
+    if (ImGui::Button("GS frame capture"))
+        port_debug_request_gs_capture();
+    ImGui::EndDisabled();
+    tooltip("The GS's and VU1's state and everything drawn in the next two vblanks, for kf4-gsreplay\n"
+            "(docs/port/README.md, \"Debugging\"). Any build reads it.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", keys[0]);
+    ImGui::SameLine();
+    if (ImGui::Button("Game state dump"))
+        port_debug_write_state_dump();
+    tooltip("The map, the player, the entities and map objects near, the story's flags and the last\n"
+            "events, as JSON.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", keys[1]);
+    ImGui::SameLine();
+    if (ImGui::Button("Last 20 s of sound"))
+        port_debug_write_audio_tail();
+    tooltip("The sound as the game made it (before the volume), as a WAV.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", keys[2]);
+    ImGui::TextWrapped("Folder: %s", port_debug_folder());
+    ImGui::TextWrapped("%s", port_debug_message());
+}
+
 void debug_page() {
     PortGameReadout game;
     kf4_game_readout(&game);
@@ -584,6 +688,7 @@ void debug_page() {
     if (ImGui::Button("Copy for a bug report"))
         ImGui::SetClipboardText(bug_report().c_str());
     tooltip("Copies the numbers above, the map and position, and this run's options.");
+    debug_tools();
 }
 
 // ---- Interface -----------------------------------------------------------------------------------
@@ -684,7 +789,7 @@ void draw_toast() {
     Uint32 now = SDL_GetTicks();
     if (toast_until == 0 || (int32_t)(toast_until - now) <= 0)
         return;
-    const char *text = port_state_message();
+    const char *text = toast_text();
     float alpha = (int32_t)(toast_until - now) < 400 ? (float)(int32_t)(toast_until - now) / 400.0f : 1.0f;
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImFont *font = ImGui::GetFont();
@@ -864,7 +969,13 @@ extern "C" int port_overlay_paused(void) {
 }
 
 extern "C" void port_overlay_notify_state(void) {
+    toast_text = port_state_message;
     toast_until = SDL_GetTicks() + 2500;
+}
+
+extern "C" void port_overlay_notify_quick(void) {
+    toast_text = port_quick_message;
+    toast_until = SDL_GetTicks() + 3000;
 }
 
 extern "C" void port_overlay_draw(void) {
