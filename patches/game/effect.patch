@@ -540,7 +540,7 @@ index b838114fb1a612a884cf66b295fbcdea0816f8d7..84e8135d897b6c5a437b9b921a6fc8be
      { EffectFly_StartRaised, EffectFly_Update },
      { EffectAtTarget_Start, EffectAtTarget_Update },
 diff --git a/src/game/effect/effect_kinds_a.c b/src/game/effect/effect_kinds_a.c
-index 7d95e993232d8d027ae096a608cfb2a40174aa3f..1c3ff5ee65834082c5a227936797f564b06b7aeb 100644
+index 7d95e993232d8d027ae096a608cfb2a40174aa3f..3aa8d983aa57fb48c39034111bcedfa9cc51f6b0 100644
 --- a/src/game/effect/effect_kinds_a.c
 +++ b/src/game/effect/effect_kinds_a.c
 @@ -4,27 +4,21 @@
@@ -612,6 +612,15 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..1c3ff5ee65834082c5a227936797f564
          }
      }
      if (actor->frame < actor->def->max_frames || actor->def->max_frames == 0) {
+@@ -672,7 +666,7 @@ void EffectFall_Update(EffectActor *effect) {
+ void EffectChase_Start(EffectActor *actor, EffectSlot *spawn_slot) {
+     ChaseMotion *motion;
+     ModelInstance *target;
+-    float offset[3];
++    float offset[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+     double remaining;
+ 
+     motion = (ChaseMotion *)&actor->motion;
 @@ -686,7 +680,7 @@ void EffectChase_Start(EffectActor *actor, EffectSlot *spawn_slot) {
          target = *(ModelInstance **)actor->target_entity;
          Vector_Subtract(offset, &target->position, &actor->model->position);
@@ -630,6 +639,15 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..1c3ff5ee65834082c5a227936797f564
              if (slot->def->kind_index == 0xE) {
                  actor->frame++;
                  return;
+@@ -936,7 +930,7 @@ void EffectFloorSkim_Update(EffectActor *effect) {
+    floor within 1.5 unkDC below, or ends next frame without one. */
+ void EffectGroundSway_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     GroundSwayMotion *motion;
+-    float point[3];
++    float point[4]; /* PC: [3]; Vector_Copy stores a quadword */
+ 
+     motion = (GroundSwayMotion *)&effect->motion;
+     EffectStart_PlaceModel(effect, spawn_slot);
 @@ -991,7 +985,7 @@ void EffectGroundSway_Update(EffectActor *effect) {
          angle += 6.2831855f;
      }
@@ -648,6 +666,15 @@ index 7d95e993232d8d027ae096a608cfb2a40174aa3f..1c3ff5ee65834082c5a227936797f564
          EFFECT_FLAG_PARTS(effect)->sound_track = result;
          if ((s8)result > 0) {
              effect_sound_count += 1;
+@@ -1029,7 +1023,7 @@ void EffectGroundSway_Update(EffectActor *effect) {
+    and stands on the floor within 1.5 unkDC below, or ends next frame without one. */
+ void EffectGroundTrail_Start(EffectActor *effect, EffectSlot *spawn_slot) {
+     GroundTrailMotion *motion;
+-    float point[3];
++    float point[4]; /* PC: [3]; Vector_Copy stores a quadword */
+ 
+     motion = (GroundTrailMotion *)&effect->motion;
+     EffectStart_PlaceModel(effect, spawn_slot);
 @@ -1110,7 +1104,7 @@ void EffectGroundTrail_Update(EffectActor *effect) {
          return;
      }
