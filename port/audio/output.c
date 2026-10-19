@@ -20,6 +20,7 @@
 
 #include "port/audio.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 #include "sd.h"
 #include "spu2.h"
 
@@ -315,4 +316,46 @@ uint64_t port_audio_next_event(void) {
 void port_audio_event(uint64_t now) {
     port_audio_sync(now);
     fsiopsnd_tick(now);
+}
+
+/* ---- Save states -------------------------------------------------------------------------------
+   The SPU2 (ico-audio's, saved whole with the program's image) and the driver come back as they were;
+   this is the clock between them and the EE. The clock is this run's own: a state taken on the
+   game's clock goes on on the device's, and the other way round, from where the SPU2 and the
+   driver's next tick were. */
+void port_audio_state(PortStateIo *io) {
+    int state_device_clock = device_clock;
+    int64_t state_frame_offset = frame_offset;
+    uint64_t state_tick_due_x64 = 0;
+    uint64_t now = port_ee_cycles();
+
+#ifdef KF4_HAVE_SDL
+    state_tick_due_x64 = tick_due_x64;
+#endif
+    PORT_STATE(io, state_device_clock);
+    PORT_STATE(io, state_frame_offset);
+    PORT_STATE(io, state_tick_due_x64);
+    if (!io->loading) {
+        return;
+    }
+    if (!device_clock) {
+        frame_offset = state_device_clock ? (int64_t)spu2_time() - (int64_t)(now / AUDIO_EE_CYCLES_PER_FRAME)
+                                          : state_frame_offset;
+        sd_set_clock(0, frame_offset);
+        if (state_device_clock) {
+            fsiopsnd_resume_ticks(now);
+        }
+        return;
+    }
+#ifdef KF4_HAVE_SDL
+    if (state_device_clock) {
+        tick_due_x64 = state_tick_due_x64;
+    } else {
+        uint64_t next = fsiopsnd_next_tick();
+        uint64_t ahead = next != UINT64_MAX && next > now ? next - now : 0;
+
+        tick_due_x64 = spu2_time() * 64u + (ahead * 64u + AUDIO_EE_CYCLES_PER_FRAME - 1) / AUDIO_EE_CYCLES_PER_FRAME;
+    }
+    sd_set_clock(1, 0);
+#endif
 }

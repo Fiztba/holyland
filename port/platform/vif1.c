@@ -13,6 +13,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define VU1_QWORDS 1024
 
@@ -412,4 +413,10 @@ void port_vif1_feed(const uint32_t *words, size_t count) {
 
 int port_vif1_path3_masked(void) {
     return vif.mskpath3;
+}
+
+/* ---- Save states: the registers, and a command's data read so far ---------------------------- */
+void port_vif1_state(PortStateIo *io) {
+    PORT_STATE(io, vif);
+    PORT_STATE(io, pending);
 }

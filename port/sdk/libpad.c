@@ -30,6 +30,7 @@
 #include "port/controls.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #define BUTTON_SELECT 0x0001
 #define BUTTON_L3 0x0002
@@ -535,4 +536,10 @@ int scePadExitPressMode(int port, int slot) {
     }
     pressure = 0;
     return 1;
+}
+
+/* ---- Save states: the mode the game set (the buttons are the host's, or the script's at a vblank) - */
+void port_pad_state(PortStateIo *io) {
+    PORT_STATE(io, analog);
+    PORT_STATE(io, pressure);
 }
