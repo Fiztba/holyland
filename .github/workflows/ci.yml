@@ -1,4 +1,7 @@
 # Configures the PC port (which proves the patches apply to the pinned decomp), builds it with paraLLEl-GS, and fails if any game code still errors.
+# Two jobs: Linux with gcc, and Windows with llvm-mingw (the windows-clang preset) and SDL2, on two pinned
+# llvm-mingw releases: the one the port is developed with (clang 22) and a later one, whose io.h once
+# clashed with a file-scope `open` in the overlay.
 name: ci
 
 on:
@@ -29,5 +32,59 @@ jobs:
       - name: Census must be zero
         run: |
           python3 tools/port_census.py out/linux-gcc > census.txt
+          cat census.txt
+          grep -q '^0 error(s) in' census.txt
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm_mingw: ["20260616", "20261006"]
+    env:
+      SDL2_VERSION: "2.30.9"
+      NINJA_VERSION: "1.12.1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Check out what paraLLEl-GS needs
+        run: |
+          git -C third_party/parallel-gs submodule update --init Granite
+          git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
+      - name: Download llvm-mingw, SDL2 and Ninja
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools"
+          cd "$RUNNER_TEMP/tools"
+          lm="llvm-mingw-${{ matrix.llvm_mingw }}-ucrt-x86_64"
+          curl -fsSL -o lm.zip "https://github.com/mstorsjo/llvm-mingw/releases/download/${{ matrix.llvm_mingw }}/$lm.zip"
+          unzip -q lm.zip
+          curl -fsSL -o sdl.zip "https://github.com/libsdl-org/SDL/releases/download/release-$SDL2_VERSION/SDL2-devel-$SDL2_VERSION-mingw.zip"
+          unzip -q sdl.zip
+          curl -fsSL -o ninja.zip "https://github.com/ninja-build/ninja/releases/download/v$NINJA_VERSION/ninja-win.zip"
+          mkdir ninja && unzip -q ninja.zip -d ninja
+          tools="$(cygpath -m "$RUNNER_TEMP/tools")"
+          echo "$tools/$lm/bin" >> "$GITHUB_PATH"
+          echo "$tools/ninja" >> "$GITHUB_PATH"
+          echo "SDL2_DIR=$tools/SDL2-$SDL2_VERSION/x86_64-w64-mingw32/lib/cmake/SDL2" >> "$GITHUB_ENV"
+      - name: Tool versions
+        run: |
+          which clang cmake ninja
+          clang --version
+          cmake --version
+      - name: Configure
+        run: cmake --preset windows-clang -DSDL2_DIR="$SDL2_DIR"
+      - name: Build
+        run: cmake --build out/windows-clang
+      - name: VU1 self-test
+        run: out/windows-clang/vu1_test.exe
+      - name: Unit tests
+        run: ctest --test-dir out/windows-clang --output-on-failure
+      - name: Census must be zero
+        run: |
+          python tools/port_census.py out/windows-clang > census.txt
           cat census.txt
           grep -q '^0 error(s) in' census.txt
