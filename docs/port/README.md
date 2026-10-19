@@ -143,6 +143,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
+| `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 
 The window shows the game at 4:3 (16:9 with widescreen). A game controller is the pad; so is the keyboard (the PS2 layout,
@@ -179,6 +180,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
 | Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; and a button that copies them for a bug report |
 | Save states | the ten slots (0 is the quick slot of F2 and F4), save, load, and what the last request did (`port/include/port/savestate.h`) |
+| Mods | the opt-in changes to the game, live: Myu's Necklace, always (see "Mods") |
 | Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
 
@@ -193,7 +195,7 @@ the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
-`--widescreen` keeps widescreen on,
+`--widescreen` keeps widescreen on, `--myus-necklace` keeps that mod on,
 and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
@@ -203,7 +205,7 @@ player has chosen. Built without SDL there is no overlay at all.
 `KF4_OVERLAY_SHOT=page@vblank,...` is for checking the overlay without anyone at the screen: it opens
 the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
 window's whole picture a few vblanks later as `overlay_<page>.png` in `--dump-dir`. The pages are
-`display`, `audio`, `controls`, `savestates`, `debug` and `interface`, and `closed` is the game alone;
+`display`, `audio`, `controls`, `savestates`, `mods`, `debug` and `interface`, and `closed` is the game alone;
 list them in vblank order. Use it with `KF4_DATA_DIR`, as it reads and, after the last picture,
 writes back settings.json:
 
@@ -230,6 +232,18 @@ that none is blank (`--keep DIR` keeps them to look at).
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
+
+## Mods
+
+Changes to the game itself, each off by default, so the game is the PS2's. Each is a switch on the
+command line and on the overlay's Mods page (live), kept in `settings.json`'s `"mods"`, and read by the
+game's patches through a function of `port/include/port/host.h`; off, the game code does exactly what
+it does without it.
+
+- **Myu's Necklace, always** (`--myus-necklace`, `port_myus_necklace()`). `MapObject_DrawAll` decides
+  each frame whether the necklace is worn, from the amulet slot; with the mod on it is always worn, so
+  the things it makes glow glow (their pulse starts when it is turned on) whatever the amulet slot holds,
+  and the slot is free for another amulet.
 
 ## Widescreen
 

@@ -34,6 +34,8 @@ typedef struct {
     int mute;
     /* Controls (the bindings are port/sdk/controls.c's) */
     char layout[16];       /* "ps2" or "verdite" */
+    /* Mods */
+    int myus_necklace;     /* the effect of Myu's Necklace, always (port_options.myus_necklace) */
     /* The overlay */
     int pause_when_open;
     int show_fps;

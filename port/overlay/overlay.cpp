@@ -39,9 +39,9 @@ extern "C" {
 
 namespace {
 
-enum Page { PAGE_DISPLAY, PAGE_AUDIO, PAGE_CONTROLS, PAGE_SAVE_STATES, PAGE_DEBUG, PAGE_INTERFACE, PAGE_COUNT };
-const char *const page_names[PAGE_COUNT] = {"Display", "Audio", "Controls", "Save states", "Debug", "Interface"};
-const char *const page_ids[PAGE_COUNT] = {"display", "audio", "controls", "savestates", "debug", "interface"};
+enum Page { PAGE_DISPLAY, PAGE_AUDIO, PAGE_CONTROLS, PAGE_SAVE_STATES, PAGE_MODS, PAGE_DEBUG, PAGE_INTERFACE, PAGE_COUNT };
+const char *const page_names[PAGE_COUNT] = {"Display", "Audio", "Controls", "Save states", "Mods", "Debug", "Interface"};
+const char *const page_ids[PAGE_COUNT] = {"display", "audio", "controls", "savestates", "mods", "debug", "interface"};
 
 const ImVec4 colour_note(0.95f, 0.8f, 0.45f, 1.0f);
 const ImVec4 colour_good(0.55f, 0.85f, 0.55f, 1.0f);
@@ -693,6 +693,25 @@ void debug_tools() {
     ImGui::TextWrapped("%s", port_debug_message());
 }
 
+// ---- Mods ----------------------------------------------------------------------------------------
+void mods_page() {
+    PortSettings &s = port_settings;
+
+    ImGui::TextWrapped("Changes to the game itself. Each is off by default, and the game is the PS2's while it is.");
+    ImGui::Spacing();
+    bool necklace = port_options.myus_necklace != 0;
+    if (ImGui::Checkbox("Myu's Necklace, always", &necklace)) {
+        s.myus_necklace = port_options.myus_necklace = necklace;
+        changed();
+    }
+    tooltip("The necklace's effect without wearing it: the things it makes glow glow,\nwhatever amulet you "
+            "wear. Applies at once. (--myus-necklace)");
+    if (port_options.myus_necklace != s.myus_necklace) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(on for this run: command line)");
+    }
+}
+
 void debug_page() {
     PortGameReadout game;
     kf4_game_readout(&game);
@@ -787,6 +806,7 @@ void settings_window() {
     case PAGE_AUDIO: audio_page(); break;
     case PAGE_CONTROLS: controls_page(); break;
     case PAGE_SAVE_STATES: save_states_page(); break;
+    case PAGE_MODS: mods_page(); break;
     case PAGE_DEBUG: debug_page(); break;
     default: interface_page(); break;
     }
@@ -861,7 +881,7 @@ void parse_shots(const char *text) {
             shot.page = PAGE_COUNT;
         if (shot.page < 0) {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no page called %s (display, audio, controls, "
-                                 "savestates, debug, interface, closed)\n",
+                                 "savestates, mods, debug, interface, closed)\n",
                          name.c_str());
             continue;
         }
