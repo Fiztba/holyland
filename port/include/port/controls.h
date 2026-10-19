@@ -52,8 +52,10 @@ typedef enum {
     ACTION_RIGHT_STICK_LEFT,
     ACTION_RIGHT_STICK_RIGHT,
     ACTION_CAPTURE_MOUSE, /* Verdite: capture or release the mouse */
-    ACTION_QUICK_SAVE,    /* save states (port/include/port/savestate.h), the quick slot */
+    ACTION_QUICK_SAVE,    /* save states (port/include/port/savestate.h), the quick slot: F5, F7 */
     ACTION_QUICK_LOAD,
+    ACTION_GAME_SAVE,     /* quick saves (port/include/port/quicksave.h), any build: F2, F4 */
+    ACTION_GAME_LOAD,
     ACTION_COUNT
 } PortAction;
 

@@ -38,6 +38,17 @@ out/linux-gcc/kf4
 For now the program prints the PS2 calls it reaches that the PC does not do yet (`[todo] ...`), then
 waits for the disc. Stop it with Ctrl+C.
 
+## Saving
+
+Three ways to keep a game ([`docs/port/README.md`](docs/port/README.md) says more):
+- **Quick saves (F2 to save, F4 to load): the ones to play with.** The game's own save, taken where you
+  stand, without a save point. They load in any build of the port, so they survive updates. Loading
+  one restarts the map from it, as loading a memory card save does: enemies are back.
+- **Save states (F5, F7): for debugging.** The whole running game, exact to the frame, but they load
+  only in the build that made them, so an update makes them useless.
+- **Memory card saves**, at the game's save points: the PS2's own, in the `memcard` folder (a PCSX2
+  folder memory card works too).
+
 ## Working on it
 
 - [`docs/port/README.md`](docs/port/README.md): how the port is laid out, and how it stays in step

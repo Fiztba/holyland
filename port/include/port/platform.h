@@ -49,6 +49,8 @@ typedef struct {
     int stats;               /* --stats: print where the controller's time went at exit */
     const char *state_save_at; /* --state-save-at: VBLANK[:SLOT|:FILE],... (port/platform/savestate.c) */
     const char *state_load;    /* --state-load: [VBLANK:]SLOT|FILE */
+    const char *quick_save_at; /* --quick-save-at: VBLANK[:SLOT|:FILE],... (port/platform/quicksave.c) */
+    const char *quick_load;    /* --quick-load: [VBLANK:]SLOT|FILE */
 } PortOptions;
 extern PortOptions port_options;
 

@@ -78,6 +78,7 @@ add_library(kf4_port STATIC
     port/sdk/controls.c
     port/sdk/libsdr.c
     port/platform/savestate.c
+    port/platform/quicksave.c
     port/overlay/settings.c
     third_party/cjson/cJSON.c
     port/sdk/sif.c
@@ -272,7 +273,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c)
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/quicksave.c)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES

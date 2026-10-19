@@ -34,6 +34,10 @@
                          save a state at these vblanks (port/platform/savestate.c)
        --state-load [VBLANK:]SLOT|FILE
                          load a state before the game starts, or at that vblank
+       --quick-save-at VBLANK[:SLOT|:FILE],...
+                         take a quick save once in play from these vblanks (port/platform/quicksave.c)
+       --quick-load [VBLANK:]SLOT|FILE
+                         load a quick save on the title screen, or in play once the run reaches VBLANK
    With a window and no pad script, settings.json (port/overlay/settings.c, the overlay's F1) fills in
    what the command line does not say. */
 #include <stdarg.h>
@@ -46,6 +50,7 @@
 #include "port/platform.h"
 #include "port/settings.h"
 #include "port/savestate.h"
+#include "port/quicksave.h"
 
 PortOptions port_options;
 PortStats port_stats;
@@ -59,7 +64,8 @@ static void usage(const char *program) {
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
             "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
-            "          [--state-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n",
+            "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
+            "          [--quick-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n",
             program);
     exit(2);
 }
@@ -163,6 +169,10 @@ static void parse_options(int argc, char **argv) {
             port_options.state_save_at = value;
         } else if (strcmp(option, "--state-load") == 0) {
             port_options.state_load = value;
+        } else if (strcmp(option, "--quick-save-at") == 0) {
+            port_options.quick_save_at = value;
+        } else if (strcmp(option, "--quick-load") == 0) {
+            port_options.quick_load = value;
         } else {
             usage(argv[0]);
         }
@@ -272,6 +282,7 @@ int main(int argc, char **argv) {
     port_video_init();
     port_audio_init();
     port_state_init();
+    port_quick_init();
     fprintf(stderr, "[port] game RAM at %p, running the game\n", (void *)ee_ram);
     return port_kernel_run(kf4_game_main);
 }
