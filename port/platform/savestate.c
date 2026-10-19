@@ -739,6 +739,9 @@ static int save(int slot, const char *file) {
         return 1;
     }
     why = port_sif_state_busy();
+    if (why == NULL) {
+        why = port_mc_state_busy();
+    }
     if (why != NULL) {
         set_message("waiting to save to %s: %s", name, why);
         return 0;

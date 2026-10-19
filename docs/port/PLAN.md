@@ -202,7 +202,27 @@ Still open:
 
 ## Step 5: saves and movies
 
-- The memory card becomes a folder.
+- **The memory card is a folder (done).** `port/sdk/libmc.c` implements libmc over a host folder.
+  - **Where it is.** By default the card in slot 1 is `memcard` in the data folder (`%APPDATA%\holyland`, beside settings.json and the save states). `--memcard DIR`
+    picks another folder and `--memcard none` empties the slot; `tools/boot_test.py` and
+    `tools/frame_test.py` pass `--memcard none`, so their logs are as before.
+  - **Its layout.** The game's folder `/BASLUS-20318S/` holds real files: the save files, the list
+    file, `icon.sys` and the icon. That is the layout of PCSX2's folder memory cards, so one can be
+    used here; PCSX2's own `_pcsx2_*` files are hidden from the game.
+  - **What the game sees.** It answers as Sony's libmc and mcman do: an 8 MB formatted PS2 card,
+    -1 on the first check of the slot, free space in 1 KB clusters (writes past it fail with "card
+    full"), `.` and `..` in listings, mcman's attributes and error codes. The dates are the file's,
+    in Japan's time.
+  - **The save image is the PS2's byte for byte.** `Game_WriteSaveImage` copies `PlayerState` only
+    below 0x100, ahead of the pointer fields where the PC layout starts to differ (0x204). Every other
+    block it writes (`EntityGroupRecord`, `LevelRecord`, `DefinitionByteSet`, `SaveInfo`, `McIconSys`)
+    has its PS2 size.
+  - **Checked by playing.** Saved at a save point and loaded from the title, on Windows.
+  - **Not done.** `sceMcFormat` keeps the folder as it is, since a card here is always formatted.
+    Importing a raw `.ps2` card image is left for a tool.
+- `--record-input FILE` records the live pad as a pad script for `--input`, to turn a played session
+  into a repeatable test. While recording, the sound stays on the game's clock and mouse look is off,
+  so the recording replays.
 - Movies are decoded with libmpeg2 or FFmpeg from the PSS files, keeping the PS2's timing.
 
 ## Step 6: PC features and releases

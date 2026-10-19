@@ -16,7 +16,10 @@
    that many vblanks (6 when left out), and lines of
        <vblank> lx=<0..255> ly=.. rx=.. ry=.. [<vblanks>]
    which hold the sticks the same way (0x80 is the middle). Text from '#' on is a comment. The lines
-   that cover a vblank add up: their buttons are all down. */
+   that cover a vblank add up: their buttons are all down.
+
+   --record-input FILE writes what the pad and keyboard send as such a script, a line per run of vblanks
+   with the same buttons and sticks, so a played session can be replayed with --input. */
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +80,55 @@ typedef struct {
 
 static ScriptLine *script;
 static int script_lines;
+
+/* ---- Recording (--record-input) ---------------------------------------------------------------- */
+static FILE *record_file;
+static PadInput record_run;
+static uint64_t record_first;
+static uint64_t record_count;
+
+static void record_flush(void) {
+    size_t i;
+    int any = 0;
+
+    if (record_file == NULL || record_count == 0) {
+        return;
+    }
+    fprintf(record_file, "%llu ", (unsigned long long)record_first);
+    for (i = 0; i < sizeof(button_names) / sizeof(button_names[0]); i++) {
+        if (record_run.buttons & button_names[i].bit) {
+            fprintf(record_file, "%s%s", any ? "+" : "", button_names[i].name);
+            any = 1;
+        }
+    }
+    if (!any) {
+        fputc('-', record_file);
+    }
+    fprintf(record_file, " rx=%d ry=%d lx=%d ly=%d %llu\n", record_run.axis[0], record_run.axis[1],
+            record_run.axis[2], record_run.axis[3], (unsigned long long)record_count);
+    record_count = 0;
+}
+
+static void record_close(void) {
+    record_flush();
+    if (record_file != NULL) {
+        fclose(record_file);
+        record_file = NULL;
+    }
+}
+
+/* Once a vblank: what the game reads until the next one */
+static void record_vblank(const PadInput *input, uint64_t vblank) {
+    if (record_count != 0 && memcmp(input, &record_run, sizeof(record_run)) == 0 &&
+        record_first + record_count == vblank) {
+        record_count++;
+        return;
+    }
+    record_flush();
+    record_run = *input;
+    record_first = vblank;
+    record_count = 1;
+}
 
 /* The pad's mode: 0 digital, 1 analog; pressure on top of analog. */
 static int analog = 1;
@@ -260,6 +312,17 @@ static int use_sdl;
 
 void port_pad_init(void) {
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
+    if (port_options.record_input != NULL) {
+        if (port_options.input != NULL) {
+            PORT_FATAL("--record-input records the live pad: it cannot be used with --input");
+        }
+        record_file = fopen(port_options.record_input, "w");
+        if (record_file == NULL) {
+            PORT_FATAL("cannot write the pad script %s", port_options.record_input);
+        }
+        fprintf(record_file, "# recorded with --record-input; play it back with --input (and the same --clock and card)\n");
+        atexit(record_close);
+    }
     port_controls_init(port_options.controls);
     if (port_options.input) {
         load_script(port_options.input);
@@ -312,6 +375,9 @@ void port_pad_poll(void) {
         sdl_read();
     }
 #endif
+    if (record_file != NULL) {
+        record_vblank(&live, port_vblank_count());
+    }
 }
 
 /* ---- libpad ----------------------------------------------------------------------------------- */

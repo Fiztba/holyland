@@ -329,7 +329,7 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     double p;
 
     *yaw = *pitch = 0.0f;
-    if (!port_controls_verdite()) {
+    if (!port_controls_verdite() || port_options.record_input != NULL) {
         return 0;
     }
     pc.seen_look = 1;

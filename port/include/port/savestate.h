@@ -69,6 +69,7 @@ void port_audio_state(PortStateIo *io);   /* the sound's clock: last, after the 
 /* Why a state cannot be taken now (NULL: it can), from the parts that know (port/sdk/sif.c,
    port/platform/gs.c); the request waits for the next vblank. */
 const char *port_sif_state_busy(void);
+const char *port_mc_state_busy(void);
 const char *port_gs_state_busy(void);
 
 /* 1 when game RAM (memory.c) and the EE threads' stacks (fiber.c) are at their fixed addresses, which

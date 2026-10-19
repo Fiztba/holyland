@@ -193,7 +193,8 @@ static void open_outputs(void) {
     if (!port_options.headless && !port_options.no_audio) {
         SDL_AudioSpec want;
         SDL_AudioSpec have;
-        int pull = (port_options.audio_dump == NULL && port_options.input == NULL && !port_options.fast) ||
+        int pull = (port_options.audio_dump == NULL && port_options.input == NULL && !port_options.fast &&
+                    port_options.record_input == NULL) ||
                    getenv("KF4_AUDIO_DEVICE_CLOCK") != NULL;
 
         if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {

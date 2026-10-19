@@ -137,6 +137,8 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--stats` | at exit, print where the DMA controller's thread spent its time: VU1 (its runs and instructions too), handing GIF packets to the GS, and vsyncs; and a hash of every packet VU1 sent, which two runs that drew the same share. For A/B timings. It counts from the last save state saved or loaded |
 | `--state-save-at VBLANK[:SLOT\|:FILE],...` | save a state at these vblanks, to a slot (0 when left out) or a file (see "Save states") |
 | `--state-load [VBLANK:]SLOT\|FILE` | load a state before the game starts, or once the run reaches that vblank |
+| `--memcard DIR\|none` | the folder that is the memory card in slot 1 (by default `memcard` in the data folder, beside settings.json); `none` leaves the slot empty, as the tests do |
+| `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 
 The window shows the game at 4:3. A game controller is the pad; so is the keyboard (the PS2 layout,
 the default):
