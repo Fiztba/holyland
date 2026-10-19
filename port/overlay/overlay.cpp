@@ -35,6 +35,7 @@ extern "C" {
 #include "port/quicksave.h"
 #include "port/savestate.h"
 #include "port/settings.h"
+#include "port/teleport.h"
 }
 
 namespace {
@@ -693,6 +694,82 @@ void debug_tools() {
     ImGui::TextWrapped("%s", port_debug_message());
 }
 
+// Teleport (port/include/port/teleport.h): any map, at a place read from its file, keeping the progress
+void teleport_section() {
+    static int map_index = -1;
+    static int place = 0;
+    static int places_for = -1; // the map `places` is of
+    static int place_count = 0;
+    static PortTeleportPlace places[PORT_TELEPORT_PLACES];
+    int count = port_teleport_map_count();
+
+    ImGui::SeparatorText("Teleport");
+    if (count == 0) {
+        ImGui::TextDisabled("No maps found on the disc.");
+        return;
+    }
+    if (map_index < 0 || map_index >= count) {
+        // the map the player is in, to start with
+        PortGameReadout game;
+        kf4_game_readout(&game);
+        map_index = 0;
+        for (int i = 0; i < count; i++)
+            if (port_teleport_map(i) == (game.map_tag & 0xFF))
+                map_index = i;
+    }
+    int map = port_teleport_map(map_index);
+    char label[96];
+    std::snprintf(label, sizeof(label), "%03d %s", map, port_teleport_map_name(map));
+    if (ImGui::BeginCombo("Map", label, ImGuiComboFlags_HeightLarge)) {
+        for (int i = 0; i < count; i++) {
+            int m = port_teleport_map(i);
+            std::snprintf(label, sizeof(label), "%03d %s", m, port_teleport_map_name(m));
+            if (ImGui::Selectable(label, i == map_index)) {
+                map_index = i;
+                place = 0;
+            }
+            if (i == map_index)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    map = port_teleport_map(map_index);
+    if (places_for != map) {
+        place_count = port_teleport_places(map, places);
+        places_for = map;
+    }
+    if (place >= place_count)
+        place = 0;
+    if (place_count > 0) {
+        std::snprintf(label, sizeof(label), "%d: %s", place, places[place].label);
+        if (ImGui::BeginCombo("Place", label)) {
+            for (int i = 0; i < place_count; i++) {
+                std::snprintf(label, sizeof(label), "%d: %s (%.0f, %.0f, %.0f)", i, places[i].label,
+                              places[i].position[0], places[i].position[1], places[i].position[2]);
+                if (ImGui::Selectable(label, i == place))
+                    place = i;
+            }
+            ImGui::EndCombo();
+        }
+        tooltip("start: where the map puts you when you arrive without a door or stairs.\n"
+                "item N: where one of the map's own items lies.\n"
+                "floor N: the middle of a large floor (N is the map record it belongs to).\n"
+                "You are put on the floor under the place.");
+    }
+    ImGui::BeginDisabled(place_count == 0);
+    if (ImGui::Button("Teleport"))
+        port_teleport_request(map, place);
+    ImGui::EndDisabled();
+    tooltip("Restarts the game on that map, as loading a save does, with your items, stats and the\n"
+            "world's flags as they are now. Taken in play, like a quick load. A map you would not\n"
+            "reach yet may not work as it does in a real playthrough.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("--teleport %d:%d", map, place);
+    if (port_overlay_paused())
+        ImGui::TextColored(colour_note, "The game is paused: the teleport is taken when the overlay closes.");
+    ImGui::TextDisabled("%s", port_quick_message());
+}
+
 // ---- Mods ----------------------------------------------------------------------------------------
 void mods_page() {
     PortSettings &s = port_settings;
@@ -734,7 +811,8 @@ void debug_page() {
     }
 
     ImGui::SeparatorText("Game");
-    ImGui::Text("Map: %02X in slot %d%s", game.map_tag & 0xFF, game.map_slot, game.map_loaded ? "" : " (not loaded)");
+    ImGui::Text("Map: %03d %s (tag %02X, slot %d)%s", game.map_tag & 0xFF, port_teleport_map_name(game.map_tag & 0xFF),
+                game.map_tag & 0xFF, game.map_slot, game.map_loaded ? "" : " (not loaded)");
     ImGui::Text("Position: %.2f, %.2f, %.2f   heading %.3f", game.x, game.y, game.z, game.heading);
     ImGui::Text("HP %d / %d    MP %d / %d    Level %d    Gold %d", game.hp, game.hp_max, game.mp, game.mp_max,
                 game.level, game.gold);
@@ -744,6 +822,7 @@ void debug_page() {
     if (ImGui::Button("Copy for a bug report"))
         ImGui::SetClipboardText(bug_report().c_str());
     tooltip("Copies the numbers above, the map and position, and this run's options.");
+    teleport_section();
     debug_tools();
 }
 

@@ -101,6 +101,7 @@ add_library(kf4_port STATIC
     port/sdk/libsdr.c
     port/platform/savestate.c
     port/platform/quicksave.c
+    port/platform/teleport.c
     port/platform/lz4_block.c
     port/debug/debug.c
     port/debug/gs_capture.c

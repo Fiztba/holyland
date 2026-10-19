@@ -139,6 +139,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--state-load [VBLANK:]SLOT\|FILE` | load a state before the game starts, or once the run reaches that vblank |
 | `--quick-save-at VBLANK[:SLOT\|:FILE],...` | take a quick save (slot 0 when left out) at these vblanks, or as soon after as the player is in control (see "Quick saves") |
 | `--quick-load [VBLANK:]SLOT\|FILE,...` | load a quick save on the title screen, or in play once the run reaches that vblank; several (in vblank order) are loaded one after another, as `tools/map_tour.py` does |
+| `--teleport [VBLANK:]MAP[:PLACE]` | once in play (from that vblank), put the player in map MAP at its PLACE-th place (0, the map's start, when left out), keeping the game's progress, as the overlay's Teleport does (see "Teleport"); with a vblank it is `VBLANK:MAP:PLACE` |
 | `--memcard DIR\|none` | the folder that is the memory card in slot 1 (by default `memcard` in the data folder, beside settings.json); `none` leaves the slot empty, as the tests do |
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
@@ -180,7 +181,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
 | Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
-| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
+| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
 
 Every way the PC differs from the PS2 is a switch that starts as the port has it.
@@ -340,7 +341,27 @@ How it works (`game/quicksave.c`, `port/platform/quicksave.c`):
   one, with the map and position changed) and marks them with bit 1 of the PC block's flags byte. Such
   a file loads as any other; then the player is put on the floor nearest under the position (or else
   over it: `Collision_FindFloorBelow`) and the neighbouring map is worked out from there. The game's own
-  quick saves never have the bit.
+  quick saves never have the bit. A teleport (below) is loaded the same way.
+
+### Teleport
+
+A debugging aid on the overlay's Debug page (and `--teleport`, for tests): pick a map and a place in it,
+and the player is put there, with the game's progress as it is now. It is a quick load of a save image
+made from the game this moment, with the map and the place changed (`port/platform/teleport.c`,
+`game/quicksave.c`): the game restarts the session on that map as a memory card load does, the player
+is put on the floor under the place, and the neighbouring map is worked out from there. Like a quick
+load it is taken in play. The places are those `tools/map_tour.py` visits, read from the map's file on
+the disc: the map's start (where a map change without a link puts the player), the map's own items
+that lie on a floor, then the middles of the biggest floors. A map the story has not reached yet may
+not behave as it does in a real playthrough (its doors, events and enemies follow the world's flags).
+
+**Dead ends.** 19 maps never ask for a neighbouring map themselves (their records name none of their
+links: 009, 011, 014, 021, 025, 030, 034, 036, 038, 040, 041, 042, 043, 044, 097, 106, 110, 114, 116).
+The game enters each from the one map whose link leads to it, and that map stays loaded in the other
+slot: 040's entrance looks back into 039, and walking out of it walks onto 039's floor. A quick load
+in such a map (a teleport, or a quick save taken there) finds no neighbour of the map's own, so it
+loads that map, set up, where its link puts it (`port_map_way_in`, read from the map files); without
+it the way out is black and the player falls through the world there.
 
 What a quick load restores is what loading a memory card save restores, at the place it was taken:
 - **Restored:** the map, the exact position, heading and look; HP and MP; everything else in the

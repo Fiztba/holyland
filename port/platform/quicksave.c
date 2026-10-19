@@ -55,6 +55,11 @@ typedef struct {
     const char *path;
     int patient;       /* the command line's: waits until the game can, and is never dropped */
     uint64_t asked_at; /* the vblank it was asked at */
+    /* a teleport's (port/include/port/teleport.h): where to */
+    int map;
+    float position[3];
+    float heading;
+    char label[32];
 } Request;
 
 static Request request;
@@ -126,7 +131,9 @@ static void target_path(char *out, size_t size, const Request *r, int create) {
 }
 
 static void request_name(char *out, size_t size, const Request *r) {
-    if (r->path != NULL) {
+    if (r->kind == PORT_QUICK_TELEPORT) {
+        snprintf(out, size, "to map %03d (%s)", r->map, r->label);
+    } else if (r->path != NULL) {
         snprintf(out, size, "%s", r->path);
     } else {
         snprintf(out, size, "quick save %d", r->slot);
@@ -316,6 +323,10 @@ int port_quick_info(int slot, PortQuickInfo *info) {
 }
 
 /* ---- Requests --------------------------------------------------------------------------------- */
+static const char *verb(int kind) {
+    return kind == PORT_QUICK_SAVE ? "save" : kind == PORT_QUICK_LOAD ? "load" : "teleport";
+}
+
 static void ask(int kind, int slot, const char *path, int patient) {
     char name[1100];
 
@@ -325,7 +336,8 @@ static void ask(int kind, int slot, const char *path, int patient) {
     request.patient = patient;
     request.asked_at = port_vblank_count();
     request_name(name, sizeof(name), &request);
-    set_message("%s %s asked for", kind == PORT_QUICK_SAVE ? "saving" : "loading", name);
+    set_message("%s %s asked for", kind == PORT_QUICK_SAVE ? "saving" : kind == PORT_QUICK_LOAD ? "loading" : "teleporting",
+                name);
 }
 
 void port_quick_request_save(int slot) {
@@ -334,6 +346,20 @@ void port_quick_request_save(int slot) {
 
 void port_quick_request_load(int slot) {
     ask(PORT_QUICK_LOAD, slot, NULL, 0);
+}
+
+void port_quick_request_teleport(int map, const float position[3], float heading, const char *label, int patient) {
+    request.map = map;
+    memcpy(request.position, position, sizeof(request.position));
+    request.heading = heading;
+    snprintf(request.label, sizeof(request.label), "%s", label);
+    ask(PORT_QUICK_TELEPORT, -1, NULL, patient);
+}
+
+void port_quick_teleport_target(int *map, float position[3], float *heading) {
+    *map = request.map;
+    memcpy(position, request.position, sizeof(request.position));
+    *heading = request.heading;
 }
 
 int port_quick_wanted(void) {
@@ -345,10 +371,10 @@ void port_quick_refuse(const char *why) {
 
     request_name(name, sizeof(name), &request);
     if (request.patient) {
-        set_message("waiting to %s %s: %s", request.kind == PORT_QUICK_SAVE ? "save" : "load", name, why);
+        set_message("waiting to %s %s: %s", verb(request.kind), name, why);
         return;
     }
-    set_message("cannot %s %s now: %s", request.kind == PORT_QUICK_SAVE ? "save" : "load", name, why);
+    set_message("cannot %s %s now: %s", verb(request.kind), name, why);
     request.kind = PORT_QUICK_NONE;
 }
 
@@ -453,6 +479,17 @@ void port_quick_loaded(int ok) {
     }
     port_event("quick load of %s: the game restarts from its save image", name);
     set_message("loading %s: map %02X, level %d", name, expected.map_tag, expected.level);
+}
+
+void port_quick_teleported(const PortQuickInfo *info) {
+    char name[1100];
+
+    request_name(name, sizeof(name), &request);
+    request.kind = PORT_QUICK_NONE;
+    expected = *info;
+    port_event("teleport %s: pos %.2f,%.2f,%.2f heading %.3f: the game restarts on that map", name, info->position[0],
+               info->position[1], info->position[2], info->rotation[1]);
+    set_message("teleporting %s", name);
 }
 
 void port_quick_moved(const float position[3]) {

@@ -27,6 +27,7 @@
 #include "collision/collision.h"
 #include "port/platform.h"
 #include "port/quicksave.h"
+#include "port/teleport.h"
 
 #define SAVE_IMAGE_SIZE 0x20000
 #define SAVE_IMAGE_MAGIC 0x15400
@@ -61,6 +62,8 @@ static int placed_check;
 /* and the neighbouring map is to be loaded again (Quick_RestoreNeighbour) */
 static int neighbour_due;
 static PortQuickInfo loaded_info;
+/* a dead end's way in (port_map_way_in): the request the game's load steps read while it loads */
+static MapLoadRequest way_in;
 
 /* The neighbouring map. The game keeps the map the player is in in one slot (current_map_slot) and
    the map next to it in the other, and MapLoad_Update (map/map_load.c) streams it in two stages:
@@ -196,6 +199,26 @@ static void put_on_floor(void) {
                player_state.position.y, player_state.position.z, asked);
 }
 
+/* Runs the game's load steps for map_load_state.request to where they rest (step 5, read), or on through
+   the set-up, as MapLoad_Update does when the player stands where the neighbour is needed (without
+   drawing: the screen is black, about to fade in) */
+static void run_neighbour_load(int set_up) {
+    int steps = 0;
+
+    while (map_load_state.step != 5 && steps++ < 100000) {
+        map_load_steps[map_load_state.step]();
+        Entity_UpdatePool();
+        GameLoop_RunSoundLoads();
+        Sound_Update();
+    }
+    if (map_load_state.step == 5 && set_up) {
+        map_load_state.step = 6;
+        while (map_load_state.step != 0) {
+            map_load_steps[map_load_state.step]();
+        }
+    }
+}
+
 /* (GameLoop_Run, once a loaded save's map is set up, before the first frame) a quick load asks for
    the neighbouring map the game had, as MapLoad_Update asks for one, and runs the game's load steps to
    where they were: read (resting at step 5), or on through the set-up, as MapLoad_Update does when the
@@ -204,7 +227,7 @@ static void put_on_floor(void) {
 void Quick_RestoreNeighbour(void) {
     MapSlot *current = &map_slots[current_map_slot & 1];
     MapLoadRequest *origins = (MapLoadRequest *)current->origins;
-    int origin, map, set_up, steps = 0;
+    int origin, map, set_up;
 
     if (!neighbour_due) {
         return;
@@ -221,28 +244,35 @@ void Quick_RestoreNeighbour(void) {
         origin = neighbour_from_position(&set_up);
         map = origin >= 0 && origins != NULL ? origins[origin].map : -1;
     }
+    if (origin < 0 && map_load_state.step == 0) {
+        /* a dead end (port_map_way_in): the map the game came from stays loaded, set up */
+        int from;
+        float position[3];
+
+        if (port_map_way_in(current->tag, &from, position)) {
+            way_in.x = position[0];
+            way_in.y = position[1];
+            way_in.z = position[2];
+            way_in.map = (u16)from;
+            map_load_state.request = &way_in;
+            run_neighbour_load(1);
+            port_event("quick load: map %02X is a dead end: the map it is entered from, %02X, %s", current->tag, from,
+                       map_load_state.step == 0 ? "set up" : "not read (the drive stayed busy)");
+            return;
+        }
+    }
     if (origin < 0 || origin >= MAP_ORIGIN_COUNT || origins == NULL || origins[origin].map != map ||
         (u8)map == current->tag || map_load_state.step != 0) {
         port_event("quick load: no neighbouring map%s", origin >= 0 ? " (the saved one is not this map's)" : "");
         return;
     }
     map_load_state.request = &origins[origin];
-    while (map_load_state.step != 5 && steps++ < 100000) {
-        map_load_steps[map_load_state.step]();
-        Entity_UpdatePool();
-        GameLoop_RunSoundLoads();
-        Sound_Update();
-    }
-    if (map_load_state.step == 5 && set_up) {
-        map_load_state.step = 6;
-        while (map_load_state.step != 0) {
-            map_load_steps[map_load_state.step]();
-        }
-    }
+    run_neighbour_load(set_up);
     port_event("quick load: neighbouring map %02X (origin %d%s) %s", map, origin,
                loaded_info.neighbour_known ? "" : ", from the position",
                map_load_state.step == 0 ? "set up" : map_load_state.step == 5 ? "read" : "not read (the drive stayed busy)");
 }
+
 
 static void fill_info(PortQuickInfo *info) {
     memset(info, 0, sizeof(*info));
@@ -369,22 +399,84 @@ void kf4_quick_vblank(void) {
     }
 }
 
+/* Restarts the session from the image in save_image (save_loaded set): leaves the main loop as a card
+   load does, and main then restarts the session from the image. A dying player's game over and the
+   ending are not shown */
+static void leave_for_image(void) {
+    player_state.death_timer = 0;
+    game_status.bits10 = 0;
+    game_status.bit9 = 1;
+}
+
+/* A teleport (port/include/port/teleport.h): the game written into save_image as a quick save writes it,
+   but with the map and the player's place asked for, then taken as a made-up quick save is loaded:
+   the game restarts the session on that map, and the player is put on the floor under the place */
+static void teleport(void) {
+    PortQuickInfo info;
+    MapSlot *slot = &map_slots[current_map_slot];
+    f32 kept_position[3] = {player_state.position.x, player_state.position.y, player_state.position.z};
+    f32 kept_rotation[3] = {player_state.rotation.x, player_state.rotation.y, player_state.rotation.z};
+    u8 kept_tag = slot->tag;
+    const char *why = not_in_play();
+    float position[3], heading;
+    int map;
+
+    if (why != NULL) {
+        port_quick_refuse(why);
+        return;
+    }
+    port_quick_teleport_target(&map, position, &heading);
+    player_state.position.x = position[0];
+    player_state.position.y = position[1];
+    player_state.position.z = position[2];
+    player_state.rotation.x = 0.0f;
+    player_state.rotation.y = heading;
+    player_state.rotation.z = 0.0f;
+    slot->tag = (u8)map;
+    PlayTime_Update();
+    Game_WriteSaveImage();
+    fill_info(&info);
+    slot->tag = kept_tag;
+    player_state.position.x = kept_position[0];
+    player_state.position.y = kept_position[1];
+    player_state.position.z = kept_position[2];
+    player_state.rotation.x = kept_rotation[0];
+    player_state.rotation.y = kept_rotation[1];
+    player_state.rotation.z = kept_rotation[2];
+    if (!Game_CheckSaveImage()) {
+        port_quick_refuse("the game's check of the image failed");
+        return;
+    }
+    info.made_up = 1;
+    info.neighbour_known = 0;
+    info.neighbour_origin = -1;
+    info.neighbour_map = -1;
+    save_loaded = 1;
+    placed_check = 1;
+    neighbour_due = 1;
+    loaded_info = info;
+    port_quick_teleported(&info);
+    leave_for_image();
+}
+
 void Quick_PollGame(void) {
     int wanted = port_quick_wanted();
 
     if (wanted == PORT_QUICK_SAVE) {
         quick_save();
+    } else if (wanted == PORT_QUICK_TELEPORT) {
+        if (game_status.bit9) {
+            port_quick_refuse("the game is leaving play");
+            return;
+        }
+        teleport();
     } else if (wanted == PORT_QUICK_LOAD) {
         if (game_status.bit9) {
             port_quick_refuse("the game is leaving play");
             return;
         }
         if (quick_load_image()) {
-            /* leave the main loop as a card load does; main then restarts the session from the image.
-               A dying player's game over and the ending are not shown */
-            player_state.death_timer = 0;
-            game_status.bits10 = 0;
-            game_status.bit9 = 1;
+            leave_for_image();
         }
     }
 }
@@ -392,7 +484,7 @@ void Quick_PollGame(void) {
 int Quick_PollTitle(void) {
     int wanted = port_quick_wanted();
 
-    if (wanted == PORT_QUICK_SAVE) {
+    if (wanted == PORT_QUICK_SAVE || wanted == PORT_QUICK_TELEPORT) {
         port_quick_refuse("no game is being played");
     } else if (wanted == PORT_QUICK_LOAD) {
         return quick_load_image();

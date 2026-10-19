@@ -38,6 +38,7 @@
 #include "port/platform.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
+#include "port/teleport.h"
 
 #define MAX_THREADS 64
 #define MAX_SEMAS 64
@@ -333,6 +334,7 @@ static void vblank_start(void) {
     port_pad_poll();
     port_video_present();
     port_host_float_end(mode);
+    port_teleport_vblank();
     port_quick_vblank();
     /* the settings overlay can hold the game while it is open: EE time stands still, and the pacing
        starts again from here. A save state asked for meanwhile is taken below, at once. */

@@ -48,6 +48,9 @@ typedef struct {
    request that the game has not taken within a second is dropped, with a message saying why. */
 void port_quick_request_save(int slot);
 void port_quick_request_load(int slot);
+/* A teleport (port/include/port/teleport.h): the game's image as it is now, with the map and the
+   player's place changed, loaded as a made-up file is. patient: the command line's, which waits. */
+void port_quick_request_teleport(int map, const float position[3], float heading, const char *label, int patient);
 
 /* 1 and what slot `slot` holds, or 0 when it is empty or not a quick save */
 int port_quick_info(int slot, PortQuickInfo *info);
@@ -69,6 +72,7 @@ void port_quick_vblank(void);
 #define PORT_QUICK_NONE 0
 #define PORT_QUICK_SAVE 1
 #define PORT_QUICK_LOAD 2
+#define PORT_QUICK_TELEPORT 3 /* port/include/port/teleport.h */
 
 /* What is asked for now (PORT_QUICK_) */
 int port_quick_wanted(void);
@@ -83,6 +87,10 @@ uint8_t *port_quick_read(size_t *size, PortQuickInfo *info);
 void port_quick_loaded(int ok);
 /* (the first vblank of play after a load) where the game put the player, checked against the info */
 void port_quick_placed(const PortQuickInfo *now);
+/* (PORT_QUICK_TELEPORT) the map, place and heading asked for */
+void port_quick_teleport_target(int *map, float position[3], float *heading);
+/* the game took the teleport: its image is in place for the restart, with this info (made_up) */
+void port_quick_teleported(const PortQuickInfo *info);
 /* (a made-up file) the game moved the player before the first frame: the check expects him there */
 void port_quick_moved(const float position[3]);
 /* (game/quicksave.c, called by port_quick_vblank) does that check when it is due */
