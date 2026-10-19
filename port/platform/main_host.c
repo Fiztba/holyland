@@ -34,6 +34,9 @@
                          save a state at these vblanks (port/platform/savestate.c)
        --state-load [VBLANK:]SLOT|FILE
                          load a state before the game starts, or at that vblank
+       --gs-capture-at VBLANK[:N],...
+                         write a GS frame capture of N vblanks (2 when left out) from these vblanks,
+                         for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
    With a window and no pad script, settings.json (port/overlay/settings.c, the overlay's F1) fills in
    what the command line does not say. */
 #include <stdarg.h>
@@ -42,6 +45,7 @@
 #include <string.h>
 
 #include "port/audio.h"
+#include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
@@ -59,7 +63,8 @@ static void usage(const char *program) {
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
             "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
-            "          [--state-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n",
+            "          [--state-load [VBLANK:]SLOT|FILE] [--widescreen] [--widescreen-hud-centred]\n"
+            "          [--gs-capture-at VBLANK[:N],...]\n",
             program);
     exit(2);
 }
@@ -74,6 +79,8 @@ static void parse_clock(const char *text) {
     }
     port_options.clock_fixed = 1;
 }
+
+static const char *gs_capture_at; /* --gs-capture-at (port/debug/gs_capture.c) */
 
 static void parse_options(int argc, char **argv) {
     int i;
@@ -163,6 +170,8 @@ static void parse_options(int argc, char **argv) {
             port_options.state_save_at = value;
         } else if (strcmp(option, "--state-load") == 0) {
             port_options.state_load = value;
+        } else if (strcmp(option, "--gs-capture-at") == 0) {
+            gs_capture_at = value;
         } else {
             usage(argv[0]);
         }
@@ -193,6 +202,9 @@ void port_log(const char *fmt, ...) {
 void port_event(const char *fmt, ...) {
     va_list args;
 
+    va_start(args, fmt);
+    port_debug_note_event(port_vblank_count(), fmt, args); /* F10's last events (port/debug/debug.c) */
+    va_end(args);
     if (log_file == NULL) {
         return;
     }
@@ -272,6 +284,7 @@ int main(int argc, char **argv) {
     port_video_init();
     port_audio_init();
     port_state_init();
+    port_debug_init(gs_capture_at);
     fprintf(stderr, "[port] game RAM at %p, running the game\n", (void *)ee_ram);
     return port_kernel_run(kf4_game_main);
 }

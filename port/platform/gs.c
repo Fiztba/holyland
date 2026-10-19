@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/savestate.h"
@@ -427,6 +428,9 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     } else {
         read_gif(path, (uint64_t *)data, bytes / 16, 0);
     }
+    if (port_gs_capture_recording) {
+        port_gs_capture_gif(path, data, bytes);
+    }
 #ifdef KF4_HAVE_PARALLEL_GS
     if (backend) {
         port_gs_backend_gif(path, data, bytes);
@@ -441,6 +445,9 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
 }
 
 void port_gs_read_fifo(void *dst, uint32_t qwords) {
+    if (port_gs_capture_recording) {
+        port_gs_capture_read_fifo(qwords);
+    }
 #ifdef KF4_HAVE_PARALLEL_GS
     if (backend) {
         port_gs_backend_read_fifo(dst, qwords);
@@ -470,6 +477,9 @@ void port_gs_post_vsync(void) {
     memcpy(request->privileged, ee_hw_ptr(0x12000000), sizeof(request->privileged));
     request->vblank = port_vblank_count();
     request->field = (int)((*(volatile uint64_t *)ee_hw_ptr(0x12001000) >> 13) & 1);
+    if (port_gs_capture_armed) {
+        port_gs_capture_note_vblank(request->vblank);
+    }
     __atomic_store_n(&queue_head, head + 1, __ATOMIC_RELEASE);
     port_dmac_post_vsync();
 }
@@ -510,6 +520,9 @@ void port_gs_run_vsync(void) {
         }
     } else if (dump) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
+    }
+    if (port_gs_capture_armed) {
+        port_gs_capture_vsync(request->privileged, request->field, request->vblank);
     }
 #endif
     if (port_options.stats) {

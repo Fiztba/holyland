@@ -29,6 +29,7 @@
 extern "C" {
 #include "port/audio.h"
 #include "port/controls.h"
+#include "port/debug.h"
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/savestate.h"
@@ -552,6 +553,40 @@ std::string bug_report() {
     return text;
 }
 
+// The debugging tools (port/include/port/debug.h): files for a bug report, in the captures folder
+void debug_tools() {
+    char keys[3][64];
+    const int actions[3] = {ACTION_GS_CAPTURE, ACTION_STATE_DUMP, ACTION_AUDIO_TAIL};
+    for (int i = 0; i < 3; i++)
+        port_controls_binding_label(port_controls_binding(port_controls_layout(), actions[i], 0), keys[i],
+                                    sizeof(keys[i]));
+
+    ImGui::SeparatorText("Debugging tools");
+    ImGui::BeginDisabled(!port_gs_enabled() || port_debug_gs_capture_busy());
+    if (ImGui::Button("GS frame capture"))
+        port_debug_request_gs_capture();
+    ImGui::EndDisabled();
+    tooltip("The GS's and VU1's state and everything drawn in the next two vblanks, for kf4-gsreplay\n"
+            "(docs/port/README.md, \"Debugging\"). Any build reads it.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", keys[0]);
+    ImGui::SameLine();
+    if (ImGui::Button("Game state dump"))
+        port_debug_write_state_dump();
+    tooltip("The map, the player, the entities and map objects near, the story's flags and the last\n"
+            "events, as JSON.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", keys[1]);
+    ImGui::SameLine();
+    if (ImGui::Button("Last 20 s of sound"))
+        port_debug_write_audio_tail();
+    tooltip("The sound as the game made it (before the volume), as a WAV.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", keys[2]);
+    ImGui::TextWrapped("Folder: %s", port_debug_folder());
+    ImGui::TextWrapped("%s", port_debug_message());
+}
+
 void debug_page() {
     PortGameReadout game;
     kf4_game_readout(&game);
@@ -584,6 +619,7 @@ void debug_page() {
     if (ImGui::Button("Copy for a bug report"))
         ImGui::SetClipboardText(bug_report().c_str());
     tooltip("Copies the numbers above, the map and position, and this run's options.");
+    debug_tools();
 }
 
 // ---- Interface -----------------------------------------------------------------------------------

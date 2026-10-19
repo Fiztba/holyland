@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "port/controls.h"
+#include "port/debug.h"
 #include "port/host.h"
 #include "port/overlay.h"
 #include "port/platform.h"
@@ -101,6 +102,9 @@ static const struct {
     [ACTION_CAPTURE_MOUSE] = {"capture_mouse", "Capture / release the mouse", 0},
     [ACTION_QUICK_SAVE] = {"quick_save", "Quick save (save state)", 0},
     [ACTION_QUICK_LOAD] = {"quick_load", "Quick load (save state)", 0},
+    [ACTION_GS_CAPTURE] = {"gs_capture", "GS frame capture (debug)", 0},
+    [ACTION_STATE_DUMP] = {"state_dump", "Game state dump (debug)", 0},
+    [ACTION_AUDIO_TAIL] = {"audio_tail", "Last 20 s of sound (debug)", 0},
 };
 
 const char *port_controls_action_label(int action) {
@@ -159,6 +163,9 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_RIGHT_STICK_RIGHT] = {KEY(L)},
         [ACTION_QUICK_SAVE] = {KEY(F2)},
         [ACTION_QUICK_LOAD] = {KEY(F4)},
+        [ACTION_GS_CAPTURE] = {KEY(F9)},
+        [ACTION_STATE_DUMP] = {KEY(F10)},
+        [ACTION_AUDIO_TAIL] = {KEY(F12)},
     },
     [CONTROLS_VERDITE] = {
         [ACTION_UP] = {KEY(W), KEY(UP), PAD(DPAD_UP)},
@@ -180,6 +187,9 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_CAPTURE_MOUSE] = {KEY(ESCAPE)},
         [ACTION_QUICK_SAVE] = {KEY(F2)},
         [ACTION_QUICK_LOAD] = {KEY(F4)},
+        [ACTION_GS_CAPTURE] = {KEY(F9)},
+        [ACTION_STATE_DUMP] = {KEY(F10)},
+        [ACTION_AUDIO_TAIL] = {KEY(F12)},
     },
 };
 /* Verdite's mouse outside play: left cross, right circle, middle cross */
@@ -784,6 +794,15 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_QUICK_LOAD & 1u) {
         port_state_request_load(0);
         port_overlay_notify_state();
+    }
+    if (edges >> ACTION_GS_CAPTURE & 1u) {
+        port_debug_request_gs_capture();
+    }
+    if (edges >> ACTION_STATE_DUMP & 1u) {
+        port_debug_write_state_dump();
+    }
+    if (edges >> ACTION_AUDIO_TAIL & 1u) {
+        port_debug_write_audio_tail();
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
         set_captured(!pc.captured);
