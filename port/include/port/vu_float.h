@@ -100,7 +100,8 @@ static inline uint32_t vu_float_div(uint32_t a, uint32_t b) {
 
 /* the square root of |a| (as the division, a double's rounding never crosses a boundary) */
 static inline uint32_t vu_float_sqrt(uint32_t a) {
-    return vu_float_round(sqrt(fabs(vu_float_value(a))));
+    /* (the compiler's: game files map sqrt() to the PS2's, port/libm_ps2.h) */
+    return vu_float_round(__builtin_sqrt(__builtin_fabs(vu_float_value(a))));
 }
 
 /* RSQRT: a / sqrt(|b|); b zero gives the largest float with a's sign (as vu1.c's) */
