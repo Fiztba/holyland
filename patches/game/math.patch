@@ -22,6 +22,46 @@ index 8641b62ac08d791a20f0004965fe1b2ffc195a2b..8a67666adef3b0ad7ee9e1469b751250
 +LAYOUT_OFFSET(CameraState, entity_shake_reach, 0x78);
  
  f32 D_00432620[0x80] = { 0 };              /* 0x432620 */
+diff --git a/src/game/math/geometry.c b/src/game/math/geometry.c
+index 8e32a4a39a2cb79ce7211af882d6e12e70b14f33..2a971d9fa0e2c2fef7e44185d4732ce5c54d8635 100644
+--- a/src/game/math/geometry.c
++++ b/src/game/math/geometry.c
+@@ -13,7 +13,7 @@ void Vu0_ProjectToScreen(int *, void *);
+ 
+ /* Distance between two points. */
+ static float Vector_Distance(void *origin, void *target) {
+-    float delta[3];
++    float delta[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+ 
+     Vector_Subtract(delta, origin, target);
+     return sqrtf(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
+@@ -21,7 +21,7 @@ static float Vector_Distance(void *origin, void *target) {
+ 
+ /* Horizontal (XZ-plane) distance between two points. */
+ static float Vector_DistanceXZ(void *origin, void *target) {
+-    float delta[3];
++    float delta[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+ 
+     Vector_Subtract(delta, origin, target);
+     return sqrtf(delta[0] * delta[0] + delta[2] * delta[2]);
+@@ -29,7 +29,7 @@ static float Vector_DistanceXZ(void *origin, void *target) {
+ 
+ /* Heading (angle in the XZ plane) of origin seen from target. */
+ static float Vector_Heading(void *origin, void *target) {
+-    float delta[3];
++    float delta[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+ 
+     Vector_Subtract(delta, origin, target);
+     return atan2f(delta[0], delta[2]);
+@@ -37,7 +37,7 @@ static float Vector_Heading(void *origin, void *target) {
+ 
+ /* Pitch of a point seen from an origin. */
+ static float Vector_Pitch(void *point, void *origin) {
+-    float offset[3];
++    float offset[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+ 
+     Vector_Subtract(offset, point, origin);
+     return atan2f(offset[1], sqrtf(offset[0] * offset[0] + offset[2] * offset[2]));
 diff --git a/src/game/math/vu0.c b/src/game/math/vu0.c
 index a6feffd7fbb0f42c1de1dabf06beddf3c70243d8..c6903aca2e6046572f678d6cec7a4f885c264958 100644
 --- a/src/game/math/vu0.c

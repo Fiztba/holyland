@@ -1852,7 +1852,7 @@ index 09b39b787de8199076987c014f485f3b01615437..917983969ca05e43ac2c5257bfc31cc6
      } else {
          EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/golden_statue.c b/src/game/enemy/golden_statue.c
-index 69d98ab0bc58d770384c2e9c8569d56c7bd1e3ce..919af476dffb5dde4c501b663573653c1ccd7780 100644
+index 69d98ab0bc58d770384c2e9c8569d56c7bd1e3ce..3fc3f739c0684a4cdc865ea386133acc45fef37f 100644
 --- a/src/game/enemy/golden_statue.c
 +++ b/src/game/enemy/golden_statue.c
 @@ -6,7 +6,7 @@
@@ -1908,6 +1908,15 @@ index 69d98ab0bc58d770384c2e9c8569d56c7bd1e3ce..919af476dffb5dde4c501b663573653c
          entity->move_command = 0;
      }
      if (entity->move_command & MOVE_COMMAND_TURN_LEFT) {
+@@ -462,7 +461,7 @@ static void GoldenStatue_AimPart15AbovePlayer(Entity *entity) {
+     EntityAiState *ai_state;
+     EntityModelPart80 *part;
+     s16 frame;
+-    f32 point[2];
++    f32 point[4]; /* PC: [2]; Vector_Copy stores a quadword */
+     f32 pitch;
+ 
+     model = entity->model;
 diff --git a/src/game/enemy/greater_demon.c b/src/game/enemy/greater_demon.c
 index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237cc086a3ad 100644
 --- a/src/game/enemy/greater_demon.c

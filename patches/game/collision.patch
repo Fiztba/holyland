@@ -1,7 +1,16 @@
 diff --git a/src/game/collision/collision.c b/src/game/collision/collision.c
-index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a214479f68973 100644
+index 3ff37e8f458c785217c37780db3d99d329cda113..6b337ebdd2f5487aa426b8c64367e1b54d11b16c 100644
 --- a/src/game/collision/collision.c
 +++ b/src/game/collision/collision.c
+@@ -72,7 +72,7 @@ static void Collision_PointCapsule(f32 *point, f32 *base, f32 *axis, f32 reach_s
+ 
+ /* Tests a sphere against a sphere: a hit when the two overlap. */
+ void Collision_SphereSphere(void *center_a, void *center_b, float radius_a, float radius_b) {
+-    float offset[3];
++    float offset[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+     float distance;
+     float reach;
+ 
 @@ -106,25 +106,7 @@ void Collision_PointTriangle(f32 *corner_a, f32 *corner_b, f32 *corner_c, f32 *p
      f32 weight_c;
  
@@ -243,6 +252,15 @@ index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a2144
 +    from_b[2] = (corner_a[2] - point[2]) * normal[2];
      denominator = (from_b[0] + from_b[1] + from_b[2]) / denominator;
      if (denominator < D_00446FC4[0]) {
+         return;
+@@ -686,7 +585,7 @@ void Collision_CylinderCylinder(f32 *base, f32 radius, f32 height, f32 *other_ba
+ /* Tests a point against an upright cylinder: its base at `origin`, its radius squared and its height.
+    Nothing calls it. */
+ static void Collision_PointCylinder(f32 *point, f32 *origin, f32 radius_squared, f32 height) {
+-    f32 delta[3];
++    f32 delta[4]; /* PC: [3]; Vector_Subtract stores a quadword */
+ 
+     if (point[1] > origin[1]) {
          return;
 diff --git a/src/game/collision/collision.h b/src/game/collision/collision.h
 index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195e2545118 100644
