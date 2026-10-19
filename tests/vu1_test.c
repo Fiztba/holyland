@@ -516,6 +516,7 @@ static uint32_t random_float(uint32_t near) {
 
 static void test_vu0_float(void) {
     int round, lane, bad_add = 0, bad_sub = 0, bad_mul = 0, bad_div = 0, bad_ftoi = 0, bad_itof = 0;
+    int bad_sqrt = 0, bad_rsqrt = 0, bad_max = 0, bad_mini = 0;
 
     for (round = 0; round < 3000; round++) {
         uint32_t a[4], b[4], n[4];
@@ -539,6 +540,13 @@ static void test_vu0_float(void) {
         pair(up2(0x15, XYZW, 6, 1), WAITQ);             /* ftoi4(a) */
         pair(up(0x1C, W, 0, 0, 8), LNOP);                /* mulq: vf0.w (1) * Q, which keeps -0 */
         pair(up2(0x11, XYZW, 9, 7), LNOP);              /* itof4(n) */
+        pair(UNOP, SQRT(1, 1));                          /* sqrt(|a.y|) */
+        pair(UNOP, WAITQ);
+        pair(up(0x1C, W, 0, 0, 10), RSQRT(1, 2, 2, 2));  /* a.z / sqrt(|b.z|) */
+        pair(UNOP, WAITQ);
+        pair(up(0x1C, W, 0, 0, 11), LNOP);
+        pair(up(U_MAX, XYZW, 2, 1, 12), LNOP);
+        pair(up(U_MINI, XYZW, 2, 1, 13), LNOP);
         nops(3);
         pair(UNOP, SQ(XYZW, 3, 0, 3));
         pair(UNOP, SQ(XYZW, 4, 0, 4));
@@ -546,6 +554,10 @@ static void test_vu0_float(void) {
         pair(UNOP, SQ(XYZW, 6, 0, 6));
         pair(UNOP, SQ(XYZW, 8, 0, 7));
         pair(UNOP, SQ(XYZW, 9, 0, 8));
+        pair(UNOP, SQ(XYZW, 10, 0, 9));
+        pair(UNOP, SQ(XYZW, 11, 0, 10));
+        pair(UNOP, SQ(XYZW, 12, 0, 11));
+        pair(UNOP, SQ(XYZW, 13, 0, 12));
         run();
         for (lane = 0; lane < 4; lane++) {
             int add = word(3, lane) != vu_float_add(a[lane], b[lane]);
@@ -562,6 +574,16 @@ static void test_vu0_float(void) {
             bad_mul += mul;
             bad_ftoi += word(6, lane) != (uint32_t)vu_float_ftoi(a[lane], 4);
             bad_itof += word(8, lane) != vu_float_itof((int32_t)n[lane], 4);
+            bad_max += word(11, lane) != vu_float_max(a[lane], b[lane]);
+            bad_mini += word(12, lane) != vu_float_mini(a[lane], b[lane]);
+        }
+        if (word(9, 3) != vu_float_sqrt(a[1]) && bad_sqrt++ == 0) {
+            printf("     the first square root that differs: %08X: %08X (VU1) %08X\n", a[1], word(9, 3),
+                   vu_float_sqrt(a[1]));
+        }
+        if (word(10, 3) != vu_float_rsqrt(a[2], b[2]) && bad_rsqrt++ == 0) {
+            printf("     the first rsqrt that differs: %08X / sqrt %08X: %08X (VU1) %08X\n", a[2], b[2],
+                   word(10, 3), vu_float_rsqrt(a[2], b[2]));
         }
         if (word(7, 3) != vu_float_div(a[0], b[0]) && bad_div++ == 0) {
             printf("     the first divide that differs: %08X / %08X: %08X (VU1) %08X\n", a[0], b[0], word(7, 3),
@@ -574,6 +596,10 @@ static void test_vu0_float(void) {
     check("VU0's div is VU1's (3000)", (uint32_t)bad_div, 0);
     check("VU0's ftoi4 is VU1's", (uint32_t)bad_ftoi, 0);
     check("VU0's itof4 is VU1's", (uint32_t)bad_itof, 0);
+    check("VU0's sqrt is VU1's (3000)", (uint32_t)bad_sqrt, 0);
+    check("VU0's rsqrt is VU1's (3000)", (uint32_t)bad_rsqrt, 0);
+    check("VU0's max is VU1's", (uint32_t)bad_max, 0);
+    check("VU0's mini is VU1's", (uint32_t)bad_mini, 0);
     /* the cases the double path cannot do: exponents more than 28 apart */
     check("1 - 2^-40 rounds toward zero", vu_float_sub(0x3F800000u, 0x2B800000u), 0x3F7FFFFFu);
     check("1 + 2^-40 is 1", vu_float_add(0x3F800000u, 0x2B800000u), 0x3F800000u);

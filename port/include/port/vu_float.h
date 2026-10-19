@@ -103,12 +103,30 @@ static inline uint32_t vu_float_sqrt(uint32_t a) {
     return vu_float_round(sqrt(fabs(vu_float_value(a))));
 }
 
+/* RSQRT: a / sqrt(|b|); b zero gives the largest float with a's sign (as vu1.c's) */
+static inline uint32_t vu_float_rsqrt(uint32_t a, uint32_t b) {
+    if ((b & 0x7F800000u) == 0) {
+        return (a & VU_FLOAT_SIGN) | VU_FLOAT_MAX;
+    }
+    return vu_float_div(a, vu_float_sqrt(b));
+}
+
+/* ABS: the sign cleared, nothing else changed */
+static inline uint32_t vu_float_abs(uint32_t a) {
+    return a & 0x7FFFFFFFu;
+}
+
 /* MAX: sign and magnitude compared, so -0 < +0; an operand unchanged */
 static inline uint32_t vu_float_max(uint32_t a, uint32_t b) {
     if ((int32_t)a < 0 && (int32_t)b < 0) {
         return (int32_t)a < (int32_t)b ? a : b;
     }
     return (int32_t)a > (int32_t)b ? a : b;
+}
+
+/* MINI: the other operand of MAX's */
+static inline uint32_t vu_float_mini(uint32_t a, uint32_t b) {
+    return vu_float_max(a, b) == a ? b : a;
 }
 
 /* FTOIn: times 2^shift, truncated; at 2^31 and beyond the integer's limit with the float's sign */
