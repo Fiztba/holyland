@@ -129,7 +129,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--frames N` | stop after N vblanks |
 | `--input FILE` | play the pad from a script instead of SDL |
 | `--log FILE` | the per-frame log (`-` for stdout) |
-| `--clock YYYY-MM-DDTHH:MM:SS` | the disc drive's clock at boot, in Japan's time, instead of the host's; for repeatable runs |
+| `--clock YYYY-MM-DDTHH:MM:SS` | the disc drive's clock at boot, in Japan's time, instead of the host's; it runs on with the game's time, for repeatable runs |
 | `--host-dir DIR` | the folder `host0:` paths are read from |
 | `--controls ps2\|verdite` | the keyboard and mouse layout (see below) |
 | `--audio-dump FILE` | write the sound as a 48 kHz WAV file |

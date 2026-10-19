@@ -6,6 +6,7 @@
 
 #include "libcdvd.h"
 #include "port/host.h"
+#include "port/libc_ps2.h"
 #include "port/platform.h"
 #include "port/savestate.h"
 
@@ -95,19 +96,31 @@ static unsigned char bcd(int value) {
     return (unsigned char)(((value / 10) << 4) | (value % 10));
 }
 
-/* The drive's clock, in BCD: the host's time, or the one --clock fixed. A PS2 keeps its clock in
-   Japan's time (UTC+9) whatever the console's region, and the game uses it as it is (no libscf time
-   zone), so the PC gives UTC+9 too. */
+/* The drive's clock, in BCD: the host's time, or the one --clock gives at boot. A fixed clock runs on
+   with the EE's time (port_ee_cycles), so a run is repeatable and the play time, which the game works
+   out from the clock (core/play_time.c), still counts. A PS2 keeps its clock in Japan's time (UTC+9)
+   whatever the console's region, and the game uses it as it is (no libscf time zone), so the PC gives
+   UTC+9 too. */
 int sceCdReadClock(sceCdCLOCK *clock) {
     int year, month, day, hour, minute, second;
 
     if (port_options.clock_fixed) {
-        year = port_options.clock_fields[0];
-        month = port_options.clock_fields[1];
-        day = port_options.clock_fields[2];
-        hour = port_options.clock_fields[3];
-        minute = port_options.clock_fields[4];
-        second = port_options.clock_fields[5];
+        /* newlib's mktime normalises the fields (port/sdk/libc_ps2.c) */
+        int fields[9] = {0};
+
+        fields[0] = port_options.clock_fields[5] + (int)(port_ee_cycles() / EE_BUS_HZ);
+        fields[1] = port_options.clock_fields[4];
+        fields[2] = port_options.clock_fields[3];
+        fields[3] = port_options.clock_fields[2];
+        fields[4] = port_options.clock_fields[1] - 1;
+        fields[5] = port_options.clock_fields[0] - 1900;
+        ps2_mktime(fields);
+        year = fields[5] + 1900;
+        month = fields[4] + 1;
+        day = fields[3];
+        hour = fields[2];
+        minute = fields[1];
+        second = fields[0];
     } else {
         time_t now = time(NULL) + 9 * 60 * 60;
         struct tm *local = gmtime(&now);
