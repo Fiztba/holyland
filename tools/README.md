@@ -8,6 +8,7 @@
 | `boot_test.py`, `frame_test.py` | step 1's and step 2's checks: a headless boot to a new game, and its pictures |
 | `vu1_disasm.py` | the game's VU1 programs as text |
 | `gsreplay/` | `kf4-gsreplay` (below) |
+| `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
 
 ## kf4-gsreplay
 

@@ -23,6 +23,9 @@
 #include "port/platform.h"
 #include "port/savestate.h"
 
+#if __has_include("build_rev.h")
+#include "build_rev.h" /* KF4_BUILD_REV, git describe at the build (tools/build_rev.cmake) */
+#endif
 #ifndef KF4_BUILD_REV
 #define KF4_BUILD_REV "unknown"
 #endif

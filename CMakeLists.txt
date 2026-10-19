@@ -304,13 +304,14 @@ else()
     target_link_options(kf4 PRIVATE -no-pie)
 endif()
 
-# The debugging tools (port/debug/, docs/port/README.md "Debugging"): the build a GS capture names
-execute_process(COMMAND ${GIT_EXECUTABLE} -C ${CMAKE_SOURCE_DIR} describe --always --dirty
-    OUTPUT_VARIABLE KF4_BUILD_REV OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-if(KF4_BUILD_REV STREQUAL "")
-    set(KF4_BUILD_REV unknown)
-endif()
-set_source_files_properties(port/debug/gs_capture.c PROPERTIES COMPILE_DEFINITIONS "KF4_BUILD_REV=\"${KF4_BUILD_REV}\"")
+# The debugging tools (port/debug/, docs/port/README.md "Debugging"): the build a GS capture names,
+# from git at each build (build_rev.h)
+add_custom_target(kf4_build_rev
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/build_rev.h
+        -P ${CMAKE_SOURCE_DIR}/tools/build_rev.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/build_rev.h)
+add_dependencies(kf4_port kf4_build_rev)
+target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # kf4-gsreplay draws a GS frame capture again (tools/gsreplay): the GIF stream, or the VIF1 stream
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
