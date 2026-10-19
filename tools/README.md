@@ -7,6 +7,7 @@
 | `port_abi_check.py` | declarations that disagree with the definition |
 | `boot_test.py`, `frame_test.py` | step 1's and step 2's checks: a headless boot to a new game, and its pictures |
 | `vu1_disasm.py` | the game's VU1 programs as text |
+| `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
 | `gsreplay/` | `kf4-gsreplay` (below) |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
 
@@ -26,7 +27,7 @@ kf4-gsreplay FILE.kf4gs [options]
 |---|---|
 | `--info` | the capture's vblanks, the game's state line (map, position), the build, the picture options, and its records |
 | `--mode gif` | (the default) the GIF packets as the GS had them |
-| `--mode vif` | the VIF1 stream through the VU1 interpreter, which makes the PATH1 and PATH2 packets again; each is compared with the recorded one, and for each that differs the first vertices that differ are printed (`--diff N`, 8 by default; 0 for none) |
+| `--mode vif` | the VIF1 stream through the VU1 interpreter, which makes the PATH1 and PATH2 packets again; each is compared with the recorded one, and for each that differs the first vertices that differ are printed (`--diff N`, 8 by default; 0 for none); then VU1's runs, instructions and cycles (stalls included) for the capture |
 | `--vu-round nearest` | with `--mode vif`: VU1's float arithmetic rounds to nearest instead of toward zero (a hypothesis to test: what moves) |
 | `--frames` | each scanout's picture as `frame_NNNNNN.png`, as `--dump-frames` writes it (byte for byte the same) |
 | `--out DIR` | where pictures go (the current directory) |
@@ -68,3 +69,51 @@ kf4-gsreplay gs_a.kf4gs --draws 600-640 --zbuf --out a    # the picture and Z af
 kf4-gsreplay gs_a.kf4gs --vertices 612                # the two passes' vertices: is Z the same?
 kf4-gsreplay gs_a.kf4gs --compare-mode vif --vu-round nearest   # does VU rounding move their Z?
 ```
+
+## map_tour.py
+
+Visits every map of the game (the 64 `NNN.map` files of KF4.DAT) and pictures it, without playing
+there: for checking the drawing of places nobody has reached yet, and for a census of what the maps
+draw with.
+
+```sh
+python3 tools/map_tour.py --disc kfiv_us.iso --out /tmp/tour            # all maps
+python3 tools/map_tour.py --out /tmp/tour --maps 0,99,112 --positions 3  # some, more places each
+```
+
+How it gets there: a quick save is the game's own save image (docs/port/README.md, "Quick saves"), so
+the tool writes one for any map and place.
+- It takes a real one once: a new game (`tests/newgame.pad`), `--quick-save-at` in the first map.
+- For each view it writes a copy with the image's map tag, position and heading changed (and the
+  image's byte sums and the file's hash made again), marked made up: the PC block's flags bit 1. A made-up
+  file loads as any quick save, then the game puts the player on the floor nearest under the position
+  (`Collision_FindFloorBelow`, as a dropped item is put down; else the nearest over it), and works the
+  neighbouring map out from there (`game/quicksave.c`). The game never writes the bit.
+- The places come from the map file (read from the disc): the map's own start (`MapSlotUnk08`'s
+  `player_start_*`), then its fixed items that lie on a record's floor (where the player can pick them
+  up), then the middles of the records' biggest floor triangles. The floors are the records' collision
+  meshes (`CollisionMesh` floor strips, as `Collision_RelocateMesh` reads them; records that are turned
+  are left out); a place over a hazard strip (lava, poison) is left out, and each is 1500 or more from
+  the others. Not the entity spawns: a player put on one dies at once. `--positions` places (2), each
+  at `--headings` headings (4).
+- Each map is one run: headless with the GS on, `--quick-load A,V:B,...` loads its views one after
+  another (100 vblanks each: the load, the fade in, the picture), `--dump-frames` writes each view's
+  picture and `--gs-capture-at` captures the first. `kf4-gsreplay --list` lists the capture's draws
+  and `--mode vif` runs its VIF1 stream through the VU1 interpreter again (VU1 cycles for the frame,
+  and packets that come out otherwise). Maps run `--jobs` at a time (3).
+
+What it writes into `--out` (outside the repository: the pictures, saves and captures are the game's):
+- `NNN/sheet.png`: the map's views side by side, each labelled with its place and heading, and in
+  yellow what was odd about it;
+- `NNN/pictures/`, `NNN/log.txt` (the per-frame log), `NNN/stderr.txt`, `NNN/capture.kf4gs` and
+  `NNN/draws.txt` (its `--list`);
+- `report.html` (the table and the sheets), `report.md` (the table, then the census: each VU1 program
+  and each GS state combination of PRIM, TEX0 PSM, ALPHA, TEST, ZBUF and FRAME, with the maps that
+  draw with it), and `report.json` (everything).
+
+A view is flagged when the load did not happen or came late, no floor was found, the player is not on
+the map, has a NaN position or is dying (an enemy, a trap), the game's status is not plain play, or the
+picture is black or more than half one flat colour (a void, or a dark doorway). The map is flagged for
+a `[todo]` the new game did not print, `[fatal]`, a hung kernel, a quick save message, a draw whose
+TEX0 names no PSM, more than two frames' worth of VU1 cycles, or VIF1 packets that replay differently.
+Flags are leads, not verdicts: look at the sheet.

@@ -37,6 +37,10 @@ typedef struct {
     int32_t neighbour_origin; /* 0..31, or -1: none */
     int32_t neighbour_map;    /* MapLoadRequest.map, or -1 */
     int32_t neighbour_set_up; /* 1: set up (MapLoad_SetUpMap on), 0: read, or being read, only */
+    /* A file a tool made, not the game (tools/map_tour.py: any map, any place): the PC block's flags
+       bit 1. Loading it puts the player on the floor under (or else over) the position, as the
+       game would not, and works the neighbour out from there. Never set by a quick save. */
+    int32_t made_up;
 } PortQuickInfo;
 
 /* Asks for a quick save to `slot`, or a load from it, taken where the game can (in play for a save;
@@ -56,7 +60,7 @@ int port_quick_slot(void);
 
 /* ---- The port's side ------------------------------------------------------------------------- */
 
-/* Reads --quick-save-at and --quick-load ([VBLANK:]SLOT|FILE) (port/platform/main_host.c) */
+/* Reads --quick-save-at and --quick-load ([VBLANK:]SLOT|FILE,...) (port/platform/main_host.c) */
 void port_quick_init(void);
 /* (the kernel, at each vblank) moves the command line's requests on, and drops stale ones */
 void port_quick_vblank(void);
@@ -79,6 +83,8 @@ uint8_t *port_quick_read(size_t *size, PortQuickInfo *info);
 void port_quick_loaded(int ok);
 /* (the first vblank of play after a load) where the game put the player, checked against the info */
 void port_quick_placed(const PortQuickInfo *now);
+/* (a made-up file) the game moved the player before the first frame: the check expects him there */
+void port_quick_moved(const float position[3]);
 /* (game/quicksave.c, called by port_quick_vblank) does that check when it is due */
 void kf4_quick_vblank(void);
 

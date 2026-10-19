@@ -9,6 +9,7 @@
    - --mode vif: the VIF1 stream through the VU1 interpreter (port/platform/vif1.c and vu1.c, built
      in), which makes the PATH1 and PATH2 packets again; each is compared with the recorded one, and the
      vertices of those that differ are listed (--vu-round nearest tests a hypothesis about VU floats).
+     It ends with VU1's runs, instructions and cycles for the capture.
 
    What it can write (tools/README.md has examples):
      --info             the capture's metadata and what is in it
@@ -966,7 +967,12 @@ static size_t start_state(Run *r) {
 
 static void run_capture(Run *r) {
     size_t i = start_state(r);
+    Kf4GsVu1Regs vu_start;
 
+    port_vu1_debug_regs(&vu_start, 0); /* VU1's clock as the capture starts */
+    port_options.stats = r->mode == MODE_VIF; /* vu1.c counts its runs */
+    memset(&port_stats, 0, sizeof(port_stats));
+    port_stats.vu1_cycles = vu_start.cycle;
     gif_init(&r->gif, r->capture);
     current_program = 0xFFFFFFFEu;
     current_kick = 0;
@@ -986,7 +992,10 @@ static void run_capture(Run *r) {
                "recorded\n",
                (unsigned long long)r->packets_same, (unsigned long long)r->packets_differ,
                (unsigned long long)r->packets_missing, (unsigned long long)r->packets_extra);
+        printf("VU1: %llu runs, %llu instructions, %llu cycles\n", (unsigned long long)port_stats.vu1_runs,
+               (unsigned long long)port_stats.vu1_insns, (unsigned long long)(port_stats.vu1_cycles - vu_start.cycle));
     }
+    port_options.stats = 0;
 }
 
 /* ---- Listings ------------------------------------------------------------------------------------ */

@@ -50,6 +50,7 @@ extern void (*map_load_steps[])(void);
 void Entity_UpdatePool(void);
 void GameLoop_RunSoundLoads(void);
 void Sound_Update(void);
+int Collision_FindFloorBelow(f32 reach, void *point_arg);
 
 void Game_WriteSaveImage(void);
 int Game_CheckSaveImage(void);
@@ -173,11 +174,33 @@ static int neighbour_from_position(int *set_up) {
     return standing >= 0 ? standing : found;
 }
 
+/* A made-up file (tools/map_tour.py) names a place, not where a player stood: puts the player on the
+   floor of the loaded map's records nearest under it (Collision_FindFloorBelow, as a dropped item is
+   put down), or else the nearest over it, so that he neither falls nor stands in the ground. */
+static void put_on_floor(void) {
+    f32 point[4] = {player_state.position.x, player_state.position.y, player_state.position.z, 0.0f};
+    f32 asked = point[1];
+    int step, found = Collision_FindFloorBelow(4000.0f, point);
+
+    for (step = 1; !found && step <= 8; step++) {
+        point[1] = asked - 500.0f * step; /* y grows downward: look 500 higher each time */
+        found = Collision_FindFloorBelow(500.0f, point);
+    }
+    if (!found) {
+        port_event("quick load: made up: no floor within 4000 under or over %.1f,%.1f,%.1f", point[0], asked, point[2]);
+        return;
+    }
+    player_state.position.y = COLLISION_RESULT->point[1];
+    port_quick_moved(&player_state.position.x);
+    port_event("quick load: made up: on the floor at %.1f,%.1f,%.1f (asked %.1f)", player_state.position.x,
+               player_state.position.y, player_state.position.z, asked);
+}
+
 /* (GameLoop_Run, once a loaded save's map is set up, before the first frame) a quick load asks for
    the neighbouring map the game had, as MapLoad_Update asks for one, and runs the game's load steps to
    where they were: read (resting at step 5), or on through the set-up, as MapLoad_Update does when the
    player stands where the neighbour is needed (without drawing: the screen is black, about to fade
-   in). A memory card load does nothing here. */
+   in). A memory card load does nothing here. A made-up file's player is put on the floor first. */
 void Quick_RestoreNeighbour(void) {
     MapSlot *current = &map_slots[current_map_slot & 1];
     MapLoadRequest *origins = (MapLoadRequest *)current->origins;
@@ -187,6 +210,9 @@ void Quick_RestoreNeighbour(void) {
         return;
     }
     neighbour_due = 0;
+    if (loaded_info.made_up) {
+        put_on_floor();
+    }
     if (loaded_info.neighbour_known) {
         origin = loaded_info.neighbour_origin;
         map = loaded_info.neighbour_map;
