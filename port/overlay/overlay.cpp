@@ -153,11 +153,34 @@ void display_page() {
         changed();
     }
     tooltip("Also F11.");
-    static const char *const aspects[] = {"4:3, as on a TV (PS2)", "Stretch to the window"};
+    const char *const aspects[] = {port_options.widescreen ? "16:9, as on a widescreen TV" : "4:3, as on a TV (PS2)",
+                                   "Stretch to the window"};
     if (ImGui::Combo("Picture shape", &s.aspect, aspects, 2))
         changed();
     tooltip("4:3 keeps the picture's shape with black bars at the sides or top.\nStretch fills the window "
-            "and distorts the picture.");
+            "and distorts the picture.\nWith widescreen on, the shape kept is 16:9.");
+    bool widescreen = port_options.widescreen != 0;
+    if (ImGui::Checkbox("Widescreen (16:9)", &widescreen)) {
+        s.widescreen = port_options.widescreen = widescreen;
+        port_video_apply_settings();
+        changed();
+    }
+    tooltip("Off: the PS2's 4:3 picture.\nOn: the game's view is widened to 16:9 (the same height, more at the "
+            "sides), and the\nmenus, the message boxes and the HUD keep their 4:3 shape. Applies at once. "
+            "(--widescreen)");
+    if (port_options.widescreen != s.widescreen) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(on for this run: command line)");
+    }
+    ImGui::BeginDisabled(!widescreen);
+    static const char *const huds[] = {"In the corner of the 16:9 picture", "Centred, where it is at 4:3"};
+    int hud = port_options.widescreen_hud_centred != 0;
+    if (ImGui::Combo("HUD", &hud, huds, 2)) {
+        s.widescreen_hud_centred = port_options.widescreen_hud_centred = hud;
+        changed();
+    }
+    ImGui::EndDisabled();
+    tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
     bool smooth = s.smooth != 0;
     if (ImGui::Checkbox("Smooth scaling", &smooth)) {
         s.smooth = smooth;

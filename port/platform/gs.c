@@ -103,6 +103,16 @@ int port_gs_enabled(void) {
 #define GS_REG_BITBLTBUF 0x50
 #define GS_REG_TRXREG 0x52
 #define GS_REG_TRXDIR 0x53
+#define GS_REG_PRIM 0x00
+#define GS_REG_XYZF2 0x04
+#define GS_REG_XYZ2 0x05
+#define GS_REG_XYZF3 0x0C
+#define GS_REG_XYZ3 0x0D
+#define GS_REG_XYOFFSET_1 0x18
+#define GS_REG_TEX0_1 0x06
+#define GS_REG_FRAME_1 0x4C
+#define GS_REG_FRAME_2 0x4D
+#define GS_REG_TEX0_2 0x07
 
 typedef struct {
     uint32_t left;   /* qwords of the current tag's data still to come */
@@ -113,6 +123,12 @@ typedef struct {
     int ad;          /* PACKED: one of the registers is A+D */
     int eop;         /* the current tag ends its packet */
     int in_packet;   /* between a packet's first tag and its end */
+    /* --widescreen (below): read only while it is on */
+    uint32_t prim;   /* PRIM as this path last set it */
+    uint32_t tbp[2]; /* TEX0_1's and TEX0_2's TBP0, as this path last set them */
+    uint32_t dwords; /* REGLIST: the register writes still to come */
+    int squeezing;   /* the current tag is read register by register, to be squeezed */
+    int widescreen;  /* PORT_WIDESCREEN_: what the path's drawing is, as the game last said */
 } GifPath;
 
 static GifPath gif_paths[4];
@@ -143,12 +159,39 @@ static uint32_t psm_bits(uint32_t psm) {
     }
 }
 
+/* --widescreen (below): the GS addresses that hold a picture of the frame, kept from the packets
+   whether the switch is on or not: what was drawn into (FRAME), and where a local-to-local transfer
+   or a 640-wide upload (the frame the game read back) went. Any other upload there makes it
+   a texture again. Each is its TBP + 1 (0: none). */
+#define FRAME_PICTURES 16
+static uint32_t frame_pictures[FRAME_PICTURES];
+static uint32_t frame_picture_next;
+
+static void frame_picture(uint32_t tbp, int is_picture) {
+    int i;
+
+    for (i = 0; i < FRAME_PICTURES; i++) {
+        if (frame_pictures[i] == tbp + 1) {
+            if (!is_picture) {
+                frame_pictures[i] = 0;
+            }
+            return;
+        }
+    }
+    if (is_picture) {
+        frame_pictures[frame_picture_next++ % FRAME_PICTURES] = tbp + 1;
+    }
+}
+
 static void image_register(uint32_t reg, uint64_t value) {
     if (reg == GS_REG_BITBLTBUF) {
         image_bitbltbuf = value;
     } else if (reg == GS_REG_TRXREG) {
         image_trxreg = value;
     } else if (reg == GS_REG_TRXDIR) {
+        if ((value & 3) != 1) {
+            frame_picture((uint32_t)(image_bitbltbuf >> 32) & 0x3FFF, (value & 3) == 2 || (image_trxreg & 0xFFF) == 640);
+        }
         if ((value & 3) == 0) {
             image_bits_left = (image_trxreg & 0xFFF) * ((image_trxreg >> 32) & 0xFFF) *
                               psm_bits((uint32_t)(image_bitbltbuf >> 56) & 0x3F);
@@ -164,7 +207,106 @@ static void image_data(size_t qwords) {
     image_bits_left = bits < image_bits_left ? image_bits_left - bits : 0;
 }
 
-static void read_gif(int path, const uint64_t *qwords, size_t count) {
+/* ---- Widescreen ------------------------------------------------------------------------------
+   With port_widescreen() on, the game draws its 3D world with a 16:9 field of view into the same
+   640x448 frame, and the window shows that frame at 16:9. Its 2D was laid out for 4:3, so it is
+   squeezed here to three quarters of its width, as the vertices go by, which keeps its shape:
+   - into the middle of the frame (PORT_WIDESCREEN_2D): the menus, the title, the message boxes;
+   - or, for the HUD of the top left, against the frame's left edge, unless the player wants it
+     centred (PORT_WIDESCREEN_HUD_LEFT, port_options.widescreen_hud_centred).
+   What the packet chain (PATH1 and PATH2) draws is what the game last said with an A+D write to
+   PORT_GS_REG_WIDESCREEN (game/widescreen.c; sent only while the switch is on); PATH3 carries nothing
+   but 2D (the menus and the title), so it is squeezed unless told otherwise.
+   Left as they are:
+   - the 3D world (PATH1, and the triangles the game cuts up on the CPU, PATH2), projected wide;
+   - anything drawn while the draw offset is not the 640x448 frame's (XYOFFSET_1 X 0x6C00): copies of
+     the frame into a texture, scrolling textures, the 256x256 draw environment;
+   - a vertex of an untextured primitive at or past the frame's left or right edge: full-screen fades
+     and fills, and panels that reach the edge, stay reaching the 16:9 picture's edge;
+   - a primitive textured with a picture of the frame (TBP0 0 or 0x1180, the two frame buffers, or
+     0x2BC0, where the game copies the frame): the dimmed world behind the menus, the screen effects. 
+   With the switch off nothing here runs, and the packets go to the GS untouched. */
+static uint32_t draw_offset_x = 0x6C00; /* XYOFFSET_1's X as last written, 12.4 */
+
+int port_widescreen(void) {
+    return port_options.widescreen;
+}
+
+/* A mark from the game: PATH1 and PATH2 come in the order of the one packet chain (VU1's packets and
+   VIF1's DIRECT ones), so a mark in either goes for both. */
+static void widescreen_marked(int path, int mode) {
+    if (path == 3) {
+        gif_paths[3].widescreen = mode;
+    } else {
+        gif_paths[1].widescreen = gif_paths[2].widescreen = mode;
+    }
+}
+
+static int widescreen_mode(int path) {
+    int mode = gif_paths[path].widescreen;
+
+    if (mode == PORT_WIDESCREEN_3D && path == 3) {
+        mode = PORT_WIDESCREEN_2D;
+    }
+    return mode;
+}
+
+static int is_frame_picture(uint32_t tbp) {
+    int i;
+
+    for (i = 0; i < FRAME_PICTURES; i++) {
+        if (frame_pictures[i] == tbp + 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* the X of a vertex (12.4, in the low 16 bits of the register's data) for the path's mode */
+static void squeeze_x(int path, uint8_t *data) {
+    GifPath *p = &gif_paths[path];
+    int mode = widescreen_mode(path);
+    int x = data[0] | (data[1] << 8);
+    int anchor = 0x8000;
+
+    if (mode == PORT_WIDESCREEN_3D || (draw_offset_x >> 4) != 0x6C0) {
+        return;
+    }
+    if (!(p->prim & 0x10) && (x <= 0x6C00 || x >= 0x9400)) {
+        return;
+    }
+    if ((p->prim & 0x10) && is_frame_picture(p->tbp[(p->prim >> 9) & 1])) {
+        return;
+    }
+    if (mode == PORT_WIDESCREEN_HUD_LEFT && !port_options.widescreen_hud_centred) {
+        anchor = 0x6C00;
+    }
+    x = anchor + (x - anchor) * 3 / 4;
+    data[0] = (uint8_t)x;
+    data[1] = (uint8_t)(x >> 8);
+}
+
+/* A register write of a PACKED or REGLIST tag: PRIM and the vertices (only while squeezing). */
+static void squeeze_register(int path, uint32_t reg, uint8_t *data) {
+    switch (reg) {
+    case GS_REG_PRIM:
+        gif_paths[path].prim = (uint32_t)(data[0] | (data[1] << 8)) & 0x7FF;
+        break;
+    case GS_REG_TEX0_1:
+    case GS_REG_TEX0_2:
+        gif_paths[path].tbp[reg - GS_REG_TEX0_1] = (uint32_t)(data[0] | (data[1] << 8)) & 0x3FFF;
+        break;
+    case GS_REG_XYZF2:
+    case GS_REG_XYZ2:
+    case GS_REG_XYZF3:
+    case GS_REG_XYZ3:
+        squeeze_x(path, data);
+        break;
+    }
+}
+
+/* squeeze: the qwords may be changed (port_widescreen() is on, and they are a copy) */
+static void read_gif(int path, uint64_t *qwords, size_t count, int squeeze) {
     GifPath *p = &gif_paths[path];
     size_t i = 0;
 
@@ -183,6 +325,10 @@ static void read_gif(int path, const uint64_t *qwords, size_t count) {
             p->regs = qwords[i * 2 + 1];
             p->reg = 0;
             p->ad = 0;
+            p->squeezing = squeeze; /* not from the middle of a tag, when the switch has just been turned on */
+            if (squeeze && ((tag >> 46) & 1)) {
+                p->prim = (uint32_t)(tag >> 47) & 0x7FF; /* PRE */
+            }
             if (p->flg == 0) {
                 p->left = nloop * p->nreg;
                 for (n = 0; n < p->nreg; n++) {
@@ -192,6 +338,7 @@ static void read_gif(int path, const uint64_t *qwords, size_t count) {
                 }
             } else if (p->flg == 1) {
                 p->left = (nloop * p->nreg + 1) / 2;
+                p->dwords = nloop * p->nreg;
             } else {
                 p->left = nloop;
             }
@@ -199,18 +346,44 @@ static void read_gif(int path, const uint64_t *qwords, size_t count) {
             i++;
             continue;
         }
-        if (p->ad) {
+        if (p->ad || (p->squeezing && squeeze && p->flg == 0)) {
             /* the A+D qwords: the one that writes FINISH */
-            if (((p->regs >> (p->reg * 4)) & 0xF) == 0xE) {
+            uint32_t descriptor = (uint32_t)(p->regs >> (p->reg * 4)) & 0xF;
+
+            if (descriptor == 0xE) {
                 uint32_t reg = (uint32_t)(qwords[i * 2 + 1] & 0xFF);
 
                 if (reg == GS_REG_FINISH) {
                     __atomic_fetch_or(EE_HW(volatile uint64_t *, 0x12001000), (uint64_t)GS_CSR_FINISH, __ATOMIC_RELEASE);
                 } else if (reg >= GS_REG_BITBLTBUF && reg <= GS_REG_TRXDIR) {
                     image_register(reg, qwords[i * 2]);
+                } else if (reg == GS_REG_FRAME_1 || reg == GS_REG_FRAME_2) {
+                    frame_picture((uint32_t)(qwords[i * 2] & 0x1FF) << 5, 1);
+                } else if (reg == GS_REG_XYOFFSET_1) {
+                    draw_offset_x = (uint32_t)(qwords[i * 2] & 0xFFFF);
+                } else if (p->squeezing && squeeze) {
+                    if (reg == PORT_GS_REG_WIDESCREEN) {
+                        widescreen_marked(path, (int)(qwords[i * 2] & 0xFF));
+                    } else {
+                        squeeze_register(path, reg, (uint8_t *)&qwords[i * 2]);
+                    }
                 }
+            } else if (p->squeezing && squeeze) {
+                /* PACKED: XYZF2 and XYZ2 have X in the low 16 bits as the registers do; the rest
+                   (XYZF3 and XYZ3 among them) are the register's data as it is */
+                squeeze_register(path, descriptor, (uint8_t *)&qwords[i * 2]);
             }
             p->reg = p->reg + 1 == p->nreg ? 0 : p->reg + 1;
+            p->left--;
+            i++;
+        } else if (p->squeezing && squeeze && p->flg == 1) {
+            /* REGLIST: two registers a qword (the last qword's second is padding when the count is odd) */
+            int half;
+
+            for (half = 0; half < 2 && p->dwords != 0; half++, p->dwords--) {
+                squeeze_register(path, (uint32_t)(p->regs >> (p->reg * 4)) & 0xF, (uint8_t *)&qwords[i * 2 + half]);
+                p->reg = p->reg + 1 == p->nreg ? 0 : p->reg + 1;
+            }
             p->left--;
             i++;
         } else {
@@ -235,7 +408,25 @@ int port_gs_path_idle(int path) {
 void port_gs_gif(int path, const void *data, size_t bytes) {
     uint64_t start = port_options.stats ? port_ticks() : 0;
 
-    read_gif(path, data, bytes / 16);
+    if (port_options.widescreen) {
+        /* a copy, squeezed (the game's packets are its own, and may be sent again) */
+        static uint64_t *copy;
+        static size_t copy_bytes;
+
+        if (copy_bytes < bytes) {
+            free(copy);
+            copy_bytes = bytes * 2;
+            copy = malloc(copy_bytes);
+            if (copy == NULL) {
+                PORT_FATAL("out of memory");
+            }
+        }
+        memcpy(copy, data, bytes);
+        data = copy;
+        read_gif(path, copy, bytes / 16, 1);
+    } else {
+        read_gif(path, (uint64_t *)data, bytes / 16, 0);
+    }
 #ifdef KF4_HAVE_PARALLEL_GS
     if (backend) {
         port_gs_backend_gif(path, data, bytes);
@@ -349,6 +540,9 @@ void port_gs_state(PortStateIo *io) {
     uint64_t backend_bytes = 0;
 
     PORT_STATE(io, gif_paths);
+    PORT_STATE(io, draw_offset_x);
+    PORT_STATE(io, frame_pictures);
+    PORT_STATE(io, frame_picture_next);
     PORT_STATE(io, image_bitbltbuf);
     PORT_STATE(io, image_trxreg);
     PORT_STATE(io, image_bits_left);

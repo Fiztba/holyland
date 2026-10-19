@@ -25,6 +25,8 @@ typedef struct {
     int progressive;
     int anti_blur;
     int adapt_width;
+    int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
+    int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
     /* Audio */
     int volume;            /* 0 to 100 */
     int mute;
