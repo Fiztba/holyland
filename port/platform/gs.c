@@ -20,6 +20,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/savestate.h"
+#include "port/settings.h"
 
 #ifdef KF4_HAVE_PARALLEL_GS
 int port_gs_backend_open(void);
@@ -86,7 +87,11 @@ static void open_backend(void *unused) {
            native GS does not want, and whose threads submit to the queue unlocked by the other device) */
         have_native = gsn_open(NULL);
         if (have_native) {
+            char path[1100];
+
             gsn_set_scale(port_options.native_scale);
+            snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
+            gsn_pipeline_cache(path);
         }
     }
     backend = have_gs || have_native;

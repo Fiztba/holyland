@@ -32,9 +32,15 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 #include "context.hpp"
 #include "device.hpp"
@@ -2718,6 +2724,47 @@ void ring_start() {
     std::thread(ring_thread).detach();
 }
 
+// ---- The pipeline cache -------------------------------------------------------------------------
+// Vulkan pipelines are made as draws first need them (a second or two of them in the first minutes of
+// play, when the driver has not kept them itself: a new build, or its own cache full). The pipeline
+// cache is kept in the data folder (gsn_pipeline_cache), and written again a while after it grows.
+std::string cache_path;
+size_t cache_saved_size;
+uint32_t cache_vsyncs;
+
+void save_pipeline_cache() {
+    size_t size = gs->device->get_pipeline_cache_size();
+    if (size == 0 || size == cache_saved_size) {
+        return;
+    }
+    std::vector<uint8_t> data(size);
+    if (!gs->device->get_pipeline_cache_data(data.data(), size)) {
+        return;
+    }
+    // (into a file beside it, then in its place: never half written)
+    std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\"));
+#ifdef _WIN32
+    _mkdir(folder.c_str());
+#else
+    mkdir(folder.c_str(), 0755);
+#endif
+    std::string temp = cache_path + ".new";
+    FILE *f = fopen(temp.c_str(), "wb");
+    if (!f) {
+        return;
+    }
+    bool written = fwrite(data.data(), 1, size, f) == size;
+    written = fclose(f) == 0 && written;
+    if (written) {
+        remove(cache_path.c_str());
+        written = rename(temp.c_str(), cache_path.c_str()) == 0;
+    }
+    if (written) {
+        cache_saved_size = size;
+        GSN_LOG(1, "pipeline cache written: %zu bytes\n", size);
+    }
+}
+
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
@@ -2781,6 +2828,23 @@ extern "C" void gsn_gif(int path, const void *data, size_t bytes) {
 
 extern "C" void gsn_wait(void) {
     ring_idle();
+}
+
+extern "C" void gsn_pipeline_cache(const char *path) {
+    ring_idle();
+    std::vector<uint8_t> data;
+    if (FILE *f = fopen(path, "rb")) {
+        uint8_t buffer[65536];
+        size_t n;
+        while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) {
+            data.insert(data.end(), buffer, buffer + n);
+        }
+        fclose(f);
+    }
+    // (made again empty if the file is not this driver's, or damaged)
+    gs->device->init_pipeline_cache(data.empty() ? nullptr : data.data(), data.size());
+    cache_path = path;
+    cache_saved_size = gs->device->get_pipeline_cache_size();
 }
 
 extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
@@ -2860,6 +2924,10 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     }
     submit(false);
     gs->device->next_frame_context();
+    // the pipeline cache, written when it has grown (looked at every ten seconds)
+    if (!cache_path.empty() && ++cache_vsyncs % 600 == 0) {
+        save_pipeline_cache();
+    }
     gsn_stats.targets = gs->targets.size();
     gsn_stats.textures = gs->textures.size();
     gsn_stats.pool_images = decoded_pool.size();

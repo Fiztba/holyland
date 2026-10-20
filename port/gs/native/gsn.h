@@ -24,6 +24,9 @@ int gsn_open(void *shared_context);
 void gsn_gif(int path, const void *data, size_t bytes);
 /* Waits until the native GS's thread has done all that was sent to it */
 void gsn_wait(void);
+/* The Vulkan pipeline cache kept in this file: read now (if it is there and this driver's), and
+   written again from time to time when pipelines have been made */
+void gsn_pipeline_cache(const char *path);
 void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
    into frame when want_pixels (1 if there is one) */
