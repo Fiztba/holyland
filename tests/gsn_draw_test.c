@@ -121,9 +121,11 @@ static uint64_t gif_tag(uint32_t nloop, int eop, uint32_t flg, uint32_t nreg) {
     return (uint64_t)nloop | (uint64_t)(eop ? 1 : 0) << 15 | (uint64_t)flg << 58 | (uint64_t)(nreg & 15) << 60;
 }
 
-/* The packet so far, to both renderers */
+/* The packet so far, to both renderers (or to neither: test_shared_memory's GSN_SKIP) */
+static int discard;
+
 static void send_both(int path) {
-    if (packet_qw) {
+    if (packet_qw && !discard) {
         port_gs_backend_gif(path, packet, packet_qw * 16);
         gsn_gif(path, packet, packet_qw * 16);
     }
@@ -954,6 +956,174 @@ static int run_case(int index, const Case *k) {
     return ok;
 }
 
+/* ---- Buffers that share memory ----------------------------------------------------------------
+   As the scrolling textures on map 000 do: 128-wide CT32 buffers a page row (32 lines) or more apart,
+   drawn into, uploaded into (in their own shape and in others: T8 and T4 pages over them), copied
+   between and read as textures, in a random order. The memory under them must then be the same in
+   both, byte for byte: the draws are flat sprites and textured sprites a texel a pixel, which both
+   draw exactly. This is what the native GS's targets that grow upwards, take uploads at an offset,
+   keep the pages an upload does not write, and go back to VRAM by page have to get right. */
+#define SHARED_PAGE 0x180  /* the memory's first page: 8 rows of two pages, 128 x 256 as CT32 */
+#define SHARED_PAGES 16
+#define SCRATCH_PAGE 0x100 /* a 128 x 128 CT32 buffer the textures are drawn into */
+#define CLUT_PAGE 0x140
+
+static void shared_frame(uint32_t page) {
+    ad(R_TEXFLUSH, 0);
+    ad(R_PRMODECONT, 1);
+    ad(R_DTHE, 0);
+    ad(R_FRAME_1, (uint64_t)page | (uint64_t)2 << 16);
+    ad(R_ZBUF_1, (uint64_t)0x60 | (uint64_t)1 << 32); /* (not written) */
+    ad(R_TEST_1, 1u << 16 | 1u << 17);               /* Z test ALWAYS */
+    ad(R_SCISSOR_1, (uint64_t)127 << 16 | (uint64_t)127 << 48);
+    ad(R_XYOFFSET_1, 0);
+}
+
+static void shared_sprite(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t u0, uint32_t v0) {
+    ad(R_UV, (uint64_t)(u0 << 4) | (uint64_t)(v0 << 4) << 16);
+    ad(R_XYZ2, (uint64_t)(x0 << 4) | (uint64_t)(y0 << 4) << 16);
+    ad(R_UV, (uint64_t)((u0 + x1 - x0) << 4) | (uint64_t)((v0 + y1 - y0) << 4) << 16);
+    ad(R_XYZ2, (uint64_t)(x1 << 4) | (uint64_t)(y1 << 4) << 16);
+}
+
+static void shared_end(void) {
+    put_ad(0);
+    put_qword(gif_tag(0, 1, 0, 1), 0xE);
+    send_both(2);
+}
+
+/* a rectangle of 1..128 x 1..128 within the 128 x 128 a buffer is drawn in */
+static void shared_rect(uint32_t *x0, uint32_t *y0, uint32_t *x1, uint32_t *y1) {
+    *x0 = rnd(128);
+    *y0 = rnd(128);
+    *x1 = *x0 + 1 + rnd(128 - *x0);
+    *y1 = *y0 + 1 + rnd(128 - *y0);
+}
+
+static int test_shared_memory(int rounds, uint32_t seed) {
+    static const char *names[] = {"draw", "upload", "pages", "read", "copy"};
+    int bad = 0;
+    uint32_t sx0, sy0, sx1, sy1;
+    int only = getenv("GSN_ROUND") ? atoi(getenv("GSN_ROUND")) : -1;
+    /* GSN_SKIP=n,m: those operations of the round left out (to narrow a difference down) */
+    const char *skip = getenv("GSN_SKIP");
+
+    for (int round = 0; round < rounds; round++) {
+        char ops[512] = "";
+        /* each round from its own seed, and from memory made the same in both */
+        rng_state = (0x5851F42D4C957F2Dull ^ ((uint64_t)seed << 32 | (uint32_t)round)) * 0xD1B54A32D192ED03ull | 1;
+        for (int w = 0; w < 4; w++) {
+            rng();
+        }
+        if (only >= 0 && round != only) {
+            continue;
+        }
+        fill_random(data_buf, 128 * 256 * 4);
+        upload(SHARED_PAGE * 32, 2, GSN_PSMCT32, 0, 0, 128, 256, data_buf);
+        fill_random(data_buf, 128 * 128 * 4);
+        upload(SCRATCH_PAGE * 32, 2, GSN_PSMCT32, 0, 0, 128, 128, data_buf);
+        fill_random(data_buf, 16 * 16 * 4);
+        upload(CLUT_PAGE * 32, 1, GSN_PSMCT32, 0, 0, 16, 16, data_buf);
+        int nops = 2 + (int)rnd(14);
+        for (int o = 0; o < nops; o++) {
+            uint32_t op = rnd(5), row = rnd(5); /* the buffer: this many page rows into the memory */
+            discard = 0;
+            if (skip) {
+                char tag[16];
+                snprintf(tag, sizeof(tag), ",%d,", o);
+                char list[256];
+                snprintf(list, sizeof(list), ",%s,", skip);
+                discard = strstr(list, tag) != NULL; /* (made, so that the rest are as they were, but not sent) */
+            }
+            uint32_t page = SHARED_PAGE + row * 2;
+            char one[48];
+            snprintf(one, sizeof(one), "%s%s%s %u", o ? ", " : "", discard ? "-" : "", names[op], row);
+            if (strlen(ops) + strlen(one) < sizeof(ops)) {
+                strcat(ops, one);
+            }
+            switch (op) {
+            case 0: /* flat sprites */
+                shared_frame(page);
+                ad(R_PRIM, 6);
+                for (uint32_t n = 1 + rnd(3); n > 0; n--) {
+                    shared_rect(&sx0, &sy0, &sx1, &sy1);
+                    ad(R_RGBAQ, (uint64_t)(uint32_t)rng() | (uint64_t)0x3F800000 << 32);
+                    shared_sprite(sx0, sy0, sx1, sy1, 0, 0);
+                }
+                shared_end();
+                break;
+            case 1: /* an upload in the buffer's own shape */
+                shared_rect(&sx0, &sy0, &sx1, &sy1);
+                /* (whole qwords: the padding of a last qword is left out of what the GS defines) */
+                sx0 &= ~3u;
+                sx1 = sx0 + 4 + ((sx1 - sx0) & ~3u);
+                sx1 = sx1 > 128 ? 128 : sx1;
+                fill_random(data_buf, 128 * 128 * 4);
+                upload(page * 32, 2, GSN_PSMCT32, sx0, sy0, sx1 - sx0, sy1 - sy0, data_buf);
+                break;
+            case 2: { /* whole pages of a texture in another format over the memory */
+                uint32_t t4 = rnd(2), n = 1 + rnd(2), ph = t4 ? 128 : 64;
+                uint32_t first = SHARED_PAGE + rnd(SHARED_PAGES - n + 1);
+                fill_random(data_buf, 128 * ph * n);
+                upload(first * 32, 2, t4 ? GSN_PSMT4 : GSN_PSMT8, 0, 0, 128, ph * n, data_buf);
+                break;
+            }
+            case 3: { /* the buffer read as a texture (CT32, or T8 through the CLUT), a texel a pixel */
+                uint32_t t8 = rnd(2);
+                shared_frame(SCRATCH_PAGE);
+                ad(R_TEX1_1, 1);   /* LCM, nearest */
+                ad(R_CLAMP_1, 0);  /* REPEAT */
+                ad(R_TEX0_1, (uint64_t)(page * 32) | (uint64_t)2 << 14 | (uint64_t)(t8 ? GSN_PSMT8 : GSN_PSMCT32) << 20 |
+                                 (uint64_t)7 << 26 | (uint64_t)(t8 ? 6 : 7) << 30 | (uint64_t)1 << 34 | (uint64_t)1 << 35 |
+                                 (uint64_t)(CLUT_PAGE * 32) << 37 | (uint64_t)1 << 61);
+                ad(R_PRIM, 6 | 1 << 4 | 1 << 8);
+                ad(R_RGBAQ, 0x80808080u | (uint64_t)0x3F800000 << 32);
+                shared_rect(&sx0, &sy0, &sx1, &sy1);
+                shared_sprite(sx0, sy0, sx1, sy1, rnd(128), rnd(t8 ? 64 : 128));
+                shared_end();
+                break;
+            }
+            default: { /* a local-to-local copy from another buffer of the memory */
+                uint32_t from_row = rnd(5), from = SHARED_PAGE + from_row * 2;
+                shared_rect(&sx0, &sy0, &sx1, &sy1);
+                if ((from_row > row ? from_row - row : row - from_row) * 32 < sy1 - sy0) {
+                    from = page; /* (rectangles that overlap in memory: the GS's pixel order would matter) */
+                }
+                ad(R_BITBLTBUF, (uint64_t)(from * 32) | (uint64_t)2 << 16 | (uint64_t)(page * 32) << 32 | (uint64_t)2 << 48);
+                ad(R_TRXPOS, (uint64_t)sx0 | (uint64_t)sy0 << 16 | (uint64_t)sx0 << 32 | (uint64_t)sy0 << 48);
+                ad(R_TRXREG, (uint64_t)(sx1 - sx0) | (uint64_t)(sy1 - sy0) << 32);
+                ad(R_TRXDIR, 2);
+                shared_end();
+                break;
+            }
+            }
+        }
+        discard = 0;
+        parallel_refresh(SHARED_PAGE * 32, 2, GSN_PSMCT32, 128, 256);
+        parallel_refresh(SCRATCH_PAGE * 32, 2, GSN_PSMCT32, 128, 128);
+        const uint8_t *a = port_gs_backend_vram(), *b = gsn_vram();
+        int differ = memcmp(a + SHARED_PAGE * 8192, b + SHARED_PAGE * 8192, SHARED_PAGES * 8192) != 0 ||
+                     memcmp(a + SCRATCH_PAGE * 8192, b + SCRATCH_PAGE * 8192, 4 * 8192) != 0;
+        if (differ || getenv("GSN_ALL")) {
+            printf("%s shared memory round %d: %s\n", differ ? "FAIL" : "ok", round, ops);
+        }
+        if (differ) {
+            bad++;
+            if (getenv("GSN_VERBOSE")) {
+                for (uint32_t pg = 0; pg < SHARED_PAGES; pg++) {
+                    if (memcmp(a + (SHARED_PAGE + pg) * 8192, b + (SHARED_PAGE + pg) * 8192, 8192)) {
+                        printf("  page %u (row %u) differs\n", pg, pg / 2);
+                    }
+                }
+                if (memcmp(a + SCRATCH_PAGE * 8192, b + SCRATCH_PAGE * 8192, 4 * 8192)) {
+                    printf("  the scratch buffer differs\n");
+                }
+            }
+        }
+    }
+    return bad;
+}
+
 /* gsn_draw_test [cases [seed]] */
 int main(int argc, char **argv) {
     clock_t start = clock();
@@ -999,6 +1169,11 @@ int main(int argc, char **argv) {
         if (!run_case(i, &k)) {
             failures++;
         }
+    }
+    if (only < 0 && !getenv("GSN_NO_SHARED")) {
+        int bad = test_shared_memory(cases, seed);
+        printf("%d of %d shared memory rounds %s\n", bad, cases, bad ? "FAILED" : "failed");
+        failures += bad;
     }
     printf("%d of %d cases %s, %.1f s\n", failures, cases, failures ? "FAILED" : "failed", (double)(clock() - start) / CLOCKS_PER_SEC);
     return failures ? 1 : 0;
