@@ -49,6 +49,11 @@ timings of the step 2 path, and how ico-pc built its renderer.
   drawn 4/3 of that across (rounded up: 2, 3, 4, 6 for 1x to 4x), so the 16:9 picture has square
   pixels instead of 640 columns stretched; the native GS keeps a scale per axis, and nothing else
   changes (the 2D squeeze and the GS's coordinates stay `--widescreen`'s). Live from the overlay.
+  `--native-msaa 2|4|8`: the 3D (every draw with a Z buffer) drawn into multisampled images, resolved
+  wherever the target is read (textures, the shader's blending, write-backs, frame copies, the
+  scanout), the 2D drawn with Z snapped to whole pixels so the menus and movies are unchanged; the
+  alpha test's cut-outs and draws without Z stay as they are. Combines with the two above; about 5%
+  (4x) to 10% (8x) at `--native-scale 4`, nothing measurable at 1x. PLAN.md's opt-in table.
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
   packets through) has a high-level C version that gives the interpreter's results bit for bit
   (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
@@ -233,7 +238,7 @@ for one person working steadily with agents; they will move.
 | **2. Native GS, 3D from the interpreter** | the VU1 interpreter still runs on the CPU, and its GIF output is drawn natively: the whole game on the native GS. Fog, mipmaps, contexts, DATE/FBA, the frame copies and feedback passes (integer arithmetic where they feed back), the scroll targets, the reflection, the wobble | the diff over the 64 map tour views and the step 2 checklist's spots; feedback passes exact over 600 frames | 3-5 weeks |
 | **3. VU1 on the GPU** | the programs as vertex shaders, 0x000 first (86% of draws), then 0x280, 0x5A0, 0x700; the interpreter stays as a test mode | per program: shader output against the interpreter's (X/Y within 1/16 pixel, Z and ST within a small relative error, colour within 1, ADC exact); then the picture diff | 3-5 weeks |
 | **4. Default and speed** | batching, pipeline cache, frame pacing; native becomes the default; paraLLEl-GS stays behind `--renderer gs` for comparison (and its LGPL question is settled before release builds ship it) | timings: the busiest maps at full speed with room to spare | 1-2 weeks |
-| **5. Improvements, opt-in** | resolution scale (scene targets scaled, work buffers kept at PS2 size), a native widescreen frame instead of the 2D squeeze (done as square pixels across: `--native-widescreen`), MSAA, higher frame rates with interpolation | each off by default; with all off, the picture equals stage 4's | open-ended |
+| **5. Improvements, opt-in** | resolution scale (scene targets scaled, work buffers kept at PS2 size), a native widescreen frame instead of the 2D squeeze (done as square pixels across: `--native-widescreen`), MSAA (done for the 3D: `--native-msaa`), higher frame rates with interpolation | each off by default; with all off, the picture equals stage 4's | open-ended |
 
 In all, roughly 3 to 4 months to a native default (stages 0-4), then improvements as wanted. ico-pc's
 renderer grew to about 155,000 lines with a long tail of driver fixes; KF4 needs less (fewer GS
