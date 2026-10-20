@@ -222,6 +222,7 @@ typedef struct {
     uint64_t worst_vblank;    /* where */
 } PortRendererDiff;
 extern PortRendererDiff port_renderer_diff;
+void port_gs_print_stats(void);
 
 #define PORT_GS_FRAME_PIXELS (1024u * 1024u)
 typedef struct {

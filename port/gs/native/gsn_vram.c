@@ -476,13 +476,14 @@ void gsn_vram_read_image(const uint8_t *vram, uint64_t bitbltbuf, uint64_t trxpo
         for (uint32_t i = 0; i < w; i++) {
             uint32_t v = pixel_get(vram, l.kind, pixel_nibble(&l, (sx + i) & 2047, (sy + j) & 2047));
 
-            if ((at + (size_t)bits / 4) > size * 2) {
+            if (at >= size * 2) {
                 return;
             }
             if (bits == 4) {
                 out[at >> 1] |= (uint8_t)(v << ((at & 1) * 4));
             } else {
-                for (int b = 0; b < bits / 8; b++) {
+                /* a 24-bit pixel can straddle the end of the last qword asked for */
+                for (int b = 0; b < bits / 8 && (at >> 1) + (size_t)b < size; b++) {
                     out[(at >> 1) + (size_t)b] = (uint8_t)(v >> (b * 8));
                 }
             }

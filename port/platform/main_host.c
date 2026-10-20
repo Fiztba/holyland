@@ -394,6 +394,7 @@ static void print_stats(void) {
        every run */
     port_dmac_call(drained, NULL);
     fprintf(stderr, "[stats] wall %.3f s\n", port_wall_seconds() - start_seconds);
+    port_gs_print_stats();
     if (port_options.renderer == PORT_RENDERER_BOTH) {
         const PortRendererDiff *d = &port_renderer_diff;
 

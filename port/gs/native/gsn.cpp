@@ -26,7 +26,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <deque>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "context.hpp"
@@ -181,6 +183,7 @@ struct Texture {
     ImageHandle image;
     uint32_t page_lo[7], page_count[7];
     uint64_t decoded; // the VRAM write count when it was decoded
+    uint64_t hash;    // of the bytes it was decoded from (texture_hash)
     uint64_t used;
 };
 
@@ -392,6 +395,7 @@ void write_back(Target &t) {
         return;
     }
     gsn_stats.writebacks++;
+    GSN_LOG(1, "write back target bp %#x bw %u psm %#x %ux%u\n", t.bp, t.bw, t.psm, t.width, t.height);
     const uint8_t *pixels = read_image(*t.image, 0, 0, t.width, t.height);
     for (uint32_t y = 0; y < t.height; y++) {
         for (uint32_t x = 0; x < t.width; x++) {
@@ -559,10 +563,47 @@ bool texture_current(const Texture &tex) {
     return true;
 }
 
+// The bytes of a texture's pages: textures that take turns in the same VRAM (much of what the game
+// uploads each frame) are decoded once each and found again by this
+uint64_t texture_hash(const Texture &tex) {
+    uint64_t h = 0x9E3779B97F4A7C15ull ^ (uint64_t(tex.tbp) << 32 | tex.tbw << 24 | tex.psm << 16 | tex.tw << 8 | tex.th);
+    for (uint32_t l = 0; l < tex.levels; l++) {
+        h ^= uint64_t(tex.mip_tbp[l]) << 20 | tex.mip_tbw[l];
+        for (uint32_t i = 0; i < tex.page_count[l]; i++) {
+            const uint64_t *p = reinterpret_cast<const uint64_t *>(gs->vram.data()) + size_t((tex.page_lo[l] + i) % vram_pages) * 1024;
+            for (int k = 0; k < 1024; k += 4) {
+                h = (h ^ p[k]) * 0x100000001B3ull + (p[k + 1] ^ (p[k + 2] << 1) ^ (p[k + 3] << 2));
+                h ^= h >> 29;
+            }
+        }
+    }
+    return h;
+}
+
+// Decoded textures by the hash of what they were decoded from
+std::unordered_map<uint64_t, ImageHandle> decoded_pool;
+std::deque<uint64_t> decoded_order;
+
 void decode_texture(Texture &tex) {
     VkFormat format = raw_format(tex.psm);
-    if (!tex.image) {
-        tex.image = make_image(1u << tex.tw, 1u << tex.th, format, tex.levels, false);
+    uint64_t hash = texture_hash(tex);
+    tex.decoded = gs->vram_writes;
+    if (tex.image && hash == tex.hash) {
+        return; // pages written, but not the bytes this texture has
+    }
+    tex.hash = hash;
+    auto found = decoded_pool.find(hash);
+    if (found != decoded_pool.end()) {
+        tex.image = found->second;
+        gsn_stats.texture_reuses++;
+        return;
+    }
+    tex.image = make_image(1u << tex.tw, 1u << tex.th, format, tex.levels, false);
+    decoded_pool[hash] = tex.image;
+    decoded_order.push_back(hash);
+    if (decoded_order.size() > 2048) {
+        decoded_pool.erase(decoded_order.front());
+        decoded_order.pop_front();
     }
     end_pass();
     transfer_barrier();
@@ -586,7 +627,6 @@ void decode_texture(Texture &tex) {
         gsn_stats.texture_bytes += size_t(w) * h;
     }
     transfer_barrier();
-    tex.decoded = gs->vram_writes;
     gsn_stats.texture_decodes++;
 }
 
@@ -892,7 +932,19 @@ void flush_batch() {
         gs->verts.clear();
         return;
     }
-    bool need_depth = !(ztst == 1 && zmsk);
+    // A draw whose Z test always passes and that writes no Z needs no Z buffer: ZTST ALWAYS, or GEQUAL
+    // with every vertex at the format's largest Z (the scrolling textures each frame, drawn with the
+    // main Z buffer at their own width, which would otherwise make it a target of another shape)
+    bool any_zwrite = !zmsk && (!ate || atst != 0 || afail == 2);
+    bool always_passes = ztst == 1;
+    if (ztst == 2) {
+        uint32_t zmin = UINT32_MAX;
+        for (const Vtx &v : gs->verts) {
+            zmin = std::min(zmin, v.z);
+        }
+        always_passes = std::min(zmin, depth_max(zpsm)) == depth_max(zpsm);
+    }
+    bool need_depth = !(always_passes && !any_zwrite);
     Target *color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
     Target *depth = nullptr;
     if (need_depth) {

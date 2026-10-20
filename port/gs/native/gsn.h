@@ -49,7 +49,7 @@ int gsn_restore(uint32_t type, const void *data, size_t size);
 /* What the last frames cost and did (--stats, the overlay) */
 typedef struct {
     uint64_t draws, primitives, passes, texture_decodes, texture_bytes, target_copies, writebacks,
-        uploads, upload_bytes, shader_blends;
+        uploads, upload_bytes, shader_blends, texture_reuses;
 } GsnStats;
 extern GsnStats gsn_stats;
 

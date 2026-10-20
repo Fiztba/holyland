@@ -643,6 +643,23 @@ void port_gs_post_vsync(void) {
     port_dmac_post_vsync();
 }
 
+/* --stats: what the native GS did */
+void port_gs_print_stats(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        const GsnStats *s = &gsn_stats;
+
+        fprintf(stderr,
+                "[stats] native GS: %llu draws, %llu triangles, %llu render passes, %llu shader blends, %llu target "
+                "copies, %llu write-backs; %llu textures decoded (%llu texels), %llu found again; %llu uploads (%.1f MB)\n",
+                (unsigned long long)s->draws, (unsigned long long)s->primitives, (unsigned long long)s->passes,
+                (unsigned long long)s->shader_blends, (unsigned long long)s->target_copies,
+                (unsigned long long)s->writebacks, (unsigned long long)s->texture_decodes,
+                (unsigned long long)s->texture_bytes, (unsigned long long)s->texture_reuses, (unsigned long long)s->uploads, (double)s->upload_bytes / 1048576.0);
+    }
+#endif
+}
+
 /* The GS's state as capture records (port/debug/gs_capture.c): paraLLEl-GS's, or the native GS's */
 void port_gs_state_records(void (*emit)(uint32_t type, const void *data, size_t size)) {
 #ifdef KF4_HAVE_PARALLEL_GS
