@@ -325,7 +325,7 @@ static inline unsigned mac_zsuo(unsigned mac) {
 /* vu1.c: sends the GIF packet at a VU1 address down PATH1, as XGKICK does (outside the run's DAZ). */
 void vu1_xgkick(uint32_t address);
 
-/* vu1_hle.c: 1 when micro memory holds the game's program 0x000 (checked when it is decoded). */
+/* vu1_hle.c: 1 when micro memory holds a program the HLE knows (checked when it is decoded). */
 int vu1_hle_recognise(const uint8_t *micro);
 
 /* vu1_hle.c: runs program 0x000 from pc (0x000, MSCAL, or 0x11F, MSCNT) on the state and data
@@ -337,5 +337,8 @@ uint64_t vu1_hle_run(Vu1State *vu, uint8_t *data, uint32_t pc, uint32_t top);
 /* vu1_hle_5a0.c: program 0x5A0 (MSCAL 0x5A0, MSCNT 0x640), as vu1_hle_run; vu1_hle.c calls them */
 int vu1_hle_5a0_recognise(const uint8_t *micro);
 uint64_t vu1_hle_5a0_run(Vu1State *vu, uint8_t *data, uint32_t pc, uint32_t top);
+/* vu1_hle_700.c: program 0x700 (MSCAL 0x700, MSCNT 0x7D0), as vu1_hle_run for 0x000 */
+int vu1_hle_700_recognise(const uint8_t *micro);
+uint64_t vu1_hle_700_run(Vu1State *vu, uint8_t *data, uint32_t pc, uint32_t top);
 
 #endif

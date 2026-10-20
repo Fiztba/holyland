@@ -98,6 +98,7 @@ int vu1_hle_recognise(const uint8_t *micro) {
     }
     recognised = hash == PROGRAM_HASH;
     others |= vu1_hle_5a0_recognise(micro);
+    others |= vu1_hle_700_recognise(micro);
     return recognised || others;
 }
 
@@ -553,6 +554,9 @@ uint64_t vu1_hle_run(Vu1State *vu, uint8_t *data, uint32_t pc, uint32_t top) {
 
     if (pc == 0x5A0 || pc == 0x640) {
         return vu1_hle_5a0_run(vu, data, pc, top);
+    }
+    if (pc >= 0x700) {
+        return vu1_hle_700_run(vu, data, pc, top);
     }
     if (!recognised || (pc != 0 && pc != ENTRY_MSCNT) || vu->q_pending || vu->p_pending || vu->flag_count || vu->flags_read) {
         return 0;
