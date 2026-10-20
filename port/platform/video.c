@@ -181,6 +181,9 @@ void port_video_init(void) {
             port_overlay_init(window, NULL);
             return;
         }
+        if (window == NULL) {
+            fprintf(stderr, "[video] no Vulkan window: %s\n", SDL_GetError());
+        }
         fprintf(stderr, "[video] the Vulkan presenter did not start: the window is SDL_Renderer's\n");
         if (window != NULL) {
             SDL_DestroyWindow(window);
