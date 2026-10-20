@@ -676,6 +676,8 @@ void port_gs_print_stats(void) {
                 "write-backs %.3f, decodes %.3f), vsync %.3f s\n",
                 s->ns_gif / 1e9, s->ns_flush / 1e9, s->ns_upload / 1e9, s->ns_swizzle / 1e9, s->ns_sync / 1e9,
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
+        fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
+                s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
         fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
                 (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,
                 (unsigned long long)s->pool_mb, (unsigned long long)s->upload_copies);

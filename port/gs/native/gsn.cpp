@@ -1240,6 +1240,9 @@ void flush_batch() {
         }
     }
 
+    gsn_stats.ns_draw_setup += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                            std::chrono::steady_clock::now() - timer.start).count());
+    Timer record(gsn_stats.ns_draw_record);
     begin_pass(color, depth);
     CommandBuffer &c = cmd();
     c.set_opaque_state();
