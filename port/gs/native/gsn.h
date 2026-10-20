@@ -61,6 +61,8 @@ typedef struct {
         uploads, upload_bytes, shader_blends, texture_reuses, uploads_skipped;
     /* nanoseconds spent (nested: a flush inside the GIF's time counts in both) */
     uint64_t ns_gif, ns_flush, ns_upload, ns_writeback, ns_decode, ns_vsync, ns_swizzle, ns_sync;
+    /* what it holds now: render targets, textures, decoded images (and their MB), uploads kept */
+    uint64_t targets, textures, pool_images, pool_mb, upload_copies;
 } GsnStats;
 extern GsnStats gsn_stats;
 

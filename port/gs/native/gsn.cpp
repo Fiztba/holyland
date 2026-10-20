@@ -613,6 +613,13 @@ uint64_t texture_hash(const Texture &tex) {
 // Decoded textures by the hash of what they were decoded from
 std::unordered_map<uint64_t, ImageHandle> decoded_pool;
 std::deque<uint64_t> decoded_order;
+size_t decoded_pool_bytes;
+
+size_t image_bytes(const Image &image) {
+    size_t texel = image.get_format() == VK_FORMAT_R8_UINT ? 1 : image.get_format() == VK_FORMAT_R16_UINT ? 2 : 4;
+    // levels after the first add a third at most
+    return size_t(image.get_width()) * image.get_height() * texel * (image.get_create_info().levels > 1 ? 4 : 3) / 3;
+}
 
 void decode_texture(Texture &tex) {
     Timer timer(gsn_stats.ns_decode);
@@ -632,8 +639,14 @@ void decode_texture(Texture &tex) {
     tex.image = make_image(1u << tex.tw, 1u << tex.th, format, tex.levels, false);
     decoded_pool[hash] = tex.image;
     decoded_order.push_back(hash);
-    if (decoded_order.size() > 2048) {
-        decoded_pool.erase(decoded_order.front());
+    decoded_pool_bytes += image_bytes(*tex.image);
+    // the oldest let go beyond 2,048 of them or 256 MB (a texture in use keeps its image all the same)
+    while (decoded_order.size() > 2048 || decoded_pool_bytes > (256u << 20)) {
+        auto oldest = decoded_pool.find(decoded_order.front());
+        if (oldest != decoded_pool.end()) {
+            decoded_pool_bytes -= image_bytes(*oldest->second);
+            decoded_pool.erase(oldest);
+        }
         decoded_order.pop_front();
     }
     end_pass();
@@ -2135,6 +2148,11 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
     }
     submit(false);
     gs->device->next_frame_context();
+    gsn_stats.targets = gs->targets.size();
+    gsn_stats.textures = gs->textures.size();
+    gsn_stats.pool_images = decoded_pool.size();
+    gsn_stats.pool_mb = decoded_pool_bytes >> 20;
+    gsn_stats.upload_copies = upload_copies.size();
     if (wanted_scale != target_scale) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         for (auto &t : gs->targets) {
