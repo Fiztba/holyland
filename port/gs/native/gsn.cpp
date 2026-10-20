@@ -496,27 +496,36 @@ void write_back(Target &t) {
     }
     uint32_t s = t.scale, pw = t.width * s;
     const uint8_t *pixels = read_image(*t.image, 0, row0 * s, pw, (row1 - row0) * s);
+    // (a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into the same
+    // buffer wrote it: the whole word goes back either way)
+    uint32_t psm = t.depth ? t.psm : psm_layout(t.psm);
+    std::vector<uint32_t> row(t.width);
     for (uint32_t y = row0; y < row1; y++) {
-        for (uint32_t x = 0; x < t.width; x++) {
-            if (by_page && !t.dirty_pages[(y / ph) * t.bw + x / 64]) {
-                x += 63; // (a page is 64 pixels across)
-                continue;
+        // a run of pixels to go back: the row, or a page's part of it
+        for (uint32_t x = 0; x < t.width;) {
+            uint32_t n = t.width - x;
+            if (by_page) {
+                n = std::min(n, 64u);
+                if (!t.dirty_pages[(y / ph) * t.bw + x / 64]) {
+                    x += n;
+                    continue;
+                }
             }
-            uint32_t v;
-            // a scaled target: the pixel in the middle of the GS pixel's
-            memcpy(&v, pixels + (size_t((y - row0) * s + s / 2) * pw + x * s + s / 2) * 4, 4);
-            if (t.depth) {
-                float f;
-                memcpy(&f, &v, 4);
-                double z = double(f) / depth_scale(t.psm) + 0.5;
-                v = z >= double(depth_max(t.psm)) ? depth_max(t.psm) : uint32_t(z);
-                gsn_vram_write(gs->vram.data(), t.psm, t.bp, t.bw, x, y, v);
-            } else {
-                // a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into
-                // the same buffer wrote it: the whole word goes back either way
-                uint32_t psm = psm_layout(t.psm);
-                gsn_vram_write(gs->vram.data(), psm, t.bp, t.bw, x, y, target_pixel_to_vram(v, psm));
+            for (uint32_t i = 0; i < n; i++) {
+                uint32_t v;
+                // a scaled target: the pixel in the middle of the GS pixel's
+                memcpy(&v, pixels + (size_t((y - row0) * s + s / 2) * pw + (x + i) * s + s / 2) * 4, 4);
+                if (t.depth) {
+                    float f;
+                    memcpy(&f, &v, 4);
+                    double z = double(f) / depth_scale(t.psm) + 0.5;
+                    row[i] = z >= double(depth_max(t.psm)) ? depth_max(t.psm) : uint32_t(z);
+                } else {
+                    row[i] = target_pixel_to_vram(v, psm);
+                }
             }
+            gsn_vram_write_row(gs->vram.data(), psm, t.bp, t.bw, x, y, n, row.data());
+            x += n;
         }
     }
     done_reading();
@@ -548,10 +557,12 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     uint32_t s = t.scale, pw = w * s, ph = h * s;
     uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0 * s), int32_t(y0 * s), 0},
                                                                {pw, ph, 1}, pw, ph, {aspect, 0, 0, 1}));
+    std::vector<uint32_t> row(w);
     for (uint32_t y = 0; y < h; y++) {
+        // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
+        gsn_vram_read_row(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0, y0 + y, w, row.data());
         for (uint32_t x = 0; x < w; x++) {
-            // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
-            uint32_t v = gsn_vram_read(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0 + x, y0 + y);
+            uint32_t v = row[x];
             if (t.depth) {
                 float f = float(double(v) * depth_scale(t.psm));
                 memcpy(&v, &f, 4);
@@ -838,16 +849,19 @@ void decode_texture(Texture &tex) {
         uint32_t w = std::max(1u, (1u << tex.tw) >> l), h = std::max(1u, (1u << tex.th) >> l);
         void *out = cmd().update_image(*tex.image, {0, 0, 0}, {w, h, 1}, w, h, {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1});
         uint32_t bp = tex.mip_tbp[l], bw = tex.mip_tbw[l];
+        std::vector<uint32_t> row(w);
         for (uint32_t y = 0; y < h; y++) {
+            size_t at = size_t(y) * w;
+            if (format == VK_FORMAT_R32_UINT) {
+                gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, static_cast<uint32_t *>(out) + at);
+                continue;
+            }
+            gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, row.data());
             for (uint32_t x = 0; x < w; x++) {
-                uint32_t v = gsn_vram_read(gs->vram.data(), tex.psm, bp, bw, x, y);
-                size_t i = size_t(y) * w + x;
                 if (format == VK_FORMAT_R8_UINT) {
-                    static_cast<uint8_t *>(out)[i] = uint8_t(v);
-                } else if (format == VK_FORMAT_R16_UINT) {
-                    static_cast<uint16_t *>(out)[i] = uint16_t(v);
+                    static_cast<uint8_t *>(out)[at + x] = uint8_t(row[x]);
                 } else {
-                    static_cast<uint32_t *>(out)[i] = v;
+                    static_cast<uint16_t *>(out)[at + x] = uint16_t(row[x]);
                 }
             }
         }

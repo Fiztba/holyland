@@ -274,6 +274,26 @@ void gsn_vram_write(uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint3
     pixel_put(vram, l.kind, pixel_nibble(&l, x, y), value);
 }
 
+void gsn_vram_read_row(const uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y,
+                       uint32_t count, uint32_t *out) {
+    Layout l;
+
+    layout_init(&l, psm, bp, bw);
+    for (uint32_t i = 0; i < count; i++) {
+        out[i] = pixel_get(vram, l.kind, pixel_nibble(&l, x + i, y));
+    }
+}
+
+void gsn_vram_write_row(uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y,
+                        uint32_t count, const uint32_t *in) {
+    Layout l;
+
+    layout_init(&l, psm, bp, bw);
+    for (uint32_t i = 0; i < count; i++) {
+        pixel_put(vram, l.kind, pixel_nibble(&l, x + i, y), in[i]);
+    }
+}
+
 uint32_t gsn_vram_offset(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, int *nibble) {
     Layout l;
     uint32_t nib;
