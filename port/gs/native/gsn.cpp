@@ -1318,7 +1318,9 @@ void flush_batch() {
             fail_z = zwrite;
             break;
         case 3: // RGB_ONLY
-            fail_mask = write_mask & 7;
+            // (a 16-bit frame buffer's alpha bit is written all the same, as paraLLEl-GS has it, but
+            // for ATST NEVER, which paraLLEl-GS makes a write mask of RGB)
+            fail_mask = dst16 && atst != 0 ? write_mask : write_mask & 7;
             break;
         }
         if (fail_mask || fail_z) {
