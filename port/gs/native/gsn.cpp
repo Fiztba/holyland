@@ -1875,7 +1875,7 @@ void rect_pages(const TransferRect &r, uint32_t *lo, uint32_t *count) {
     buffer_pages(r.bp, r.bw, r.psm, r.x + r.w, r.y + r.h, lo, count);
 }
 
-std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool *rgb_only = nullptr);
 
 // The rectangle has just been written in the CPU's VRAM: the targets over it, the same shape as it
 // (row_alias: perhaps starting some rows apart), take it too; those in another shape that were kept
@@ -1982,19 +1982,25 @@ PendingUpload pending_upload;
 struct PageImage {
     std::vector<uint32_t> pages;
     std::vector<uint8_t> bytes; // 8 KB a page, in pages' order
+    bool rgb_only;              // a 24-bit upload: the pages' words' low three bytes only
 };
 std::unordered_map<uint64_t, PageImage> page_images;
 std::deque<uint64_t> page_image_order;
 size_t page_image_bytes;
 
 // The pages an upload fills entirely, in order; empty if it does not fill whole pages (a format that
-// owns only part of each word, or a rectangle not on page bounds)
-std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
+// owns only part of each word, or a rectangle not on page bounds). With rgb_only, a 24-bit upload
+// counts as filling its pages too (and *rgb_only says it is one).
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool *rgb_only) {
     std::vector<uint32_t> pages;
     uint32_t dbp = bits(bitbltbuf, 32, 14), dbw = bits(bitbltbuf, 48, 6), psm = bits(bitbltbuf, 56, 6);
     uint32_t x = bits(trxpos, 32, 11), y = bits(trxpos, 48, 11), w = bits(trxreg, 0, 12), h = bits(trxreg, 32, 12);
     bool full = psm == GSN_PSMCT32 || psm == GSN_PSMCT16 || psm == GSN_PSMCT16S || psm == GSN_PSMT8 ||
                 psm == GSN_PSMT4 || psm == GSN_PSMZ32 || psm == GSN_PSMZ16 || psm == GSN_PSMZ16S;
+    if (rgb_only) {
+        *rgb_only = psm == GSN_PSMCT24 || psm == GSN_PSMZ24;
+        full = full || *rgb_only;
+    }
     uint32_t pw = page_width(psm), ph = page_height(psm);
     if (psm == GSN_PSMZ16 || psm == GSN_PSMZ16S) {
         ph = 64;
@@ -2063,15 +2069,31 @@ void upload_done() {
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
 void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
-    std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg);
+    bool rgb_only = false;
+    std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
     uint64_t key = upload_hash(p, data, size);
     auto found = pages.empty() ? page_images.end() : page_images.find(key);
-    if (found != page_images.end() && found->second.pages == pages) {
+    if (found != page_images.end() && found->second.pages == pages && found->second.rgb_only == rgb_only) {
         bool changed = false;
         for (size_t i = 0; i < pages.size(); i++) {
             uint8_t *dst = gs->vram.data() + size_t(pages[i]) * 8192;
             const uint8_t *src = found->second.bytes.data() + i * 8192;
-            if (memcmp(dst, src, 8192) != 0) {
+            if (rgb_only) {
+                // (the words' top bytes are not the upload's: they stay)
+                bool page_changed = false;
+                for (size_t k = 0; k < 8192; k += 4) {
+                    uint32_t d, s;
+                    memcpy(&d, dst + k, 4);
+                    memcpy(&s, src + k, 4);
+                    uint32_t v = (d & 0xFF000000u) | (s & 0xFFFFFFu);
+                    page_changed |= v != d;
+                    memcpy(dst + k, &v, 4);
+                }
+                if (page_changed) {
+                    pages_written(pages[i], 1);
+                    changed = true;
+                }
+            } else if (memcmp(dst, src, 8192) != 0) {
                 memcpy(dst, src, 8192);
                 pages_written(pages[i], 1);
                 changed = true;
@@ -2086,6 +2108,7 @@ void complete_upload(const uint8_t *data, size_t size) {
     if (!pages.empty()) {
         PageImage image;
         image.pages = pages;
+        image.rgb_only = rgb_only;
         image.bytes.resize(pages.size() * 8192);
         for (size_t i = 0; i < pages.size(); i++) {
             memcpy(image.bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
