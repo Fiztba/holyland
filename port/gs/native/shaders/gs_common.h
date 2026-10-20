@@ -49,3 +49,4 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_PABE 0x10u
 #define GSN_M_SCANMSK_SHIFT 5u // SCANMSK: 2 draws no even lines, 3 no odd ones
 #define GSN_M_SCALE_SHIFT 7u   // the target's pixels a GS pixel is across (--native-scale), 3 bits
+#define GSN_M_ZCLAMP 0x400u    // a vertex's Z is beyond the format's: gs_zclamp.frag writes the depth

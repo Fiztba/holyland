@@ -170,6 +170,7 @@ enum : uint32_t {
 };
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
+    M_ZCLAMP = 0x400,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -225,6 +226,7 @@ struct Gs {
     bool own_context = false;
     Device *device = nullptr;
     Program *program = nullptr;
+    Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
@@ -432,10 +434,13 @@ void write_back(Target &t) {
                 memcpy(&f, &v, 4);
                 double z = double(f) / depth_scale(t.psm) + 0.5;
                 v = z >= double(depth_max(t.psm)) ? depth_max(t.psm) : uint32_t(z);
+                gsn_vram_write(gs->vram.data(), t.psm, t.bp, t.bw, x, y, v);
             } else {
-                v = target_pixel_to_vram(v, t.psm);
+                // a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into
+                // the same buffer wrote it: the whole word goes back either way
+                uint32_t psm = psm_layout(t.psm);
+                gsn_vram_write(gs->vram.data(), psm, t.bp, t.bw, x, y, target_pixel_to_vram(v, psm));
             }
-            gsn_vram_write(gs->vram.data(), t.psm, t.bp, t.bw, x, y, v);
         }
     }
     done_reading();
@@ -463,7 +468,8 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
                                                                {pw, ph, 1}, pw, ph, {aspect, 0, 0, 1}));
     for (uint32_t y = 0; y < h; y++) {
         for (uint32_t x = 0; x < w; x++) {
-            uint32_t v = gsn_vram_read(gs->vram.data(), t.psm, t.bp, t.bw, x0 + x, y0 + y);
+            // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
+            uint32_t v = gsn_vram_read(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0 + x, y0 + y);
             if (t.depth) {
                 float f = float(double(v) * depth_scale(t.psm));
                 memcpy(&v, &f, 4);
@@ -537,6 +543,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         ImageHandle image = make_image(new_w * t->scale, new_h * t->scale, format, 1, true);
         end_pass();
         Target old = *t;
+        t->psm = psm;
         t->image = image;
         t->width = new_w;
         t->height = new_h;
@@ -983,6 +990,39 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
     return *gs->snapshot;
 }
 
+// Whether two triangles' insides overlap, so that a pixel could be drawn by both: no edge of either
+// has the other wholly on its far side (the separating axis test). Triangles that share an edge, or
+// only touch, do not; nor does one with no area, which draws nothing. (In doubles: exact for 12.4.)
+bool triangles_overlap(const Vtx *a, const Vtx *b) {
+    float ax0 = std::min(a[0].x, std::min(a[1].x, a[2].x)), ax1 = std::max(a[0].x, std::max(a[1].x, a[2].x));
+    float bx0 = std::min(b[0].x, std::min(b[1].x, b[2].x)), bx1 = std::max(b[0].x, std::max(b[1].x, b[2].x));
+    float ay0 = std::min(a[0].y, std::min(a[1].y, a[2].y)), ay1 = std::max(a[0].y, std::max(a[1].y, a[2].y));
+    float by0 = std::min(b[0].y, std::min(b[1].y, b[2].y)), by1 = std::max(b[0].y, std::max(b[1].y, b[2].y));
+    if (ax1 <= bx0 || bx1 <= ax0 || ay1 <= by0 || by1 <= ay0) {
+        return false;
+    }
+    for (int k = 0; k < 2; k++) {
+        const Vtx *p = k ? b : a, *q = k ? a : b;
+        double area = (double(p[1].x) - p[0].x) * (double(p[2].y) - p[0].y) -
+                      (double(p[1].y) - p[0].y) * (double(p[2].x) - p[0].x);
+        if (area == 0) {
+            return false;
+        }
+        for (int i = 0; i < 3; i++) {
+            const Vtx &e0 = p[i], &e1 = p[(i + 1) % 3];
+            bool apart = true;
+            for (int j = 0; j < 3 && apart; j++) {
+                double side = (double(e1.x) - e0.x) * (double(q[j].y) - e0.y) - (double(e1.y) - e0.y) * (double(q[j].x) - e0.x);
+                apart = (area > 0 ? side : -side) <= 0;
+            }
+            if (apart) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 uint32_t effective_prim() {
     uint32_t prim = uint32_t(gs->reg[R_PRIM]) & 0x7FF;
     if (!(gs->reg[R_PRMODECONT] & 1)) {
@@ -1109,6 +1149,7 @@ void flush_batch() {
     bool reads_target = false; // a feedback pass: the texture is a render target
     uint32_t clut[256];
     bool want_clut = false;
+    uint32_t tex_alpha_max = 255; // the largest alpha a texel can have, where it is known
     if (tme) {
         uint32_t tbp = bits(tex0, 0, 14), tbw = bits(tex0, 14, 6), tpsm = bits(tex0, 20, 6);
         uint32_t tw = std::min(bits(tex0, 26, 4), 10u), th = std::min(bits(tex0, 30, 4), 10u);
@@ -1184,6 +1225,10 @@ void flush_batch() {
             if (src == SRC_CLUT) {
                 clut_colours(tex0, clut);
                 want_clut = true;
+                tex_alpha_max = 0;
+                for (uint32_t i = 0; i < 256; i++) {
+                    tex_alpha_max = std::max(tex_alpha_max, clut[i] >> 24);
+                }
             }
         }
     }
@@ -1208,9 +1253,29 @@ void flush_batch() {
     bool fixed = fixed_blend(ba, bb, bc, bd, fix, &blend);
     bool exact = fixed && (blend.premul != 0 || ba == bb);
     bool sprite = gs->batch_sprites;
+    // Blending by an As above 0x80 (2.0): Vulkan's blend factor (and the alpha out that stands for it)
+    // stops at 1.0. The largest As the batch can make, from its vertices and what is known of the
+    // texture's alpha (a CLUT's entries, TEXA for 24 and 16-bit texels):
+    uint32_t as_max = 0;
+    for (const Vtx &v : gs->verts) {
+        as_max = std::max(as_max, v.rgba >> 24);
+    }
+    if (tme && bits(tex0, 34, 1)) { // TCC
+        uint32_t tpsm = bits(tex0, 20, 6);
+        if (tpsm == GSN_PSMCT24) {
+            tex_alpha_max = bits(gs->reg[R_TEXA], 0, 8);
+        } else if (psm_is_16(tpsm)) {
+            tex_alpha_max = std::max(bits(gs->reg[R_TEXA], 0, 8), bits(gs->reg[R_TEXA], 32, 8));
+        }
+        uint32_t tfx = bits(tex0, 35, 2);
+        as_max = tfx == 0 ? std::min(255u, (as_max * tex_alpha_max) >> 7)
+                 : tfx == 2 ? std::min(255u, as_max + tex_alpha_max)
+                            : tex_alpha_max;
+    }
+    bool as_over = bc == 0 && !blend.premul && as_max > 0x80;
     if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || dst16 ||
                                          (push.misc & (M_PABE)) || !(push.misc & M_COLCLAMP) ||
-                                         (bc == 0 && (push.misc & M_FBA)) || !fixed))) {
+                                         (bc == 0 && (push.misc & M_FBA)) || as_over || !fixed))) {
         shader_blend = true;
     }
     if (shader_blend) {
@@ -1224,70 +1289,26 @@ void flush_batch() {
     } else if (abe && bc == 0 && !(ba == bb)) {
         push.flags |= F_ALPHA_FACTOR;
     }
-    const Image *dest_copy = nullptr;
-    if (shader_blend || reads_own_target) {
-        // a draw that reads its own target reads anywhere in it; one that blends, only its own pixels
-        int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
-        for (const Vtx &v : gs->verts) {
-            box[0] = std::min(box[0], int32_t(floorf(v.x)) - 1);
-            box[1] = std::min(box[1], int32_t(floorf(v.y)) - 1);
-            box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
-            box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
-        }
-        dest_copy = &snapshot_of(*color, reads_own_target ? nullptr : box);
-        if (reads_own_target) {
-            target_view = &dest_copy->get_view();
-        }
-    }
-
     gsn_stats.ns_draw_setup += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                             std::chrono::steady_clock::now() - timer.start).count());
     Timer record(gsn_stats.ns_draw_record);
-    begin_pass(color, depth);
-    CommandBuffer &c = cmd();
-    c.set_opaque_state();
-    c.set_program(gs->program);
-    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    c.set_cull_mode(VK_CULL_MODE_NONE);
     uint32_t s = color->scale;
-    push.misc |= s << M_SCALE_SHIFT;
-    VkViewport vp = {0.0f, 0.0f, float(color->width * s), float(color->height * s), 0.0f, 1.0f};
-    c.set_viewport(vp);
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
         return;
     }
-    c.set_scissor({{int32_t(sx0 * s), int32_t(sy0 * s)}, {(x1 - sx0) * s, (y1 - sy0) * s}});
-    c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
-    c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
-    c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-    uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
-    if (want_clut) {
-        memcpy(clut_data, clut, sizeof(clut));
-    } else {
-        memset(clut_data, 0, 1024);
-    }
-
-    // depth
+    push.misc |= s << M_SCALE_SHIFT;
+    // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
+    // and keeps each pixel's within the format, where clamping the vertices would tilt the plane
+    bool zclamp = false;
     if (depth) {
-        c.set_depth_test(true, !zmsk);
-        c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : ztst == 3 ? VK_COMPARE_OP_GREATER
-                                                                                   : VK_COMPARE_OP_ALWAYS);
-    } else {
-        c.set_depth_test(false, false);
+        for (const Vtx &v : gs->verts) {
+            zclamp = zclamp || v.z > depth_max(zpsm);
+        }
     }
-    // blending
-    if (abe && !shader_blend) {
-        float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
-        c.set_blend_enable(true);
-        c.set_blend_constants(constants);
-        bool alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
-        c.set_blend_factors(blend.src, alpha_factor ? VK_BLEND_FACTOR_CONSTANT_ALPHA : VK_BLEND_FACTOR_ONE, blend.dst,
-                            VK_BLEND_FACTOR_ZERO);
-        c.set_blend_op(blend.op, VK_BLEND_OP_ADD);
-    } else {
-        c.set_blend_enable(false);
+    if (zclamp) {
+        push.misc |= M_ZCLAMP;
     }
     uint32_t write_mask = 0;
     for (int i = 0; i < 4; i++) {
@@ -1298,16 +1319,6 @@ void flush_batch() {
     if (fpsm == GSN_PSMCT24) {
         write_mask &= 7;
     }
-
-    // the vertices
-    size_t bytes = gs->verts.size() * sizeof(Vtx);
-    void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
-    memcpy(vdata, gs->verts.data(), bytes);
-    c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
-    c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
-    c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
-    c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
-    c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
 
     // the alpha test: pixels that pass are written whole; those that fail, as AFAIL says
     struct Pass {
@@ -1335,23 +1346,118 @@ void flush_batch() {
             fail_z = zwrite;
             break;
         case 3: // RGB_ONLY
-            fail_mask = write_mask & 7;
+            // (a 16-bit frame buffer's alpha bit is written all the same, as paraLLEl-GS has it)
+            fail_mask = dst16 ? write_mask : write_mask & 7;
             break;
         }
         if (fail_mask || fail_z) {
             passes[npasses++] = {atst == 0 ? 0u : 2u, fail_mask, fail_z};
         }
     }
-    for (int i = 0; i < npasses; i++) {
-        Push p = push;
-        p.flags |= passes[i].select << F_PASS_SHIFT;
-        c.set_color_write_mask(passes[i].mask);
-        if (depth) {
-            c.set_depth_test(true, passes[i].zwrite);
+
+    // A draw that reads the target it draws into (shader blending, DATE) reads a copy taken before it,
+    // and one drawn in two passes (the alpha test's) draws every passing pixel before any failing one.
+    // Either way, primitives of the batch that overlap would not see each other as the GS's do, one
+    // after another: such a batch is drawn in runs of primitives that do not overlap, each with its
+    // own copy and passes. (A draw whose texture is its own target reads one copy, taken before the
+    // batch, for both.)
+    std::vector<uint32_t> runs(1, 0);
+    if ((shader_blend || npasses > 1) && !reads_own_target) {
+        uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
+        for (uint32_t t = 1; t < triangles; t++) {
+            // (a long run is cut anyway: the test is against each triangle of the run)
+            bool cut = t - start >= 256;
+            for (uint32_t u = start; u < t && !cut; u++) {
+                cut = triangles_overlap(&gs->verts[t * 3], &gs->verts[u * 3]);
+            }
+            if (cut) {
+                runs.push_back(t * 3);
+                start = t;
+            }
         }
-        c.push_constants(&p, 0, sizeof(p));
-        c.draw(uint32_t(gs->verts.size()));
-        gsn_stats.draws++;
+    }
+    runs.push_back(uint32_t(gs->verts.size()));
+
+    for (size_t r = 0; r + 1 < runs.size(); r++) {
+        uint32_t first = runs[r], count = runs[r + 1] - runs[r];
+        const Image *dest_copy = nullptr;
+        if (shader_blend || reads_own_target) {
+            // a draw that reads its own target reads anywhere in it; one that blends, only its own pixels
+            int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+            for (uint32_t i = first; i < first + count; i++) {
+                const Vtx &v = gs->verts[i];
+                box[0] = std::min(box[0], int32_t(floorf(v.x)) - 1);
+                box[1] = std::min(box[1], int32_t(floorf(v.y)) - 1);
+                box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
+                box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
+            }
+            dest_copy = &snapshot_of(*color, reads_own_target ? nullptr : box);
+            if (reads_own_target) {
+                target_view = &dest_copy->get_view();
+            }
+        }
+
+        begin_pass(color, depth);
+        CommandBuffer &c = cmd();
+        c.set_opaque_state();
+        c.set_program(zclamp ? gs->program_zclamp : gs->program);
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
+        VkViewport vp = {0.0f, 0.0f, float(color->width * s), float(color->height * s), 0.0f, 1.0f};
+        c.set_viewport(vp);
+        c.set_scissor({{int32_t(sx0 * s), int32_t(sy0 * s)}, {(x1 - sx0) * s, (y1 - sy0) * s}});
+        c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
+        c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
+        c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
+        if (want_clut) {
+            memcpy(clut_data, clut, sizeof(clut));
+        } else {
+            memset(clut_data, 0, 1024);
+        }
+
+        // depth
+        if (depth) {
+            c.set_depth_test(true, !zmsk);
+            c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : ztst == 3 ? VK_COMPARE_OP_GREATER
+                                                                                       : VK_COMPARE_OP_ALWAYS);
+        } else {
+            c.set_depth_test(false, false);
+        }
+        // blending
+        if (abe && !shader_blend) {
+            float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
+            c.set_blend_enable(true);
+            c.set_blend_constants(constants);
+            bool alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
+            c.set_blend_factors(blend.src, alpha_factor ? VK_BLEND_FACTOR_CONSTANT_ALPHA : VK_BLEND_FACTOR_ONE, blend.dst,
+                                VK_BLEND_FACTOR_ZERO);
+            c.set_blend_op(blend.op, VK_BLEND_OP_ADD);
+        } else {
+            c.set_blend_enable(false);
+        }
+
+        // the vertices
+        size_t bytes = size_t(count) * sizeof(Vtx);
+        void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
+        memcpy(vdata, gs->verts.data() + first, bytes);
+        c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
+        c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
+        c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
+        c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
+        c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
+
+        for (int i = 0; i < npasses; i++) {
+            Push p = push;
+            p.flags |= passes[i].select << F_PASS_SHIFT;
+            c.set_color_write_mask(passes[i].mask);
+            if (depth) {
+                c.set_depth_test(true, passes[i].zwrite);
+            }
+            c.push_constants(&p, 0, sizeof(p));
+            c.draw(count);
+            gsn_stats.draws++;
+        }
     }
     color->dirty = true;
     if (depth && zwrite) {
@@ -1392,9 +1498,44 @@ void add_triangle(const QVertex &a, const QVertex &b, const QVertex &c) {
     gs->verts.push_back(make_vtx(c, prim, c));
 }
 
+// A UV sprite filtered bilinearly whose texture coordinates run with its position (a texel a pixel,
+// within a sixteenth) and land on texels' middles, or a sixteenth past them on a size not a power of
+// two: the GS's DDA steps a hair short and never leaves the middle, so the filter has nothing to
+// blend (paraLLEl-GS's set-up turns such a sprite's filter to nearest). Its UV is put on the middles
+// exactly, where bilinear filtering is nearest. (Signed: a corner's UV can come out under 0.)
+bool snap_sprite_uv(const QVertex &a, const QVertex &b, uint32_t prim, int32_t *snapped_a, int32_t *snapped_b) {
+    uint32_t ctxt = (prim >> 9) & 1;
+    if (!((prim >> 8) & 1) || !bits(gs->reg[R_TEX1_1 + ctxt], 5, 1)) {
+        return false; // STQ, or nearest already
+    }
+    uint64_t offset = gs->reg[R_XYOFFSET_1 + ctxt];
+    int32_t pa[2] = {int32_t(a.x) - int32_t(bits(offset, 0, 16)), int32_t(a.y) - int32_t(bits(offset, 32, 16))};
+    int32_t pb[2] = {int32_t(b.x) - int32_t(bits(offset, 0, 16)), int32_t(b.y) - int32_t(bits(offset, 32, 16))};
+    int32_t ua[2] = {int32_t(a.u), int32_t(a.v)}, ub[2] = {int32_t(b.u), int32_t(b.v)};
+    int32_t lo[2];
+    for (int i = 0; i < 2; i++) {
+        int32_t d0 = ua[i] - pa[i], d1 = ub[i] - pb[i];
+        int32_t mn = std::min(d0, d1), mx = std::max(d0, d1);
+        int32_t dist = std::abs(pb[i] - pa[i]);
+        bool npot = (dist & (dist - 1)) != 0;
+        bool centre = (mn & 15) == 8, next = (mx & 15) == 9 && npot;
+        if (!(centre || next) || mx - mn > 1) {
+            return false;
+        }
+        lo[i] = (mn & ~15) | 8; // the middle
+    }
+    for (int i = 0; i < 2; i++) {
+        snapped_a[i] = pa[i] + lo[i];
+        snapped_b[i] = pb[i] + lo[i];
+    }
+    return true;
+}
+
 void add_sprite(const QVertex &a, const QVertex &b) {
     uint32_t prim = gs->batch_prim;
     gs->batch_sprites = true;
+    int32_t ua[2], ub[2];
+    bool snapped = snap_sprite_uv(a, b, prim, ua, ub);
     // a sprite's colour, Z and fog are its second vertex's; its texture coordinates run corner to corner
     QVertex c[4] = {b, b, b, b};
     c[0].x = a.x, c[0].y = a.y, c[0].s = a.s, c[0].t = a.t, c[0].u = a.u, c[0].v = a.v;
@@ -1404,6 +1545,13 @@ void add_sprite(const QVertex &a, const QVertex &b) {
     Vtx v[4];
     for (int i = 0; i < 4; i++) {
         v[i] = make_vtx(c[i], prim, b);
+    }
+    if (snapped) {
+        // corners 0 and 2 have a's U, 0 and 1 a's V
+        for (int i = 0; i < 4; i++) {
+            v[i].s = float(i == 0 || i == 2 ? ua[0] : ub[0]) / 16.0f;
+            v[i].t = float(i == 0 || i == 1 ? ua[1] : ub[1]) / 16.0f;
+        }
     }
     gs->verts.push_back(v[0]);
     gs->verts.push_back(v[1]);
@@ -2105,6 +2253,8 @@ void make_program() {
     Shader *vs = gs->device->request_shader(gsn_spv_gs_vert, sizeof(gsn_spv_gs_vert), &vert);
     Shader *fs = gs->device->request_shader(gsn_spv_gs_frag, sizeof(gsn_spv_gs_frag), &frag);
     gs->program = gs->device->request_program(vs, fs);
+    Shader *fs_zclamp = gs->device->request_shader(gsn_spv_gs_zclamp_frag, sizeof(gsn_spv_gs_zclamp_frag), &frag);
+    gs->program_zclamp = gs->device->request_program(vs, fs_zclamp);
 }
 
 void reset_gs() {
