@@ -194,9 +194,11 @@ struct Target {
     ImageHandle image;
     bool depth;
     bool dirty; // newer than the CPU's VRAM (somewhere: dirty_pages says where)
+    bool stale; // a page of it is another target's (stale_pages: shares_pages below)
     // which of its pages (target_pages' order: rows of bw pages, when the target is `regular`) are
     // newer than the CPU's VRAM; the others hold what VRAM does
     std::vector<uint8_t> dirty_pages;
+    std::vector<uint8_t> stale_pages;
     uint64_t used;
     // --native-msaa: the multisampled image the 3D is drawn into (made when first drawn so), and which
     // of the two has pixels the other does not (msaa_settle, msaa_ready)
@@ -621,6 +623,8 @@ void clear_dirty(Target &t) {
     target_pages(t, &lo, &count);
     t.dirty_pages.assign(count, 0);
     t.dirty = false;
+    t.stale_pages.assign(count, 0);
+    t.stale = false;
 }
 
 // Rows y0..y1-1 of the target drawn into (all of it, for one that is not regular)
@@ -830,12 +834,16 @@ void drop_target(Target *t) {
 
 // Everything on the GPU that is newer than these pages of the CPU's VRAM, written back; and the
 // targets over them that are not `keep`, gone (they are about to be written in another shape)
-void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop) {
+bool shares_pages(const Target &a, const Target &b);
+
+// (sharer: targets that share pages with it (shares_pages) are left alone: take_pages moves pages
+// between them)
+void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer = nullptr) {
     for (size_t i = 0; i < gs->targets.size();) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
         target_pages(*t, &tlo, &tcount);
-        if (t != keep && pages_overlap(lo, count, tlo, tcount)) {
+        if (t != keep && pages_overlap(lo, count, tlo, tcount) && !(sharer && shares_pages(*sharer, *t))) {
             if (drop) {
                 write_back(*t);
                 drop_target(t);
@@ -892,10 +900,98 @@ void carry_dirty(Target &t, const Target &old, uint32_t rows) {
     }
 }
 
+// Two Z buffers in the same format at the same address, at different widths (map 008 and 009's
+// reflection draws with the main Z buffer's address at 256 wide, each frame): a page is the same 8 KB
+// in both, its pixels in the same places, so a page moves from one to the other as a GPU copy of its
+// 64-pixel-wide rectangle, where going back through VRAM cost two read-backs a frame. A page is the
+// other's (stale) in all of them but one.
+bool shares_pages(const Target &a, const Target &b) {
+    return &a != &b && a.depth && b.depth && psm_layout(a.psm) == psm_layout(b.psm) && regular(a) && regular(b) &&
+           a.sx == b.sx && a.sy == b.sy && a.bw != b.bw; // (scaled alike: a page is the same rectangle)
+}
+
+// Pages of t from the targets it shares pages with, where they are theirs: copied in on the GPU, and
+// theirs no more (only_stale: just the pages t has as stale; any of those nobody has, from VRAM)
+void take_pages(Target &t, bool only_stale) {
+    uint32_t tlo, tcount;
+    target_pages(t, &tlo, &tcount);
+    uint32_t tph = page_height(t.psm), sx = t.sx, sy = t.sy;
+    struct Copy {
+        Target *from;
+        uint32_t k_from, k_to;
+    };
+    std::vector<Copy> copies;
+    for (auto &o : gs->targets) {
+        if (!shares_pages(t, *o)) {
+            continue;
+        }
+        uint32_t olo, ocount;
+        target_pages(*o, &olo, &ocount);
+        if (!pages_overlap(tlo, tcount, olo, ocount)) {
+            continue;
+        }
+        for (uint32_t k = 0; k < tcount; k++) {
+            if (only_stale && !t.stale_pages[k]) {
+                continue;
+            }
+            uint32_t ko = ((tlo + k) % vram_pages + vram_pages - olo) % vram_pages;
+            if (ko >= ocount || o->stale_pages[ko]) {
+                continue;
+            }
+            copies.push_back({o.get(), ko, k});
+            t.dirty_pages[k] = o->dirty_pages[ko];
+            t.stale_pages[k] = 0;
+            o->dirty_pages[ko] = 0;
+            o->stale_pages[ko] = 1;
+            o->stale = true;
+        }
+    }
+    if (!copies.empty()) {
+        // --native-msaa: the pages move between the targets' images, so each is made current first
+        // (Z resolved: its first sample), and t's multisampled image is behind it after
+        msaa_settle(t);
+        for (const Copy &c : copies) {
+            msaa_settle(*c.from);
+        }
+        end_pass();
+        transfer_barrier();
+        const VkImageSubresourceLayers z = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+        for (const Copy &c : copies) {
+            Target &o = *c.from;
+            uint32_t oph = page_height(o.psm);
+            uint32_t ox = (c.k_from % o.bw) * 64, oy = (c.k_from / o.bw) * oph;
+            uint32_t tx = (c.k_to % t.bw) * 64, ty = (c.k_to / t.bw) * tph;
+            uint32_t h = std::min(std::min(oph, o.height - oy), t.height - ty);
+            cmd().copy_image(*t.image, *o.image, {int32_t(tx * sx), int32_t(ty * sy), 0}, {int32_t(ox * sx), int32_t(oy * sy), 0},
+                             {64 * sx, h * sy, 1}, z, z);
+        }
+        transfer_barrier();
+        msaa_image_written(t);
+        gsn_stats.target_copies += copies.size();
+        for (auto &o : gs->targets) {
+            o->dirty = std::find(o->dirty_pages.begin(), o->dirty_pages.end(), 1) != o->dirty_pages.end();
+        }
+    }
+    // pages nobody else has: VRAM's
+    if (only_stale) {
+        for (uint32_t k = 0; k < tcount; k++) {
+            if (t.stale_pages[k]) {
+                t.stale_pages[k] = 0;
+                load_target_rect(t, (k % t.bw) * 64, (k / t.bw) * tph, 64, tph);
+            }
+        }
+    }
+    t.stale = false;
+    t.dirty = std::find(t.dirty_pages.begin(), t.dirty_pages.end(), 1) != t.dirty_pages.end();
+}
+
 // The target that is the buffer at bp, at least width x height, made (from the CPU's VRAM) or grown
 Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
     Target *t = find_target(bp, bw, psm);
     width = std::max(width, std::max(bw, 1u) * 64);
+    if (t && t->stale) {
+        take_pages(*t, true);
+    }
     if (t && t->width >= width && t->height >= height) {
         t->psm = psm;
         t->used = gs->tick;
@@ -960,13 +1056,14 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         // what the old target did not cover comes from VRAM: the whole of it first, then the old on top
         uint32_t lo, count;
         target_pages(*t, &lo, &count);
-        claim_pages(lo, count, t, true);
+        claim_pages(lo, count, t, true, t);
         load_target_rect(*t, 0, 0, new_w, new_h);
         VkImageAspectFlags aspect = t->depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
         cmd().copy_image(*t->image, *old.image, {0, 0, 0}, {0, 0, 0}, {old.width * t->sx, old.height * t->sy, 1},
                          {aspect, 0, 0, 1}, {aspect, 0, 0, 1});
         transfer_barrier();
         carry_dirty(*t, old, 0);
+        take_pages(*t, false);
         t->used = gs->tick;
         return t;
     }
@@ -986,9 +1083,11 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
     uint32_t lo, count;
     target_pages(*made, &lo, &count);
     // whatever else was drawn over these pages goes back to VRAM first, and stops being a target
-    claim_pages(lo, count, nullptr, true);
+    // (but for a Z buffer sharing its pages, which hands them over)
+    claim_pages(lo, count, nullptr, true, made.get());
     load_target_rect(*made, 0, 0, width, height);
     gs->targets.push_back(std::move(made));
+    take_pages(*gs->targets.back(), false);
     return gs->targets.back().get();
 }
 
@@ -1390,8 +1489,6 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
         uint32_t h = std::max(th, gs->snapshot ? gs->snapshot->get_height() : 0u);
         gs->snapshot = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
     }
-    end_pass();
-    transfer_barrier();
     VkOffset3D at = {0, 0, 0};
     VkExtent3D size = {tw, th, 1};
     if (box) {
@@ -1399,7 +1496,7 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
         int32_t x0 = std::max(box[0], 0) * sx, y0 = std::max(box[1], 0) * sy;
         int32_t x1 = std::min(box[2] * sx, int32_t(tw)), y1 = std::min(box[3] * sy, int32_t(th));
         if (x1 <= x0 || y1 <= y0) {
-            return *gs->snapshot;
+            return *gs->snapshot; // (nothing of it on the target: no copy, and the render pass goes on)
         }
         at = {x0, y0, 0};
         size = {uint32_t(x1 - x0), uint32_t(y1 - y0), 1};
@@ -1409,6 +1506,8 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
         msaa_resolve(*gs->snapshot, *t.ms, at, size);
         return *gs->snapshot;
     }
+    end_pass();
+    transfer_barrier();
     cmd().copy_image(*gs->snapshot, *t.image, at, at, size, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
     transfer_barrier();
@@ -1757,6 +1856,35 @@ void flush_batch() {
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
         return;
+    }
+    // Triangles wholly outside the scissor draw nothing: left out, before the runs below are cut (a
+    // reflection drawn into its 256 x 256 target from the whole scene had most of its triangles off it,
+    // each a run of its own). (A pixel's margin each way.)
+    {
+        float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
+        size_t kept = 0, n = gs->verts.size();
+        Vtx *v = gs->verts.data();
+        for (size_t i = 0; i + 2 < n; i += 3) {
+            float tx0 = std::min(v[i].x, std::min(v[i + 1].x, v[i + 2].x));
+            float tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
+            float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y));
+            float ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
+            if (tx1 < cx0 || tx0 > cx1 || ty1 < cy0 || ty0 > cy1) {
+                continue;
+            }
+            if (kept != i) {
+                v[kept] = v[i];
+                v[kept + 1] = v[i + 1];
+                v[kept + 2] = v[i + 2];
+            }
+            kept += 3;
+        }
+        gsn_stats.primitives += (n - kept) / 3;
+        gs->verts.resize(kept);
+        if (kept == 0) {
+            gs->batch_sprites = false;
+            return;
+        }
     }
     push.misc |= scale_y << M_SCALE_SHIFT; // (SCANMSK's lines)
     // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
@@ -2207,7 +2335,8 @@ void prepare_write(const TransferRect &r) {
             }
             // A target whose pages under the transfer are all written whole keeps the rest, and takes
             // those pages from VRAM after the write (sync_targets): it need not go back to VRAM first
-            bool keep = !covered && !whole.empty() && regular(*t);
+            // (not a Z buffer: one may share its pages with another, take_pages)
+            bool keep = !covered && !whole.empty() && regular(*t) && !t->depth;
             for (uint32_t k = 0; keep && k < tcount; k++) {
                 uint32_t page = (tlo + k) % vram_pages;
                 if (pages_overlap(lo, count, page, 1)) {
