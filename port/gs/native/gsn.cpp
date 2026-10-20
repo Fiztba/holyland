@@ -432,10 +432,13 @@ void write_back(Target &t) {
                 memcpy(&f, &v, 4);
                 double z = double(f) / depth_scale(t.psm) + 0.5;
                 v = z >= double(depth_max(t.psm)) ? depth_max(t.psm) : uint32_t(z);
+                gsn_vram_write(gs->vram.data(), t.psm, t.bp, t.bw, x, y, v);
             } else {
-                v = target_pixel_to_vram(v, t.psm);
+                // a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into
+                // the same buffer wrote it: the whole word goes back either way
+                uint32_t psm = psm_layout(t.psm);
+                gsn_vram_write(gs->vram.data(), psm, t.bp, t.bw, x, y, target_pixel_to_vram(v, psm));
             }
-            gsn_vram_write(gs->vram.data(), t.psm, t.bp, t.bw, x, y, v);
         }
     }
     done_reading();
@@ -463,7 +466,8 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
                                                                {pw, ph, 1}, pw, ph, {aspect, 0, 0, 1}));
     for (uint32_t y = 0; y < h; y++) {
         for (uint32_t x = 0; x < w; x++) {
-            uint32_t v = gsn_vram_read(gs->vram.data(), t.psm, t.bp, t.bw, x0 + x, y0 + y);
+            // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
+            uint32_t v = gsn_vram_read(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0 + x, y0 + y);
             if (t.depth) {
                 float f = float(double(v) * depth_scale(t.psm));
                 memcpy(&v, &f, 4);
@@ -537,6 +541,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         ImageHandle image = make_image(new_w * t->scale, new_h * t->scale, format, 1, true);
         end_pass();
         Target old = *t;
+        t->psm = psm;
         t->image = image;
         t->width = new_w;
         t->height = new_h;
