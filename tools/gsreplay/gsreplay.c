@@ -42,6 +42,7 @@
                         After each, the native GS's box is made paraLLEl-GS's, so a draw listed made
                         the difference itself (--no-resync: not, the differences carry on). A pixel
                         differs when a channel is more than 1 apart (--exact: at all)
+     --msaa N           the native GS draws the 3D with N samples a pixel (2, 4 or 8: --native-msaa)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -1360,7 +1361,7 @@ static void usage(void) {
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
-            "                    [--renderer gs|native|both] [--compare-renderers]\n"
+            "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1372,7 +1373,7 @@ int main(int argc, char **argv) {
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
     long vertices = -1;
     int renderer = RENDER_GS;
-    int exact = 0;
+    int exact = 0, msaa = 1;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1407,6 +1408,9 @@ int main(int argc, char **argv) {
             i++;
         } else if (a[0] == '-' && v == NULL) {
             usage();
+        } else if (strcmp(a, "--msaa") == 0) {
+            msaa = atoi(v);
+            i++;
         } else if (strcmp(a, "--mode") == 0 || strcmp(a, "--compare-mode") == 0) {
             int m = strcmp(v, "vif") == 0 ? MODE_VIF : strcmp(v, "gif") == 0 ? MODE_GIF : -1;
 
@@ -1498,6 +1502,9 @@ int main(int argc, char **argv) {
         }
         if ((run.render & RENDER_NATIVE) && !gsn_open(NULL)) {
             die("no native GS: it needs a Vulkan GPU");
+        }
+        if ((run.render & RENDER_NATIVE) && msaa > 1) {
+            fprintf(stderr, "native GS: MSAA %dx\n", gsn_set_msaa(msaa));
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
