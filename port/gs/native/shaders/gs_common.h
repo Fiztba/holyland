@@ -1,0 +1,52 @@
+// What every draw of the native GS passes its shaders (port/gs/native/gsn.cpp, GsnPush: the two
+// must agree). Colours are the GS's integers, 0-255, and alpha 0x80 is 1.0.
+layout(push_constant, std430) uniform Push {
+    vec2 inv_size;    // 1 / the target's size in pixels
+    float zscale;     // Z to depth: 1 / 2^24, or 1 / 2^32 for PSMZ32
+    uint zmax;        // the largest Z the Z buffer's format holds
+    uint flags;       // GSN_F_* below
+    uint tex_size;    // the texture's width (bits 0-15) and height (16-31) in texels
+    uint clamp_lo;    // CLAMP: WMS 0-1, WMT 2-3, MINU 4-13, MAXU 14-23
+    uint clamp_hi;    // CLAMP: MINV 0-9, MAXV 10-19
+    uint test;        // TEST: ATE 0, ATST 1-3, AREF 4-11, AFAIL 12-13, DATE 14, DATM 15
+    uint fogcol;      // FOGCOL: R 0-7, G 8-15, B 16-23
+    uint alpha;       // ALPHA: A 0-1, B 2-3, C 4-5, D 6-7, FIX 8-15
+    uint texa;        // TEXA: TA0 0-7, AEM 15, TA1 16-23
+    uint tex1;        // TEX1: MMAG 0, MMIN 1-3, MXL 4-6, LCM 7, L 8-9
+    float lod_k;      // TEX1's K
+    ivec2 src_offset; // a texture that is a render target: where in it the texture starts
+    ivec2 dst_offset; // the destination copy (shader blending): the frame buffer pixel at its (0, 0)
+    uint misc;        // GSN_M_* below
+    uint fbmsk;       // FRAME's FBMSK: the bits not written
+    uint tscale;      // a texture that is a render target: its pixels a GS pixel is across (--native-scale)
+} pc;
+
+#define GSN_F_TME 0x1u
+#define GSN_F_FST 0x2u
+#define GSN_F_TFX_SHIFT 2u
+#define GSN_F_TCC 0x10u
+#define GSN_F_FGE 0x20u
+#define GSN_F_SHADER_BLEND 0x40u   // blend here, from a copy of the destination (no fixed-function blend)
+#define GSN_F_SRC_SHIFT 8u         // GSN_SRC_*
+#define GSN_F_ALPHA_FACTOR 0x1000u // fixed-function blend by As: alpha out is As / 128 (the blend constant puts it back)
+#define GSN_F_PASS_SHIFT 13u       // 0: every pixel; 1: those that pass the alpha test; 2: those that fail it
+#define GSN_F_DATE 0x8000u         // the destination alpha test, here (shader blending only)
+#define GSN_F_PREMUL 0x10000u      // Cs * C >> 7 out (C: ALPHA's As or FIX), for Vulkan to add or take away
+#define GSN_F_PREMUL_CEIL 0x20000u // ... rounded up (a subtraction)
+
+#define GSN_SRC_CLUT 0u
+#define GSN_SRC_CT32 1u
+#define GSN_SRC_CT24 2u
+#define GSN_SRC_CT16 3u
+#define GSN_SRC_TARGET_CT32 4u
+#define GSN_SRC_TARGET_CT24 5u
+#define GSN_SRC_TARGET_CT16 6u
+
+#define GSN_M_FBA 0x1u
+#define GSN_M_COLCLAMP 0x2u
+#define GSN_M_DST16 0x4u  // the frame buffer is 16-bit: colours keep their top 5 bits, alpha its top bit
+#define GSN_M_DST24 0x8u  // the frame buffer has no alpha
+#define GSN_M_PABE 0x10u
+#define GSN_M_SCANMSK_SHIFT 5u // SCANMSK: 2 draws no even lines, 3 no odd ones
+#define GSN_M_SCALE_SHIFT 7u   // the target's pixels a GS pixel is across (--native-scale), 3 bits
+#define GSN_M_ZCLAMP 0x400u    // a vertex's Z is beyond the format's: gs_zclamp.frag writes the depth

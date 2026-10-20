@@ -63,6 +63,11 @@ void port_gs_backend_capture(void (*emit)(uint32_t type, const void *data, size_
 int port_gs_backend_restore(uint32_t type, const void *data, size_t size);
 /* Waits for the GS and returns its VRAM as the GS lays it out (4 MB) */
 const void *port_gs_backend_vram(void);
+/* A rectangle of a buffer read back through the GS itself, as RGBA: for comparing the renderers */
+void port_gs_backend_read_rect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w,
+                               uint32_t h, uint32_t *rgba);
+/* The renderer's state as capture records: paraLLEl-GS's, or the native GS's (port/platform/gs.c) */
+void port_gs_state_records(void (*emit)(uint32_t type, const void *data, size_t size));
 
 /* ---- The sound (port/audio/output.c): frames as the SPU2 made them, before the volume ----------- */
 void port_debug_audio_frames(const int16_t *frames, int count);

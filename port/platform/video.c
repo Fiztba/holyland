@@ -338,12 +338,17 @@ int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint3
 }
 
 void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
+    char name[64];
+
+    snprintf(name, sizeof(name), "frame_%06llu.png", (unsigned long long)vblank);
+    port_video_dump_named(frame, name);
+}
+
+void port_video_dump_named(const PortGsFrame *frame, const char *name) {
     char path[4096];
 
-    snprintf(path, sizeof(path), "%s/frame_%06llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
-             (unsigned long long)vblank);
+    snprintf(path, sizeof(path), "%s/%s", port_options.dump_dir ? port_options.dump_dir : ".", name);
     if (port_png_write(path, frame->rgba, frame->width, frame->height)) {
-        fprintf(stderr, "[video] vblank %llu: %ux%u, %s\n", (unsigned long long)vblank, frame->width,
-                frame->height, path);
+        fprintf(stderr, "[video] %ux%u, %s\n", frame->width, frame->height, path);
     }
 }

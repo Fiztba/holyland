@@ -119,6 +119,8 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--fast` | run as fast as possible instead of at 60 vblanks a second |
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
+| `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (step 3, [STEP3.md](STEP3.md)), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
+| `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
@@ -489,6 +491,23 @@ kf4-gsreplay gs.kf4gs --pixel 320,200            # the draws that cover a pixel,
 kf4-gsreplay gs.kf4gs --vertices 412             # a draw's vertices
 kf4-gsreplay gs.kf4gs --mode vif --vu-round nearest   # VU floats rounded to nearest: which vertices move
 kf4-gsreplay a.kf4gs --compare b.kf4gs           # two captures, draw by draw
+```
+
+With `--renderer native` it draws with the native GS instead, and with `--renderer both` with both
+(`--draws` and `--frames` then write `_native` pictures beside paraLLEl-GS's).
+`--compare-renderers` runs both and, after each draw, compares the pixels of its box: it lists the
+draws whose box differs by more than 1 in a channel, then puts the native GS back in step with
+paraLLEl-GS's pixels so that the next draw listed made its own difference (`--no-resync`: not). At
+each vblank, and once more at the end of the capture (a capture's last frame is drawn after its
+last vblank), it compares the frame buffer the display shows (`--frames`: `vblank_N_gs.png`,
+`end_N_native.png`...). `--draws` limits the per-draw comparison to a range (`--draws
+999999-999999`: only the vblanks and the end). paraLLEl-GS's pixels are read back through the GS (a local-to-host
+transfer); for some field-mode menu buffers that read is stale, and the scanout pictures
+(`--frames --renderer both`) are the ones to trust.
+
+```sh
+kf4-gsreplay gs.kf4gs --compare-renderers --limit 50           # the draws the native GS draws differently
+kf4-gsreplay gs.kf4gs --compare-renderers --draws 3050-3060 --out pics   # and their pictures
 ```
 
 Without a GPU, `--info`, `--list`, `--vertices` and `--compare` still work. A draw is a run of vertices

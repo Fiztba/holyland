@@ -38,7 +38,10 @@ kf4-gsreplay FILE.kf4gs [options]
 | `--vertices N` | draw N's vertices: X, Y (12.4, as sent, before XYOFFSET), Z, RGBA, STQ, UV, fog, and whether it kicked a primitive |
 | `--compare OTHER` | another capture's draws against these, one by one: the GS state, and the vertices (the first that differs, and the largest Z difference) |
 | `--compare-mode gif\|vif` | compare this capture with itself in that mode (with `--vu-round`: the VU1 variant against the recorded packets, draw by draw) |
-| `--limit N` | how many differing draws `--compare` prints (50) |
+| `--limit N` | how many differing draws `--compare` and `--compare-renderers` print (50) |
+| `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (`port/gs/native/`), or both; with both, `--draws` and `--frames` write `_native` pictures beside paraLLEl-GS's |
+| `--compare-renderers` | both renderers. After each draw (or each of `--draws`), the pixels of its box are compared: the draws where they differ are printed, and the native GS is then given paraLLEl-GS's pixels so that the next draw printed made its own difference (`--no-resync`: not). At each vblank, and at the end of the capture, the frame buffer on display is compared, and at the end the other in-play frame buffer too (`end-other`: the frame is drawn into the one not on display, so that is the comparison that counts in play). `--draws 999999-999999` skips the per-draw comparisons |
+| `--exact` | with `--compare-renderers`: a pixel differs when a channel differs at all (else by more than 1) |
 
 A **draw** is a run of vertices in one GIF packet with no GS register written between them other than
 a vertex's own (RGBAQ, ST, UV, FOG). `--list` gives, for each:
@@ -54,7 +57,8 @@ the Z range, and the GS state it drew with: FRAME, ZBUF, TEST (alpha test, desti
 depth test: ZTST 0 never, 1 always, 2 greater or equal, 3 greater), ALPHA (A B C D and FIX), FBA,
 PABE, TEX0, TEX1, CLAMP, SCISSOR and XYOFFSET.
 
-Pictures need a Vulkan GPU; `--info`, `--list`, `--vertices` and `--compare` do not.
+Pictures need a Vulkan GPU; `--info`, `--list`, `--vertices` and `--compare` do not. On Mesa's lavapipe,
+`--renderer both` needs `LP_NUM_THREADS=1` (two Vulkan devices in one process abort its threaded rasteriser).
 
 ### Example: a flicker on the water
 

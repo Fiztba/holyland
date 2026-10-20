@@ -174,6 +174,28 @@ Still open:
 ## Step 3: graphics, stage 2 (native renderer)
 
 The plan, from a survey of the game's draw code and GS captures of every map: [STEP3.md](STEP3.md).
+Where it stands: STEP3.md's "Progress". `--renderer native` (or `both`) turns it on; paraLLEl-GS
+stays the default until stage 4.
+
+### Where the native GS differs from paraLLEl-GS
+
+What it knowingly does otherwise, found with `kf4-gsreplay --compare-renderers`:
+
+| What | The native GS | paraLLEl-GS (the GS) |
+|---|---|---|
+| Triangle edges | Vulkan's exact edge test on the GS's 1/16-pixel vertices | the GS's own scan conversion: a few pixels along some edges are covered by one and not the other |
+| Alpha test on filtered textures | the same filtering and rounding (4-bit weights, rounded to even), but an alpha a hair either side of AREF can pass in one and fail in the other | |
+| Mipmap LOD | per pixel from Q in floats | the GS's precision: differences of a few levels of a channel on mipmapped draws |
+| (Cs - Cd) C + Cd on 3D geometry | Vulkan's blending, rounded to nearest (a difference of 1, drawn again each frame) | truncated; sprites and feedback passes blend in the shader, exactly |
+| Blending by As with As above 0x80 from a texture whose alpha is not known ahead (CT32, a render target) | Vulkan's blend factor clamps at 1.0 (vertex alphas, CLUT and TEXA alphas above 0x80 are seen, and blended in the shader) | 2.0 |
+| DATE (the destination alpha test) | tested against a copy of the target taken before the draw: overlapping primitives of one draw do not see each other's alpha | per pixel as drawn |
+| Points and lines | not drawn (the game draws neither) | drawn |
+| PABE with (A - A) C + Cd (blending that keeps Cd) | a pixel whose As is under 0x80 is not blended: Cs | an RGB write mask (PABE not seen): Cd |
+| Sprites drawn right to left or bottom to top | UV interpolated from the corners as given | paraLLEl-GS's set-up starts elsewhere: texels a sixteenth apart, which bilinear filtering shows |
+| A draw reading its own frame buffer (TBP = FBP) with bilinear filtering, cut by the scissor | reads the frame as it was before the draw | its feedback emulation: pixels on the cut differ |
+| ST/Q at a texel's edge | exact to the float | a hair under: now and then the texel before (bilinear filtering: a sixteenth) |
+| Field-mode scanout (title, menus, movies) | the two fields woven line by line | paraLLEl-GS's deinterlacer: the same picture, within 3 a channel |
+| Flames and other tiny perspective-textured effects (program 0x700) | S/Q in 32-bit floats | the GS's precision: a few pixels of a flame differ, and the frame-to-frame smear spreads them a little |
 
 A renderer under the game's draw layer, as ico-pc has:
 - The four VU1 programs become shaders that read the game's own vertex data. Each has a CPU
@@ -209,6 +231,7 @@ The opt-in switches, each off by default (the PS2's picture), which the native r
 | Switch | What it changes in the game code | What the PC does |
 |---|---|---|
 | `--widescreen` (overlay: Display, live) | Under `port_widescreen()` only: `GameLoop_SetCameraMatrices` (case 0) and `MapViewer_RunKingsMap` build the view-to-screen matrix three quarters as wide (`ax` 0.75), a 16:9 horizontal field of view in the same 640x448. `Hud_Draw`, `Hud_DrawPaused`, `Message_Draw`, `Splash_Draw`, `MapViewer_DrawPictureMap` and `MapViewer_DrawKingsMap` call `Widescreen_Mark` (`game/widescreen.c`) around their 2D: a GS register list writing `PORT_GS_REG_WIDESCREEN`, an address the GS does not have. | `port/platform/gs.c` squeezes the X of 2D vertices to three quarters about the screen's middle (the HUD about its left edge, or the middle with `--widescreen-hud-centred`): all of PATH3, and the marked 2D of the packet chain; it leaves pictures of the frame, full-screen fades and untextured fills reaching the edge at full width. The window is 16:9; `--dump-frames` keeps the GS's 640x448. No culling needed widening: the map records are culled by a half-plane, the rest in screen space. |
+| `--native-scale N` (overlay: Debug > Renderer, live; `settings.json` `display.native_scale`) | Nothing. | With the native GS (`--renderer native`), every render target is N times the PS2's size in each direction (1 to 4): positions stay in GS pixels and the viewport and scissor scale; a target read as a texture is read at its own pixels, so the frame copies and the smear keep the detail; written back to VRAM (for a texture in another format, a read-back) it gives one sample a GS pixel. The scanout is the larger picture. 1 (the default) is the PS2's picture. Above 1, thin seams can show where the game's meshes do not meet exactly (the sky dome on map 000), which the PS2's pixels were too coarse to catch. |
 
 ## Step 4: sound (first version done)
 

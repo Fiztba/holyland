@@ -29,6 +29,15 @@
                         one, with --compare-mode), compared one by one: state and vertices
      --vu-round nearest VU1's float arithmetic rounds to nearest instead of toward zero (--mode vif)
      --diff N           with --mode vif: show up to N differing vertices of each differing packet (8)
+     --renderer NAME    who draws: gs (paraLLEl-GS, the default), native (step 3's native GS,
+                        port/gs/native/) or both. With both, --draws writes draw_NNNNN_native.png
+                        beside each draw_NNNNN.png, and --frames frame_NNNNNN_native.png
+     --compare-renderers
+                        both renderers, and after every draw (or each of --draws) the pixels of its box
+                        compared: the draws after which they differ, and by how much (up to --limit).
+                        After each, the native GS's box is made paraLLEl-GS's, so a draw listed made
+                        the difference itself (--no-resync: not, the differences carry on). A pixel
+                        differs when a channel is more than 1 apart (--exact: at all)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -43,9 +52,11 @@
 #include "port/platform.h"
 
 int port_gs_backend_open(void);
+void *port_gs_backend_context(void);
 void port_gs_backend_gif(int path, const void *data, size_t bytes);
 void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+#include "gsn.h"
 
 /* ---- What vif1.c, vu1.c, video.c and gs_parallel.cpp need of the program --------------------- */
 PortOptions port_options;
@@ -604,10 +615,20 @@ static void gif_qword(Gif *g, uint32_t path, const uint64_t q[2]) {
 /* ---- The run ------------------------------------------------------------------------------------- */
 enum { MODE_GIF, MODE_VIF };
 
+enum { RENDER_GS = 1, RENDER_NATIVE = 2 };
+
 typedef struct {
     const Capture *capture;
     int mode;
-    int render;           /* a GS backend */
+    int render;           /* the renderers that draw: RENDER_GS, RENDER_NATIVE */
+    int compare_renderers; /* --compare-renderers */
+    int resync;            /* (not --no-resync) after each draw, the native GS takes paraLLEl-GS's pixels */
+    uint32_t threshold;    /* a pixel differs when a channel is more than this apart (1; --exact: 0) */
+    uint64_t last_priv[0xF0 / 8]; /* the display registers at the last vblank */
+    uint64_t last_vblank;
+    int seen_vsync;
+    int limit;
+    uint64_t compared, compared_differ;
     Gif gif;
     size_t cursor;        /* --mode vif: the next record not yet matched */
     /* --mode vif's comparison */
@@ -634,9 +655,95 @@ static void write_png(const Run *r, const char *name, const uint32_t *rgba, uint
     }
 }
 
+/* What a draw drew into, from the native GS: its frame buffer (and the box) */
+static GsnRect draw_rect(const Draw *d, int box_only) {
+    GsnRect rect;
+    uint32_t fbw = (uint32_t)((d->frame >> 16) & 0x3F);
+    uint32_t h = (uint32_t)((d->scissor >> 48) & 0x7FF) + 1;
+
+    rect.bp = (uint32_t)(d->frame & 0x1FF) * 32;
+    rect.bw = fbw;
+    rect.psm = (uint32_t)((d->frame >> 24) & 0x3F);
+    rect.x = rect.y = 0;
+    rect.w = fbw ? fbw * 64 : 640;
+    rect.h = h > 2048 ? 2048 : h;
+    if (box_only) {
+        int x0 = d->box[0] < 0 ? 0 : d->box[0], y0 = d->box[1] < 0 ? 0 : d->box[1];
+        int x1 = d->box[2] + 1 > (int)rect.w ? (int)rect.w : d->box[2] + 1;
+        int y1 = d->box[3] + 1 > (int)rect.h ? (int)rect.h : d->box[3] + 1;
+
+        rect.x = (uint32_t)x0;
+        rect.y = (uint32_t)y0;
+        rect.w = x1 > x0 ? (uint32_t)(x1 - x0) : 0;
+        rect.h = y1 > y0 ? (uint32_t)(y1 - y0) : 0;
+    }
+    return rect;
+}
+
+static void write_png(const Run *r, const char *name, const uint32_t *rgba, uint32_t w, uint32_t h);
+
+/* --compare-renderers: the draw's box as each renderer has it after the draw */
+static void compare_draw(Run *r, long index) {
+    const Draw *d = &r->gif.draws[index];
+    GsnRect rect = draw_rect(d, 1);
+    uint32_t *a, *b, max = 0, pixels = 0;
+    size_t i, n = (size_t)rect.w * rect.h;
+
+    if (n == 0) {
+        return; /* off the frame buffer */
+    }
+    a = malloc(n * 4);
+    b = malloc(n * 4);
+    port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a);
+    gsn_read_rect(&rect, b);
+    for (i = 0; i < n; i++) {
+        uint32_t worst = 0;
+        int c;
+
+        for (c = 0; c < 24; c += 8) {
+            int e = (int)((a[i] >> c) & 0xFF) - (int)((b[i] >> c) & 0xFF);
+            uint32_t m = (uint32_t)(e < 0 ? -e : e);
+
+            worst = m > worst ? m : worst;
+        }
+        max = worst > max ? worst : max;
+        pixels += worst > r->threshold;
+    }
+    r->compared++;
+    if (r->resync) {
+        /* the next draw starts from the same picture: what it shows is its own difference */
+        port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a);
+        gsn_write_rect(&rect, a);
+    }
+    if (pixels) {
+        r->compared_differ++;
+        if (r->compared_differ <= (uint64_t)r->limit) {
+            printf("draw %6ld differs: %u of %zu pixels of its box (%u,%u %ux%u) by more than %u, at most %u\n", index,
+                   pixels, n, rect.x, rect.y, rect.w, rect.h, r->threshold, max);
+        }
+    }
+    free(a);
+    free(b);
+}
+
 static void dump_draw_buffers(Run *r, long index) {
     const Draw *d = &r->gif.draws[index];
-    const uint8_t *vram = port_gs_backend_vram();
+    const uint8_t *vram;
+
+    if (r->render & RENDER_NATIVE) {
+        GsnRect rect = draw_rect(d, 0);
+        uint32_t *rgba = malloc((size_t)rect.w * rect.h * 4);
+        char name[64];
+
+        gsn_read_rect(&rect, rgba);
+        snprintf(name, sizeof(name), (r->render & RENDER_GS) ? "draw_%05ld_native.png" : "draw_%05ld.png", index);
+        write_png(r, name, rgba, rect.w, rect.h);
+        free(rgba);
+    }
+    if (!(r->render & RENDER_GS)) {
+        return;
+    }
+    vram = port_gs_backend_vram();
     uint32_t fbp = (uint32_t)(d->frame & 0x1FF) * 1, fbw = (uint32_t)((d->frame >> 16) & 0x3F);
     uint32_t psm = (uint32_t)((d->frame >> 24) & 0x3F);
     uint32_t w = fbw * 64, h = (uint32_t)((d->scissor >> 48) & 0x7FF) + 1;
@@ -700,7 +807,7 @@ static void pixel_after(Run *r, long index) {
     if (!box_covers(d, r->pixel_x, r->pixel_y) || (r->fbp_filter >= 0 && (long)(d->frame & 0x1FF) != r->fbp_filter)) {
         return;
     }
-    if (!r->render) {
+    if (!(r->render & RENDER_GS)) {
         printf("draw %ld covers (%d,%d) by its box: FBP %u ZBP %u TEST %08llX\n", index, r->pixel_x, r->pixel_y,
                (unsigned)(d->frame & 0x1FF), (unsigned)(d->zbuf & 0x1FF), (unsigned long long)d->test);
         return;
@@ -721,15 +828,33 @@ static void pixel_after(Run *r, long index) {
 }
 
 static int wants_draw_end(const Run *r) {
-    return r->draw_from >= 0 || r->pixel;
+    return r->draw_from >= 0 || r->pixel || r->compare_renderers;
 }
 
 static void draw_ended(Run *r, long index) {
-    if (r->draw_from >= 0 && index >= r->draw_from && index <= r->draw_to && r->render) {
+    int in_range = r->draw_from < 0 || (index >= r->draw_from && index <= r->draw_to);
+
+    if (r->draw_from >= 0 && in_range && r->render && !r->compare_renderers) {
         dump_draw_buffers(r, index);
+    }
+    if (r->compare_renderers && in_range) {
+        if (r->draw_from >= 0) {
+            dump_draw_buffers(r, index); /* (before the native GS is put back in step) */
+        }
+        compare_draw(r, index);
     }
     if (r->pixel) {
         pixel_after(r, index);
+    }
+}
+
+/* The renderers, as the run has them */
+static void gs_gif(Run *r, int path, const void *data, size_t bytes) {
+    if (r->render & RENDER_GS) {
+        port_gs_backend_gif(path, data, bytes);
+    }
+    if (r->render & RENDER_NATIVE) {
+        gsn_gif(path, data, bytes);
     }
 }
 
@@ -751,7 +876,7 @@ static void send(Run *r, uint32_t record, int path, const void *data, size_t byt
                 size_t end = d->end_record == record ? d->end_qword : start;
 
                 if (end > start && r->render) {
-                    port_gs_backend_gif(path, (const uint8_t *)data + start * 16, (end - start) * 16);
+                    gs_gif(r, path, (const uint8_t *)data + start * 16, (end - start) * 16);
                     start = end;
                 }
                 draw_ended(r, index);
@@ -759,7 +884,46 @@ static void send(Run *r, uint32_t record, int path, const void *data, size_t byt
         }
     }
     if (n > start && r->render) {
-        port_gs_backend_gif(path, (const uint8_t *)data + start * 16, (n - start) * 16);
+        gs_gif(r, path, (const uint8_t *)data + start * 16, (n - start) * 16);
+    }
+}
+
+/* --compare-renderers: the buffer the display shows (by the display registers `priv`), as each renderer
+   has it now */
+static void compare_display(Run *r, const uint64_t *priv, const char *when, uint64_t vblank) {
+    GsnRect rect;
+
+    if (gsn_display_rect(priv, &rect)) {
+            size_t i, n = (size_t)rect.w * rect.h;
+            uint32_t *a = malloc(n * 4), *b = malloc(n * 4), max = 0, pixels = 0;
+
+            port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a);
+            gsn_read_rect(&rect, b);
+            for (i = 0; i < n; i++) {
+                uint32_t worst = 0;
+                int c;
+
+                for (c = 0; c < 24; c += 8) {
+                    int e = (int)((a[i] >> c) & 0xFF) - (int)((b[i] >> c) & 0xFF);
+                    uint32_t m = (uint32_t)(e < 0 ? -e : e);
+
+                    worst = m > worst ? m : worst;
+                }
+                max = worst > max ? worst : max;
+                pixels += worst > r->threshold;
+            }
+            printf("%s %llu: the displayed buffer (FBP %u) differs in %u of %zu pixels by more than %u, at most %u\n",
+                   when, (unsigned long long)vblank, rect.bp / 32, pixels, n, r->threshold, max);
+            if (r->frames) {
+                char name[64];
+
+                snprintf(name, sizeof(name), "%s_%06llu_gs.png", when, (unsigned long long)vblank);
+                write_png(r, name, a, rect.w, rect.h);
+                snprintf(name, sizeof(name), "%s_%06llu_native.png", when, (unsigned long long)vblank);
+                write_png(r, name, b, rect.w, rect.h);
+            }
+            free(a);
+            free(b);
     }
 }
 
@@ -772,8 +936,23 @@ static void vsync(Run *r, const Record *rec) {
     if (!r->render) {
         return;
     }
-    if (port_gs_backend_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) && r->frames) {
+    memcpy(r->last_priv, rec->data + 16, sizeof(r->last_priv));
+    r->last_vblank = vblank;
+    r->seen_vsync = 1;
+    if (r->compare_renderers) {
+        compare_display(r, r->last_priv, "vblank", vblank);
+    }
+    if ((r->render & RENDER_GS) &&
+        port_gs_backend_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) && r->frames) {
         port_video_dump(&r->frame, vblank);
+    }
+    if ((r->render & RENDER_NATIVE) && gsn_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) &&
+        r->frames) {
+        char name[64];
+
+        snprintf(name, sizeof(name), (r->render & RENDER_GS) ? "frame_%06llu_native.png" : "frame_%06llu.png",
+                 (unsigned long long)vblank);
+        port_video_dump_named(&r->frame, name);
     }
 }
 
@@ -786,7 +965,12 @@ static void read_fifo(Run *r, const Record *rec) {
         return;
     }
     sink = malloc((size_t)qwords * 16 + 16);
-    port_gs_backend_read_fifo(sink, qwords);
+    if (r->render & RENDER_GS) {
+        port_gs_backend_read_fifo(sink, qwords);
+    }
+    if (r->render & RENDER_NATIVE) {
+        gsn_read_fifo(sink, qwords);
+    }
     free(sink);
 }
 
@@ -930,8 +1114,11 @@ static size_t start_state(Run *r) {
         case KF4GS_GS_REGS:
         case KF4GS_GS_PRIV:
         case KF4GS_GS_HISTORY:
-            if (r->render && !port_gs_backend_restore(rec->type, rec->data, rec->size)) {
+            if ((r->render & RENDER_GS) && !port_gs_backend_restore(rec->type, rec->data, rec->size)) {
                 die("the capture's GS state (record %u) does not fit this GS", rec->type);
+            }
+            if ((r->render & RENDER_NATIVE) && !gsn_restore(rec->type, rec->data, rec->size)) {
+                die("the capture's GS state (record %u) does not fit the native GS", rec->type);
             }
             break;
         case KF4GS_VU1: {
@@ -987,6 +1174,23 @@ static void run_capture(Run *r) {
         handle(r, index);
     }
     port_gs_capture_recording = 0;
+    if (r->compare_renderers && r->seen_vsync) {
+        /* a capture's last frame is drawn after its last vblank: compared once all of it is */
+        compare_display(r, r->last_priv, "end", r->last_vblank);
+        /* and the other frame buffer in play (0 and 0x8C, 640x448): the game keeps the last frame there
+           for the next to blend with, which the displayed one shows only a frame later */
+        {
+            uint64_t other[0xF0 / 8];
+            uint64_t fbp;
+
+            memcpy(other, r->last_priv, sizeof(other));
+            fbp = other[9 * 2] & 0x1FF;
+            if (fbp == 0 || fbp == 0x8C) {
+                other[9 * 2] = (other[9 * 2] & ~(uint64_t)0x1FF) | (fbp == 0 ? 0x8C : 0);
+                compare_display(r, other, "end-other", r->last_vblank);
+            }
+        }
+    }
     if (r->mode == MODE_VIF) {
         printf("VIF1 -> VU1: %llu packets as recorded, %llu differ, %llu recorded but not made, %llu made but not "
                "recorded\n",
@@ -1132,7 +1336,7 @@ static void usage(void) {
             "usage: kf4-gsreplay FILE.kf4gs [--info] [--mode gif|vif] [--frames] [--out DIR] [--list]\n"
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
-            "                    [--diff N] [--limit N]\n"
+            "                    [--diff N] [--limit N] [--renderer gs|native|both] [--compare-renderers]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1143,6 +1347,8 @@ int main(int argc, char **argv) {
     const char *file = NULL, *compare_file = NULL;
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
     long vertices = -1;
+    int renderer = RENDER_GS;
+    int exact = 0;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1161,6 +1367,20 @@ int main(int argc, char **argv) {
             run.frames = 1;
         } else if (strcmp(a, "--zbuf") == 0) {
             run.zbuf = 1;
+        } else if (strcmp(a, "--exact") == 0) {
+            exact = 1;
+        } else if (strcmp(a, "--no-resync") == 0) {
+            run.resync = -1;
+        } else if (strcmp(a, "--compare-renderers") == 0) {
+            run.compare_renderers = 1;
+            renderer = RENDER_GS | RENDER_NATIVE;
+        } else if (strcmp(a, "--renderer") == 0 && v != NULL) {
+            renderer = strcmp(v, "gs") == 0 ? RENDER_GS : strcmp(v, "native") == 0 ? RENDER_NATIVE
+                       : strcmp(v, "both") == 0 ? RENDER_GS | RENDER_NATIVE : 0;
+            if (renderer == 0) {
+                usage();
+            }
+            i++;
         } else if (a[0] == '-' && v == NULL) {
             usage();
         } else if (strcmp(a, "--mode") == 0 || strcmp(a, "--compare-mode") == 0) {
@@ -1233,10 +1453,16 @@ int main(int argc, char **argv) {
     port_options.anti_blur = (int)meta_int(&capture, "anti_blur", 1);
     port_options.adapt_width = (int)meta_int(&capture, "adapt_width", 1);
     port_options.dump_dir = run.out;
-    run.render = run.frames || run.draw_from >= 0 || run.pixel;
+    run.limit = limit;
+    run.threshold = exact ? 0 : 1;
+    run.resync = run.resync == 0 && run.compare_renderers;
+    run.render = run.frames || run.draw_from >= 0 || run.pixel || run.compare_renderers ? renderer : 0;
     if (run.render) {
-        if (!port_gs_backend_open()) {
+        if ((run.render & RENDER_GS) && !port_gs_backend_open()) {
             die("no paraLLEl-GS: pictures need a Vulkan GPU");
+        }
+        if ((run.render & RENDER_NATIVE) && !gsn_open(NULL)) {
+            die("no native GS: it needs a Vulkan GPU");
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
@@ -1245,6 +1471,10 @@ int main(int argc, char **argv) {
     }
     run_capture(&run);
     printf("%zu draws, %zu vertices\n", run.gif.count, run.gif.vertex_count);
+    if (run.compare_renderers) {
+        printf("renderers: %llu draws compared, %llu differ\n", (unsigned long long)run.compared,
+               (unsigned long long)run.compared_differ);
+    }
     if (list) {
         long d;
 

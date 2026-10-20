@@ -10,6 +10,58 @@ how each stage is checked, and the risks. It is written from four surveys (Octob
 game's draw code, a census of GS captures of all 64 maps and of the menus, title, movies and spells,
 timings of the step 2 path, and how ico-pc built its renderer.
 
+## Progress (October 2026)
+
+- **Stage 0, mostly done.** `--renderer gs|native|both`, the Debug page's switch and
+  `settings.json`; with `both`, the displayed frame buffers compared every vblank (the overlay and
+  `--stats`). `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank).
+  Not done: the presenter on Granite's WSI and ImGui on Vulkan (the native GS's picture still goes
+  through the CPU to SDL, as paraLLEl-GS's does). Interlace settled: in play and the in-game menus
+  draw one 448-line frame (SMODE2 FFMD 0); the title, the memory card screens and the movies draw
+  224-line fields, FBP 0 and 0x46 in turn.
+- **Stages 1 and 2, working.** The native GS (`port/gs/native/`) draws the whole game from the VU1
+  interpreter's packets: VRAM on the CPU in the GS's layout (`gsn_vram.c`, byte for byte against
+  paraLLEl-GS for all 13 formats, `tests/gsn_vram_test.c`), render targets on the GPU, textures as
+  raw texels looked up and filtered in the shader, Vulkan's blending where the GS equation maps onto
+  it and the shader's (from a copy of the target) elsewhere, the feedback passes, DATE, AFAIL,
+  MTBA mipmaps, SCANMSK, save states. `tests/gsn_draw_test.c` draws random batches (every primitive,
+  texture and frame buffer format, CLUT, blend, alpha and Z test, DATE, FBMSK, SCANMSK, fog) on both
+  renderers and compares their VRAM: 300 cases a run pass, and paraLLEl-GS's own quirks the game
+  does not reach are listed in PLAN.md. The 64 map tour captures, each frame drawn from
+  paraLLEl-GS's state: no crash; on average 2% of the frame's pixels are more than 1 a channel
+  from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
+  PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
+  captures: within 5 a channel. Live, with both renderers through 600 vblanks on all 64 maps: no
+  crash; at the end typically 3% of pixels more than 1 apart (mean 0.2 a channel). The passes that
+  carry a frame into the next (the dimming each frame, the previous frame blended in, the smear)
+  blend in the shader exactly, so they do not drift. A 2,000-vblank run takes 8.0 s against
+  paraLLEl-GS's 8.2 s.
+- **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
+  resolution, live from the overlay).
+- **Stage 3**: the VU1 programs as C, bit for bit against the interpreter (`--vu1 hle`), which was
+  the stage's purpose (speed); shaders are left for later (below).
+- Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
+  there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
+  texture's target on map 000) has the target written back through the CPU each frame;
+  `--renderer both` on Mesa's lavapipe needs `LP_NUM_THREADS=1`.
+
+### What could come next
+
+- **Exact blending everywhere.** The one difference left by design is Vulkan's rounding of
+  (Cs - Cd) C + Cd on 3D geometry (1 a channel, drawn again each frame). Fragment shader interlock
+  (VK_EXT_fragment_shader_interlock) would let the shader read and write the target in primitive
+  order: every blend exact, and DATE per pixel. Granite does not turn the feature on; the native GS
+  would need its own device set-up for it.
+- **Uploads on the GPU.** The swizzle runs on the CPU (and is mostly skipped now: uploads seen before
+  are copied in as pages). A compute pass writing a GPU copy of VRAM, with textures read from it,
+  would take the rest off the CPU and remove the write-backs.
+- **The presenter on Vulkan.** The picture still goes to the window through the CPU, as
+  paraLLEl-GS's does; at 4x that is 18 MB a vblank, which the measurements show is affordable. A
+  swapchain on the native GS's device would need the overlay and the on-screen controls (both drawn
+  with SDL_Renderer today) on Vulkan too.
+- **VU1 on the GPU.** The C programs (stage 3) take VU1 from two thirds of the run's time to a
+  sixth; shaders would take the rest, at the cost of a second implementation to keep bit for bit.
+
 ## Why
 
 - **Speed.** The VU1 interpreter is 65-70% of the run's time with the GS on. The busiest maps (000,
