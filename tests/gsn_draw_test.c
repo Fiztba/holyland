@@ -29,15 +29,17 @@
      crossed a pixel early or late (with nearest filtering, any difference: the textures are noise);
    - the alpha test cutting an interpolated or filtered alpha at AREF a little differently (and what
      overlapping primitives then blend with);
-   - ST/Q: at a texel's edge the two land either side now and then; with bilinear filtering every
-     sixteenth of a texel is such an edge, and noise turns it into differences of up to 30;
+   - ST/Q, and any texture coordinate interpolated by the rasteriser: at a texel's edge the two land
+     either side now and then (where, depends on the GPU's interpolation: lavapipe's differs from
+     NVIDIA's); with bilinear filtering every sixteenth of a texel is such an edge, and noise turns it
+     into differences of up to 30. (The native GS's filter is integer already; it is the coordinate.)
    - Z interpolated in floats: 2 apart plus 1 in 2^20; a Z32 buffer above 2^24 (a D32 float holds 24
      bits): 1 in 2^23 for sprites, 1 in 2^16 interpolated.
    So a pixel "differs" when a channel is more than 1 apart (a CT16 buffer's: 1 in 5 bits; with
    COLCLAMP 0, apart either way round 256). A case passes when, of the pixels not on a triangle's edge:
    - sprites with no texture, sprites that map texels 1:1 (UV a texel a pixel), and nearest-filtered
      sprites that read their own frame buffer: none differ, in colour or Z;
-   - STQ with bilinear filtering: at most 1/8 of the pixels the case covers differ, plus 4;
+   - other bilinear-filtered draws: at most 1/8 of the pixels the case covers differ, plus 4;
    - anything else: at most 1/50 of them, plus 4.
    The limits are loose on purpose: a systematic error (a wrong blend, format, wrap, CLUT) moves most
    pixels of a primitive, and the strict class catches a difference of a single pixel.
@@ -67,6 +69,7 @@
 #include "port/platform.h"
 
 int port_gs_backend_open(void);
+int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 void port_gs_backend_gif(int path, const void *data, size_t bytes);
 const void *port_gs_backend_vram(void);
 
@@ -879,6 +882,14 @@ static int run_case(int index, const Case *k) {
     gsn_decode_rect(vram, &fr, fb_b);
     gsn_decode_rect(vram, &zr, z_b);
 
+    /* A vblank (the display off) for both: each renderer's Vulkan device moves on to its next frame
+       and lets go of what the last ones used; without it, what every case allocates is kept */
+    {
+        static const uint64_t privileged[0xF0 / 8];
+        port_gs_backend_vsync(privileged, 0, 0, NULL);
+        gsn_vsync(privileged, 0, 0, NULL);
+    }
+
     for (size_t i = 0; i < n; i++) {
         uint32_t d = pixel_diff(k, fb_a[i], fb_b[i]);
         int zd = z_differs(k, z_a[i], z_b[i]);
@@ -920,8 +931,8 @@ static int run_case(int index, const Case *k) {
     /* the criterion (the header comment) */
     int exact = k->prim == 6 && (!k->tme || (k->unit_uv && !k->feedback) || (k->feedback && k->fst && !k->mmag));
     uint32_t allowed = exact ? 0 : cover / 50 + 4;
-    if (k->tme && !k->fst && (k->mmag || k->mmin)) {
-        allowed = cover / 8 + 4; /* STQ and bilinear: each sixteenth of a texel is a boundary */
+    if (!exact && k->tme && (k->mmag || k->mmin)) {
+        allowed = cover / 8 + 4; /* bilinear: each sixteenth of a texel is a boundary */
     }
     int ok = bad <= allowed && zbad <= allowed;
     if (getenv("GSN_ALL") || !ok) {
