@@ -21,7 +21,8 @@
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
-                         or all), as the Debug page's buttons do (port/include/port/cheats.h)
+                         or all), as the Debug page's buttons do; spells1, spells2 or spells3 for the
+                         spells at that level (3 otherwise) (port/include/port/cheats.h)
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default)
@@ -248,7 +249,8 @@ static int parse_cheats(const char *list) {
     static const struct {
         const char *name;
         int bits;
-    } names[] = {{"spells", PORT_CHEAT_SPELLS}, {"equipment", PORT_CHEAT_EQUIPMENT}, {"items", PORT_CHEAT_ITEMS},
+    } names[] = {{"spells", PORT_CHEAT_SPELLS}, {"spells1", PORT_CHEAT_SPELLS | 0x100}, {"spells2", PORT_CHEAT_SPELLS | 0x200},
+                 {"spells3", PORT_CHEAT_SPELLS | 0x300}, {"equipment", PORT_CHEAT_EQUIPMENT}, {"items", PORT_CHEAT_ITEMS},
                  {"magic", PORT_CHEAT_MAGIC},
                  {"all", PORT_CHEAT_SPELLS | PORT_CHEAT_EQUIPMENT | PORT_CHEAT_ITEMS | PORT_CHEAT_MAGIC}};
     const char *at = list;
@@ -260,7 +262,10 @@ static int parse_cheats(const char *list) {
 
         for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
             if (strlen(names[i].name) == length && strncmp(at, names[i].name, length) == 0) {
-                port_cheat_request(names[i].bits);
+                if (names[i].bits >> 8) {
+                    port_cheat_set_spell_level(names[i].bits >> 8);
+                }
+                port_cheat_request(names[i].bits & 0xFF);
                 found = 1;
             }
         }

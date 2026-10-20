@@ -6,6 +6,7 @@
 #include "port/cheats.h"
 
 static int requested;
+static int spell_level = 3;
 static char message[160] = "";
 
 void port_cheat_request(int cheats) {
@@ -15,6 +16,14 @@ void port_cheat_request(int cheats) {
 
 const char *port_cheat_message(void) {
     return message;
+}
+
+void port_cheat_set_spell_level(int level) {
+    spell_level = level < 1 ? 1 : level > 3 ? 3 : level;
+}
+
+int port_cheat_spell_level(void) {
+    return spell_level;
 }
 
 int port_cheat_take(void) {

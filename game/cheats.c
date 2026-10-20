@@ -1,7 +1,8 @@
 /* cheats.c: PC-only. The game's side of the debug cheats (port/include/port/cheats.h), taken in play at
    the end of a frame (Quick_PollGame), as the game itself would change these.
 
-   - Spells: spell_levels[school][slot] is 0 for a spell not known, else its level (1 to 3), and
+   - Spells: spell_levels[school][slot] is 0 for a spell not known, else its level (1 to 3, each its own
+     spell in fx_table, with its own strength, effect and length; port_cheat_spell_level picks), and
      spell_experience counts toward the next (50 and 150: Player_CountMagicUse). A known spell is in the
      menus' lists, which are built as a menu opens. The gauge charges for PlayerState.charging_magic,
      picked as a crystal teaches a spell (Player_ApplyItem, Player_PickChargingMagic).
@@ -45,13 +46,14 @@ static int unlisted(int item) {
 }
 
 static int learn_spells(void) {
-    int school, slot, learned = 0;
+    static const u16 experience[4] = {0, 0, 50, 150}; /* where each level starts (Player_CountMagicUse) */
+    int school, slot, learned = 0, level = port_cheat_spell_level();
 
     for (school = 0; school < SPELL_SCHOOLS; school++) {
         for (slot = 0; slot < SPELL_SLOTS; slot++) {
-            learned += spell_levels[school][slot] != 3;
-            spell_levels[school][slot] = 3;
-            spell_experience[school][slot] = 150;
+            learned += spell_levels[school][slot] != level;
+            spell_levels[school][slot] = (u8)level;
+            spell_experience[school][slot] = experience[level];
         }
     }
     if (player_state.charging_magic == 0) {
@@ -116,7 +118,8 @@ void Cheat_Poll(void) {
     text[0] = 0;
     if (cheats & PORT_CHEAT_SPELLS) {
         n = learn_spells();
-        at += (size_t)snprintf(text + at, sizeof(text) - at, "%d spells learned; ", n);
+        at += (size_t)snprintf(text + at, sizeof(text) - at, "%d spells set to level %d; ", n,
+                               port_cheat_spell_level());
     }
     if (cheats & PORT_CHEAT_EQUIPMENT) {
         n = add_equipment();

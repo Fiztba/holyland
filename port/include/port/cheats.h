@@ -11,13 +11,19 @@
 extern "C" {
 #endif
 
-#define PORT_CHEAT_SPELLS 1    /* every spell of the six schools, at level 3 */
+#define PORT_CHEAT_SPELLS 1    /* every spell of the six schools, at port_cheat_spell_level() */
 #define PORT_CHEAT_EQUIPMENT 2 /* one of every weapon and worn item */
 #define PORT_CHEAT_ITEMS 4     /* the carried items, 99 of each (one of a one-of-a-kind item); no keys */
 #define PORT_CHEAT_MAGIC 8     /* MP and Magic Power at 999 (the game's own cap), MP full */
 
 /* Asks for the cheats (PORT_CHEAT_ bits), taken once the player is in play */
 void port_cheat_request(int cheats);
+/* The level PORT_CHEAT_SPELLS gives (1 to 3; 3 at first). Each level is its own spell, with its own
+   strength, effect and length: Earth Heal 1 heals for under 3 s, Earth Heal 3 also gives a 30 s boost
+   and shows it as long. A spell already known goes to this level too. */
+void port_cheat_set_spell_level(int level);
+int port_cheat_spell_level(void);
+
 /* The last thing the cheats did or why they waited, for the overlay */
 const char *port_cheat_message(void);
 

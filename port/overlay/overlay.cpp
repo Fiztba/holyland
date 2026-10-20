@@ -833,8 +833,18 @@ void debug_page() {
             "(--invincible turns it on from the start).");
     if (ImGui::Button("Learn all spells"))
         port_cheat_request(PORT_CHEAT_SPELLS);
-    tooltip("Every spell of the six schools, at level 3. They show in Equipment > Magic and the Item\n"
-            "menu's magic once a menu is opened again.");
+    tooltip("Every spell of the six schools, at the level beside. They show in Equipment > Magic and\n"
+            "the Item menu's magic once a menu is opened again.");
+    ImGui::SameLine();
+    {
+        int level = port_cheat_spell_level();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+        if (ImGui::SliderInt("level", &level, 1, 3))
+            port_cheat_set_spell_level(level);
+        tooltip("Each level is its own spell, with its own strength, effect and length (Earth Heal 1 heals\n"
+                "for under 3 seconds; Earth Heal 3 also gives a 30 second boost, and its glow lasts as\n"
+                "long). Learning again sets every spell to this level.");
+    }
     ImGui::SameLine();
     if (ImGui::Button("Add all equipment"))
         port_cheat_request(PORT_CHEAT_EQUIPMENT);
