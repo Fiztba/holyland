@@ -15,6 +15,10 @@
        --renderer NAME   who draws: gs (paraLLEl-GS, the default), native (step 3's renderer,
                          port/gs/native/) or both (side by side, their pictures compared; the
                          window shows gs's, --renderer-shown native shows the other)
+       --presenter NAME  how the picture reaches the window: sdl (SDL_Renderer, the default) or
+                         vulkan (a swapchain on the native GS's device, the picture kept on the
+                         GPU; port/platform/present_vk.cpp); vulkan falls back to sdl if it
+                         cannot start
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): interp (the interpreter, the default), hle (the same
@@ -124,7 +128,7 @@ static void usage(const char *program) {
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n"
-            "          [--native-scale 1-4] [--vu1 interp|hle|check]\n",
+            "          [--presenter sdl|vulkan] [--native-scale 1-4] [--vu1 interp|hle|check]\n",
             program);
     exit(2);
 }
@@ -229,6 +233,16 @@ static void parse_options(int argc, char **argv) {
             } else {
                 port_options.renderer_shown = which;
             }
+        } else if (strcmp(option, "--presenter") == 0) {
+            if (strcmp(value, "sdl") == 0) {
+                port_options.presenter = PORT_PRESENTER_SDL;
+            } else if (strcmp(value, "vulkan") == 0) {
+                port_options.presenter = PORT_PRESENTER_VULKAN;
+            } else {
+                fprintf(stderr, "--presenter wants sdl or vulkan, not %s\n", value);
+                exit(2);
+            }
+            port_options.presenter_forced = 1;
         } else if (strcmp(option, "--native-scale") == 0) {
             port_options.native_scale = atoi(value);
             if (port_options.native_scale < 1 || port_options.native_scale > 4) {

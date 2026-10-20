@@ -3,7 +3,8 @@
      {
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "widescreen": false, "widescreen_hud": "corner", "renderer": "gs", "native_scale": 1},
+                    "widescreen": false, "widescreen_hud": "corner", "renderer": "gs", "native_scale": 1,
+                    "presenter": "sdl"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -276,6 +277,13 @@ void port_settings_load(void) {
         }
     }
     s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 1, 4);
+    {
+        const char *presenter = read_string(display, "presenter");
+
+        if (presenter != NULL) {
+            s->presenter = strcmp(presenter, "vulkan") == 0 ? PORT_PRESENTER_VULKAN : PORT_PRESENTER_SDL;
+        }
+    }
     audio = cJSON_GetObjectItemCaseSensitive(document, "audio");
     s->volume = (int)read_number(audio, "volume", s->volume, 0, 100);
     s->mute = read_bool(audio, "mute", s->mute);
@@ -313,6 +321,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
+    }
+    if (!port_options.presenter_forced) {
+        port_options.presenter = s->presenter;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -422,6 +433,7 @@ void port_settings_save(void) {
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));
+    put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));

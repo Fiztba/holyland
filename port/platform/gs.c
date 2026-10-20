@@ -83,7 +83,11 @@ static void open_backend(void *unused) {
     }
     if (port_options.renderer != PORT_RENDERER_GS) {
         /* a Vulkan device of its own, beside paraLLEl-GS's (whose context has features on that the
-           native GS does not want, and whose threads submit to the queue unlocked by the other device) */
+           native GS does not want, and whose threads submit to the queue unlocked by the other device);
+           with the window's swapchain on it for --presenter vulkan (port/platform/present_vk.cpp) */
+        if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
+            gsn_enable_present();
+        }
         have_native = gsn_open(NULL);
         if (have_native) {
             gsn_set_scale(port_options.native_scale);
@@ -569,9 +573,14 @@ static void compare_buffers(VsyncRequest *request, int dump) {
     }
 }
 
-/* A picture of a renderer's (or each's, with both) for the window and --dump-frames: 1 if one is shown */
+/* A picture of a renderer's (or each's, with both) for the window and --dump-frames: 1 if one is shown.
+   With the Vulkan presenter the native GS's picture stays on the GPU (GSN_WANT_IMAGE), and is read back
+   only for a dump. */
 static int present_frames(VsyncRequest *request, int shown, int dump) {
     int want = shown || dump;
+    int want_native = shown && port_video_takes_images() ? GSN_WANT_IMAGE | (dump ? GSN_WANT_PIXELS : 0)
+                      : want                             ? GSN_WANT_PIXELS
+                                                         : 0;
     int got_gs = 0, got_native = 0;
     PortGsFrame *show;
 
@@ -579,14 +588,18 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         got_gs = port_gs_backend_vsync(request->privileged, request->field, want, &frame);
     }
     if (have_native) {
-        got_native = gsn_vsync(request->privileged, request->field, want, &native_frame);
+        got_native = gsn_vsync(request->privileged, request->field, want_native, &native_frame);
     }
     if (have_gs && have_native) {
         compare_buffers(request, dump);
     }
     if (have_gs && have_native) {
         show = port_options.renderer_shown == PORT_RENDERER_NATIVE ? &native_frame : &frame;
-        if (dump && got_gs && got_native) {
+        if (show == &native_frame && !(got_native & GSN_WANT_PIXELS) && (got_native & GSN_WANT_IMAGE)) {
+            port_video_submit_image();
+            return 1;
+        }
+        if (dump && got_gs && (got_native & GSN_WANT_PIXELS)) {
             /* each picture, the one shown under the usual name */
             char name[64];
 
@@ -597,10 +610,22 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
             port_video_dump_named(&native_frame, name);
             dump = 0;
         }
-        if (!(show == &frame ? got_gs : got_native)) {
+        if (!(show == &frame ? got_gs : got_native & GSN_WANT_PIXELS)) {
             return 0;
         }
+        if (show == &native_frame && (got_native & GSN_WANT_IMAGE) && shown) {
+            /* (dumped above) the window takes the image */
+            port_video_submit_image();
+            return 1;
+        }
     } else if (have_native) {
+        if (got_native & GSN_WANT_IMAGE) {
+            if (dump && (got_native & GSN_WANT_PIXELS)) {
+                port_video_dump(&native_frame, request->vblank);
+            }
+            port_video_submit_image();
+            return 1;
+        }
         if (!got_native) {
             return 0;
         }

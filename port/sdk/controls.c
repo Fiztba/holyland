@@ -876,12 +876,15 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
 /* The mouse in the window's top right corner when the capture changes: fades in over 140 ms, stays
    1100 ms, fades out over 420 ms. A cut across it means released. The glyph and timing are Verdite2's
    (patches/MouseIndicator.cs, MIT, Voicedrew11). */
-void port_controls_draw(void *sdl_renderer, int x, int y, int width, int height) {
+int port_controls_indicator_shown(void) {
+    return port_controls_verdite() && pc.indicator_time != 0 && SDL_GetTicks() - pc.indicator_time < 1660;
+}
+
+void port_controls_draw(PortFillRect fill, void *context, int x, int y, int width, int height) {
     static const char *const glyph[13] = {
         "....#....", "....#....", "...###...", "..#####..", ".##.#.##.", ".##.#.##.", ".#######.",
         ".#######.", ".#######.", ".#######.", ".#######.", "..#####..", "...###...",
     };
-    SDL_Renderer *renderer = sdl_renderer;
     uint32_t age;
     double alpha;
     int cell;
@@ -889,55 +892,36 @@ void port_controls_draw(void *sdl_renderer, int x, int y, int width, int height)
     int origin_x;
     int origin_y;
     int pass;
-    Uint8 old_r, old_g, old_b, old_a;
-    SDL_BlendMode old_blend;
 
-    if (!port_controls_verdite() || pc.indicator_time == 0 || width < 64 || height < 64) {
+    if (!port_controls_indicator_shown() || width < 64 || height < 64) {
         return;
     }
     age = SDL_GetTicks() - pc.indicator_time;
-    if (age >= 1660) {
-        return;
-    }
     alpha = age < 140 ? age / 140.0 : age < 1240 ? 1.0 : (1660 - age) / 420.0;
     cell = height / 180 > 2 ? height / 180 : 2;
     margin = height * 3 / 100 > cell * 2 ? height * 3 / 100 : cell * 2;
     origin_x = x + width - margin - cell * 9;
     origin_y = y + margin;
-    /* the window clears to the draw colour: it is put back as it was */
-    SDL_GetRenderDrawColor(renderer, &old_r, &old_g, &old_b, &old_a);
-    SDL_GetRenderDrawBlendMode(renderer, &old_blend);
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     for (pass = 0; pass < 2; pass++) {
         int offset = pass == 0 ? 1 : 0;
+        /* a shadow, then the glyph */
+        unsigned int rgba = pass == 0 ? (unsigned int)(255.0 * 0.55 * alpha) << 24
+                                      : ((unsigned int)(255.0 * alpha) << 24) | 0xFFFFFFu;
         int row;
 
-        if (pass == 0) {
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(255.0 * 0.55 * alpha));
-        } else {
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, (Uint8)(255.0 * alpha));
-        }
         for (row = 0; row < 13; row++) {
             int column;
 
             for (column = 0; column < 9; column++) {
-                SDL_Rect rect;
-
                 if (glyph[row][column] != '#') {
                     continue;
                 }
                 if (!pc.indicator_captured && (row - column == 4 || row - column == 5)) {
                     continue;
                 }
-                rect.x = origin_x + (column + offset) * cell;
-                rect.y = origin_y + (row + offset) * cell;
-                rect.w = cell;
-                rect.h = cell;
-                SDL_RenderFillRect(renderer, &rect);
+                fill(context, origin_x + (column + offset) * cell, origin_y + (row + offset) * cell, cell, cell, rgba);
             }
         }
     }
-    SDL_SetRenderDrawColor(renderer, old_r, old_g, old_b, old_a);
-    SDL_SetRenderDrawBlendMode(renderer, old_blend);
 }
 #endif
