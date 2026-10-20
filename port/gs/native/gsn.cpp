@@ -170,6 +170,7 @@ enum : uint32_t {
 };
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
+    M_ZCLAMP = 0x400,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -225,6 +226,7 @@ struct Gs {
     bool own_context = false;
     Device *device = nullptr;
     Program *program = nullptr;
+    Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
@@ -1269,6 +1271,17 @@ void flush_batch() {
         return;
     }
     push.misc |= s << M_SCALE_SHIFT;
+    // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
+    // and keeps each pixel's within the format, where clamping the vertices would tilt the plane
+    bool zclamp = false;
+    if (depth) {
+        for (const Vtx &v : gs->verts) {
+            zclamp = zclamp || v.z > depth_max(zpsm);
+        }
+    }
+    if (zclamp) {
+        push.misc |= M_ZCLAMP;
+    }
     uint32_t write_mask = 0;
     for (int i = 0; i < 4; i++) {
         if (shader_blend || ((fbmsk >> (i * 8)) & 0xFF) != 0xFF) {
@@ -1358,7 +1371,7 @@ void flush_batch() {
         begin_pass(color, depth);
         CommandBuffer &c = cmd();
         c.set_opaque_state();
-        c.set_program(gs->program);
+        c.set_program(zclamp ? gs->program_zclamp : gs->program);
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
         VkViewport vp = {0.0f, 0.0f, float(color->width * s), float(color->height * s), 0.0f, 1.0f};
@@ -2169,6 +2182,8 @@ void make_program() {
     Shader *vs = gs->device->request_shader(gsn_spv_gs_vert, sizeof(gsn_spv_gs_vert), &vert);
     Shader *fs = gs->device->request_shader(gsn_spv_gs_frag, sizeof(gsn_spv_gs_frag), &frag);
     gs->program = gs->device->request_program(vs, fs);
+    Shader *fs_zclamp = gs->device->request_shader(gsn_spv_gs_zclamp_frag, sizeof(gsn_spv_gs_zclamp_frag), &frag);
+    gs->program_zclamp = gs->device->request_program(vs, fs_zclamp);
 }
 
 void reset_gs() {
