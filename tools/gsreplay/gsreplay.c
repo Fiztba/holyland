@@ -1427,7 +1427,7 @@ int main(int argc, char **argv) {
         if ((run.render & RENDER_GS) && !port_gs_backend_open()) {
             die("no paraLLEl-GS: pictures need a Vulkan GPU");
         }
-        if ((run.render & RENDER_NATIVE) && !gsn_open((run.render & RENDER_GS) ? port_gs_backend_context() : NULL)) {
+        if ((run.render & RENDER_NATIVE) && !gsn_open(NULL)) {
             die("no native GS: it needs a Vulkan GPU");
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);

@@ -82,8 +82,9 @@ static void open_backend(void *unused) {
         have_gs = port_gs_backend_open();
     }
     if (port_options.renderer != PORT_RENDERER_GS) {
-        /* beside paraLLEl-GS, on its Vulkan device's context */
-        have_native = gsn_open(have_gs ? port_gs_backend_context() : NULL);
+        /* a Vulkan device of its own, beside paraLLEl-GS's (whose context has features on that the
+           native GS does not want, and whose threads submit to the queue unlocked by the other device) */
+        have_native = gsn_open(NULL);
     }
     backend = have_gs || have_native;
 #endif
