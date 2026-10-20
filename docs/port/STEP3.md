@@ -12,11 +12,19 @@ timings of the step 2 path, and how ico-pc built its renderer.
 
 ## Progress (October 2026)
 
-- **Stage 0, mostly done.** `--renderer gs|native|both`, the Debug page's switch and
+- **Stage 0, done.** `--renderer gs|native|both`, the Debug page's switch and
   `settings.json`; with `both`, the displayed frame buffers compared every vblank (the overlay and
-  `--stats`). `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank).
-  Not done: the presenter on Granite's WSI and ImGui on Vulkan (the native GS's picture still goes
-  through the CPU to SDL, as paraLLEl-GS's does). Interlace settled: in play and the in-game menus
+  `--stats`), and shown as a heat map (the renderer section's "Show where they differ",
+  `--renderer-shown heatmap`; computed from the pixels the comparison reads on the CPU).
+  `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank). The presenter
+  on Vulkan, opt-in: `--presenter vulkan` (the Debug page, `settings.json` `display.presenter`)
+  makes the window's swapchain (through SDL_Vulkan_CreateSurface, not Granite's WSI) on the native
+  GS's device; the native GS copies the displayed buffer on the GPU into an image (field mode woven
+  there) which is blitted into the window, and the overlay and the mouse indicator are drawn with
+  ImGui's Vulkan backend (`port/platform/present_vk.cpp`). No read-back: 2,000 vblanks windowed at
+  4x went from 16-22 s to 8.1-8.2 s, at 1x from 7.6 s to 7.2-7.6 s. paraLLEl-GS keeps
+  SDL_Renderer (`--renderer gs` falls back to it); with `both` the paraLLEl-GS picture is uploaded.
+  `sdl` stays the default until the Vulkan one has been played with. Interlace settled: in play and the in-game menus
   draw one 448-line frame (SMODE2 FFMD 0); the title, the memory card screens and the movies draw
   224-line fields, FBP 0 and 0x46 in turn.
 - **Stages 1 and 2, working.** The native GS (`port/gs/native/`) draws the whole game from the VU1
@@ -27,7 +35,9 @@ timings of the step 2 path, and how ico-pc built its renderer.
   MTBA mipmaps, SCANMSK, save states. `tests/gsn_draw_test.c` draws random batches (every primitive,
   texture and frame buffer format, CLUT, blend, alpha and Z test, DATE, FBMSK, SCANMSK, fog) on both
   renderers and compares their VRAM: 300 cases a run pass, and paraLLEl-GS's own quirks the game
-  does not reach are listed in PLAN.md. The 64 map tour captures, each frame drawn from
+  does not reach are listed in PLAN.md; then as many rounds of buffers that share memory (128-wide
+  buffers page rows apart drawn into, uploaded into in their shape and in others, copied and read
+  as textures, as the scrolling textures do), which must leave VRAM the same byte for byte. The 64 map tour captures, each frame drawn from
   paraLLEl-GS's state: no crash; on average 2% of the frame's pixels are more than 1 a channel
   from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
   PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
@@ -37,20 +47,56 @@ timings of the step 2 path, and how ico-pc built its renderer.
   smear) blend in the shader exactly, so they do not drift. Uploads seen before come back as page
   copies instead of being swizzled again.
 - **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
-  resolution, live from the overlay); `--frame-rate 60` (a picture at every vblank in play, the camera
-  interpolated; below, "Higher frame rates").
+  resolution, live from the overlay). `--native-widescreen`: with `--widescreen`, the targets are
+  drawn 4/3 of that across (rounded up: 2, 3, 4, 6 for 1x to 4x), so the 16:9 picture has square
+  pixels instead of 640 columns stretched; the native GS keeps a scale per axis, and nothing else
+  changes (the 2D squeeze and the GS's coordinates stay `--widescreen`'s). Live from the overlay.
+  `--native-msaa 2|4|8`: the 3D (every draw with a Z buffer) drawn into multisampled images, resolved
+  wherever the target is read (textures, the shader's blending, write-backs, frame copies, the
+  scanout), the 2D drawn with Z snapped to whole pixels so the menus and movies are unchanged; the
+  alpha test's cut-outs and draws without Z stay as they are. Combines with the two above; 2% (4x)
+  to 5% (8x) of a run's time at 1x, 6% to 12% at `--native-scale 4`. PLAN.md's opt-in table.
+  `--frame-rate 60`: a picture at every vblank in play, the camera interpolated (below, "Higher
+  frame rates").
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
   packets through) has a high-level C version that gives the interpreter's results bit for bit
   (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
   captures and live runs on several maps). That was the stage's purpose: VU1 goes from two thirds
   of the run's time to a sixth. Shaders are left as an option (below).
-- **Speed** (2,000 vblanks, new game then map 000): paraLLEl-GS with the interpreter 6.4 s (main
-  today); paraLLEl-GS with VU1 in C 3.2 s; the native GS with VU1 in C 4.4 s.
+- **Speed** (2,000 vblanks, new game then map 000, `--fast --headless`, Ryzen 9 9900X3D):
+  paraLLEl-GS with the interpreter 6.4 s (main today); paraLLEl-GS with VU1 in C 3.3-3.6 s; the
+  native GS with VU1 in C 2.0 s (4.4 s before stage 4's speed work); no GS at all 1.5 s. Maps 004,
+  029, 112 and 116 the same way: 1.9-2.1 s, paraLLEl-GS 3.3-3.5 s. With a picture for the window
+  every vblank (the window's path made to run in a headless build): 2.2 s, paraLLEl-GS 8.8 s.
+  What stage 4's speed work did (feat/gsn-speed):
+  - the native GS has a thread of its own: the DMA controller's thread copies the GIF packets and
+    vblanks into a ring and goes on with VU1; whatever wants something back (the FIFO read-back, a
+    dumped picture, a save state, kf4-gsreplay) waits for the ring to empty; a picture for the
+    window is handed to it by the GS's thread (`GSN_PRESENT`), so nothing waits for that either
+    (`KF4_GSN_THREAD=0`: no thread);
+  - four frame contexts, where two left a vblank waiting for the GPU's work of the one before;
+  - targets keep which pages are newer than VRAM (the rows their draws reach): a write-back writes
+    only those, a texture or CLUT read of the others needs none; a buffer whole page rows above a
+    target, in its layout, makes the target grow upwards; uploads into a target at such an offset
+    go into it, and an upload that writes whole pages of a target in another shape keeps the rest.
+    Map 000's scrolling textures no longer go back through the CPU every frame (713 write-backs in
+    the run to 133, those left at the title, the menus and map 008's reflection);
+  - uploads: a hash four lanes wide, no copy of an upload that comes whole, 24-bit uploads (the
+    title's) found again as pages; VRAM read and written a row at a time, each format's swizzle
+    and row loop made on its own;
+  - a Vulkan pipeline cache in the data folder (`native_gs_pipelines.bin`): where the driver keeps
+    none (a new build, its own cache full) the first minutes made pipelines for 1.6 s;
+  - VU1's code aligned to 64 bytes (`-falign-functions=64 -falign-loops=64` for vu1*.c): its speed
+    moved by a third with where the linker put it.
 - **Stage 4 (the default)** is the next decision: `--renderer native` and `--vu1 hle` are opt-in
   until they have been played through.
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
-  there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
-  texture's target on map 000) has the target written back through the CPU each frame;
+  there; the scanouts agree); write-backs still left: the title's 640x224 field buffer (61 in the
+  run), the menus' Z buffer over the play's frame buffers, and map 008's reflection drawn with the
+  main Z buffer at 256 wide, which sends the main Z back to VRAM; at the title and in the menus each
+  field is read back for the weave, wanted or not;
+  the Vulkan instance and device take a fifth of a second to make at start-up, waited for by the
+  boot's read-back;
   `--renderer both` on Mesa's lavapipe needs `LP_NUM_THREADS=1`.
 
 ### What could come next
@@ -63,10 +109,9 @@ timings of the step 2 path, and how ico-pc built its renderer.
 - **Uploads on the GPU.** The swizzle runs on the CPU (and is mostly skipped now: uploads seen before
   are copied in as pages). A compute pass writing a GPU copy of VRAM, with textures read from it,
   would take the rest off the CPU and remove the write-backs.
-- **The presenter on Vulkan.** The picture still goes to the window through the CPU, as
-  paraLLEl-GS's does; at 4x that is 18 MB a vblank, which the measurements show is affordable. A
-  swapchain on the native GS's device would need the overlay and the on-screen controls (both drawn
-  with SDL_Renderer today) on Vulkan too.
+- **The Vulkan presenter as the default.** Done as an opt-in (`--presenter vulkan`, Progress above);
+  the default can change once it has been played with. paraLLEl-GS's picture could go the same way
+  (uploaded, or its image on a shared device) so that `--renderer gs` needs no SDL_Renderer either.
 - **VU1 on the GPU.** The C programs (stage 3) take VU1 from two thirds of the run's time to a
   sixth; shaders would take the rest, at the cost of a second implementation to keep bit for bit.
 
@@ -224,7 +269,7 @@ for one person working steadily with agents; they will move.
 | **2. Native GS, 3D from the interpreter** | the VU1 interpreter still runs on the CPU, and its GIF output is drawn natively: the whole game on the native GS. Fog, mipmaps, contexts, DATE/FBA, the frame copies and feedback passes (integer arithmetic where they feed back), the scroll targets, the reflection, the wobble | the diff over the 64 map tour views and the step 2 checklist's spots; feedback passes exact over 600 frames | 3-5 weeks |
 | **3. VU1 on the GPU** | the programs as vertex shaders, 0x000 first (86% of draws), then 0x280, 0x5A0, 0x700; the interpreter stays as a test mode | per program: shader output against the interpreter's (X/Y within 1/16 pixel, Z and ST within a small relative error, colour within 1, ADC exact); then the picture diff | 3-5 weeks |
 | **4. Default and speed** | batching, pipeline cache, frame pacing; native becomes the default; paraLLEl-GS stays behind `--renderer gs` for comparison (and its LGPL question is settled before release builds ship it) | timings: the busiest maps at full speed with room to spare | 1-2 weeks |
-| **5. Improvements, opt-in** | resolution scale (scene targets scaled, work buffers kept at PS2 size), a native widescreen frame instead of the 2D squeeze, MSAA, higher frame rates with interpolation | each off by default; with all off, the picture equals stage 4's | open-ended |
+| **5. Improvements, opt-in** | resolution scale (scene targets scaled, work buffers kept at PS2 size), a native widescreen frame instead of the 2D squeeze (done as square pixels across: `--native-widescreen`), MSAA (done for the 3D: `--native-msaa`), higher frame rates with interpolation | each off by default; with all off, the picture equals stage 4's | open-ended |
 
 In all, roughly 3 to 4 months to a native default (stages 0-4), then improvements as wanted. ico-pc's
 renderer grew to about 155,000 lines with a long tail of driver fixes; KF4 needs less (fewer GS

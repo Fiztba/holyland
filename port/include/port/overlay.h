@@ -26,14 +26,23 @@ typedef struct {
 void kf4_game_readout(PortGameReadout *out);
 
 #ifdef KF4_HAVE_SDL
-/* (port/platform/video.c) after the window and its renderer are made */
+/* (port/platform/video.c) after the window and its renderer are made: an SDL_Renderer, or NULL for
+   the Vulkan presenter (port/platform/present_vk.cpp), which records ImGui's draw lists itself */
 void port_overlay_init(void *sdl_window, void *sdl_renderer);
 /* (port/sdk/libpad.c) each SDL event: 1 when the overlay took it, and the game must not see it */
 int port_overlay_event(const void *sdl_event);
 /* 1 when the overlay draws something this vblank (open, a message, the frame rate, a test picture) */
 int port_overlay_visible(void);
-/* (port/platform/video.c) draws it over the picture, before the window is presented */
-void port_overlay_draw(void);
+/* (port/platform/video.c) draws it over the picture, before the window is presented; the picture is
+   at x, y, width x height in the window's pixels. On the Vulkan presenter it only makes the draw
+   lists (with the mouse indicator, port_controls_draw), and port_overlay_draw_data hands them out:
+   an ImDrawData *, or NULL when nothing is drawn this time. */
+void port_overlay_draw(int x, int y, int width, int height);
+void *port_overlay_draw_data(void);
+/* (the Vulkan presenter) a test picture (KF4_OVERLAY_SHOT) is due: the window, read back after this
+   vblank's drawing, goes to port_overlay_shot as RGBA (R in the low byte) */
+int port_overlay_shot_due(void);
+void port_overlay_shot(const unsigned int *rgba, int width, int height);
 /* 1 while it is open: the keyboard, mouse and controller go to it, not to the game */
 int port_overlay_open(void);
 /* The game holds still while the overlay is open ("Pause the game while the overlay is open") */

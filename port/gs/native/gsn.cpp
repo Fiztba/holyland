@@ -26,15 +26,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <deque>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 #include "context.hpp"
 #include "device.hpp"
+#include "thread_id.hpp"
 
 extern "C" {
 #include "port/gs_capture_format.h"
@@ -156,7 +167,8 @@ struct Push {
     int32_t dst_offset[2];
     uint32_t misc;
     uint32_t fbmsk;
-    uint32_t tscale; // a texture that is a render target: how many of its pixels a GS pixel is across
+    uint32_t tscale; // a texture that is a render target: how many of its pixels a GS pixel is, across
+                     // (bits 0-15) and down (16-31)
 };
 static_assert(sizeof(Push) == 84, "Push is the shaders' push constant block");
 
@@ -177,12 +189,19 @@ enum : uint32_t {
 // ---- Render targets and textures ----------------------------------------------------------------
 struct Target {
     uint32_t bp, bw, psm; // bp in 256-byte blocks
-    uint32_t width, height; // in GS pixels: the image is `scale` times as wide and as high
-    uint32_t scale;
+    uint32_t width, height; // in GS pixels: the image is `sx` times as wide and `sy` times as high
+    uint32_t sx, sy;
     ImageHandle image;
     bool depth;
-    bool dirty; // newer than the CPU's VRAM
+    bool dirty; // newer than the CPU's VRAM (somewhere: dirty_pages says where)
+    // which of its pages (target_pages' order: rows of bw pages, when the target is `regular`) are
+    // newer than the CPU's VRAM; the others hold what VRAM does
+    std::vector<uint8_t> dirty_pages;
     uint64_t used;
+    // --native-msaa: the multisampled image the 3D is drawn into (made when first drawn so), and which
+    // of the two has pixels the other does not (msaa_settle, msaa_ready)
+    ImageHandle ms;
+    bool ms_newer, image_newer;
 };
 
 struct Texture {
@@ -209,6 +228,7 @@ struct Gs {
     uint32_t clut_cbp[2]; // CBP0, CBP1: the last CBP loaded by CLD 2..5
     uint64_t clut_version;
     QVertex queue[3];
+    Vtx queued[3]; // the same, as the shaders take them (made as each is queued)
     uint32_t queue_count;
     uint32_t fan_first; // a fan's first vertex is queue[0], kept
     GifPath paths[4];
@@ -228,6 +248,7 @@ struct Gs {
     Device *device = nullptr;
     Program *program = nullptr;
     Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
+    Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
@@ -238,6 +259,7 @@ struct Gs {
     // the render pass under way
     Target *pass_color = nullptr;
     Target *pass_depth = nullptr;
+    bool pass_ms = false; // drawing into the targets' multisampled images
     bool in_pass = false;
 
     // ---- the batch being gathered: triangles since the last register write
@@ -251,10 +273,15 @@ struct Gs {
 };
 
 Gs *gs;
-// --native-scale: the render targets' size, in pixels a GS pixel (1: the PS2's). Changed at a vblank
-// (gsn_set_scale), when every target goes back to VRAM and comes again at the new size.
-uint32_t target_scale = 1;
-volatile uint32_t wanted_scale = 1;
+// --native-scale: the render targets' size, in pixels a GS pixel across (sx) and down (sy); 1 and 1
+// are the PS2's. sx is larger than sy for --native-widescreen. Changed at a vblank (gsn_set_scale),
+// when every target goes back to VRAM and comes again at the new size.
+uint32_t target_sx = 1, target_sy = 1;
+volatile uint32_t wanted_scale = 1 | 1 << 8; // sx | sy << 8
+// --native-msaa: the samples a pixel of the 3D's targets has (1: none, the PS2's picture; 2, 4, 8).
+// Changed at a vblank (gsn_set_msaa), as the scale is.
+uint32_t target_samples = 1;
+volatile uint32_t wanted_samples = 1;
 
 // Time spent in a function, added to a counter of gsn_stats
 struct Timer {
@@ -290,6 +317,7 @@ void end_pass() {
         gs->in_pass = false;
         gs->pass_color = nullptr;
         gs->pass_depth = nullptr;
+        gs->pass_ms = false;
         gs->cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -358,6 +386,199 @@ void done_reading() {
     gs->device->unmap_host_buffer(*gs->readback_buffer, MEMORY_ACCESS_READ_BIT);
 }
 
+// ---- --native-msaa ------------------------------------------------------------------------------
+// With MSAA on (target_samples above 1), the 3D is drawn into multisampled images: a target drawn into
+// with a Z buffer gets one (Target::ms, as large as its image), and so does its Z buffer. Every draw
+// with a Z buffer goes to them; so does a draw without one into a target whose multisampled image is
+// newer than its image, unless it reads that target as its texture (flush_batch). Everything else uses
+// the image as before: draws without Z (the 2D, the passes over the whole frame), textures read from
+// targets, write-backs, frame copies, uploads, the scanout. The two are kept in step lazily, at most
+// one of them newer: before the image is read or written, a newer multisampled image is resolved
+// into it (msaa_settle: colour, each pixel the mean of its samples; Z, its first sample); before the
+// multisampled image is drawn into, a newer image is copied into every sample of it (msaa_ready).
+// Draws into the multisampled images are shaded once a pixel, as without MSAA: only coverage and Z
+// are per sample, so the pixels inside a primitive are what they are without MSAA, and its edges are
+// smoothed when resolved. A draw that blends in the shader reads the target's resolved pixels
+// (snapshot_of), which keeps a blended pixel's samples as one colour.
+
+// Granite's cache of render passes does not tell them apart by their attachments' sample counts: a
+// pass into multisampled images names its one subpass, where the passes into the images have the
+// default (so the two kinds are not mixed up), and one run uses one sample count (msaa_samples_used).
+// (Set on the GS's thread, read by gsn_set_msaa on the sender's or the overlay's; msaa_samples_have,
+// the counts this GPU has, set by gsn_open, so gsn_set_msaa needs nothing of Granite's.)
+std::atomic<uint32_t> msaa_samples_used{0};
+uint32_t msaa_samples_have = 1;
+
+void msaa_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
+    subpass = {};
+    subpass.num_color_attachments = rp.num_color_attachments;
+    subpass.color_attachments[0] = 0;
+    subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
+    rp.subpasses = &subpass;
+    rp.num_subpasses = 1;
+}
+
+ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
+    msaa_samples_used = target_samples;
+    ImageCreateInfo info = ImageCreateInfo::render_target(width, height, depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM);
+    info.samples = VkSampleCountFlagBits(target_samples);
+    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                 (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    info.layout = ImageLayout::General;
+    info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+    return gs->device->create_image(info, nullptr);
+}
+
+// One of the copying passes (shaders/msaa.vert): src read at each pixel of dst, written to its colour
+// or (depth) its Z
+void msaa_copy_pass(const Image &dst, const Image &src, Program *program, bool depth) {
+    end_pass();
+    RenderPassInfo rp;
+    RenderPassInfo::Subpass subpass;
+    if (depth) {
+        rp.depth_stencil = &dst.get_view();
+        rp.op_flags = RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+    } else {
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &dst.get_view();
+        rp.store_attachments = 1;
+    }
+    if (dst.get_create_info().samples != VK_SAMPLE_COUNT_1_BIT) {
+        msaa_subpass(rp, subpass);
+    }
+    CommandBuffer &c = cmd();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    c.begin_render_pass(rp);
+    c.set_opaque_state();
+    c.set_program(program);
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_test(depth, depth);
+    c.set_depth_compare(VK_COMPARE_OP_ALWAYS);
+    c.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp);
+    c.draw(3);
+    c.end_render_pass();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+}
+
+// A rectangle of a multisampled colour image resolved into a single-sampled one, at the same place
+void msaa_resolve(const Image &dst, const Image &src, VkOffset3D at, VkExtent3D size) {
+    end_pass();
+    transfer_barrier();
+    VkImageResolve region = {};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.srcOffset = at;
+    region.dstOffset = at;
+    region.extent = size;
+    gs->device->get_device_table().vkCmdResolveImage(cmd().get_command_buffer(), src.get_image(),
+                                                     src.get_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL), dst.get_image(),
+                                                     dst.get_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL), 1, &region);
+    transfer_barrier();
+    gsn_stats.ms_resolves++;
+}
+
+// The target's image made current: what was drawn into the multisampled image, resolved into it.
+// (Called before anything reads or writes the image; nothing when MSAA is off.)
+void msaa_settle(Target &t) {
+    if (!t.ms_newer) {
+        return;
+    }
+    if (t.depth) {
+        msaa_copy_pass(*t.image, *t.ms, gs->program_ms_depth, true);
+        gsn_stats.ms_resolves++;
+    } else {
+        msaa_resolve(*t.image, *t.ms, {0, 0, 0}, {t.image->get_width(), t.image->get_height(), 1});
+    }
+    t.ms_newer = false;
+}
+
+// The target's image has been written (a draw without MSAA, an upload, a copy): the multisampled
+// image, if there is one, is behind it
+void msaa_image_written(Target &t) {
+    if (t.ms) {
+        t.image_newer = true;
+    }
+}
+
+// The target's multisampled image made, and current, to be drawn into
+void msaa_ready(Target &t) {
+    if (!t.ms) {
+        t.ms = make_ms_image(t.image->get_width(), t.image->get_height(), t.depth);
+        t.image_newer = true;
+    }
+    if (t.image_newer) {
+        msaa_copy_pass(*t.ms, *t.image, t.depth ? gs->program_ms_load_depth : gs->program_ms_load, t.depth);
+        t.image_newer = false;
+        gsn_stats.ms_loads++;
+    }
+}
+
+// The multisampled image let go (the target's image was made again at another size)
+void msaa_forget(Target &t) {
+    t.ms.reset();
+    t.ms_newer = t.image_newer = false;
+}
+
+// The 2D drawn into a multisampled image covers the same pixels it does without MSAA, whole. Its
+// primitives are rectangles on the screen (sprites, and the menus' quads: two triangles of a strip
+// with one Z), each triangle half of one: its corners are those of its bounding box. Such a
+// triangle's corners are moved out to the edges of the pixels it covers (those whose middle, a GS
+// pixel's integer point, is inside: from ceil(x0) to ceil(x1) - 1 across, the same down; at a larger
+// --native-scale, the target's pixels), and its texture coordinates and fog carried along their
+// slopes, so that each pixel's middle has what it had.
+// (Left as they are, the samples of an edge pixel on the far side of its middle would not be covered:
+// a rectangle over the whole frame would leave half of its first column and row as they were, and
+// every box and letter of the menus would be blurred by half a pixel.) A triangle with a slant, or
+// with its colour or Z not the same at its corners, is left as it is: the 3D, whose edges are smoothed.
+void msaa_flat_2d(std::vector<Vtx> &verts, uint32_t sx, uint32_t sy) {
+    for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
+        Vtx *v = &verts[i];
+        if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
+            continue;
+        }
+        float x0 = std::min(v[0].x, std::min(v[1].x, v[2].x)), x1 = std::max(v[0].x, std::max(v[1].x, v[2].x));
+        float y0 = std::min(v[0].y, std::min(v[1].y, v[2].y)), y1 = std::max(v[0].y, std::max(v[1].y, v[2].y));
+        bool corners = x0 < x1 && y0 < y1;
+        for (int k = 0; k < 3 && corners; k++) {
+            corners = (v[k].x == x0 || v[k].x == x1) && (v[k].y == y0 || v[k].y == y1);
+        }
+        if (!corners) {
+            continue;
+        }
+        // the attributes' slopes across and down (the plane through the three corners)
+        double ax = double(v[1].x) - v[0].x, ay = double(v[1].y) - v[0].y;
+        double bx = double(v[2].x) - v[0].x, by = double(v[2].y) - v[0].y;
+        double det = ax * by - bx * ay;
+        if (det == 0) {
+            continue; // (two corners the same)
+        }
+        float *attr[3][4];
+        for (int k = 0; k < 3; k++) {
+            attr[k][0] = &v[k].s, attr[k][1] = &v[k].t, attr[k][2] = &v[k].q, attr[k][3] = &v[k].fog;
+        }
+        double dx[4], dy[4];
+        for (int a = 0; a < 4; a++) {
+            double da = double(*attr[1][a]) - *attr[0][a], db = double(*attr[2][a]) - *attr[0][a];
+            dx[a] = (da * by - db * ay) / det;
+            dy[a] = (db * ax - da * bx) / det;
+        }
+        for (int k = 0; k < 3; k++) {
+            // in the target's pixels (sx and sy a GS pixel) a corner is at (x + 0.5) sx (the vertex shader
+            // adds half a GS pixel), and a pixel is covered when its middle, j + 0.5, is inside
+            double nx = ceil((v[k].x + 0.5) * sx - 0.5) / sx - 0.5, ny = ceil((v[k].y + 0.5) * sy - 0.5) / sy - 0.5;
+            for (int a = 0; a < 4; a++) {
+                *attr[k][a] = float(*attr[k][a] + dx[a] * (nx - v[k].x) + dy[a] * (ny - v[k].y));
+            }
+            v[k].x = float(nx);
+            v[k].y = float(ny);
+        }
+    }
+}
+
 // ---- The CPU's VRAM ----------------------------------------------------------------------------
 void pages_written(uint32_t lo, uint32_t count) {
     gs->vram_writes++;
@@ -385,6 +606,55 @@ bool pages_overlap(uint32_t lo_a, uint32_t count_a, uint32_t lo_b, uint32_t coun
 
 void target_pages(const Target &t, uint32_t *lo, uint32_t *count) {
     buffer_pages(t.bp, t.bw, t.psm, t.width, t.height, lo, count);
+}
+
+// A target whose pages are rows of bw pages from bp (on a page, and as wide as its buffer): each of
+// its pages is a known 64-pixel-wide rectangle of it, so what is newer than VRAM is kept by page.
+// (Otherwise all of a dirty target counts as dirty.)
+bool regular(const Target &t) {
+    return t.bp % 32 == 0 && t.bw > 0 && t.width == t.bw * 64;
+}
+
+// The target's pages, none newer than VRAM
+void clear_dirty(Target &t) {
+    uint32_t lo, count;
+    target_pages(t, &lo, &count);
+    t.dirty_pages.assign(count, 0);
+    t.dirty = false;
+}
+
+// Rows y0..y1-1 of the target drawn into (all of it, for one that is not regular)
+void mark_dirty(Target &t, uint32_t y0, uint32_t y1) {
+    t.dirty = true;
+    if (!regular(t)) {
+        std::fill(t.dirty_pages.begin(), t.dirty_pages.end(), 1);
+        return;
+    }
+    y1 = std::min(y1, t.height);
+    uint32_t ph = page_height(t.psm);
+    for (uint32_t r = y0 / ph; y0 < y1 && r <= (y1 - 1) / ph; r++) {
+        for (uint32_t c = 0; c < t.bw && size_t(r) * t.bw + c < t.dirty_pages.size(); c++) {
+            t.dirty_pages[size_t(r) * t.bw + c] = 1;
+        }
+    }
+}
+
+// Whether a page of these is one of the target's newer than VRAM
+bool dirty_in(const Target &t, uint32_t lo, uint32_t count) {
+    if (!t.dirty) {
+        return false;
+    }
+    uint32_t tlo, tcount;
+    target_pages(t, &tlo, &tcount);
+    if (!regular(t)) {
+        return pages_overlap(lo, count, tlo, tcount);
+    }
+    for (uint32_t k = 0; k < tcount && k < t.dirty_pages.size(); k++) {
+        if (t.dirty_pages[k] && pages_overlap(lo, count, (tlo + k) % vram_pages, 1)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // ---- Targets ------------------------------------------------------------------------------------
@@ -421,34 +691,74 @@ void write_back(Target &t) {
     if (!t.dirty) {
         return;
     }
+    msaa_settle(t);
     gsn_stats.writebacks++;
     GSN_LOG(1, "write back target bp %#x bw %u psm %#x %ux%u\n", t.bp, t.bw, t.psm, t.width, t.height);
-    uint32_t s = t.scale, pw = t.width * s;
-    const uint8_t *pixels = read_image(*t.image, 0, 0, pw, t.height * s);
-    for (uint32_t y = 0; y < t.height; y++) {
-        for (uint32_t x = 0; x < t.width; x++) {
-            uint32_t v;
-            // a scaled target: the pixel in the middle of the GS pixel's
-            memcpy(&v, pixels + (size_t(y * s + s / 2) * pw + x * s + s / 2) * 4, 4);
-            if (t.depth) {
-                float f;
-                memcpy(&f, &v, 4);
-                double z = double(f) / depth_scale(t.psm) + 0.5;
-                v = z >= double(depth_max(t.psm)) ? depth_max(t.psm) : uint32_t(z);
-                gsn_vram_write(gs->vram.data(), t.psm, t.bp, t.bw, x, y, v);
-            } else {
-                // a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into
-                // the same buffer wrote it: the whole word goes back either way
-                uint32_t psm = psm_layout(t.psm);
-                gsn_vram_write(gs->vram.data(), psm, t.bp, t.bw, x, y, target_pixel_to_vram(v, psm));
+    uint32_t lo, count;
+    target_pages(t, &lo, &count);
+    // the rows of pages with a page newer than VRAM, read; those pages written
+    uint32_t ph = page_height(t.psm), row0 = 0, row1 = t.height;
+    bool by_page = regular(t) && t.dirty_pages.size() == count;
+    if (by_page) {
+        uint32_t first = count, last = 0;
+        for (uint32_t k = 0; k < count; k++) {
+            if (t.dirty_pages[k]) {
+                first = std::min(first, k);
+                last = k;
             }
+        }
+        if (first == count) {
+            t.dirty = false;
+            return;
+        }
+        row0 = first / t.bw * ph;
+        row1 = std::min(t.height, (last / t.bw + 1) * ph);
+    }
+    uint32_t sx = t.sx, sy = t.sy, pw = t.width * sx;
+    const uint8_t *pixels = read_image(*t.image, 0, row0 * sy, pw, (row1 - row0) * sy);
+    // (a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into the same
+    // buffer wrote it: the whole word goes back either way)
+    uint32_t psm = t.depth ? t.psm : psm_layout(t.psm);
+    std::vector<uint32_t> row(t.width);
+    for (uint32_t y = row0; y < row1; y++) {
+        // a run of pixels to go back: the row, or a page's part of it
+        for (uint32_t x = 0; x < t.width;) {
+            uint32_t n = t.width - x;
+            if (by_page) {
+                n = std::min(n, 64u);
+                if (!t.dirty_pages[(y / ph) * t.bw + x / 64]) {
+                    x += n;
+                    continue;
+                }
+            }
+            for (uint32_t i = 0; i < n; i++) {
+                uint32_t v;
+                // a scaled target: the pixel in the middle of the GS pixel's
+                memcpy(&v, pixels + (size_t((y - row0) * sy + sy / 2) * pw + (x + i) * sx + sx / 2) * 4, 4);
+                if (t.depth) {
+                    float f;
+                    memcpy(&f, &v, 4);
+                    double z = double(f) / depth_scale(t.psm) + 0.5;
+                    row[i] = z >= double(depth_max(t.psm)) ? depth_max(t.psm) : uint32_t(z);
+                } else {
+                    row[i] = target_pixel_to_vram(v, psm);
+                }
+            }
+            gsn_vram_write_row(gs->vram.data(), psm, t.bp, t.bw, x, y, n, row.data());
+            x += n;
         }
     }
     done_reading();
-    uint32_t lo, count;
-    target_pages(t, &lo, &count);
-    pages_written(lo, count);
-    t.dirty = false;
+    if (by_page) {
+        for (uint32_t k = 0; k < count; k++) {
+            if (t.dirty_pages[k]) {
+                pages_written((lo + k) % vram_pages, 1);
+            }
+        }
+    } else {
+        pages_written(lo, count);
+    }
+    clear_dirty(t);
 }
 
 // The CPU's VRAM into a rectangle of the target
@@ -461,30 +771,47 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     if (w == 0 || h == 0) {
         return;
     }
+    msaa_settle(t); // (the rest of the image stays)
     end_pass();
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    uint32_t s = t.scale, pw = w * s, ph = h * s;
-    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0 * s), int32_t(y0 * s), 0},
+    uint32_t sx = t.sx, sy = t.sy, pw = w * sx, ph = h * sy;
+    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0},
                                                                {pw, ph, 1}, pw, ph, {aspect, 0, 0, 1}));
+    std::vector<uint32_t> row(w);
     for (uint32_t y = 0; y < h; y++) {
+        // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
+        gsn_vram_read_row(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0, y0 + y, w, row.data());
         for (uint32_t x = 0; x < w; x++) {
-            // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
-            uint32_t v = gsn_vram_read(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0 + x, y0 + y);
+            uint32_t v = row[x];
             if (t.depth) {
                 float f = float(double(v) * depth_scale(t.psm));
                 memcpy(&v, &f, 4);
             } else {
                 v = vram_to_target_pixel(v, t.psm);
             }
-            for (uint32_t j = 0; j < s; j++) {
-                for (uint32_t i = 0; i < s; i++) {
-                    out[size_t(y * s + j) * pw + x * s + i] = v;
+            for (uint32_t j = 0; j < sy; j++) {
+                for (uint32_t i = 0; i < sx; i++) {
+                    out[size_t(y * sy + j) * pw + x * sx + i] = v;
                 }
             }
         }
     }
     transfer_barrier();
+    msaa_image_written(t);
+    // the pages wholly inside the rectangle hold what VRAM does now
+    if (t.dirty && regular(t)) {
+        uint32_t pgh = page_height(t.psm);
+        // (the last row of pages may go past the target's height: it has only the rows above that)
+        for (uint32_t r = (y0 + pgh - 1) / pgh; r * pgh < t.height && std::min((r + 1) * pgh, t.height) <= y0 + h; r++) {
+            for (uint32_t c = (x0 + 63) / 64; (c + 1) * 64 <= x0 + w && c < t.bw; c++) {
+                if (size_t(r) * t.bw + c < t.dirty_pages.size()) {
+                    t.dirty_pages[size_t(r) * t.bw + c] = 0;
+                }
+            }
+        }
+        t.dirty = std::find(t.dirty_pages.begin(), t.dirty_pages.end(), 1) != t.dirty_pages.end();
+    }
 }
 
 void drop_target(Target *t) {
@@ -509,10 +836,14 @@ void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop) {
         uint32_t tlo, tcount;
         target_pages(*t, &tlo, &tcount);
         if (t != keep && pages_overlap(lo, count, tlo, tcount)) {
-            write_back(*t);
             if (drop) {
+                write_back(*t);
                 drop_target(t);
                 continue;
+            }
+            // (a target whose pages here hold what VRAM does need not go back)
+            if (dirty_in(*t, lo, count)) {
+                write_back(*t);
             }
         }
         i++;
@@ -528,6 +859,39 @@ Target *find_target(uint32_t bp, uint32_t bw, uint32_t psm) {
     return nullptr;
 }
 
+// A colour buffer that starts a whole number of page rows from a colour target's start, as wide and in
+// the same layout, is the target's memory from that row on: its pixel (x, y) is the target's pixel
+// (x, y + *rows). (*rows below 0: the buffer starts above the target.)
+bool row_alias(const Target &t, uint32_t bp, uint32_t bw, uint32_t psm, int32_t *rows) {
+    if (t.depth || psm_is_depth(psm) || t.bw != bw || bw == 0 || psm_layout(t.psm) != psm_layout(psm)) {
+        return false;
+    }
+    // (a colour format's page is 64 pixels across: a row of pages is bw pages, 32 blocks each)
+    int32_t d = int32_t(bp) - int32_t(t.bp), row = int32_t(bw) * 32;
+    if (d % row != 0) {
+        return false;
+    }
+    *rows = d / row * int32_t(page_height(t.psm));
+    return true;
+}
+
+// A target made again in a new size, its old picture copied in `rows` rows down: what was newer than
+// VRAM in the old one is in the new one
+void carry_dirty(Target &t, const Target &old, uint32_t rows) {
+    if (!old.dirty) {
+        return;
+    }
+    t.dirty = true;
+    if (regular(t) && regular(old) && old.bw == t.bw && rows % page_height(t.psm) == 0) {
+        size_t shift = size_t(rows / page_height(t.psm)) * t.bw;
+        for (size_t k = 0; k < old.dirty_pages.size() && k + shift < t.dirty_pages.size(); k++) {
+            t.dirty_pages[k + shift] |= old.dirty_pages[k];
+        }
+    } else {
+        std::fill(t.dirty_pages.begin(), t.dirty_pages.end(), 1);
+    }
+}
+
 // The target that is the buffer at bp, at least width x height, made (from the CPU's VRAM) or grown
 Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
     Target *t = find_target(bp, bw, psm);
@@ -538,25 +902,71 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         return t;
     }
     VkFormat format = psm_is_depth(psm) ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+    if (!t) {
+        // A buffer that starts some rows above a target and runs into it (a scrolling texture's
+        // target, drawn into from a page row higher the next time): the target grows upwards to start
+        // where the buffer does, instead of going back to VRAM to be made again in the new shape
+        Target *below = nullptr;
+        int32_t rows = 0;
+        for (auto &o : gs->targets) {
+            if (row_alias(*o, bp, bw, psm, &rows) && rows < 0 && int32_t(height) > -rows) {
+                below = o.get();
+                break;
+            }
+        }
+        if (below) {
+            uint32_t down = uint32_t(-rows), sx = below->sx, sy = below->sy;
+            uint32_t new_w = std::max(width, below->width), new_h = std::max(height, down + below->height);
+            GSN_LOG(1, "target bp %#x grows up to bp %#x: %ux%u\n", below->bp, bp, new_w, new_h);
+            end_pass();
+            msaa_settle(*below);
+            Target old = *below;
+            below->bp = bp;
+            below->psm = psm;
+            below->image = make_image(new_w * sx, new_h * sy, format, 1, true);
+            msaa_forget(*below);
+            below->width = new_w;
+            below->height = new_h;
+            clear_dirty(*below);
+            uint32_t lo, count;
+            target_pages(*below, &lo, &count);
+            claim_pages(lo, count, below, true);
+            // VRAM where the old picture is not, then the old picture
+            load_target_rect(*below, 0, 0, new_w, down);
+            load_target_rect(*below, 0, down + old.height, new_w, new_h - (down + old.height));
+            load_target_rect(*below, old.width, down, new_w - old.width, old.height);
+            cmd().copy_image(*below->image, *old.image, {0, int32_t(down * sy), 0}, {0, 0, 0},
+                             {old.width * sx, old.height * sy, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                             {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+            transfer_barrier();
+            carry_dirty(*below, old, down);
+            below->used = gs->tick;
+            return below;
+        }
+    }
     if (t) {
         // grown: the old picture kept, the new part from VRAM
         uint32_t new_w = std::max(width, t->width), new_h = std::max(height, t->height);
-        ImageHandle image = make_image(new_w * t->scale, new_h * t->scale, format, 1, true);
+        ImageHandle image = make_image(new_w * t->sx, new_h * t->sy, format, 1, true);
         end_pass();
+        msaa_settle(*t);
         Target old = *t;
         t->psm = psm;
         t->image = image;
+        msaa_forget(*t);
         t->width = new_w;
         t->height = new_h;
+        clear_dirty(*t);
         // what the old target did not cover comes from VRAM: the whole of it first, then the old on top
         uint32_t lo, count;
         target_pages(*t, &lo, &count);
         claim_pages(lo, count, t, true);
         load_target_rect(*t, 0, 0, new_w, new_h);
         VkImageAspectFlags aspect = t->depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-        cmd().copy_image(*t->image, *old.image, {0, 0, 0}, {0, 0, 0}, {old.width * t->scale, old.height * t->scale, 1},
+        cmd().copy_image(*t->image, *old.image, {0, 0, 0}, {0, 0, 0}, {old.width * t->sx, old.height * t->sy, 1},
                          {aspect, 0, 0, 1}, {aspect, 0, 0, 1});
         transfer_barrier();
+        carry_dirty(*t, old, 0);
         t->used = gs->tick;
         return t;
     }
@@ -567,10 +977,11 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
     made->width = width;
     made->height = height;
     made->depth = psm_is_depth(psm);
-    made->dirty = false;
+    clear_dirty(*made);
     made->used = gs->tick;
-    made->scale = target_scale;
-    made->image = make_image(width * made->scale, height * made->scale, format, 1, true);
+    made->sx = target_sx;
+    made->sy = target_sy;
+    made->image = make_image(width * made->sx, height * made->sy, format, 1, true);
     GSN_LOG(1, "new target bp %#x bw %u psm %#x %ux%u\n", bp, bw, psm, width, height);
     uint32_t lo, count;
     target_pages(*made, &lo, &count);
@@ -665,16 +1076,19 @@ void decode_texture(Texture &tex) {
         uint32_t w = std::max(1u, (1u << tex.tw) >> l), h = std::max(1u, (1u << tex.th) >> l);
         void *out = cmd().update_image(*tex.image, {0, 0, 0}, {w, h, 1}, w, h, {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1});
         uint32_t bp = tex.mip_tbp[l], bw = tex.mip_tbw[l];
+        std::vector<uint32_t> row(w);
         for (uint32_t y = 0; y < h; y++) {
+            size_t at = size_t(y) * w;
+            if (format == VK_FORMAT_R32_UINT) {
+                gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, static_cast<uint32_t *>(out) + at);
+                continue;
+            }
+            gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, row.data());
             for (uint32_t x = 0; x < w; x++) {
-                uint32_t v = gsn_vram_read(gs->vram.data(), tex.psm, bp, bw, x, y);
-                size_t i = size_t(y) * w + x;
                 if (format == VK_FORMAT_R8_UINT) {
-                    static_cast<uint8_t *>(out)[i] = uint8_t(v);
-                } else if (format == VK_FORMAT_R16_UINT) {
-                    static_cast<uint16_t *>(out)[i] = uint16_t(v);
+                    static_cast<uint8_t *>(out)[at + x] = uint8_t(row[x]);
                 } else {
-                    static_cast<uint32_t *>(out)[i] = v;
+                    static_cast<uint16_t *>(out)[at + x] = uint16_t(row[x]);
                 }
             }
         }
@@ -938,19 +1352,24 @@ bool fixed_blend(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fix, F
     return false; // (A - B) C + D with D one of A and B: a factor of 1 + C
 }
 
-void begin_pass(Target *color, Target *depth) {
-    if (gs->in_pass && gs->pass_color == color && gs->pass_depth == depth) {
+// (ms: into the targets' multisampled images, --native-msaa)
+void begin_pass(Target *color, Target *depth, bool ms = false) {
+    if (gs->in_pass && gs->pass_color == color && gs->pass_depth == depth && gs->pass_ms == ms) {
         return;
     }
     end_pass();
     RenderPassInfo rp;
     rp.num_color_attachments = 1;
-    rp.color_attachments[0] = &color->image->get_view();
+    rp.color_attachments[0] = ms ? &color->ms->get_view() : &color->image->get_view();
     rp.load_attachments = 1;
     rp.store_attachments = 1;
     if (depth) {
-        rp.depth_stencil = &depth->image->get_view();
+        rp.depth_stencil = ms ? &depth->ms->get_view() : &depth->image->get_view();
         rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+    }
+    RenderPassInfo::Subpass subpass;
+    if (ms) {
+        msaa_subpass(rp, subpass);
     }
     cmd().barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -958,13 +1377,14 @@ void begin_pass(Target *color, Target *depth) {
     gs->in_pass = true;
     gs->pass_color = color;
     gs->pass_depth = depth;
+    gs->pass_ms = ms;
     gsn_stats.passes++;
 }
 
 // A copy of the target, for a draw that reads what it draws over
 // (box: only the target's pixels a draw can cover, x0 y0 x1 y1 in GS pixels; NULL: all of it)
 const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
-    uint32_t tw = t.width * t.scale, th = t.height * t.scale;
+    uint32_t tw = t.width * t.sx, th = t.height * t.sy;
     if (!gs->snapshot || gs->snapshot->get_width() < tw || gs->snapshot->get_height() < th) {
         uint32_t w = std::max(tw, gs->snapshot ? gs->snapshot->get_width() : 0u);
         uint32_t h = std::max(th, gs->snapshot ? gs->snapshot->get_height() : 0u);
@@ -975,14 +1395,19 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
     VkOffset3D at = {0, 0, 0};
     VkExtent3D size = {tw, th, 1};
     if (box) {
-        int32_t s = int32_t(t.scale);
-        int32_t x0 = std::max(box[0], 0) * s, y0 = std::max(box[1], 0) * s;
-        int32_t x1 = std::min(box[2] * s, int32_t(tw)), y1 = std::min(box[3] * s, int32_t(th));
+        int32_t sx = int32_t(t.sx), sy = int32_t(t.sy);
+        int32_t x0 = std::max(box[0], 0) * sx, y0 = std::max(box[1], 0) * sy;
+        int32_t x1 = std::min(box[2] * sx, int32_t(tw)), y1 = std::min(box[3] * sy, int32_t(th));
         if (x1 <= x0 || y1 <= y0) {
             return *gs->snapshot;
         }
         at = {x0, y0, 0};
         size = {uint32_t(x1 - x0), uint32_t(y1 - y0), 1};
+    }
+    if (t.ms_newer) {
+        // --native-msaa: the target's resolved pixels
+        msaa_resolve(*gs->snapshot, *t.ms, at, size);
+        return *gs->snapshot;
     }
     cmd().copy_image(*gs->snapshot, *t.image, at, at, size, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
@@ -1040,6 +1465,17 @@ void flush_batch() {
         return;
     }
     gs->tick++;
+    // what the decisions below need of the vertices, in one pass over them: their Z's range, the
+    // largest alpha, the rows they reach
+    uint32_t zmin = UINT32_MAX, zmax = 0, as_max = 0;
+    float vy0 = gs->verts[0].y, vy1 = vy0;
+    for (const Vtx &v : gs->verts) {
+        zmin = std::min(zmin, v.z);
+        zmax = std::max(zmax, v.z);
+        as_max = std::max(as_max, v.rgba >> 24);
+        vy0 = std::min(vy0, v.y);
+        vy1 = std::max(vy1, v.y);
+    }
     uint32_t prim = gs->batch_prim;
     uint32_t ctxt = (prim >> 9) & 1;
     bool tme = (prim >> 4) & 1, fge = (prim >> 5) & 1, abe = (prim >> 6) & 1, fst = (prim >> 8) & 1;
@@ -1088,15 +1524,23 @@ void flush_batch() {
     bool any_zwrite = !zmsk && (!ate || atst != 0 || afail == 2);
     bool always_passes = ztst == 1;
     if (ztst == 2) {
-        uint32_t zmin = UINT32_MAX;
-        for (const Vtx &v : gs->verts) {
-            zmin = std::min(zmin, v.z);
-        }
         always_passes = std::min(zmin, depth_max(zpsm)) == depth_max(zpsm);
     }
     bool need_depth = !(always_passes && !any_zwrite);
     Target *color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
     Target *depth = nullptr;
+    if (need_depth && color->height > sy1 + 1) {
+        // a colour target taller than the draw needs (one drawn over both frame buffers once, say) that
+        // runs into the Z buffer: back to VRAM, and made again as tall as the draw needs
+        uint32_t clo, ccount, zlo, zcount;
+        target_pages(*color, &clo, &ccount);
+        buffer_pages(zbp, fbw, zpsm, fbw * 64, sy1 + 1, &zlo, &zcount);
+        if (pages_overlap(clo, ccount, zlo, zcount)) {
+            write_back(*color);
+            drop_target(color);
+            color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
+        }
+    }
     if (need_depth) {
         // a Vulkan frame buffer's attachments are as big as each other. Making one may drop the other
         // (when their pages overlap, as the menus' Z buffer does the play's frame buffers), so both
@@ -1179,10 +1623,28 @@ void flush_batch() {
             if (y0 >= t->height) {
                 continue;
             }
+            // A texture whose rows the batch reads run past the target's is decoded from VRAM, the
+            // targets' pages back there first: the rows past are VRAM's, or another target's. (The
+            // rows read, from the vertices' V, or T/Q: a frame read as a 1024 x 512 texture reads
+            // only the frame's rows. A pixel samples above its V's largest, which is at a vertex
+            // when Q stays above 0; bilinear filtering's row past that has no weight.)
+            uint32_t rows = 1u << th;
+            float vmin = 0.0f, vmax = 0.0f;
+            for (const Vtx &v : gs->verts) {
+                float tv = fst ? v.t : v.q > 0.0f ? v.t / v.q * float(rows) : -1.0f;
+                vmin = std::min(vmin, tv);
+                vmax = std::max(vmax, tv);
+            }
+            if (vmin >= 0.0f && vmax < float(rows)) {
+                rows = std::max(1u, uint32_t(ceilf(vmax)));
+            }
+            if (y0 + rows > t->height) {
+                break;
+            }
             source = t.get();
             push.src_offset[0] = int32_t(x0);
             push.src_offset[1] = int32_t(y0);
-            push.tscale = t->scale;
+            push.tscale = t->sx | t->sy << 16;
             break;
         }
         if (source) {
@@ -1192,6 +1654,7 @@ void flush_batch() {
             if (source == color) {
                 reads_own_target = true;
             } else {
+                msaa_settle(*source);
                 target_view = &source->image->get_view();
             }
         } else {
@@ -1257,10 +1720,6 @@ void flush_batch() {
     // Blending by an As above 0x80 (2.0): Vulkan's blend factor (and the alpha out that stands for it)
     // stops at 1.0. The largest As the batch can make, from its vertices and what is known of the
     // texture's alpha (a CLUT's entries, TEXA for 24 and 16-bit texels):
-    uint32_t as_max = 0;
-    for (const Vtx &v : gs->verts) {
-        as_max = std::max(as_max, v.rgba >> 24);
-    }
     if (tme && bits(tex0, 34, 1)) { // TCC
         uint32_t tpsm = bits(tex0, 20, 6);
         if (tpsm == GSN_PSMCT24) {
@@ -1293,21 +1752,16 @@ void flush_batch() {
     gsn_stats.ns_draw_setup += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                             std::chrono::steady_clock::now() - timer.start).count());
     Timer record(gsn_stats.ns_draw_record);
-    uint32_t s = color->scale;
+    uint32_t scale_x = color->sx, scale_y = color->sy;
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
         return;
     }
-    push.misc |= s << M_SCALE_SHIFT;
+    push.misc |= scale_y << M_SCALE_SHIFT; // (SCANMSK's lines)
     // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
     // and keeps each pixel's within the format, where clamping the vertices would tilt the plane
-    bool zclamp = false;
-    if (depth) {
-        for (const Vtx &v : gs->verts) {
-            zclamp = zclamp || v.z > depth_max(zpsm);
-        }
-    }
+    bool zclamp = depth && zmax > depth_max(zpsm);
     if (zclamp) {
         push.misc |= M_ZCLAMP;
     }
@@ -1362,6 +1816,24 @@ void flush_batch() {
     // after another: such a batch is drawn in runs of primitives that do not overlap, each with its
     // own copy and passes. (A draw whose texture is its own target reads one copy, taken before the
     // batch, for both.)
+    // --native-msaa: the draws with Z to the multisampled images, and those without while they are newer
+    // (unless they read their own target, which is resolved for it); the rest to the image
+    bool ms = target_samples > 1 && (depth || (color->ms_newer && !reads_own_target));
+    if (ms) {
+        msaa_ready(*color);
+        if (depth) {
+            msaa_ready(*depth);
+        }
+        // (from here on: each run's copy of the target, below, is resolved from it)
+        color->ms_newer = true;
+        if (depth && zwrite) {
+            depth->ms_newer = true;
+        }
+        msaa_flat_2d(gs->verts, color->sx, color->sy);
+    } else {
+        msaa_settle(*color);
+    }
+
     std::vector<uint32_t> runs(1, 0);
     if ((shader_blend || npasses > 1) && !reads_own_target) {
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
@@ -1398,15 +1870,15 @@ void flush_batch() {
             }
         }
 
-        begin_pass(color, depth);
+        begin_pass(color, depth, ms);
         CommandBuffer &c = cmd();
         c.set_opaque_state();
         c.set_program(zclamp ? gs->program_zclamp : gs->program);
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
-        VkViewport vp = {0.0f, 0.0f, float(color->width * s), float(color->height * s), 0.0f, 1.0f};
+        VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
         c.set_viewport(vp);
-        c.set_scissor({{int32_t(sx0 * s), int32_t(sy0 * s)}, {(x1 - sx0) * s, (y1 - sy0) * s}});
+        c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
         c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
         c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
         c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
@@ -1460,9 +1932,15 @@ void flush_batch() {
             gsn_stats.draws++;
         }
     }
-    color->dirty = true;
+    // the rows the batch can have drawn into (its vertices' within the scissor, a row more each way)
+    uint32_t dirty0 = uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
+    uint32_t dirty1 = uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
+    mark_dirty(*color, dirty0, dirty1);
     if (depth && zwrite) {
-        depth->dirty = true;
+        mark_dirty(*depth, dirty0, dirty1);
+    }
+    if (!ms) {
+        msaa_image_written(*color);
     }
     gsn_stats.primitives += gs->verts.size() / 3;
     gs->verts.clear();
@@ -1491,12 +1969,16 @@ Vtx make_vtx(const QVertex &q, uint32_t prim, const QVertex &colour_from) {
     return v;
 }
 
-void add_triangle(const QVertex &a, const QVertex &b, const QVertex &c) {
-    uint32_t prim = gs->batch_prim;
-    bool gouraud = (prim >> 3) & 1;
-    gs->verts.push_back(make_vtx(a, prim, gouraud ? a : c));
-    gs->verts.push_back(make_vtx(b, prim, gouraud ? b : c));
-    gs->verts.push_back(make_vtx(c, prim, c));
+void add_triangle(const Vtx &a, const Vtx &b, const Vtx &c) {
+    bool gouraud = (gs->batch_prim >> 3) & 1;
+    gs->verts.push_back(a);
+    gs->verts.push_back(b);
+    gs->verts.push_back(c);
+    if (!gouraud) {
+        // flat: the last vertex's colour
+        Vtx *v = &gs->verts[gs->verts.size() - 3];
+        v[0].rgba = v[1].rgba = c.rgba;
+    }
 }
 
 // A UV sprite filtered bilinearly whose texture coordinates run with its position (a texel a pixel,
@@ -1584,12 +2066,14 @@ void vertex_kick(uint32_t address, uint64_t value) {
     }
     uint32_t type = prim & 7;
     QVertex *q = gs->queue;
+    Vtx *qv = gs->queued;
     switch (type) {
     case 3: // triangles
+        qv[gs->queue_count] = make_vtx(v, prim, v);
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3) {
             if (draw) {
-                add_triangle(q[0], q[1], q[2]);
+                add_triangle(qv[0], qv[1], qv[2]);
             }
             gs->queue_count = 0;
         }
@@ -1598,21 +2082,26 @@ void vertex_kick(uint32_t address, uint64_t value) {
         if (gs->queue_count == 3) {
             q[0] = q[1];
             q[1] = q[2];
+            qv[0] = qv[1];
+            qv[1] = qv[2];
             gs->queue_count = 2;
         }
+        qv[gs->queue_count] = make_vtx(v, prim, v);
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3 && draw) {
-            add_triangle(q[0], q[1], q[2]);
+            add_triangle(qv[0], qv[1], qv[2]);
         }
         break;
     case 5: // a fan
         if (gs->queue_count == 3) {
             q[1] = q[2];
+            qv[1] = qv[2];
             gs->queue_count = 2;
         }
+        qv[gs->queue_count] = make_vtx(v, prim, v);
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3 && draw) {
-            add_triangle(q[0], q[1], q[2]);
+            add_triangle(qv[0], qv[1], qv[2]);
         }
         break;
     case 6: // sprites
@@ -1651,20 +2140,47 @@ void rect_pages(const TransferRect &r, uint32_t *lo, uint32_t *count) {
     buffer_pages(r.bp, r.bw, r.psm, r.x + r.w, r.y + r.h, lo, count);
 }
 
-// The rectangle has just been written in the CPU's VRAM: the targets over it, the same shape as it,
-// take it too; the others were written back and dropped before
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool *rgb_only = nullptr);
+
+// The rectangle has just been written in the CPU's VRAM: the targets over it, the same shape as it
+// (row_alias: perhaps starting some rows apart), take it too; those in another shape that were kept
+// (prepare_write: it writes whole pages of them) take those pages again; the others were written back
+// and dropped before
 void sync_targets(const TransferRect &r) {
+    std::vector<uint32_t> whole = whole_pages(gs->reg[R_BITBLTBUF], gs->reg[R_TRXPOS], gs->reg[R_TRXREG]);
     for (auto &t : gs->targets) {
-        if (!t->depth && t->bp == r.bp && t->bw == r.bw && psm_layout(t->psm) == psm_layout(r.psm)) {
-            load_target_rect(*t, r.x, r.y, r.w, r.h);
+        int32_t rows;
+        if (!row_alias(*t, r.bp, r.bw, r.psm, &rows)) {
+            if (!regular(*t)) {
+                continue;
+            }
+            uint32_t tlo, tcount;
+            target_pages(*t, &tlo, &tcount);
+            uint32_t ph = page_height(t->psm);
+            for (uint32_t page : whole) {
+                uint32_t k = (page + vram_pages - tlo) % vram_pages;
+                if (k < tcount) {
+                    load_target_rect(*t, (k % t->bw) * 64, (k / t->bw) * ph, 64, ph);
+                }
+            }
+        } else {
+            int32_t y = int32_t(r.y) + rows;
+            uint32_t h = r.h;
+            if (y < 0) {
+                if (uint32_t(-y) >= h) {
+                    continue;
+                }
+                h -= uint32_t(-y);
+                y = 0;
+            }
+            load_target_rect(*t, r.x, uint32_t(y), r.w, h);
         }
     }
 }
 
-// Before the rectangle is written in the CPU's VRAM: the targets over it in another shape go back to
-// VRAM and stop being targets
-std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 
+// Before the rectangle is written in the CPU's VRAM: the targets over it in another shape go back to
+// VRAM and stop being targets (unless it writes whole pages of them, or all of them)
 void prepare_write(const TransferRect &r) {
     uint32_t lo, count;
     rect_pages(r, &lo, &count);
@@ -1676,16 +2192,31 @@ void prepare_write(const TransferRect &r) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
         target_pages(*t, &tlo, &tcount);
-        bool same = !t->depth && t->bp == r.bp && t->bw == r.bw && psm_layout(t->psm) == psm_layout(r.psm);
+        int32_t rows;
+        bool same = row_alias(*t, r.bp, r.bw, r.psm, &rows);
         if (pages_overlap(lo, count, tlo, tcount)) {
-            if (same) {
-                // the rest of the target stays newer than VRAM; the rectangle, after the write, both
-                i++;
-                continue;
-            }
             bool covered = !whole.empty() && t->bp % 32 == 0;
             for (uint32_t k = 0; covered && k < tcount; k++) {
                 covered = std::binary_search(whole.begin(), whole.end(), (tlo + k) % vram_pages);
+            }
+            if (same && (rows == 0 || !covered)) {
+                // the rest of the target stays newer than VRAM; the rectangle, after the write, both
+                // (sync_targets). (A target some rows from the transfer that it covers whole is let go.)
+                i++;
+                continue;
+            }
+            // A target whose pages under the transfer are all written whole keeps the rest, and takes
+            // those pages from VRAM after the write (sync_targets): it need not go back to VRAM first
+            bool keep = !covered && !whole.empty() && regular(*t);
+            for (uint32_t k = 0; keep && k < tcount; k++) {
+                uint32_t page = (tlo + k) % vram_pages;
+                if (pages_overlap(lo, count, page, 1)) {
+                    keep = std::binary_search(whole.begin(), whole.end(), page);
+                }
+            }
+            if (keep) {
+                i++;
+                continue;
             }
             if (!covered) {
                 write_back(*t);
@@ -1716,19 +2247,25 @@ PendingUpload pending_upload;
 struct PageImage {
     std::vector<uint32_t> pages;
     std::vector<uint8_t> bytes; // 8 KB a page, in pages' order
+    bool rgb_only;              // a 24-bit upload: the pages' words' low three bytes only
 };
 std::unordered_map<uint64_t, PageImage> page_images;
 std::deque<uint64_t> page_image_order;
 size_t page_image_bytes;
 
 // The pages an upload fills entirely, in order; empty if it does not fill whole pages (a format that
-// owns only part of each word, or a rectangle not on page bounds)
-std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
+// owns only part of each word, or a rectangle not on page bounds). With rgb_only, a 24-bit upload
+// counts as filling its pages too (and *rgb_only says it is one).
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool *rgb_only) {
     std::vector<uint32_t> pages;
     uint32_t dbp = bits(bitbltbuf, 32, 14), dbw = bits(bitbltbuf, 48, 6), psm = bits(bitbltbuf, 56, 6);
     uint32_t x = bits(trxpos, 32, 11), y = bits(trxpos, 48, 11), w = bits(trxreg, 0, 12), h = bits(trxreg, 32, 12);
     bool full = psm == GSN_PSMCT32 || psm == GSN_PSMCT16 || psm == GSN_PSMCT16S || psm == GSN_PSMT8 ||
                 psm == GSN_PSMT4 || psm == GSN_PSMZ32 || psm == GSN_PSMZ16 || psm == GSN_PSMZ16S;
+    if (rgb_only) {
+        *rgb_only = psm == GSN_PSMCT24 || psm == GSN_PSMZ24;
+        full = full || *rgb_only;
+    }
     uint32_t pw = page_width(psm), ph = page_height(psm);
     if (psm == GSN_PSMZ16 || psm == GSN_PSMZ16S) {
         ph = 64;
@@ -1746,22 +2283,32 @@ std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t 
     return pages;
 }
 
-uint64_t upload_hash(const PendingUpload &p) {
-    uint64_t h = 0x9E3779B97F4A7C15ull ^ p.bitbltbuf;
-    h = (h ^ p.trxpos) * 0x100000001B3ull;
-    h = (h ^ p.trxreg) * 0x100000001B3ull;
-    size_t n = p.data.size() / 8;
-    const uint8_t *d = p.data.data();
-    for (size_t i = 0; i < n; i++) {
-        uint64_t v;
-        memcpy(&v, d + i * 8, 8);
-        h = (h ^ v) * 0x100000001B3ull;
-        h ^= h >> 31;
+inline uint64_t rotate_left(uint64_t v, int n) {
+    return (v << n) | (v >> (64 - n));
+}
+
+// An upload's bytes, and where they go, as 64 bits. (Four lanes of 8 bytes each, so that the
+// multiplies do not wait for each other: it runs at about the speed of reading the bytes.)
+uint64_t upload_hash(const PendingUpload &p, const uint8_t *d, size_t size) {
+    const uint64_t K1 = 0x9E3779B97F4A7C15ull, K2 = 0xC2B2AE3D27D4EB4Full, K3 = 0x165667B19E3779F9ull;
+    uint64_t lane[4] = {p.bitbltbuf ^ K1, p.trxpos ^ K2, p.trxreg ^ K3, size};
+    size_t i = 0;
+    for (; i + 32 <= size; i += 32) {
+        for (int k = 0; k < 4; k++) {
+            uint64_t v;
+            memcpy(&v, d + i + k * 8, 8);
+            lane[k] = rotate_left(lane[k] + v * K2, 31) * K1;
+        }
     }
-    for (size_t i = n * 8; i < p.data.size(); i++) {
-        h = (h ^ d[i]) * 0x100000001B3ull;
+    uint64_t h = rotate_left(lane[0], 1) + rotate_left(lane[1], 7) + rotate_left(lane[2], 12) + rotate_left(lane[3], 18);
+    for (; i < size; i++) {
+        h = (h ^ d[i]) * K3;
     }
-    return h ^ p.data.size();
+    h ^= h >> 33;
+    h *= K2;
+    h ^= h >> 29;
+    h *= K3;
+    return h ^ (h >> 32);
 }
 
 // An upload's bytes, swizzled into VRAM as they are
@@ -1785,17 +2332,33 @@ void upload_done() {
 }
 
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
-void complete_upload() {
+void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
-    std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg);
-    uint64_t key = upload_hash(p);
+    bool rgb_only = false;
+    std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
+    uint64_t key = upload_hash(p, data, size);
     auto found = pages.empty() ? page_images.end() : page_images.find(key);
-    if (found != page_images.end() && found->second.pages == pages) {
+    if (found != page_images.end() && found->second.pages == pages && found->second.rgb_only == rgb_only) {
         bool changed = false;
         for (size_t i = 0; i < pages.size(); i++) {
             uint8_t *dst = gs->vram.data() + size_t(pages[i]) * 8192;
             const uint8_t *src = found->second.bytes.data() + i * 8192;
-            if (memcmp(dst, src, 8192) != 0) {
+            if (rgb_only) {
+                // (the words' top bytes are not the upload's: they stay)
+                bool page_changed = false;
+                for (size_t k = 0; k < 8192; k += 4) {
+                    uint32_t d, s;
+                    memcpy(&d, dst + k, 4);
+                    memcpy(&s, src + k, 4);
+                    uint32_t v = (d & 0xFF000000u) | (s & 0xFFFFFFu);
+                    page_changed |= v != d;
+                    memcpy(dst + k, &v, 4);
+                }
+                if (page_changed) {
+                    pages_written(pages[i], 1);
+                    changed = true;
+                }
+            } else if (memcmp(dst, src, 8192) != 0) {
                 memcpy(dst, src, 8192);
                 pages_written(pages[i], 1);
                 changed = true;
@@ -1806,10 +2369,11 @@ void complete_upload() {
         upload_done();
         return;
     }
-    swizzle_upload(p.data.data(), p.data.size());
+    swizzle_upload(data, size);
     if (!pages.empty()) {
         PageImage image;
         image.pages = pages;
+        image.rgb_only = rgb_only;
         image.bytes.resize(pages.size() * 8192);
         for (size_t i = 0; i < pages.size(); i++) {
             memcpy(image.bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
@@ -1837,6 +2401,25 @@ void settle_upload() {
         return;
     }
     p.incremental = true;
+    // A target in another shape that prepare_write kept, as the upload writes whole pages of it: those
+    // pages are VRAM's from now on (half written), and must not go back over it before sync_targets
+    // takes them from it
+    std::vector<uint32_t> whole = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg);
+    TransferRect r = destination_rect();
+    for (auto &t : gs->targets) {
+        int32_t rows;
+        if (row_alias(*t, r.bp, r.bw, r.psm, &rows) || !regular(*t)) {
+            continue;
+        }
+        uint32_t tlo, tcount;
+        target_pages(*t, &tlo, &tcount);
+        for (uint32_t page : whole) {
+            uint32_t k = (page + vram_pages - tlo) % vram_pages;
+            if (k < tcount && k < t->dirty_pages.size()) {
+                t->dirty_pages[k] = 0;
+            }
+        }
+    }
     swizzle_upload(p.data.data(), p.data.size());
     p.data.clear();
 }
@@ -1900,14 +2483,17 @@ void begin_transfer(uint32_t dir) {
             src = find_target(sbp, sbw, spsm);
             dst = find_target(d.bp, d.bw, d.psm);
             if (src && dst) {
+                msaa_settle(*src);
+                msaa_settle(*dst);
                 end_pass();
                 transfer_barrier();
-                uint32_t s = src->scale;
-                cmd().copy_image(*dst->image, *src->image, {int32_t(d.x * s), int32_t(d.y * s), 0},
-                                 {int32_t(sx * s), int32_t(sy * s), 0}, {w * s, h * s, 1},
+                uint32_t kx = src->sx, ky = src->sy;
+                cmd().copy_image(*dst->image, *src->image, {int32_t(d.x * kx), int32_t(d.y * ky), 0},
+                                 {int32_t(sx * kx), int32_t(sy * ky), 0}, {w * kx, h * ky, 1},
                                  {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
                 transfer_barrier();
-                dst->dirty = true;
+                mark_dirty(*dst, d.y, d.y + h);
+                msaa_image_written(*dst);
                 gsn_stats.target_copies++;
                 gs->transfer_dir = 3;
                 return;
@@ -1943,9 +2529,13 @@ void image_data(const uint8_t *data, size_t bytes) {
         }
         return;
     }
+    if (p.data.empty() && bytes >= p.expect) {
+        complete_upload(data, bytes); // (all of it at once: no need to keep it)
+        return;
+    }
     p.data.insert(p.data.end(), data, data + bytes);
     if (p.data.size() >= p.expect) {
-        complete_upload();
+        complete_upload(p.data.data(), p.data.size());
     }
 }
 
@@ -2176,30 +2766,33 @@ void gif(int path, const uint8_t *data, size_t bytes) {
 
 // ---- Scanout ------------------------------------------------------------------------------------
 // A rectangle of a buffer as RGBA: from its target if it is one, else from the CPU's VRAM
-// (scaled: as many pixels as the target has, returned in *got_scale; else one a GS pixel)
+// (scaled: as many pixels as the target has, its scale across and down returned in got_scale[0] and
+// [1]; else one a GS pixel)
 void read_buffer(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                  uint32_t *out, bool scaled = false, uint32_t *got_scale = nullptr) {
     Target *t = find_target(bp, bw, psm);
     if (got_scale) {
-        *got_scale = 1;
+        got_scale[0] = got_scale[1] = 1;
     }
     if (t && x + w <= t->width && y + h <= t->height) {
-        uint32_t s = t->scale;
-        const uint8_t *pixels = read_image(*t->image, x * s, y * s, w * s, h * s);
+        msaa_settle(*t);
+        uint32_t sx = t->sx, sy = t->sy;
+        const uint8_t *pixels = read_image(*t->image, x * sx, y * sy, w * sx, h * sy);
         if (scaled) {
-            for (size_t i = 0; i < size_t(w) * h * s * s; i++) {
+            for (size_t i = 0; i < size_t(w) * h * sx * sy; i++) {
                 uint32_t v;
                 memcpy(&v, pixels + i * 4, 4);
                 out[i] = v | 0xFF000000u;
             }
             if (got_scale) {
-                *got_scale = s;
+                got_scale[0] = sx;
+                got_scale[1] = sy;
             }
         } else {
             for (uint32_t j = 0; j < h; j++) {
                 for (uint32_t i = 0; i < w; i++) {
                     uint32_t v;
-                    memcpy(&v, pixels + (size_t(j * s + s / 2) * w * s + i * s + s / 2) * 4, 4);
+                    memcpy(&v, pixels + (size_t(j * sy + sy / 2) * w * sx + i * sx + sx / 2) * 4, 4);
                     out[size_t(j) * w + i] = v | 0xFF000000u;
                 }
             }
@@ -2257,6 +2850,22 @@ void make_program() {
     gs->program = gs->device->request_program(vs, fs);
     Shader *fs_zclamp = gs->device->request_shader(gsn_spv_gs_zclamp_frag, sizeof(gsn_spv_gs_zclamp_frag), &frag);
     gs->program_zclamp = gs->device->request_program(vs, fs_zclamp);
+
+    // --native-msaa's copying passes: a texture in, a colour or a depth out
+    ResourceLayout copy_vert = {};
+    ResourceLayout copy_frag = {};
+    copy_frag.sets[0].sampled_image_mask = 1u << 0;
+    copy_frag.sets[0].fp_mask = 1u << 0;
+    copy_frag.sets[0].meta[0].array_size = 1;
+    ResourceLayout copy_colour = copy_frag;
+    copy_colour.output_mask = 1;
+    Shader *copy_vs = gs->device->request_shader(gsn_spv_msaa_vert, sizeof(gsn_spv_msaa_vert), &copy_vert);
+    gs->program_ms_load = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_msaa_load_frag, sizeof(gsn_spv_msaa_load_frag), &copy_colour));
+    gs->program_ms_load_depth = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_msaa_load_depth_frag, sizeof(gsn_spv_msaa_load_depth_frag), &copy_frag));
+    gs->program_ms_depth = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_msaa_depth_frag, sizeof(gsn_spv_msaa_depth_frag), &copy_frag));
 }
 
 void reset_gs() {
@@ -2268,6 +2877,386 @@ void reset_gs() {
     memset(gs->paths, 0, sizeof(gs->paths));
     memset(&gs->upload, 0, sizeof(gs->upload));
     gs->transfer_dir = 3;
+}
+
+// ---- The scanout as an image (gsn_scanout_take) ---------------------------------------------------
+// With a presenter on this device (port/platform/present_vk.cpp) the buffer the display shows is
+// copied on the GPU into an image of its own, which the presenter draws from: no read-back. In field
+// mode the image is the woven picture, each field's lines copied into its own rows (line l of the
+// picture is field (l & 1)'s line l / 2), so the field before stays in the other rows.
+struct ScanoutImage {
+    std::mutex lock; // (the presenter takes the image on the game's thread)
+    ImageHandle image;
+    std::vector<ImageHandle> retired; // images replaced while the presenter had one: dropped once it lets go
+    uint32_t width = 0, height = 0;
+    uint64_t serial = 0;
+    bool taken = false;
+};
+ScanoutImage scanout_image;
+bool present_wanted; // gsn_enable_present
+
+// The surface extensions the Vulkan loader has (VK_KHR_surface and each platform's: SDL picks one;
+// VK_EXT_headless_surface for SDL's offscreen driver)
+void present_extensions(std::vector<const char *> &instance_ext, std::vector<const char *> &device_ext) {
+    static const char *const surfaces[] = {"VK_KHR_win32_surface", "VK_KHR_xlib_surface", "VK_KHR_xcb_surface",
+                                           "VK_KHR_wayland_surface", "VK_EXT_metal_surface",
+                                           "VK_EXT_headless_surface"};
+    uint32_t count = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS) {
+        return;
+    }
+    std::vector<VkExtensionProperties> have(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, have.data());
+    auto has = [&](const char *name) {
+        for (auto &e : have) {
+            if (strcmp(e.extensionName, name) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!has(VK_KHR_SURFACE_EXTENSION_NAME)) {
+        return;
+    }
+    for (const char *name : surfaces) {
+        if (has(name)) {
+            instance_ext.push_back(name);
+        }
+    }
+    if (instance_ext.empty()) {
+        return;
+    }
+    instance_ext.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    device_ext.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+}
+
+// The displayed buffer (field_mode: this field) into scanout_image; with frame, read back into it too.
+// Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has the picture.
+int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uint32_t dby, uint32_t w, uint32_t h,
+                     bool field_mode, int field, PortGsFrame *frame) {
+    ScanoutImage &so = scanout_image;
+    Target *t = find_target(fbp, fbw, psm);
+    bool from_target = t && !t->depth && dbx + w <= t->width && dby + h <= t->height;
+    uint32_t sx = from_target ? t->sx : target_sx, sy = from_target ? t->sy : target_sy;
+    uint32_t iw = w * sx, ih = h * sy * (field_mode ? 2 : 1);
+    bool fresh = false;
+    // (images are made and let go outside the lock: Granite's device lock, which the presenter holds
+    // while it releases the image (gsn_queue_lock, then gsn_scanout_release), comes before it)
+    {
+        std::lock_guard<std::mutex> hold(so.lock);
+        fresh = !so.image || so.width != iw || so.height != ih;
+    }
+    ImageHandle made = fresh ? make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, false) : ImageHandle();
+    std::vector<ImageHandle> let_go;
+    {
+        std::lock_guard<std::mutex> hold(so.lock);
+        if (!so.taken) {
+            let_go.swap(so.retired);
+        }
+        if (fresh) {
+            if (so.taken && so.image) {
+                so.retired.push_back(so.image);
+            } else if (so.image) {
+                let_go.push_back(so.image);
+            }
+            so.image = made;
+            so.width = iw;
+            so.height = ih;
+        }
+    }
+    let_go.clear();
+    // the rows of the picture this field writes: every row in frame mode; in field mode its own, or
+    // both when the image is new (as the read-back path starts the other field as this one)
+    uint32_t parity_lo = field_mode && !fresh ? uint32_t(field & 1) : 0;
+    uint32_t parity_hi = field_mode ? (fresh ? 1 : uint32_t(field & 1)) : 0;
+    const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    if (from_target) {
+        msaa_settle(*t);
+    }
+    end_pass();
+    transfer_barrier();
+    if (from_target) {
+        for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
+            if (!field_mode) {
+                cmd().copy_image(*so.image, *t->image, {0, 0, 0}, {int32_t(dbx * sx), int32_t(dby * sy), 0}, {iw, ih, 1},
+                                 colour, colour);
+                continue;
+            }
+            for (uint32_t m = 0; m < h; m++) {
+                cmd().copy_image(*so.image, *t->image, {0, int32_t((2 * m + parity) * sy), 0},
+                                 {int32_t(dbx * sx), int32_t((dby + m) * sy), 0}, {iw, sy, 1}, colour, colour);
+            }
+        }
+    } else {
+        // not a target (yet): from the CPU's VRAM, each GS pixel repeated sx times across and sy down
+        std::vector<uint32_t> small(size_t(w) * h);
+        read_buffer(fbp, fbw, psm, dbx, dby, w, h, small.data());
+        end_pass();
+        transfer_barrier();
+        // a band of sy rows for each of the buffer's lines: field mode's into its own rows
+        uint32_t step = field_mode ? 2 : 1;
+        for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
+            for (uint32_t m = 0; m < h; m++) {
+                uint32_t *out = static_cast<uint32_t *>(
+                    cmd().update_image(*so.image, {0, int32_t((step * m + parity) * sy), 0}, {iw, sy, 1}, iw, sy, colour));
+                for (uint32_t y = 0; y < sy; y++) {
+                    for (uint32_t x = 0; x < iw; x++) {
+                        out[size_t(y) * iw + x] = small[size_t(m) * w + x / sx];
+                    }
+                }
+            }
+        }
+    }
+    transfer_barrier();
+    int ok = GSN_WANT_IMAGE;
+    if (frame && size_t(iw) * ih <= PORT_GS_FRAME_PIXELS) {
+        const uint8_t *pixels = read_image(*so.image, 0, 0, iw, ih);
+        for (size_t i = 0; i < size_t(iw) * ih; i++) {
+            uint32_t v;
+            memcpy(&v, pixels + i * 4, 4);
+            frame->rgba[i] = v | 0xFF000000u;
+        }
+        done_reading();
+        frame->width = iw;
+        frame->height = ih;
+        ok |= GSN_WANT_PIXELS;
+    }
+    return ok;
+}
+
+// After the vblank's commands went to the queue: the presenter may show the new picture
+void scanout_published() {
+    std::lock_guard<std::mutex> hold(scanout_image.lock);
+    scanout_image.serial++;
+}
+
+// ---- The GS's own thread ------------------------------------------------------------------------
+// The native GS works on a thread of its own, as the GS is a chip of its own: what is sent to it (GIF
+// packets, vblanks) is copied into a ring, and its thread takes it from there while the thread that
+// sent it (the DMA controller's) goes on with VU1's programs and the next packets. Whatever wants
+// something back (a read-back, a picture to show, the GS's state) first waits until the ring is
+// empty and the GS's thread idle, then does it on its own thread. (KF4_GSN_THREAD=0: no thread, all
+// of it done as it is sent.)
+enum : uint32_t { RING_GIF, RING_VSYNC, RING_SKIP };
+
+// A record in the ring: this header, then its bytes, padded to 16
+struct RingRecord {
+    uint32_t type;
+    uint32_t size;
+    int32_t arg;
+    uint32_t want_pixels; // (a vblank's)
+};
+static_assert(sizeof(RingRecord) == 16, "a ring record's header is a qword");
+
+const size_t ring_bytes = size_t(64) << 20; // (a power of two)
+// the display registers gsn_vsync reads: PMODE to DISPLAY2, a register every 16 bytes
+const size_t vsync_bytes = 11 * 16;
+
+struct Ring {
+    std::vector<uint8_t> bytes;
+    std::atomic<uint64_t> head{0}; // bytes put in (the sender's)
+    std::atomic<uint64_t> tail{0}; // bytes done (the GS thread's)
+    std::atomic<bool> gs_sleeping{false}, sender_waiting{false};
+    std::atomic<bool> stop{false}, stopped{false}; // (at exit: ring_stop)
+    std::atomic<uint64_t> vsyncs_done{0};          // vblanks the GS's thread has done
+    uint64_t vsyncs_sent = 0;                      // (the sender's)
+    std::mutex lock;
+    std::condition_variable wake; // the GS's thread, when there is something to do
+    std::condition_variable done; // the sender, when the GS's thread has done something
+};
+
+Ring *ring; // (none: no thread)
+
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+
+void ring_work(const RingRecord &r, const uint8_t *data) {
+    if (r.type == RING_GIF) {
+        Timer timer(gsn_stats.ns_gif);
+        gif(r.arg, data, r.size);
+    } else if (r.type == RING_VSYNC) {
+        uint64_t privileged[vsync_bytes / 8];
+        memcpy(privileged, data, vsync_bytes);
+        vsync_now(privileged, r.arg, int(r.want_pixels), nullptr);
+    }
+}
+
+void ring_thread() {
+    Util::register_thread_index(0); // (Granite's command pools: the sender's when it does the work)
+    Ring &q = *ring;
+    for (;;) {
+        if (q.stop.load()) {
+            // the program is ending: nothing more is done, and nothing of the GS's is touched again
+            q.stopped.store(true);
+            {
+                std::lock_guard<std::mutex> hold(q.lock);
+                q.done.notify_all();
+            }
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+        uint64_t tail = q.tail.load(std::memory_order_relaxed);
+        if (q.head.load(std::memory_order_acquire) == tail) {
+            // nothing to do: a while spinning (packets come in bursts), then asleep
+            auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(200);
+            while (q.head.load(std::memory_order_acquire) == tail && std::chrono::steady_clock::now() < until) {
+                std::this_thread::yield();
+            }
+            if (q.head.load(std::memory_order_acquire) == tail) {
+                std::unique_lock<std::mutex> hold(q.lock);
+                q.gs_sleeping.store(true);
+                while (q.head.load() == tail && !q.stop.load()) {
+                    q.wake.wait(hold);
+                }
+                q.gs_sleeping.store(false);
+            }
+            continue;
+        }
+        const uint8_t *at = q.bytes.data() + (tail & (ring_bytes - 1));
+        RingRecord r;
+        memcpy(&r, at, sizeof(r));
+        ring_work(r, at + sizeof(r));
+        if (r.type == RING_VSYNC) {
+            q.vsyncs_done.fetch_add(1);
+        }
+        q.tail.store(tail + sizeof(r) + ((size_t(r.size) + 15) & ~size_t(15)));
+        if (q.sender_waiting.load()) {
+            std::lock_guard<std::mutex> hold(q.lock);
+            q.done.notify_all();
+        }
+    }
+}
+
+// The sender: waits until the GS's thread has done all but `room` bytes of the ring's
+template <class Done> void sender_wait(Done done) {
+    Ring &q = *ring;
+    if (done()) {
+        return;
+    }
+    // a short wait spinning, a long one asleep
+    auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(100);
+    while (!done() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::yield();
+    }
+    if (!done()) {
+        std::unique_lock<std::mutex> hold(q.lock);
+        q.sender_waiting.store(true);
+        while (!done()) {
+            q.done.wait(hold);
+        }
+        q.sender_waiting.store(false);
+    }
+}
+
+void ring_wait(size_t room) {
+    Ring &q = *ring;
+    uint64_t head = q.head.load(std::memory_order_relaxed);
+    sender_wait([&] { return head - q.tail.load() <= ring_bytes - room || q.stopped.load(); });
+}
+
+// The sender: all that was sent, done
+void ring_idle() {
+    if (ring) {
+        ring_wait(ring_bytes);
+    }
+}
+
+void ring_put(uint32_t type, int32_t arg, const void *data, size_t size, uint32_t want_pixels = 0) {
+    Ring &q = *ring;
+    size_t padded = (size + 15) & ~size_t(15);
+    size_t need = sizeof(RingRecord) + padded;
+    uint64_t head = q.head.load(std::memory_order_relaxed);
+    size_t at = head & (ring_bytes - 1);
+    if (at + need > ring_bytes) {
+        // no room before the ring's end: the rest of it skipped
+        ring_wait(ring_bytes - at);
+        RingRecord skip = {RING_SKIP, uint32_t(ring_bytes - at - sizeof(RingRecord)), 0, 0};
+        memcpy(q.bytes.data() + at, &skip, sizeof(skip));
+        head += ring_bytes - at;
+        q.head.store(head);
+        at = 0;
+    }
+    ring_wait(need);
+    RingRecord r = {type, uint32_t(size), arg, want_pixels};
+    memcpy(q.bytes.data() + at, &r, sizeof(r));
+    memcpy(q.bytes.data() + at + sizeof(r), data, size);
+    q.head.store(head + need);
+    if (q.gs_sleeping.load()) {
+        std::lock_guard<std::mutex> hold(q.lock);
+        q.wake.notify_one();
+    }
+}
+
+// At exit: the GS's thread stops before the GS's objects are destroyed, once it has done what was sent
+// (two seconds at most: what is left then stays undone)
+void ring_stop() {
+    Ring &q = *ring;
+    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (q.tail.load() != q.head.load() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    q.stop.store(true);
+    {
+        std::lock_guard<std::mutex> hold(q.lock);
+        q.wake.notify_one();
+        q.done.notify_all();
+    }
+    until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!q.stopped.load() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void ring_start() {
+    const char *on = getenv("KF4_GSN_THREAD");
+    if (on && atoi(on) == 0) {
+        return;
+    }
+    ring = new Ring();
+    ring->bytes.resize(ring_bytes);
+    std::thread(ring_thread).detach();
+    atexit(ring_stop);
+}
+
+// ---- The pipeline cache -------------------------------------------------------------------------
+// Vulkan pipelines are made as draws first need them (a second or two of them in the first minutes of
+// play, when the driver has not kept them itself: a new build, or its own cache full). The pipeline
+// cache is kept in the data folder (gsn_pipeline_cache), and written again a while after it grows.
+std::string cache_path;
+size_t cache_saved_size;
+uint32_t cache_vsyncs;
+
+void save_pipeline_cache() {
+    size_t size = gs->device->get_pipeline_cache_size();
+    if (size == 0 || size == cache_saved_size) {
+        return;
+    }
+    std::vector<uint8_t> data(size);
+    if (!gs->device->get_pipeline_cache_data(data.data(), size)) {
+        return;
+    }
+    // (into a file beside it, then in its place: never half written)
+    std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\"));
+#ifdef _WIN32
+    _mkdir(folder.c_str());
+#else
+    mkdir(folder.c_str(), 0755);
+#endif
+    std::string temp = cache_path + ".new";
+    FILE *f = fopen(temp.c_str(), "wb");
+    if (!f) {
+        return;
+    }
+    bool written = fwrite(data.data(), 1, size, f) == size;
+    written = fclose(f) == 0 && written;
+    if (written) {
+        remove(cache_path.c_str());
+        written = rename(temp.c_str(), cache_path.c_str()) == 0;
+    }
+    if (written) {
+        cache_saved_size = size;
+        GSN_LOG(1, "pipeline cache written: %zu bytes\n", size);
+    }
 }
 
 } // namespace
@@ -2282,16 +3271,39 @@ extern "C" int gsn_open(void *shared_context) {
 
     if (shared_context) {
         gs->context = static_cast<Context *>(shared_context);
+        present_wanted = false;
     } else {
         if (!Context::init_loader(nullptr)) {
             fprintf(stderr, "[gsn] no Vulkan loader\n");
             return 0;
         }
+        // a presenter's surface and swapchain extensions when asked for; without them if they fail
+        std::vector<const char *> instance_ext, device_ext;
+        if (present_wanted) {
+            present_extensions(instance_ext, device_ext);
+        }
         gs->context = new Context;
         gs->context->set_num_thread_indices(1);
-        if (!gs->context->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
-            fprintf(stderr, "[gsn] no Vulkan device\n");
-            return 0;
+        if (!gs->context->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()), device_ext.data(),
+                                                   uint32_t(device_ext.size()), 0)) {
+            delete gs->context;
+            gs->context = nullptr;
+            if (!instance_ext.empty()) {
+                fprintf(stderr, "[gsn] no Vulkan device with a swapchain: the window is shown without one\n");
+                gs->context = new Context;
+                gs->context->set_num_thread_indices(1);
+                if (!gs->context->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
+                    delete gs->context;
+                    gs->context = nullptr;
+                }
+            }
+            present_wanted = false;
+            if (!gs->context) {
+                fprintf(stderr, "[gsn] no Vulkan device\n");
+                return 0;
+            }
+        } else if (instance_ext.empty()) {
+            present_wanted = false;
         }
         gs->own_context = true;
     }
@@ -2299,7 +3311,9 @@ extern "C" int gsn_open(void *shared_context) {
     log_level = level ? atoi(level) : 0;
     gs->device = new Device;
     gs->device->set_context(*gs->context);
-    gs->device->init_frame_contexts(2);
+    // a frame context a vblank: with four, the CPU waits at a vblank for the GPU's work of four vblanks
+    // before (two left it waiting on the GPU with --fast, a third of the native GS's vsync time)
+    gs->device->init_frame_contexts(4);
     make_program();
 
     gs->dummy_raw = make_image(1, 1, VK_FORMAT_R8_UINT, 1, false);
@@ -2309,15 +3323,53 @@ extern "C" int gsn_open(void *shared_context) {
     transfer_barrier();
     submit(true);
     fprintf(stderr, "[gsn] the native GS on %s\n", gs->device->get_gpu_properties().deviceName);
+    // --native-msaa's sample counts: colour and depth attachments' both, and depth read in a shader
+    const VkPhysicalDeviceLimits &limits = gs->device->get_gpu_properties().limits;
+    msaa_samples_have = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts &
+                        limits.sampledImageDepthSampleCounts;
+    ring_start();
     return 1;
 }
 
 extern "C" void gsn_gif(int path, const void *data, size_t bytes) {
+    if (ring) {
+        // (a packet bigger than a quarter of the ring goes in pieces: the GIF reads it qword by qword)
+        const uint8_t *p = static_cast<const uint8_t *>(data);
+        while (bytes > ring_bytes / 4) {
+            ring_put(RING_GIF, path, p, ring_bytes / 4);
+            p += ring_bytes / 4;
+            bytes -= ring_bytes / 4;
+        }
+        ring_put(RING_GIF, path, p, bytes);
+        return;
+    }
     Timer timer(gsn_stats.ns_gif);
     gif(path, static_cast<const uint8_t *>(data), bytes);
 }
 
+extern "C" void gsn_wait(void) {
+    ring_idle();
+}
+
+extern "C" void gsn_pipeline_cache(const char *path) {
+    ring_idle();
+    std::vector<uint8_t> data;
+    if (FILE *f = fopen(path, "rb")) {
+        uint8_t buffer[65536];
+        size_t n;
+        while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) {
+            data.insert(data.end(), buffer, buffer + n);
+        }
+        fclose(f);
+    }
+    // (made again empty if the file is not this driver's, or damaged)
+    gs->device->init_pipeline_cache(data.empty() ? nullptr : data.data(), data.size());
+    cache_path = path;
+    cache_saved_size = gs->device->get_pipeline_cache_size();
+}
+
 extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
+    ring_idle();
     size_t bytes = size_t(qwords) * 16;
     size_t have = gs->readback.size() > gs->readback_at ? gs->readback.size() - gs->readback_at : 0;
     size_t n = std::min(bytes, have);
@@ -2326,8 +3378,21 @@ extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
     gs->readback_at += n;
 }
 
-extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+namespace {
+// gsn_set_presenter's (a picture's pixels, or a new image for gsn_scanout_take), and the pixels it
+// is given
+void (*presenter)(const PortGsFrame *frame);
+void (*presenter_image)(void);
+PortGsFrame presented;
+
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
     Timer timer(gsn_stats.ns_vsync);
+    if ((want_pixels & GSN_PRESENT) && !(want_pixels & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) {
+        if (!presented.rgba) {
+            presented.rgba = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS));
+        }
+        frame = &presented;
+    }
     flush_batch();
     // a register every 16 bytes: PMODE, SMODE1, SMODE2, ..., DISPFB1, DISPLAY1, DISPFB2, DISPLAY2
     auto preg = [&](int n) { return privileged[n * 2]; };
@@ -2345,19 +3410,22 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
         if (interlaced && field_mode) {
             h /= 2;
         }
-        uint32_t s = target_scale;
-        if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && size_t(w) * h * s * s * (field_mode ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
-            if (interlaced && field_mode) {
+        uint32_t sx = target_sx, sy = target_sy;
+        if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && size_t(w) * h * sx * sy * (field_mode ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
+            if (want_pixels & GSN_WANT_IMAGE) {
+                ok = scanout_to_image(fbp, fbw, psm, dbx, dby, w, h, interlaced && field_mode, field,
+                                      (want_pixels & GSN_WANT_PIXELS) ? frame : nullptr);
+            } else if (interlaced && field_mode) {
                 // each field its own picture, woven with the one before: kept every field, wanted or not
                 int f = field & 1;
-                uint32_t got = 1;
-                gs->fields[f].resize(size_t(w) * h * s * s);
-                read_buffer(fbp, fbw, psm, dbx, dby, w, h, gs->fields[f].data(), true, &got);
-                if (got != s) { // not a target (yet): one pixel a GS pixel, repeated
+                uint32_t got[2];
+                gs->fields[f].resize(size_t(w) * h * sx * sy);
+                read_buffer(fbp, fbw, psm, dbx, dby, w, h, gs->fields[f].data(), true, got);
+                if (got[0] != sx || got[1] != sy) { // not a target (yet): one pixel a GS pixel, repeated
                     std::vector<uint32_t> small(gs->fields[f].begin(), gs->fields[f].begin() + long(size_t(w) * h));
-                    for (uint32_t y = 0; y < h * s; y++) {
-                        for (uint32_t x = 0; x < w * s; x++) {
-                            gs->fields[f][size_t(y) * w * s + x] = small[size_t(y / s) * w + x / s];
+                    for (uint32_t y = 0; y < h * sy; y++) {
+                        for (uint32_t x = 0; x < w * sx; x++) {
+                            gs->fields[f][size_t(y) * w * sx + x] = small[size_t(y / sy) * w + x / sx];
                         }
                     }
                 }
@@ -2372,47 +3440,109 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
                     gs->fields[f ^ 1] = gs->fields[f];
                 }
                 if (want_pixels) {
-                    // the woven picture's line l is field (l & 1)'s line l / 2, each line s rows of pixels
-                    for (uint32_t y = 0; y < h * 2 * s; y++) {
-                        uint32_t l = y / s, row = (l / 2) * s + y % s;
-                        memcpy(frame->rgba + size_t(y) * w * s, gs->fields[l & 1].data() + size_t(row) * w * s, w * s * 4);
+                    // the woven picture's line l is field (l & 1)'s line l / 2, each line sy rows of pixels
+                    for (uint32_t y = 0; y < h * 2 * sy; y++) {
+                        uint32_t l = y / sy, row = (l / 2) * sy + y % sy;
+                        memcpy(frame->rgba + size_t(y) * w * sx, gs->fields[l & 1].data() + size_t(row) * w * sx, w * sx * 4);
                     }
-                    frame->width = w * s;
-                    frame->height = h * 2 * s;
+                    frame->width = w * sx;
+                    frame->height = h * 2 * sy;
                     ok = 1;
                 }
             } else if (want_pixels) {
-                uint32_t got = 1;
-                read_buffer(fbp, fbw, psm, dbx, dby, w, h, frame->rgba, true, &got);
-                frame->width = w * got;
-                frame->height = h * got;
+                uint32_t got[2];
+                read_buffer(fbp, fbw, psm, dbx, dby, w, h, frame->rgba, true, got);
+                frame->width = w * got[0];
+                frame->height = h * got[1];
                 ok = 1;
             }
         }
     }
     submit(false);
     gs->device->next_frame_context();
+    if (ok & GSN_WANT_IMAGE) {
+        scanout_published();
+    }
+    // the pipeline cache, written when it has grown (looked at every ten seconds)
+    if (!cache_path.empty() && ++cache_vsyncs % 600 == 0) {
+        save_pipeline_cache();
+    }
     gsn_stats.targets = gs->targets.size();
     gsn_stats.textures = gs->textures.size();
     gsn_stats.pool_images = decoded_pool.size();
     gsn_stats.pool_mb = decoded_pool_bytes >> 20;
     gsn_stats.upload_copies = page_images.size();
-    if (wanted_scale != target_scale) {
+    uint32_t wanted = wanted_scale;
+    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         for (auto &t : gs->targets) {
             write_back(*t);
         }
         end_pass();
         gs->targets.clear();
-        target_scale = wanted_scale;
+        target_sx = wanted & 0xFF;
+        target_sy = wanted >> 8;
+        target_samples = wanted_samples;
         gs->fields[0].clear();
         gs->fields[1].clear();
     }
+    if (ok && (want_pixels & GSN_PRESENT)) {
+        // the window's picture, handed over now that it is there (an image: once its commands are on
+        // the queue, scanout_published above)
+        if ((ok & GSN_WANT_IMAGE) && presenter_image) {
+            presenter_image();
+        } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
+            presenter(frame);
+        }
+    }
     return ok;
 }
+} // namespace
 
-extern "C" void gsn_set_scale(int scale) {
-    wanted_scale = uint32_t(scale < 1 ? 1 : scale > 4 ? 4 : scale);
+extern "C" void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(void)) {
+    presenter = pixels;
+    presenter_image = image;
+}
+
+extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+    // On the GS's thread, with the sender going on: a vblank whose picture nobody waits for (none, or
+    // one the GS's thread hands to the presenter). A picture wanted in frame, or an image the caller
+    // goes on to show itself, waits for the thread to be idle and is made here.
+    bool queued = !(want_pixels & GSN_WANT_PIXELS) && (!(want_pixels & GSN_WANT_IMAGE) || (want_pixels & GSN_PRESENT));
+    if (ring && queued) {
+        ring_put(RING_VSYNC, field, privileged, vsync_bytes, uint32_t(want_pixels));
+        ring->vsyncs_sent++;
+        if (want_pixels & GSN_PRESENT) {
+            // A window's picture is at most two vblanks behind the game: the sender waits for the GS's
+            // thread beyond that (with --fast it would run ahead by as many vblanks as the ring holds)
+            Ring &q = *ring;
+            sender_wait([&] { return q.vsyncs_sent - q.vsyncs_done.load() <= 2 || q.stopped.load(); });
+        }
+        return want_pixels & (GSN_PRESENT | GSN_WANT_IMAGE);
+    }
+    ring_idle();
+    return vsync_now(privileged, field, want_pixels, frame);
+}
+
+extern "C" void gsn_set_scale(int x_scale, int y_scale) {
+    uint32_t x = uint32_t(x_scale < 1 ? 1 : x_scale > GSN_MAX_SCALE_X ? GSN_MAX_SCALE_X : x_scale);
+    uint32_t y = uint32_t(y_scale < 1 ? 1 : y_scale > 4 ? 4 : y_scale);
+    wanted_scale = x | y << 8;
+}
+
+extern "C" int gsn_set_msaa(int samples) {
+    // the most this GPU has up to `samples` (msaa_samples_have)
+    uint32_t n = 1;
+    while (n * 2 <= uint32_t(samples) && n < 8 && (msaa_samples_have & (n * 2))) {
+        n *= 2;
+    }
+    // (off and on again is live; another count once one has been drawn with, from the next start)
+    uint32_t used = msaa_samples_used.load();
+    if (n > 1 && used) {
+        n = used;
+    }
+    wanted_samples = n;
+    return int(n);
 }
 
 extern "C" int gsn_display_rect(const uint64_t *privileged, GsnRect *rect) {
@@ -2420,6 +3550,7 @@ extern "C" int gsn_display_rect(const uint64_t *privileged, GsnRect *rect) {
 }
 
 extern "C" void gsn_read_rect(const GsnRect *r, uint32_t *rgba) {
+    ring_idle();
     flush_batch();
     read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba);
     submit(false);
@@ -2435,9 +3566,12 @@ extern "C" void gsn_decode_rect(const uint8_t *vram, const GsnRect *r, uint32_t 
 }
 
 extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
+    ring_idle();
     flush_batch();
     Target *t = find_target(r->bp, r->bw, r->psm);
-    if (t && t->scale == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
+    if (t && t->sx == 1 && t->sy == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
+        msaa_settle(*t);
+        msaa_image_written(*t);
         end_pass();
         transfer_barrier();
         uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0},
@@ -2460,6 +3594,7 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
 }
 
 extern "C" const void *gsn_vram(void) {
+    ring_idle();
     flush_batch();
     for (auto &t : gs->targets) {
         write_back(*t);
@@ -2489,6 +3624,7 @@ extern "C" size_t gsn_state_size(void) {
 }
 
 extern "C" void gsn_state(PortStateIo *io) {
+    ring_idle();
     if (!io->loading) {
         port_state_bytes(io, const_cast<void *>(gsn_vram()), GSN_VRAM_BYTES);
     } else {
@@ -2511,6 +3647,9 @@ extern "C" void gsn_state(PortStateIo *io) {
     port_state_bytes(io, &gs->upload, sizeof(gs->upload));
     port_state_bytes(io, &gs->transfer_dir, sizeof(gs->transfer_dir));
     if (io->loading) {
+        for (uint32_t i = 0; i < 3; i++) {
+            gs->queued[i] = make_vtx(gs->queue[i], effective_prim(), gs->queue[i]);
+        }
         gs->verts.clear();
         gs->fields[0].clear();
         gs->fields[1].clear();
@@ -2518,6 +3657,7 @@ extern "C" void gsn_state(PortStateIo *io) {
 }
 
 extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
+    ring_idle();
     switch (type) {
     case KF4GS_VRAM:
         if (size != GSN_VRAM_BYTES) {
@@ -2532,6 +3672,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         memcpy(gs->vram.data(), data, GSN_VRAM_BYTES);
         pages_written(0, vram_pages);
         reset_gs();
+        target_samples = wanted_samples; // (no targets: a capture is drawn with MSAA from its start)
         return 1;
     case KF4GS_GS_REGS: {
         const Kf4GsReg *regs = static_cast<const Kf4GsReg *>(data);
@@ -2551,4 +3692,50 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         return 1;
     }
     return 0;
+}
+
+// ---- The presenter's side (port/platform/present_vk.cpp) ------------------------------------------
+extern "C" void gsn_enable_present(void) {
+    present_wanted = true;
+}
+
+extern "C" int gsn_present_device(GsnPresentDevice *out) {
+    if (!gs || !gs->context || !present_wanted) {
+        return 0;
+    }
+    const QueueInfo &queues = gs->context->get_queue_info();
+    out->instance = gs->context->get_instance();
+    out->gpu = gs->context->get_gpu();
+    out->device = gs->context->get_device();
+    out->queue = queues.queues[QUEUE_INDEX_GRAPHICS];
+    out->queue_family = queues.family_indices[QUEUE_INDEX_GRAPHICS];
+    out->api_version = gs->context->get_enabled_device_features().instance_api_core_version;
+    out->get_instance_proc_addr = reinterpret_cast<void *>(Context::get_instance_proc_addr());
+    return out->queue != VK_NULL_HANDLE;
+}
+
+extern "C" void gsn_queue_lock(void) {
+    gs->device->external_queue_lock();
+}
+
+extern "C" void gsn_queue_unlock(void) {
+    gs->device->external_queue_unlock();
+}
+
+extern "C" int gsn_scanout_take(GsnScanout *out) {
+    std::lock_guard<std::mutex> hold(scanout_image.lock);
+    if (!scanout_image.image || scanout_image.serial == 0) {
+        return 0;
+    }
+    out->image = uint64_t(scanout_image.image->get_image());
+    out->width = scanout_image.width;
+    out->height = scanout_image.height;
+    out->serial = scanout_image.serial;
+    scanout_image.taken = true;
+    return 1;
+}
+
+extern "C" void gsn_scanout_release(void) {
+    std::lock_guard<std::mutex> hold(scanout_image.lock);
+    scanout_image.taken = false;
 }

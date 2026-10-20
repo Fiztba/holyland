@@ -130,7 +130,7 @@ target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
-set_source_files_properties(port/platform/vu1.c port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
+set_source_files_properties(port/platform/vu1.c port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c PROPERTIES COMPILE_OPTIONS "-frounding-math;-falign-functions=64;-falign-loops=64")
 set_source_files_properties(port/sdk/libm_ps2.c port/math/libvu0.c PROPERTIES COMPILE_OPTIONS "${KF4_EE_FLOAT_FLAGS}")
 # The fibers switch stacks by hand (port/platform/fiber.c), which a shadow stack would refuse
 if(NOT WIN32)
@@ -197,6 +197,16 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
+    # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the native GS's
+    # device, with the overlay drawn by Dear ImGui's Vulkan backend (functions loaded at run time)
+    if(TARGET imgui)
+        target_sources(imgui PRIVATE third_party/imgui/backends/imgui_impl_vulkan.cpp)
+        target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
+        target_link_libraries(imgui PUBLIC Vulkan::Headers)
+        target_sources(kf4_port PRIVATE port/platform/present_vk.cpp)
+        target_include_directories(kf4_port PRIVATE port/gs/native)
+        target_compile_definitions(kf4_port PRIVATE KF4_HAVE_VULKAN_PRESENTER)
+    endif()
 elseif(KF4_USE_PARALLEL_GS)
     message(STATUS "third_party/parallel-gs is not checked out: the game will draw nothing")
 endif()

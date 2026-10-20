@@ -4,7 +4,7 @@
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "gs",
-                    "native_scale": 1},
+                    "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "presenter": "sdl"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -279,6 +279,15 @@ void port_settings_load(void) {
         }
     }
     s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 1, 4);
+    s->native_widescreen = read_bool(display, "native_widescreen", s->native_widescreen);
+    s->native_msaa = (int)read_number(display, "native_msaa", s->native_msaa, 1, 8);
+    {
+        const char *presenter = read_string(display, "presenter");
+
+        if (presenter != NULL) {
+            s->presenter = strcmp(presenter, "vulkan") == 0 ? PORT_PRESENTER_VULKAN : PORT_PRESENTER_SDL;
+        }
+    }
     audio = cJSON_GetObjectItemCaseSensitive(document, "audio");
     s->volume = (int)read_number(audio, "volume", s->volume, 0, 100);
     s->mute = read_bool(audio, "mute", s->mute);
@@ -319,6 +328,15 @@ void port_settings_load(void) {
     }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
+    }
+    if (!port_options.native_widescreen_forced) {
+        port_options.native_widescreen = s->native_widescreen;
+    }
+    if (!port_options.native_msaa_forced) {
+        port_options.native_msaa = s->native_msaa;
+    }
+    if (!port_options.presenter_forced) {
+        port_options.presenter = s->presenter;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -426,9 +444,12 @@ void port_settings_save(void) {
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
     put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
     put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
+    put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
+    put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));
+    put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));

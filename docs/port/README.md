@@ -119,8 +119,11 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--fast` | run as fast as possible instead of at 60 vblanks a second |
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
-| `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (step 3, [STEP3.md](STEP3.md)), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
+| `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (step 3, [STEP3.md](STEP3.md)), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
 | `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
+| `--native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`) |
+| `--native-msaa N` | the native GS draws the 3D with N samples a pixel (1, the default: off; 2, 4 or 8), smoothing its edges (on the Debug page, live but for a change of count, which takes a restart; `settings.json` `display.native_msaa`) |
+| `--presenter sdl\|vulkan` | how the picture reaches the window: SDL_Renderer (the default), or a Vulkan swapchain on the native GS's device, the native GS's picture never leaving the GPU (`port/platform/present_vk.cpp`; needs `--renderer native` or `both`, else falls back to SDL). The Debug page sets it for the next start (`settings.json`, `display.presenter`) |
 | `--vu1 interp\|hle\|check` | who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through): the interpreter (the default), or `hle`, the same results to the bit computed directly (a speed switch: `port/platform/vu1_hle*.c`); `check` runs both and compares them run by run (`--stats` counts the differences) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |

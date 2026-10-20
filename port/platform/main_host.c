@@ -14,8 +14,18 @@
        --no-gs           draw nothing (VIF1 and VU1 still run)
        --renderer NAME   who draws: gs (paraLLEl-GS, the default), native (step 3's renderer,
                          port/gs/native/) or both (side by side, their pictures compared; the
-                         window shows gs's, --renderer-shown native shows the other)
+                         window shows gs's, --renderer-shown native shows the other, and
+                         --renderer-shown heatmap where they differ)
+       --presenter NAME  how the picture reaches the window: sdl (SDL_Renderer, the default) or
+                         vulkan (a swapchain on the native GS's device, the picture kept on the
+                         GPU; port/platform/present_vk.cpp); vulkan falls back to sdl if it
+                         cannot start
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
+       --native-widescreen
+                         with --widescreen, the native GS draws the 16:9 picture wider still, with
+                         square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6)
+       --native-msaa N   the native GS draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
+                         by default): its edges smoothed
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): interp (the interpreter, the default), hle (the same
                          results to the bit, computed directly: faster; port/platform/vu1_hle*.c)
@@ -127,8 +137,9 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n"
-            "          [--native-scale 1-4] [--vu1 interp|hle|check]\n",
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native|heatmap]\n"
+            "          [--presenter sdl|vulkan] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
+            "          [--vu1 interp|hle|check] [--frame-rate 30|60]\n",
             program);
     exit(2);
 }
@@ -153,6 +164,7 @@ static void parse_options(int argc, char **argv) {
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.native_scale = 1;
     port_options.frame_rate = 30;
+    port_options.native_msaa = 1;
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
         const char *value = i + 1 < argc ? argv[i + 1] : NULL;
@@ -200,6 +212,10 @@ static void parse_options(int argc, char **argv) {
             }
             continue;
         }
+        if (strcmp(option, "--native-widescreen") == 0) {
+            port_options.native_widescreen = port_options.native_widescreen_forced = 1;
+            continue;
+        }
         if (strcmp(option, "--invincible") == 0) {
             port_options.invincible = 1;
             continue;
@@ -220,12 +236,14 @@ static void parse_options(int argc, char **argv) {
             port_options.disc = value;
         } else if (strcmp(option, "--renderer") == 0 || strcmp(option, "--renderer-shown") == 0) {
             int both = strcmp(option, "--renderer") == 0;
-            int which = strcmp(value, "gs") == 0             ? PORT_RENDERER_GS
+            int heatmap = !both && strcmp(value, "heatmap") == 0;
+            int which = heatmap                              ? PORT_RENDERER_NATIVE
+                        : strcmp(value, "gs") == 0           ? PORT_RENDERER_GS
                         : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : "", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
@@ -233,7 +251,18 @@ static void parse_options(int argc, char **argv) {
                 port_options.renderer_forced = 1;
             } else {
                 port_options.renderer_shown = which;
+                port_options.renderer_heatmap = heatmap;
             }
+        } else if (strcmp(option, "--presenter") == 0) {
+            if (strcmp(value, "sdl") == 0) {
+                port_options.presenter = PORT_PRESENTER_SDL;
+            } else if (strcmp(value, "vulkan") == 0) {
+                port_options.presenter = PORT_PRESENTER_VULKAN;
+            } else {
+                fprintf(stderr, "--presenter wants sdl or vulkan, not %s\n", value);
+                exit(2);
+            }
+            port_options.presenter_forced = 1;
         } else if (strcmp(option, "--native-scale") == 0) {
             port_options.native_scale = atoi(value);
             if (port_options.native_scale < 1 || port_options.native_scale > 4) {
@@ -248,6 +277,14 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--native-msaa") == 0) {
+            port_options.native_msaa = atoi(value);
+            if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
+                port_options.native_msaa != 8) {
+                fprintf(stderr, "--native-msaa wants 1, 2, 4 or 8, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_msaa_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;

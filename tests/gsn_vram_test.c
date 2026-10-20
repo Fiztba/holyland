@@ -550,6 +550,37 @@ static void test_round_trip(void) {
     }
 }
 
+/* gsn_vram_read_row and gsn_vram_write_row do what gsn_vram_read and gsn_vram_write do, pixel by pixel */
+static void test_rows(void) {
+    static uint32_t row[2048], one[2048];
+
+    for (size_t p = 0; p < PSM_COUNT; p++) {
+        uint32_t psm = all_psms[p];
+
+        for (int t = 0; t < 200; t++) {
+            uint32_t bp = rnd(16384), bw = rnd(64), x = rnd(2048), y = rnd(2048), count = 1 + rnd(2048);
+
+            for (uint32_t i = 0; i < count; i++) {
+                row[i] = (uint32_t)rng();
+            }
+            gsn_vram_write_row(model, psm, bp, bw, x, y, count, row);
+            memcpy(before, model, GSN_VRAM_BYTES);
+            for (uint32_t i = 0; i < count; i++) {
+                gsn_vram_write(before, psm, bp, bw, x + i, y, row[i]);
+            }
+            gsn_vram_read_row(model, psm, bp, bw, x, y, count, row);
+            for (uint32_t i = 0; i < count; i++) {
+                one[i] = gsn_vram_read(model, psm, bp, bw, x + i, y);
+            }
+            if (memcmp(before, model, GSN_VRAM_BYTES) != 0 || memcmp(row, one, count * 4) != 0) {
+                printf("FAIL rows %s bp 0x%X bw %u (%u,%u) x %u\n", psm_name(psm), bp, bw, x, y, count);
+                failures++;
+                break;
+            }
+        }
+    }
+}
+
 /* gsn_upload_data's speed, for a 1024x1024 PSMCT32 picture */
 static void measure_upload(void) {
     uint8_t *vram = calloc(GSN_VRAM_BYTES, 1);
@@ -591,6 +622,7 @@ int main(int argc, char **argv) {
     data_buf = malloc(MAX_DATA + 16);
 
     test_round_trip();
+    test_rows();
     measure_upload();
 
     if (!port_gs_backend_open()) {

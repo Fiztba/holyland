@@ -47,16 +47,20 @@ int texa_alpha(ivec3 rgb, bool bit, bool has_bit) {
     return int(field(pc.texa, 0u, 8u));
 }
 
-// A texture that is a render target drawn at a larger scale (--native-scale) is read at its own
-// pixels: the coordinates are in them, `ts` to a texel, and wrap as the texel they are in does
-int target_scale() {
-    return field(pc.flags, GSN_F_SRC_SHIFT, 4u) >= GSN_SRC_TARGET_CT32 ? max(int(pc.tscale), 1) : 1;
+// A texture that is a render target drawn at a larger scale (--native-scale, --native-widescreen) is
+// read at its own pixels: the coordinates are in them, `ts` to a texel (across and down), and wrap as
+// the texel they are in does
+ivec2 target_scale() {
+    if (field(pc.flags, GSN_F_SRC_SHIFT, 4u) < GSN_SRC_TARGET_CT32) {
+        return ivec2(1);
+    }
+    return max(ivec2(int(pc.tscale & 0xFFFFu), int(pc.tscale >> 16)), ivec2(1));
 }
 
 // One texel at integer coordinates, wrapped as CLAMP says, at mip level `level`
 ivec4 texel(ivec2 c, int level) {
-    int ts = target_scale();
-    ivec2 logical = ivec2(floor(vec2(c) / float(ts)));
+    ivec2 ts = target_scale();
+    ivec2 logical = ivec2(floor(vec2(c) / vec2(ts)));
     ivec2 sub = c - logical * ts;
     c = logical;
     ivec2 size = max(ivec2(int(pc.tex_size & 0xFFFFu), int(pc.tex_size >> 16)) >> level, ivec2(1));
@@ -114,7 +118,7 @@ ivec4 round_shift(ivec4 v, int bits) {
 
 // The texture at texel coordinates `tc` (level 0's), one level, nearest or bilinear
 ivec4 sample_level(vec2 tc, int level, bool linear) {
-    vec2 at = tc / float(1 << level) * float(target_scale());
+    vec2 at = tc / float(1 << level) * vec2(target_scale());
     // the GS's texel coordinates have 4 bits of fraction; interpolated in floats, a coordinate that is
     // exactly on one comes out a hair under it, which the bias puts back
     ivec2 p = ivec2(floor(at * 16.0 + 1.0 / 64.0));

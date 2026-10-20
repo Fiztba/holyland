@@ -2,10 +2,14 @@
 
    The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread and left here;
    at each vblank the game's thread shows the newest one in an SDL window, scaled to fit it at the
-   TV's 4:3 (or stretched, by the settings), with the settings overlay (F1) over it. A dumped frame is
+   TV's 4:3 (or stretched, by the settings), with the settings overlay (F1) over it. That is
+   SDL_Renderer's work, or with --presenter vulkan a swapchain's on the native GS's own device
+   (port/platform/present_vk.cpp), which takes the native GS's picture as the image it is on the GPU
+   (port_video_submit_image) and the others' pixels as they are here. A dumped frame is
    written as a PNG, uncompressed, so no library is needed. It is the GS's own picture, 640x448 (or
    the scanout's size) whatever the window shows: with --widescreen it is the squeezed picture, to be
-   shown at 16:9. */
+   shown at 16:9 (with --native-widescreen, the native GS's wider one, 4/3 or more as many pixels
+   across as --native-scale gives). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +28,7 @@
 #include "port/host.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/present_vk.h"
 #include "port/settings.h"
 
 /* ---- The newest picture, between the two threads --------------------------------------------- */
@@ -40,6 +45,8 @@ static pthread_mutex_t frame_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t *latest;
 static uint32_t latest_width, latest_height;
 static int latest_new;
+static int latest_image; /* the newest picture is the native GS's image on the GPU, not latest */
+static int presenter = PORT_PRESENTER_SDL;
 
 void port_video_submit(const PortGsFrame *frame) {
     LOCK();
@@ -50,8 +57,46 @@ void port_video_submit(const PortGsFrame *frame) {
     latest_width = frame->width;
     latest_height = frame->height;
     latest_new = 1;
+    latest_image = 0;
     UNLOCK();
 }
+
+void port_video_submit_image(void) {
+    LOCK();
+    latest_new = 1;
+    latest_image = 1;
+    UNLOCK();
+}
+
+int port_video_takes_images(void) {
+    return __atomic_load_n(&presenter, __ATOMIC_ACQUIRE) == PORT_PRESENTER_VULKAN;
+}
+
+int port_video_presenter(void) {
+    return __atomic_load_n(&presenter, __ATOMIC_ACQUIRE);
+}
+
+#ifdef KF4_HAVE_SDL
+/* The picture's place in a window of out_w x out_h pixels: the TV's 4:3, whatever the scanout's size;
+   with --widescreen a 16:9 TV's (the game drew its picture squeezed for it, port/platform/gs.c); or
+   the whole window, stretched */
+void port_video_fit(int out_w, int out_h, int *x, int *y, int *width, int *height) {
+    double aspect = port_options.widescreen ? 16.0 / 9.0 : 4.0 / 3.0;
+
+    if (port_settings.aspect == ASPECT_STRETCH) {
+        *width = out_w;
+        *height = out_h;
+    } else if ((double)out_w / out_h > aspect) {
+        *height = out_h;
+        *width = (int)(out_h * aspect + 0.5);
+    } else {
+        *width = out_w;
+        *height = (int)(out_w / aspect + 0.5);
+    }
+    *x = (out_w - *width) / 2;
+    *y = (out_h - *height) / 2;
+}
+#endif
 
 /* ---- The window ------------------------------------------------------------------------------- */
 #ifdef KF4_HAVE_SDL
@@ -88,9 +133,32 @@ void port_video_apply_settings(void) {
         SDL_SetWindowSize(window, width, height);
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
-    SDL_RenderSetVSync(renderer, port_settings.vsync);
+    if (renderer != NULL) {
+        SDL_RenderSetVSync(renderer, port_settings.vsync);
+    }
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+    if (presenter == PORT_PRESENTER_VULKAN) {
+        port_vk_set_vsync(port_settings.vsync);
+    }
+#endif
 #endif
 }
+
+#ifdef KF4_HAVE_SDL
+static SDL_Window *make_window(Uint32 flags) {
+    int width, height;
+
+    window_size(&width, &height);
+    if (port_settings.fullscreen) {
+        flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
+    /* pictures of the overlay for tests (KF4_OVERLAY_SHOT) need no window on the screen */
+    if (getenv("KF4_OVERLAY_SHOT") != NULL) {
+        flags |= SDL_WINDOW_HIDDEN;
+    }
+    return SDL_CreateWindow("King's Field IV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, flags);
+}
+#endif
 
 void port_video_init(void) {
 #ifdef KF4_HAVE_SDL
@@ -104,21 +172,30 @@ void port_video_init(void) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return;
     }
-    {
-        int width, height;
-        Uint32 flags = SDL_WINDOW_RESIZABLE;
-
-        window_size(&width, &height);
-        if (port_settings.fullscreen) {
-            flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+    /* the Vulkan presenter on the window, if it starts; else the window again, for SDL_Renderer */
+    if (port_options.presenter == PORT_PRESENTER_VULKAN) {
+        window = make_window(SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        if (window != NULL && port_vk_open(window)) {
+            shown = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+            __atomic_store_n(&presenter, PORT_PRESENTER_VULKAN, __ATOMIC_RELEASE);
+            port_overlay_init(window, NULL);
+            return;
         }
-        /* pictures of the overlay for tests (KF4_OVERLAY_SHOT) need no window on the screen */
-        if (getenv("KF4_OVERLAY_SHOT") != NULL) {
-            flags |= SDL_WINDOW_HIDDEN;
+        if (window == NULL) {
+            fprintf(stderr, "[video] no Vulkan window: %s\n", SDL_GetError());
         }
-        window = SDL_CreateWindow("King's Field IV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height,
-                                  flags);
+        fprintf(stderr, "[video] the Vulkan presenter did not start: the window is SDL_Renderer's\n");
+        if (window != NULL) {
+            SDL_DestroyWindow(window);
+        }
     }
+#else
+    if (port_options.presenter == PORT_PRESENTER_VULKAN) {
+        fprintf(stderr, "[video] built without the Vulkan presenter: the window is SDL_Renderer's\n");
+    }
+#endif
+    window = make_window(SDL_WINDOW_RESIZABLE);
     if (window == NULL) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return;
@@ -147,23 +224,46 @@ void port_video_init(void) {
 #endif
 }
 
+#ifdef KF4_HAVE_SDL
+/* SDL_Renderer's square for the mouse indicator (port_controls_draw) */
+static void fill_rect(void *context, int x, int y, int width, int height, unsigned int rgba) {
+    SDL_Rect rect;
+
+    (void)context;
+    rect.x = x;
+    rect.y = y;
+    rect.w = width;
+    rect.h = height;
+    SDL_SetRenderDrawColor(renderer, (Uint8)rgba, (Uint8)(rgba >> 8), (Uint8)(rgba >> 16), (Uint8)(rgba >> 24));
+    SDL_RenderFillRect(renderer, &rect);
+}
+#endif
+
 void port_video_present(void) {
 #ifdef KF4_HAVE_SDL
     uint32_t width, height;
-    int fresh;
+    int fresh, image;
 
     if (window == NULL) {
         return;
     }
     LOCK();
     fresh = latest_new;
+    image = latest_image;
     width = latest_width;
     height = latest_height;
-    if (fresh) {
+    if (fresh && !image) {
         memcpy(shown, latest, sizeof(uint32_t) * width * height);
-        latest_new = 0;
     }
+    latest_new = 0;
     UNLOCK();
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+    if (presenter == PORT_PRESENTER_VULKAN) {
+        /* (the presenter draws again with nothing new only for the overlay, as below) */
+        port_vk_present(fresh && !image ? shown : NULL, width, height, fresh && image);
+        return;
+    }
+#endif
     /* with nothing new, the window is drawn again only for the overlay */
     if (!fresh && (texture == NULL || !port_overlay_visible())) {
         return;
@@ -191,27 +291,18 @@ void port_video_present(void) {
     {
         int out_w, out_h;
         SDL_Rect dst;
-        /* the TV's 4:3, whatever the scanout's size; with --widescreen a 16:9 TV's (the game drew its
-           picture squeezed for it, port/platform/gs.c) */
-        double aspect = port_options.widescreen ? 16.0 / 9.0 : 4.0 / 3.0;
+        SDL_BlendMode blend;
 
         SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
-        if (port_settings.aspect == ASPECT_STRETCH) {
-            dst.w = out_w;
-            dst.h = out_h;
-        } else if ((double)out_w / out_h > aspect) {
-            dst.h = out_h;
-            dst.w = (int)(out_h * aspect + 0.5);
-        } else {
-            dst.w = out_w;
-            dst.h = (int)(out_w / aspect + 0.5);
-        }
-        dst.x = (out_w - dst.w) / 2;
-        dst.y = (out_h - dst.h) / 2;
+        port_video_fit(out_w, out_h, &dst.x, &dst.y, &dst.w, &dst.h);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, &dst);
-        port_controls_draw(renderer, dst.x, dst.y, dst.w, dst.h);
-        port_overlay_draw();
+        SDL_GetRenderDrawBlendMode(renderer, &blend);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        port_controls_draw(fill_rect, NULL, dst.x, dst.y, dst.w, dst.h);
+        SDL_SetRenderDrawBlendMode(renderer, blend);
+        port_overlay_draw(dst.x, dst.y, dst.w, dst.h);
         SDL_RenderPresent(renderer);
     }
 #endif
