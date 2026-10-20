@@ -246,6 +246,12 @@ them run by run.
 - **Speed** (that run, `--fast --headless --renderer native`, Ryzen 9 9900X3D): VU1 3.3 s with the
   interpreter, 1.14 s with `--vu1 hle` (0.59 s of it program 0x000's 499,185 runs: 4.7 times faster
   than interpreted); the run's wall time 7.9 s to 5.4 s.
+- **Program 0x5A0** (the silhouettes) has its own: `port/platform/vu1_hle_5a0.c`, the same way
+  (exact helpers only, no SSE fast path), MSCAL 0x5A0 and MSCNT 0x640, n = 3..49, recognised by a
+  hash of 0x5A0-0x641; `vu1_hle_run` hands its runs on. Checked: the 78 captures, 94,086 runs
+  (3,288 of them 0x5A0's), none different; in the game on maps 035, 112 and 115 (2500 frames,
+  `--vu1 check`) none different, and `--vu1 hle`'s PATH1 hash is `--vu1 interp`'s. On map 035 its
+  117,384 runs take VU1 from 2.94 s to 2.62 s with `--vu1 hle`.
 
 ## Testing
 

@@ -87,14 +87,18 @@
 #define MXCSR_TROUBLE 0x0019u /* invalid, overflow, underflow */
 #endif
 
+static int recognised; /* program 0x000; the others' files keep their own */
+
 int vu1_hle_recognise(const uint8_t *micro) {
     uint64_t hash = 0xCBF29CE484222325ull;
-    int n;
+    int n, others = 0;
 
     for (n = 0; n < PROGRAM_PAIRS * 8; n++) {
         hash = (hash ^ micro[n]) * 0x100000001B3ull;
     }
-    return hash == PROGRAM_HASH;
+    recognised = hash == PROGRAM_HASH;
+    others |= vu1_hle_5a0_recognise(micro);
+    return recognised || others;
 }
 
 /* ---- Arithmetic ------------------------------------------------------------------------------ */
@@ -547,7 +551,10 @@ uint64_t vu1_hle_run(Vu1State *vu, uint8_t *data, uint32_t pc, uint32_t top) {
     int16_t light_count;
     LightEnd e;
 
-    if ((pc != 0 && pc != ENTRY_MSCNT) || vu->q_pending || vu->p_pending || vu->flag_count || vu->flags_read) {
+    if (pc == 0x5A0 || pc == 0x640) {
+        return vu1_hle_5a0_run(vu, data, pc, top);
+    }
+    if (!recognised || (pc != 0 && pc != ENTRY_MSCNT) || vu->q_pending || vu->p_pending || vu->flag_count || vu->flags_read) {
         return 0;
     }
     top &= DATA_QWORDS - 1;

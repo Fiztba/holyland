@@ -334,4 +334,8 @@ int vu1_hle_recognise(const uint8_t *micro);
    rounding mode and DAZ set as for the interpreter. */
 uint64_t vu1_hle_run(Vu1State *vu, uint8_t *data, uint32_t pc, uint32_t top);
 
+/* vu1_hle_5a0.c: program 0x5A0 (MSCAL 0x5A0, MSCNT 0x640), as vu1_hle_run; vu1_hle.c calls them */
+int vu1_hle_5a0_recognise(const uint8_t *micro);
+uint64_t vu1_hle_5a0_run(Vu1State *vu, uint8_t *data, uint32_t pc, uint32_t top);
+
 #endif
