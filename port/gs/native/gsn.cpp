@@ -29,6 +29,7 @@
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -2268,6 +2269,142 @@ void reset_gs() {
     gs->transfer_dir = 3;
 }
 
+// ---- The scanout as an image (gsn_scanout_take) ---------------------------------------------------
+// With a presenter on this device (port/platform/present_vk.cpp) the buffer the display shows is
+// copied on the GPU into an image of its own, which the presenter draws from: no read-back. In field
+// mode the image is the woven picture, each field's lines copied into its own rows (line l of the
+// picture is field (l & 1)'s line l / 2), so the field before stays in the other rows.
+struct ScanoutImage {
+    std::mutex lock; // (the presenter takes the image on the game's thread)
+    ImageHandle image;
+    std::vector<ImageHandle> retired; // images replaced while the presenter had one: dropped once it lets go
+    uint32_t width = 0, height = 0;
+    uint64_t serial = 0;
+    bool taken = false;
+};
+ScanoutImage scanout_image;
+bool present_wanted; // gsn_enable_present
+
+// The surface extensions the Vulkan loader has (VK_KHR_surface and each platform's: SDL picks one)
+void present_extensions(std::vector<const char *> &instance_ext, std::vector<const char *> &device_ext) {
+    static const char *const surfaces[] = {"VK_KHR_win32_surface", "VK_KHR_xlib_surface", "VK_KHR_xcb_surface",
+                                           "VK_KHR_wayland_surface", "VK_EXT_metal_surface"};
+    uint32_t count = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS) {
+        return;
+    }
+    std::vector<VkExtensionProperties> have(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, have.data());
+    auto has = [&](const char *name) {
+        for (auto &e : have) {
+            if (strcmp(e.extensionName, name) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!has(VK_KHR_SURFACE_EXTENSION_NAME)) {
+        return;
+    }
+    for (const char *name : surfaces) {
+        if (has(name)) {
+            instance_ext.push_back(name);
+        }
+    }
+    if (instance_ext.empty()) {
+        return;
+    }
+    instance_ext.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    device_ext.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+}
+
+// The displayed buffer (field_mode: this field) into scanout_image; with frame, read back into it too.
+// Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has the picture.
+int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uint32_t dby, uint32_t w, uint32_t h,
+                     bool field_mode, int field, PortGsFrame *frame) {
+    ScanoutImage &so = scanout_image;
+    Target *t = find_target(fbp, fbw, psm);
+    bool from_target = t && !t->depth && dbx + w <= t->width && dby + h <= t->height;
+    uint32_t s = from_target ? t->scale : target_scale;
+    uint32_t iw = w * s, ih = h * s * (field_mode ? 2 : 1);
+    bool fresh = false;
+    {
+        std::lock_guard<std::mutex> hold(so.lock);
+        if (!so.taken) {
+            so.retired.clear();
+        }
+        if (!so.image || so.width != iw || so.height != ih) {
+            if (so.taken && so.image) {
+                so.retired.push_back(so.image);
+            }
+            so.image = make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+            so.width = iw;
+            so.height = ih;
+            fresh = true;
+        }
+    }
+    // the rows of the picture this field writes: every row in frame mode; in field mode its own, or
+    // both when the image is new (as the read-back path starts the other field as this one)
+    uint32_t parity_lo = field_mode && !fresh ? uint32_t(field & 1) : 0;
+    uint32_t parity_hi = field_mode ? (fresh ? 1 : uint32_t(field & 1)) : 0;
+    const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    end_pass();
+    transfer_barrier();
+    if (from_target) {
+        for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
+            if (!field_mode) {
+                cmd().copy_image(*so.image, *t->image, {0, 0, 0}, {int32_t(dbx * s), int32_t(dby * s), 0}, {iw, ih, 1},
+                                 colour, colour);
+                continue;
+            }
+            for (uint32_t m = 0; m < h; m++) {
+                cmd().copy_image(*so.image, *t->image, {0, int32_t((2 * m + parity) * s), 0},
+                                 {int32_t(dbx * s), int32_t((dby + m) * s), 0}, {iw, s, 1}, colour, colour);
+            }
+        }
+    } else {
+        // not a target (yet): from the CPU's VRAM, each GS pixel repeated s times across and down
+        std::vector<uint32_t> small(size_t(w) * h);
+        read_buffer(fbp, fbw, psm, dbx, dby, w, h, small.data());
+        end_pass();
+        transfer_barrier();
+        // a band of s rows for each of the buffer's lines: field mode's into its own rows
+        uint32_t step = field_mode ? 2 : 1;
+        for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
+            for (uint32_t m = 0; m < h; m++) {
+                uint32_t *out = static_cast<uint32_t *>(
+                    cmd().update_image(*so.image, {0, int32_t((step * m + parity) * s), 0}, {iw, s, 1}, iw, s, colour));
+                for (uint32_t y = 0; y < s; y++) {
+                    for (uint32_t x = 0; x < iw; x++) {
+                        out[size_t(y) * iw + x] = small[size_t(m) * w + x / s];
+                    }
+                }
+            }
+        }
+    }
+    transfer_barrier();
+    int ok = GSN_WANT_IMAGE;
+    if (frame && size_t(iw) * ih <= PORT_GS_FRAME_PIXELS) {
+        const uint8_t *pixels = read_image(*so.image, 0, 0, iw, ih);
+        for (size_t i = 0; i < size_t(iw) * ih; i++) {
+            uint32_t v;
+            memcpy(&v, pixels + i * 4, 4);
+            frame->rgba[i] = v | 0xFF000000u;
+        }
+        done_reading();
+        frame->width = iw;
+        frame->height = ih;
+        ok |= GSN_WANT_PIXELS;
+    }
+    return ok;
+}
+
+// After the vblank's commands went to the queue: the presenter may show the new picture
+void scanout_published() {
+    std::lock_guard<std::mutex> hold(scanout_image.lock);
+    scanout_image.serial++;
+}
+
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
@@ -2280,16 +2417,39 @@ extern "C" int gsn_open(void *shared_context) {
 
     if (shared_context) {
         gs->context = static_cast<Context *>(shared_context);
+        present_wanted = false;
     } else {
         if (!Context::init_loader(nullptr)) {
             fprintf(stderr, "[gsn] no Vulkan loader\n");
             return 0;
         }
+        // a presenter's surface and swapchain extensions when asked for; without them if they fail
+        std::vector<const char *> instance_ext, device_ext;
+        if (present_wanted) {
+            present_extensions(instance_ext, device_ext);
+        }
         gs->context = new Context;
         gs->context->set_num_thread_indices(1);
-        if (!gs->context->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
-            fprintf(stderr, "[gsn] no Vulkan device\n");
-            return 0;
+        if (!gs->context->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()), device_ext.data(),
+                                                   uint32_t(device_ext.size()), 0)) {
+            delete gs->context;
+            gs->context = nullptr;
+            if (!instance_ext.empty()) {
+                fprintf(stderr, "[gsn] no Vulkan device with a swapchain: the window is shown without one\n");
+                gs->context = new Context;
+                gs->context->set_num_thread_indices(1);
+                if (!gs->context->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
+                    delete gs->context;
+                    gs->context = nullptr;
+                }
+            }
+            present_wanted = false;
+            if (!gs->context) {
+                fprintf(stderr, "[gsn] no Vulkan device\n");
+                return 0;
+            }
+        } else if (instance_ext.empty()) {
+            present_wanted = false;
         }
         gs->own_context = true;
     }
@@ -2345,7 +2505,10 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
         }
         uint32_t s = target_scale;
         if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && size_t(w) * h * s * s * (field_mode ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
-            if (interlaced && field_mode) {
+            if (want_pixels & GSN_WANT_IMAGE) {
+                ok = scanout_to_image(fbp, fbw, psm, dbx, dby, w, h, interlaced && field_mode, field,
+                                      (want_pixels & GSN_WANT_PIXELS) ? frame : nullptr);
+            } else if (interlaced && field_mode) {
                 // each field its own picture, woven with the one before: kept every field, wanted or not
                 int f = field & 1;
                 uint32_t got = 1;
@@ -2390,6 +2553,9 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
     }
     submit(false);
     gs->device->next_frame_context();
+    if (ok & GSN_WANT_IMAGE) {
+        scanout_published();
+    }
     gsn_stats.targets = gs->targets.size();
     gsn_stats.textures = gs->textures.size();
     gsn_stats.pool_images = decoded_pool.size();
@@ -2549,4 +2715,50 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         return 1;
     }
     return 0;
+}
+
+// ---- The presenter's side (port/platform/present_vk.cpp) ------------------------------------------
+extern "C" void gsn_enable_present(void) {
+    present_wanted = true;
+}
+
+extern "C" int gsn_present_device(GsnPresentDevice *out) {
+    if (!gs || !gs->context || !present_wanted) {
+        return 0;
+    }
+    const QueueInfo &queues = gs->context->get_queue_info();
+    out->instance = gs->context->get_instance();
+    out->gpu = gs->context->get_gpu();
+    out->device = gs->context->get_device();
+    out->queue = queues.queues[QUEUE_INDEX_GRAPHICS];
+    out->queue_family = queues.family_indices[QUEUE_INDEX_GRAPHICS];
+    out->api_version = gs->context->get_enabled_device_features().instance_api_core_version;
+    out->get_instance_proc_addr = reinterpret_cast<void *>(Context::get_instance_proc_addr());
+    return out->queue != VK_NULL_HANDLE;
+}
+
+extern "C" void gsn_queue_lock(void) {
+    gs->device->external_queue_lock();
+}
+
+extern "C" void gsn_queue_unlock(void) {
+    gs->device->external_queue_unlock();
+}
+
+extern "C" int gsn_scanout_take(GsnScanout *out) {
+    std::lock_guard<std::mutex> hold(scanout_image.lock);
+    if (!scanout_image.image || scanout_image.serial == 0) {
+        return 0;
+    }
+    out->image = uint64_t(scanout_image.image->get_image());
+    out->width = scanout_image.width;
+    out->height = scanout_image.height;
+    out->serial = scanout_image.serial;
+    scanout_image.taken = true;
+    return 1;
+}
+
+extern "C" void gsn_scanout_release(void) {
+    std::lock_guard<std::mutex> hold(scanout_image.lock);
+    scanout_image.taken = false;
 }

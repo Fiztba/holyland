@@ -22,7 +22,11 @@ int gsn_open(void *shared_context);
 void gsn_gif(int path, const void *data, size_t bytes);
 void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
-   into frame when want_pixels (1 if there is one) */
+   into frame when want_pixels (1 if there is one). With GSN_WANT_IMAGE in want_pixels the picture
+   stays on the GPU instead, as the image gsn_scanout_take hands out (GSN_WANT_IMAGE is returned when
+   it is there; GSN_WANT_PIXELS as well asks for it in frame too, read back from that image). */
+#define GSN_WANT_PIXELS 1
+#define GSN_WANT_IMAGE 2
 int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 /* The render targets' size, 1 to 4 times the PS2's (--native-scale), from the next vblank */
 void gsn_set_scale(int scale);
@@ -54,6 +58,38 @@ int gsn_restore(uint32_t type, const void *data, size_t size);
    buffer. Taken between GIF packets. */
 size_t gsn_state_size(void);
 void gsn_state(PortStateIo *io);
+
+/* A presenter on the native GS's own Vulkan device (port/platform/present_vk.cpp): the window's
+   swapchain takes the picture straight from the GPU, with no read-back.
+   gsn_enable_present, before gsn_open: the instance gets the surface extensions and the device the
+   swapchain's, when the Vulkan loader and the GPU have them. gsn_present_device then hands out the
+   device (0 if it has no swapchain); the presenter submits to the native GS's queue, between
+   gsn_queue_lock and gsn_queue_unlock. Handles are Vulkan's, as void pointers and 64-bit integers. */
+typedef struct {
+    void *instance;           /* VkInstance */
+    void *gpu;                /* VkPhysicalDevice */
+    void *device;             /* VkDevice */
+    void *queue;              /* VkQueue: the graphics queue the native GS draws on */
+    uint32_t queue_family;
+    uint32_t api_version;     /* the instance's */
+    void *get_instance_proc_addr; /* PFN_vkGetInstanceProcAddr */
+} GsnPresentDevice;
+void gsn_enable_present(void);
+int gsn_present_device(GsnPresentDevice *out);
+void gsn_queue_lock(void);
+void gsn_queue_unlock(void);
+/* The picture of the last vblank asked for with GSN_WANT_IMAGE: an RGBA8 image (VkImage) in the
+   GENERAL layout, width x height. The native GS writes it again at each vblank, with a barrier after
+   whatever was submitted to the queue before, so a presenter's command buffer, submitted to the same
+   queue with a barrier before it reads, sees one whole picture. Between take and release (once the
+   presenter's command buffer is submitted) the image is not destroyed. serial counts the pictures. */
+typedef struct {
+    uint64_t image;
+    uint32_t width, height;
+    uint64_t serial;
+} GsnScanout;
+int gsn_scanout_take(GsnScanout *out);
+void gsn_scanout_release(void);
 
 /* What the last frames cost and did (--stats, the overlay) */
 typedef struct {
