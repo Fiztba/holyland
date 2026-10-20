@@ -129,7 +129,7 @@ target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
-set_source_files_properties(port/platform/vu1.c port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
+set_source_files_properties(port/platform/vu1.c port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c PROPERTIES COMPILE_OPTIONS "-frounding-math;-falign-functions=64;-falign-loops=64")
 set_source_files_properties(port/sdk/libm_ps2.c port/math/libvu0.c PROPERTIES COMPILE_OPTIONS "${KF4_EE_FLOAT_FLAGS}")
 # The fibers switch stacks by hand (port/platform/fiber.c), which a shadow stack would refuse
 if(NOT WIN32)
