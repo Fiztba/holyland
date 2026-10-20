@@ -187,9 +187,13 @@ What it knowingly does otherwise, found with `kf4-gsreplay --compare-renderers`:
 | Alpha test on filtered textures | the same filtering and rounding (4-bit weights, rounded to even), but an alpha a hair either side of AREF can pass in one and fail in the other | |
 | Mipmap LOD | per pixel from Q in floats | the GS's precision: differences of a few levels of a channel on mipmapped draws |
 | (Cs - Cd) C + Cd on 3D geometry | Vulkan's blending, rounded to nearest (a difference of 1, drawn again each frame) | truncated; sprites and feedback passes blend in the shader, exactly |
-| Blending by As with As above 0x80 | Vulkan's blend factor clamps at 1.0 (for draws blended by the fixed-function unit) | 2.0 |
+| Blending by As with As above 0x80 from a texture whose alpha is not known ahead (CT32, a render target) | Vulkan's blend factor clamps at 1.0 (vertex alphas, CLUT and TEXA alphas above 0x80 are seen, and blended in the shader) | 2.0 |
 | DATE (the destination alpha test) | tested against a copy of the target taken before the draw: overlapping primitives of one draw do not see each other's alpha | per pixel as drawn |
 | Points and lines | not drawn (the game draws neither) | drawn |
+| PABE with (A - A) C + Cd (blending that keeps Cd) | a pixel whose As is under 0x80 is not blended: Cs | an RGB write mask (PABE not seen): Cd |
+| Sprites drawn right to left or bottom to top | UV interpolated from the corners as given | paraLLEl-GS's set-up starts elsewhere: texels a sixteenth apart, which bilinear filtering shows |
+| A draw reading its own frame buffer (TBP = FBP) with bilinear filtering, cut by the scissor | reads the frame as it was before the draw | its feedback emulation: pixels on the cut differ |
+| ST/Q at a texel's edge | exact to the float | a hair under: now and then the texel before (bilinear filtering: a sixteenth) |
 | Field-mode scanout (title, menus, movies) | the two fields woven line by line | paraLLEl-GS's deinterlacer: the same picture, within 3 a channel |
 | Flames and other tiny perspective-textured effects (program 0x700) | S/Q in 32-bit floats | the GS's precision: a few pixels of a flame differ, and the frame-to-frame smear spreads them a little |
 
