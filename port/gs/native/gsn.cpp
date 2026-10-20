@@ -1658,12 +1658,18 @@ void image_data(const uint8_t *data, size_t bytes) {
     }
     upload_bytes.insert(upload_bytes.end(), data, data + bytes);
     uint32_t lo = 0, hi = 0;
-    if (gsn_upload_data(&gs->upload, gs->vram.data(), data, bytes, &lo, &hi)) {
-        pages_written(lo, hi - lo + 1);
+    {
+        Timer swizzle(gsn_stats.ns_swizzle);
+        if (gsn_upload_data(&gs->upload, gs->vram.data(), data, bytes, &lo, &hi)) {
+            pages_written(lo, hi - lo + 1);
+        }
     }
     if (!gs->upload.active) {
         TransferRect r = destination_rect();
-        sync_targets(r);
+        {
+            Timer sync(gsn_stats.ns_sync);
+            sync_targets(r);
+        }
         gs->transfer_dir = 3;
         // kept for next time, the newest last, up to 16 MB of them
         UploadCopy copy;

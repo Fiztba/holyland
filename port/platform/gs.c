@@ -671,9 +671,10 @@ void port_gs_print_stats(void) {
                 (unsigned long long)s->texture_bytes, (unsigned long long)s->texture_reuses, (unsigned long long)s->uploads, (double)s->upload_bytes / 1048576.0,
                 (unsigned long long)s->uploads_skipped);
         fprintf(stderr,
-                "[stats] native GS time: GIF %.3f s (draws %.3f, uploads %.3f, write-backs %.3f, decodes %.3f), "
-                "vsync %.3f s\n",
-                s->ns_gif / 1e9, s->ns_flush / 1e9, s->ns_upload / 1e9, s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
+                "[stats] native GS time: GIF %.3f s (draws %.3f, uploads %.3f: swizzle %.3f, targets %.3f; "
+                "write-backs %.3f, decodes %.3f), vsync %.3f s\n",
+                s->ns_gif / 1e9, s->ns_flush / 1e9, s->ns_upload / 1e9, s->ns_swizzle / 1e9, s->ns_sync / 1e9,
+                s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
     }
 #endif
 }
