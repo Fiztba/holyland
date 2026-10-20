@@ -161,7 +161,8 @@ static_assert(sizeof(Push) == 84, "Push is the shaders' push constant block");
 
 enum : uint32_t {
     F_TME = 0x1, F_FST = 0x2, F_TFX_SHIFT = 2, F_TCC = 0x10, F_FGE = 0x20, F_SHADER_BLEND = 0x40,
-    F_SRC_SHIFT = 8, F_ALPHA_FACTOR = 0x1000, F_PASS_SHIFT = 13, F_DATE = 0x8000,
+    F_SRC_SHIFT = 8, F_ALPHA_FACTOR = 0x1000, F_PASS_SHIFT = 13, F_DATE = 0x8000, F_PREMUL = 0x10000,
+    F_PREMUL_CEIL = 0x20000,
 };
 enum : uint32_t {
     SRC_CLUT = 0, SRC_CT32 = 1, SRC_CT24 = 2, SRC_CT16 = 3, SRC_TARGET_CT32 = 4, SRC_TARGET_CT24 = 5,
@@ -843,6 +844,7 @@ void clut_colours(uint64_t tex0, uint32_t *out) {
 struct FixedBlend {
     VkBlendFactor src, dst;
     VkBlendOp op;
+    uint32_t premul; // 0; or the shader gives Cs * C >> 7 (F_PREMUL), rounded up for a subtraction (F_PREMUL_CEIL)
 };
 
 bool fixed_blend(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fix, FixedBlend *out) {
@@ -857,6 +859,23 @@ bool fixed_blend(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fix, F
         out->op = VK_BLEND_OP_ADD;
         out->src = d == CS ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
         out->dst = d == CD ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
+        return true;
+    }
+    // Cs * C added to Cd or taken from it (glows, fire, shadows): the shader works out Cs * C >> 7 as
+    // the GS does, Vulkan adds it or takes it away, so the result is the GS's exactly, whatever C is
+    if (c != 1 && a == CS && b == ZERO && (d == CD || d == ZERO)) {
+        out->op = VK_BLEND_OP_ADD;
+        out->src = VK_BLEND_FACTOR_ONE;
+        out->dst = d == CD ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
+        out->premul = F_PREMUL;
+        return true;
+    }
+    if (c != 1 && a == ZERO && b == CS && (d == CD || d == ZERO)) {
+        // (0 - Cs) C >> 7 is -(Cs C / 128) rounded down: Cs C / 128 rounded up, taken away
+        out->op = VK_BLEND_OP_REVERSE_SUBTRACT;
+        out->src = VK_BLEND_FACTOR_ONE;
+        out->dst = d == CD ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
+        out->premul = F_PREMUL | F_PREMUL_CEIL;
         return true;
     }
     if (c == 0) {
@@ -1140,7 +1159,7 @@ void flush_batch() {
     // blending: Vulkan's where it can, the shader's where it cannot or the draw reads its own target
     uint32_t ba = bits(alpha, 0, 2), bb = bits(alpha, 2, 2), bc = bits(alpha, 4, 2), bd = bits(alpha, 6, 2);
     uint32_t fix = bits(alpha, 32, 8);
-    FixedBlend blend = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
+    FixedBlend blend = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, 0};
     bool shader_blend = false;
     bool partial_mask = false;
     for (int i = 0; i < 4; i++) {
@@ -1160,6 +1179,8 @@ void flush_batch() {
             push.alpha = (2 << 0) | (2 << 2) | (2 << 4) | (0 << 6); // (0 - 0) * FIX + Cs: no blending
         }
         gsn_stats.shader_blends++;
+    } else if (abe && blend.premul) {
+        push.flags |= blend.premul;
     } else if (abe && bc == 0 && !(ba == bb)) {
         push.flags |= F_ALPHA_FACTOR;
     }

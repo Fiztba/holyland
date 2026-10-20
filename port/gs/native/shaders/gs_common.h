@@ -31,6 +31,8 @@ layout(push_constant, std430) uniform Push {
 #define GSN_F_ALPHA_FACTOR 0x1000u // fixed-function blend by As: alpha out is As / 128 (the blend constant puts it back)
 #define GSN_F_PASS_SHIFT 13u       // 0: every pixel; 1: those that pass the alpha test; 2: those that fail it
 #define GSN_F_DATE 0x8000u         // the destination alpha test, here (shader blending only)
+#define GSN_F_PREMUL 0x10000u      // Cs * C >> 7 out (C: ALPHA's As or FIX), for Vulkan to add or take away
+#define GSN_F_PREMUL_CEIL 0x20000u // ... rounded up (a subtraction)
 
 #define GSN_SRC_CLUT 0u
 #define GSN_SRC_CT32 1u

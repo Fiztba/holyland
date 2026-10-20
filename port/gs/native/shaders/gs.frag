@@ -253,6 +253,10 @@ void main() {
         c.rgb &= 0xF8;
         a &= 0x80;
     }
+    if ((pc.flags & GSN_F_PREMUL) != 0u) {
+        int k = field(pc.alpha, 4u, 2u) == 0u ? c.a : int(field(pc.alpha, 8u, 8u));
+        c.rgb = min((c.rgb * k + ((pc.flags & GSN_F_PREMUL_CEIL) != 0u ? 127 : 0)) >> 7, ivec3(255));
+    }
     o_color.rgb = vec3(c.rgb) / 255.0;
     o_color.a = (pc.flags & GSN_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
 }
