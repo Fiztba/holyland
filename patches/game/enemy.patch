@@ -1972,19 +1972,26 @@ index 69d98ab0bc58d770384c2e9c8569d56c7bd1e3ce..e122744c1d071391ed57dec810566dfe
          } else if (frame >= 54) {
              ai_state->part_angle_y *= (f32)(67 - frame) / 14.0f;
 diff --git a/src/game/enemy/greater_demon.c b/src/game/enemy/greater_demon.c
-index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237cc086a3ad 100644
+index bc4c19b31665636e8aa2504ac729d4a8e89bb587..08a302033f1ea6831eca483b42dddc196331f2e4 100644
 --- a/src/game/enemy/greater_demon.c
 +++ b/src/game/enemy/greater_demon.c
-@@ -16,7 +16,7 @@ extern f32 D_00446828[];
+@@ -14,9 +14,13 @@ extern MapSlot map_slots[];
+ extern f32 D_00446824[];
+ extern f32 D_00446828[];
  
- static KfVector climb_points[3]; /* 0x4FF390 the points GreaterDemon_Think climbs over (it indexes up to 5) */
+-static KfVector climb_points[3]; /* 0x4FF390 the points GreaterDemon_Think climbs over (it indexes up to 5) */
++/* 0x4FF390 the points GreaterDemon_Think climbs over. PC: 5, not 3. GreaterDemon_Think fills up to five
++   (climb_point_index < 5); on the PS2 the last two went into sound_file_path (0x4FF3C0), a sprintf buffer
++   the sound code writes before it reads, so nothing showed. Here they went into whatever the build put
++   next, and the game crashed a few seconds after a Greater Demon (116, 037) first chose where to go. */
++static KfVector climb_points[5];
  
 -void EntityAi_SetUpdate(char *, s32);
 +void EntityAi_SetUpdate(char *, void (*)(Entity *));
  void Motion_ClearPartSlots(EntityModel *);
  int Motion_StepModel(EntityModel *, s32, s32);
  void Vector_Copy(void *, void *);
-@@ -24,7 +24,7 @@ void Vector_Copy(void *, void *);
+@@ -24,7 +28,7 @@ void Vector_Copy(void *, void *);
  void EntityAi_Animate(void);
  void EntityAi_Dormant(Entity *);
  void EntityAi_Death(Entity *);
@@ -1993,7 +2000,7 @@ index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237c
  int EntityShot_Launch(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *);
  static void GreaterDemon_Think(Entity *entity, s32 unknown);
  static void GreaterDemon_Move(Entity *entity);
-@@ -34,8 +34,8 @@ void EntityPoint_PickNear(float, void *, void *, void *);
+@@ -34,8 +38,8 @@ void EntityPoint_PickNear(float, void *, void *, void *);
  f32 EntityCollision_DistanceToPropFloor(void *, void *);
  void EntityAi_CheckFarFromSpawn(void *);
  void EntityAi_StepState(void *);
@@ -2004,7 +2011,7 @@ index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237c
  void EntityAi_ThinkPursue(Entity *, s32);
  static void GreaterDemon_ThinkCombat(Entity *, s32);
  int rand(void);
-@@ -50,7 +50,7 @@ void EntityAi_ClearTurnInPlace(Entity *);
+@@ -50,7 +54,7 @@ void EntityAi_ClearTurnInPlace(Entity *);
  float EntityMath_AngleDifference(float, float);
  int EntityAi_TurnCommand(Entity *);
  int EntityAi_TurnFromPush(void *, void *);
@@ -2013,7 +2020,7 @@ index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237c
  int EntityAi_StartAction(Entity *, void (*)(Entity *), int);
  void EntityAi_Dodge(Entity *);
  void EntityAi_MeleeAttack(Entity *);
-@@ -73,7 +73,7 @@ void EntityAi_SetState(char *, u8);
+@@ -73,7 +77,7 @@ void EntityAi_SetState(char *, u8);
  int EntityAi_SetReaction(char *, void (*)(void), int); // match: an int result keeps $2 busy after the call
  static void GreaterDemon_ReactionHeavy(Entity *);
  void EntityAi_SetAttackDelay(Entity *, s32);
@@ -2022,7 +2029,7 @@ index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237c
  int EntityAi_LaunchShots(Entity *, EntityParamsUnk3D8 *, s32, s32);
  float EntityMath_DistanceXZ(void *, void *);
  void EntityEvent_Respawn(char *);
-@@ -108,7 +108,7 @@ void GreaterDemon_Init(Entity *entity) {
+@@ -108,7 +112,7 @@ void GreaterDemon_Init(Entity *entity) {
      }
      entity->target = NULL;
      entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
@@ -2031,7 +2038,7 @@ index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237c
          EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
          EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
-@@ -294,7 +294,7 @@ static void GreaterDemon_ThinkCombat(Entity *entity, s32 unknown) {
+@@ -294,7 +298,7 @@ static void GreaterDemon_ThinkCombat(Entity *entity, s32 unknown) {
              } else if (turn < 0) {
                  entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_RUN | MOVE_COMMAND_TURN_LEFT);
              } else {
@@ -2040,7 +2047,7 @@ index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237c
              }
          } else {
              if (turn > 0) {
-@@ -302,7 +302,7 @@ static void GreaterDemon_ThinkCombat(Entity *entity, s32 unknown) {
+@@ -302,7 +306,7 @@ static void GreaterDemon_ThinkCombat(Entity *entity, s32 unknown) {
              } else if (turn < 0) {
                  entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
              } else {
@@ -2049,7 +2056,7 @@ index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237c
              }
          }
      }
-@@ -734,7 +734,7 @@ static void GreaterDemon_Guard(Entity *entity) {
+@@ -734,7 +738,7 @@ static void GreaterDemon_Guard(Entity *entity) {
              entity->flags &= ~ENTITY_FLAG_HIT_BY_PLAYER;
              entity->action_timer = entity->params->guard_frames;
          }
