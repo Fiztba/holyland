@@ -173,6 +173,8 @@ Still open:
 
 ## Step 3: graphics, stage 2 (native renderer)
 
+The plan, from a survey of the game's draw code and GS captures of every map: [STEP3.md](STEP3.md).
+
 A renderer under the game's draw layer, as ico-pc has:
 - The four VU1 programs become shaders that read the game's own vertex data. Each has a CPU
   version for testing.
