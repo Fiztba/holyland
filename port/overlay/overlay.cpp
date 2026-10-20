@@ -28,6 +28,7 @@
 
 extern "C" {
 #include "port/audio.h"
+#include "port/cheats.h"
 #include "port/controls.h"
 #include "port/debug.h"
 #include "port/overlay.h"
@@ -830,6 +831,29 @@ void debug_page() {
             "deadly ground and scripted deaths do not kill. Poison and other ailments still show.\n"
             "For testing areas a new character could not survive. Not saved: off at the next start\n"
             "(--invincible turns it on from the start).");
+    if (ImGui::Button("Learn all spells"))
+        port_cheat_request(PORT_CHEAT_SPELLS);
+    tooltip("Every spell of the six schools, at level 3. They show in Equipment > Magic and the Item\n"
+            "menu's magic once a menu is opened again.");
+    ImGui::SameLine();
+    if (ImGui::Button("Add all equipment"))
+        port_cheat_request(PORT_CHEAT_EQUIPMENT);
+    tooltip("One of every weapon, shield, helm, armour, gauntlet, boot, ring, bracelet and amulet.");
+    ImGui::SameLine();
+    if (ImGui::Button("Add all items"))
+        port_cheat_request(PORT_CHEAT_ITEMS);
+    tooltip("99 of every carried item (one of a one-of-a-kind item): potions, herbs, crystals, wands,\n"
+            "arrows, maps. Not the keys, which belong to the story.");
+    if (ImGui::Button("Max MP and Magic Power"))
+        port_cheat_request(PORT_CHEAT_MAGIC);
+    tooltip("MP and Magic Power at 999, the game's own cap, and MP full. Magic Power is what makes\n"
+            "the magic gauge fill quickly.");
+    ImGui::SameLine();
+    if (ImGui::Button("All of these"))
+        port_cheat_request(PORT_CHEAT_SPELLS | PORT_CHEAT_EQUIPMENT | PORT_CHEAT_ITEMS | PORT_CHEAT_MAGIC);
+    tooltip("They change your game as progress does: a save made afterwards keeps them.");
+    if (port_cheat_message()[0])
+        ImGui::TextDisabled("%s", port_cheat_message());
     teleport_section();
     debug_tools();
 }

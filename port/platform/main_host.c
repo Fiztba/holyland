@@ -20,6 +20,8 @@
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
+       --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
+                         or all), as the Debug page's buttons do (port/include/port/cheats.h)
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
        --host-dir DIR    where host0: files go (the current directory by default)
@@ -68,6 +70,9 @@
 #include "port/savestate.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
+#include "port/cheats.h"
+
+static int parse_cheats(const char *list);
 #include "port/sanitize.h"
 
 #if PORT_ASAN
@@ -92,7 +97,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]]\n",
             program);
     exit(2);
@@ -211,6 +216,10 @@ static void parse_options(int argc, char **argv) {
             port_options.quick_save_at = value;
         } else if (strcmp(option, "--quick-load") == 0) {
             port_options.quick_load = value;
+        } else if (strcmp(option, "--cheats") == 0) {
+            if (!parse_cheats(value)) {
+                usage(argv[0]);
+            }
         } else if (strcmp(option, "--teleport") == 0) {
             port_options.teleport = value;
         } else if (strcmp(option, "--gs-capture-at") == 0) {
@@ -232,6 +241,38 @@ static void parse_options(int argc, char **argv) {
 
 int port_myus_necklace(void) {
     return port_options.myus_necklace != 0;
+}
+
+/* --cheats spells,equipment,items,magic or all: 0 for a word it does not know */
+static int parse_cheats(const char *list) {
+    static const struct {
+        const char *name;
+        int bits;
+    } names[] = {{"spells", PORT_CHEAT_SPELLS}, {"equipment", PORT_CHEAT_EQUIPMENT}, {"items", PORT_CHEAT_ITEMS},
+                 {"magic", PORT_CHEAT_MAGIC},
+                 {"all", PORT_CHEAT_SPELLS | PORT_CHEAT_EQUIPMENT | PORT_CHEAT_ITEMS | PORT_CHEAT_MAGIC}};
+    const char *at = list;
+
+    while (*at != 0) {
+        size_t length = strcspn(at, ",");
+        size_t i;
+        int found = 0;
+
+        for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            if (strlen(names[i].name) == length && strncmp(at, names[i].name, length) == 0) {
+                port_cheat_request(names[i].bits);
+                found = 1;
+            }
+        }
+        if (!found) {
+            return 0;
+        }
+        at += length;
+        if (*at == ',') {
+            at++;
+        }
+    }
+    return 1;
 }
 
 int port_invincible(void) {
