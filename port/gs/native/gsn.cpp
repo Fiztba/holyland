@@ -27,6 +27,7 @@
 #include <string.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <unordered_map>
