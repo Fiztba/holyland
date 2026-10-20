@@ -98,7 +98,7 @@ ivec4 texel(ivec2 c, int level) {
     return t;
 }
 
-// v / 2^bits, rounded to nearest, ties to even: the filters' weighted sums
+// v / 2^bits, rounded to nearest, ties to even: the mipmap levels' weighted sum
 ivec4 round_shift(ivec4 v, int bits) {
     ivec4 q = v >> bits;
     ivec4 r = v & ((1 << bits) - 1);
@@ -122,7 +122,9 @@ ivec4 sample_level(vec2 tc, int level, bool linear) {
     ivec4 c10 = texel(i + ivec2(1, 0), level);
     ivec4 c01 = texel(i + ivec2(0, 1), level);
     ivec4 c11 = texel(i + ivec2(1, 1), level);
-    return round_shift(c00 * (16 - f.x) * (16 - f.y) + c10 * f.x * (16 - f.y) + c01 * (16 - f.x) * f.y + c11 * f.x * f.y, 8);
+    // rounded to nearest, a half up (as paraLLEl-GS has it: a texel a pixel at the GS's half-texel
+    // offset makes every pixel such a half, and ties to even left half of them 1 lower)
+    return (c00 * (16 - f.x) * (16 - f.y) + c10 * f.x * (16 - f.y) + c01 * (16 - f.x) * f.y + c11 * f.x * f.y + 128) >> 8;
 }
 
 ivec4 sample_texture() {
