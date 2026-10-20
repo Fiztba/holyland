@@ -3,7 +3,7 @@
      {
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "widescreen": false, "widescreen_hud": "corner"},
+                    "widescreen": false, "widescreen_hud": "corner", "renderer": "gs"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -266,6 +266,15 @@ void port_settings_load(void) {
             s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
         }
     }
+    {
+        const char *renderer = read_string(display, "renderer");
+
+        if (renderer != NULL) {
+            s->renderer = strcmp(renderer, "native") == 0 ? PORT_RENDERER_NATIVE
+                          : strcmp(renderer, "both") == 0 ? PORT_RENDERER_BOTH
+                                                          : PORT_RENDERER_GS;
+        }
+    }
     audio = cJSON_GetObjectItemCaseSensitive(document, "audio");
     s->volume = (int)read_number(audio, "volume", s->volume, 0, 100);
     s->mute = read_bool(audio, "mute", s->mute);
@@ -297,6 +306,9 @@ void port_settings_load(void) {
     }
     if (!port_options.myus_necklace_forced) {
         port_options.myus_necklace = s->myus_necklace;
+    }
+    if (!port_options.renderer_forced) {
+        port_options.renderer = s->renderer;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -402,6 +414,9 @@ void port_settings_save(void) {
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
+    put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
+                                                : s->renderer == PORT_RENDERER_BOTH  ? "both"
+                                                                                     : "gs"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));

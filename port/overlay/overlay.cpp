@@ -661,6 +661,36 @@ std::string bug_report() {
     return text;
 }
 
+// The renderer (docs/port/STEP3.md): which draws from the next start; with both, which is shown and how
+// their pictures compare
+void renderer_section() {
+    static const char *const names[] = {"paraLLEl-GS (gs)", "Native GS (native, step 3)", "Both, compared (both)"};
+    ImGui::SeparatorText("Renderer");
+    ImGui::Text("This run: %s", names[port_options.renderer]);
+    int next = port_settings.renderer;
+    if (ImGui::Combo("From the next start", &next, names, 3)) {
+        port_settings.renderer = next;
+        port_settings_changed();
+    }
+    tooltip("paraLLEl-GS emulates the PS2's GS and is the reference. The native GS (step 3) draws with\n"
+            "the GPU's own rasteriser: faster, and the base for higher resolutions later. Both runs the\n"
+            "two side by side and compares the pictures every vblank (slower; for testing).\n"
+            "--renderer on the command line wins over this.");
+    if (port_options.renderer == PORT_RENDERER_BOTH) {
+        bool native = port_options.renderer_shown == PORT_RENDERER_NATIVE;
+        if (ImGui::Checkbox("Show the native GS's picture", &native))
+            port_options.renderer_shown = native ? PORT_RENDERER_NATIVE : PORT_RENDERER_GS;
+        const PortRendererDiff &d = port_renderer_diff;
+        ImGui::Text("Last picture: %u pixels differ by more than 1, at most %u (mean %.3f)", d.last_pixels, d.last_max,
+                    d.last_mean);
+        ImGui::Text("%llu of %llu pictures differ; the largest difference %u, at vblank %llu",
+                    (unsigned long long)d.frames_differ, (unsigned long long)d.frames, d.worst_max,
+                    (unsigned long long)d.worst_vblank);
+        tooltip("The frame buffer the display shows, as each renderer drew it (not the scanout, where the\n"
+                "two place and weave the picture each their own way).");
+    }
+}
+
 // The debugging tools (port/include/port/debug.h): files for a bug report, in the captures folder
 void debug_tools() {
     char keys[3][64];
@@ -865,6 +895,7 @@ void debug_page() {
     if (port_cheat_message()[0])
         ImGui::TextDisabled("%s", port_cheat_message());
     teleport_section();
+    renderer_section();
     debug_tools();
 }
 

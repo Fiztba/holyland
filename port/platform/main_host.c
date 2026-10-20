@@ -217,6 +217,7 @@ static void parse_options(int argc, char **argv) {
             }
             if (both) {
                 port_options.renderer = which;
+                port_options.renderer_forced = 1;
             } else {
                 port_options.renderer_shown = which;
             }

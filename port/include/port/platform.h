@@ -31,6 +31,7 @@ typedef struct {
        and compares their pictures, showing renderer_shown's. */
     int renderer;
     int renderer_shown;
+    int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
     /* How the GS's output becomes a PC picture (port/gs/gs_parallel.cpp). Each is on by default and
        turned off by --no-<name>; --ps2-scanout turns them all off (the GS's raw output). */
     int deinterlace;         /* weave the two fields of an interlaced picture into one */
