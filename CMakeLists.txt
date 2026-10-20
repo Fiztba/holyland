@@ -86,6 +86,7 @@ add_library(kf4_port STATIC
     port/platform/vu1_hle.c
     port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c
     port/platform/gs.c
+    port/platform/frame_interp.c
     port/platform/video.c
     port/platform/disc.c
     port/platform/ipu.c
@@ -305,7 +306,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/quicksave.c game/cheats.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/frame_interp.c game/quicksave.c game/cheats.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)

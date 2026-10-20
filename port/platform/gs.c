@@ -455,6 +455,9 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     if (port_gs_capture_recording) {
         port_gs_capture_gif(path, data, bytes);
     }
+    if (port_frame_interp() && backend) {
+        port_interp_keep(path, data, bytes); /* --frame-rate 60 (port/platform/frame_interp.c) */
+    }
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_gs) {
         port_gs_backend_gif(path, data, bytes);
@@ -498,6 +501,16 @@ void port_gs_read_fifo(void *dst, uint32_t qwords) {
 
 /* ---- Vblanks ---------------------------------------------------------------------------------- */
 #ifdef KF4_HAVE_PARALLEL_GS
+/* --frame-rate 60: the packets port/platform/frame_interp.c sends again, to the renderers only */
+static void replay_gif(int path, const void *data, size_t bytes) {
+    if (have_gs) {
+        port_gs_backend_gif(path, data, bytes);
+    }
+    if (have_native) {
+        gsn_gif(path, data, bytes);
+    }
+}
+
 /* --renderer both: the two pictures, compared channel by channel */
 static void compare_frames(const PortGsFrame *a, const PortGsFrame *b, uint64_t vblank) {
     PortRendererDiff *d = &port_renderer_diff;
@@ -726,6 +739,15 @@ void port_gs_run_vsync(void) {
         frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
+    if (port_frame_interp()) {
+        /* the game's world drawn again into the buffer shown, the camera half way */
+        int idle = port_gs_path_idle(1) && port_gs_path_idle(2) && port_gs_path_idle(3);
+
+        if (idle) {
+            port_interp_vsync(request->privileged, replay_gif);
+        }
+        port_interp_reset(idle);
+    }
     if (present_frames(request, shown, dump)) {
     } else if (dump) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
@@ -786,6 +808,9 @@ void port_gs_state(PortStateIo *io) {
     uint64_t backend_bytes = 0;
     uint64_t native_bytes = 0;
 
+    if (io->loading) {
+        port_interp_forget(); /* (--frame-rate 60) the packets kept are not this state's */
+    }
     PORT_STATE(io, gif_paths);
     PORT_STATE(io, draw_offset_x);
     PORT_STATE(io, frame_pictures);

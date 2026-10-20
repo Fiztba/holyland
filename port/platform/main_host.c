@@ -27,6 +27,10 @@
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
+       --frame-rate 30|60
+                         the opt-in 60: a picture at every vblank in play, the one between the
+                         game's two drawn with the camera half way (port/platform/frame_interp.c);
+                         30, the PS2's, by default
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
@@ -148,6 +152,7 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.native_scale = 1;
+    port_options.frame_rate = 30;
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
         const char *value = i + 1 < argc ? argv[i + 1] : NULL;
@@ -236,6 +241,13 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_scale_forced = 1;
+        } else if (strcmp(option, "--frame-rate") == 0) {
+            port_options.frame_rate = atoi(value);
+            if (port_options.frame_rate != 30 && port_options.frame_rate != 60) {
+                fprintf(stderr, "--frame-rate wants 30 or 60, not %s\n", value);
+                exit(2);
+            }
+            port_options.frame_rate_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;
@@ -422,6 +434,9 @@ static void print_stats(void) {
     port_dmac_call(drained, NULL);
     fprintf(stderr, "[stats] wall %.3f s\n", port_wall_seconds() - start_seconds);
     port_gs_print_stats();
+    if (port_frame_interp()) {
+        port_interp_print_stats();
+    }
     if (port_options.renderer == PORT_RENDERER_BOTH) {
         const PortRendererDiff *d = &port_renderer_diff;
 

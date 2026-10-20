@@ -2032,6 +2032,7 @@ void gs_write(uint32_t address, uint64_t value) {
     }
     case R_TEXFLUSH:
     case 0x0F: // NOP
+    case 0x7D: // the port's frame-rate mark (frame_interp.c)
     case 0x7E: // the port's widescreen mark (gs.c)
         return;
     case R_SIGNAL:

@@ -126,6 +126,19 @@ int port_widescreen(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 
+/* port_frame_interp(): 1 while the opt-in higher frame rate is on (--frame-rate 60;
+   port/platform/frame_interp.c). The patched GameLoop_DrawFrame then marks, in its packet chain, where
+   the 3D world is and the cameras that drew it (game/frame_interp.c), with A+D writes to
+   PORT_GS_REG_FRAME_INTERP, another address the GS does not have: bits 32-39 of the data are one of
+   PORT_FRAME_INTERP_, bits 0-31 its value (a float's bits, or the header). The GS front end draws the
+   world once more for the vblank in between, with the camera half way. */
+int port_frame_interp(void);
+#define PORT_GS_REG_FRAME_INTERP 0x7D
+#define PORT_FRAME_INTERP_HEADER 0  /* last: projection | mode << 8 (GameLoop_SetCameraMatrices'), or _END */
+#define PORT_FRAME_INTERP_VIEW 1    /* 1-12: world_view_matrix's columns' x, y, z */
+#define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */
+#define PORT_FRAME_INTERP_END 0xFFFF /* the header after the world: what follows stays as it is */
+
 /* ---- Opt-in mods the game code reads ---------------------------------------------------------
    Each changes the game, so each is off by default; while it is off the game does what it did on
    the PS2.

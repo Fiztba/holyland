@@ -1346,11 +1346,14 @@ static uint64_t check_run(uint32_t pc, uint32_t top, uint32_t itop) {
     return pairs;
 }
 
+uint32_t port_vu1_run_pc;
+
 static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int saved_round = fegetround();
     uint64_t start = 0, gif_before = 0, pairs = 0;
     int hle = 0;
 
+    port_vu1_run_pc = pc;
     if (port_options.stats) {
         start = port_ticks();
         gif_before = port_stats.gif_ticks;
