@@ -173,8 +173,15 @@ void port_video_init(void) {
         return;
     }
 #ifdef KF4_HAVE_VULKAN_PRESENTER
-    /* the Vulkan presenter on the window, if it starts; else the window again, for SDL_Renderer */
-    if (port_options.presenter == PORT_PRESENTER_VULKAN) {
+    /* the Vulkan presenter on the window, if it starts; else the window again, for SDL_Renderer. It
+       needs the native GS's device: with paraLLEl-GS alone (--renderer gs, or the native GS did not
+       start; port_options.renderer is what started) the window is SDL_Renderer's, quietly unless
+       --presenter vulkan asked for it */
+    if (port_options.presenter == PORT_PRESENTER_VULKAN && port_options.renderer == PORT_RENDERER_GS) {
+        if (port_options.presenter_forced) {
+            fprintf(stderr, "[video] --presenter vulkan needs the native GS: the window is SDL_Renderer's\n");
+        }
+    } else if (port_options.presenter == PORT_PRESENTER_VULKAN) {
         window = make_window(SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
         if (window != NULL && port_vk_open(window)) {
             shown = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);

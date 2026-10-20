@@ -103,6 +103,19 @@ static void open_backend(void *unused) {
             gsn_pipeline_cache(path);
         }
     }
+    if (port_options.renderer == PORT_RENDERER_NATIVE && !have_native) {
+        /* the default renderer did not start (no Vulkan device it can use): paraLLEl-GS, if it can */
+        have_gs = port_gs_backend_open();
+        if (have_gs) {
+            fprintf(stderr, "[gs] the native GS did not start: paraLLEl-GS draws instead\n");
+        }
+    }
+    /* what did start, for the window (the Vulkan presenter needs the native GS), the overlay and --stats */
+    if (have_gs || have_native) {
+        port_options.renderer = have_gs && have_native ? PORT_RENDERER_BOTH
+                                : have_native          ? PORT_RENDERER_NATIVE
+                                                       : PORT_RENDERER_GS;
+    }
     backend = have_gs || have_native;
 #endif
 }
