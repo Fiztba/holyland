@@ -37,7 +37,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
   smear) blend in the shader exactly, so they do not drift. Uploads seen before come back as page
   copies instead of being swizzled again.
 - **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
-  resolution, live from the overlay).
+  resolution, live from the overlay); `--frame-rate 60` (a picture at every vblank in play, the camera
+  interpolated; below, "Higher frame rates").
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
   packets through) has a high-level C version that gives the interpreter's results bit for bit
   (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
@@ -302,7 +303,108 @@ vertex is clipped). The arithmetic is shared through `port/platform/vu1_hle_ops.
 without the fast path) and 160,207 in the game run above (659,392 compared with 0x000's). With both,
 that run's VU1 time is 0.76 s (from 3.3 s), its wall time 5.2 s.
 
-## Testing
+### Higher frame rates (`--frame-rate 60`)
+
+Stage 5's "higher frame rates, with interpolation while the game itself keeps its 30 Hz". A first
+version is in: `--frame-rate 60` (the overlay's Display page, `settings.json` `display.frame_rate`),
+off by default. `port/platform/frame_interp.c`'s top comment has the details.
+
+**What the game does.**
+- In play, `GameLoop_Run`'s loop runs once every two vblanks. `Display_SwapBuffers` waits until
+  `sceGsSyncV` returns field 1, so a pass that is done early waits for the second vblank; one that runs
+  past 0x4B0C7 timer ticks swaps without waiting (`allow_late_swap`), which the PC does not reach.
+- The swap shows the buffer drawn last time and sets the other to be drawn: libgraph's draw environment
+  by PATH3, with a clear of colour and Z (`sceGsSetDefDBuff(..., 1)`), for both contexts.
+- `Packet_SendChain` then sends the chain the previous pass built. It draws the whole frame: the world,
+  the screen passes, the arm, the HUD. Then the game moves on by one frame (input, scripts, player,
+  entities, camera: `GameLoop_UpdateCamera`, `GameLoop_SetCameraMatrices`) and builds the next chain
+  (`GameLoop_DrawFrame`).
+- The display registers a vblank scans out are those it found, before the game's swap after it. So
+  the chain drawn after vblank 2k - 1 is shown at 2k + 2 and 2k + 3. A frame's camera is that of the
+  pass before the one that sends it. From the pad to the screen: about 6 vblanks, most of it the
+  game's own pipeline.
+- Evidence: pictures dumped in play change at even vblanks only. The GIF packets between two vblanks
+  hold a whole frame at even vblanks and nothing at odd ones.
+- The menus, the title, the memory card screens and the movies have loops of their own. They draw
+  fields (FFMD 1), and no world.
+
+**What reaches VU1.**
+- `GsDraw_QueueVu1Matrix(world_screen_matrix)` puts the camera's world-to-screen matrix at VU 0x00-0x03,
+  where program 0x000 multiplies it with each part's model matrix (VU 0x04-0x07).
+- Many other draws get matrices the CPU has already multiplied with `world_screen_matrix`
+  (`Matrix_Multiply(model, world_screen_matrix, ...)` in model/, map/, player/; 0x280's skinned models,
+  0x700's effects).
+- The CPU also projects points itself (`Vu0_ProjectToScreen`: the turn smear) and cuts the near
+  triangles of map records.
+- So there is no single matrix to swap. Re-running the chain with another camera would mean finding
+  every matrix in it, and it would still miss what the CPU worked out.
+
+**The choice.** The changes are made after VU1, in the GIF packets, at the GS front end:
+- Every vertex of the world reaches the GS as a screen position, a Z and (textured) Q = 1/w. That is
+  enough to undo the projection and do it again from another camera: back to the camera's space, the
+  camera's change, projected again, S and T scaled for the new Q, Z moved by what the projection's Z
+  moves by (the flames carry a Z offset of their own).
+- It does not care which program or which matrix made the vertex. It costs no VU1 run.
+- The game tells, by marks in its chain, where the world is and with which camera.
+- The other way, the game drawing twice a pass, would run the draw code's side effects twice (the wobble
+  sines, the message dimming, effects' state, `rand`), and the game would no longer be the PS2's.
+
+**How it goes.** At vblank 2k:
+- The packets of the last vblank (the clear and the whole chain) drew the world into the buffer not
+  shown, so they are kept.
+- At 2k + 1 they are sent again: the frame into the buffer shown, the world's vertices from the camera
+  half way between the frame shown and the one drawn.
+- The frame drawn is shown at 2k + 2 as before.
+- The camera half way: the rotation by quaternion slerp, the position half way. A turn of more than
+  0.8 radians or a move of more than 400 units is a cut: not interpolated.
+- Nothing of it is left behind:
+  - the next clear wipes the buffer shown;
+  - the other targets are drawn again from the same packets;
+  - uploads go again in their order;
+  - local-to-local copies into anything but the frame, and local-to-host transfers, are not started;
+  - FRAME, TEX0 and BITBLTBUF are written back to what the game last wrote.
+
+**Checked.**
+- With the switch on, the game's own pictures (the even vblanks) are byte for byte those of a build
+  without the change. Native GS, in play on maps 099, 000, 008, 009, 035 and 112, and through the title,
+  the opening, a teleport and the menus.
+- With `KF4_INTERP_STILL=1` (the frame's own camera) the picture between equals the next vblank's,
+  within 2 on a few dozen pixels.
+- Turning on map 000 the picture moves 7.5 px, then 7 px, where the game's frames move 14.5. A save
+  state taken with it on loads with it on or off.
+- Off: boot_test and frame_test as before (the logs and the 52 pictures the same as main's), `--stats`'
+  PATH1 hash and VU1 cycles the same, vu1_test and the gsn tests pass.
+- Cost: the GS draws each frame twice; 2,200 vblanks headless went from 5.0 s to 6.8 s.
+
+**Latency.**
+- Nothing is shown later than on the PS2: the frame the game drew is shown at the same vblank.
+- The picture between shows half of the camera's next move one vblank early.
+- Turning from standing (map 000): the first picture that moves is the fifth vblank after the pad's
+  input with the switch on, the sixth off.
+
+**What is left.**
+- **Things that move by themselves** move at 30 Hz: enemies, NPCs, effects, the arm, animated textures,
+  and the HUD and messages change when the game draws them. Interpolating them would need the
+  previous frame's matrix for each draw: a mark per model with its model matrix (or its world-space
+  position), matched from frame to frame by model and draw order, in `ModelScreen_*`, `MapObject_*`,
+  `Entity_*`.
+- **The screen effects that copy the frame** (the wobble of status bit 39 and the MP drain's tint, both
+  through `GsDraw_CopyFrame(0x2BC0)`) draw the copy the frame made, so in those states the picture
+  between is the frame drawn, not interpolated. Allowing the copy into 0x2BC0 would leave the picture
+  between there, where `MapChange_CaptureFrame` leaves a frame for `MapChange_FadeOutCapture` to fade
+  out over the frames after.
+- **`Game_BlendPreviousFrame`** (on with `map_draw_state.bit40`, and while aiming) blends nothing in the
+  picture between: its "previous frame" is the buffer being drawn.
+- **2D drawn in the world as sprites** (none seen; the triangles are moved) would stay where the frame
+  put them. Sprites are not moved, as the full-screen clears and passes are sprites too.
+- **paraLLEl-GS** (`--renderer gs`) gets the same packets, but its scanout weaves each vblank with the
+  field before. Its pictures then mix two of the game's, and the game's turn smear
+  (`Game_ShiftScreenByViewTurn`, one field moved by the turn) adds to the move. The native GS shows
+  the frame whole.
+- **More than 60.** 120 or 144 Hz needs pictures at times between vblanks, from the wall clock, more
+  than one replay a frame (each a fraction of the way), and a presenter that shows them at the
+  screen's rate.
+
 
 - **The live diff** (stage 0): both renderers on, the difference per frame in the overlay and the
   log; `--compare-renderers` in headless runs, failing above a threshold.

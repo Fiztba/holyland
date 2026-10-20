@@ -149,6 +149,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
+| `--frame-rate 30\|60` | 60 is the opt-in higher frame rate (also on the overlay's Display page; 30, the PS2's, by default): in play, a picture at every vblank, the one between the game's two drawn with the camera half way (see "60 pictures a second") |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
@@ -181,7 +182,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
+| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, 60 pictures a second in play, live, smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
@@ -200,8 +201,8 @@ the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
-`--widescreen` keeps widescreen on, `--myus-necklace` keeps that mod on,
-and `--controls` picks the layout.
+`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` keeps that mod
+on, and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
 settings.json and has no overlay, so `boot_test.py` and `frame_test.py` run the same whatever the
@@ -278,6 +279,36 @@ turns it on:
 - Not done: the 2D is squeezed into 480 of the 640 columns, so it is a little softer than at 4:3 (a
   higher internal resolution, step 3, would mend that). Anything the game sizes in screen pixels around
   a projected point would come out a third wider; none has been seen yet.
+
+## 60 pictures a second
+
+Off by default (30 pictures a second in play, as on the PS2). `--frame-rate 60`, or the overlay's
+Display page (live), turns it on. The game itself still runs at 30 frames a second: in play it draws
+a frame every second vblank and shows it for two. With the switch on, the vblank in between shows a
+picture of its own: the frame the game has just drawn (shown at the next vblank), drawn again with the
+3D world seen from a camera half way between the frame shown and that one
+(`port/platform/frame_interp.c`; STEP3.md, "Higher frame rates").
+- **Turning and walking are smooth**, which is most of what moves in a first-person game. What moves
+  by itself (enemies, effects, the arm, animated textures) still moves 30 times a second, the HUD and
+  the 2D change when the game draws them, and a cut (a teleport, a map change, a scripted jump of the
+  camera) is not interpolated.
+- **No input lag is added.** The picture between shows half of the camera's next move one vblank
+  early; everything else is shown when it was. (Turning from standing: the first picture that moves
+  comes at the fifth vblank after the input, the sixth with the switch off.)
+- **The menus, the title and the movies** are as they were: they draw no world.
+- **The native GS** (`--renderer native`) is the one to use. paraLLEl-GS (`--renderer gs`) draws the
+  pictures between as well, but its picture of a vblank weaves in the field of the vblank before, so
+  each of its pictures mixes two of the game's; and the game's own turn smear
+  (`Game_ShiftScreenByViewTurn`, which moves one field by the turn) adds to the move.
+- The cost is the GS's: each frame is drawn twice (VU1 is not run again). 2,200 vblanks (new game, map 099), headless
+  with `--fast`: 5.0 s to 6.8 s on a Ryzen 9 9900X3D.
+- Off, nothing changes: the game queues no marks and the GS front end keeps nothing; the frame and boot
+  tests and `--stats`' PATH1 hash are as without the switch. On, the game's own frames (the even
+  vblanks) are still the same pixels, byte for byte; only the pictures between are new.
+  `KF4_INTERP_STILL=1` draws the pictures between with the frame's own camera, so each must equal
+  the next vblank's (it does, within 2 on a few dozen pixels): a check of the replay.
+- `--gs-capture-at` and F9 record the GS's packets as the game sent them, without the pictures
+  between.
 
 ## Saving: quick saves, save states and the memory card
 
