@@ -9,7 +9,13 @@
    on the GPU, so a transfer two of whose pixels land on the same byte (a rectangle that runs past
    the buffer's width onto rows of pages it also covers below, or wraps all of VRAM) has no one
    answer there. Those are left out; a rectangle wider than the buffer is tried within one row of
-   pages. */
+   pages (paraLLEl drops the pixels past the width on every row of pages but the last). Overlapping
+   copies are made with the DIR that makes them a move, which is what paraLLEl always does.
+
+   paraLLEl's own view of VRAM (what port_gs_backend_vram maps) is a mirror of the GPU's, refreshed
+   only for the pages its tracking says a transfer touched; that tracking misses some (a buffer not
+   on a page boundary, a rectangle wrapping at 2048), so before each comparison all of VRAM is
+   copied onto itself, which refreshes every page. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,6 +101,7 @@ static void send_transfer(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, 
 /* ---- The two memories ------------------------------------------------------------------------- */
 static uint8_t *model;
 static uint8_t *stamp; /* one bit per nibble of VRAM: written by the transfer being made up */
+static uint8_t *before; /* the model's VRAM before the transfer */
 static int failures;
 
 static const uint32_t all_psms[] = {GSN_PSMCT32, GSN_PSMCT24, GSN_PSMCT16, GSN_PSMCT16S, GSN_PSMT8,
@@ -124,8 +131,13 @@ static const char *psm_name(uint32_t psm) {
 static void (*debug_hook)(const uint8_t *gs);
 
 /* Compares all of VRAM; prints the first differences */
+static void sync_all(void);
+
 static int compare_vram(const char *what) {
-    const uint8_t *gs = port_gs_backend_vram();
+    const uint8_t *gs;
+
+    sync_all();
+    gs = port_gs_backend_vram();
     int shown = 0;
 
     if (memcmp(gs, model, GSN_VRAM_BYTES) == 0) {
@@ -166,9 +178,29 @@ static int page_h(uint32_t psm) {
     return (psm == GSN_PSMT8 || (bits == 16)) ? 64 : 32;
 }
 
+/* paraLLEl's page tracking (compute_page_rect) works out a rectangle's blocks in its first page
+   from the block coordinates of its far corner taken modulo 32; when that comes out below the near
+   corner's (a buffer not on a page boundary, and a rectangle some pages wide), the count of blocks
+   underflows and paraLLEl loops for a very long time. Such rectangles are not tried. */
+static int parallel_tracks(uint32_t psm, const Rect *r) {
+    uint32_t pw = (uint32_t)page_w(psm), ph = (uint32_t)page_h(psm);
+    uint32_t bw = psm == GSN_PSMT4 ? 32 : (gsn_psm_bits(psm) == 16 || psm == GSN_PSMT8) ? 16 : 8;
+    uint32_t bh = (psm == GSN_PSMT8 || psm == GSN_PSMT4) ? 16 : 8;
+    uint32_t x = r->x % pw, y = r->y % ph, w = r->w + x, h = r->h + y;
+    int single = (w - 1) / pw == 0 && (h - 1) / ph == 0;
+
+    if (r->bp % 32 == 0 && !single) {
+        return 1;
+    }
+    return ((w - 1) / bw) % 32 >= x / bw && ((h - 1) / bh) % 32 >= y / bh;
+}
+
 /* Marks the units a rectangle's pixels are in; 0 if two of them share one (or one is marked
    already, when keep is set) */
 static int stamp_rect(uint32_t psm, const Rect *r, int keep) {
+    if (!parallel_tracks(psm, r)) {
+        return 0;
+    }
     if (!keep) {
         memset(stamp, 0, GSN_VRAM_BYTES / 4);
     }
@@ -211,14 +243,6 @@ static void random_rect(uint32_t psm, Rect *r, uint32_t max_pixels) {
         r->y = rnd(2048 / ph) * ph + rnd(ph);
         r->h = 1 + rnd(ph - (r->y % ph));
     }
-    /* not across the 2048 the transmission area wraps at: paraLLEl does the wrap, but its page
-       tracking does not see the pages wrapped onto, and VRAM as read from it keeps them stale */
-    if (r->x + r->w > 2048) {
-        r->w = 2048 - r->x;
-    }
-    if (r->y + r->h > 2048) {
-        r->h = 2048 - r->y;
-    }
 }
 
 static uint64_t make_bitbltbuf(uint32_t sbp, uint32_t sbw, uint32_t spsm, uint32_t dbp, uint32_t dbw, uint32_t dpsm) {
@@ -234,6 +258,11 @@ static uint64_t make_trxreg(uint32_t w, uint32_t h) {
     return (uint64_t)w | (uint64_t)h << 32;
 }
 
+/* All of VRAM copied onto itself: changes nothing, but has paraLLEl take every page as written */
+static void sync_all(void) {
+    send_transfer(make_bitbltbuf(0, 16, 0, 0, 16, 0), 0, make_trxreg(1024, 1024), 2, NULL, 0);
+}
+
 static uint8_t *data_buf;
 #define MAX_DATA (2u << 20)
 
@@ -244,21 +273,42 @@ static void upload_both(uint32_t psm, const Rect *r, const uint8_t *data, size_t
     uint64_t trxreg = make_trxreg(r->w, r->h);
     GsnUpload u;
     size_t at = 0;
+    uint32_t lo = 512, hi = 0;
+    int changed = 0;
 
     send_transfer(bitbltbuf, trxpos, trxreg, 0, data, bytes);
+    memcpy(before, model, GSN_VRAM_BYTES);
     gsn_upload_begin(&u, bitbltbuf, trxpos, trxreg);
     while (at < bytes) {
         size_t n = rnd(4) == 0 ? bytes - at : 1 + rnd(rnd(2) ? 40 : 4000);
+        uint32_t piece_lo, piece_hi;
 
         if (n > bytes - at) {
             n = bytes - at;
         }
-        gsn_upload_data(&u, model, data + at, n, NULL, NULL);
+        changed |= gsn_upload_data(&u, model, data + at, n, &piece_lo, &piece_hi);
+        if (piece_lo <= piece_hi) {
+            lo = piece_lo < lo ? piece_lo : lo;
+            hi = piece_hi > hi ? piece_hi : hi;
+        }
         at += n;
     }
     if (u.active) {
         printf("FAIL %s upload still waits for pixels after all of them\n", psm_name(psm));
         failures++;
+    }
+    /* what gsn_upload_data says it changed, and where */
+    if (changed != (memcmp(before, model, GSN_VRAM_BYTES) != 0)) {
+        printf("FAIL %s upload says it %s VRAM\n", psm_name(psm), changed ? "changed" : "did not change");
+        failures++;
+    }
+    for (uint32_t i = 0; i < GSN_VRAM_BYTES; i += 8192) {
+        if ((i >> 13 < lo || i >> 13 > hi) && memcmp(before + i, model + i, 8192) != 0) {
+            printf("FAIL %s upload changed page %u outside the pages it gave, %u..%u\n", psm_name(psm), i >> 13, lo,
+                   hi);
+            failures++;
+            break;
+        }
     }
 }
 
@@ -319,6 +369,53 @@ static int test_uploads(uint32_t psm, int count) {
     return 1;
 }
 
+static Rect dbg_src;
+
+static void copy_debug(const uint8_t *gs) {
+    uint32_t diffs = 0, first = 0xFFFFFFFF;
+
+    for (uint32_t i = 0; i < GSN_VRAM_BYTES; i++) {
+        if (gs[i] != model[i]) {
+            if (!diffs) {
+                first = i;
+            }
+            diffs++;
+        }
+    }
+    printf("  %u bytes differ\n", diffs);
+    for (uint32_t j = 0; j < dbg_rect.h; j++) {
+        for (uint32_t i = 0; i < dbg_rect.w; i++) {
+            uint32_t at = gsn_vram_offset(dbg_psm, dbg_rect.bp, dbg_rect.bw, dbg_rect.x + i, dbg_rect.y + j, NULL);
+            if (at <= first && first < at + 4) {
+                uint32_t sx = dbg_src.x + i, sy = dbg_src.y + j;
+                uint32_t want = gsn_vram_read(before, dbg_psm, dbg_src.bp, dbg_src.bw, sx, sy);
+                uint32_t got = gsn_vram_read(gs, dbg_psm, dbg_rect.bp, dbg_rect.bw, dbg_rect.x + i, dbg_rect.y + j);
+                uint32_t old = gsn_vram_read(before, dbg_psm, dbg_rect.bp, dbg_rect.bw, dbg_rect.x + i, dbg_rect.y + j);
+
+                printf("  first difference: destination pixel (%u,%u): source %08X, paraLLEl %08X, old %08X\n", i, j,
+                       want, got, old);
+                for (uint32_t b = 0; b < dbg_src.h; b++) {
+                    for (uint32_t a = 0; a < dbg_src.w; a++) {
+                        if (gsn_vram_read(before, dbg_psm, dbg_src.bp, dbg_src.bw, dbg_src.x + a, dbg_src.y + b) == got) {
+                            printf("  paraLLEl's value is source pixel (%u,%u)\n", a, b);
+                        }
+                    }
+                }
+                if (gsn_psm_bits(dbg_psm) == 32) {
+                    uint32_t fifo[4];
+
+                    send_transfer(make_bitbltbuf(dbg_rect.bp, dbg_rect.bw, dbg_psm, 0, 0, 0),
+                                  make_trxpos(dbg_rect.x + i, dbg_rect.y + j, 0, 0, 0), make_trxreg(4, 1), 1, NULL, 0);
+                    port_gs_backend_read_fifo(fifo, 1);
+                    printf("  paraLLEl's FIFO read of it: %08X\n", fifo[0]);
+                }
+                return;
+            }
+        }
+    }
+    printf("  first difference 0x%X is not in the destination\n", first);
+}
+
 static int test_copies(uint32_t psm, int count) {
     char what[256];
 
@@ -375,8 +472,20 @@ static int test_copies(uint32_t psm, int count) {
         bitbltbuf = make_bitbltbuf(s.bp, s.bw, psm, d.bp, d.bw, psm);
         trxpos = make_trxpos(s.x, s.y, d.x, d.y, dir);
         trxreg = make_trxreg(s.w, s.h);
+        if (getenv("GSN_VERBOSE")) {
+            printf("\n copy SBP 0x%X SBW %u (%u,%u) -> DBP 0x%X DBW %u (%u,%u) %ux%u DIR %u", s.bp, s.bw, s.x, s.y,
+                   d.bp, d.bw, d.x, d.y, s.w, s.h, dir);
+        }
+        memcpy(before, model, GSN_VRAM_BYTES);
+        dbg_psm = psm;
+        dbg_rect = d;
+        dbg_src = s;
+        debug_hook = copy_debug;
         send_transfer(bitbltbuf, trxpos, trxreg, 2, NULL, 0);
-        gsn_vram_copy(model, bitbltbuf, trxpos, trxreg);
+        if (gsn_vram_copy(model, bitbltbuf, trxpos, trxreg) != (memcmp(before, model, GSN_VRAM_BYTES) != 0)) {
+            printf("FAIL copy %s: what gsn_vram_copy says it changed\n", psm_name(psm));
+            failures++;
+        }
         snprintf(what, sizeof(what), "copy %s SBP 0x%X SBW %u (%u,%u) -> DBP 0x%X DBW %u (%u,%u) %ux%u DIR %u",
                  psm_name(psm), s.bp, s.bw, s.x, s.y, d.bp, d.bw, d.x, d.y, s.w, s.h, dir);
         if (!compare_vram(what) && failures > 20) {
@@ -395,11 +504,10 @@ static int test_reads(uint32_t psm, int count) {
         uint64_t bitbltbuf, trxpos, trxreg;
         size_t qwords;
 
-        random_rect(psm, &r, (sizeof(gs_out) * 8 / (uint32_t)bits) / 2);
-        qwords = (size_t)r.w * r.h * (size_t)bits / 128; /* paraLLEl sends whole qwords only */
-        if (qwords == 0) {
-            continue;
-        }
+        do {
+            random_rect(psm, &r, (sizeof(gs_out) * 8 / (uint32_t)bits) / 2);
+            qwords = (size_t)r.w * r.h * (size_t)bits / 128; /* paraLLEl sends whole qwords only */
+        } while (qwords == 0 || !parallel_tracks(psm, &r));
         bitbltbuf = make_bitbltbuf(r.bp, r.bw, psm, 0, 0, 0);
         trxpos = make_trxpos(r.x, r.y, 0, 0, 0);
         trxreg = make_trxreg(r.w, r.h);
@@ -467,11 +575,19 @@ static void measure_upload(void) {
     free(vram);
 }
 
-int main(void) {
+/* gsn_vram_test [rounds [seed]]: rounds scales the number of transfers (1 by default) */
+int main(int argc, char **argv) {
     clock_t start = clock();
+    int rounds = argc > 1 ? atoi(argv[1]) : 1;
+    int uploads = 300 * rounds, copies = 120 * rounds, reads = 60 * rounds;
+
+    if (argc > 2) {
+        rng_state = strtoull(argv[2], NULL, 0) | 1;
+    }
 
     model = calloc(GSN_VRAM_BYTES, 1);
     stamp = calloc(GSN_VRAM_BYTES / 4, 1);
+    before = calloc(GSN_VRAM_BYTES, 1);
     data_buf = malloc(MAX_DATA + 16);
 
     test_round_trip();
@@ -500,17 +616,17 @@ int main(void) {
         uint32_t psm = all_psms[p];
 
         printf("%s: uploads", psm_name(psm));
-        if (!test_uploads(psm, 150)) {
+        if (!test_uploads(psm, uploads)) {
             break;
         }
         printf(", copies");
-        if (!test_copies(psm, 60)) {
+        if (!test_copies(psm, copies)) {
             break;
         }
         /* paraLLEl does not send 4-bit formats to the host */
         if (gsn_psm_bits(psm) != 4) {
             printf(", reads");
-            if (!test_reads(psm, 40)) {
+            if (!test_reads(psm, reads)) {
                 break;
             }
         }
