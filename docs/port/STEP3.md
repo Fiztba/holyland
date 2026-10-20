@@ -367,7 +367,7 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
 **Checked.**
 - With the switch on, the game's own pictures (the even vblanks) are byte for byte those of a build
   without the change. Native GS, in play on maps 099, 000, 008, 009, 035 and 112, and through the title,
-  the opening, a teleport and the menus.
+  the opening, a teleport and the menus; with `--widescreen` too.
 - With `KF4_INTERP_STILL=1` (the frame's own camera) the picture between equals the next vblank's,
   within 2 on a few dozen pixels.
 - Turning on map 000 the picture moves 7.5 px, then 7 px, where the game's frames move 14.5. A save
