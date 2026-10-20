@@ -24,13 +24,15 @@ timings of the step 2 path, and how ico-pc built its renderer.
   paraLLEl-GS for all 13 formats, `tests/gsn_vram_test.c`), render targets on the GPU, textures as
   raw texels looked up and filtered in the shader, Vulkan's blending where the GS equation maps onto
   it and the shader's (from a copy of the target) elsewhere, the feedback passes, DATE, AFAIL,
-  MTBA mipmaps, SCANMSK, save states. The 64 map tour captures: no crash, and at the end of each
-  (the frame finished) the displayed frame buffer is paraLLEl-GS's exactly, every pixel; single
-  draws differ in a few edge pixels that later draws cover (PLAN.md, "Where the native GS
-  differs"). Title, memory card, menus, journal, magic and movie captures: within 5 a channel. Live,
-  with both renderers through 600 vblanks on eight maps: no crash, frames within a mean of 0.2 a
-  channel (a few edge pixels that the frame-to-frame smear carries on). A 2,000-vblank run takes
-  8.0 s against paraLLEl-GS's 8.2 s.
+  MTBA mipmaps, SCANMSK, save states. The 64 map tour captures, each frame drawn from
+  paraLLEl-GS's state: no crash; on average 2% of the frame's pixels are more than 1 a channel
+  from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
+  PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
+  captures: within 5 a channel. Live, with both renderers through 600 vblanks on all 64 maps: no
+  crash; at the end typically 3% of pixels more than 1 apart (mean 0.2 a channel). The passes that
+  carry a frame into the next (the dimming each frame, the previous frame blended in, the smear)
+  blend in the shader exactly, so they do not drift. A 2,000-vblank run takes 8.0 s against
+  paraLLEl-GS's 8.2 s.
 - **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
   resolution, live from the overlay).
 - **Stage 3, started**: the VU1 programs, first as C (bit for bit against the interpreter), then as

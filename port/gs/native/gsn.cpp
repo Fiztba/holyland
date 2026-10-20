@@ -240,6 +240,7 @@ struct Gs {
     // ---- the batch being gathered: triangles since the last register write
     std::vector<Vtx> verts;
     uint32_t batch_prim = 0; // PRIM's attributes (PRMODE's when PRMODECONT says)
+    bool batch_sprites = false; // the batch is sprites
 
     // the last field shown (field mode: the picture is woven from the last two)
     std::vector<uint32_t> fields[2];
@@ -938,7 +939,8 @@ void begin_pass(Target *color, Target *depth) {
 }
 
 // A copy of the target, for a draw that reads what it draws over
-const Image &snapshot_of(Target &t) {
+// (box: only the target's pixels a draw can cover, x0 y0 x1 y1 in GS pixels; NULL: all of it)
+const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
     uint32_t tw = t.width * t.scale, th = t.height * t.scale;
     if (!gs->snapshot || gs->snapshot->get_width() < tw || gs->snapshot->get_height() < th) {
         uint32_t w = std::max(tw, gs->snapshot ? gs->snapshot->get_width() : 0u);
@@ -947,8 +949,20 @@ const Image &snapshot_of(Target &t) {
     }
     end_pass();
     transfer_barrier();
-    cmd().copy_image(*gs->snapshot, *t.image, {0, 0, 0}, {0, 0, 0}, {tw, th, 1},
-                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+    VkOffset3D at = {0, 0, 0};
+    VkExtent3D size = {tw, th, 1};
+    if (box) {
+        int32_t s = int32_t(t.scale);
+        int32_t x0 = std::max(box[0], 0) * s, y0 = std::max(box[1], 0) * s;
+        int32_t x1 = std::min(box[2] * s, int32_t(tw)), y1 = std::min(box[3] * s, int32_t(th));
+        if (x1 <= x0 || y1 <= y0) {
+            return *gs->snapshot;
+        }
+        at = {x0, y0, 0};
+        size = {uint32_t(x1 - x0), uint32_t(y1 - y0), 1};
+    }
+    cmd().copy_image(*gs->snapshot, *t.image, at, at, size, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
     transfer_barrier();
     gsn_stats.target_copies++;
     return *gs->snapshot;
@@ -1076,6 +1090,7 @@ void flush_batch() {
     const ImageView *raw_view = &gs->dummy_raw->get_view();
     const ImageView *target_view = &gs->dummy_rgba->get_view();
     bool reads_own_target = false;
+    bool reads_target = false; // a feedback pass: the texture is a render target
     uint32_t clut[256];
     bool want_clut = false;
     if (tme) {
@@ -1115,6 +1130,7 @@ void flush_batch() {
         if (source) {
             uint32_t src = tpsm == GSN_PSMCT24 ? SRC_TARGET_CT24 : psm_is_16(tpsm) ? SRC_TARGET_CT16 : SRC_TARGET_CT32;
             push.flags |= src << F_SRC_SHIFT;
+            reads_target = true;
             if (source == color) {
                 reads_own_target = true;
             } else {
@@ -1168,9 +1184,17 @@ void flush_batch() {
             partial_mask = true;
         }
     }
-    if (date || partial_mask || (abe && (reads_own_target || dst16 || (push.misc & (M_PABE)) ||
-                                         !(push.misc & M_COLCLAMP) || (bc == 0 && (push.misc & M_FBA)) ||
-                                         !fixed_blend(ba, bb, bc, bd, fix, &blend)))) {
+    // Vulkan's blending rounds where the GS truncates: exact for a layer added or taken away, and when
+    // only one of Cs and Cd is kept, but not for (Cs - Cd) C + Cd. That is a difference of 1 a draw,
+    // which the passes over the whole frame (the dimming each frame, the previous frame blended in, the
+    // smear) carry on frame after frame: sprites, and draws whose texture is a render target, blend
+    // here, exactly. (3D geometry is drawn again each frame, and keeps Vulkan's blending.)
+    bool fixed = fixed_blend(ba, bb, bc, bd, fix, &blend);
+    bool exact = fixed && (blend.premul != 0 || ba == bb);
+    bool sprite = gs->batch_sprites;
+    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || dst16 ||
+                                         (push.misc & (M_PABE)) || !(push.misc & M_COLCLAMP) ||
+                                         (bc == 0 && (push.misc & M_FBA)) || !fixed))) {
         shader_blend = true;
     }
     if (shader_blend) {
@@ -1186,7 +1210,15 @@ void flush_batch() {
     }
     const Image *dest_copy = nullptr;
     if (shader_blend || reads_own_target) {
-        dest_copy = &snapshot_of(*color);
+        // a draw that reads its own target reads anywhere in it; one that blends, only its own pixels
+        int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+        for (const Vtx &v : gs->verts) {
+            box[0] = std::min(box[0], int32_t(floorf(v.x)) - 1);
+            box[1] = std::min(box[1], int32_t(floorf(v.y)) - 1);
+            box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
+            box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
+        }
+        dest_copy = &snapshot_of(*color, reads_own_target ? nullptr : box);
         if (reads_own_target) {
             target_view = &dest_copy->get_view();
         }
@@ -1308,6 +1340,7 @@ void flush_batch() {
     }
     gsn_stats.primitives += gs->verts.size() / 3;
     gs->verts.clear();
+    gs->batch_sprites = false;
 }
 
 // ---- Primitives ---------------------------------------------------------------------------------
@@ -1342,6 +1375,7 @@ void add_triangle(const QVertex &a, const QVertex &b, const QVertex &c) {
 
 void add_sprite(const QVertex &a, const QVertex &b) {
     uint32_t prim = gs->batch_prim;
+    gs->batch_sprites = true;
     // a sprite's colour, Z and fog are its second vertex's; its texture coordinates run corner to corner
     QVertex c[4] = {b, b, b, b};
     c[0].x = a.x, c[0].y = a.y, c[0].s = a.s, c[0].t = a.t, c[0].u = a.u, c[0].v = a.v;
@@ -1378,6 +1412,7 @@ void vertex_kick(uint32_t address, uint64_t value) {
     uint32_t prim = effective_prim();
     if (gs->verts.empty()) {
         gs->batch_prim = prim;
+        gs->batch_sprites = false;
     }
     uint32_t type = prim & 7;
     QVertex *q = gs->queue;

@@ -36,7 +36,8 @@
                         both renderers, and after every draw (or each of --draws) the pixels of its box
                         compared: the draws after which they differ, and by how much (up to --limit).
                         After each, the native GS's box is made paraLLEl-GS's, so a draw listed made
-                        the difference itself (--no-resync: not, the differences carry on)
+                        the difference itself (--no-resync: not, the differences carry on). A pixel
+                        differs when a channel is more than 1 apart (--exact: at all)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -622,6 +623,7 @@ typedef struct {
     int render;           /* the renderers that draw: RENDER_GS, RENDER_NATIVE */
     int compare_renderers; /* --compare-renderers */
     int resync;            /* (not --no-resync) after each draw, the native GS takes paraLLEl-GS's pixels */
+    uint32_t threshold;    /* a pixel differs when a channel is more than this apart (1; --exact: 0) */
     uint64_t last_priv[0xF0 / 8]; /* the display registers at the last vblank */
     uint64_t last_vblank;
     int seen_vsync;
@@ -705,7 +707,7 @@ static void compare_draw(Run *r, long index) {
             worst = m > worst ? m : worst;
         }
         max = worst > max ? worst : max;
-        pixels += worst > 1;
+        pixels += worst > r->threshold;
     }
     r->compared++;
     if (r->resync) {
@@ -716,8 +718,8 @@ static void compare_draw(Run *r, long index) {
     if (pixels) {
         r->compared_differ++;
         if (r->compared_differ <= (uint64_t)r->limit) {
-            printf("draw %6ld differs: %u of %zu pixels of its box (%u,%u %ux%u) by more than 1, at most %u\n", index,
-                   pixels, n, rect.x, rect.y, rect.w, rect.h, max);
+            printf("draw %6ld differs: %u of %zu pixels of its box (%u,%u %ux%u) by more than %u, at most %u\n", index,
+                   pixels, n, rect.x, rect.y, rect.w, rect.h, r->threshold, max);
         }
     }
     free(a);
@@ -908,10 +910,10 @@ static void compare_display(Run *r, const uint64_t *priv, const char *when, uint
                     worst = m > worst ? m : worst;
                 }
                 max = worst > max ? worst : max;
-                pixels += worst > 1;
+                pixels += worst > r->threshold;
             }
-            printf("%s %llu: the displayed buffer (FBP %u) differs in %u of %zu pixels by more than 1, at most %u\n",
-                   when, (unsigned long long)vblank, rect.bp / 32, pixels, n, max);
+            printf("%s %llu: the displayed buffer (FBP %u) differs in %u of %zu pixels by more than %u, at most %u\n",
+                   when, (unsigned long long)vblank, rect.bp / 32, pixels, n, r->threshold, max);
             if (r->frames) {
                 char name[64];
 
@@ -1175,6 +1177,19 @@ static void run_capture(Run *r) {
     if (r->compare_renderers && r->seen_vsync) {
         /* a capture's last frame is drawn after its last vblank: compared once all of it is */
         compare_display(r, r->last_priv, "end", r->last_vblank);
+        /* and the other frame buffer in play (0 and 0x8C, 640x448): the game keeps the last frame there
+           for the next to blend with, which the displayed one shows only a frame later */
+        {
+            uint64_t other[0xF0 / 8];
+            uint64_t fbp;
+
+            memcpy(other, r->last_priv, sizeof(other));
+            fbp = other[9 * 2] & 0x1FF;
+            if (fbp == 0 || fbp == 0x8C) {
+                other[9 * 2] = (other[9 * 2] & ~(uint64_t)0x1FF) | (fbp == 0 ? 0x8C : 0);
+                compare_display(r, other, "end-other", r->last_vblank);
+            }
+        }
     }
     if (r->mode == MODE_VIF) {
         printf("VIF1 -> VU1: %llu packets as recorded, %llu differ, %llu recorded but not made, %llu made but not "
@@ -1333,6 +1348,7 @@ int main(int argc, char **argv) {
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
     long vertices = -1;
     int renderer = RENDER_GS;
+    int exact = 0;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1351,6 +1367,8 @@ int main(int argc, char **argv) {
             run.frames = 1;
         } else if (strcmp(a, "--zbuf") == 0) {
             run.zbuf = 1;
+        } else if (strcmp(a, "--exact") == 0) {
+            exact = 1;
         } else if (strcmp(a, "--no-resync") == 0) {
             run.resync = -1;
         } else if (strcmp(a, "--compare-renderers") == 0) {
@@ -1436,6 +1454,7 @@ int main(int argc, char **argv) {
     port_options.adapt_width = (int)meta_int(&capture, "adapt_width", 1);
     port_options.dump_dir = run.out;
     run.limit = limit;
+    run.threshold = exact ? 0 : 1;
     run.resync = run.resync == 0 && run.compare_renderers;
     run.render = run.frames || run.draw_from >= 0 || run.pixel || run.compare_renderers ? renderer : 0;
     if (run.render) {

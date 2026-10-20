@@ -186,6 +186,7 @@ What it knowingly does otherwise, found with `kf4-gsreplay --compare-renderers`:
 | Triangle edges | Vulkan's exact edge test on the GS's 1/16-pixel vertices | the GS's own scan conversion: a few pixels along some edges are covered by one and not the other |
 | Alpha test on filtered textures | the same filtering and rounding (4-bit weights, rounded to even), but an alpha a hair either side of AREF can pass in one and fail in the other | |
 | Mipmap LOD | per pixel from Q in floats | the GS's precision: differences of a few levels of a channel on mipmapped draws |
+| (Cs - Cd) C + Cd on 3D geometry | Vulkan's blending, rounded to nearest (a difference of 1, drawn again each frame) | truncated; sprites and feedback passes blend in the shader, exactly |
 | Blending by As with As above 0x80 | Vulkan's blend factor clamps at 1.0 (for draws blended by the fixed-function unit) | 2.0 |
 | DATE (the destination alpha test) | tested against a copy of the target taken before the draw: overlapping primitives of one draw do not see each other's alpha | per pixel as drawn |
 | Points and lines | not drawn (the game draws neither) | drawn |
