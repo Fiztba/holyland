@@ -54,8 +54,9 @@
    off; GSN_CASE=n runs one case, GSN_FIRST=n the cases from n; GSN_THRESHOLD=t (1); GSN_ALL prints
    every case; GSN_VERBOSE the vertices; GSN_DUMP writes a failing case's two frame buffers and their
    difference as PPM files; GSN_GRADIENT makes CT32 textures their own coordinates (decal), and prints
-   how far apart the texels each renderer sampled are. Exits 77 (skipped) when there is no Vulkan
-   device. */
+   how far apart the texels each renderer sampled are. Then as many rounds of buffers that share
+   memory (test_shared_memory, below; GSN_ROUND, GSN_SKIP, GSN_NO_SHARED). Exits 77 (skipped) when
+   there is no Vulkan device. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
