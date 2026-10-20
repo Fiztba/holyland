@@ -45,7 +45,6 @@ extern "C" {
 using namespace Vulkan;
 
 GsnStats gsn_stats;
-extern "C" void port_gs_backend_share_queue(void *other_device);
 
 namespace {
 
@@ -1812,9 +1811,6 @@ extern "C" int gsn_open(void *shared_context) {
     gs->device = new Device;
     gs->device->set_context(*gs->context);
     gs->device->init_frame_contexts(2);
-    if (shared_context) {
-        port_gs_backend_share_queue(gs->device); // one queue, two devices: one lock
-    }
     make_program();
 
     gs->dummy_raw = make_image(1, 1, VK_FORMAT_R8_UINT, 1, false);
