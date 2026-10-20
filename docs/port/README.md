@@ -129,7 +129,8 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
 | `--no-adapt-width` | scan out at the TV's width, not the game's |
-| `--ps2-scanout` | all four of the above: the GS's raw output, for comparing with the PS2 or PCSX2 |
+| `--no-whole-frame` | let the game draw its picture between over every other line while the view turns (`Game_ShiftScreenByViewTurn`, for the other field of an interlaced TV): the picture is then read a field at a time and deinterlaced, as on the PS2 (docs/port/PLAN.md) |
+| `--ps2-scanout` | all five of the above: the GS's raw output, for comparing with the PS2 or PCSX2 |
 | `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
 | `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
 | `--frames N` | stop after N vblanks |
@@ -185,7 +186,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, 60 pictures a second in play, live, smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
+| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, 60 pictures a second in play, live, smooth or sharp scaling, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
@@ -203,7 +204,7 @@ reported and left alone (the defaults are used). The controls keep only the bind
 the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:lefttrigger"`.
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
-`--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
+`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off,
 `--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` keeps that mod
 on, and `--controls` picks the layout.
 
@@ -300,10 +301,9 @@ picture of its own: the frame the game has just drawn (shown at the next vblank)
   early; everything else is shown when it was. (Turning from standing: the first picture that moves
   comes at the fifth vblank after the input, the sixth with the switch off.)
 - **The menus, the title and the movies** are as they were: they draw no world.
-- **The native GS** (`--renderer native`) is the one to use. paraLLEl-GS (`--renderer gs`) draws the
-  pictures between as well, but its picture of a vblank weaves in the field of the vblank before, so
-  each of its pictures mixes two of the game's; and the game's own turn smear
-  (`Game_ShiftScreenByViewTurn`, which moves one field by the turn) adds to the move.
+- **Both renderers** show the pictures between the same. With `--no-whole-frame` the game's own turn
+  effect (`Game_ShiftScreenByViewTurn`, the frame before over every other line) comes back, and each
+  vblank's picture is read a field at a time and deinterlaced, mixing in the field before.
 - The cost is the GS's: each frame is drawn twice (VU1 is not run again). 2,030 vblanks (new game, map 000),
   headless with `--fast`: 2.15 s to 2.57 s on a Ryzen 9 9900X3D.
 - Both presenters show every vblank's picture in turn, evenly (`--stats` counts what reached the window).
@@ -539,7 +539,8 @@ draws whose box differs by more than 1 in a channel, then puts the native GS bac
 paraLLEl-GS's pixels so that the next draw listed made its own difference (`--no-resync`: not). At
 each vblank, and once more at the end of the capture (a capture's last frame is drawn after its
 last vblank), it compares the frame buffer the display shows (`--frames`: `vblank_N_gs.png`,
-`end_N_native.png`...). `--draws` limits the per-draw comparison to a range (`--draws
+`end_N_native.png`...), and at each vblank the two scanouts (the pictures shown: a `scanout N` line,
+and a `scanouts:` total at the end). `--draws` limits the per-draw comparison to a range (`--draws
 999999-999999`: only the vblanks and the end). paraLLEl-GS's pixels are read back through the GS (a local-to-host
 transfer); for some field-mode menu buffers that read is stale, and the scanout pictures
 (`--frames --renderer both`) are the ones to trust.

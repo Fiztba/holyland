@@ -111,7 +111,8 @@ void port_fatal(const char *file, int line, const char *fmt, ...) __attribute__(
 #define PORT_FATAL(...) port_fatal(__FILE__, __LINE__, __VA_ARGS__)
 
 /* ---- PC presentation switches the game code reads -------------------------------------------
-   Each is off by default, and the game code does exactly what it did on the PS2 while it is off.
+   Each is off by default (but port_whole_frame(), below), and the game code does exactly what it did
+   on the PS2 while it is off.
 
    port_widescreen(): 1 while the opt-in 16:9 picture is on (--widescreen, or the overlay's Display
    page; port/platform/gs.c). The game's patches then widen the 3D projection, and tell the GS front

@@ -248,7 +248,11 @@ dual-source blend, which the design does not need). The move from SDL2 to SDL3 (
 files) is worth doing on its own and is separate from this.
 
 Depth: GS Z (16 bits in play, 32 in the menus) fits a D32_SFLOAT target as z/2^24 exactly, so
-GEQUAL stays GEQUAL.
+GEQUAL stays GEQUAL. Each pixel's Z is rounded to a whole Z as the GS rounds it (`gs_zclamp.frag`
+writes the depth for every draw with a Z buffer): with the fraction the GPU's interpolation keeps, a
+draw over the same plane as the one before (the lava's glow, ZTST GEQUAL) came out a hair behind it
+in places, which showed the lava through in dark specks (map tour: `end-other` 366,070 to 362,601
+pixels, the worst difference 118 to 53).
 
 ### Interlace
 
@@ -256,6 +260,32 @@ The code reads: in play, one 448-line frame drawn at 30 Hz into frame-mode buffe
 and movies draw each field as its own 224-line picture (FFMD 1, `sceGsSetHalfOffset`). PLAN.md says
 in-play is two fields; stage 0 settles which, from captures. The native renderer draws the 448-line
 picture (or more) and weaves menu fields, as step 2's default switches do.
+
+### The scanout
+
+What the display registers say, and what `vsync_now` (port/gs/native/gsn.cpp) makes of them. The game
+only ever enables read circuit 2 (PMODE 0x66, `sceGsPutDispEnv`): DISPFB2 at FBP 0 or 0x8C (0x1180
+blocks), 640 wide, DISPLAY2 DX 636, DY 50, MAGH 3, 448 lines. SMODE2 is 3 (field mode) for the title,
+menus and movies, 1 (frame mode) in play.
+- **Field mode**: each vblank's buffer is one field's 224-line picture, woven into the lines of its
+  parity with the field before (`--no-deinterlace`: the field alone).
+- **Frame mode**: the 448 lines read whole, except for 4 vblanks after a primitive drawn with SCANMSK
+  over more than 400 lines (`scanmsk_seen`), or with `--no-progressive`: then the picture is read a
+  field at a time, the lines of parity (DY ^ field) & 1, as the PS2 shows them, because the game
+  drew its two fields as two pictures. With `--deinterlace` the field is deinterlaced
+  (`shaders/deinterlace.frag`, from the last four fields: the other field's lines woven from the
+  vblank before where the picture holds still, this field's lines interpolated where it moves, as
+  paraLLEl-GS's FastMAD does); without, the field alone (224 lines). paraLLEl-GS does the same with
+  its `force_progressive`: the SCANMSK sign is its own (`has_complex_scanmsk_timeout`).
+- The one such draw in play is `Game_ShiftScreenByViewTurn`, which the port leaves out by default
+  (`--no-whole-frame`, PLAN.md): the game then draws whole frames, read whole by both renderers.
+  With it drawn, both renderers show the same deinterlaced picture.
+- The history (the countdown and the fields) is in a GS capture (`KF4GS_GS_HISTORY`, which
+  paraLLEl-GS's save states and captures carry too), so a replay starts from the game's. The native
+  GS's save states do not keep it: the first picture after a load in that state takes its field's
+  lines twice.
+- `kf4-gsreplay --compare-renderers` compares the two renderers' scanouts at each vblank, besides the
+  frame buffers; the comb this replaced was in the scanout only.
 
 ## The stages
 
@@ -465,10 +495,10 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
   picture between: its "previous frame" is the buffer being drawn.
 - **2D drawn in the world as sprites** (none seen; the triangles are moved) would stay where the frame
   put them. Sprites are not moved, as the full-screen clears and passes are sprites too.
-- **paraLLEl-GS** (`--renderer gs`) gets the same packets, but its scanout weaves each vblank with the
-  field before. Its pictures then mix two of the game's, and the game's turn smear
-  (`Game_ShiftScreenByViewTurn`, one field moved by the turn) adds to the move. The native GS shows
-  the frame whole.
+- **paraLLEl-GS** (`--renderer gs`) gets the same packets and shows the same pictures. (With
+  `--no-whole-frame` the game's `Game_ShiftScreenByViewTurn` draws the frame before over the even
+  lines, and both renderers read each vblank's picture a field at a time and deinterlace it, mixing
+  in the field before: "The scanout".)
 - **More than 60.** 120 or 144 Hz needs pictures at times between vblanks, from the wall clock, more
   than one replay a frame (each a fraction of the way), and a presenter that shows them at the
   screen's rate.
