@@ -32,6 +32,7 @@ typedef struct {
     int renderer;
     int renderer_shown;
     int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
+    int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_SDL, the
        default, through SDL_Renderer; PORT_PRESENTER_VULKAN, a swapchain on the native GS's own device
        (port/platform/present_vk.cpp), with the native GS's picture taken from the GPU as it is. */

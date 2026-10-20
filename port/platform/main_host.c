@@ -14,7 +14,8 @@
        --no-gs           draw nothing (VIF1 and VU1 still run)
        --renderer NAME   who draws: gs (paraLLEl-GS, the default), native (step 3's renderer,
                          port/gs/native/) or both (side by side, their pictures compared; the
-                         window shows gs's, --renderer-shown native shows the other)
+                         window shows gs's, --renderer-shown native shows the other, and
+                         --renderer-shown heatmap where they differ)
        --presenter NAME  how the picture reaches the window: sdl (SDL_Renderer, the default) or
                          vulkan (a swapchain on the native GS's device, the picture kept on the
                          GPU; port/platform/present_vk.cpp); vulkan falls back to sdl if it
@@ -127,7 +128,7 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter sdl|vulkan] [--native-scale 1-4] [--vu1 interp|hle|check]\n",
             program);
     exit(2);
@@ -219,12 +220,14 @@ static void parse_options(int argc, char **argv) {
             port_options.disc = value;
         } else if (strcmp(option, "--renderer") == 0 || strcmp(option, "--renderer-shown") == 0) {
             int both = strcmp(option, "--renderer") == 0;
-            int which = strcmp(value, "gs") == 0             ? PORT_RENDERER_GS
+            int heatmap = !both && strcmp(value, "heatmap") == 0;
+            int which = heatmap                              ? PORT_RENDERER_NATIVE
+                        : strcmp(value, "gs") == 0           ? PORT_RENDERER_GS
                         : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : "", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
@@ -232,6 +235,7 @@ static void parse_options(int argc, char **argv) {
                 port_options.renderer_forced = 1;
             } else {
                 port_options.renderer_shown = which;
+                port_options.renderer_heatmap = heatmap;
             }
         } else if (strcmp(option, "--presenter") == 0) {
             if (strcmp(value, "sdl") == 0) {

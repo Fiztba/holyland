@@ -711,8 +711,17 @@ void renderer_section() {
             "SDL_Renderer's. --presenter on the command line wins over this.");
     if (port_options.renderer == PORT_RENDERER_BOTH) {
         bool native = port_options.renderer_shown == PORT_RENDERER_NATIVE;
+        ImGui::BeginDisabled(port_options.renderer_heatmap != 0);
         if (ImGui::Checkbox("Show the native GS's picture", &native))
             port_options.renderer_shown = native ? PORT_RENDERER_NATIVE : PORT_RENDERER_GS;
+        ImGui::EndDisabled();
+        bool heatmap = port_options.renderer_heatmap != 0;
+        if (ImGui::Checkbox("Show where they differ (heat map)", &heatmap))
+            port_options.renderer_heatmap = heatmap;
+        tooltip("The window shows the displayed frame buffer's difference, pixel by pixel: grey where the\n"
+                "two are within 1 in every channel, else coloured by the largest difference, from blue (2)\n"
+                "through green and yellow (16) to red (64 and more). At the PS2's resolution. Not saved.\n"
+                "(--renderer-shown heatmap)");
         const PortRendererDiff &d = port_renderer_diff;
         ImGui::Text("Last picture: %u pixels differ by more than 1, at most %u (mean %.3f)", d.last_pixels, d.last_max,
                     d.last_mean);
