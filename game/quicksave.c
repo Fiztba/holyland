@@ -295,8 +295,8 @@ static void fill_info(PortQuickInfo *info) {
     info->neighbour_origin = neighbour_origin(&info->neighbour_map, &info->neighbour_set_up);
 }
 
-/* Why the player is not in control now (NULL: he is) */
-static const char *not_in_play(void) {
+/* Why the player is not in control now (NULL: he is); the cheats (game/cheats.c) ask too */
+const char *Quick_WhyNotInPlay(void) {
     if (game_status.bit9) {
         return "the game is leaving play";
     }
@@ -331,7 +331,7 @@ static void quick_save(void) {
     PortQuickInfo info;
     u8 *kept = malloc(SAVE_IMAGE_SIZE);
     u32 size;
-    const char *why = not_in_play();
+    const char *why = Quick_WhyNotInPlay();
 
     if (why != NULL || kept == NULL) {
         free(kept);
@@ -417,7 +417,7 @@ static void teleport(void) {
     f32 kept_position[3] = {player_state.position.x, player_state.position.y, player_state.position.z};
     f32 kept_rotation[3] = {player_state.rotation.x, player_state.rotation.y, player_state.rotation.z};
     u8 kept_tag = slot->tag;
-    const char *why = not_in_play();
+    const char *why = Quick_WhyNotInPlay();
     float position[3], heading;
     int map;
 
@@ -459,8 +459,12 @@ static void teleport(void) {
     leave_for_image();
 }
 
+void Cheat_Poll(void);
+
 void Quick_PollGame(void) {
     int wanted = port_quick_wanted();
+
+    Cheat_Poll(); /* the debug cheats (game/cheats.c) */
 
     if (wanted == PORT_QUICK_SAVE) {
         quick_save();

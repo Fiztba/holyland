@@ -139,6 +139,8 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--state-load [VBLANK:]SLOT\|FILE` | load a state before the game starts, or once the run reaches that vblank |
 | `--quick-save-at VBLANK[:SLOT\|:FILE],...` | take a quick save (slot 0 when left out) at these vblanks, or as soon after as the player is in control (see "Quick saves") |
 | `--quick-load [VBLANK:]SLOT\|FILE,...` | load a quick save on the title screen, or in play once the run reaches that vblank; several (in vblank order) are loaded one after another, as `tools/map_tour.py` does |
+| `--invincible` | debugging: the player loses no HP and does not die (the Debug page's Invincible) |
+| `--cheats spells,equipment,items,magic\|all` | debugging: once in play, as the Debug page's cheat buttons do (`game/cheats.c`) |
 | `--teleport [VBLANK:]MAP[:PLACE]` | once in play (from that vblank), put the player in map MAP at its PLACE-th place (0, the map's start, when left out), keeping the game's progress, as the overlay's Teleport does (see "Teleport"); with a vblank it is `VBLANK:MAP:PLACE` |
 | `--memcard DIR\|none` | the folder that is the memory card in slot 1 (by default `memcard` in the data folder, beside settings.json); `none` leaves the slot empty, as the tests do |
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
@@ -181,7 +183,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
 | Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
-| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
+| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
 
 Every way the PC differs from the PS2 is a switch that starts as the port has it.
