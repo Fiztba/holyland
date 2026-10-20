@@ -1959,6 +1959,38 @@ extern "C" void gsn_capture(void (*emit)(uint32_t type, const void *data, size_t
     emit(KF4GS_GS_REGS, regs.data(), regs.size() * sizeof(Kf4GsReg));
 }
 
+extern "C" size_t gsn_state_size(void) {
+    return GSN_VRAM_BYTES + sizeof(gs->reg) + sizeof(gs->internal_q) + sizeof(gs->clut) + sizeof(gs->clut_cbp) +
+           sizeof(gs->queue) + sizeof(gs->queue_count) + sizeof(gs->paths) + sizeof(gs->upload) + sizeof(gs->transfer_dir);
+}
+
+extern "C" void gsn_state(PortStateIo *io) {
+    if (!io->loading) {
+        port_state_bytes(io, const_cast<void *>(gsn_vram()), GSN_VRAM_BYTES);
+    } else {
+        flush_batch();
+        end_pass();
+        gs->targets.clear();
+        gs->textures.clear();
+        port_state_bytes(io, gs->vram.data(), GSN_VRAM_BYTES);
+        pages_written(0, vram_pages);
+    }
+    port_state_bytes(io, gs->reg, sizeof(gs->reg));
+    port_state_bytes(io, &gs->internal_q, sizeof(gs->internal_q));
+    port_state_bytes(io, gs->clut, sizeof(gs->clut));
+    port_state_bytes(io, gs->clut_cbp, sizeof(gs->clut_cbp));
+    port_state_bytes(io, gs->queue, sizeof(gs->queue));
+    port_state_bytes(io, &gs->queue_count, sizeof(gs->queue_count));
+    port_state_bytes(io, gs->paths, sizeof(gs->paths));
+    port_state_bytes(io, &gs->upload, sizeof(gs->upload));
+    port_state_bytes(io, &gs->transfer_dir, sizeof(gs->transfer_dir));
+    if (io->loading) {
+        gs->verts.clear();
+        gs->fields[0].clear();
+        gs->fields[1].clear();
+    }
+}
+
 extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
     switch (type) {
     case KF4GS_VRAM:

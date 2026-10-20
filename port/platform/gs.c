@@ -734,8 +734,33 @@ const char *port_gs_state_busy(void) {
     return NULL;
 }
 
+/* A renderer's part of a state saved by another (the state has the other's and not this one's): its
+   VRAM, which both put first, so that the textures are there; the registers come back as the game
+   next writes them */
+static void take_other_vram(PortStateIo *io, uint64_t bytes, int into_native) {
+    void *vram = bytes >= 4u << 20 ? malloc(4u << 20) : NULL;
+
+    if (vram == NULL) {
+        port_state_bytes(io, NULL, (size_t)bytes);
+        return;
+    }
+    port_state_bytes(io, vram, 4u << 20);
+    port_state_bytes(io, NULL, (size_t)(bytes - (4u << 20)));
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (into_native) {
+        gsn_restore(KF4GS_VRAM, vram, 4u << 20);
+    } else {
+        port_gs_backend_restore(KF4GS_VRAM, vram, 4u << 20);
+    }
+#else
+    (void)into_native;
+#endif
+    free(vram);
+}
+
 void port_gs_state(PortStateIo *io) {
     uint64_t backend_bytes = 0;
+    uint64_t native_bytes = 0;
 
     PORT_STATE(io, gif_paths);
     PORT_STATE(io, draw_offset_x);
@@ -744,23 +769,41 @@ void port_gs_state(PortStateIo *io) {
     PORT_STATE(io, image_bitbltbuf);
     PORT_STATE(io, image_trxreg);
     PORT_STATE(io, image_bits_left);
+    /* paraLLEl-GS's state, then the native GS's: each only when it runs; a state loaded into the other
+       renderer gives it the VRAM (take_other_vram) */
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_gs) {
         backend_bytes = port_gs_backend_state_size();
-    } else if (have_native && !io->loading) {
-        fprintf(stderr, "[gs] the native GS's state is not saved yet: the state has no GS in it\n");
+    }
+    if (have_native) {
+        native_bytes = gsn_state_size();
     }
 #endif
     PORT_STATE(io, backend_bytes);
-    if (backend_bytes == 0) {
-        return;
-    }
+    if (backend_bytes != 0) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_gs) {
-        port_gs_backend_state(io);
-        return;
-    }
+        if (have_gs) {
+            port_gs_backend_state(io);
+        } else if (have_native && io->loading) {
+            take_other_vram(io, backend_bytes, 1);
+            backend_bytes = 0; /* (the native GS's own, if any, is read below) */
+        } else
 #endif
-    /* a loaded state's GS, and no renderer to take it */
-    port_state_bytes(io, NULL, (size_t)backend_bytes);
+        {
+            port_state_bytes(io, NULL, (size_t)backend_bytes);
+        }
+    }
+    PORT_STATE(io, native_bytes);
+    if (native_bytes != 0) {
+#ifdef KF4_HAVE_PARALLEL_GS
+        if (have_native && native_bytes == gsn_state_size()) {
+            gsn_state(io);
+        } else if (have_gs && io->loading && !backend_bytes) {
+            take_other_vram(io, native_bytes, 0);
+        } else
+#endif
+        {
+            port_state_bytes(io, NULL, (size_t)native_bytes);
+        }
+    }
 }

@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "port/platform.h"
+#include "port/savestate.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +46,12 @@ void gsn_write_rect(const GsnRect *rect, const uint32_t *rgba);
 const void *gsn_vram(void);
 void gsn_capture(void (*emit)(uint32_t type, const void *data, size_t size));
 int gsn_restore(uint32_t type, const void *data, size_t size);
+
+/* Save states (port/platform/savestate.c, through port/platform/gs.c): the native GS's state, VRAM
+   first (4 MB, as the GS lays it out, render targets written back), then its registers and the CLUT
+   buffer. Taken between GIF packets. */
+size_t gsn_state_size(void);
+void gsn_state(PortStateIo *io);
 
 /* What the last frames cost and did (--stats, the overlay) */
 typedef struct {
