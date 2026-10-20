@@ -123,6 +123,15 @@ int port_widescreen(void);
 #define PORT_GS_REG_WIDESCREEN 0x7E
 #define PORT_WIDESCREEN_3D 0      /* what follows is the 3D world: drawn as it comes (the default) */
 #define PORT_WIDESCREEN_2D 1      /* 2D at 4:3, squeezed into the middle of the 16:9 picture */
+
+/* port_whole_frame(): 1 while the game draws whole frames only (port_options.whole_frame). Unlike the
+   switches above it is on by default, as one of the ways the PC picture differs from the GS's raw
+   output (docs/port/PLAN.md); --no-whole-frame and --ps2-scanout turn it off, and the game code then
+   does what it did on the PS2. On, GameLoop_DrawFrame leaves out Game_ShiftScreenByViewTurn: the
+   frame before, moved by half the view's turn, drawn over the even lines (SCANMSK), a picture between
+   for the field an interlaced TV shows next. On a PC screen, which shows both fields at once, it is a
+   comb trailing what moves; --frame-rate 60 draws real pictures between instead. */
+int port_whole_frame(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 

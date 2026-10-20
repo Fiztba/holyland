@@ -31,7 +31,7 @@
                          results to the bit, computed directly: faster; port/platform/vu1_hle*.c)
                          or check (both, compared run by run, differences on stderr and counted
                          by --stats)
-       --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
+       --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width, --no-whole-frame
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
@@ -162,6 +162,7 @@ static void parse_options(int argc, char **argv) {
 
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
+    port_options.whole_frame = 1;
     port_options.native_scale = 1;
     port_options.frame_rate = 30;
     port_options.native_msaa = 1;
@@ -187,6 +188,7 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--ps2-scanout") == 0) {
             port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 0;
+            port_options.whole_frame = 0;
             continue;
         }
         if (strcmp(option, "--no-deinterlace") == 0) {
@@ -203,6 +205,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--no-adapt-width") == 0) {
             port_options.adapt_width = 0;
+            continue;
+        }
+        if (strcmp(option, "--no-whole-frame") == 0) {
+            port_options.whole_frame = 0;
             continue;
         }
         if (strcmp(option, "--widescreen") == 0 || strcmp(option, "--widescreen-hud-centred") == 0) {

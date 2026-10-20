@@ -1537,6 +1537,7 @@ int main(int argc, char **argv) {
     port_options.progressive = (int)meta_int(&capture, "progressive", 1);
     port_options.anti_blur = (int)meta_int(&capture, "anti_blur", 1);
     port_options.adapt_width = (int)meta_int(&capture, "adapt_width", 1);
+    port_options.whole_frame = (int)meta_int(&capture, "whole_frame", 0);
     port_options.dump_dir = run.out;
     run.limit = limit;
     run.threshold = exact ? 0 : 1;
