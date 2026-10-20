@@ -60,6 +60,11 @@ extern "C" int port_gs_backend_open(void) {
     return 1;
 }
 
+// The Vulkan context, for the native GS to run beside paraLLEl-GS (--renderer both)
+extern "C" void *port_gs_backend_context(void) {
+    return context;
+}
+
 extern "C" void port_gs_backend_gif(int path, const void *data, size_t bytes) {
     gs->gif_transfer(uint32_t(path), data, bytes);
 }

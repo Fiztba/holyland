@@ -1,8 +1,9 @@
 /* The GS: the GIF's three paths and the display, on the DMA controller's thread.
 
    Packets come from VU1's XGKICK (PATH1, port/platform/vif1.c), VIF1's DIRECT (PATH2) and DMA
-   channel 2 (PATH3, port/platform/dmac.c), and go to the backend in port/gs/gs_parallel.cpp
-   (paraLLEl-GS). At each vblank the kernel snapshots the display registers (PMODE..BGCOLOR in the
+   channel 2 (PATH3, port/platform/dmac.c), and go to the renderer --renderer chose: the backend in
+   port/gs/gs_parallel.cpp (paraLLEl-GS, the default), the native GS (port/gs/native/, step 3's), or
+   both, whose pictures are then compared (port_renderer_diff). At each vblank the kernel snapshots the display registers (PMODE..BGCOLOR in the
    register page) and queues them here; the controller's thread finishes the channels started before
    it, then has the backend scan the frame out, and hands the picture to the window
    (port/platform/video.c) and to --dump-frames.
@@ -27,6 +28,8 @@ void port_gs_backend_state(PortStateIo *io);
 void port_gs_backend_gif(int path, const void *data, size_t bytes);
 void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+void *port_gs_backend_context(void);
+#include "gsn.h"
 #endif
 
 #define VSYNC_QUEUE 16
@@ -37,11 +40,15 @@ typedef struct {
     int field;
 } VsyncRequest;
 
-static int backend; /* the renderer is up */
+static int backend;     /* a renderer is up */
+static int have_gs;     /* paraLLEl-GS is */
+static int have_native; /* the native GS is */
+PortRendererDiff port_renderer_diff;
 static VsyncRequest queue[VSYNC_QUEUE];
 static volatile uint64_t queue_head; /* written by the game thread */
 static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
+static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
 
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
@@ -71,7 +78,14 @@ static void parse_dumps(void) {
 static void open_backend(void *unused) {
     (void)unused;
 #ifdef KF4_HAVE_PARALLEL_GS
-    backend = port_gs_backend_open();
+    if (port_options.renderer != PORT_RENDERER_NATIVE) {
+        have_gs = port_gs_backend_open();
+    }
+    if (port_options.renderer != PORT_RENDERER_GS) {
+        /* beside paraLLEl-GS, on its Vulkan device's context */
+        have_native = gsn_open(have_gs ? port_gs_backend_context() : NULL);
+    }
+    backend = have_gs || have_native;
 #endif
 }
 
@@ -438,8 +452,11 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
         port_gs_capture_gif(path, data, bytes);
     }
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (backend) {
+    if (have_gs) {
         port_gs_backend_gif(path, data, bytes);
+    }
+    if (have_native) {
+        gsn_gif(path, data, bytes);
     }
 #endif
     if (port_options.stats) {
@@ -455,7 +472,19 @@ void port_gs_read_fifo(void *dst, uint32_t qwords) {
         port_gs_capture_read_fifo(qwords);
     }
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (backend) {
+    if (have_gs && have_native) {
+        /* both read the same transfer; paraLLEl-GS's pixels are the ones the game gets */
+        void *scratch = malloc((size_t)qwords * 16);
+
+        if (scratch != NULL) {
+            gsn_read_fifo(scratch, qwords);
+            free(scratch);
+        }
+    } else if (have_native) {
+        gsn_read_fifo(dst, qwords);
+        return;
+    }
+    if (have_gs) {
         port_gs_backend_read_fifo(dst, qwords);
         return;
     }
@@ -464,6 +493,130 @@ void port_gs_read_fifo(void *dst, uint32_t qwords) {
 }
 
 /* ---- Vblanks ---------------------------------------------------------------------------------- */
+#ifdef KF4_HAVE_PARALLEL_GS
+/* --renderer both: the two pictures, compared channel by channel */
+static void compare_frames(const PortGsFrame *a, const PortGsFrame *b, uint64_t vblank) {
+    PortRendererDiff *d = &port_renderer_diff;
+    uint64_t sum = 0;
+    uint32_t max = 0, pixels = 0;
+    size_t i, n;
+
+    if (a->width != b->width || a->height != b->height) {
+        max = 255;
+        pixels = a->width * a->height;
+        n = 0;
+    } else {
+        n = (size_t)a->width * a->height;
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t p = a->rgba[i], q = b->rgba[i];
+        uint32_t worst = 0;
+        int c;
+
+        if (p == q) {
+            continue;
+        }
+        for (c = 0; c < 24; c += 8) {
+            int e = (int)((p >> c) & 0xFF) - (int)((q >> c) & 0xFF);
+            uint32_t m = (uint32_t)(e < 0 ? -e : e);
+
+            sum += m;
+            worst = m > worst ? m : worst;
+        }
+        max = worst > max ? worst : max;
+        pixels += worst > 1;
+    }
+    d->frames++;
+    d->frames_differ += pixels != 0;
+    d->last_max = max;
+    d->last_pixels = pixels;
+    d->last_mean = n ? (double)sum / (double)(n * 3) : 255.0;
+    if (max > d->worst_max) {
+        d->worst_max = max;
+        d->worst_vblank = vblank;
+    }
+}
+
+/* --renderer both: the buffer the display shows, as each renderer drew it (the scanouts differ by
+   their own conventions: paraLLEl-GS's crop of the TV picture and its weave of the fields) */
+static void compare_buffers(VsyncRequest *request, int dump) {
+    static PortGsFrame a, b;
+    GsnRect rect;
+
+    if (!gsn_display_rect(request->privileged, &rect)) {
+        return;
+    }
+    if (a.rgba == NULL) {
+        a.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+        b.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+    }
+    a.width = b.width = rect.w;
+    a.height = b.height = rect.h;
+    gsn_decode_rect((const uint8_t *)port_gs_backend_vram(), &rect, a.rgba);
+    gsn_read_rect(&rect, b.rgba);
+    compare_frames(&a, &b, request->vblank);
+    if (dump) {
+        char name[64];
+
+        snprintf(name, sizeof(name), "frame_%06llu_gs_fb.png", (unsigned long long)request->vblank);
+        port_video_dump_named(&a, name);
+        snprintf(name, sizeof(name), "frame_%06llu_native_fb.png", (unsigned long long)request->vblank);
+        port_video_dump_named(&b, name);
+    }
+}
+
+/* A picture of a renderer's (or each's, with both) for the window and --dump-frames: 1 if one is shown */
+static int present_frames(VsyncRequest *request, int shown, int dump) {
+    int want = shown || dump;
+    int got_gs = 0, got_native = 0;
+    PortGsFrame *show;
+
+    if (have_gs) {
+        got_gs = port_gs_backend_vsync(request->privileged, request->field, want, &frame);
+    }
+    if (have_native) {
+        got_native = gsn_vsync(request->privileged, request->field, want, &native_frame);
+    }
+    if (have_gs && have_native) {
+        compare_buffers(request, dump);
+    }
+    if (have_gs && have_native) {
+        show = port_options.renderer_shown == PORT_RENDERER_NATIVE ? &native_frame : &frame;
+        if (dump && got_gs && got_native) {
+            /* each picture, the one shown under the usual name */
+            char name[64];
+
+            port_video_dump(show, request->vblank);
+            snprintf(name, sizeof(name), "frame_%06llu_gs.png", (unsigned long long)request->vblank);
+            port_video_dump_named(&frame, name);
+            snprintf(name, sizeof(name), "frame_%06llu_native.png", (unsigned long long)request->vblank);
+            port_video_dump_named(&native_frame, name);
+            dump = 0;
+        }
+        if (!(show == &frame ? got_gs : got_native)) {
+            return 0;
+        }
+    } else if (have_native) {
+        if (!got_native) {
+            return 0;
+        }
+        show = &native_frame;
+    } else {
+        if (!got_gs) {
+            return 0;
+        }
+        show = &frame;
+    }
+    if (dump) {
+        port_video_dump(show, request->vblank);
+    }
+    if (shown) {
+        port_video_submit(show);
+    }
+    return 1;
+}
+#endif
+
 void port_gs_post_vsync(void) {
     VsyncRequest *request;
     uint64_t head;
@@ -488,6 +641,19 @@ void port_gs_post_vsync(void) {
     }
     __atomic_store_n(&queue_head, head + 1, __ATOMIC_RELEASE);
     port_dmac_post_vsync();
+}
+
+/* The GS's state as capture records (port/debug/gs_capture.c): paraLLEl-GS's, or the native GS's */
+void port_gs_state_records(void (*emit)(uint32_t type, const void *data, size_t size)) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_gs) {
+        port_gs_backend_capture(emit);
+    } else if (have_native) {
+        gsn_capture(emit);
+    }
+#else
+    (void)emit;
+#endif
 }
 
 void port_gs_finish(void) {
@@ -516,14 +682,9 @@ void port_gs_run_vsync(void) {
     }
     if (frame.rgba == NULL) {
         frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+        native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
-    if (port_gs_backend_vsync(request->privileged, request->field, shown || dump, &frame)) {
-        if (dump) {
-            port_video_dump(&frame, request->vblank);
-        }
-        if (shown) {
-            port_video_submit(&frame);
-        }
+    if (present_frames(request, shown, dump)) {
     } else if (dump) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
     }
@@ -566,8 +727,10 @@ void port_gs_state(PortStateIo *io) {
     PORT_STATE(io, image_trxreg);
     PORT_STATE(io, image_bits_left);
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (backend) {
+    if (have_gs) {
         backend_bytes = port_gs_backend_state_size();
+    } else if (have_native && !io->loading) {
+        fprintf(stderr, "[gs] the native GS's state is not saved yet: the state has no GS in it\n");
     }
 #endif
     PORT_STATE(io, backend_bytes);
@@ -575,7 +738,7 @@ void port_gs_state(PortStateIo *io) {
         return;
     }
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (backend) {
+    if (have_gs) {
         port_gs_backend_state(io);
         return;
     }

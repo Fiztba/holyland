@@ -12,6 +12,9 @@
        --headless        no SDL at all: no window, and the GS draws only for --dump-frames and
                          GS captures (--gs-capture-at, KF4_DEBUG_AT)
        --no-gs           draw nothing (VIF1 and VU1 still run)
+       --renderer NAME   who draws: gs (paraLLEl-GS, the default), native (step 3's renderer,
+                         port/gs/native/) or both (side by side, their pictures compared; the
+                         window shows gs's, --renderer-shown native shows the other)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off
@@ -76,6 +79,21 @@
 static int parse_cheats(const char *list);
 #include "port/sanitize.h"
 
+#ifdef _WIN32
+#include <windows.h>
+/* A crash on Windows says where it was, which `llvm-addr2line -f -e kf4.exe ADDRESS` names (the
+   program is linked at a fixed address) */
+static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
+    fprintf(stderr, "[port] crashed: exception 0x%08lx at %p\n", (unsigned long)e->ExceptionRecord->ExceptionCode,
+            e->ExceptionRecord->ExceptionAddress);
+    if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && e->ExceptionRecord->NumberParameters >= 2) {
+        fprintf(stderr, "[port] (a %s of %p)\n", e->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
+                (void *)e->ExceptionRecord->ExceptionInformation[1]);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 #if PORT_ASAN
 /* ASan's defaults for this program (ASAN_OPTIONS overrides them): no fake stacks, which would keep
    locals outside the EE threads' stacks, where a save state does not see them; no leak check at exit */
@@ -99,7 +117,7 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]]\n",
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n",
             program);
     exit(2);
 }
@@ -187,6 +205,21 @@ static void parse_options(int argc, char **argv) {
         i++;
         if (strcmp(option, "--disc") == 0) {
             port_options.disc = value;
+        } else if (strcmp(option, "--renderer") == 0 || strcmp(option, "--renderer-shown") == 0) {
+            int both = strcmp(option, "--renderer") == 0;
+            int which = strcmp(value, "gs") == 0             ? PORT_RENDERER_GS
+                        : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
+                        : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
+                                                             : -1;
+            if (which < 0) {
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : "", value);
+                exit(2);
+            }
+            if (both) {
+                port_options.renderer = which;
+            } else {
+                port_options.renderer_shown = which;
+            }
         } else if (strcmp(option, "--frames") == 0) {
             port_options.frames = strtoll(value, NULL, 0);
         } else if (strcmp(option, "--input") == 0) {
@@ -361,6 +394,14 @@ static void print_stats(void) {
        every run */
     port_dmac_call(drained, NULL);
     fprintf(stderr, "[stats] wall %.3f s\n", port_wall_seconds() - start_seconds);
+    if (port_options.renderer == PORT_RENDERER_BOTH) {
+        const PortRendererDiff *d = &port_renderer_diff;
+
+        fprintf(stderr, "[stats] renderers: %llu pictures compared, %llu differ (a channel by more than 1); "
+                        "the largest difference %u at vblank %llu\n",
+                (unsigned long long)d->frames, (unsigned long long)d->frames_differ, d->worst_max,
+                (unsigned long long)d->worst_vblank);
+    }
     fprintf(stderr, "[stats] VU1 %.3f s: %llu runs, %llu instructions (%.2f ns each)\n", vu1,
             (unsigned long long)port_stats.vu1_runs, (unsigned long long)port_stats.vu1_insns,
             port_stats.vu1_insns ? vu1 * 1e9 / (double)port_stats.vu1_insns : 0.0);
@@ -375,6 +416,9 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     parse_options(argc, argv);
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(crash_report);
+#endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();

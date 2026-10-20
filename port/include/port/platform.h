@@ -26,6 +26,11 @@ typedef struct {
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
     int headless;            /* --headless: no SDL at all, and no window */
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
+    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_GS, paraLLEl-GS, is the default;
+       PORT_RENDERER_NATIVE is step 3's (port/gs/native/); PORT_RENDERER_BOTH runs the two side by side
+       and compares their pictures, showing renderer_shown's. */
+    int renderer;
+    int renderer_shown;
     /* How the GS's output becomes a PC picture (port/gs/gs_parallel.cpp). Each is on by default and
        turned off by --no-<name>; --ps2-scanout turns them all off (the GS's raw output). */
     int deinterlace;         /* weave the two fields of an interlaced picture into one */
@@ -205,6 +210,19 @@ void port_vu1_continue(uint32_t top, uint32_t itop);
 
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
+enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2 };
+/* --renderer both: how the last pictures of the two compared (port/platform/gs.c) */
+typedef struct {
+    uint64_t frames;          /* pictures compared */
+    uint64_t frames_differ;   /* of which some pixel differs by more than 1 in a channel */
+    uint32_t last_max;        /* the last picture's largest difference in a channel */
+    uint32_t last_pixels;     /* its pixels that differ by more than 1 */
+    double last_mean;         /* its mean difference per channel */
+    uint32_t worst_max;       /* the largest difference seen */
+    uint64_t worst_vblank;    /* where */
+} PortRendererDiff;
+extern PortRendererDiff port_renderer_diff;
+
 #define PORT_GS_FRAME_PIXELS (1024u * 1024u)
 typedef struct {
     uint32_t width, height;
@@ -234,6 +252,8 @@ void port_video_init(void);
 void port_video_submit(const PortGsFrame *frame);
 /* (the controller's thread) writes the picture as <dump-dir>/frame_<vblank>.png */
 void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
+/* the same, under its own name in --dump-dir */
+void port_video_dump_named(const PortGsFrame *frame, const char *name);
 /* writes RGBA pixels (R in the low byte) as an RGB PNG: 1 when it was written */
 int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture and keeps the window alive */

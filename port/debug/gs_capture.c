@@ -246,7 +246,7 @@ static void start(uint64_t vblank, int vblanks) {
              port_options.adapt_width, port_options.widescreen, port_options.widescreen_hud_centred);
     put(KF4GS_META, meta, strlen(meta));
 #ifdef KF4_HAVE_PARALLEL_GS
-    port_gs_backend_capture(emit); /* (without a renderer no capture starts: why_not_now) */
+    port_gs_state_records(emit); /* (without a renderer no capture starts: why_not_now) */
 #endif
     port_vu1_debug_regs(&vu, 0);
     port_vif1_debug_regs(&vif, 0);
