@@ -892,6 +892,43 @@ static void vsync(Run *r, const Record *rec) {
     if (!r->render) {
         return;
     }
+    if (r->compare_renderers) {
+        /* the buffer the display shows, as each renderer has it at the vblank */
+        GsnRect rect;
+
+        if (gsn_display_rect((const uint64_t *)(rec->data + 16), &rect)) {
+            size_t i, n = (size_t)rect.w * rect.h;
+            uint32_t *a = malloc(n * 4), *b = malloc(n * 4), max = 0, pixels = 0;
+
+            gsn_decode_rect(port_gs_backend_vram(), &rect, a);
+            gsn_read_rect(&rect, b);
+            for (i = 0; i < n; i++) {
+                uint32_t worst = 0;
+                int c;
+
+                for (c = 0; c < 24; c += 8) {
+                    int e = (int)((a[i] >> c) & 0xFF) - (int)((b[i] >> c) & 0xFF);
+                    uint32_t m = (uint32_t)(e < 0 ? -e : e);
+
+                    worst = m > worst ? m : worst;
+                }
+                max = worst > max ? worst : max;
+                pixels += worst > 1;
+            }
+            printf("vblank %llu: the displayed buffer (FBP %u) differs in %u of %zu pixels by more than 1, at most %u\n",
+                   (unsigned long long)vblank, rect.bp / 32, pixels, n, max);
+            if (r->frames) {
+                char name[64];
+
+                snprintf(name, sizeof(name), "vblank_%06llu_gs.png", (unsigned long long)vblank);
+                write_png(r, name, a, rect.w, rect.h);
+                snprintf(name, sizeof(name), "vblank_%06llu_native.png", (unsigned long long)vblank);
+                write_png(r, name, b, rect.w, rect.h);
+            }
+            free(a);
+            free(b);
+        }
+    }
     if ((r->render & RENDER_GS) &&
         port_gs_backend_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) && r->frames) {
         port_video_dump(&r->frame, vblank);
