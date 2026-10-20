@@ -189,7 +189,8 @@ What it knowingly does otherwise, found with `kf4-gsreplay --compare-renderers`:
 | Blending by As with As above 0x80 | Vulkan's blend factor clamps at 1.0 (for draws blended by the fixed-function unit) | 2.0 |
 | DATE (the destination alpha test) | tested against a copy of the target taken before the draw: overlapping primitives of one draw do not see each other's alpha | per pixel as drawn |
 | Points and lines | not drawn (the game draws neither) | drawn |
-| Field-mode scanout (title, menus, movies) | the two fields woven line by line, the picture not moved | paraLLEl-GS's deinterlacer and its NTSC crop: the picture sits a pixel or two apart |
+| Field-mode scanout (title, menus, movies) | the two fields woven line by line | paraLLEl-GS's deinterlacer: the same picture, within 3 a channel |
+| Flames and other tiny perspective-textured effects (program 0x700) | S/Q in 32-bit floats | the GS's precision: a few pixels of a flame differ, and the frame-to-frame smear spreads them a little |
 
 A renderer under the game's draw layer, as ico-pc has:
 - The four VU1 programs become shaders that read the game's own vertex data. Each has a CPU
