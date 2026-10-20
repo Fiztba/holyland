@@ -2719,17 +2719,21 @@ void ring_put(uint32_t type, int32_t arg, const void *data, size_t size, uint32_
     }
 }
 
-// At exit: the GS's thread stops before the GS's objects are destroyed (what was sent and not done yet
-// is left)
+// At exit: the GS's thread stops before the GS's objects are destroyed, once it has done what was sent
+// (two seconds at most: what is left then stays undone)
 void ring_stop() {
     Ring &q = *ring;
+    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (q.tail.load() != q.head.load() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     q.stop.store(true);
     {
         std::lock_guard<std::mutex> hold(q.lock);
         q.wake.notify_one();
         q.done.notify_all();
     }
-    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (!q.stopped.load() && std::chrono::steady_clock::now() < until) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
