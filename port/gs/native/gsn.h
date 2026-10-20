@@ -19,7 +19,11 @@ extern "C" {
 /* Starts it: on the Vulkan context paraLLEl-GS made (a Vulkan::Context *, to run beside it and compare)
    or, with NULL, on one of its own. 0 if there is no Vulkan device it can use. */
 int gsn_open(void *shared_context);
+/* GIF packets and vblanks (without a picture wanted) are worked on by the native GS's own thread; the
+   functions that give something back wait for it to have done all that was sent before */
 void gsn_gif(int path, const void *data, size_t bytes);
+/* Waits until the native GS's thread has done all that was sent to it */
+void gsn_wait(void);
 void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
    into frame when want_pixels (1 if there is one) */

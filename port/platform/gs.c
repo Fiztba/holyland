@@ -662,6 +662,7 @@ void port_gs_print_stats(void) {
     if (have_native) {
         const GsnStats *s = &gsn_stats;
 
+        gsn_wait();
         fprintf(stderr,
                 "[stats] native GS: %llu draws, %llu triangles, %llu render passes, %llu shader blends, %llu target "
                 "copies, %llu write-backs; %llu textures decoded (%llu texels), %llu found again; %llu uploads (%.1f MB, %llu found in VRAM already, %llu copied in whole)\n",

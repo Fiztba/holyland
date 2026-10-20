@@ -26,14 +26,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include "context.hpp"
 #include "device.hpp"
+#include "thread_id.hpp"
 
 extern "C" {
 #include "port/gs_capture_format.h"
@@ -2532,6 +2537,152 @@ void reset_gs() {
     gs->transfer_dir = 3;
 }
 
+// ---- The GS's own thread ------------------------------------------------------------------------
+// The native GS works on a thread of its own, as the GS is a chip of its own: what is sent to it (GIF
+// packets, vblanks) is copied into a ring, and its thread takes it from there while the thread that
+// sent it (the DMA controller's) goes on with VU1's programs and the next packets. Whatever wants
+// something back (a read-back, a picture to show, the GS's state) first waits until the ring is
+// empty and the GS's thread idle, then does it on its own thread. (KF4_GSN_THREAD=0: no thread, all
+// of it done as it is sent.)
+enum : uint32_t { RING_GIF, RING_VSYNC, RING_SKIP };
+
+// A record in the ring: this header, then its bytes, padded to 16
+struct RingRecord {
+    uint32_t type;
+    uint32_t size;
+    int32_t arg;
+    uint32_t unused;
+};
+static_assert(sizeof(RingRecord) == 16, "a ring record's header is a qword");
+
+const size_t ring_bytes = size_t(64) << 20; // (a power of two)
+// the display registers gsn_vsync reads: PMODE to DISPLAY2, a register every 16 bytes
+const size_t vsync_bytes = 11 * 16;
+
+struct Ring {
+    std::vector<uint8_t> bytes;
+    std::atomic<uint64_t> head{0}; // bytes put in (the sender's)
+    std::atomic<uint64_t> tail{0}; // bytes done (the GS thread's)
+    std::atomic<bool> gs_sleeping{false}, sender_waiting{false};
+    std::mutex lock;
+    std::condition_variable wake; // the GS's thread, when there is something to do
+    std::condition_variable done; // the sender, when the GS's thread has done something
+};
+
+Ring *ring; // (none: no thread)
+
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+
+void ring_work(const RingRecord &r, const uint8_t *data) {
+    if (r.type == RING_GIF) {
+        Timer timer(gsn_stats.ns_gif);
+        gif(r.arg, data, r.size);
+    } else if (r.type == RING_VSYNC) {
+        uint64_t privileged[vsync_bytes / 8];
+        memcpy(privileged, data, vsync_bytes);
+        vsync_now(privileged, r.arg, 0, nullptr);
+    }
+}
+
+void ring_thread() {
+    Util::register_thread_index(0); // (Granite's command pools: the sender's when it does the work)
+    Ring &q = *ring;
+    for (;;) {
+        uint64_t tail = q.tail.load(std::memory_order_relaxed);
+        if (q.head.load(std::memory_order_acquire) == tail) {
+            // nothing to do: a while spinning (packets come in bursts), then asleep
+            auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(200);
+            while (q.head.load(std::memory_order_acquire) == tail && std::chrono::steady_clock::now() < until) {
+                std::this_thread::yield();
+            }
+            if (q.head.load(std::memory_order_acquire) == tail) {
+                std::unique_lock<std::mutex> hold(q.lock);
+                q.gs_sleeping.store(true);
+                while (q.head.load() == tail) {
+                    q.wake.wait(hold);
+                }
+                q.gs_sleeping.store(false);
+            }
+            continue;
+        }
+        const uint8_t *at = q.bytes.data() + (tail & (ring_bytes - 1));
+        RingRecord r;
+        memcpy(&r, at, sizeof(r));
+        ring_work(r, at + sizeof(r));
+        q.tail.store(tail + sizeof(r) + ((size_t(r.size) + 15) & ~size_t(15)));
+        if (q.sender_waiting.load()) {
+            std::lock_guard<std::mutex> hold(q.lock);
+            q.done.notify_all();
+        }
+    }
+}
+
+// The sender: waits until the GS's thread has done all but `room` bytes of the ring's
+void ring_wait(size_t room) {
+    Ring &q = *ring;
+    uint64_t head = q.head.load(std::memory_order_relaxed);
+    auto done = [&] { return head - q.tail.load() <= ring_bytes - room; };
+    if (done()) {
+        return;
+    }
+    // a short wait spinning, a long one asleep
+    auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(100);
+    while (!done() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::yield();
+    }
+    if (!done()) {
+        std::unique_lock<std::mutex> hold(q.lock);
+        q.sender_waiting.store(true);
+        while (!done()) {
+            q.done.wait(hold);
+        }
+        q.sender_waiting.store(false);
+    }
+}
+
+// The sender: all that was sent, done
+void ring_idle() {
+    if (ring) {
+        ring_wait(ring_bytes);
+    }
+}
+
+void ring_put(uint32_t type, int32_t arg, const void *data, size_t size) {
+    Ring &q = *ring;
+    size_t padded = (size + 15) & ~size_t(15);
+    size_t need = sizeof(RingRecord) + padded;
+    uint64_t head = q.head.load(std::memory_order_relaxed);
+    size_t at = head & (ring_bytes - 1);
+    if (at + need > ring_bytes) {
+        // no room before the ring's end: the rest of it skipped
+        ring_wait(ring_bytes - at);
+        RingRecord skip = {RING_SKIP, uint32_t(ring_bytes - at - sizeof(RingRecord)), 0, 0};
+        memcpy(q.bytes.data() + at, &skip, sizeof(skip));
+        head += ring_bytes - at;
+        q.head.store(head);
+        at = 0;
+    }
+    ring_wait(need);
+    RingRecord r = {type, uint32_t(size), arg, 0};
+    memcpy(q.bytes.data() + at, &r, sizeof(r));
+    memcpy(q.bytes.data() + at + sizeof(r), data, size);
+    q.head.store(head + need);
+    if (q.gs_sleeping.load()) {
+        std::lock_guard<std::mutex> hold(q.lock);
+        q.wake.notify_one();
+    }
+}
+
+void ring_start() {
+    const char *on = getenv("KF4_GSN_THREAD");
+    if (on && atoi(on) == 0) {
+        return;
+    }
+    ring = new Ring();
+    ring->bytes.resize(ring_bytes);
+    std::thread(ring_thread).detach();
+}
+
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
@@ -2573,15 +2724,32 @@ extern "C" int gsn_open(void *shared_context) {
     transfer_barrier();
     submit(true);
     fprintf(stderr, "[gsn] the native GS on %s\n", gs->device->get_gpu_properties().deviceName);
+    ring_start();
     return 1;
 }
 
 extern "C" void gsn_gif(int path, const void *data, size_t bytes) {
+    if (ring) {
+        // (a packet bigger than a quarter of the ring goes in pieces: the GIF reads it qword by qword)
+        const uint8_t *p = static_cast<const uint8_t *>(data);
+        while (bytes > ring_bytes / 4) {
+            ring_put(RING_GIF, path, p, ring_bytes / 4);
+            p += ring_bytes / 4;
+            bytes -= ring_bytes / 4;
+        }
+        ring_put(RING_GIF, path, p, bytes);
+        return;
+    }
     Timer timer(gsn_stats.ns_gif);
     gif(path, static_cast<const uint8_t *>(data), bytes);
 }
 
+extern "C" void gsn_wait(void) {
+    ring_idle();
+}
+
 extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
+    ring_idle();
     size_t bytes = size_t(qwords) * 16;
     size_t have = gs->readback.size() > gs->readback_at ? gs->readback.size() - gs->readback_at : 0;
     size_t n = std::min(bytes, have);
@@ -2590,7 +2758,8 @@ extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
     gs->readback_at += n;
 }
 
-extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+namespace {
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
     Timer timer(gsn_stats.ns_vsync);
     flush_batch();
     // a register every 16 bytes: PMODE, SMODE1, SMODE2, ..., DISPFB1, DISPLAY1, DISPFB2, DISPLAY2
@@ -2674,6 +2843,16 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
     }
     return ok;
 }
+} // namespace
+
+extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+    if (ring && !want_pixels) {
+        ring_put(RING_VSYNC, field, privileged, vsync_bytes);
+        return 0;
+    }
+    ring_idle();
+    return vsync_now(privileged, field, want_pixels, frame);
+}
 
 extern "C" void gsn_set_scale(int scale) {
     wanted_scale = uint32_t(scale < 1 ? 1 : scale > 4 ? 4 : scale);
@@ -2684,6 +2863,7 @@ extern "C" int gsn_display_rect(const uint64_t *privileged, GsnRect *rect) {
 }
 
 extern "C" void gsn_read_rect(const GsnRect *r, uint32_t *rgba) {
+    ring_idle();
     flush_batch();
     read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba);
     submit(false);
@@ -2699,6 +2879,7 @@ extern "C" void gsn_decode_rect(const uint8_t *vram, const GsnRect *r, uint32_t 
 }
 
 extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
+    ring_idle();
     flush_batch();
     Target *t = find_target(r->bp, r->bw, r->psm);
     if (t && t->scale == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
@@ -2724,6 +2905,7 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
 }
 
 extern "C" const void *gsn_vram(void) {
+    ring_idle();
     flush_batch();
     for (auto &t : gs->targets) {
         write_back(*t);
@@ -2753,6 +2935,7 @@ extern "C" size_t gsn_state_size(void) {
 }
 
 extern "C" void gsn_state(PortStateIo *io) {
+    ring_idle();
     if (!io->loading) {
         port_state_bytes(io, const_cast<void *>(gsn_vram()), GSN_VRAM_BYTES);
     } else {
@@ -2782,6 +2965,7 @@ extern "C" void gsn_state(PortStateIo *io) {
 }
 
 extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
+    ring_idle();
     switch (type) {
     case KF4GS_VRAM:
         if (size != GSN_VRAM_BYTES) {
