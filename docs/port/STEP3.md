@@ -12,11 +12,19 @@ timings of the step 2 path, and how ico-pc built its renderer.
 
 ## Progress (October 2026)
 
-- **Stage 0, mostly done.** `--renderer gs|native|both`, the Debug page's switch and
+- **Stage 0, done.** `--renderer gs|native|both`, the Debug page's switch and
   `settings.json`; with `both`, the displayed frame buffers compared every vblank (the overlay and
-  `--stats`). `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank).
-  Not done: the presenter on Granite's WSI and ImGui on Vulkan (the native GS's picture still goes
-  through the CPU to SDL, as paraLLEl-GS's does). Interlace settled: in play and the in-game menus
+  `--stats`), and shown as a heat map (the renderer section's "Show where they differ",
+  `--renderer-shown heatmap`; computed from the pixels the comparison reads on the CPU).
+  `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank). The presenter
+  on Vulkan, opt-in: `--presenter vulkan` (the Debug page, `settings.json` `display.presenter`)
+  makes the window's swapchain (through SDL_Vulkan_CreateSurface, not Granite's WSI) on the native
+  GS's device; the native GS copies the displayed buffer on the GPU into an image (field mode woven
+  there) which is blitted into the window, and the overlay and the mouse indicator are drawn with
+  ImGui's Vulkan backend (`port/platform/present_vk.cpp`). No read-back: 2,000 vblanks windowed at
+  4x went from 16-22 s to 8.1-8.2 s, at 1x from 7.6 s to 7.2-7.6 s. paraLLEl-GS keeps
+  SDL_Renderer (`--renderer gs` falls back to it); with `both` the paraLLEl-GS picture is uploaded.
+  `sdl` stays the default until the Vulkan one has been played with. Interlace settled: in play and the in-game menus
   draw one 448-line frame (SMODE2 FFMD 0); the title, the memory card screens and the movies draw
   224-line fields, FBP 0 and 0x46 in turn.
 - **Stages 1 and 2, working.** The native GS (`port/gs/native/`) draws the whole game from the VU1
@@ -62,10 +70,9 @@ timings of the step 2 path, and how ico-pc built its renderer.
 - **Uploads on the GPU.** The swizzle runs on the CPU (and is mostly skipped now: uploads seen before
   are copied in as pages). A compute pass writing a GPU copy of VRAM, with textures read from it,
   would take the rest off the CPU and remove the write-backs.
-- **The presenter on Vulkan.** The picture still goes to the window through the CPU, as
-  paraLLEl-GS's does; at 4x that is 18 MB a vblank, which the measurements show is affordable. A
-  swapchain on the native GS's device would need the overlay and the on-screen controls (both drawn
-  with SDL_Renderer today) on Vulkan too.
+- **The Vulkan presenter as the default.** Done as an opt-in (`--presenter vulkan`, Progress above);
+  the default can change once it has been played with. paraLLEl-GS's picture could go the same way
+  (uploaded, or its image on a shared device) so that `--renderer gs` needs no SDL_Renderer either.
 - **VU1 on the GPU.** The C programs (stage 3) take VU1 from two thirds of the run's time to a
   sixth; shaders would take the rest, at the cost of a second implementation to keep bit for bit.
 
