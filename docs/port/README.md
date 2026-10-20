@@ -303,8 +303,11 @@ picture of its own: the frame the game has just drawn (shown at the next vblank)
   pictures between as well, but its picture of a vblank weaves in the field of the vblank before, so
   each of its pictures mixes two of the game's; and the game's own turn smear
   (`Game_ShiftScreenByViewTurn`, which moves one field by the turn) adds to the move.
-- The cost is the GS's: each frame is drawn twice (VU1 is not run again). 2,200 vblanks (new game, map 099), headless
-  with `--fast`: 5.0 s to 6.8 s on a Ryzen 9 9900X3D.
+- The cost is the GS's: each frame is drawn twice (VU1 is not run again). 2,030 vblanks (new game, map 000),
+  headless with `--fast`: 2.15 s to 2.57 s on a Ryzen 9 9900X3D.
+- Both presenters show every vblank's picture in turn, evenly (`--stats` counts what reached the window).
+  At `--native-scale` above 1 the game's own frames differ from the switch off in a few strips at the
+  top and left edges, where the native GS's picture depends on its targets' history anyway (STEP3.md).
 - Off, nothing changes: the game queues no marks and the GS front end keeps nothing; the frame and boot
   tests and `--stats`' PATH1 hash are as without the switch. On, the game's own frames (the even
   vblanks) are still the same pixels, byte for byte; only the pictures between are new.

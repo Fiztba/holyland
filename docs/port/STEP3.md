@@ -402,6 +402,12 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
 - The frame drawn is shown at 2k + 2 as before.
 - The camera half way: the rotation by quaternion slerp, the position half way. A turn of more than
   0.8 radians or a move of more than 400 units is a cut: not interpolated.
+- With the native GS on its own thread, the replay's packets go into its ring like the game's, ahead
+  of the vblank's scanout, so its thread draws the picture between and hands it to the window as
+  that vblank's (`GSN_PRESENT`); MSAA targets are resolved by the same draws.
+- The window shows the pictures in the order they come, up to two waiting
+  (`port/platform/video.c`): with every vblank's picture its own, one that the GS's thread hands over
+  just after a vblank's present is shown at the next vblank instead of being replaced.
 - Nothing of it is left behind:
   - the next clear wipes the buffer shown;
   - the other targets are drawn again from the same packets;
@@ -412,20 +418,38 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
 **Checked.**
 - With the switch on, the game's own pictures (the even vblanks) are byte for byte those of a build
   without the change. Native GS, in play on maps 099, 000, 008, 009, 035 and 112, and through the title,
-  the opening, a teleport and the menus; with `--widescreen` too.
+  the opening, a teleport and the menus; with `--widescreen` too, and with `--native-msaa 4`.
+- At `--native-scale 2` (or `--native-widescreen`) the game's own pictures differ from the switch off
+  in about 4,000 of 1.1 million pixels (at most 35), all in the top rows and a strip at the left edge,
+  where the turn smear reads past the picture. The native GS's picture there depends on what its targets
+  held before at scales above 1: with the switch off, a run loaded from a state at vblank 1990 differs
+  from the run that went on in the same strips (7,398 pixels, at most 252). The pictures between move
+  half way at every scale (map 000: 15.5 then 14.5 px of 30.5 at 2x).
 - With `KF4_INTERP_STILL=1` (the frame's own camera) the picture between equals the next vblank's,
   within 2 on a few dozen pixels.
 - Turning on map 000 the picture moves 7.5 px, then 7 px, where the game's frames move 14.5. A save
   state taken with it on loads with it on or off.
-- Off: boot_test and frame_test as before (the logs and the 52 pictures the same as main's), `--stats`'
-  PATH1 hash and VU1 cycles the same, vu1_test and the gsn tests pass.
-- Cost: the GS draws each frame twice; 2,200 vblanks headless went from 5.0 s to 6.8 s.
+- Off: boot_test and frame_test as before (the logs and the 52 pictures the same as the build without
+  the change), `--stats`' PATH1 hash and VU1 cycles the same, vu1_test passes, gsn_draw_test's 300
+  cases and 300 shared-memory rounds pass, and the map tour's replay
+  (`kf4-gsreplay --compare-renderers`) gives the same differences on every map (366,070 pixels in all).
+- The window, not `--fast`, turning on map 000 for 410 vblanks: with either presenter 408 or 409 of the
+  vblanks show a new picture one vblank after the last (16.7 ms apart, sd 1.0 to 1.7 ms), and none or two
+  of the 410 pictures are replaced before they are shown. Before the window kept two, SDL's presenter
+  lost 11 of them with the switch on (48 with it off). `--stats` prints these counts.
+- Cost: the GS draws each frame twice. 2,030 vblanks headless (new game, map 000), on the GS's thread:
+  2.15 s to 2.57 s at 1x, 2.42 s to 2.80 s at 2x, 2.50 s to 3.09 s at 2x with `--native-widescreen` and
+  `--native-msaa 8`.
 
 **Latency.**
 - Nothing is shown later than on the PS2: the frame the game drew is shown at the same vblank.
 - The picture between shows half of the camera's next move one vblank early.
 - Turning from standing (map 000): the first picture that moves is the fifth vblank after the pad's
   input with the switch on, the sixth off.
+- The window: with SDL's presenter the GS's thread hands most pictures over just after the game's
+  thread has shown a vblank's (the pixels are read back first), so most are shown a vblank later, as
+  before; the window now shows each in turn instead of skipping one when two arrive together. With the
+  Vulkan presenter nearly all are there in time.
 
 **What is left.**
 - **Things that move by themselves** move at 30 Hz: enemies, NPCs, effects, the arm, animated textures,
@@ -450,6 +474,7 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
   than one replay a frame (each a fraction of the way), and a presenter that shows them at the
   screen's rate.
 
+## Testing
 
 - **The live diff** (stage 0): both renderers on, the difference per frame in the overlay and the
   log; `--compare-renderers` in headless runs, failing above a threshold.
