@@ -92,6 +92,9 @@ static void open_backend(void *unused) {
         have_native = gsn_open(NULL);
         if (have_native) {
             gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
+            if (port_options.native_msaa > 1) {
+                port_options.native_msaa = gsn_set_msaa(port_options.native_msaa);
+            }
         }
     }
     backend = have_gs || have_native;
@@ -738,6 +741,16 @@ void port_gs_set_native_scale(int scale) {
 #endif
 }
 
+int port_gs_set_native_msaa(int samples) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        samples = gsn_set_msaa(samples);
+    }
+#endif
+    port_options.native_msaa = samples;
+    return samples;
+}
+
 /* --native-widescreen: the widescreen picture is the GS's 640x448 shown at 16:9, its 3D drawn with a
    16:9 field of view and its 2D squeezed (above). The native GS draws it as it is, only with more
    pixels across than down: 4/3 of --native-scale, rounded up (1x: 2, 2x: 3, 3x: 4, exactly 4/3; 4x: 6),
@@ -775,6 +788,10 @@ void port_gs_print_stats(void) {
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
+        if (s->ms_resolves || s->ms_loads) {
+            fprintf(stderr, "[stats] native GS MSAA: %llu resolves, %llu loads into the multisampled images\n",
+                    (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads);
+        }
         fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
                 (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,
                 (unsigned long long)s->pool_mb, (unsigned long long)s->upload_copies);

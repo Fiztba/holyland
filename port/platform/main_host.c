@@ -24,6 +24,8 @@
        --native-widescreen
                          with --widescreen, the native GS draws the 16:9 picture wider still, with
                          square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6)
+       --native-msaa N   the native GS draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
+                         by default): its edges smoothed
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): interp (the interpreter, the default), hle (the same
                          results to the bit, computed directly: faster; port/platform/vu1_hle*.c)
@@ -132,7 +134,7 @@ static void usage(const char *program) {
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native|heatmap]\n"
-            "          [--presenter sdl|vulkan] [--native-scale 1-4] [--native-widescreen]\n"
+            "          [--presenter sdl|vulkan] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
             "          [--vu1 interp|hle|check]\n",
             program);
     exit(2);
@@ -157,6 +159,7 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.native_scale = 1;
+    port_options.native_msaa = 1;
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
         const char *value = i + 1 < argc ? argv[i + 1] : NULL;
@@ -262,6 +265,14 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_scale_forced = 1;
+        } else if (strcmp(option, "--native-msaa") == 0) {
+            port_options.native_msaa = atoi(value);
+            if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
+                port_options.native_msaa != 8) {
+                fprintf(stderr, "--native-msaa wants 1, 2, 4 or 8, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_msaa_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;

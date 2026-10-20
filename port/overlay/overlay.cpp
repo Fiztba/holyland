@@ -702,6 +702,22 @@ void renderer_section() {
                 "square ones, instead of the 640 columns the PS2 has stretched to 16:9 (at 1x 1280x448,\n"
                 "2x 1920x896, 3x 2560x1344, 4x 3840x1792). The picture is the same, sharper across.\n"
                 "Without widescreen it changes nothing. (--native-widescreen)");
+        static const char *const msaa_names[] = {"Off", "2x", "4x", "8x"};
+        int msaa_at = port_settings.native_msaa >= 8 ? 3 : port_settings.native_msaa >= 4 ? 2 : port_settings.native_msaa >= 2 ? 1 : 0;
+        if (ImGui::Combo("Native GS anti-aliasing (MSAA)", &msaa_at, msaa_names, 4)) {
+            port_settings.native_msaa = 1 << msaa_at;
+            port_gs_set_native_msaa(port_settings.native_msaa);
+            port_settings_changed();
+        }
+        if (port_settings.native_msaa != port_options.native_msaa) {
+            ImGui::TextDisabled("This run: %s (from one count to another takes a restart, or the GPU has fewer)",
+                                port_options.native_msaa > 1 ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
+                                                             : "Off");
+        }
+        tooltip("The native GS draws the 3D with this many samples a pixel, which smooths its edges (the 2D,\n"
+                "the passes over the whole frame and the alpha test's cut-outs stay as they are). Off is the\n"
+                "PS2's picture. Costs GPU time, more with the resolution above. Off and back on is live;\n"
+                "from one count to another takes a restart. (--native-msaa)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan)"};
     int presenter = port_video_presenter();

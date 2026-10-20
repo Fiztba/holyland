@@ -45,6 +45,11 @@ typedef struct {
        instead of 640 columns stretched. Off by default; live from the overlay. */
     int native_widescreen;
     int native_widescreen_forced;
+    /* --native-msaa: the native GS draws the 3D with this many samples a pixel (1, the default: none,
+       the PS2's picture; 2, 4 or 8), its edges smoothed. Live from the overlay (but for a change from
+       one count to another, which takes a restart). */
+    int native_msaa;
+    int native_msaa_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_INTERP, the interpreter, is the default;
        PORT_VU1_HLE computes the same results directly, to the bit (faster); PORT_VU1_CHECK runs
@@ -257,6 +262,9 @@ void port_gs_set_native_scale(int scale);
 /* The native GS's scale across: native_scale, or with --native-widescreen (and widescreen on) the
    smallest whole number at least 4/3 of it */
 int port_gs_native_scale_x(void);
+/* The native GS's MSAA (port_options.native_msaa), from the next vblank; returns the count the GPU
+   gives (see gsn_set_msaa) */
+int port_gs_set_native_msaa(int samples);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {

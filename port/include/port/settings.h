@@ -32,6 +32,7 @@ typedef struct {
     int renderer;          /* who draws, from the next start: PORT_RENDERER_ (port_options.renderer) */
     int native_scale;      /* the native GS's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
     int native_widescreen; /* with widescreen, the native GS's picture drawn wider (port_options.native_widescreen) */
+    int native_msaa;       /* the native GS's samples a pixel for the 3D: 1, 2, 4, 8 (port_options.native_msaa) */
     int presenter;         /* how the picture reaches the window, from the next start: PORT_PRESENTER_ */
     /* Audio */
     int volume;            /* 0 to 100 */
