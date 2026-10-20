@@ -656,6 +656,8 @@ typedef struct {
     const char *out;
     int frames;
     PortGsFrame frame;
+    PortGsFrame native_frame; /* --compare-renderers: the native GS's picture of a vblank */
+    uint32_t scanouts, scanouts_differ, scanout_worst; /* and how the pictures compared */
     uint32_t last_pixel_colour, last_pixel_z;
     int pixel_seen;
 } Run;
@@ -941,9 +943,43 @@ static void compare_display(Run *r, const uint64_t *priv, const char *when, uint
     }
 }
 
+/* --compare-renderers: the pictures of a vblank (the scanouts: each renderer's read of the display,
+   field by field or whole, deinterlaced) */
+static void compare_scanouts(Run *r, const PortGsFrame *a, const PortGsFrame *b, uint64_t vblank) {
+    size_t i, n = (size_t)a->width * a->height;
+    uint32_t max = 0, pixels = 0;
+
+    if (a->width != b->width || a->height != b->height) {
+        printf("scanout %llu: the pictures are %ux%u and %ux%u\n", (unsigned long long)vblank, a->width, a->height,
+               b->width, b->height);
+        r->scanouts++;
+        r->scanouts_differ++;
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t worst = 0;
+        int c;
+
+        for (c = 0; c < 24; c += 8) {
+            int e = (int)((a->rgba[i] >> c) & 0xFF) - (int)((b->rgba[i] >> c) & 0xFF);
+            uint32_t m = (uint32_t)(e < 0 ? -e : e);
+
+            worst = m > worst ? m : worst;
+        }
+        max = worst > max ? worst : max;
+        pixels += worst > r->threshold;
+    }
+    printf("scanout %llu: the picture (%ux%u) differs in %u of %zu pixels by more than %u, at most %u\n",
+           (unsigned long long)vblank, a->width, a->height, pixels, n, r->threshold, max);
+    r->scanouts++;
+    r->scanouts_differ += pixels != 0;
+    r->scanout_worst = max > r->scanout_worst ? max : r->scanout_worst;
+}
+
 static void vsync(Run *r, const Record *rec) {
     uint64_t vblank;
     uint32_t field;
+    int want, got_gs = 0;
 
     memcpy(&vblank, rec->data, 8);
     memcpy(&field, rec->data + 8, 4);
@@ -956,17 +992,25 @@ static void vsync(Run *r, const Record *rec) {
     if (r->compare_renderers) {
         compare_display(r, r->last_priv, "vblank", vblank);
     }
-    if ((r->render & RENDER_GS) &&
-        port_gs_backend_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) && r->frames) {
-        port_video_dump(&r->frame, vblank);
+    want = r->frames || r->compare_renderers;
+    if ((r->render & RENDER_GS) && port_gs_backend_vsync((const uint64_t *)(rec->data + 16), (int)field, want, &r->frame)) {
+        got_gs = 1;
+        if (r->frames) {
+            port_video_dump(&r->frame, vblank);
+        }
     }
-    if ((r->render & RENDER_NATIVE) && gsn_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) &&
-        r->frames) {
+    if ((r->render & RENDER_NATIVE) &&
+        gsn_vsync((const uint64_t *)(rec->data + 16), (int)field, want, &r->native_frame) && want) {
         char name[64];
 
-        snprintf(name, sizeof(name), (r->render & RENDER_GS) ? "frame_%06llu_native.png" : "frame_%06llu.png",
-                 (unsigned long long)vblank);
-        port_video_dump_named(&r->frame, name);
+        if (r->frames) {
+            snprintf(name, sizeof(name), (r->render & RENDER_GS) ? "frame_%06llu_native.png" : "frame_%06llu.png",
+                     (unsigned long long)vblank);
+            port_video_dump_named(&r->native_frame, name);
+        }
+        if (r->compare_renderers && got_gs) {
+            compare_scanouts(r, &r->frame, &r->native_frame, vblank);
+        }
     }
 }
 
@@ -1206,6 +1250,8 @@ static void run_capture(Run *r) {
                 compare_display(r, other, "end-other", r->last_vblank);
             }
         }
+        printf("scanouts: %u pictures compared, %u differ by more than %u, at most %u\n", r->scanouts,
+               r->scanouts_differ, r->threshold, r->scanout_worst);
     }
     if (r->mode == MODE_VIF) {
         printf("VIF1 -> VU1: %llu packets as recorded, %llu differ, %llu recorded but not made, %llu made but not "
@@ -1507,6 +1553,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "native GS: MSAA %dx\n", gsn_set_msaa(msaa));
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+        run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
     if (show_info && !list && !run.render && vertices < 0 && compare_file == NULL && run.mode == MODE_GIF) {
         return 0;
