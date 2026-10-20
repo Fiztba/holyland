@@ -1239,6 +1239,17 @@ void flush_batch() {
         return;
     }
     gs->tick++;
+    // what the decisions below need of the vertices, in one pass over them: their Z's range, the
+    // largest alpha, the rows they reach
+    uint32_t zmin = UINT32_MAX, zmax = 0, as_max = 0;
+    float vy0 = gs->verts[0].y, vy1 = vy0;
+    for (const Vtx &v : gs->verts) {
+        zmin = std::min(zmin, v.z);
+        zmax = std::max(zmax, v.z);
+        as_max = std::max(as_max, v.rgba >> 24);
+        vy0 = std::min(vy0, v.y);
+        vy1 = std::max(vy1, v.y);
+    }
     uint32_t prim = gs->batch_prim;
     uint32_t ctxt = (prim >> 9) & 1;
     bool tme = (prim >> 4) & 1, fge = (prim >> 5) & 1, abe = (prim >> 6) & 1, fst = (prim >> 8) & 1;
@@ -1287,10 +1298,6 @@ void flush_batch() {
     bool any_zwrite = !zmsk && (!ate || atst != 0 || afail == 2);
     bool always_passes = ztst == 1;
     if (ztst == 2) {
-        uint32_t zmin = UINT32_MAX;
-        for (const Vtx &v : gs->verts) {
-            zmin = std::min(zmin, v.z);
-        }
         always_passes = std::min(zmin, depth_max(zpsm)) == depth_max(zpsm);
     }
     bool need_depth = !(always_passes && !any_zwrite);
@@ -1468,10 +1475,6 @@ void flush_batch() {
     // Blending by an As above 0x80 (2.0): Vulkan's blend factor (and the alpha out that stands for it)
     // stops at 1.0. The largest As the batch can make, from its vertices and what is known of the
     // texture's alpha (a CLUT's entries, TEXA for 24 and 16-bit texels):
-    uint32_t as_max = 0;
-    for (const Vtx &v : gs->verts) {
-        as_max = std::max(as_max, v.rgba >> 24);
-    }
     if (tme && bits(tex0, 34, 1)) { // TCC
         uint32_t tpsm = bits(tex0, 20, 6);
         if (tpsm == GSN_PSMCT24) {
@@ -1513,12 +1516,7 @@ void flush_batch() {
     push.misc |= s << M_SCALE_SHIFT;
     // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
     // and keeps each pixel's within the format, where clamping the vertices would tilt the plane
-    bool zclamp = false;
-    if (depth) {
-        for (const Vtx &v : gs->verts) {
-            zclamp = zclamp || v.z > depth_max(zpsm);
-        }
-    }
+    bool zclamp = depth && zmax > depth_max(zpsm);
     if (zclamp) {
         push.misc |= M_ZCLAMP;
     }
@@ -1672,11 +1670,6 @@ void flush_batch() {
         }
     }
     // the rows the batch can have drawn into (its vertices' within the scissor, a row more each way)
-    float vy0 = gs->verts[0].y, vy1 = vy0;
-    for (const Vtx &v : gs->verts) {
-        vy0 = std::min(vy0, v.y);
-        vy1 = std::max(vy1, v.y);
-    }
     uint32_t dirty0 = uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
     uint32_t dirty1 = uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
     mark_dirty(*color, dirty0, dirty1);
