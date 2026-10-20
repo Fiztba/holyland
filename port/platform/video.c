@@ -44,7 +44,8 @@ static pthread_mutex_t frame_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static uint32_t *latest;
 static uint32_t latest_width, latest_height;
-static int latest_new;
+static int latest_new;   /* (read without the lock by port_video_present's wait) */
+static int last_fresh;   /* the window's last present had a new picture */
 static int latest_image; /* the newest picture is the native GS's image on the GPU, not latest */
 static int presenter = PORT_PRESENTER_SDL;
 
@@ -56,14 +57,14 @@ void port_video_submit(const PortGsFrame *frame) {
     memcpy(latest, frame->rgba, sizeof(uint32_t) * frame->width * frame->height);
     latest_width = frame->width;
     latest_height = frame->height;
-    latest_new = 1;
+    __atomic_store_n(&latest_new, 1, __ATOMIC_RELEASE);
     latest_image = 0;
     UNLOCK();
 }
 
 void port_video_submit_image(void) {
     LOCK();
-    latest_new = 1;
+    __atomic_store_n(&latest_new, 1, __ATOMIC_RELEASE);
     latest_image = 1;
     UNLOCK();
 }
@@ -254,6 +255,18 @@ void port_video_present(void) {
     if (window == NULL) {
         return;
     }
+    /* The picture of the vblank just begun comes from the renderer's thread about when this one wakes
+       for it, sometimes a little after: shown at the next vblank instead, it was shown twice and the
+       next one never (two in one vblank, the older dropped). So while pictures are coming (the last
+       present had one), the window waits for it, up to half a vblank; not with --fast, which does not
+       wait for the renderer (it is held at most two vblanks behind, gsn_vsync). */
+    if (!port_options.fast && last_fresh) {
+        double until = port_wall_seconds() + 0.5 / 59.94;
+
+        while (!__atomic_load_n(&latest_new, __ATOMIC_ACQUIRE) && port_wall_seconds() < until) {
+            port_sleep(0.00025);
+        }
+    }
     LOCK();
     fresh = latest_new;
     image = latest_image;
@@ -264,6 +277,7 @@ void port_video_present(void) {
     }
     latest_new = 0;
     UNLOCK();
+    last_fresh = fresh;
 #ifdef KF4_HAVE_VULKAN_PRESENTER
     if (presenter == PORT_PRESENTER_VULKAN) {
         /* (the presenter draws again with nothing new only for the overlay, as below) */
