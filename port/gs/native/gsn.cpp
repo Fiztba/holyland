@@ -2285,10 +2285,12 @@ struct ScanoutImage {
 ScanoutImage scanout_image;
 bool present_wanted; // gsn_enable_present
 
-// The surface extensions the Vulkan loader has (VK_KHR_surface and each platform's: SDL picks one)
+// The surface extensions the Vulkan loader has (VK_KHR_surface and each platform's: SDL picks one;
+// VK_EXT_headless_surface for SDL's offscreen driver)
 void present_extensions(std::vector<const char *> &instance_ext, std::vector<const char *> &device_ext) {
     static const char *const surfaces[] = {"VK_KHR_win32_surface", "VK_KHR_xlib_surface", "VK_KHR_xcb_surface",
-                                           "VK_KHR_wayland_surface", "VK_EXT_metal_surface"};
+                                           "VK_KHR_wayland_surface", "VK_EXT_metal_surface",
+                                           "VK_EXT_headless_surface"};
     uint32_t count = 0;
     if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS) {
         return;
