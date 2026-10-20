@@ -135,6 +135,12 @@ int port_widescreen(void);
    the amulet slot holds. */
 int port_myus_necklace(void);
 
+/* port_invincible(): 1 while the debug option is on (--invincible, or the overlay's Debug page; never
+   saved). The player then loses no HP: hits still land, flash and knock back, but take nothing
+   (Player_LoseHp), and falls, deadly ground and scripted kills or damage do not kill. For testing
+   areas a new character could not survive; it is not a mod. */
+int port_invincible(void);
+
 /* Checks a struct's size and a field's offset against the PS2 layout written in its comments, for
    overlay and save structs: LAYOUT_SIZE(ModelHeader, 0x40); LAYOUT_OFFSET(ModelHeader, parts, 0x10); */
 #define LAYOUT_SIZE(T, size) _Static_assert(sizeof(T) == (size), #T " is not its PS2 size")
