@@ -263,6 +263,19 @@ void display_page() {
     }
     ImGui::EndDisabled();
     tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
+    bool sixty = port_options.frame_rate > 30;
+    if (ImGui::Checkbox("60 pictures a second in play", &sixty)) {
+        s.frame_rate = port_options.frame_rate = sixty ? 60 : 30;
+        changed();
+    }
+    tooltip("Off: the PS2's 30 pictures a second in play.\nOn: a picture between each two of the game's, "
+            "the world seen from the camera half\nway between them, so turning and walking look smooth. "
+            "The game still runs at 30:\nenemies and effects move 30 times a second, and the picture is "
+            "no later than off.\nThe menus are as they were. Applies at once. (--frame-rate 60)");
+    if (port_options.frame_rate != s.frame_rate) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(for this run: command line)");
+    }
     bool smooth = s.smooth != 0;
     if (ImGui::Checkbox("Smooth scaling", &smooth)) {
         s.smooth = smooth;

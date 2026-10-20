@@ -69,6 +69,11 @@ typedef struct {
     int widescreen;
     int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
     int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
+    /* The opt-in higher frame rate (port_frame_interp(), port/platform/frame_interp.c): 30 (the
+       PS2's: a picture every second vblank in play) by default, 60 with --frame-rate 60 or
+       settings.json, live from the overlay. */
+    int frame_rate;
+    int frame_rate_forced;   /* --frame-rate: this run's, whatever settings.json says */
     /* The opt-in mods (port/include/port/host.h): off by default, turned on by their switch or
        settings.json, live from the overlay. */
     int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */
@@ -238,6 +243,8 @@ uint8_t *port_vu1_data(void);
 void port_vu1_start(uint32_t address, uint32_t top, uint32_t itop);
 /* MSCNT: runs on from where the last one ended. */
 void port_vu1_continue(uint32_t top, uint32_t itop);
+/* The address (in instructions) the running or last run started at: which program XGKICKs */
+extern uint32_t port_vu1_run_pc;
 /* --vu1 */
 enum { PORT_VU1_INTERP, PORT_VU1_HLE, PORT_VU1_CHECK };
 /* --vu1 check: the runs compared, and those where the HLE and the interpreter differed (each
@@ -292,6 +299,18 @@ void port_gs_finish(void);
 int port_gs_vsync_pending(void);
 void port_gs_run_vsync(void);
 
+/* --frame-rate 60 (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to
+   the GS is kept (port_interp_keep) until the vblank; port_interp_vsync, before the vblank's
+   scanout, keeps them on when they drew the game's world into the buffer not shown, and at the vblank
+   after sends them again through send, changed, into the buffer shown (1 when it did); then
+   port_interp_reset starts the next vblank's (whole: every path is between packets).
+   port_interp_forget drops what was kept and the last frame's camera (a state was loaded). */
+void port_interp_keep(int path, const void *data, size_t bytes);
+int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes));
+void port_interp_reset(int whole);
+void port_interp_forget(void);
+void port_interp_print_stats(void);
+
 /* ---- The window (port/platform/video.c) -------------------------------------------------- */
 void port_video_init(void);
 /* (the controller's thread) the newest picture, for the window */
@@ -310,6 +329,8 @@ void port_video_dump_named(const PortGsFrame *frame, const char *name);
 int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture and keeps the window alive */
 void port_video_present(void);
+/* --stats: how the pictures reached the window */
+void port_video_print_stats(void);
 
 /* ---- The disc (port/platform/disc.c) --------------------------------------------------------
    The user's own disc, as an ISO 9660 image or as the folder it was extracted to, read by sector

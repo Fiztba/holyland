@@ -1,8 +1,9 @@
 /* The window, and --dump-frames' pictures (port/include/port/platform.h).
 
    The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread and left here;
-   at each vblank the game's thread shows the newest one in an SDL window, scaled to fit it at the
-   TV's 4:3 (or stretched, by the settings), with the settings overlay (F1) over it. That is
+   at each vblank the game's thread shows the next one (of up to two; it waits a little for one that
+   is due) in an SDL window, scaled to fit it at the TV's 4:3 (or stretched, by the settings), with
+   the settings overlay (F1) over it. That is
    SDL_Renderer's work, or with --presenter vulkan a swapchain's on the native GS's own device
    (port/platform/present_vk.cpp), which takes the native GS's picture as the image it is on the GPU
    (port_video_submit_image) and the others' pixels as they are here. A dumped frame is
@@ -10,6 +11,7 @@
    the scanout's size) whatever the window shows: with --widescreen it is the squeezed picture, to be
    shown at 16:9 (with --native-widescreen, the native GS's wider one, 4/3 or more as many pixels
    across as --native-scale gives). */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,30 +44,60 @@ static pthread_mutex_t frame_lock = PTHREAD_MUTEX_INITIALIZER;
 #define UNLOCK() pthread_mutex_unlock(&frame_lock)
 #endif
 
-static uint32_t *latest;
-static uint32_t latest_width, latest_height;
-static int latest_new;   /* (read without the lock by port_video_present's wait) */
+/* The pictures handed over and not yet shown, oldest first: two, so that one the GS's thread hands
+   over after a vblank's present (later than the present waits for it, below) is still shown, at the
+   next vblank, instead of being replaced by the next one (with --frame-rate 60 every vblank's picture
+   is its own). More than two: the oldest goes. A queue a vblank late at two presents in turn loses
+   its oldest (port_video_present), or with a picture every vblank it would stay late for good. */
+#define PICTURES 2
+static uint32_t *pictures[PICTURES];
+static uint32_t picture_width[PICTURES], picture_height[PICTURES];
+static int picture_first, picture_count;
+static int latest_image; /* the newest picture is the native GS's image on the GPU, not pictures' */
+static int latest_new;   /* (the image) */
+static int waiting;      /* pictures not yet shown, pixels or the image: read without the lock by
+                            port_video_present's wait */
 static int last_fresh;   /* the window's last present had a new picture */
-static int latest_image; /* the newest picture is the native GS's image on the GPU, not latest */
+static int behind;       /* and showed one with a newer one waiting */
 static int presenter = PORT_PRESENTER_SDL;
+
+/* --stats: how the pictures reached the window (port_video_print_stats) */
+static uint64_t stat_submitted, stat_overwritten, stat_fresh, stat_stale, stat_gaps[4];
+static double stat_last, stat_sum, stat_sum2, stat_max;
+static uint64_t stat_intervals, stat_vblanks_since, stat_behind, stat_caught_up;
 
 void port_video_submit(const PortGsFrame *frame) {
     LOCK();
-    if (latest == NULL) {
-        latest = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+    stat_submitted++;
+    if (picture_count == PICTURES) {
+        stat_overwritten++; /* the oldest is never shown */
+        picture_first = (picture_first + 1) % PICTURES;
+        picture_count--;
     }
-    memcpy(latest, frame->rgba, sizeof(uint32_t) * frame->width * frame->height);
-    latest_width = frame->width;
-    latest_height = frame->height;
-    __atomic_store_n(&latest_new, 1, __ATOMIC_RELEASE);
+    {
+        int at = (picture_first + picture_count) % PICTURES;
+
+        if (pictures[at] == NULL) {
+            pictures[at] = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+        }
+        memcpy(pictures[at], frame->rgba, sizeof(uint32_t) * frame->width * frame->height);
+        picture_width[at] = frame->width;
+        picture_height[at] = frame->height;
+        picture_count++;
+    }
+    __atomic_store_n(&waiting, picture_count, __ATOMIC_RELEASE);
     latest_image = 0;
     UNLOCK();
 }
 
 void port_video_submit_image(void) {
     LOCK();
-    __atomic_store_n(&latest_new, 1, __ATOMIC_RELEASE);
+    stat_submitted++;
+    stat_overwritten += latest_new;
+    latest_new = 1;
     latest_image = 1;
+    picture_count = 0;
+    __atomic_store_n(&waiting, 1, __ATOMIC_RELEASE);
     UNLOCK();
 }
 
@@ -107,6 +139,7 @@ static SDL_Texture *texture;
 static uint32_t texture_width, texture_height;
 static int texture_smooth;
 static uint32_t *shown;
+static uint32_t shown_width, shown_height; /* its size */
 
 /* the window's size in windowed mode: the height the settings say, and the width they say (a
    monitor's size, which the picture is fitted into) or as wide as the picture's shape (4:3, or 16:9
@@ -256,28 +289,71 @@ void port_video_present(void) {
         return;
     }
     /* The picture of the vblank just begun comes from the renderer's thread about when this one wakes
-       for it, sometimes a little after: shown at the next vblank instead, it was shown twice and the
-       next one never (two in one vblank, the older dropped). So while pictures are coming (the last
-       present had one), the window waits for it, up to half a vblank; not with --fast, which does not
-       wait for the renderer (it is held at most two vblanks behind, gsn_vsync). */
+       for it, sometimes a little after. Shown at the next vblank instead, the one before was shown
+       twice, and the pictures after it each a vblank late (queued above) until a vblank without one;
+       the image (the Vulkan presenter's) has no queue, so it was replaced, never shown. So while
+       pictures are coming (the last present had one) and none is waiting, the window waits for it, up
+       to half a vblank; not with --fast, which does not wait for the renderer (it is held at most two
+       vblanks behind, gsn_vsync). */
     if (!port_options.fast && last_fresh) {
         double until = port_wall_seconds() + 0.5 / 59.94;
 
-        while (!__atomic_load_n(&latest_new, __ATOMIC_ACQUIRE) && port_wall_seconds() < until) {
+        while (__atomic_load_n(&waiting, __ATOMIC_ACQUIRE) == 0 && port_wall_seconds() < until) {
             port_sleep(0.00025);
         }
     }
     LOCK();
-    fresh = latest_new;
     image = latest_image;
-    width = latest_width;
-    height = latest_height;
-    if (fresh && !image) {
-        memcpy(shown, latest, sizeof(uint32_t) * width * height);
+    if (image) {
+        fresh = latest_new;
+        latest_new = 0;
+    } else {
+        fresh = picture_count > 0;
+        if (picture_count > 1 && behind) {
+            /* a vblank late at the last present too: with a picture coming every vblank the queue
+               would never empty, and every picture would stay a vblank late. One is left out to
+               catch up (with the wait above, this is rare). */
+            stat_caught_up++;
+            picture_first = (picture_first + 1) % PICTURES;
+            picture_count--;
+        }
+        behind = picture_count > 1;
+        if (fresh) {
+            stat_behind += behind; /* a newer one is there already: this one is a vblank late */
+            shown_width = picture_width[picture_first];
+            shown_height = picture_height[picture_first];
+            memcpy(shown, pictures[picture_first], sizeof(uint32_t) * shown_width * shown_height);
+            picture_first = (picture_first + 1) % PICTURES;
+            picture_count--;
+        }
     }
-    latest_new = 0;
+    __atomic_store_n(&waiting, image ? 0 : picture_count, __ATOMIC_RELEASE);
+    width = shown_width;
+    height = shown_height;
     UNLOCK();
     last_fresh = fresh;
+    if (port_options.stats) {
+        /* a new picture at this vblank, or the last one again; and the wall time between new ones */
+        stat_vblanks_since++;
+        if (fresh) {
+            double now = port_wall_seconds();
+
+            stat_fresh++;
+            stat_gaps[stat_vblanks_since < 4 ? stat_vblanks_since : 3]++;
+            if (stat_last > 0) {
+                double d = now - stat_last;
+
+                stat_intervals++;
+                stat_sum += d;
+                stat_sum2 += d * d;
+                stat_max = d > stat_max ? d : stat_max;
+            }
+            stat_last = now;
+            stat_vblanks_since = 0;
+        } else {
+            stat_stale++;
+        }
+    }
 #ifdef KF4_HAVE_VULKAN_PRESENTER
     if (presenter == PORT_PRESENTER_VULKAN) {
         /* (the presenter draws again with nothing new only for the overlay, as below) */
@@ -447,6 +523,25 @@ int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint3
     free(raw);
     free(z);
     return ok;
+}
+
+void port_video_print_stats(void) {
+#ifdef KF4_HAVE_SDL
+    double mean = stat_intervals ? stat_sum / (double)stat_intervals : 0;
+    double sd = stat_intervals ? sqrt(stat_sum2 / (double)stat_intervals - mean * mean) : 0;
+
+    if (window == NULL) {
+        return;
+    }
+    fprintf(stderr,
+            "[stats] window: %llu pictures handed over, %llu of them replaced before shown; %llu vblanks showed a new "
+            "one (1, 2, 3+ vblanks after the last: %llu, %llu, %llu), %llu the last again; between new ones %.2f ms "
+            "(sd %.2f, most %.2f); %llu shown with a newer one waiting, %llu left out to catch up\n",
+            (unsigned long long)stat_submitted, (unsigned long long)stat_overwritten, (unsigned long long)stat_fresh,
+            (unsigned long long)stat_gaps[1], (unsigned long long)stat_gaps[2], (unsigned long long)stat_gaps[3],
+            (unsigned long long)stat_stale, mean * 1e3, sd * 1e3, stat_max * 1e3, (unsigned long long)stat_behind,
+            (unsigned long long)stat_caught_up);
+#endif
 }
 
 void port_video_dump(const PortGsFrame *frame, uint64_t vblank) {
