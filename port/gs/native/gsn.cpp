@@ -2297,7 +2297,9 @@ extern "C" int gsn_open(void *shared_context) {
     log_level = level ? atoi(level) : 0;
     gs->device = new Device;
     gs->device->set_context(*gs->context);
-    gs->device->init_frame_contexts(2);
+    // a frame context a vblank: with four, the CPU waits at a vblank for the GPU's work of four vblanks
+    // before (two left it waiting on the GPU with --fast, a third of the native GS's vsync time)
+    gs->device->init_frame_contexts(4);
     make_program();
 
     gs->dummy_raw = make_image(1, 1, VK_FORMAT_R8_UINT, 1, false);
