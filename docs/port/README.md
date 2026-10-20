@@ -121,7 +121,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
 | `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (step 3, [STEP3.md](STEP3.md)), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
 | `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
-| `--vu1 interp\|hle\|check` | who runs VU1's program 0x000, which draws most of the 3D: the interpreter (the default), or `hle`, the same results to the bit computed directly (a speed switch: `port/platform/vu1_hle.c`); `check` runs both and compares them run by run (`--stats` counts the differences) |
+| `--vu1 interp\|hle\|check` | who runs VU1's programs 0x000 and 0x280, which draw most of the 3D: the interpreter (the default), or `hle`, the same results to the bit computed directly (a speed switch: `port/platform/vu1_hle*.c`); `check` runs both and compares them run by run (`--stats` counts the differences) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |

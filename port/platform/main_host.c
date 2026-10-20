@@ -16,7 +16,7 @@
                          port/gs/native/) or both (side by side, their pictures compared; the
                          window shows gs's, --renderer-shown native shows the other)
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
-       --vu1 NAME        who runs VU1's program 0x000, which draws most of the 3D: interp (the
+       --vu1 NAME        who runs VU1's programs 0x000 and 0x280 (most of the 3D): interp (the
                          interpreter, the default), hle (the same results to the bit, computed
                          directly: faster; port/platform/vu1_hle.c) or check (both, compared run by run,
                          differences on stderr and counted by --stats)

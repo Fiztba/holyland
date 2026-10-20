@@ -206,7 +206,7 @@ Stage 2 before stage 3 is deliberate: with the CPU's VU1 output drawn natively, 
 the picture is the native GS's fault; once that is clean, every difference after stage 3 is the
 shaders'.
 
-### VU1 program 0x000 without the interpreter (`--vu1 hle`)
+### VU1 programs 0x000 and 0x280 without the interpreter (`--vu1 hle`)
 
 Ahead of stage 3, program 0x000 has a CPU version that computes its results directly, a vertex at a
 time, instead of interpreting its 289 software-pipelined instruction pairs:
@@ -246,6 +246,16 @@ them run by run.
 - **Speed** (that run, `--fast --headless --renderer native`, Ryzen 9 9900X3D): VU1 3.3 s with the
   interpreter, 1.14 s with `--vu1 hle` (0.59 s of it program 0x000's 499,185 runs: 4.7 times faster
   than interpreted); the run's wall time 7.9 s to 5.4 s.
+
+Program 0x280 (skinned models: two matrix sets chosen per vertex by ST's w, float vertices, a colour
+scale and bias, point lights in the vertex's set, and the optional sphere-mapped second pass gated
+by TOP+0xA4.z) has its own, `port/platform/vu1_hle_280.c`, to the same bar: its top comment
+describes the program, including where its pipeline shows (the colour's xyz carried from vertex to
+vertex, vertex 0 taking the tag's w as its light set, the run ending after the A+D kick when every
+vertex is clipped). The arithmetic is shared through `port/platform/vu1_hle_ops.h`. Checked: the
+21,390 runs of 0x280 in the 78 captures (90,798 + 21,390 = 112,188 compared, none different, with and
+without the fast path) and 160,207 in the game run above (659,392 compared with 0x000's). With both,
+that run's VU1 time is 0.76 s (from 3.3 s), its wall time 5.2 s.
 
 ## Testing
 

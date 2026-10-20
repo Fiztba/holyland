@@ -37,10 +37,10 @@
    VI register, and an ILW (which stalls the branch), are seen at once. Of the game's programs only
    the one at 0x700 relies on it (its loop at 0x7BE).
 
-   With --vu1 hle, program 0x000 (MSCAL 0x000 and the MSCNTs that go on from it) runs in
-   port/platform/vu1_hle.c instead, which leaves the same memory, packets, registers, flags and clock;
-   --vu1 check runs both and compares them (check_run). The float helpers and the state are shared
-   with it through vu1_internal.h.
+   With --vu1 hle, programs 0x000 and 0x280 (their MSCAL and the MSCNTs that go on from it) run in
+   port/platform/vu1_hle.c and vu1_hle_280.c instead (hle_try), which leave the same memory, packets,
+   registers, flags and clock; --vu1 check runs both and compares them (check_run). The float
+   helpers and the state are shared with them through vu1_internal.h.
 
    Only the DMA controller's thread calls in here (port/platform/dmac.c). */
 #include <fenv.h>
@@ -112,7 +112,8 @@ typedef struct {
 } VuInsn;
 
 static Vu1State vu;
-static int hle_program; /* micro memory holds program 0x000 as the game uploads it (vu1_hle.c) */
+/* micro memory holds the program as the game uploads it: 0x000 (vu1_hle.c), 0x280 (vu1_hle_280.c) */
+static int hle_000, hle_280;
 static int check_kicks; /* --vu1 check: XGKICK records its packets (check_kick) */
 static void check_kick(uint32_t address);
 
@@ -1237,6 +1238,20 @@ static int check_report(const char *what, unsigned index, uint64_t hle, uint64_t
     return 1;
 }
 
+/* --vu1 hle: the run done by the HLE of the program at pc, if there is one and it takes it (the
+   pairs the interpreter would have run), or 0 */
+static uint64_t hle_try(uint32_t pc, uint32_t top) {
+    uint64_t pairs = 0;
+
+    if (hle_000) {
+        pairs = vu1_hle_run(&vu, data, pc, top);
+    }
+    if (!pairs && hle_280) {
+        pairs = vu1_hle_280_run(&vu, data, pc, top);
+    }
+    return pairs;
+}
+
 static uint64_t check_run(uint32_t pc, uint32_t top, uint32_t itop) {
     uint64_t hle_pairs, pairs;
     int bad = 0, n, f;
@@ -1246,7 +1261,7 @@ static uint64_t check_run(uint32_t pc, uint32_t top, uint32_t itop) {
     check_record[0].count = check_record[1].count = 0;
     check_kicks = 1;
     check_phase = 0;
-    hle_pairs = vu1_hle_run(&vu, data, pc, top);
+    hle_pairs = hle_try(pc, top);
     if (!hle_pairs) {
         check_kicks = 0;
         return interpret(pc, top, itop);
@@ -1335,19 +1350,21 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     if (!vu.decoded) {
         vu.flags_read = 0;
         decode_all();
-        hle_program = vu1_hle_recognise(micro);
+        hle_000 = vu1_hle_recognise(micro);
+        hle_280 = vu1_hle_280_recognise(micro);
     }
     fesetround(port_vu1_round_nearest ? FE_TONEAREST : FE_TOWARDZERO);
 #if VU_DAZ
     run_csr = _mm_getcsr();
     _mm_setcsr(run_csr | MXCSR_DAZ);
 #endif
-    /* --vu1 hle: program 0x000 (MSCAL 0x000, and MSCNT where it ended) without the interpreter */
-    if (port_options.vu1 != PORT_VU1_INTERP && hle_program && !port_vu1_round_nearest) {
+    /* --vu1 hle: programs 0x000 and 0x280 (their MSCAL, and MSCNT where they ended) without the
+       interpreter */
+    if (port_options.vu1 != PORT_VU1_INTERP && !port_vu1_round_nearest) {
         if (port_options.vu1 == PORT_VU1_CHECK) {
             pairs = check_run(pc, top, itop);
         } else {
-            pairs = vu1_hle_run(&vu, data, pc, top);
+            pairs = hle_try(pc, top);
             hle = pairs != 0;
         }
     }

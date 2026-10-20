@@ -28,9 +28,9 @@
      --compare OTHER    the draws of another capture (or of --mode vif against --mode gif of the same
                         one, with --compare-mode), compared one by one: state and vertices
      --vu-round nearest VU1's float arithmetic rounds to nearest instead of toward zero (--mode vif)
-     --vu1 NAME         with --mode vif, who runs VU1's program 0x000: interp (the interpreter, the
-                        default), hle (port/platform/vu1_hle.c) or check (both, compared run by run:
-                        memory, packets, registers, flags and clock)
+     --vu1 NAME         with --mode vif, who runs VU1's programs 0x000 and 0x280: interp (the
+                        interpreter, the default), hle (port/platform/vu1_hle*.c) or check (both,
+                        compared run by run: memory, packets, registers, flags and clock)
      --diff N           with --mode vif: show up to N differing vertices of each differing packet (8)
      --renderer NAME    who draws: gs (paraLLEl-GS, the default), native (step 3's native GS,
                         port/gs/native/) or both. With both, --draws writes draw_NNNNN_native.png
