@@ -1149,6 +1149,7 @@ void flush_batch() {
     bool reads_target = false; // a feedback pass: the texture is a render target
     uint32_t clut[256];
     bool want_clut = false;
+    uint32_t tex_alpha_max = 255; // the largest alpha a texel can have, where it is known
     if (tme) {
         uint32_t tbp = bits(tex0, 0, 14), tbw = bits(tex0, 14, 6), tpsm = bits(tex0, 20, 6);
         uint32_t tw = std::min(bits(tex0, 26, 4), 10u), th = std::min(bits(tex0, 30, 4), 10u);
@@ -1224,6 +1225,10 @@ void flush_batch() {
             if (src == SRC_CLUT) {
                 clut_colours(tex0, clut);
                 want_clut = true;
+                tex_alpha_max = 0;
+                for (uint32_t i = 0; i < 256; i++) {
+                    tex_alpha_max = std::max(tex_alpha_max, clut[i] >> 24);
+                }
             }
         }
     }
@@ -1248,9 +1253,29 @@ void flush_batch() {
     bool fixed = fixed_blend(ba, bb, bc, bd, fix, &blend);
     bool exact = fixed && (blend.premul != 0 || ba == bb);
     bool sprite = gs->batch_sprites;
+    // Blending by an As above 0x80 (2.0): Vulkan's blend factor (and the alpha out that stands for it)
+    // stops at 1.0. The largest As the batch can make, from its vertices and what is known of the
+    // texture's alpha (a CLUT's entries, TEXA for 24 and 16-bit texels):
+    uint32_t as_max = 0;
+    for (const Vtx &v : gs->verts) {
+        as_max = std::max(as_max, v.rgba >> 24);
+    }
+    if (tme && bits(tex0, 34, 1)) { // TCC
+        uint32_t tpsm = bits(tex0, 20, 6);
+        if (tpsm == GSN_PSMCT24) {
+            tex_alpha_max = bits(gs->reg[R_TEXA], 0, 8);
+        } else if (psm_is_16(tpsm)) {
+            tex_alpha_max = std::max(bits(gs->reg[R_TEXA], 0, 8), bits(gs->reg[R_TEXA], 32, 8));
+        }
+        uint32_t tfx = bits(tex0, 35, 2);
+        as_max = tfx == 0 ? std::min(255u, (as_max * tex_alpha_max) >> 7)
+                 : tfx == 2 ? std::min(255u, as_max + tex_alpha_max)
+                            : tex_alpha_max;
+    }
+    bool as_over = bc == 0 && !blend.premul && as_max > 0x80;
     if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || dst16 ||
                                          (push.misc & (M_PABE)) || !(push.misc & M_COLCLAMP) ||
-                                         (bc == 0 && (push.misc & M_FBA)) || !fixed))) {
+                                         (bc == 0 && (push.misc & M_FBA)) || as_over || !fixed))) {
         shader_blend = true;
     }
     if (shader_blend) {
