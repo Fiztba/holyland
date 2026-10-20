@@ -509,13 +509,14 @@ void msaa_forget(Target &t) {
 // primitives are rectangles on the screen (sprites, and the menus' quads: two triangles of a strip
 // with one Z), each triangle half of one: its corners are those of its bounding box. Such a
 // triangle's corners are moved out to the edges of the pixels it covers (those whose middle, a GS
-// pixel's integer point, is inside: from ceil(x0) to ceil(x1) - 1 across, the same down), and its
-// texture coordinates and fog carried along their slopes, so that each pixel's middle has what it had.
+// pixel's integer point, is inside: from ceil(x0) to ceil(x1) - 1 across, the same down; at a larger
+// --native-scale, the target's pixels), and its texture coordinates and fog carried along their
+// slopes, so that each pixel's middle has what it had.
 // (Left as they are, the samples of an edge pixel on the far side of its middle would not be covered:
 // a rectangle over the whole frame would leave half of its first column and row as they were, and
 // every box and letter of the menus would be blurred by half a pixel.) A triangle with a slant, or
 // with its colour or Z not the same at its corners, is left as it is: the 3D, whose edges are smoothed.
-void msaa_flat_2d(std::vector<Vtx> &verts) {
+void msaa_flat_2d(std::vector<Vtx> &verts, uint32_t sx, uint32_t sy) {
     for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
         Vtx *v = &verts[i];
         if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
@@ -548,8 +549,9 @@ void msaa_flat_2d(std::vector<Vtx> &verts) {
             dy[a] = (db * ax - da * bx) / det;
         }
         for (int k = 0; k < 3; k++) {
-            // (the vertex shader adds half a pixel: an edge at a pixel's edge is half a pixel less)
-            double nx = ceil(double(v[k].x)) - 0.5, ny = ceil(double(v[k].y)) - 0.5;
+            // in the target's pixels (sx and sy a GS pixel) a corner is at (x + 0.5) sx (the vertex shader
+            // adds half a GS pixel), and a pixel is covered when its middle, j + 0.5, is inside
+            double nx = ceil((v[k].x + 0.5) * sx - 0.5) / sx - 0.5, ny = ceil((v[k].y + 0.5) * sy - 0.5) / sy - 0.5;
             for (int a = 0; a < 4; a++) {
                 *attr[k][a] = float(*attr[k][a] + dx[a] * (nx - v[k].x) + dy[a] * (ny - v[k].y));
             }
@@ -1594,7 +1596,7 @@ void flush_batch() {
         if (depth && zwrite) {
             depth->ms_newer = true;
         }
-        msaa_flat_2d(gs->verts);
+        msaa_flat_2d(gs->verts, color->sx, color->sy);
     } else {
         msaa_settle(*color);
     }
