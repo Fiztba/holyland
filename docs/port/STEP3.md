@@ -247,6 +247,18 @@ them run by run.
   interpreter, 1.14 s with `--vu1 hle` (0.59 s of it program 0x000's 499,185 runs: 4.7 times faster
   than interpreted); the run's wall time 7.9 s to 5.4 s.
 
+### VU1 program 0x700 without the interpreter
+
+Program 0x700 draws the effects (sfx.dat models: fire, glows, magic) and has its HLE in
+`port/platform/vu1_hle_700.c` (its top comment describes the program), reached through
+`vu1_hle_run` and recognised by a hash of 0x700-0x7D1. It is not pipelined: a vertex a loop pass,
+directional light, one colour for the model (VU 0x64), and the texture animation (TEX0 replaced by
+VU 0x66 when its TBP0 is 0x65.w). What it leaves past the batch is reproduced: a "vertex -1" from the
+raw qword at the previous run's vi07 + 1, and an extra vertex n (the loop's IBGTZ reads its counter
+before the decrement, so it runs n + 1 times). Its timing is a formula in n and its two branches.
+Checked as 0x000: the 78 captures (2,423 runs of 0x700, both entries, both branches each) and the
+game on maps 009, 025 and 000 with `--vu1 check`, none different.
+
 ## Testing
 
 - **The live diff** (stage 0): both renderers on, the difference per frame in the overlay and the
