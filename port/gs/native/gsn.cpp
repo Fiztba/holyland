@@ -251,6 +251,7 @@ struct Gs {
     Program *program = nullptr;
     Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
     Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
+    Program *program_deinterlace = nullptr; // (the scanout's: shaders/deinterlace.frag)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
@@ -272,6 +273,13 @@ struct Gs {
     // the last field shown (field mode: the picture is woven from the last two)
     std::vector<uint32_t> fields[2];
     uint32_t field_width = 0, field_height = 0;
+    // vblanks left that a frame-mode picture is read a field at a time: a primitive over more than 400
+    // lines drawn with SCANMSK (into one field's lines only) sets it to 4 (scanmsk_seen, "The scanout")
+    uint32_t field_scan_vblanks = 0;
+    // the displayed buffer as it was at the last vblanks read a field at a time, the newest first (the
+    // deinterlace's history; filled: how many are there)
+    ImageHandle history[4];
+    uint32_t history_filled = 0;
 };
 
 Gs *gs;
@@ -294,7 +302,7 @@ struct Timer {
         total += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
     }
 };
-int log_level; // KF4_GSN_LOG: 1 says when targets are made and dropped, 2 every batch too
+int log_level; // KF4_GSN_LOG: 1 says when targets are made and dropped, 2 every batch too, 3 each vblank's display registers
 
 #define GSN_LOG(level, ...)                                                                                \
     do {                                                                                                   \
@@ -2097,7 +2105,23 @@ Vtx make_vtx(const QVertex &q, uint32_t prim, const QVertex &colour_from) {
     return v;
 }
 
+// A primitive drawn with SCANMSK into one field's lines and over more than 400 of them (Y within the
+// scissor): the game draws its two fields as two pictures (Game_ShiftScreenByViewTurn puts the frame
+// before, moved by the turn, on the even lines), so the next vblanks' pictures are read a field at a
+// time, as the PS2 shows them ("The scanout"; paraLLEl-GS takes the same sign)
+void scanmsk_seen(float y0, float y1) {
+    if (!(gs->reg[R_SCANMSK] & 2)) {
+        return;
+    }
+    uint64_t scissor = gs->reg[R_SCISSOR_1 + ((gs->batch_prim >> 9) & 1)];
+    float top = std::max(y0, float(bits(scissor, 32, 11))), bottom = std::min(y1, float(bits(scissor, 48, 11)));
+    if (bottom - top > 400.0f) {
+        gs->field_scan_vblanks = 4;
+    }
+}
+
 void add_triangle(const Vtx &a, const Vtx &b, const Vtx &c) {
+    scanmsk_seen(std::min({a.y, b.y, c.y}), std::max({a.y, b.y, c.y}));
     bool gouraud = (gs->batch_prim >> 3) & 1;
     gs->verts.push_back(a);
     gs->verts.push_back(b);
@@ -2164,6 +2188,7 @@ void add_sprite(const QVertex &a, const QVertex &b) {
             v[i].t = float(i == 0 || i == 1 ? ua[1] : ub[1]) / 16.0f;
         }
     }
+    scanmsk_seen(std::min(v[0].y, v[3].y), std::max(v[0].y, v[3].y));
     gs->verts.push_back(v[0]);
     gs->verts.push_back(v[1]);
     gs->verts.push_back(v[2]);
@@ -2995,6 +3020,18 @@ void make_program() {
         copy_vs, gs->device->request_shader(gsn_spv_msaa_load_depth_frag, sizeof(gsn_spv_msaa_load_depth_frag), &copy_frag));
     gs->program_ms_depth = gs->device->request_program(
         copy_vs, gs->device->request_shader(gsn_spv_msaa_depth_frag, sizeof(gsn_spv_msaa_depth_frag), &copy_frag));
+
+    // the scanout's deinterlace: four images in, the picture out
+    ResourceLayout deinterlace = {};
+    deinterlace.output_mask = 1;
+    deinterlace.push_constant_size = 3 * sizeof(int32_t);
+    deinterlace.sets[0].sampled_image_mask = 0xF;
+    deinterlace.sets[0].fp_mask = 0xF;
+    for (int b = 0; b < 4; b++) {
+        deinterlace.sets[0].meta[b].array_size = 1;
+    }
+    gs->program_deinterlace = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_deinterlace_frag, sizeof(gsn_spv_deinterlace_frag), &deinterlace));
 }
 
 void reset_gs() {
@@ -3006,6 +3043,7 @@ void reset_gs() {
     memset(gs->paths, 0, sizeof(gs->paths));
     memset(&gs->upload, 0, sizeof(gs->upload));
     gs->transfer_dir = 3;
+    gs->field_scan_vblanks = 0;
 }
 
 // ---- The scanout as an image (gsn_scanout_take) ---------------------------------------------------
@@ -3059,15 +3097,141 @@ void present_extensions(std::vector<const char *> &instance_ext, std::vector<con
     device_ext.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 }
 
-// The displayed buffer (field_mode: this field) into scanout_image; with frame, read back into it too.
-// Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has the picture.
-int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uint32_t dby, uint32_t w, uint32_t h,
-                     bool field_mode, int field, PortGsFrame *frame) {
+// gsn_vsync's want_pixels as vsync_now has it: the PC's switches (port_options) added
+enum : int { VSYNC_PROGRESSIVE = 1 << 8, VSYNC_DEINTERLACE = 1 << 9 };
+
+// How the displayed buffer becomes the picture ("The scanout", at vsync_now)
+enum ScanMode : uint32_t {
+    SCAN_WHOLE,       // every line, as it is (progressive frame mode, a field picture alone)
+    SCAN_WEAVE,       // field mode: this field's picture into its own lines of a picture twice as tall
+    SCAN_FIELD,       // frame mode read a field at a time, without --deinterlace: this field's lines alone
+    SCAN_DEINTERLACE, // the same with --deinterlace: deinterlace.frag over the buffer's last four vblanks
+};
+
+// The displayed buffer: where it is, and its target if it has one (and holds the whole of it)
+struct Shown {
+    uint32_t fbp, fbw, psm, dbx, dby, w, h;
+    Target *t;
+    uint32_t sx, sy; // its target's scale (or the targets' when it has none)
+};
+
+Shown shown_buffer(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uint32_t dby, uint32_t w, uint32_t h) {
+    Shown s = {fbp, fbw, psm, dbx, dby, w, h, find_target(fbp, fbw, psm), target_sx, target_sy};
+    if (s.t && (s.t->depth || dbx + w > s.t->width || dby + h > s.t->height)) {
+        s.t = nullptr;
+    }
+    if (s.t) {
+        s.sx = s.t->sx;
+        s.sy = s.t->sy;
+    }
+    return s;
+}
+
+// count of the buffer's lines, from line `first` every `step`, into dst: the m-th into the band of sy
+// rows of its line dst_first + dst_step * m. From the target on the GPU, or else from the CPU's VRAM
+// (each GS pixel repeated sx times across and sy down).
+void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step, uint32_t count, uint32_t dst_first,
+                uint32_t dst_step) {
+    const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    uint32_t iw = s.w * s.sx, sy = s.sy;
+    if (s.t) {
+        msaa_settle(*s.t);
+        end_pass();
+        transfer_barrier();
+        if (step == 1 && dst_step == 1) {
+            cmd().copy_image(dst, *s.t->image, {0, int32_t(dst_first * sy), 0},
+                             {int32_t(s.dbx * s.sx), int32_t((s.dby + first) * sy), 0}, {iw, count * sy, 1}, colour,
+                             colour);
+        } else {
+            for (uint32_t m = 0; m < count; m++) {
+                cmd().copy_image(dst, *s.t->image, {0, int32_t((dst_first + dst_step * m) * sy), 0},
+                                 {int32_t(s.dbx * s.sx), int32_t((s.dby + first + step * m) * sy), 0}, {iw, sy, 1},
+                                 colour, colour);
+            }
+        }
+    } else {
+        std::vector<uint32_t> small(size_t(s.w) * s.h);
+        read_buffer(s.fbp, s.fbw, s.psm, s.dbx, s.dby, s.w, s.h, small.data());
+        end_pass();
+        transfer_barrier();
+        for (uint32_t m = 0; m < count; m++) {
+            uint32_t line = first + step * m;
+            uint32_t *out = static_cast<uint32_t *>(cmd().update_image(
+                dst, {0, int32_t((dst_first + dst_step * m) * sy), 0}, {iw, sy, 1}, iw, sy, colour));
+            for (uint32_t y = 0; y < sy; y++) {
+                for (uint32_t x = 0; x < iw; x++) {
+                    out[size_t(y) * iw + x] = small[size_t(line) * s.w + x / s.sx];
+                }
+            }
+        }
+    }
+    transfer_barrier();
+}
+
+// The deinterlace's history let go (a vblank not read a field at a time, or a new size)
+void forget_history() {
+    for (auto &h : gs->history) {
+        h.reset();
+    }
+    gs->history_filled = 0;
+}
+
+// The buffer at this vblank into the deinterlace's history (SCAN_DEINTERLACE), the newest first: kept
+// at every vblank read a field at a time, a picture wanted or not
+void record_history(const Shown &s) {
+    uint32_t iw = s.w * s.sx, ih = s.h * s.sy;
+    if (gs->history_filled && (gs->history[0]->get_width() != iw || gs->history[0]->get_height() != ih)) {
+        forget_history();
+    }
+    ImageHandle oldest = gs->history_filled == 4 ? gs->history[3] : ImageHandle();
+    for (int i = 3; i > 0; i--) {
+        gs->history[i] = gs->history[i - 1];
+    }
+    gs->history[0] = oldest ? oldest : make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+    gs->history_filled = std::min(gs->history_filled + 1, 4u);
+    copy_lines(*gs->history[0], s, 0, 1, s.h, 0, 1);
+}
+
+// The picture of the deinterlace into dst (as tall as the buffer), from the history: the vblanks
+// before that are not there yet are the oldest that is (the newest for the first)
+void deinterlace_pass(const Image &dst, int parity, uint32_t sy, uint32_t lines) {
+    const Image *before[4];
+    for (uint32_t i = 0; i < 4; i++) {
+        before[i] = i < gs->history_filled ? gs->history[i].get() : before[i == 3 ? 1 : 0];
+    }
+    end_pass();
+    RenderPassInfo rp;
+    rp.num_color_attachments = 1;
+    rp.color_attachments[0] = &dst.get_view();
+    rp.store_attachments = 1;
+    CommandBuffer &c = cmd();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    c.begin_render_pass(rp);
+    c.set_opaque_state();
+    c.set_program(gs->program_deinterlace);
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_test(false, false);
+    for (uint32_t i = 0; i < 4; i++) {
+        c.set_texture(0, i, before[i]->get_view(), StockSampler::NearestClamp);
+    }
+    int32_t push[3] = {parity, int32_t(sy), int32_t(lines)};
+    c.push_constants(push, 0, sizeof(push));
+    c.draw(3);
+    c.end_render_pass();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+}
+
+// The displayed buffer into scanout_image as `mode` says (parity: the lines of this vblank's field; in
+// field mode the buffer is the field's picture, and parity the lines of the woven picture it goes
+// into); with frame, read back into it too. Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has
+// the picture. (SCAN_DEINTERLACE draws from the history: record_history first.)
+int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *frame) {
     ScanoutImage &so = scanout_image;
-    Target *t = find_target(fbp, fbw, psm);
-    bool from_target = t && !t->depth && dbx + w <= t->width && dby + h <= t->height;
-    uint32_t sx = from_target ? t->sx : target_sx, sy = from_target ? t->sy : target_sy;
-    uint32_t iw = w * sx, ih = h * sy * (field_mode ? 2 : 1);
+    uint32_t lines = mode == SCAN_WEAVE ? s.h * 2 : mode == SCAN_FIELD ? s.h / 2 : s.h;
+    uint32_t iw = s.w * s.sx, ih = lines * s.sy;
     bool fresh = false;
     // (images are made and let go outside the lock: Granite's device lock, which the presenter holds
     // while it releases the image (gsn_queue_lock, then gsn_scanout_release), comes before it)
@@ -3075,7 +3239,7 @@ int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uin
         std::lock_guard<std::mutex> hold(so.lock);
         fresh = !so.image || so.width != iw || so.height != ih;
     }
-    ImageHandle made = fresh ? make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, false) : ImageHandle();
+    ImageHandle made = fresh ? make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, true) : ImageHandle();
     std::vector<ImageHandle> let_go;
     {
         std::lock_guard<std::mutex> hold(so.lock);
@@ -3094,49 +3258,24 @@ int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uin
         }
     }
     let_go.clear();
-    // the rows of the picture this field writes: every row in frame mode; in field mode its own, or
-    // both when the image is new (as the read-back path starts the other field as this one)
-    uint32_t parity_lo = field_mode && !fresh ? uint32_t(field & 1) : 0;
-    uint32_t parity_hi = field_mode ? (fresh ? 1 : uint32_t(field & 1)) : 0;
-    const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    if (from_target) {
-        msaa_settle(*t);
-    }
-    end_pass();
-    transfer_barrier();
-    if (from_target) {
-        for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
-            if (!field_mode) {
-                cmd().copy_image(*so.image, *t->image, {0, 0, 0}, {int32_t(dbx * sx), int32_t(dby * sy), 0}, {iw, ih, 1},
-                                 colour, colour);
-                continue;
-            }
-            for (uint32_t m = 0; m < h; m++) {
-                cmd().copy_image(*so.image, *t->image, {0, int32_t((2 * m + parity) * sy), 0},
-                                 {int32_t(dbx * sx), int32_t((dby + m) * sy), 0}, {iw, sy, 1}, colour, colour);
-            }
+    switch (mode) {
+    case SCAN_WHOLE:
+        copy_lines(*so.image, s, 0, 1, s.h, 0, 1);
+        break;
+    case SCAN_WEAVE:
+        // the field into its own lines; into both when the image is new (as the read-back path starts
+        // the other field as this one)
+        for (uint32_t p = fresh ? 0 : uint32_t(parity); p <= (fresh ? 1u : uint32_t(parity)); p++) {
+            copy_lines(*so.image, s, 0, 1, s.h, p, 2);
         }
-    } else {
-        // not a target (yet): from the CPU's VRAM, each GS pixel repeated sx times across and sy down
-        std::vector<uint32_t> small(size_t(w) * h);
-        read_buffer(fbp, fbw, psm, dbx, dby, w, h, small.data());
-        end_pass();
-        transfer_barrier();
-        // a band of sy rows for each of the buffer's lines: field mode's into its own rows
-        uint32_t step = field_mode ? 2 : 1;
-        for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
-            for (uint32_t m = 0; m < h; m++) {
-                uint32_t *out = static_cast<uint32_t *>(
-                    cmd().update_image(*so.image, {0, int32_t((step * m + parity) * sy), 0}, {iw, sy, 1}, iw, sy, colour));
-                for (uint32_t y = 0; y < sy; y++) {
-                    for (uint32_t x = 0; x < iw; x++) {
-                        out[size_t(y) * iw + x] = small[size_t(m) * w + x / sx];
-                    }
-                }
-            }
-        }
+        break;
+    case SCAN_FIELD:
+        copy_lines(*so.image, s, uint32_t(parity), 2, lines, 0, 1);
+        break;
+    case SCAN_DEINTERLACE:
+        deinterlace_pass(*so.image, parity, s.sy, s.h);
+        break;
     }
-    transfer_barrier();
     int ok = GSN_WANT_IMAGE;
     if (frame && size_t(iw) * ih <= PORT_GS_FRAME_PIXELS) {
         const uint8_t *pixels = read_image(*so.image, 0, 0, iw, ih);
@@ -3528,6 +3667,19 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     uint64_t pmode = preg(0);
     uint64_t smode2 = preg(2);
     int circuit = (pmode & 2) ? 2 : (pmode & 1) ? 1 : 0;
+    // the PC's switches (gsn_vsync)
+    bool progressive = want_pixels & VSYNC_PROGRESSIVE, deinterlace = want_pixels & VSYNC_DEINTERLACE;
+    want_pixels &= GSN_WANT_PIXELS | GSN_WANT_IMAGE | GSN_PRESENT;
+    // a frame-mode picture read a field at a time: 4 vblanks after a tall SCANMSK primitive (scanmsk_seen)
+    bool field_scan = gs->field_scan_vblanks > 0;
+    if (gs->field_scan_vblanks) {
+        gs->field_scan_vblanks--;
+    }
+    GSN_LOG(3, "vsync field %d%s PMODE %llx SMODE2 %llx DISPFB1 %llx DISPLAY1 %llx DISPFB2 %llx DISPLAY2 %llx\n", field,
+            field_scan ? " (a field at a time)" : "", (unsigned long long)pmode, (unsigned long long)smode2,
+            (unsigned long long)preg(7), (unsigned long long)preg(8), (unsigned long long)preg(9),
+            (unsigned long long)preg(10));
+    bool history_kept = false;
     int ok = 0;
     if (circuit) {
         uint64_t dispfb = preg(circuit == 2 ? 9 : 7), display = preg(circuit == 2 ? 10 : 8);
@@ -3539,12 +3691,28 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         if (interlaced && field_mode) {
             h /= 2;
         }
+        // The scanout ("The scanout"): a field picture woven with the one before (or alone); a frame
+        // picture whole, or a field at a time (this field's lines, deinterlaced or alone)
+        ScanMode mode = SCAN_WHOLE;
+        int parity = 0;
+        if (interlaced && field_mode) {
+            mode = deinterlace ? SCAN_WEAVE : SCAN_WHOLE;
+            parity = field & 1;
+        } else if (interlaced && (!progressive || field_scan)) {
+            mode = deinterlace ? SCAN_DEINTERLACE : SCAN_FIELD;
+            parity = int((bits(display, 12, 11) ^ uint32_t(field)) & 1); // (DY's parity moves the fields)
+        }
         uint32_t sx = target_sx, sy = target_sy;
-        if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && size_t(w) * h * sx * sy * (field_mode ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
+        if (w > 0 && h > 0 && w <= 1024 && h <= 1024 &&
+            size_t(w) * h * sx * sy * (mode == SCAN_WEAVE ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
+            Shown shown = shown_buffer(fbp, fbw, psm, dbx, dby, w, h);
+            if (mode == SCAN_DEINTERLACE) {
+                record_history(shown);
+                history_kept = true;
+            }
             if (want_pixels & GSN_WANT_IMAGE) {
-                ok = scanout_to_image(fbp, fbw, psm, dbx, dby, w, h, interlaced && field_mode, field,
-                                      (want_pixels & GSN_WANT_PIXELS) ? frame : nullptr);
-            } else if (interlaced && field_mode) {
+                ok = scanout_to_image(shown, mode, parity, (want_pixels & GSN_WANT_PIXELS) ? frame : nullptr);
+            } else if (mode == SCAN_WEAVE) {
                 // each field its own picture, woven with the one before: kept every field, wanted or not
                 int f = field & 1;
                 uint32_t got[2];
@@ -3578,6 +3746,11 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     frame->height = h * 2 * sy;
                     ok = 1;
                 }
+            } else if (mode != SCAN_WHOLE) {
+                // (on the GPU, as for the presenter, and read back)
+                if (want_pixels) {
+                    ok = (scanout_to_image(shown, mode, parity, frame) & GSN_WANT_PIXELS) ? 1 : 0;
+                }
             } else if (want_pixels) {
                 uint32_t got[2];
                 read_buffer(fbp, fbw, psm, dbx, dby, w, h, frame->rgba, true, got);
@@ -3586,6 +3759,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                 ok = 1;
             }
         }
+    }
+    if (!history_kept && gs->history_filled) {
+        forget_history();
     }
     submit(false);
     gs->device->next_frame_context();
@@ -3614,6 +3790,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         target_samples = wanted_samples;
         gs->fields[0].clear();
         gs->fields[1].clear();
+        forget_history();
     }
     if (ok && (want_pixels & GSN_PRESENT)) {
         // the window's picture, handed over now that it is there (an image: once its commands are on
@@ -3634,6 +3811,8 @@ extern "C" void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void
 }
 
 extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+    // the PC's switches for the scanout, as they are at this vblank
+    want_pixels |= (port_options.progressive ? VSYNC_PROGRESSIVE : 0) | (port_options.deinterlace ? VSYNC_DEINTERLACE : 0);
     // On the GS's thread, with the sender going on: a vblank whose picture nobody waits for (none, or
     // one the GS's thread hands to the presenter). A picture wanted in frame, or an image the caller
     // goes on to show itself, waits for the thread to be idle and is made here.
@@ -3782,6 +3961,7 @@ extern "C" void gsn_state(PortStateIo *io) {
         gs->verts.clear();
         gs->fields[0].clear();
         gs->fields[1].clear();
+        forget_history();
     }
 }
 
