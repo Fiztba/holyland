@@ -394,6 +394,11 @@ if(TARGET kf4_gs)
     if(KF4_TESTS)
         add_test(NAME gsn_draw COMMAND gsn_draw_test)
         set_tests_properties(gsn_draw PROPERTIES SKIP_RETURN_CODE 77)
+        if(NOT WIN32)
+            # likely lavapipe: it keeps what a process's device has had until the process ends (5 cases
+            # a process), and its sampler filters paraLLEl-GS's textures otherwise than a GPU's
+            set_tests_properties(gsn_draw PROPERTIES ENVIRONMENT "GSN_CHUNK=5;GSN_SOFTWARE=1")
+        endif()
     endif()
 endif()
 
