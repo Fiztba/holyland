@@ -6,8 +6,9 @@
    For that it has to know, in the packet chain, where the 3D world is and which camera drew it. The
    patched GameLoop_DrawFrame says so: FrameInterp_BeginFrame at its start, then each
    GameLoop_SetCameraMatrices it makes queues its camera (world to view, and view to screen) with
-   FrameInterp_MarkCamera, and FrameInterp_EndWorld follows the world, before the screen passes, the
-   arm and the HUD. A mark is a run of GS register writes of its own (PORT_GS_REG_FRAME_INTERP, an
+   FrameInterp_MarkCamera, and FrameInterp_EndWorld follows the world, before the screen passes and
+   the HUD. FrameInterp_BeginArm and FrameInterp_EndWorld mark the arm and the held item (drawn later,
+   in the world before the eye), which move only as the arm moves. A mark is a run of GS register writes of its own (PORT_GS_REG_FRAME_INTERP, an
    address the GS does not have), queued in the chain where the call is made. With the switch off
    nothing is queued, and the chain is the PS2's. */
 #include "common.h"
@@ -69,7 +70,18 @@ void FrameInterp_MarkCamera(int projection, int mode) {
     Packet_EndGsRegisters();
 }
 
-/* After the world: what follows is not moved with the camera */
+/* Before Player_DrawArm: models in the world, by the camera of the world */
+void FrameInterp_BeginArm(void) {
+    marking = port_frame_interp();
+    if (!marking) {
+        return;
+    }
+    Packet_BeginGsRegisters();
+    add_field(PORT_FRAME_INTERP_HEADER, PORT_FRAME_INTERP_ARM);
+    Packet_EndGsRegisters();
+}
+
+/* After the world (and after the arm): what follows is not moved with the camera */
 void FrameInterp_EndWorld(void) {
     if (!marking) {
         return;

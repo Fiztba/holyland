@@ -135,6 +135,13 @@ static uint32_t element(const uint8_t *bytes, uint32_t index, uint32_t vl, int u
     }
 }
 
+/* --frame-rate 60 (port/platform/frame_interp.c): what a VU1 run drew, told apart from frame to frame
+   by what its batch is: a hash of the qwords unpacked at 0x80 and above (the batches; the matrices and
+   lights are below) since the run before, and a count of the runs */
+uint64_t port_vif1_run_key;
+uint32_t port_vif1_run_serial;
+static uint64_t batch_hash = 0xCBF29CE484222325ull;
+
 static void do_unpack(void) {
     uint32_t cmd = (vif.code >> 24) & 0x7F;
     uint32_t num = (vif.code >> 16) & 0xFF;
@@ -146,6 +153,7 @@ static void do_unpack(void) {
     uint8_t *vu_data = port_vu1_data();
     uint32_t written, read = 0, vectors;
     uint32_t cl = vif.cl, wl = vif.wl;
+    int hashing;
 
     if (num == 0) {
         num = 256;
@@ -158,6 +166,7 @@ static void do_unpack(void) {
         return;
     }
     vectors = unpack_vectors_read(num);
+    hashing = port_options.frame_rate > 30 && (address & (VU1_QWORDS - 1)) >= 0x80; /* (port_frame_interp()) */
     for (written = 0; written < num; written++) {
         uint32_t block = written / wl, in_block = written % wl;
         uint32_t qaddr = cl >= wl ? address + block * cl + in_block : address + written;
@@ -225,6 +234,11 @@ static void do_unpack(void) {
                 break; /* write-protected */
             }
         }
+        if (hashing) {
+            for (f = 0; f < 4; f++) {
+                batch_hash = (batch_hash ^ dest[f]) * 0x100000001B3ull;
+            }
+        }
     }
 }
 
@@ -233,6 +247,9 @@ static void start_vu1(int cont) {
     if (port_gs_capture_recording) {
         port_gs_capture_vu1_run(cont ? KF4GS_MSCNT : vif.code & 0xFFFF, vif.tops, vif.itops);
     }
+    port_vif1_run_key = batch_hash;
+    port_vif1_run_serial++;
+    batch_hash = 0xCBF29CE484222325ull;
     vif.top = vif.tops;
     vif.itop = vif.itops;
     if (vif.dbf) {

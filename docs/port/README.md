@@ -300,10 +300,11 @@ a frame every second vblank and shows it for two. With the switch on, the vblank
 picture of its own: the frame the game has just drawn (shown at the next vblank), drawn again with the
 3D world seen from a camera half way between the frame shown and that one
 (`port/platform/frame_interp.c`; STEP3.md, "Higher frame rates").
-- **Turning and walking are smooth**, which is most of what moves in a first-person game. What moves
-  by itself (enemies, effects, the arm, animated textures) still moves 30 times a second, the HUD and
-  the 2D change when the game draws them, and a cut (a teleport, a map change, a scripted jump of the
-  camera) is not interpolated.
+- **Turning and walking are smooth**, which is most of what moves in a first-person game, and so are
+  the enemies, the arm's swing, the effects and moving objects: each model part is paired with itself
+  in the frame before and drawn half way. Animated textures and what the CPU makes anew each frame
+  still change 30 times a second, the HUD and the 2D change when the game draws them, and a cut (a
+  teleport, a map change, a scripted jump of the camera) is not interpolated.
 - **No input lag is added.** The picture between shows half of the camera's next move one vblank
   early; everything else is shown when it was. (Turning from standing: the first picture that moves
   comes at the fifth vblank after the input, the sixth with the switch off.)
