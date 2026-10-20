@@ -13,8 +13,11 @@
 //
 // The presenter submits to the native GS's queue, under its lock (gsn_queue_lock): the queue's order
 // and a barrier at the start of each command buffer are all the synchronisation the native GS's
-// picture needs. The native GS draws on the DMA controller's thread; everything here runs on the
-// game's thread, at the vblank.
+// picture needs. The native GS draws on a thread of its own (port/gs/native/gsn.cpp): it writes the
+// picture into its image at the vblank and then says so (gsn_set_presenter's image callback,
+// port_video_submit_image), so a picture is never taken half made; gsn_scanout_take and
+// gsn_scanout_release keep the image alive while this uses it. Everything here runs on the game's
+// thread, with command pools of its own; the queue is shared under Granite's device lock.
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 

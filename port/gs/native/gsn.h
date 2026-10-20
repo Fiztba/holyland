@@ -19,15 +19,28 @@ extern "C" {
 /* Starts it: on the Vulkan context paraLLEl-GS made (a Vulkan::Context *, to run beside it and compare)
    or, with NULL, on one of its own. 0 if there is no Vulkan device it can use. */
 int gsn_open(void *shared_context);
+/* GIF packets and vblanks (without a picture wanted) are worked on by the native GS's own thread; the
+   functions that give something back wait for it to have done all that was sent before */
 void gsn_gif(int path, const void *data, size_t bytes);
+/* Waits until the native GS's thread has done all that was sent to it */
+void gsn_wait(void);
+/* The Vulkan pipeline cache kept in this file: read now (if it is there and this driver's), and
+   written again from time to time when pipelines have been made */
+void gsn_pipeline_cache(const char *path);
 void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
    into frame when want_pixels (1 if there is one). With GSN_WANT_IMAGE in want_pixels the picture
    stays on the GPU instead, as the image gsn_scanout_take hands out (GSN_WANT_IMAGE is returned when
-   it is there; GSN_WANT_PIXELS as well asks for it in frame too, read back from that image). */
+   it is there; GSN_WANT_PIXELS as well asks for it in frame too, read back from that image).
+   With GSN_PRESENT the picture goes to the presenter (gsn_set_presenter): its pixels, or with
+   GSN_WANT_IMAGE word that the image is new, from the native GS's thread once it is there. Without
+   GSN_WANT_PIXELS the caller then does not wait for it (and gets GSN_PRESENT, with GSN_WANT_IMAGE if
+   asked); a vblank with no picture wanted does not wait either. */
 #define GSN_WANT_PIXELS 1
 #define GSN_WANT_IMAGE 2
+#define GSN_PRESENT 4
 int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(void));
 /* The render targets' size, from the next vblank: x_scale times the PS2's across (1 to GSN_MAX_SCALE_X)
    and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
 #define GSN_MAX_SCALE_X 6
