@@ -1471,9 +1471,44 @@ void add_triangle(const QVertex &a, const QVertex &b, const QVertex &c) {
     gs->verts.push_back(make_vtx(c, prim, c));
 }
 
+// A UV sprite filtered bilinearly whose texture coordinates run with its position (a texel a pixel,
+// within a sixteenth) and land on texels' middles, or a sixteenth past them on a size not a power of
+// two: the GS's DDA steps a hair short and never leaves the middle, so the filter has nothing to
+// blend (paraLLEl-GS's set-up turns such a sprite's filter to nearest). Its UV is put on the middles
+// exactly, where bilinear filtering is nearest. (Signed: a corner's UV can come out under 0.)
+bool snap_sprite_uv(const QVertex &a, const QVertex &b, uint32_t prim, int32_t *snapped_a, int32_t *snapped_b) {
+    uint32_t ctxt = (prim >> 9) & 1;
+    if (!((prim >> 8) & 1) || !bits(gs->reg[R_TEX1_1 + ctxt], 5, 1)) {
+        return false; // STQ, or nearest already
+    }
+    uint64_t offset = gs->reg[R_XYOFFSET_1 + ctxt];
+    int32_t pa[2] = {int32_t(a.x) - int32_t(bits(offset, 0, 16)), int32_t(a.y) - int32_t(bits(offset, 32, 16))};
+    int32_t pb[2] = {int32_t(b.x) - int32_t(bits(offset, 0, 16)), int32_t(b.y) - int32_t(bits(offset, 32, 16))};
+    int32_t ua[2] = {int32_t(a.u), int32_t(a.v)}, ub[2] = {int32_t(b.u), int32_t(b.v)};
+    int32_t lo[2];
+    for (int i = 0; i < 2; i++) {
+        int32_t d0 = ua[i] - pa[i], d1 = ub[i] - pb[i];
+        int32_t mn = std::min(d0, d1), mx = std::max(d0, d1);
+        int32_t dist = std::abs(pb[i] - pa[i]);
+        bool npot = (dist & (dist - 1)) != 0;
+        bool centre = (mn & 15) == 8, next = (mx & 15) == 9 && npot;
+        if (!(centre || next) || mx - mn > 1) {
+            return false;
+        }
+        lo[i] = (mn & ~15) | 8; // the middle
+    }
+    for (int i = 0; i < 2; i++) {
+        snapped_a[i] = pa[i] + lo[i];
+        snapped_b[i] = pb[i] + lo[i];
+    }
+    return true;
+}
+
 void add_sprite(const QVertex &a, const QVertex &b) {
     uint32_t prim = gs->batch_prim;
     gs->batch_sprites = true;
+    int32_t ua[2], ub[2];
+    bool snapped = snap_sprite_uv(a, b, prim, ua, ub);
     // a sprite's colour, Z and fog are its second vertex's; its texture coordinates run corner to corner
     QVertex c[4] = {b, b, b, b};
     c[0].x = a.x, c[0].y = a.y, c[0].s = a.s, c[0].t = a.t, c[0].u = a.u, c[0].v = a.v;
@@ -1483,6 +1518,13 @@ void add_sprite(const QVertex &a, const QVertex &b) {
     Vtx v[4];
     for (int i = 0; i < 4; i++) {
         v[i] = make_vtx(c[i], prim, b);
+    }
+    if (snapped) {
+        // corners 0 and 2 have a's U, 0 and 1 a's V
+        for (int i = 0; i < 4; i++) {
+            v[i].s = float(i == 0 || i == 2 ? ua[0] : ub[0]) / 16.0f;
+            v[i].t = float(i == 0 || i == 1 ? ua[1] : ub[1]) / 16.0f;
+        }
     }
     gs->verts.push_back(v[0]);
     gs->verts.push_back(v[1]);
