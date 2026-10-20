@@ -12,14 +12,15 @@
        --headless        no SDL at all: no window, and the GS draws only for --dump-frames and
                          GS captures (--gs-capture-at, KF4_DEBUG_AT)
        --no-gs           draw nothing (VIF1 and VU1 still run)
-       --renderer NAME   who draws: gs (paraLLEl-GS, the default), native (step 3's renderer,
-                         port/gs/native/) or both (side by side, their pictures compared; the
-                         window shows gs's, --renderer-shown native shows the other, and
-                         --renderer-shown heatmap where they differ)
-       --presenter NAME  how the picture reaches the window: sdl (SDL_Renderer, the default) or
-                         vulkan (a swapchain on the native GS's device, the picture kept on the
-                         GPU; port/platform/present_vk.cpp); vulkan falls back to sdl if it
-                         cannot start
+       --renderer NAME   who draws: native (step 3's renderer, port/gs/native/, the default; if
+                         it cannot start, paraLLEl-GS), gs (paraLLEl-GS, the reference) or both
+                         (side by side, their pictures compared; the window shows gs's,
+                         --renderer-shown native shows the other, and --renderer-shown heatmap
+                         where they differ)
+       --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
+                         the native GS's device, the picture kept on the GPU;
+                         port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
+                         GS, or if vulkan cannot start, sdl
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
        --native-widescreen
                          with --widescreen, the native GS draws the 16:9 picture wider still, with
@@ -133,8 +134,8 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native|heatmap]\n"
-            "          [--presenter sdl|vulkan] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
+            "          [--presenter vulkan|sdl] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
             "          [--vu1 interp|hle|check]\n",
             program);
     exit(2);
@@ -160,6 +161,8 @@ static void parse_options(int argc, char **argv) {
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.native_scale = 1;
     port_options.native_msaa = 1;
+    port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
+    port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
