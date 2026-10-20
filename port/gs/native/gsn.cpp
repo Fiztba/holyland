@@ -2135,6 +2135,25 @@ void settle_upload() {
         return;
     }
     p.incremental = true;
+    // A target in another shape that prepare_write kept, as the upload writes whole pages of it: those
+    // pages are VRAM's from now on (half written), and must not go back over it before sync_targets
+    // takes them from it
+    std::vector<uint32_t> whole = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg);
+    TransferRect r = destination_rect();
+    for (auto &t : gs->targets) {
+        int32_t rows;
+        if (row_alias(*t, r.bp, r.bw, r.psm, &rows) || !regular(*t)) {
+            continue;
+        }
+        uint32_t tlo, tcount;
+        target_pages(*t, &tlo, &tcount);
+        for (uint32_t page : whole) {
+            uint32_t k = (page + vram_pages - tlo) % vram_pages;
+            if (k < tcount && k < t->dirty_pages.size()) {
+                t->dirty_pages[k] = 0;
+            }
+        }
+    }
     swizzle_upload(p.data.data(), p.data.size());
     p.data.clear();
 }
