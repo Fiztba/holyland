@@ -56,7 +56,9 @@ void gsn_state(PortStateIo *io);
 /* What the last frames cost and did (--stats, the overlay) */
 typedef struct {
     uint64_t draws, primitives, passes, texture_decodes, texture_bytes, target_copies, writebacks,
-        uploads, upload_bytes, shader_blends, texture_reuses;
+        uploads, upload_bytes, shader_blends, texture_reuses, uploads_skipped;
+    /* nanoseconds spent (nested: a flush inside the GIF's time counts in both) */
+    uint64_t ns_gif, ns_flush, ns_upload, ns_writeback, ns_decode, ns_vsync;
 } GsnStats;
 extern GsnStats gsn_stats;
 

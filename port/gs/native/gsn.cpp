@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <unordered_map>
@@ -241,6 +242,16 @@ struct Gs {
 };
 
 Gs *gs;
+
+// Time spent in a function, added to a counter of gsn_stats
+struct Timer {
+    uint64_t &total;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    explicit Timer(uint64_t &t) : total(t) {}
+    ~Timer() {
+        total += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+    }
+};
 int log_level; // KF4_GSN_LOG: 1 says when targets are made and dropped, 2 every batch too
 
 #define GSN_LOG(level, ...)                                                                                \
@@ -391,6 +402,7 @@ uint32_t depth_max(uint32_t psm) {
 
 // The target's pixels into the CPU's VRAM
 void write_back(Target &t) {
+    Timer timer(gsn_stats.ns_writeback);
     if (!t.dirty) {
         return;
     }
@@ -585,6 +597,7 @@ std::unordered_map<uint64_t, ImageHandle> decoded_pool;
 std::deque<uint64_t> decoded_order;
 
 void decode_texture(Texture &tex) {
+    Timer timer(gsn_stats.ns_decode);
     VkFormat format = raw_format(tex.psm);
     uint64_t hash = texture_hash(tex);
     tex.decoded = gs->vram_writes;
@@ -630,17 +643,36 @@ void decode_texture(Texture &tex) {
     gsn_stats.texture_decodes++;
 }
 
+// The textures by what they are (texture_key), for the lookup each batch makes
+std::unordered_map<uint64_t, Texture *> texture_index;
+
+uint64_t texture_key(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t levels,
+                     const uint32_t *mip_tbp, const uint32_t *mip_tbw) {
+    uint64_t k = uint64_t(tbp) | uint64_t(tbw) << 14 | uint64_t(psm) << 20 | uint64_t(tw) << 26 | uint64_t(th) << 30 |
+                 uint64_t(levels) << 34;
+    for (uint32_t l = 1; l < levels; l++) {
+        k = (k ^ (uint64_t(mip_tbp[l]) | uint64_t(mip_tbw[l]) << 14)) * 0x100000001B3ull;
+    }
+    return k;
+}
+
+bool same_texture(const Texture &t, uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t levels,
+                  const uint32_t *mip_tbp, const uint32_t *mip_tbw) {
+    return t.tbp == tbp && t.tbw == tbw && t.psm == psm && t.tw == tw && t.th == th && t.levels == levels &&
+           memcmp(t.mip_tbp, mip_tbp, levels * 4) == 0 && memcmp(t.mip_tbw, mip_tbw, levels * 4) == 0;
+}
+
 Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t levels,
                      const uint32_t *mip_tbp, const uint32_t *mip_tbw) {
-    for (auto &t : gs->textures) {
-        if (t->tbp == tbp && t->tbw == tbw && t->psm == psm && t->tw == tw && t->th == th && t->levels == levels &&
-            memcmp(t->mip_tbp, mip_tbp, levels * 4) == 0 && memcmp(t->mip_tbw, mip_tbw, levels * 4) == 0) {
-            t->used = gs->tick;
-            if (!texture_current(*t)) {
-                decode_texture(*t);
-            }
-            return t.get();
+    uint64_t key = texture_key(tbp, tbw, psm, tw, th, levels, mip_tbp, mip_tbw);
+    auto found = texture_index.find(key);
+    if (found != texture_index.end() && same_texture(*found->second, tbp, tbw, psm, tw, th, levels, mip_tbp, mip_tbw)) {
+        Texture *t = found->second;
+        t->used = gs->tick;
+        if (t->decoded != gs->vram_writes && !texture_current(*t)) {
+            decode_texture(*t);
         }
+        return t;
     }
     std::unique_ptr<Texture> tex(new Texture());
     tex->tbp = tbp;
@@ -657,6 +689,11 @@ Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint
     }
     tex->used = gs->tick;
     decode_texture(*tex);
+    Texture *made = tex.get();
+    if (found != texture_index.end()) {
+        texture_index.erase(found); // (a key shared by two textures: the newer one is indexed)
+    }
+    texture_index[key] = made;
     gs->textures.push_back(std::move(tex));
     // a few hundred textures at most are in use at once: drop the oldest beyond that
     if (gs->textures.size() > 1024) {
@@ -664,11 +701,16 @@ Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint
                                        [](const std::unique_ptr<Texture> &a, const std::unique_ptr<Texture> &b) {
                                            return a->used < b->used;
                                        });
-        if (oldest->get() != gs->textures.back().get()) {
+        if (oldest->get() != made) {
+            Texture *t = oldest->get();
+            auto at = texture_index.find(texture_key(t->tbp, t->tbw, t->psm, t->tw, t->th, t->levels, t->mip_tbp, t->mip_tbw));
+            if (at != texture_index.end() && at->second == t) {
+                texture_index.erase(at);
+            }
             gs->textures.erase(oldest);
         }
     }
-    return gs->textures.back().get();
+    return made;
 }
 
 // ---- The CLUT ----------------------------------------------------------------------------------
@@ -886,6 +928,7 @@ uint32_t effective_prim() {
 
 // The batch, drawn
 void flush_batch() {
+    Timer timer(gsn_stats.ns_flush);
     if (gs->verts.empty()) {
         return;
     }
@@ -1398,6 +1441,36 @@ void prepare_write(const TransferRect &r) {
     }
 }
 
+// Uploads the game sends again each frame, most of them the same bytes to the same place: the last
+// ones kept, so that one found again, over pages nothing has written since, is not swizzled again
+struct UploadCopy {
+    uint64_t bitbltbuf, trxpos, trxreg;
+    std::vector<uint8_t> data;
+    uint64_t written;     // vram_writes once it was in VRAM
+    uint32_t lo, count;   // its pages
+};
+std::vector<UploadCopy> upload_copies; // the newest last
+size_t upload_copies_bytes;
+UploadCopy *upload_match;  // the upload under way is this one's bytes so far (none written yet)
+size_t upload_at;          // how many of them
+std::vector<uint8_t> upload_bytes; // the upload under way, as it comes
+
+bool pages_untouched(uint32_t lo, uint32_t count, uint64_t since) {
+    for (uint32_t i = 0; i < count && i < vram_pages; i++) {
+        if (gs->page_written[(lo + i) % vram_pages] > since) {
+            return false;
+        }
+    }
+    for (auto &t : gs->targets) {
+        uint32_t tlo, tcount;
+        target_pages(*t, &tlo, &tcount);
+        if (pages_overlap(lo, count, tlo, tcount)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void begin_transfer(uint32_t dir) {
     uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
     gs->transfer_dir = dir;
@@ -1406,6 +1479,17 @@ void begin_transfer(uint32_t dir) {
         prepare_write(r);
         gsn_upload_begin(&gs->upload, bitbltbuf, trxpos, trxreg);
         gsn_stats.uploads++;
+        upload_match = nullptr;
+        upload_at = 0;
+        upload_bytes.clear();
+        for (auto &c : upload_copies) {
+            if (c.bitbltbuf == bitbltbuf && c.trxpos == trxpos && c.trxreg == trxreg) {
+                if (pages_untouched(c.lo, c.count, c.written)) {
+                    upload_match = &c;
+                }
+                break;
+            }
+        }
     } else if (dir == 1) {
         // local to host: what the GPU drew there, back first
         uint32_t sbp = bits(bitbltbuf, 0, 14), sbw = bits(bitbltbuf, 16, 6), spsm = bits(bitbltbuf, 24, 6);
@@ -1468,17 +1552,63 @@ void begin_transfer(uint32_t dir) {
 }
 
 void image_data(const uint8_t *data, size_t bytes) {
+    Timer timer(gsn_stats.ns_upload);
     if (gs->transfer_dir != 0 || !gs->upload.active) {
         return;
     }
+    gsn_stats.upload_bytes += bytes;
+    if (upload_match) {
+        if (upload_at + bytes <= upload_match->data.size() &&
+            memcmp(upload_match->data.data() + upload_at, data, bytes) == 0) {
+            upload_at += bytes;
+            if (upload_at == upload_match->data.size()) {
+                // all of it what VRAM already holds
+                gs->upload.active = 0;
+                gs->transfer_dir = 3;
+                upload_match = nullptr;
+                gsn_stats.uploads_skipped++;
+            }
+            return;
+        }
+        // not the same after all: what matched goes in first
+        upload_bytes.assign(upload_match->data.begin(), upload_match->data.begin() + long(upload_at));
+        upload_match = nullptr;
+        uint32_t lo = 0, hi = 0;
+        if (gsn_upload_data(&gs->upload, gs->vram.data(), upload_bytes.data(), upload_bytes.size(), &lo, &hi)) {
+            pages_written(lo, hi - lo + 1);
+        }
+    }
+    upload_bytes.insert(upload_bytes.end(), data, data + bytes);
     uint32_t lo = 0, hi = 0;
     if (gsn_upload_data(&gs->upload, gs->vram.data(), data, bytes, &lo, &hi)) {
         pages_written(lo, hi - lo + 1);
     }
-    gsn_stats.upload_bytes += bytes;
     if (!gs->upload.active) {
-        sync_targets(destination_rect());
+        TransferRect r = destination_rect();
+        sync_targets(r);
         gs->transfer_dir = 3;
+        // kept for next time, the newest last, up to 16 MB of them
+        UploadCopy copy;
+        copy.bitbltbuf = gs->reg[R_BITBLTBUF];
+        copy.trxpos = gs->reg[R_TRXPOS];
+        copy.trxreg = gs->reg[R_TRXREG];
+        copy.data.swap(upload_bytes);
+        copy.written = gs->vram_writes;
+        rect_pages(r, &copy.lo, &copy.count);
+        for (size_t i = 0; i < upload_copies.size(); i++) {
+            if (upload_copies[i].bitbltbuf == copy.bitbltbuf && upload_copies[i].trxpos == copy.trxpos &&
+                upload_copies[i].trxreg == copy.trxreg) {
+                upload_copies_bytes -= upload_copies[i].data.size();
+                upload_copies.erase(upload_copies.begin() + long(i));
+                break;
+            }
+        }
+        upload_copies_bytes += copy.data.size();
+        upload_copies.push_back(std::move(copy));
+        while (upload_copies_bytes > (16u << 20) && !upload_copies.empty()) {
+            upload_copies_bytes -= upload_copies.front().data.size();
+            upload_copies.erase(upload_copies.begin());
+        }
     }
 }
 
@@ -1824,6 +1954,7 @@ extern "C" int gsn_open(void *shared_context) {
 }
 
 extern "C" void gsn_gif(int path, const void *data, size_t bytes) {
+    Timer timer(gsn_stats.ns_gif);
     gif(path, static_cast<const uint8_t *>(data), bytes);
 }
 
@@ -1837,6 +1968,7 @@ extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
 }
 
 extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+    Timer timer(gsn_stats.ns_vsync);
     flush_batch();
     // a register every 16 bytes: PMODE, SMODE1, SMODE2, ..., DISPFB1, DISPLAY1, DISPFB2, DISPLAY2
     auto preg = [&](int n) { return privileged[n * 2]; };
@@ -1972,6 +2104,10 @@ extern "C" void gsn_state(PortStateIo *io) {
         end_pass();
         gs->targets.clear();
         gs->textures.clear();
+        texture_index.clear();
+        upload_copies.clear();
+        upload_copies_bytes = 0;
+        upload_match = nullptr;
         port_state_bytes(io, gs->vram.data(), GSN_VRAM_BYTES);
         pages_written(0, vram_pages);
     }
@@ -2001,6 +2137,10 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         end_pass();
         gs->targets.clear();
         gs->textures.clear();
+        texture_index.clear();
+        upload_copies.clear();
+        upload_copies_bytes = 0;
+        upload_match = nullptr;
         memcpy(gs->vram.data(), data, GSN_VRAM_BYTES);
         pages_written(0, vram_pages);
         reset_gs();
