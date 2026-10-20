@@ -40,6 +40,10 @@
    - sprites with no texture, sprites that map texels 1:1 (UV a texel a pixel), and nearest-filtered
      sprites that read their own frame buffer: none differ, in colour or Z;
    - other bilinear-filtered draws: at most 1/8 of the pixels the case covers differ, plus 4;
+     with GSN_SOFTWARE (a software device, lavapipe: ctest sets it off Windows), every bilinear-
+     filtered draw, 1:1 sprites too, 1/4. paraLLEl-GS filters with the device's own sampler, whose
+     weights lavapipe works out otherwise than a GPU: its pictures move (by up to 100 on noise),
+     where the native GS's integer filter gives the same picture on both;
    - anything else: at most 1/50 of them, plus 4.
    The limits are loose on purpose: a systematic error (a wrong blend, format, wrap, CLUT) moves most
    pixels of a primitive, and the strict class catches a difference of a single pixel.
@@ -55,14 +59,20 @@
    Switches, for narrowing a difference down: GSN_OFF=feature,... (make_case's list) turns features
    off; GSN_CASE=n runs one case, GSN_FIRST=n the cases from n; GSN_THRESHOLD=t (1); GSN_ALL prints
    every case; GSN_VERBOSE the vertices; GSN_DUMP writes a failing case's two frame buffers and their
-   difference as PPM files; GSN_GRADIENT makes CT32 textures their own coordinates (decal), and prints
-   how far apart the texels each renderer sampled are. Exits 77 (skipped) when there is no Vulkan
-   device. */
+   difference as PPM files (GSN_DUMP=all: every case GSN_ALL prints); GSN_GRADIENT makes CT32
+   textures their own coordinates (decal), and prints how far apart the texels each renderer
+   sampled are; GSN_SAME runs case 0's draws every time; GSN_ONLY_GS / GSN_ONLY_NATIVE feed one
+   renderer (no comparison worth reading); GSN_STATS prints the native GS's holdings after each
+   case; GSN_CHUNK=n runs n cases a process (run_chunks); GSN_SOFTWARE, above. Exits 77 (skipped)
+   when there is no Vulkan device. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
 #include "gsn.h"
 #include "gsn_vram.h"
@@ -127,8 +137,8 @@ static uint64_t gif_tag(uint32_t nloop, int eop, uint32_t flg, uint32_t nreg) {
 /* The packet so far, to both renderers */
 static void send_both(int path) {
     if (packet_qw) {
-        port_gs_backend_gif(path, packet, packet_qw * 16);
-        gsn_gif(path, packet, packet_qw * 16);
+        if (!getenv("GSN_ONLY_NATIVE")) port_gs_backend_gif(path, packet, packet_qw * 16);
+        if (!getenv("GSN_ONLY_GS")) gsn_gif(path, packet, packet_qw * 16);
     }
     packet_qw = 0;
 }
@@ -888,6 +898,12 @@ static int run_case(int index, const Case *k) {
         static const uint64_t privileged[0xF0 / 8];
         port_gs_backend_vsync(privileged, 0, 0, NULL);
         gsn_vsync(privileged, 0, 0, NULL);
+        if (getenv("GSN_STATS")) {
+            fprintf(stderr, "stats targets %llu textures %llu pool %llu (%llu MB) uploads kept %llu\n",
+                    (unsigned long long)gsn_stats.targets, (unsigned long long)gsn_stats.textures,
+                    (unsigned long long)gsn_stats.pool_images, (unsigned long long)gsn_stats.pool_mb,
+                    (unsigned long long)gsn_stats.upload_copies);
+        }
     }
 
     for (size_t i = 0; i < n; i++) {
@@ -929,10 +945,15 @@ static int run_case(int index, const Case *k) {
                hist[0][0], hist[0][1], hist[0][2], hist[0][3], hist[0][4], hist[1][0], hist[1][1], hist[1][2], hist[1][3], hist[1][4]);
     }
     /* the criterion (the header comment) */
-    int exact = k->prim == 6 && (!k->tme || (k->unit_uv && !k->feedback) || (k->feedback && k->fst && !k->mmag));
+    int bilinear = k->tme && (k->mmag || k->mmin);
+    int software = getenv("GSN_SOFTWARE") != NULL;
+    int exact = k->prim == 6 && (!k->tme || (k->unit_uv && !k->feedback) || (k->feedback && k->fst && !k->mmag)) &&
+                !(software && bilinear);
     uint32_t allowed = exact ? 0 : cover / 50 + 4;
-    if (!exact && k->tme && (k->mmag || k->mmin)) {
-        allowed = cover / 8 + 4; /* bilinear: each sixteenth of a texel is a boundary */
+    if (!exact && bilinear) {
+        /* bilinear: each sixteenth of a texel is a boundary; on a software device, paraLLEl-GS's
+           filter (the device's sampler) is the device's own */
+        allowed = cover / (software ? 4 : 8) + 4;
     }
     int ok = bad <= allowed && zbad <= allowed;
     if (getenv("GSN_ALL") || !ok) {
@@ -946,7 +967,7 @@ static int run_case(int index, const Case *k) {
             printf("  at (%d,%d): paraLLEl %08X native %08X; Z paraLLEl %08X native %08X\n", first_x, first_y,
                    fb_a[at], fb_b[at], z_a[at], z_b[at]);
         }
-        if (!ok && getenv("GSN_DUMP")) {
+        if (getenv("GSN_DUMP") && (!ok || strcmp(getenv("GSN_DUMP"), "all") == 0)) {
             char name[64];
             uint32_t *diff = malloc(n * 4);
             snprintf(name, sizeof(name), "case%d_parallel.ppm", index);
@@ -966,6 +987,49 @@ static int run_case(int index, const Case *k) {
 }
 
 /* gsn_draw_test [cases [seed]] */
+static void set_env(const char *name, const char *value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
+/* GSN_CHUNK=n: the cases run n at a time, each n in a process of its own (this program again, with
+   GSN_FIRST). Under lavapipe, what a process's Vulkan device has had (every pipeline state's compiled
+   shaders, something each submission leaves) is let go only when it ends: some 100 MB a case of this
+   test's variety, which a few hundred cases in one process turn into an out-of-memory kill. (On a GPU
+   the device's memory holds still; CMakeLists.txt sets GSN_CHUNK for ctest off Windows.) */
+static int run_chunks(const char *program, int cases, uint32_t seed, int chunk) {
+    int failed = 0, skipped = 0;
+    char command[4096], number[32];
+
+    set_env("GSN_CHUNK", "");
+    for (int first = 0; first < cases; first += chunk) {
+        int last = first + chunk < cases ? first + chunk : cases;
+        int status;
+
+        snprintf(number, sizeof(number), "%d", first);
+        set_env("GSN_FIRST", number);
+        snprintf(command, sizeof(command), "\"%s\" %d %u", program, last, seed);
+        status = system(command);
+#ifndef _WIN32
+        status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+#endif
+        if (status == 77) {
+            skipped++;
+        } else if (status != 0) {
+            printf("cases %d-%d: FAILED (%d)\n", first, last - 1, status);
+            failed++;
+        }
+    }
+    if (skipped && !failed) {
+        return 77;
+    }
+    printf("%d chunks of %d cases %s\n", failed, chunk, failed ? "FAILED" : "failed");
+    return failed ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     clock_t start = clock();
     int cases = argc > 1 ? atoi(argv[1]) : 300;
@@ -978,6 +1042,9 @@ int main(int argc, char **argv) {
     }
 
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (getenv("GSN_CHUNK") && atoi(getenv("GSN_CHUNK")) > 0) {
+        return run_chunks(argv[0], cases, seed, atoi(getenv("GSN_CHUNK")));
+    }
     if (!port_gs_backend_open()) {
         printf("no Vulkan device for paraLLEl-GS: skipped\n");
         return 77;
@@ -997,7 +1064,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < cases; i++) {
         Case k;
         /* each case from its own seed, so one can be run alone (GSN_CASE) */
-        rng_state = (0x9E3779B97F4A7C15ull ^ ((uint64_t)seed << 32 | (uint32_t)i)) * 0xD1B54A32D192ED03ull | 1;
+        rng_state = (0x9E3779B97F4A7C15ull ^ ((uint64_t)seed << 32 | (uint32_t)(getenv("GSN_SAME") ? 0 : i))) * 0xD1B54A32D192ED03ull | 1;
         for (int w = 0; w < 4; w++) {
             rng();
         }
