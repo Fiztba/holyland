@@ -24,7 +24,10 @@ timings of the step 2 path, and how ico-pc built its renderer.
   paraLLEl-GS for all 13 formats, `tests/gsn_vram_test.c`), render targets on the GPU, textures as
   raw texels looked up and filtered in the shader, Vulkan's blending where the GS equation maps onto
   it and the shader's (from a copy of the target) elsewhere, the feedback passes, DATE, AFAIL,
-  MTBA mipmaps, SCANMSK, save states. The 64 map tour captures, each frame drawn from
+  MTBA mipmaps, SCANMSK, save states. `tests/gsn_draw_test.c` draws random batches (every primitive,
+  texture and frame buffer format, CLUT, blend, alpha and Z test, DATE, FBMSK, SCANMSK, fog) on both
+  renderers and compares their VRAM: 300 cases a run pass, and paraLLEl-GS's own quirks the game
+  does not reach are listed in PLAN.md. The 64 map tour captures, each frame drawn from
   paraLLEl-GS's state: no crash; on average 2% of the frame's pixels are more than 1 a channel
   from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
   PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
