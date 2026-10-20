@@ -10,6 +10,31 @@ how each stage is checked, and the risks. It is written from four surveys (Octob
 game's draw code, a census of GS captures of all 64 maps and of the menus, title, movies and spells,
 timings of the step 2 path, and how ico-pc built its renderer.
 
+## Progress (October 2026)
+
+- **Stage 0, mostly done.** `--renderer gs|native|both`, the Debug page's switch and
+  `settings.json`; with `both`, the displayed frame buffers compared every vblank (the overlay and
+  `--stats`). `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank).
+  Not done: the presenter on Granite's WSI and ImGui on Vulkan (the native GS's picture still goes
+  through the CPU to SDL, as paraLLEl-GS's does). Interlace settled: in play and the in-game menus
+  draw one 448-line frame (SMODE2 FFMD 0); the title, the memory card screens and the movies draw
+  224-line fields, FBP 0 and 0x46 in turn.
+- **Stages 1 and 2, working.** The native GS (`port/gs/native/`) draws the whole game from the VU1
+  interpreter's packets: VRAM on the CPU in the GS's layout (`gsn_vram.c`, byte for byte against
+  paraLLEl-GS for all 13 formats, `tests/gsn_vram_test.c`), render targets on the GPU, textures as
+  raw texels looked up and filtered in the shader, Vulkan's blending where the GS equation maps onto
+  it and the shader's (from a copy of the target) elsewhere, the feedback passes, DATE, AFAIL,
+  MTBA mipmaps, save states. The 64 map tour captures: no crash, and map 000's displayed frames equal
+  paraLLEl-GS's (no pixel off by more than 1); the others differ in a few edge pixels per draw
+  (PLAN.md, "Where the native GS differs"). Title, memory card, menus, journal, magic and movie
+  captures match. A 2,000-vblank run takes 8.0 s against paraLLEl-GS's 8.2 s.
+- **Stage 3, started**: the VU1 programs, first as C (bit for bit against the interpreter), then as
+  shaders.
+- Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
+  there; the scanouts agree); a draw that samples a target as another format (the scrolling textures,
+  T4/T8 over CT32) writes the target back through the CPU once a frame; `--renderer both` aborts in
+  Mesa's lavapipe (each renderer alone runs there).
+
 ## Why
 
 - **Speed.** The VU1 interpreter is 65-70% of the run's time with the GS on. The busiest maps (000,

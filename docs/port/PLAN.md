@@ -174,6 +174,22 @@ Still open:
 ## Step 3: graphics, stage 2 (native renderer)
 
 The plan, from a survey of the game's draw code and GS captures of every map: [STEP3.md](STEP3.md).
+Where it stands: STEP3.md's "Progress". `--renderer native` (or `both`) turns it on; paraLLEl-GS
+stays the default until stage 4.
+
+### Where the native GS differs from paraLLEl-GS
+
+What it knowingly does otherwise, found with `kf4-gsreplay --compare-renderers`:
+
+| What | The native GS | paraLLEl-GS (the GS) |
+|---|---|---|
+| Triangle edges | Vulkan's exact edge test on the GS's 1/16-pixel vertices | the GS's own scan conversion: a few pixels along some edges are covered by one and not the other |
+| Alpha test on filtered textures | the same filtering and rounding (4-bit weights, rounded to even), but an alpha a hair either side of AREF can pass in one and fail in the other | |
+| Mipmap LOD | per pixel from Q in floats | the GS's precision: differences of a few levels of a channel on mipmapped draws |
+| Blending by As with As above 0x80 | Vulkan's blend factor clamps at 1.0 (for draws blended by the fixed-function unit) | 2.0 |
+| DATE (the destination alpha test) | tested against a copy of the target taken before the draw: overlapping primitives of one draw do not see each other's alpha | per pixel as drawn |
+| Points and lines | not drawn (the game draws neither) | drawn |
+| Field-mode scanout (title, menus, movies) | the two fields woven line by line, the picture not moved | paraLLEl-GS's deinterlacer and its NTSC crop: the picture sits a pixel or two apart |
 
 A renderer under the game's draw layer, as ico-pc has:
 - The four VU1 programs become shaders that read the game's own vertex data. Each has a CPU
