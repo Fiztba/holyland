@@ -1511,9 +1511,15 @@ void sync_targets(const TransferRect &r) {
 
 // Before the rectangle is written in the CPU's VRAM: the targets over it in another shape go back to
 // VRAM and stop being targets
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+
 void prepare_write(const TransferRect &r) {
     uint32_t lo, count;
     rect_pages(r, &lo, &count);
+    // the pages the transfer writes whole (when it is an upload of whole pages): a target entirely
+    // under them loses every pixel, and needs no writing back first
+    std::vector<uint32_t> whole = whole_pages(gs->reg[R_BITBLTBUF], gs->reg[R_TRXPOS], gs->reg[R_TRXREG]);
+    std::sort(whole.begin(), whole.end());
     for (size_t i = 0; i < gs->targets.size();) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
@@ -1525,7 +1531,13 @@ void prepare_write(const TransferRect &r) {
                 i++;
                 continue;
             }
-            write_back(*t);
+            bool covered = !whole.empty() && t->bp % 32 == 0;
+            for (uint32_t k = 0; covered && k < tcount; k++) {
+                covered = std::binary_search(whole.begin(), whole.end(), (tlo + k) % vram_pages);
+            }
+            if (!covered) {
+                write_back(*t);
+            }
             drop_target(t);
             continue;
         }
