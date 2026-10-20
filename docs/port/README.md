@@ -81,9 +81,10 @@ If not, it keeps the scratch copy so the conflicts can be resolved there, and th
 ## Building
 
 The game code is GNU C, so build it with clang or gcc (not MSVC's cl). You need CMake 3.21 or newer
-and Ninja. The renderer, paraLLEl-GS, is C++ (clang++ or g++, which the presets name). It runs on
-desktop Vulkan GPUs (its README lists the features it needs); running it needs a Vulkan driver,
-building it does not.
+and Ninja. The renderers, the native GS (`port/gs/native/`, the default) and paraLLEl-GS (the
+reference), are C++ (clang++ or g++, which the presets name) on Vulkan, through paraLLEl-GS's Granite.
+They run on desktop Vulkan GPUs (paraLLEl-GS's README lists the features it needs); running them needs
+a Vulkan driver, building them does not.
 
 **Windows:** use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw), or LLVM's clang, on the PATH:
 
@@ -104,8 +105,8 @@ cmake --build out/linux-gcc
 ```
 
 The program is `out/<preset>/kf4`. SDL2 is used for the window and the pad if CMake finds it
-(`-DKF4_USE_SDL=OFF` turns it off). paraLLEl-GS is built when it is checked out
-(`-DKF4_USE_PARALLEL_GS=OFF` turns it off); without it the game runs and draws nothing.
+(`-DKF4_USE_SDL=OFF` turns it off). The renderers are built when paraLLEl-GS is checked out
+(`-DKF4_USE_PARALLEL_GS=OFF` turns them off); without them the game runs and draws nothing.
 
 ## Running
 
@@ -116,14 +117,14 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | Option | What |
 |---|---|
 | `--disc PATH` | the game's disc image (or set `KF4_DISC`) |
-| `--fast` | run as fast as possible instead of at 60 vblanks a second |
+| `--fast` | run as fast as possible instead of at 60 vblanks a second (59.94: each vblank waits for the host's clock, on Windows a high-resolution waitable timer; the window shows each vblank's picture, waiting up to half a vblank for it) |
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
-| `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (step 3, [STEP3.md](STEP3.md)), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
+| `--renderer native\|gs\|both` | who draws: the native GS (the default; step 3, [STEP3.md](STEP3.md)), paraLLEl-GS (the reference, kept for comparison; it draws instead if the native GS cannot start), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
 | `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
 | `--native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`) |
 | `--native-msaa N` | the native GS draws the 3D with N samples a pixel (1, the default: off; 2, 4 or 8), smoothing its edges (on the Debug page, live but for a change of count, which takes a restart; `settings.json` `display.native_msaa`) |
-| `--presenter sdl\|vulkan` | how the picture reaches the window: SDL_Renderer (the default), or a Vulkan swapchain on the native GS's device, the native GS's picture never leaving the GPU (`port/platform/present_vk.cpp`; needs `--renderer native` or `both`, else falls back to SDL). The Debug page sets it for the next start (`settings.json`, `display.presenter`) |
+| `--presenter vulkan\|sdl` | how the picture reaches the window: a Vulkan swapchain on the native GS's device, the native GS's picture never leaving the GPU (the default; `port/platform/present_vk.cpp`), or SDL_Renderer. Vulkan needs the native GS (`--renderer native` or `both`): with paraLLEl-GS alone the window is SDL_Renderer's, as it is if the swapchain cannot be made. The Debug page sets it for the next start (`settings.json`, `display.presenter`) |
 | `--vu1 interp\|hle\|check` | who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through): `hle` (the default), computed directly with the interpreter's results to the bit (`port/platform/vu1_hle*.c`), or `interp`, the cycle-accurate interpreter; `check` runs both and compares them run by run (`--stats` counts the differences) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
@@ -200,6 +201,11 @@ The overlay's window places go beside it in `overlay.ini`. It is written a secon
 the overlay closes and at exit; keys it does not know are kept, and a file that is not valid JSON is
 reported and left alone (the defaults are used). The controls keep only the bindings that differ from
 the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:lefttrigger"`.
+`"version"` is 2 since the native GS and the Vulkan presenter became the defaults: every save writes
+every setting, so an older file says `"renderer": "gs"` and `"presenter": "sdl"` whether the player
+chose them or not. In a file without a version those two values are taken as the old defaults and the
+new ones are used (the file is written again as version 2, with a line on stderr); `"native"`,
+`"both"` and `"vulkan"` are kept. From version 2 on, `"gs"` and `"sdl"` are kept as chosen.
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
@@ -208,7 +214,9 @@ and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
 settings.json and has no overlay, so `boot_test.py` and `frame_test.py` run the same whatever the
-player has chosen. Built without SDL there is no overlay at all.
+player has chosen. `frame_test.py` and `map_tour.py` ask for `--renderer gs` (paraLLEl-GS, the
+reference), whatever the program's default; `--renderer native` runs them on the native GS. Built
+without SDL there is no overlay at all.
 
 `KF4_OVERLAY_SHOT=page@vblank,...` is for checking the overlay without anyone at the screen: it opens
 the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
@@ -236,7 +244,8 @@ the two logs match and reach the first map. It runs headless with no GS, so it n
 `tools/frame_test.py --disc kfiv_us.iso` is step 2's: the same boot with the GS, dumping the logo,
 the title menu, the brightness screen, the opening and the first map, and every picture of vblanks 990
 to 1010 (`--dense`). It checks two runs (`--runs N` for more) give the same pictures byte for byte and
-that none is blank (`--keep DIR` keeps them to look at).
+that none is blank (`--keep DIR` keeps them to look at). It draws with paraLLEl-GS; `--renderer native`
+makes the same check of the native GS.
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).

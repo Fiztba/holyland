@@ -24,7 +24,7 @@ timings of the step 2 path, and how ico-pc built its renderer.
   ImGui's Vulkan backend (`port/platform/present_vk.cpp`). No read-back: 2,000 vblanks windowed at
   4x went from 16-22 s to 8.1-8.2 s, at 1x from 7.6 s to 7.2-7.6 s. paraLLEl-GS keeps
   SDL_Renderer (`--renderer gs` falls back to it); with `both` the paraLLEl-GS picture is uploaded.
-  `sdl` stays the default until the Vulkan one has been played with. Interlace settled: in play and the in-game menus
+  The Vulkan presenter is the default since stage 4 (below). Interlace settled: in play and the in-game menus
   draw one 448-line frame (SMODE2 FFMD 0); the title, the memory card screens and the movies draw
   224-line fields, FBP 0 and 0x46 in turn.
 - **Stages 1 and 2, working.** The native GS (`port/gs/native/`) draws the whole game from the VU1
@@ -86,8 +86,35 @@ timings of the step 2 path, and how ico-pc built its renderer.
     none (a new build, its own cache full) the first minutes made pipelines for 1.6 s;
   - VU1's code aligned to 64 bytes (`-falign-functions=64 -falign-loops=64` for vu1*.c): its speed
     moved by a third with where the linker put it.
-- **Stage 4, started**: `--vu1 hle` is the default (bit for bit, so no switch to keep the PS2's
-  behaviour is needed). `--renderer native` stays opt-in until it has been played through.
+- **Stage 4, done pending a play-through.** The defaults: the native GS (`--renderer native`), the
+  Vulkan presenter (`--presenter vulkan`) and the VU1 programs in C (`--vu1 hle`; bit for bit, so no
+  switch to keep the PS2's behaviour is needed). paraLLEl-GS stays behind `--renderer gs` (and
+  `both`) for comparison; it draws instead when the native GS cannot start (no Vulkan device it can
+  use), and with it alone the window is SDL_Renderer's. `settings.json` has a `"version"` (2): older
+  files wrote `"gs"` and `"sdl"` out whether chosen or not, so in them those two are read as the old
+  defaults (README.md, "settings.json"). `frame_test.py` and `map_tour.py` ask for `--renderer gs`;
+  `frame_test.py --renderer native` passes too (the native GS's pictures the same every run). CI
+  builds and runs the unit tests only, none of which depends on the default.
+  Frame pacing, measured windowed at 59.94 Hz pacing over 2,300 vblanks (new game, then map 000 from
+  vblank 1900; a 144 Hz monitor, vsync off; per-present timestamps in a test build):
+  - the vblank wake-up: Windows' Sleep in whole milliseconds woke it 0 to 2.5 ms late (presents a
+    deviation of 0.60 ms apart); a high-resolution waitable timer wakes it 0.3 ms late (p99 0.5 ms),
+    0.22 ms deviation (`port_sleep`, `host_time.c`; Linux's nanosleep was already exact);
+  - the picture of a vblank reaches the window from the renderer's thread about when the window
+    wakes for it (on map 000: the native GS 9 ms after the vblank before, paraLLEl-GS 14-22 ms); a
+    late one was shown at the next vblank, the one before twice and one dropped. In a run: the native
+    GS with the Vulkan presenter 1, with SDL_Renderer 3-93, paraLLEl-GS 7-77 (it varies run to run).
+    The window now waits for it up to half a vblank while pictures are coming (not with `--fast`):
+    0, 1 and 0, with 0-12 presents of 2,300 waiting more than 1.5 ms;
+  - pipeline compiles: no present more than 23.7 ms after the one before, with the native GS's cache
+    new and NVIDIA's shader cache off (`__GL_SHADER_DISK_CACHE=0`) or with both;
+  - with vsync, presents are as even (0.61 ms deviation; FIFO with 3 images never waited at
+    144 Hz), but 59.94 pictures a second on a 144 Hz screen are shown 2 and 3 refreshes in turn: only
+    a 60 Hz (or variable-refresh) screen shows them evenly.
+  Left for the owner: the play-through; paraLLEl-GS's LGPL question before release builds ship it
+  (`-DKF4_USE_PARALLEL_GS=OFF` leaves it out today only by taking the native GS with it: the two
+  are one library, `kf4_gs`, on the Granite that comes with paraLLEl-GS; a build of the native GS
+  alone needs them split).
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
   there; the scanouts agree); write-backs still left: the title's 640x224 field buffer (61 in the
   run), the menus' Z buffer over the play's frame buffers, and map 008's reflection drawn with the
@@ -107,8 +134,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
 - **Uploads on the GPU.** The swizzle runs on the CPU (and is mostly skipped now: uploads seen before
   are copied in as pages). A compute pass writing a GPU copy of VRAM, with textures read from it,
   would take the rest off the CPU and remove the write-backs.
-- **The Vulkan presenter as the default.** Done as an opt-in (`--presenter vulkan`, Progress above);
-  the default can change once it has been played with. paraLLEl-GS's picture could go the same way
+- **paraLLEl-GS's picture on the Vulkan presenter.** The Vulkan presenter is the default (stage 4,
+  Progress above), for the native GS. paraLLEl-GS's picture could go the same way
   (uploaded, or its image on a shared device) so that `--renderer gs` needs no SDL_Renderer either.
 - **VU1 on the GPU.** The C programs (stage 3) take VU1 from two thirds of the run's time to a
   sixth; shaders would take the rest, at the cost of a second implementation to keep bit for bit.
