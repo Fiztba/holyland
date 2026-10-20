@@ -85,6 +85,9 @@ static void open_backend(void *unused) {
         /* a Vulkan device of its own, beside paraLLEl-GS's (whose context has features on that the
            native GS does not want, and whose threads submit to the queue unlocked by the other device) */
         have_native = gsn_open(NULL);
+        if (have_native) {
+            gsn_set_scale(port_options.native_scale);
+        }
     }
     backend = have_gs || have_native;
 #endif
@@ -642,6 +645,15 @@ void port_gs_post_vsync(void) {
     }
     __atomic_store_n(&queue_head, head + 1, __ATOMIC_RELEASE);
     port_dmac_post_vsync();
+}
+
+void port_gs_set_native_scale(int scale) {
+    port_options.native_scale = scale;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_scale(scale);
+    }
+#endif
 }
 
 /* --stats: what the native GS did */

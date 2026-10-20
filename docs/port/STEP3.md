@@ -31,6 +31,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
   with both renderers through 600 vblanks on eight maps: no crash, frames within a mean of 0.2 a
   channel (a few edge pixels that the frame-to-frame smear carries on). A 2,000-vblank run takes
   8.0 s against paraLLEl-GS's 8.2 s.
+- **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
+  resolution, live from the overlay).
 - **Stage 3, started**: the VU1 programs, first as C (bit for bit against the interpreter), then as
   shaders.
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale

@@ -32,6 +32,8 @@ typedef struct {
     int renderer;
     int renderer_shown;
     int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
+    int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
+    int native_scale_forced;
     /* How the GS's output becomes a PC picture (port/gs/gs_parallel.cpp). Each is on by default and
        turned off by --no-<name>; --ps2-scanout turns them all off (the GS's raw output). */
     int deinterlace;         /* weave the two fields of an interlaced picture into one */
@@ -224,8 +226,10 @@ typedef struct {
 } PortRendererDiff;
 extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
+/* The native GS's scale (port_options.native_scale), from the next vblank */
+void port_gs_set_native_scale(int scale);
 
-#define PORT_GS_FRAME_PIXELS (1024u * 1024u)
+#define PORT_GS_FRAME_PIXELS (2560u * 2048u) /* the native GS at 4 times the PS2's 640x448 */
 typedef struct {
     uint32_t width, height;
     uint32_t *rgba; /* width * height pixels, R in the low byte */

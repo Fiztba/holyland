@@ -676,6 +676,17 @@ void renderer_section() {
             "the GPU's own rasteriser: faster, and the base for higher resolutions later. Both runs the\n"
             "two side by side and compares the pictures every vblank (slower; for testing).\n"
             "--renderer on the command line wins over this.");
+    if (port_options.renderer != PORT_RENDERER_GS) {
+        int scale = port_options.native_scale;
+        if (ImGui::SliderInt("Native GS resolution", &scale, 1, 4, "%dx")) {
+            port_gs_set_native_scale(scale);
+            port_settings.native_scale = scale;
+            port_settings_changed();
+        }
+        tooltip("The native GS draws its frame buffers at this many times the PS2's 640x448 (2x: 1280x896,\n"
+                "4x: 2560x1792). 1x is the PS2's picture; with --renderer both the comparison is made at 1x\n"
+                "pixels either way.");
+    }
     if (port_options.renderer == PORT_RENDERER_BOTH) {
         bool native = port_options.renderer_shown == PORT_RENDERER_NATIVE;
         if (ImGui::Checkbox("Show the native GS's picture", &native))

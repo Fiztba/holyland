@@ -41,8 +41,18 @@ int texa_alpha(ivec3 rgb, bool bit, bool has_bit) {
     return int(field(pc.texa, 0u, 8u));
 }
 
+// A texture that is a render target drawn at a larger scale (--native-scale) is read at its own
+// pixels: the coordinates are in them, `ts` to a texel, and wrap as the texel they are in does
+int target_scale() {
+    return field(pc.flags, GSN_F_SRC_SHIFT, 4u) >= GSN_SRC_TARGET_CT32 ? max(int(pc.tscale), 1) : 1;
+}
+
 // One texel at integer coordinates, wrapped as CLAMP says, at mip level `level`
 ivec4 texel(ivec2 c, int level) {
+    int ts = target_scale();
+    ivec2 logical = ivec2(floor(vec2(c) / float(ts)));
+    ivec2 sub = c - logical * ts;
+    c = logical;
     ivec2 size = max(ivec2(int(pc.tex_size & 0xFFFFu), int(pc.tex_size >> 16)) >> level, ivec2(1));
     uint wms = field(pc.clamp_lo, 0u, 2u);
     uint wmt = field(pc.clamp_lo, 2u, 2u);
@@ -64,7 +74,7 @@ ivec4 texel(ivec2 c, int level) {
 
     uint src = field(pc.flags, GSN_F_SRC_SHIFT, 4u);
     if (src >= GSN_SRC_TARGET_CT32) {
-        ivec4 t = ivec4(round(texelFetch(u_target, c + pc.src_offset, 0) * 255.0));
+        ivec4 t = ivec4(round(texelFetch(u_target, (c + pc.src_offset) * ts + sub, 0) * 255.0));
         if (src == GSN_SRC_TARGET_CT24) {
             t.a = texa_alpha(t.rgb, false, false);
         } else if (src == GSN_SRC_TARGET_CT16) {
@@ -98,7 +108,7 @@ ivec4 round_shift(ivec4 v, int bits) {
 
 // The texture at texel coordinates `tc` (level 0's), one level, nearest or bilinear
 ivec4 sample_level(vec2 tc, int level, bool linear) {
-    vec2 at = tc / float(1 << level);
+    vec2 at = tc / float(1 << level) * float(target_scale());
     // the GS's texel coordinates have 4 bits of fraction; interpolated in floats, a coordinate that is
     // exactly on one comes out a hair under it, which the bias puts back
     ivec2 p = ivec2(floor(at * 16.0 + 1.0 / 64.0));
@@ -188,7 +198,8 @@ void main() {
     }
 
     uint scanmsk = field(pc.misc, GSN_M_SCANMSK_SHIFT, 2u);
-    if (scanmsk >= 2u && (uint(gl_FragCoord.y) & 1u) == scanmsk - 2u) {
+    uint line = uint(gl_FragCoord.y) / max(field(pc.misc, GSN_M_SCALE_SHIFT, 3u), 1u);
+    if (scanmsk >= 2u && (line & 1u) == scanmsk - 2u) {
         discard;
     }
 

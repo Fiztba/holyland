@@ -3,7 +3,7 @@
      {
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "widescreen": false, "widescreen_hud": "corner", "renderer": "gs"},
+                    "widescreen": false, "widescreen_hud": "corner", "renderer": "gs", "native_scale": 1},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -275,6 +275,7 @@ void port_settings_load(void) {
                                                           : PORT_RENDERER_GS;
         }
     }
+    s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 1, 4);
     audio = cJSON_GetObjectItemCaseSensitive(document, "audio");
     s->volume = (int)read_number(audio, "volume", s->volume, 0, 100);
     s->mute = read_bool(audio, "mute", s->mute);
@@ -309,6 +310,9 @@ void port_settings_load(void) {
     }
     if (!port_options.renderer_forced) {
         port_options.renderer = s->renderer;
+    }
+    if (!port_options.native_scale_forced) {
+        port_options.native_scale = s->native_scale;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -414,6 +418,7 @@ void port_settings_save(void) {
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
+    put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

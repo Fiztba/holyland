@@ -15,6 +15,7 @@
        --renderer NAME   who draws: gs (paraLLEl-GS, the default), native (step 3's renderer,
                          port/gs/native/) or both (side by side, their pictures compared; the
                          window shows gs's, --renderer-shown native shows the other)
+       --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off
@@ -117,7 +118,8 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n",
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n"
+            "          [--native-scale 1-4]\n",
             program);
     exit(2);
 }
@@ -140,6 +142,7 @@ static void parse_options(int argc, char **argv) {
 
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
+    port_options.native_scale = 1;
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
         const char *value = i + 1 < argc ? argv[i + 1] : NULL;
@@ -221,6 +224,13 @@ static void parse_options(int argc, char **argv) {
             } else {
                 port_options.renderer_shown = which;
             }
+        } else if (strcmp(option, "--native-scale") == 0) {
+            port_options.native_scale = atoi(value);
+            if (port_options.native_scale < 1 || port_options.native_scale > 4) {
+                fprintf(stderr, "--native-scale wants 1 to 4, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_scale_forced = 1;
         } else if (strcmp(option, "--frames") == 0) {
             port_options.frames = strtoll(value, NULL, 0);
         } else if (strcmp(option, "--input") == 0) {

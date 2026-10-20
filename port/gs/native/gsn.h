@@ -24,6 +24,8 @@ void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
    into frame when want_pixels (1 if there is one) */
 int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+/* The render targets' size, 1 to 4 times the PS2's (--native-scale), from the next vblank */
+void gsn_set_scale(int scale);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {
