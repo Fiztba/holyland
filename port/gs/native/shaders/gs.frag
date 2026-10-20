@@ -225,7 +225,9 @@ void main() {
             uint sc = field(pc.alpha, 4u, 2u), sd = field(pc.alpha, 6u, 2u);
             ivec3 a = sa == 0u ? c.rgb : sa == 1u ? d.rgb : ivec3(0);
             ivec3 b = sb == 0u ? c.rgb : sb == 1u ? d.rgb : ivec3(0);
-            int k = sc == 0u ? c.a : sc == 1u ? d.a : int(field(pc.alpha, 8u, 8u));
+            // (a 24-bit frame buffer has no alpha: its Ad is 1.0)
+            int ad = (pc.misc & GSN_M_DST24) != 0u ? 0x80 : d.a;
+            int k = sc == 0u ? c.a : sc == 1u ? ad : int(field(pc.alpha, 8u, 8u));
             ivec3 dd = sd == 0u ? c.rgb : sd == 1u ? d.rgb : ivec3(0);
             o.rgb = (((a - b) * k) >> 7) + dd;
         }
