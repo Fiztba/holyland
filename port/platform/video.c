@@ -8,7 +8,8 @@
    (port_video_submit_image) and the others' pixels as they are here. A dumped frame is
    written as a PNG, uncompressed, so no library is needed. It is the GS's own picture, 640x448 (or
    the scanout's size) whatever the window shows: with --widescreen it is the squeezed picture, to be
-   shown at 16:9. */
+   shown at 16:9 (with --native-widescreen, the native GS's wider one, 4/3 or more as many pixels
+   across as --native-scale gives). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
