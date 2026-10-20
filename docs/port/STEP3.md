@@ -54,8 +54,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
   `--native-msaa 2|4|8`: the 3D (every draw with a Z buffer) drawn into multisampled images, resolved
   wherever the target is read (textures, the shader's blending, write-backs, frame copies, the
   scanout), the 2D drawn with Z snapped to whole pixels so the menus and movies are unchanged; the
-  alpha test's cut-outs and draws without Z stay as they are. Combines with the two above; about 5%
-  (4x) to 10% (8x) at `--native-scale 4`, nothing measurable at 1x. PLAN.md's opt-in table.
+  alpha test's cut-outs and draws without Z stay as they are. Combines with the two above; 2% (4x)
+  to 5% (8x) of a run's time at 1x, 6% to 12% at `--native-scale 4`. PLAN.md's opt-in table.
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
   packets through) has a high-level C version that gives the interpreter's results bit for bit
   (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
