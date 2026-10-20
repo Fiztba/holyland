@@ -216,6 +216,7 @@ struct Gs {
     uint32_t clut_cbp[2]; // CBP0, CBP1: the last CBP loaded by CLD 2..5
     uint64_t clut_version;
     QVertex queue[3];
+    Vtx queued[3]; // the same, as the shaders take them (made as each is queued)
     uint32_t queue_count;
     uint32_t fan_first; // a fan's first vertex is queue[0], kept
     GifPath paths[4];
@@ -1703,12 +1704,16 @@ Vtx make_vtx(const QVertex &q, uint32_t prim, const QVertex &colour_from) {
     return v;
 }
 
-void add_triangle(const QVertex &a, const QVertex &b, const QVertex &c) {
-    uint32_t prim = gs->batch_prim;
-    bool gouraud = (prim >> 3) & 1;
-    gs->verts.push_back(make_vtx(a, prim, gouraud ? a : c));
-    gs->verts.push_back(make_vtx(b, prim, gouraud ? b : c));
-    gs->verts.push_back(make_vtx(c, prim, c));
+void add_triangle(const Vtx &a, const Vtx &b, const Vtx &c) {
+    bool gouraud = (gs->batch_prim >> 3) & 1;
+    gs->verts.push_back(a);
+    gs->verts.push_back(b);
+    gs->verts.push_back(c);
+    if (!gouraud) {
+        // flat: the last vertex's colour
+        Vtx *v = &gs->verts[gs->verts.size() - 3];
+        v[0].rgba = v[1].rgba = c.rgba;
+    }
 }
 
 // A UV sprite filtered bilinearly whose texture coordinates run with its position (a texel a pixel,
@@ -1796,12 +1801,14 @@ void vertex_kick(uint32_t address, uint64_t value) {
     }
     uint32_t type = prim & 7;
     QVertex *q = gs->queue;
+    Vtx *qv = gs->queued;
     switch (type) {
     case 3: // triangles
+        qv[gs->queue_count] = make_vtx(v, prim, v);
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3) {
             if (draw) {
-                add_triangle(q[0], q[1], q[2]);
+                add_triangle(qv[0], qv[1], qv[2]);
             }
             gs->queue_count = 0;
         }
@@ -1810,21 +1817,26 @@ void vertex_kick(uint32_t address, uint64_t value) {
         if (gs->queue_count == 3) {
             q[0] = q[1];
             q[1] = q[2];
+            qv[0] = qv[1];
+            qv[1] = qv[2];
             gs->queue_count = 2;
         }
+        qv[gs->queue_count] = make_vtx(v, prim, v);
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3 && draw) {
-            add_triangle(q[0], q[1], q[2]);
+            add_triangle(qv[0], qv[1], qv[2]);
         }
         break;
     case 5: // a fan
         if (gs->queue_count == 3) {
             q[1] = q[2];
+            qv[1] = qv[2];
             gs->queue_count = 2;
         }
+        qv[gs->queue_count] = make_vtx(v, prim, v);
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3 && draw) {
-            add_triangle(q[0], q[1], q[2]);
+            add_triangle(qv[0], qv[1], qv[2]);
         }
         break;
     case 6: // sprites
@@ -2958,6 +2970,9 @@ extern "C" void gsn_state(PortStateIo *io) {
     port_state_bytes(io, &gs->upload, sizeof(gs->upload));
     port_state_bytes(io, &gs->transfer_dir, sizeof(gs->transfer_dir));
     if (io->loading) {
+        for (uint32_t i = 0; i < 3; i++) {
+            gs->queued[i] = make_vtx(gs->queue[i], effective_prim(), gs->queue[i]);
+        }
         gs->verts.clear();
         gs->fields[0].clear();
         gs->fields[1].clear();
