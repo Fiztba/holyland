@@ -497,8 +497,10 @@ With `--renderer native` it draws with the native GS instead, and with `--render
 `--compare-renderers` runs both and, after each draw, compares the pixels of its box: it lists the
 draws whose box differs by more than 1 in a channel, then puts the native GS back in step with
 paraLLEl-GS's pixels so that the next draw listed made its own difference (`--no-resync`: not). At
-each vblank it compares the frame buffer the display shows (`--frames`: `vblank_N_gs.png` and
-`vblank_N_native.png`). paraLLEl-GS's pixels are read back through the GS (a local-to-host
+each vblank, and once more at the end of the capture (a capture's last frame is drawn after its
+last vblank), it compares the frame buffer the display shows (`--frames`: `vblank_N_gs.png`,
+`end_N_native.png`...). `--draws` limits the per-draw comparison to a range (`--draws
+999999-999999`: only the vblanks and the end). paraLLEl-GS's pixels are read back through the GS (a local-to-host
 transfer); for some field-mode menu buffers that read is stale, and the scanout pictures
 (`--frames --renderer both`) are the ones to trust.
 

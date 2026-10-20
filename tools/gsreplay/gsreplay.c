@@ -622,6 +622,9 @@ typedef struct {
     int render;           /* the renderers that draw: RENDER_GS, RENDER_NATIVE */
     int compare_renderers; /* --compare-renderers */
     int resync;            /* (not --no-resync) after each draw, the native GS takes paraLLEl-GS's pixels */
+    uint64_t last_priv[0xF0 / 8]; /* the display registers at the last vblank */
+    uint64_t last_vblank;
+    int seen_vsync;
     int limit;
     uint64_t compared, compared_differ;
     Gif gif;
@@ -883,20 +886,12 @@ static void send(Run *r, uint32_t record, int path, const void *data, size_t byt
     }
 }
 
-static void vsync(Run *r, const Record *rec) {
-    uint64_t vblank;
-    uint32_t field;
+/* --compare-renderers: the buffer the display shows (by the display registers `priv`), as each renderer
+   has it now */
+static void compare_display(Run *r, const uint64_t *priv, const char *when, uint64_t vblank) {
+    GsnRect rect;
 
-    memcpy(&vblank, rec->data, 8);
-    memcpy(&field, rec->data + 8, 4);
-    if (!r->render) {
-        return;
-    }
-    if (r->compare_renderers) {
-        /* the buffer the display shows, as each renderer has it at the vblank */
-        GsnRect rect;
-
-        if (gsn_display_rect((const uint64_t *)(rec->data + 16), &rect)) {
+    if (gsn_display_rect(priv, &rect)) {
             size_t i, n = (size_t)rect.w * rect.h;
             uint32_t *a = malloc(n * 4), *b = malloc(n * 4), max = 0, pixels = 0;
 
@@ -915,19 +910,35 @@ static void vsync(Run *r, const Record *rec) {
                 max = worst > max ? worst : max;
                 pixels += worst > 1;
             }
-            printf("vblank %llu: the displayed buffer (FBP %u) differs in %u of %zu pixels by more than 1, at most %u\n",
-                   (unsigned long long)vblank, rect.bp / 32, pixels, n, max);
+            printf("%s %llu: the displayed buffer (FBP %u) differs in %u of %zu pixels by more than 1, at most %u\n",
+                   when, (unsigned long long)vblank, rect.bp / 32, pixels, n, max);
             if (r->frames) {
                 char name[64];
 
-                snprintf(name, sizeof(name), "vblank_%06llu_gs.png", (unsigned long long)vblank);
+                snprintf(name, sizeof(name), "%s_%06llu_gs.png", when, (unsigned long long)vblank);
                 write_png(r, name, a, rect.w, rect.h);
-                snprintf(name, sizeof(name), "vblank_%06llu_native.png", (unsigned long long)vblank);
+                snprintf(name, sizeof(name), "%s_%06llu_native.png", when, (unsigned long long)vblank);
                 write_png(r, name, b, rect.w, rect.h);
             }
             free(a);
             free(b);
-        }
+    }
+}
+
+static void vsync(Run *r, const Record *rec) {
+    uint64_t vblank;
+    uint32_t field;
+
+    memcpy(&vblank, rec->data, 8);
+    memcpy(&field, rec->data + 8, 4);
+    if (!r->render) {
+        return;
+    }
+    memcpy(r->last_priv, rec->data + 16, sizeof(r->last_priv));
+    r->last_vblank = vblank;
+    r->seen_vsync = 1;
+    if (r->compare_renderers) {
+        compare_display(r, r->last_priv, "vblank", vblank);
     }
     if ((r->render & RENDER_GS) &&
         port_gs_backend_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) && r->frames) {
@@ -1161,6 +1172,10 @@ static void run_capture(Run *r) {
         handle(r, index);
     }
     port_gs_capture_recording = 0;
+    if (r->compare_renderers && r->seen_vsync) {
+        /* a capture's last frame is drawn after its last vblank: compared once all of it is */
+        compare_display(r, r->last_priv, "end", r->last_vblank);
+    }
     if (r->mode == MODE_VIF) {
         printf("VIF1 -> VU1: %llu packets as recorded, %llu differ, %llu recorded but not made, %llu made but not "
                "recorded\n",

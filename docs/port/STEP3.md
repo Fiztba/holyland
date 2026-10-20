@@ -24,10 +24,13 @@ timings of the step 2 path, and how ico-pc built its renderer.
   paraLLEl-GS for all 13 formats, `tests/gsn_vram_test.c`), render targets on the GPU, textures as
   raw texels looked up and filtered in the shader, Vulkan's blending where the GS equation maps onto
   it and the shader's (from a copy of the target) elsewhere, the feedback passes, DATE, AFAIL,
-  MTBA mipmaps, save states. The 64 map tour captures: no crash, and map 000's displayed frames equal
-  paraLLEl-GS's (no pixel off by more than 1); the others differ in a few edge pixels per draw
-  (PLAN.md, "Where the native GS differs"). Title, memory card, menus, journal, magic and movie
-  captures match. A 2,000-vblank run takes 8.0 s against paraLLEl-GS's 8.2 s.
+  MTBA mipmaps, SCANMSK, save states. The 64 map tour captures: no crash, and at the end of each
+  (the frame finished) the displayed frame buffer is paraLLEl-GS's exactly, every pixel; single
+  draws differ in a few edge pixels that later draws cover (PLAN.md, "Where the native GS
+  differs"). Title, memory card, menus, journal, magic and movie captures: within 5 a channel. Live,
+  with both renderers through 600 vblanks on eight maps: no crash, frames within a mean of 0.2 a
+  channel (a few edge pixels that the frame-to-frame smear carries on). A 2,000-vblank run takes
+  8.0 s against paraLLEl-GS's 8.2 s.
 - **Stage 3, started**: the VU1 programs, first as C (bit for bit against the interpreter), then as
   shaders.
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
