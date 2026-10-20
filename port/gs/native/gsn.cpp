@@ -2598,6 +2598,7 @@ struct Ring {
     std::atomic<uint64_t> head{0}; // bytes put in (the sender's)
     std::atomic<uint64_t> tail{0}; // bytes done (the GS thread's)
     std::atomic<bool> gs_sleeping{false}, sender_waiting{false};
+    std::atomic<bool> stop{false}, stopped{false}; // (at exit: ring_stop)
     std::mutex lock;
     std::condition_variable wake; // the GS's thread, when there is something to do
     std::condition_variable done; // the sender, when the GS's thread has done something
@@ -2622,6 +2623,17 @@ void ring_thread() {
     Util::register_thread_index(0); // (Granite's command pools: the sender's when it does the work)
     Ring &q = *ring;
     for (;;) {
+        if (q.stop.load()) {
+            // the program is ending: nothing more is done, and nothing of the GS's is touched again
+            q.stopped.store(true);
+            {
+                std::lock_guard<std::mutex> hold(q.lock);
+                q.done.notify_all();
+            }
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
         uint64_t tail = q.tail.load(std::memory_order_relaxed);
         if (q.head.load(std::memory_order_acquire) == tail) {
             // nothing to do: a while spinning (packets come in bursts), then asleep
@@ -2632,7 +2644,7 @@ void ring_thread() {
             if (q.head.load(std::memory_order_acquire) == tail) {
                 std::unique_lock<std::mutex> hold(q.lock);
                 q.gs_sleeping.store(true);
-                while (q.head.load() == tail) {
+                while (q.head.load() == tail && !q.stop.load()) {
                     q.wake.wait(hold);
                 }
                 q.gs_sleeping.store(false);
@@ -2655,7 +2667,7 @@ void ring_thread() {
 void ring_wait(size_t room) {
     Ring &q = *ring;
     uint64_t head = q.head.load(std::memory_order_relaxed);
-    auto done = [&] { return head - q.tail.load() <= ring_bytes - room; };
+    auto done = [&] { return head - q.tail.load() <= ring_bytes - room || q.stopped.load(); };
     if (done()) {
         return;
     }
@@ -2707,6 +2719,22 @@ void ring_put(uint32_t type, int32_t arg, const void *data, size_t size, uint32_
     }
 }
 
+// At exit: the GS's thread stops before the GS's objects are destroyed (what was sent and not done yet
+// is left)
+void ring_stop() {
+    Ring &q = *ring;
+    q.stop.store(true);
+    {
+        std::lock_guard<std::mutex> hold(q.lock);
+        q.wake.notify_one();
+        q.done.notify_all();
+    }
+    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!q.stopped.load() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
 void ring_start() {
     const char *on = getenv("KF4_GSN_THREAD");
     if (on && atoi(on) == 0) {
@@ -2715,6 +2743,7 @@ void ring_start() {
     ring = new Ring();
     ring->bytes.resize(ring_bytes);
     std::thread(ring_thread).detach();
+    atexit(ring_stop);
 }
 
 // ---- The pipeline cache -------------------------------------------------------------------------
