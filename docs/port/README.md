@@ -121,6 +121,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
 | `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (step 3, [STEP3.md](STEP3.md)), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
 | `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
+| `--vu1 interp\|hle\|check` | who runs VU1's program 0x000, which draws most of the 3D: the interpreter (the default), or `hle`, the same results to the bit computed directly (a speed switch: `port/platform/vu1_hle.c`); `check` runs both and compares them run by run (`--stats` counts the differences) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
@@ -589,7 +590,7 @@ Next:
 | `port/math/` | libvu0 in C, computing what the SDK's VU0 code does, bit for bit (VU arithmetic from `port/include/port/vu_float.h`) |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
 | `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |
-| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `ee_libm_ref.py` (the retail program's math functions run on a model of the EE: `tests/libm_ref.txt`), `map_tour.py` (every map pictured, with a GS census), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
+| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py`, `frame_test.py`, `vu1_disasm.py` (the VU1 programs as text), `vif_replay_all.py` (VU1 replayed on many GS captures), `ee_libm_ref.py` (the retail program's math functions run on a model of the EE: `tests/libm_ref.txt`), `map_tour.py` (every map pictured, with a GS census), `gsreplay/` (`kf4-gsreplay`, which draws a GS frame capture again; `tools/README.md`) |
 | `tests/` | pad scripts for headless runs (`newgame.pad`, `walk.pad`); `libm_test.c`, the PS2's math library against the retail program's results; `int_divide_test.c`, integer division as the EE does it; `vu1_test.c`, the VU1 interpreter's self-test, which also checks that VU0's arithmetic (`port/include/port/vu_float.h`) gives VU1's bits and that `port/math/libvu0.c` matches the SDK's VU0 code run as microcode (`out/<preset>/vu1_test`) |
 | `.github/workflows/ci.yml` | CI: configure (the patches apply), build with paraLLEl-GS, `port_census.py` reports 0 errors |
 | `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |

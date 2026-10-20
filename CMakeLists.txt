@@ -83,6 +83,7 @@ add_library(kf4_port STATIC
     port/platform/dmac.c
     port/platform/vif1.c
     port/platform/vu1.c
+    port/platform/vu1_hle.c
     port/platform/gs.c
     port/platform/video.c
     port/platform/disc.c
@@ -127,7 +128,7 @@ target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
-set_source_files_properties(port/platform/vu1.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
+set_source_files_properties(port/platform/vu1.c port/platform/vu1_hle.c PROPERTIES COMPILE_OPTIONS "-frounding-math")
 set_source_files_properties(port/sdk/libm_ps2.c port/math/libvu0.c PROPERTIES COMPILE_OPTIONS "${KF4_EE_FLOAT_FLAGS}")
 # The fibers switch stacks by hand (port/platform/fiber.c), which a shadow stack would refuse
 if(NOT WIN32)
@@ -367,7 +368,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
     add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c port/platform/vif1.c port/platform/vu1.c
-        port/platform/video.c port/platform/lz4_block.c)
+        port/platform/vu1_hle.c port/platform/video.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})
     target_link_libraries(kf4-gsreplay PRIVATE kf4_gs Threads::Threads)
@@ -395,9 +396,9 @@ target_include_directories(libm_test PRIVATE port/include)
 target_compile_options(libm_test PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS})
 
 # The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone
-add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c port/math/libvu0.c)
+add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c port/platform/vu1_hle.c port/math/libvu0.c)
 target_include_directories(vu1_test PRIVATE port/include)
-target_compile_options(vu1_test PRIVATE -frounding-math)
+target_compile_options(vu1_test PRIVATE -frounding-math -ffp-contract=off)
 if(NOT WIN32)
     target_link_libraries(vu1_test PRIVATE m)
 endif()

@@ -48,7 +48,7 @@ void port_vif1_reset(void) {
 /* ---- PATH1: XGKICK ----------------------------------------------------------------------------- */
 static uint8_t path1_buffer[VU1_QWORDS * 16 * 2];
 
-void port_gif_path1_kick(uint32_t address) {
+size_t port_gif_path1_read(uint32_t address, uint8_t *out) {
     uint8_t *vu_data = port_vu1_data();
     uint32_t qwords = 0;
     int eop = 0;
@@ -74,14 +74,20 @@ void port_gif_path1_kick(uint32_t address) {
             size = nloop;
         }
         for (n = 0; n <= size && qwords < VU1_QWORDS * 2; n++, qwords++) {
-            memcpy(path1_buffer + qwords * 16, vu_data + ((address + qwords) & (VU1_QWORDS - 1)) * 16, 16);
+            memcpy(out + qwords * 16, vu_data + ((address + qwords) & (VU1_QWORDS - 1)) * 16, 16);
         }
     }
+    return (size_t)qwords * 16;
+}
+
+void port_gif_path1_kick(uint32_t address) {
+    size_t bytes = port_gif_path1_read(address, path1_buffer);
+
     if (port_options.stats) {
         uint64_t hash = port_stats.path1_hash;
-        uint32_t n;
+        size_t n;
 
-        for (n = 0; n < qwords * 2; n++) {
+        for (n = 0; n < bytes / 8; n++) {
             uint64_t word;
 
             memcpy(&word, path1_buffer + n * 8, 8);
@@ -89,7 +95,7 @@ void port_gif_path1_kick(uint32_t address) {
         }
         port_stats.path1_hash = hash;
     }
-    port_gs_gif(1, path1_buffer, (size_t)qwords * 16);
+    port_gs_gif(1, path1_buffer, bytes);
 }
 
 /* ---- UNPACK ------------------------------------------------------------------------------------ */

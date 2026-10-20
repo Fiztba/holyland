@@ -159,7 +159,8 @@ Still open:
 - The opening shows no message text. That may be how it is on the PS2; it has not been checked
   against it.
 - The VU1 interpreter runs on the CPU. It keeps up at full speed (3000 vblanks in about 30 s with
-  `--fast`), and step 3 replaces it.
+  `--fast`), and step 3 replaces it. `--vu1 hle` already runs program 0x000 (86% of the draws)
+  without it, to the bit (STEP3.md, "VU1 program 0x000 without the interpreter").
 - The GIF's arbitration is modelled only as far as it decides an order with transfers that take no
   time: PATH3 never goes in the middle of a channel 1 chain unless VIF1 unmasks it there.
 - The game's write-1-to-clear stores (CSR's FINISH, T0_MODE's EQUF) set the bit instead: nothing sees

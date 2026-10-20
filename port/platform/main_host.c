@@ -16,6 +16,10 @@
                          port/gs/native/) or both (side by side, their pictures compared; the
                          window shows gs's, --renderer-shown native shows the other)
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
+       --vu1 NAME        who runs VU1's program 0x000, which draws most of the 3D: interp (the
+                         interpreter, the default), hle (the same results to the bit, computed
+                         directly: faster; port/platform/vu1_hle.c) or check (both, compared run by run,
+                         differences on stderr and counted by --stats)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off
@@ -119,7 +123,7 @@ static void usage(const char *program) {
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n"
-            "          [--native-scale 1-4]\n",
+            "          [--native-scale 1-4] [--vu1 interp|hle|check]\n",
             program);
     exit(2);
 }
@@ -231,6 +235,17 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_scale_forced = 1;
+        } else if (strcmp(option, "--vu1") == 0) {
+            if (strcmp(value, "interp") == 0) {
+                port_options.vu1 = PORT_VU1_INTERP;
+            } else if (strcmp(value, "hle") == 0) {
+                port_options.vu1 = PORT_VU1_HLE;
+            } else if (strcmp(value, "check") == 0) {
+                port_options.vu1 = PORT_VU1_CHECK;
+            } else {
+                fprintf(stderr, "--vu1 wants interp, hle or check, not %s\n", value);
+                exit(2);
+            }
         } else if (strcmp(option, "--frames") == 0) {
             port_options.frames = strtoll(value, NULL, 0);
         } else if (strcmp(option, "--input") == 0) {
@@ -417,6 +432,13 @@ static void print_stats(void) {
     fprintf(stderr, "[stats] VU1 %.3f s: %llu runs, %llu instructions (%.2f ns each)\n", vu1,
             (unsigned long long)port_stats.vu1_runs, (unsigned long long)port_stats.vu1_insns,
             port_stats.vu1_insns ? vu1 * 1e9 / (double)port_stats.vu1_insns : 0.0);
+    if (port_options.vu1 == PORT_VU1_HLE) {
+        fprintf(stderr, "[stats] VU1 HLE: %llu of the runs, %.3f s of the time\n",
+                (unsigned long long)port_stats.vu1_hle_runs, (double)port_stats.vu1_hle_ticks / per_second);
+    } else if (port_options.vu1 == PORT_VU1_CHECK) {
+        fprintf(stderr, "[stats] VU1 check: %llu runs compared, %llu differ\n",
+                (unsigned long long)port_vu1_check_runs, (unsigned long long)port_vu1_check_differ);
+    }
     fprintf(stderr, "[stats] GIF hand-off %.3f s, vsync %.3f s\n", (double)port_stats.gif_ticks / per_second,
             (double)port_stats.vsync_ticks / per_second);
     fprintf(stderr, "[stats] VU1 cycles %llu, PATH1 hash %016llx\n",

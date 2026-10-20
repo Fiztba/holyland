@@ -28,6 +28,9 @@
      --compare OTHER    the draws of another capture (or of --mode vif against --mode gif of the same
                         one, with --compare-mode), compared one by one: state and vertices
      --vu-round nearest VU1's float arithmetic rounds to nearest instead of toward zero (--mode vif)
+     --vu1 NAME         with --mode vif, who runs VU1's program 0x000: interp (the interpreter, the
+                        default), hle (port/platform/vu1_hle.c) or check (both, compared run by run:
+                        memory, packets, registers, flags and clock)
      --diff N           with --mode vif: show up to N differing vertices of each differing packet (8)
      --renderer NAME    who draws: gs (paraLLEl-GS, the default), native (step 3's native GS,
                         port/gs/native/) or both. With both, --draws writes draw_NNNNN_native.png
@@ -44,6 +47,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "port/debug.h"
 #include "port/gs_capture_format.h"
@@ -71,8 +75,12 @@ void *ee_hw_ptr(uint32_t ee_address) {
     return ee_address == 0x11008000 ? (void *)vu1_micro_memory : (void *)vu1_data_memory;
 }
 
+/* vu1.c times its runs with these (the VU1 line of --mode vif) */
 uint64_t port_ticks(void) {
-    return 0;
+    struct timespec t;
+
+    timespec_get(&t, TIME_UTC);
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
 
 void port_todo(const char *what, const char *file, int line) {
@@ -1032,6 +1040,7 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     Run *r = vif_run;
     const Record *recs = r->capture->records;
     int matched = 0;
+    uint64_t start = port_ticks(); /* the time here is not VU1's (vu1.c leaves it out) */
 
     /* what was recorded before this packet: PATH3, read-backs (VU1_RUN is this run's own) */
     while (r->cursor < r->capture->count) {
@@ -1063,6 +1072,7 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     }
     send(r, (uint32_t)(r->cursor ? r->cursor - 1 : 0), path, data, bytes);
     r->gif.differs = 0;
+    port_stats.gif_ticks += port_ticks() - start;
 }
 
 static void handle(Run *r, size_t index) {
@@ -1198,6 +1208,14 @@ static void run_capture(Run *r) {
                (unsigned long long)r->packets_missing, (unsigned long long)r->packets_extra);
         printf("VU1: %llu runs, %llu instructions, %llu cycles\n", (unsigned long long)port_stats.vu1_runs,
                (unsigned long long)port_stats.vu1_insns, (unsigned long long)(port_stats.vu1_cycles - vu_start.cycle));
+        printf("VU1 time: %.3f ms (the GIF hand-offs excluded)\n", (double)port_stats.vu1_ticks / 1e6);
+        if (port_options.vu1 == PORT_VU1_HLE) {
+            printf("VU1 HLE: %llu runs, %.3f ms\n", (unsigned long long)port_stats.vu1_hle_runs,
+                   (double)port_stats.vu1_hle_ticks / 1e6);
+        } else if (port_options.vu1 == PORT_VU1_CHECK) {
+            printf("VU1 check: %llu runs compared, %llu differ\n", (unsigned long long)port_vu1_check_runs,
+                   (unsigned long long)port_vu1_check_differ);
+        }
     }
     port_options.stats = 0;
 }
@@ -1336,7 +1354,8 @@ static void usage(void) {
             "usage: kf4-gsreplay FILE.kf4gs [--info] [--mode gif|vif] [--frames] [--out DIR] [--list]\n"
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
-            "                    [--diff N] [--limit N] [--renderer gs|native|both] [--compare-renderers]\n"
+            "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
+            "                    [--renderer gs|native|both] [--compare-renderers]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1425,6 +1444,17 @@ int main(int argc, char **argv) {
             if (strcmp(v, "nearest") == 0) {
                 port_vu1_round_nearest = 1;
             } else if (strcmp(v, "zero") != 0) {
+                usage();
+            }
+            i++;
+        } else if (strcmp(a, "--vu1") == 0) {
+            if (strcmp(v, "interp") == 0) {
+                port_options.vu1 = PORT_VU1_INTERP;
+            } else if (strcmp(v, "hle") == 0) {
+                port_options.vu1 = PORT_VU1_HLE;
+            } else if (strcmp(v, "check") == 0) {
+                port_options.vu1 = PORT_VU1_CHECK;
+            } else {
                 usage();
             }
             i++;

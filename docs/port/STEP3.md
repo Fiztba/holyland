@@ -206,6 +206,47 @@ Stage 2 before stage 3 is deliberate: with the CPU's VU1 output drawn natively, 
 the picture is the native GS's fault; once that is clean, every difference after stage 3 is the
 shaders'.
 
+### VU1 program 0x000 without the interpreter (`--vu1 hle`)
+
+Ahead of stage 3, program 0x000 has a CPU version that computes its results directly, a vertex at a
+time, instead of interpreting its 289 software-pipelined instruction pairs:
+`port/platform/vu1_hle.c` (its top comment describes the program). It is the specification of the
+0x000 shader, and a speed switch now: its results are the interpreter's to the bit, so it is not a
+divergence. `--vu1 interp` (the default) keeps the interpreter; `--vu1 check` runs both and compares
+them run by run.
+
+- **Bit for bit.** Every FMAC operation is the interpreter's own helper (`v4_op`, shared through
+  `port/platform/vu1_internal.h`) in the program's order, ACC and the MADD roundings included. On x86
+  a vertex is first tried in plain SSE floats with flush-to-zero, which gives the same bits when no
+  operand has exponent 255 and MXCSR shows no overflow, underflow or invalid operation; otherwise
+  (about 0.5% of the vertices) it is done again with the interpreter's helpers.
+- **Timing.** Only Q, P and the clip flag are read without a stall, and the program's timing is
+  static: every DIV, ESADD and CLIP result is due by its reader, except the FCAND at 0x07E, which sees
+  one of the two CLIPs before it. The cycles and instruction pairs of a run are a formula in the
+  vertex count and the number of point lights.
+- **What it leaves.** The interpreter can take any run after an HLE run: data memory (including what
+  the pipeline writes past the batch: TOP+0xC1..0xC7, two vertices past the end in the light passes),
+  the XGKICK packets and their order with the stores, every VF and VI register, ACC, Q, P, I, the MAC,
+  status and clip flags (sticky bits too), VU1's clock and MSCNT's continue address are all as the
+  interpreter leaves them. Not reproduced: the interpreter's scratch that it clears or rewrites before
+  reading (the flag-write queue, empty after a run, and its head; the VI-write record for branches,
+  cleared at each run's start; Q's and P's due cycles with nothing pending). A save state taken after an
+  HLE run therefore differs from the interpreter's in those bytes only.
+- **Left to the interpreter.** Batches the game does not make (fewer than 3 or more than 39
+  vertices, or not between 0x80 and the end of data memory), a run starting with anything in flight,
+  micro memory with a flag-reading instruction in it, `--vu-round nearest`; and every other program.
+  Micro memory is recognised by a hash of 0x000-0x120 when it is decoded.
+- **Checked.** `kf4-gsreplay --mode vif --vu1 check` on the 64 map tour captures and the 14 census
+  captures (title, menus, journal, magic, movies): 90,798 runs, every one the same as the
+  interpreter's (memory, packets, registers, flags, clock), with the fast path and with it switched
+  off; `--vu1 hle`: every packet as recorded. In the game (`tests/newgame.pad`, teleported to map 0,
+  2010 vblanks, `--vu1 check`): 499,185 runs, none different; with `--vu1 hle`, the per-frame log,
+  the dumped frame, `--stats`' VU1 runs, instructions and cycles and PATH1 hash are those of
+  `--vu1 interp`.
+- **Speed** (that run, `--fast --headless --renderer native`, Ryzen 9 9900X3D): VU1 3.3 s with the
+  interpreter, 1.14 s with `--vu1 hle` (0.59 s of it program 0x000's 499,185 runs: 4.7 times faster
+  than interpreted); the run's wall time 7.9 s to 5.4 s.
+
 ## Testing
 
 - **The live diff** (stage 0): both renderers on, the difference per frame in the overlay and the

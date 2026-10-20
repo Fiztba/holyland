@@ -9,6 +9,7 @@
 | `vu1_disasm.py` | the game's VU1 programs as text |
 | `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
 | `gsreplay/` | `kf4-gsreplay` (below) |
+| `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares VU1's program 0x000 HLE with the interpreter on all of them (fails if anything differs) |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
 
 ## kf4-gsreplay
@@ -29,6 +30,7 @@ kf4-gsreplay FILE.kf4gs [options]
 | `--mode gif` | (the default) the GIF packets as the GS had them |
 | `--mode vif` | the VIF1 stream through the VU1 interpreter, which makes the PATH1 and PATH2 packets again; each is compared with the recorded one, and for each that differs the first vertices that differ are printed (`--diff N`, 8 by default; 0 for none); then VU1's runs, instructions and cycles (stalls included) for the capture |
 | `--vu-round nearest` | with `--mode vif`: VU1's float arithmetic rounds to nearest instead of toward zero (a hypothesis to test: what moves) |
+| `--vu1 interp\|hle\|check` | with `--mode vif`: who runs VU1's program 0x000: the interpreter (the default), the HLE (`port/platform/vu1_hle.c`), or both, compared run by run (data memory, packets, registers, flags, clock; the differences on stderr, then `VU1 check: N runs compared, M differ`). VU1's time for the capture is printed too, without the GIF hand-offs |
 | `--frames` | each scanout's picture as `frame_NNNNNN.png`, as `--dump-frames` writes it (byte for byte the same) |
 | `--out DIR` | where pictures go (the current directory) |
 | `--list` | every draw, one a line (below) |
