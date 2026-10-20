@@ -28,8 +28,10 @@ void gsn_read_fifo(void *dst, uint32_t qwords);
 #define GSN_WANT_PIXELS 1
 #define GSN_WANT_IMAGE 2
 int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
-/* The render targets' size, 1 to 4 times the PS2's (--native-scale), from the next vblank */
-void gsn_set_scale(int scale);
+/* The render targets' size, from the next vblank: x_scale times the PS2's across (1 to GSN_MAX_SCALE_X)
+   and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
+#define GSN_MAX_SCALE_X 6
+void gsn_set_scale(int x_scale, int y_scale);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {

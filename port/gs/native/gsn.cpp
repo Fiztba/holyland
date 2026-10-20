@@ -156,7 +156,8 @@ struct Push {
     int32_t dst_offset[2];
     uint32_t misc;
     uint32_t fbmsk;
-    uint32_t tscale; // a texture that is a render target: how many of its pixels a GS pixel is across
+    uint32_t tscale; // a texture that is a render target: how many of its pixels a GS pixel is, across
+                     // (bits 0-15) and down (16-31)
 };
 static_assert(sizeof(Push) == 84, "Push is the shaders' push constant block");
 
@@ -177,8 +178,8 @@ enum : uint32_t {
 // ---- Render targets and textures ----------------------------------------------------------------
 struct Target {
     uint32_t bp, bw, psm; // bp in 256-byte blocks
-    uint32_t width, height; // in GS pixels: the image is `scale` times as wide and as high
-    uint32_t scale;
+    uint32_t width, height; // in GS pixels: the image is `sx` times as wide and `sy` times as high
+    uint32_t sx, sy;
     ImageHandle image;
     bool depth;
     bool dirty; // newer than the CPU's VRAM
@@ -251,10 +252,11 @@ struct Gs {
 };
 
 Gs *gs;
-// --native-scale: the render targets' size, in pixels a GS pixel (1: the PS2's). Changed at a vblank
-// (gsn_set_scale), when every target goes back to VRAM and comes again at the new size.
-uint32_t target_scale = 1;
-volatile uint32_t wanted_scale = 1;
+// --native-scale: the render targets' size, in pixels a GS pixel across (sx) and down (sy); 1 and 1
+// are the PS2's. sx is larger than sy for --native-widescreen. Changed at a vblank (gsn_set_scale),
+// when every target goes back to VRAM and comes again at the new size.
+uint32_t target_sx = 1, target_sy = 1;
+volatile uint32_t wanted_scale = 1 | 1 << 8; // sx | sy << 8
 
 // Time spent in a function, added to a counter of gsn_stats
 struct Timer {
@@ -423,13 +425,13 @@ void write_back(Target &t) {
     }
     gsn_stats.writebacks++;
     GSN_LOG(1, "write back target bp %#x bw %u psm %#x %ux%u\n", t.bp, t.bw, t.psm, t.width, t.height);
-    uint32_t s = t.scale, pw = t.width * s;
-    const uint8_t *pixels = read_image(*t.image, 0, 0, pw, t.height * s);
+    uint32_t sx = t.sx, sy = t.sy, pw = t.width * sx;
+    const uint8_t *pixels = read_image(*t.image, 0, 0, pw, t.height * sy);
     for (uint32_t y = 0; y < t.height; y++) {
         for (uint32_t x = 0; x < t.width; x++) {
             uint32_t v;
             // a scaled target: the pixel in the middle of the GS pixel's
-            memcpy(&v, pixels + (size_t(y * s + s / 2) * pw + x * s + s / 2) * 4, 4);
+            memcpy(&v, pixels + (size_t(y * sy + sy / 2) * pw + x * sx + sx / 2) * 4, 4);
             if (t.depth) {
                 float f;
                 memcpy(&f, &v, 4);
@@ -464,8 +466,8 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     end_pass();
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    uint32_t s = t.scale, pw = w * s, ph = h * s;
-    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0 * s), int32_t(y0 * s), 0},
+    uint32_t sx = t.sx, sy = t.sy, pw = w * sx, ph = h * sy;
+    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0},
                                                                {pw, ph, 1}, pw, ph, {aspect, 0, 0, 1}));
     for (uint32_t y = 0; y < h; y++) {
         for (uint32_t x = 0; x < w; x++) {
@@ -477,9 +479,9 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
             } else {
                 v = vram_to_target_pixel(v, t.psm);
             }
-            for (uint32_t j = 0; j < s; j++) {
-                for (uint32_t i = 0; i < s; i++) {
-                    out[size_t(y * s + j) * pw + x * s + i] = v;
+            for (uint32_t j = 0; j < sy; j++) {
+                for (uint32_t i = 0; i < sx; i++) {
+                    out[size_t(y * sy + j) * pw + x * sx + i] = v;
                 }
             }
         }
@@ -541,7 +543,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
     if (t) {
         // grown: the old picture kept, the new part from VRAM
         uint32_t new_w = std::max(width, t->width), new_h = std::max(height, t->height);
-        ImageHandle image = make_image(new_w * t->scale, new_h * t->scale, format, 1, true);
+        ImageHandle image = make_image(new_w * t->sx, new_h * t->sy, format, 1, true);
         end_pass();
         Target old = *t;
         t->psm = psm;
@@ -554,7 +556,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         claim_pages(lo, count, t, true);
         load_target_rect(*t, 0, 0, new_w, new_h);
         VkImageAspectFlags aspect = t->depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-        cmd().copy_image(*t->image, *old.image, {0, 0, 0}, {0, 0, 0}, {old.width * t->scale, old.height * t->scale, 1},
+        cmd().copy_image(*t->image, *old.image, {0, 0, 0}, {0, 0, 0}, {old.width * t->sx, old.height * t->sy, 1},
                          {aspect, 0, 0, 1}, {aspect, 0, 0, 1});
         transfer_barrier();
         t->used = gs->tick;
@@ -569,8 +571,9 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
     made->depth = psm_is_depth(psm);
     made->dirty = false;
     made->used = gs->tick;
-    made->scale = target_scale;
-    made->image = make_image(width * made->scale, height * made->scale, format, 1, true);
+    made->sx = target_sx;
+    made->sy = target_sy;
+    made->image = make_image(width * made->sx, height * made->sy, format, 1, true);
     GSN_LOG(1, "new target bp %#x bw %u psm %#x %ux%u\n", bp, bw, psm, width, height);
     uint32_t lo, count;
     target_pages(*made, &lo, &count);
@@ -964,7 +967,7 @@ void begin_pass(Target *color, Target *depth) {
 // A copy of the target, for a draw that reads what it draws over
 // (box: only the target's pixels a draw can cover, x0 y0 x1 y1 in GS pixels; NULL: all of it)
 const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
-    uint32_t tw = t.width * t.scale, th = t.height * t.scale;
+    uint32_t tw = t.width * t.sx, th = t.height * t.sy;
     if (!gs->snapshot || gs->snapshot->get_width() < tw || gs->snapshot->get_height() < th) {
         uint32_t w = std::max(tw, gs->snapshot ? gs->snapshot->get_width() : 0u);
         uint32_t h = std::max(th, gs->snapshot ? gs->snapshot->get_height() : 0u);
@@ -975,9 +978,9 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
     VkOffset3D at = {0, 0, 0};
     VkExtent3D size = {tw, th, 1};
     if (box) {
-        int32_t s = int32_t(t.scale);
-        int32_t x0 = std::max(box[0], 0) * s, y0 = std::max(box[1], 0) * s;
-        int32_t x1 = std::min(box[2] * s, int32_t(tw)), y1 = std::min(box[3] * s, int32_t(th));
+        int32_t sx = int32_t(t.sx), sy = int32_t(t.sy);
+        int32_t x0 = std::max(box[0], 0) * sx, y0 = std::max(box[1], 0) * sy;
+        int32_t x1 = std::min(box[2] * sx, int32_t(tw)), y1 = std::min(box[3] * sy, int32_t(th));
         if (x1 <= x0 || y1 <= y0) {
             return *gs->snapshot;
         }
@@ -1182,7 +1185,7 @@ void flush_batch() {
             source = t.get();
             push.src_offset[0] = int32_t(x0);
             push.src_offset[1] = int32_t(y0);
-            push.tscale = t->scale;
+            push.tscale = t->sx | t->sy << 16;
             break;
         }
         if (source) {
@@ -1293,13 +1296,13 @@ void flush_batch() {
     gsn_stats.ns_draw_setup += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                             std::chrono::steady_clock::now() - timer.start).count());
     Timer record(gsn_stats.ns_draw_record);
-    uint32_t s = color->scale;
+    uint32_t scale_x = color->sx, scale_y = color->sy;
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
         return;
     }
-    push.misc |= s << M_SCALE_SHIFT;
+    push.misc |= scale_y << M_SCALE_SHIFT; // (SCANMSK's lines)
     // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
     // and keeps each pixel's within the format, where clamping the vertices would tilt the plane
     bool zclamp = false;
@@ -1404,9 +1407,9 @@ void flush_batch() {
         c.set_program(zclamp ? gs->program_zclamp : gs->program);
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
-        VkViewport vp = {0.0f, 0.0f, float(color->width * s), float(color->height * s), 0.0f, 1.0f};
+        VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
         c.set_viewport(vp);
-        c.set_scissor({{int32_t(sx0 * s), int32_t(sy0 * s)}, {(x1 - sx0) * s, (y1 - sy0) * s}});
+        c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
         c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
         c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
         c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
@@ -1902,9 +1905,9 @@ void begin_transfer(uint32_t dir) {
             if (src && dst) {
                 end_pass();
                 transfer_barrier();
-                uint32_t s = src->scale;
-                cmd().copy_image(*dst->image, *src->image, {int32_t(d.x * s), int32_t(d.y * s), 0},
-                                 {int32_t(sx * s), int32_t(sy * s), 0}, {w * s, h * s, 1},
+                uint32_t kx = src->sx, ky = src->sy;
+                cmd().copy_image(*dst->image, *src->image, {int32_t(d.x * kx), int32_t(d.y * ky), 0},
+                                 {int32_t(sx * kx), int32_t(sy * ky), 0}, {w * kx, h * ky, 1},
                                  {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
                 transfer_barrier();
                 dst->dirty = true;
@@ -2175,30 +2178,32 @@ void gif(int path, const uint8_t *data, size_t bytes) {
 
 // ---- Scanout ------------------------------------------------------------------------------------
 // A rectangle of a buffer as RGBA: from its target if it is one, else from the CPU's VRAM
-// (scaled: as many pixels as the target has, returned in *got_scale; else one a GS pixel)
+// (scaled: as many pixels as the target has, its scale across and down returned in got_scale[0] and
+// [1]; else one a GS pixel)
 void read_buffer(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                  uint32_t *out, bool scaled = false, uint32_t *got_scale = nullptr) {
     Target *t = find_target(bp, bw, psm);
     if (got_scale) {
-        *got_scale = 1;
+        got_scale[0] = got_scale[1] = 1;
     }
     if (t && x + w <= t->width && y + h <= t->height) {
-        uint32_t s = t->scale;
-        const uint8_t *pixels = read_image(*t->image, x * s, y * s, w * s, h * s);
+        uint32_t sx = t->sx, sy = t->sy;
+        const uint8_t *pixels = read_image(*t->image, x * sx, y * sy, w * sx, h * sy);
         if (scaled) {
-            for (size_t i = 0; i < size_t(w) * h * s * s; i++) {
+            for (size_t i = 0; i < size_t(w) * h * sx * sy; i++) {
                 uint32_t v;
                 memcpy(&v, pixels + i * 4, 4);
                 out[i] = v | 0xFF000000u;
             }
             if (got_scale) {
-                *got_scale = s;
+                got_scale[0] = sx;
+                got_scale[1] = sy;
             }
         } else {
             for (uint32_t j = 0; j < h; j++) {
                 for (uint32_t i = 0; i < w; i++) {
                     uint32_t v;
-                    memcpy(&v, pixels + (size_t(j * s + s / 2) * w * s + i * s + s / 2) * 4, 4);
+                    memcpy(&v, pixels + (size_t(j * sy + sy / 2) * w * sx + i * sx + sx / 2) * 4, 4);
                     out[size_t(j) * w + i] = v | 0xFF000000u;
                 }
             }
@@ -2327,8 +2332,8 @@ int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uin
     ScanoutImage &so = scanout_image;
     Target *t = find_target(fbp, fbw, psm);
     bool from_target = t && !t->depth && dbx + w <= t->width && dby + h <= t->height;
-    uint32_t s = from_target ? t->scale : target_scale;
-    uint32_t iw = w * s, ih = h * s * (field_mode ? 2 : 1);
+    uint32_t sx = from_target ? t->sx : target_sx, sy = from_target ? t->sy : target_sy;
+    uint32_t iw = w * sx, ih = h * sy * (field_mode ? 2 : 1);
     bool fresh = false;
     {
         std::lock_guard<std::mutex> hold(so.lock);
@@ -2355,30 +2360,30 @@ int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uin
     if (from_target) {
         for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
             if (!field_mode) {
-                cmd().copy_image(*so.image, *t->image, {0, 0, 0}, {int32_t(dbx * s), int32_t(dby * s), 0}, {iw, ih, 1},
+                cmd().copy_image(*so.image, *t->image, {0, 0, 0}, {int32_t(dbx * sx), int32_t(dby * sy), 0}, {iw, ih, 1},
                                  colour, colour);
                 continue;
             }
             for (uint32_t m = 0; m < h; m++) {
-                cmd().copy_image(*so.image, *t->image, {0, int32_t((2 * m + parity) * s), 0},
-                                 {int32_t(dbx * s), int32_t((dby + m) * s), 0}, {iw, s, 1}, colour, colour);
+                cmd().copy_image(*so.image, *t->image, {0, int32_t((2 * m + parity) * sy), 0},
+                                 {int32_t(dbx * sx), int32_t((dby + m) * sy), 0}, {iw, sy, 1}, colour, colour);
             }
         }
     } else {
-        // not a target (yet): from the CPU's VRAM, each GS pixel repeated s times across and down
+        // not a target (yet): from the CPU's VRAM, each GS pixel repeated sx times across and sy down
         std::vector<uint32_t> small(size_t(w) * h);
         read_buffer(fbp, fbw, psm, dbx, dby, w, h, small.data());
         end_pass();
         transfer_barrier();
-        // a band of s rows for each of the buffer's lines: field mode's into its own rows
+        // a band of sy rows for each of the buffer's lines: field mode's into its own rows
         uint32_t step = field_mode ? 2 : 1;
         for (uint32_t parity = parity_lo; parity <= parity_hi; parity++) {
             for (uint32_t m = 0; m < h; m++) {
                 uint32_t *out = static_cast<uint32_t *>(
-                    cmd().update_image(*so.image, {0, int32_t((step * m + parity) * s), 0}, {iw, s, 1}, iw, s, colour));
-                for (uint32_t y = 0; y < s; y++) {
+                    cmd().update_image(*so.image, {0, int32_t((step * m + parity) * sy), 0}, {iw, sy, 1}, iw, sy, colour));
+                for (uint32_t y = 0; y < sy; y++) {
                     for (uint32_t x = 0; x < iw; x++) {
-                        out[size_t(y) * iw + x] = small[size_t(m) * w + x / s];
+                        out[size_t(y) * iw + x] = small[size_t(m) * w + x / sx];
                     }
                 }
             }
@@ -2505,22 +2510,22 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
         if (interlaced && field_mode) {
             h /= 2;
         }
-        uint32_t s = target_scale;
-        if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && size_t(w) * h * s * s * (field_mode ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
+        uint32_t sx = target_sx, sy = target_sy;
+        if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && size_t(w) * h * sx * sy * (field_mode ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
             if (want_pixels & GSN_WANT_IMAGE) {
                 ok = scanout_to_image(fbp, fbw, psm, dbx, dby, w, h, interlaced && field_mode, field,
                                       (want_pixels & GSN_WANT_PIXELS) ? frame : nullptr);
             } else if (interlaced && field_mode) {
                 // each field its own picture, woven with the one before: kept every field, wanted or not
                 int f = field & 1;
-                uint32_t got = 1;
-                gs->fields[f].resize(size_t(w) * h * s * s);
-                read_buffer(fbp, fbw, psm, dbx, dby, w, h, gs->fields[f].data(), true, &got);
-                if (got != s) { // not a target (yet): one pixel a GS pixel, repeated
+                uint32_t got[2];
+                gs->fields[f].resize(size_t(w) * h * sx * sy);
+                read_buffer(fbp, fbw, psm, dbx, dby, w, h, gs->fields[f].data(), true, got);
+                if (got[0] != sx || got[1] != sy) { // not a target (yet): one pixel a GS pixel, repeated
                     std::vector<uint32_t> small(gs->fields[f].begin(), gs->fields[f].begin() + long(size_t(w) * h));
-                    for (uint32_t y = 0; y < h * s; y++) {
-                        for (uint32_t x = 0; x < w * s; x++) {
-                            gs->fields[f][size_t(y) * w * s + x] = small[size_t(y / s) * w + x / s];
+                    for (uint32_t y = 0; y < h * sy; y++) {
+                        for (uint32_t x = 0; x < w * sx; x++) {
+                            gs->fields[f][size_t(y) * w * sx + x] = small[size_t(y / sy) * w + x / sx];
                         }
                     }
                 }
@@ -2535,20 +2540,20 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
                     gs->fields[f ^ 1] = gs->fields[f];
                 }
                 if (want_pixels) {
-                    // the woven picture's line l is field (l & 1)'s line l / 2, each line s rows of pixels
-                    for (uint32_t y = 0; y < h * 2 * s; y++) {
-                        uint32_t l = y / s, row = (l / 2) * s + y % s;
-                        memcpy(frame->rgba + size_t(y) * w * s, gs->fields[l & 1].data() + size_t(row) * w * s, w * s * 4);
+                    // the woven picture's line l is field (l & 1)'s line l / 2, each line sy rows of pixels
+                    for (uint32_t y = 0; y < h * 2 * sy; y++) {
+                        uint32_t l = y / sy, row = (l / 2) * sy + y % sy;
+                        memcpy(frame->rgba + size_t(y) * w * sx, gs->fields[l & 1].data() + size_t(row) * w * sx, w * sx * 4);
                     }
-                    frame->width = w * s;
-                    frame->height = h * 2 * s;
+                    frame->width = w * sx;
+                    frame->height = h * 2 * sy;
                     ok = 1;
                 }
             } else if (want_pixels) {
-                uint32_t got = 1;
-                read_buffer(fbp, fbw, psm, dbx, dby, w, h, frame->rgba, true, &got);
-                frame->width = w * got;
-                frame->height = h * got;
+                uint32_t got[2];
+                read_buffer(fbp, fbw, psm, dbx, dby, w, h, frame->rgba, true, got);
+                frame->width = w * got[0];
+                frame->height = h * got[1];
                 ok = 1;
             }
         }
@@ -2563,22 +2568,26 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
     gsn_stats.pool_images = decoded_pool.size();
     gsn_stats.pool_mb = decoded_pool_bytes >> 20;
     gsn_stats.upload_copies = page_images.size();
-    if (wanted_scale != target_scale) {
+    uint32_t wanted = wanted_scale;
+    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         for (auto &t : gs->targets) {
             write_back(*t);
         }
         end_pass();
         gs->targets.clear();
-        target_scale = wanted_scale;
+        target_sx = wanted & 0xFF;
+        target_sy = wanted >> 8;
         gs->fields[0].clear();
         gs->fields[1].clear();
     }
     return ok;
 }
 
-extern "C" void gsn_set_scale(int scale) {
-    wanted_scale = uint32_t(scale < 1 ? 1 : scale > 4 ? 4 : scale);
+extern "C" void gsn_set_scale(int x_scale, int y_scale) {
+    uint32_t x = uint32_t(x_scale < 1 ? 1 : x_scale > GSN_MAX_SCALE_X ? GSN_MAX_SCALE_X : x_scale);
+    uint32_t y = uint32_t(y_scale < 1 ? 1 : y_scale > 4 ? 4 : y_scale);
+    wanted_scale = x | y << 8;
 }
 
 extern "C" int gsn_display_rect(const uint64_t *privileged, GsnRect *rect) {
@@ -2603,7 +2612,7 @@ extern "C" void gsn_decode_rect(const uint8_t *vram, const GsnRect *r, uint32_t 
 extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
     flush_batch();
     Target *t = find_target(r->bp, r->bw, r->psm);
-    if (t && t->scale == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
+    if (t && t->sx == 1 && t->sy == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
         end_pass();
         transfer_barrier();
         uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0},

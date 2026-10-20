@@ -91,7 +91,7 @@ static void open_backend(void *unused) {
         }
         have_native = gsn_open(NULL);
         if (have_native) {
-            gsn_set_scale(port_options.native_scale);
+            gsn_set_scale(port_options.native_scale, port_options.native_scale);
         }
     }
     backend = have_gs || have_native;
@@ -733,7 +733,7 @@ void port_gs_set_native_scale(int scale) {
     port_options.native_scale = scale;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_scale(scale);
+        gsn_set_scale(scale, scale);
     }
 #endif
 }

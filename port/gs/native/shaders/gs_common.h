@@ -18,7 +18,7 @@ layout(push_constant, std430) uniform Push {
     ivec2 dst_offset; // the destination copy (shader blending): the frame buffer pixel at its (0, 0)
     uint misc;        // GSN_M_* below
     uint fbmsk;       // FRAME's FBMSK: the bits not written
-    uint tscale;      // a texture that is a render target: its pixels a GS pixel is across (--native-scale)
+    uint tscale;      // a texture that is a render target: its pixels a GS pixel is, across (bits 0-15) and down (16-31)
 } pc;
 
 #define GSN_F_TME 0x1u
@@ -48,5 +48,5 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_DST24 0x8u  // the frame buffer has no alpha
 #define GSN_M_PABE 0x10u
 #define GSN_M_SCANMSK_SHIFT 5u // SCANMSK: 2 draws no even lines, 3 no odd ones
-#define GSN_M_SCALE_SHIFT 7u   // the target's pixels a GS pixel is across (--native-scale), 3 bits
+#define GSN_M_SCALE_SHIFT 7u   // the target's pixels a GS pixel is down (--native-scale), 3 bits
 #define GSN_M_ZCLAMP 0x400u    // a vertex's Z is beyond the format's: gs_zclamp.frag writes the depth
