@@ -32,14 +32,21 @@ timings of the step 2 path, and how ico-pc built its renderer.
   from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
   PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
   captures: within 5 a channel. Live, with both renderers through 600 vblanks on all 64 maps: no
-  crash; at the end typically 3% of pixels more than 1 apart (mean 0.2 a channel). The passes that
-  carry a frame into the next (the dimming each frame, the previous frame blended in, the smear)
-  blend in the shader exactly, so they do not drift. A 2,000-vblank run takes 8.0 s against
-  paraLLEl-GS's 8.2 s.
+  crash; at the end typically 2-3% of pixels more than 1 apart (mean 0.1 a channel). The passes
+  that carry a frame into the next (the dimming each frame, the previous frame blended in, the
+  smear) blend in the shader exactly, so they do not drift. Uploads seen before come back as page
+  copies instead of being swizzled again.
 - **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
   resolution, live from the overlay).
-- **Stage 3**: the VU1 programs as C, bit for bit against the interpreter (`--vu1 hle`), which was
-  the stage's purpose (speed); shaders are left for later (below).
+- **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
+  packets through) has a high-level C version that gives the interpreter's results bit for bit
+  (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
+  captures and live runs on several maps). That was the stage's purpose: VU1 goes from two thirds
+  of the run's time to a sixth. Shaders are left as an option (below).
+- **Speed** (2,000 vblanks, new game then map 000): paraLLEl-GS with the interpreter 6.4 s (main
+  today); paraLLEl-GS with VU1 in C 3.2 s; the native GS with VU1 in C 4.4 s.
+- **Stage 4 (the default)** is the next decision: `--renderer native` and `--vu1 hle` are opt-in
+  until they have been played through.
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
   there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
   texture's target on map 000) has the target written back through the CPU each frame;
@@ -225,6 +232,75 @@ states, five small programs, no context tricks beyond PRMODECONT), and we can bo
 Stage 2 before stage 3 is deliberate: with the CPU's VU1 output drawn natively, every difference in
 the picture is the native GS's fault; once that is clean, every difference after stage 3 is the
 shaders'.
+
+### The VU1 programs without the interpreter (`--vu1 hle`)
+
+Ahead of stage 3, program 0x000 has a CPU version that computes its results directly, a vertex at a
+time, instead of interpreting its 289 software-pipelined instruction pairs:
+`port/platform/vu1_hle.c` (its top comment describes the program). It is the specification of the
+0x000 shader, and a speed switch now: its results are the interpreter's to the bit, so it is not a
+divergence. `--vu1 interp` (the default) keeps the interpreter; `--vu1 check` runs both and compares
+them run by run.
+
+- **Bit for bit.** Every FMAC operation is the interpreter's own helper (`v4_op`, shared through
+  `port/platform/vu1_internal.h`) in the program's order, ACC and the MADD roundings included. On x86
+  a vertex is first tried in plain SSE floats with flush-to-zero, which gives the same bits when no
+  operand has exponent 255 and MXCSR shows no overflow, underflow or invalid operation; otherwise
+  (about 0.5% of the vertices) it is done again with the interpreter's helpers.
+- **Timing.** Only Q, P and the clip flag are read without a stall, and the program's timing is
+  static: every DIV, ESADD and CLIP result is due by its reader, except the FCAND at 0x07E, which sees
+  one of the two CLIPs before it. The cycles and instruction pairs of a run are a formula in the
+  vertex count and the number of point lights.
+- **What it leaves.** The interpreter can take any run after an HLE run: data memory (including what
+  the pipeline writes past the batch: TOP+0xC1..0xC7, two vertices past the end in the light passes),
+  the XGKICK packets and their order with the stores, every VF and VI register, ACC, Q, P, I, the MAC,
+  status and clip flags (sticky bits too), VU1's clock and MSCNT's continue address are all as the
+  interpreter leaves them. Not reproduced: the interpreter's scratch that it clears or rewrites before
+  reading (the flag-write queue, empty after a run, and its head; the VI-write record for branches,
+  cleared at each run's start; Q's and P's due cycles with nothing pending). A save state taken after an
+  HLE run therefore differs from the interpreter's in those bytes only.
+- **Left to the interpreter.** Batches the game does not make (fewer than 3 or more than 39
+  vertices, or not between 0x80 and the end of data memory), a run starting with anything in flight,
+  micro memory with a flag-reading instruction in it, `--vu-round nearest`; and every other program.
+  Micro memory is recognised by a hash of 0x000-0x120 when it is decoded.
+- **Checked.** `kf4-gsreplay --mode vif --vu1 check` on the 64 map tour captures and the 14 census
+  captures (title, menus, journal, magic, movies): 90,798 runs, every one the same as the
+  interpreter's (memory, packets, registers, flags, clock), with the fast path and with it switched
+  off; `--vu1 hle`: every packet as recorded. In the game (`tests/newgame.pad`, teleported to map 0,
+  2010 vblanks, `--vu1 check`): 499,185 runs, none different; with `--vu1 hle`, the per-frame log,
+  the dumped frame, `--stats`' VU1 runs, instructions and cycles and PATH1 hash are those of
+  `--vu1 interp`.
+- **Speed** (that run, `--fast --headless --renderer native`, Ryzen 9 9900X3D): VU1 3.3 s with the
+  interpreter, 1.14 s with `--vu1 hle` (0.59 s of it program 0x000's 499,185 runs: 4.7 times faster
+  than interpreted); the run's wall time 7.9 s to 5.4 s.
+- **Program 0x5A0** (the silhouettes) has its own: `port/platform/vu1_hle_5a0.c`, the same way
+  (exact helpers only, no SSE fast path), MSCAL 0x5A0 and MSCNT 0x640, n = 3..49, recognised by a
+  hash of 0x5A0-0x641; vu1.c's `hle_try` hands its runs on. Checked: the 78 captures, 94,086 runs
+  (3,288 of them 0x5A0's), none different; in the game on maps 035, 112 and 115 (2500 frames,
+  `--vu1 check`) none different, and `--vu1 hle`'s PATH1 hash is `--vu1 interp`'s. On map 035 its
+  117,384 runs take VU1 from 2.94 s to 2.62 s with `--vu1 hle`.
+
+### VU1 program 0x700 without the interpreter
+
+Program 0x700 draws the effects (sfx.dat models: fire, glows, magic) and has its HLE in
+`port/platform/vu1_hle_700.c` (its top comment describes the program), reached through
+vu1.c's `hle_try` and recognised by a hash of 0x700-0x7D1. It is not pipelined: a vertex a loop pass,
+directional light, one colour for the model (VU 0x64), and the texture animation (TEX0 replaced by
+VU 0x66 when its TBP0 is 0x65.w). What it leaves past the batch is reproduced: a "vertex -1" from the
+raw qword at the previous run's vi07 + 1, and an extra vertex n (the loop's IBGTZ reads its counter
+before the decrement, so it runs n + 1 times). Its timing is a formula in n and its two branches.
+Checked as 0x000: the 78 captures (2,423 runs of 0x700, both entries, both branches each) and the
+game on maps 009, 025 and 000 with `--vu1 check`, none different.
+
+Program 0x280 (skinned models: two matrix sets chosen per vertex by ST's w, float vertices, a colour
+scale and bias, point lights in the vertex's set, and the optional sphere-mapped second pass gated
+by TOP+0xA4.z) has its own, `port/platform/vu1_hle_280.c`, to the same bar: its top comment
+describes the program, including where its pipeline shows (the colour's xyz carried from vertex to
+vertex, vertex 0 taking the tag's w as its light set, the run ending after the A+D kick when every
+vertex is clipped). The arithmetic is shared through `port/platform/vu1_hle_ops.h`. Checked: the
+21,390 runs of 0x280 in the 78 captures (90,798 + 21,390 = 112,188 compared, none different, with and
+without the fast path) and 160,207 in the game run above (659,392 compared with 0x000's). With both,
+that run's VU1 time is 0.76 s (from 3.3 s), its wall time 5.2 s.
 
 ## Testing
 

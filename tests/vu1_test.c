@@ -34,6 +34,12 @@ void port_gif_path1_kick(uint32_t address) {
     (void)address;
 }
 
+size_t port_gif_path1_read(uint32_t address, uint8_t *out) {
+    (void)address;
+    (void)out;
+    return 0;
+}
+
 PortOptions port_options; /* no --stats */
 PortStats port_stats;
 

@@ -34,6 +34,11 @@ typedef struct {
     int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
     int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
     int native_scale_forced;
+    /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
+       port/platform/vu1.c, vu1_hle*.c). PORT_VU1_INTERP, the interpreter, is the default;
+       PORT_VU1_HLE computes the same results directly, to the bit (faster); PORT_VU1_CHECK runs
+       both and compares them, run by run. */
+    int vu1;
     /* How the GS's output becomes a PC picture (port/gs/gs_parallel.cpp). Each is on by default and
        turned off by --no-<name>; --ps2-scanout turns them all off (the GS's raw output). */
     int deinterlace;         /* weave the two fields of an interlaced picture into one */
@@ -75,7 +80,9 @@ typedef struct {
     uint64_t gif_ticks;   /* handing GIF packets to the GS (all three paths) */
     uint64_t vsync_ticks; /* the GS's scanouts, with the picture to the window and --dump-frames */
     uint64_t vu1_runs;    /* MSCAL, MSCALF and MSCNT */
-    uint64_t vu1_insns;   /* instruction pairs run */
+    uint64_t vu1_insns;   /* instruction pairs run (or that the HLE did the work of) */
+    uint64_t vu1_hle_runs; /* of the runs, those --vu1 hle took */
+    uint64_t vu1_hle_ticks; /* and their share of vu1_ticks */
     uint64_t vu1_cycles;  /* VU1's own clock (stalls included): two runs that timed the same agree */
     uint64_t path1_hash;  /* of every packet VU1's XGKICK sent: two runs that drew the same agree */
 } PortStats;
@@ -200,6 +207,8 @@ void port_vif1_feed(const uint32_t *words, size_t count);
 int port_vif1_path3_masked(void);
 /* XGKICK: sends the GIF packet at a VU1 data address (in qwords) by PATH1. */
 void port_gif_path1_kick(uint32_t address);
+/* The bytes of the GIF packet XGKICK would send from address, into out (32 KB); returns its size. */
+size_t port_gif_path1_read(uint32_t address, uint8_t *out);
 
 void port_vu1_reset(void);
 /* MPG wrote micro memory: decode it again. */
@@ -210,6 +219,11 @@ uint8_t *port_vu1_data(void);
 void port_vu1_start(uint32_t address, uint32_t top, uint32_t itop);
 /* MSCNT: runs on from where the last one ended. */
 void port_vu1_continue(uint32_t top, uint32_t itop);
+/* --vu1 */
+enum { PORT_VU1_INTERP, PORT_VU1_HLE, PORT_VU1_CHECK };
+/* --vu1 check: the runs compared, and those where the HLE and the interpreter differed (each
+   difference is told on stderr, the first few) */
+extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
