@@ -29,8 +29,12 @@ void gsn_wait(void);
 void gsn_pipeline_cache(const char *path);
 void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
-   into frame when want_pixels (1 if there is one) */
+   into frame when want_pixels (1 if there is one). With want_pixels GSN_PRESENT, the picture goes to
+   the presenter (gsn_set_presenter) instead, from the native GS's thread when it has it: the caller
+   does not wait for it (and gets 1). */
+#define GSN_PRESENT 2
 int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+void gsn_set_presenter(void (*present)(const PortGsFrame *frame));
 /* The render targets' size, 1 to 4 times the PS2's (--native-scale), from the next vblank */
 void gsn_set_scale(int scale);
 

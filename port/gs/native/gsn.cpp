@@ -2592,7 +2592,7 @@ struct RingRecord {
     uint32_t type;
     uint32_t size;
     int32_t arg;
-    uint32_t unused;
+    uint32_t want_pixels; // (a vblank's)
 };
 static_assert(sizeof(RingRecord) == 16, "a ring record's header is a qword");
 
@@ -2621,7 +2621,7 @@ void ring_work(const RingRecord &r, const uint8_t *data) {
     } else if (r.type == RING_VSYNC) {
         uint64_t privileged[vsync_bytes / 8];
         memcpy(privileged, data, vsync_bytes);
-        vsync_now(privileged, r.arg, 0, nullptr);
+        vsync_now(privileged, r.arg, int(r.want_pixels), nullptr);
     }
 }
 
@@ -2688,7 +2688,7 @@ void ring_idle() {
     }
 }
 
-void ring_put(uint32_t type, int32_t arg, const void *data, size_t size) {
+void ring_put(uint32_t type, int32_t arg, const void *data, size_t size, uint32_t want_pixels = 0) {
     Ring &q = *ring;
     size_t padded = (size + 15) & ~size_t(15);
     size_t need = sizeof(RingRecord) + padded;
@@ -2704,7 +2704,7 @@ void ring_put(uint32_t type, int32_t arg, const void *data, size_t size) {
         at = 0;
     }
     ring_wait(need);
-    RingRecord r = {type, uint32_t(size), arg, 0};
+    RingRecord r = {type, uint32_t(size), arg, want_pixels};
     memcpy(q.bytes.data() + at, &r, sizeof(r));
     memcpy(q.bytes.data() + at + sizeof(r), data, size);
     q.head.store(head + need);
@@ -2858,8 +2858,18 @@ extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
 }
 
 namespace {
+// gsn_set_presenter's, and the picture it is given
+void (*presenter)(const PortGsFrame *frame);
+PortGsFrame presented;
+
 int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
     Timer timer(gsn_stats.ns_vsync);
+    if (want_pixels == GSN_PRESENT) {
+        if (!presented.rgba) {
+            presented.rgba = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS));
+        }
+        frame = &presented;
+    }
     flush_batch();
     // a register every 16 bytes: PMODE, SMODE1, SMODE2, ..., DISPFB1, DISPLAY1, DISPFB2, DISPLAY2
     auto preg = [&](int n) { return privileged[n * 2]; };
@@ -2944,14 +2954,21 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         gs->fields[0].clear();
         gs->fields[1].clear();
     }
+    if (ok && want_pixels == GSN_PRESENT && presenter) {
+        presenter(frame);
+    }
     return ok;
 }
 } // namespace
 
+extern "C" void gsn_set_presenter(void (*present)(const PortGsFrame *frame)) {
+    presenter = present;
+}
+
 extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
-    if (ring && !want_pixels) {
-        ring_put(RING_VSYNC, field, privileged, vsync_bytes);
-        return 0;
+    if (ring && (!want_pixels || want_pixels == GSN_PRESENT)) {
+        ring_put(RING_VSYNC, field, privileged, vsync_bytes, uint32_t(want_pixels));
+        return want_pixels == GSN_PRESENT;
     }
     ring_idle();
     return vsync_now(privileged, field, want_pixels, frame);

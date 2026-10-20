@@ -90,6 +90,7 @@ static void open_backend(void *unused) {
             char path[1100];
 
             gsn_set_scale(port_options.native_scale);
+            gsn_set_presenter(port_video_submit);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
         }
@@ -584,6 +585,10 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         got_gs = port_gs_backend_vsync(request->privileged, request->field, want, &frame);
     }
     if (have_native) {
+        if (!have_gs && shown && !dump) {
+            /* the native GS shows the picture itself when it has it, and this thread goes on */
+            return gsn_vsync(request->privileged, request->field, GSN_PRESENT, NULL);
+        }
         got_native = gsn_vsync(request->privileged, request->field, want, &native_frame);
     }
     if (have_gs && have_native) {
