@@ -274,13 +274,24 @@ void gsn_vram_write(uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint3
     pixel_put(vram, l.kind, pixel_nibble(&l, x, y), value);
 }
 
+static inline __attribute__((always_inline)) void read_row_as(const Layout *l, const uint8_t *vram, int kind, uint32_t x,
+                                                               uint32_t y, uint32_t count, uint32_t *out) {
+    for (uint32_t i = 0; i < count; i++) {
+        out[i] = pixel_get(vram, kind, pixel_nibble(l, x + i, y));
+    }
+}
+
 void gsn_vram_read_row(const uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y,
                        uint32_t count, uint32_t *out) {
     Layout l;
 
     layout_init(&l, psm, bp, bw);
-    for (uint32_t i = 0; i < count; i++) {
-        out[i] = pixel_get(vram, l.kind, pixel_nibble(&l, x + i, y));
+    switch (l.kind) {
+    case KIND_32: read_row_as(&l, vram, KIND_32, x, y, count, out); break;
+    case KIND_16: read_row_as(&l, vram, KIND_16, x, y, count, out); break;
+    case KIND_8: read_row_as(&l, vram, KIND_8, x, y, count, out); break;
+    case KIND_4: read_row_as(&l, vram, KIND_4, x, y, count, out); break;
+    default: read_row_as(&l, vram, l.kind, x, y, count, out); break;
     }
 }
 
@@ -332,9 +343,12 @@ void gsn_upload_begin(GsnUpload *u, uint64_t bitbltbuf, uint64_t trxpos, uint64_
 
 /* Writes `count` pixels of one row of the rectangle, from relative x `rx` on, taken from src: whole
    bytes for 8 bits and up, or nibbles from nibble `first` of src for 4 bits. Keeps the lowest and
-   highest page written to. */
-static int write_run(const Layout *l, uint8_t *vram, uint32_t x0, uint32_t y, uint32_t rx, uint32_t count,
-                     const uint8_t *src, uint32_t first, int bits, uint32_t *page_lo, uint32_t *page_hi) {
+   highest page written to. (write_run below has it made for each common format on its own, with
+   `bits` and `kind` known.) */
+static inline __attribute__((always_inline)) int write_run_as(const Layout *l, uint8_t *vram, uint32_t x0, uint32_t y,
+                                                              uint32_t rx, uint32_t count, const uint8_t *src,
+                                                              uint32_t first, int bits, int kind, uint32_t *page_lo,
+                                                              uint32_t *page_hi) {
     uint32_t page_row = (y >> l->page_h) * l->stride;
     const uint16_t *row = l->table + ((y & ((1u << l->page_h) - 1)) << l->page_w);
     uint32_t xmask = (1u << l->page_w) - 1;
@@ -355,7 +369,7 @@ static int write_run(const Layout *l, uint8_t *vram, uint32_t x0, uint32_t y, ui
         case 8: v = src[i]; break;
         default: v = (src[(first + i) >> 1] >> (((first + i) & 1) * 4)) & 0xF; break;
         }
-        changed |= pixel_put(vram, l->kind, nib, v);
+        changed |= pixel_put(vram, kind, nib, v);
         if (page < lo) {
             lo = page;
         }
@@ -366,6 +380,26 @@ static int write_run(const Layout *l, uint8_t *vram, uint32_t x0, uint32_t y, ui
     *page_lo = lo;
     *page_hi = hi;
     return changed;
+}
+
+static int write_run(const Layout *l, uint8_t *vram, uint32_t x0, uint32_t y, uint32_t rx, uint32_t count,
+                     const uint8_t *src, uint32_t first, int bits, uint32_t *page_lo, uint32_t *page_hi) {
+    if (bits == 32 && l->kind == KIND_32) {
+        return write_run_as(l, vram, x0, y, rx, count, src, first, 32, KIND_32, page_lo, page_hi);
+    }
+    if (bits == 24 && l->kind == KIND_24) {
+        return write_run_as(l, vram, x0, y, rx, count, src, first, 24, KIND_24, page_lo, page_hi);
+    }
+    if (bits == 16 && l->kind == KIND_16) {
+        return write_run_as(l, vram, x0, y, rx, count, src, first, 16, KIND_16, page_lo, page_hi);
+    }
+    if (bits == 8 && l->kind == KIND_8) {
+        return write_run_as(l, vram, x0, y, rx, count, src, first, 8, KIND_8, page_lo, page_hi);
+    }
+    if (bits == 4 && l->kind == KIND_4) {
+        return write_run_as(l, vram, x0, y, rx, count, src, first, 4, KIND_4, page_lo, page_hi);
+    }
+    return write_run_as(l, vram, x0, y, rx, count, src, first, bits, l->kind, page_lo, page_hi);
 }
 
 /* Moves the transfer on by n pixels along its row, to the next row at the row's end */
