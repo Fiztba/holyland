@@ -17,10 +17,10 @@
                          window shows gs's, --renderer-shown native shows the other)
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
-                         packets through): interp (the interpreter, the default), hle (the same
-                         results to the bit, computed directly: faster; port/platform/vu1_hle*.c)
-                         or check (both, compared run by run, differences on stderr and counted
-                         by --stats)
+                         packets through): hle (the default: computed directly, the interpreter's
+                         results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
+                         interpreter) or check (both, compared run by run, differences on stderr
+                         and counted by --stats)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off
@@ -148,6 +148,7 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.native_scale = 1;
+    port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
         const char *value = i + 1 < argc ? argv[i + 1] : NULL;

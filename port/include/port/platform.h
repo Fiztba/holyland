@@ -35,9 +35,10 @@ typedef struct {
     int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
     int native_scale_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
-       port/platform/vu1.c, vu1_hle*.c). PORT_VU1_INTERP, the interpreter, is the default;
-       PORT_VU1_HLE computes the same results directly, to the bit (faster); PORT_VU1_CHECK runs
-       both and compares them, run by run. */
+       port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
+       the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
+       interpreter (and what any other program runs on); PORT_VU1_CHECK runs both and compares them,
+       run by run. */
     int vu1;
     /* How the GS's output becomes a PC picture (port/gs/gs_parallel.cpp). Each is on by default and
        turned off by --no-<name>; --ps2-scanout turns them all off (the GS's raw output). */
