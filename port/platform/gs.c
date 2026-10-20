@@ -664,16 +664,23 @@ void port_gs_print_stats(void) {
 
         fprintf(stderr,
                 "[stats] native GS: %llu draws, %llu triangles, %llu render passes, %llu shader blends, %llu target "
-                "copies, %llu write-backs; %llu textures decoded (%llu texels), %llu found again; %llu uploads (%.1f MB, %llu found in VRAM already)\n",
+                "copies, %llu write-backs; %llu textures decoded (%llu texels), %llu found again; %llu uploads (%.1f MB, %llu found in VRAM already, %llu copied in whole)\n",
                 (unsigned long long)s->draws, (unsigned long long)s->primitives, (unsigned long long)s->passes,
                 (unsigned long long)s->shader_blends, (unsigned long long)s->target_copies,
                 (unsigned long long)s->writebacks, (unsigned long long)s->texture_decodes,
                 (unsigned long long)s->texture_bytes, (unsigned long long)s->texture_reuses, (unsigned long long)s->uploads, (double)s->upload_bytes / 1048576.0,
-                (unsigned long long)s->uploads_skipped);
+                (unsigned long long)s->uploads_skipped,
+                (unsigned long long)s->uploads_copied);
         fprintf(stderr,
-                "[stats] native GS time: GIF %.3f s (draws %.3f, uploads %.3f, write-backs %.3f, decodes %.3f), "
-                "vsync %.3f s\n",
-                s->ns_gif / 1e9, s->ns_flush / 1e9, s->ns_upload / 1e9, s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
+                "[stats] native GS time: GIF %.3f s (draws %.3f, uploads %.3f: swizzle %.3f, targets %.3f; "
+                "write-backs %.3f, decodes %.3f), vsync %.3f s\n",
+                s->ns_gif / 1e9, s->ns_flush / 1e9, s->ns_upload / 1e9, s->ns_swizzle / 1e9, s->ns_sync / 1e9,
+                s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
+        fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
+                s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
+        fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
+                (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,
+                (unsigned long long)s->pool_mb, (unsigned long long)s->upload_copies);
     }
 #endif
 }
