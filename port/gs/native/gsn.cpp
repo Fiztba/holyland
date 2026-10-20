@@ -983,6 +983,39 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
     return *gs->snapshot;
 }
 
+// Whether two triangles' insides overlap, so that a pixel could be drawn by both: no edge of either
+// has the other wholly on its far side (the separating axis test). Triangles that share an edge, or
+// only touch, do not; nor does one with no area, which draws nothing. (In doubles: exact for 12.4.)
+bool triangles_overlap(const Vtx *a, const Vtx *b) {
+    float ax0 = std::min(a[0].x, std::min(a[1].x, a[2].x)), ax1 = std::max(a[0].x, std::max(a[1].x, a[2].x));
+    float bx0 = std::min(b[0].x, std::min(b[1].x, b[2].x)), bx1 = std::max(b[0].x, std::max(b[1].x, b[2].x));
+    float ay0 = std::min(a[0].y, std::min(a[1].y, a[2].y)), ay1 = std::max(a[0].y, std::max(a[1].y, a[2].y));
+    float by0 = std::min(b[0].y, std::min(b[1].y, b[2].y)), by1 = std::max(b[0].y, std::max(b[1].y, b[2].y));
+    if (ax1 <= bx0 || bx1 <= ax0 || ay1 <= by0 || by1 <= ay0) {
+        return false;
+    }
+    for (int k = 0; k < 2; k++) {
+        const Vtx *p = k ? b : a, *q = k ? a : b;
+        double area = (double(p[1].x) - p[0].x) * (double(p[2].y) - p[0].y) -
+                      (double(p[1].y) - p[0].y) * (double(p[2].x) - p[0].x);
+        if (area == 0) {
+            return false;
+        }
+        for (int i = 0; i < 3; i++) {
+            const Vtx &e0 = p[i], &e1 = p[(i + 1) % 3];
+            bool apart = true;
+            for (int j = 0; j < 3 && apart; j++) {
+                double side = (double(e1.x) - e0.x) * (double(q[j].y) - e0.y) - (double(e1.y) - e0.y) * (double(q[j].x) - e0.x);
+                apart = (area > 0 ? side : -side) <= 0;
+            }
+            if (apart) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 uint32_t effective_prim() {
     uint32_t prim = uint32_t(gs->reg[R_PRIM]) & 0x7FF;
     if (!(gs->reg[R_PRMODECONT] & 1)) {
@@ -1224,68 +1257,13 @@ void flush_batch() {
     } else if (abe && bc == 0 && !(ba == bb)) {
         push.flags |= F_ALPHA_FACTOR;
     }
-    const Image *dest_copy = nullptr;
-    if (shader_blend || reads_own_target) {
-        // a draw that reads its own target reads anywhere in it; one that blends, only its own pixels
-        int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
-        for (const Vtx &v : gs->verts) {
-            box[0] = std::min(box[0], int32_t(floorf(v.x)) - 1);
-            box[1] = std::min(box[1], int32_t(floorf(v.y)) - 1);
-            box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
-            box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
-        }
-        dest_copy = &snapshot_of(*color, reads_own_target ? nullptr : box);
-        if (reads_own_target) {
-            target_view = &dest_copy->get_view();
-        }
-    }
-
-    begin_pass(color, depth);
-    CommandBuffer &c = cmd();
-    c.set_opaque_state();
-    c.set_program(gs->program);
-    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    c.set_cull_mode(VK_CULL_MODE_NONE);
     uint32_t s = color->scale;
-    push.misc |= s << M_SCALE_SHIFT;
-    VkViewport vp = {0.0f, 0.0f, float(color->width * s), float(color->height * s), 0.0f, 1.0f};
-    c.set_viewport(vp);
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
         return;
     }
-    c.set_scissor({{int32_t(sx0 * s), int32_t(sy0 * s)}, {(x1 - sx0) * s, (y1 - sy0) * s}});
-    c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
-    c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
-    c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-    uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
-    if (want_clut) {
-        memcpy(clut_data, clut, sizeof(clut));
-    } else {
-        memset(clut_data, 0, 1024);
-    }
-
-    // depth
-    if (depth) {
-        c.set_depth_test(true, !zmsk);
-        c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : ztst == 3 ? VK_COMPARE_OP_GREATER
-                                                                                   : VK_COMPARE_OP_ALWAYS);
-    } else {
-        c.set_depth_test(false, false);
-    }
-    // blending
-    if (abe && !shader_blend) {
-        float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
-        c.set_blend_enable(true);
-        c.set_blend_constants(constants);
-        bool alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
-        c.set_blend_factors(blend.src, alpha_factor ? VK_BLEND_FACTOR_CONSTANT_ALPHA : VK_BLEND_FACTOR_ONE, blend.dst,
-                            VK_BLEND_FACTOR_ZERO);
-        c.set_blend_op(blend.op, VK_BLEND_OP_ADD);
-    } else {
-        c.set_blend_enable(false);
-    }
+    push.misc |= s << M_SCALE_SHIFT;
     uint32_t write_mask = 0;
     for (int i = 0; i < 4; i++) {
         if (shader_blend || ((fbmsk >> (i * 8)) & 0xFF) != 0xFF) {
@@ -1295,16 +1273,6 @@ void flush_batch() {
     if (fpsm == GSN_PSMCT24) {
         write_mask &= 7;
     }
-
-    // the vertices
-    size_t bytes = gs->verts.size() * sizeof(Vtx);
-    void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
-    memcpy(vdata, gs->verts.data(), bytes);
-    c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
-    c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
-    c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
-    c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
-    c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
 
     // the alpha test: pixels that pass are written whole; those that fail, as AFAIL says
     struct Pass {
@@ -1339,16 +1307,110 @@ void flush_batch() {
             passes[npasses++] = {atst == 0 ? 0u : 2u, fail_mask, fail_z};
         }
     }
-    for (int i = 0; i < npasses; i++) {
-        Push p = push;
-        p.flags |= passes[i].select << F_PASS_SHIFT;
-        c.set_color_write_mask(passes[i].mask);
-        if (depth) {
-            c.set_depth_test(true, passes[i].zwrite);
+
+    // A draw that reads the target it draws into (shader blending, DATE) reads a copy taken before it,
+    // and one drawn in two passes (the alpha test's) draws every passing pixel before any failing one.
+    // Either way, primitives of the batch that overlap would not see each other as the GS's do, one
+    // after another: such a batch is drawn in runs of primitives that do not overlap, each with its
+    // own copy and passes. (A draw whose texture is its own target reads one copy, taken before the
+    // batch, for both.)
+    std::vector<uint32_t> runs(1, 0);
+    if ((shader_blend || npasses > 1) && !reads_own_target) {
+        uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
+        for (uint32_t t = 1; t < triangles; t++) {
+            // (a long run is cut anyway: the test is against each triangle of the run)
+            bool cut = t - start >= 256;
+            for (uint32_t u = start; u < t && !cut; u++) {
+                cut = triangles_overlap(&gs->verts[t * 3], &gs->verts[u * 3]);
+            }
+            if (cut) {
+                runs.push_back(t * 3);
+                start = t;
+            }
         }
-        c.push_constants(&p, 0, sizeof(p));
-        c.draw(uint32_t(gs->verts.size()));
-        gsn_stats.draws++;
+    }
+    runs.push_back(uint32_t(gs->verts.size()));
+
+    for (size_t r = 0; r + 1 < runs.size(); r++) {
+        uint32_t first = runs[r], count = runs[r + 1] - runs[r];
+        const Image *dest_copy = nullptr;
+        if (shader_blend || reads_own_target) {
+            // a draw that reads its own target reads anywhere in it; one that blends, only its own pixels
+            int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+            for (uint32_t i = first; i < first + count; i++) {
+                const Vtx &v = gs->verts[i];
+                box[0] = std::min(box[0], int32_t(floorf(v.x)) - 1);
+                box[1] = std::min(box[1], int32_t(floorf(v.y)) - 1);
+                box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
+                box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
+            }
+            dest_copy = &snapshot_of(*color, reads_own_target ? nullptr : box);
+            if (reads_own_target) {
+                target_view = &dest_copy->get_view();
+            }
+        }
+
+        begin_pass(color, depth);
+        CommandBuffer &c = cmd();
+        c.set_opaque_state();
+        c.set_program(gs->program);
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
+        VkViewport vp = {0.0f, 0.0f, float(color->width * s), float(color->height * s), 0.0f, 1.0f};
+        c.set_viewport(vp);
+        c.set_scissor({{int32_t(sx0 * s), int32_t(sy0 * s)}, {(x1 - sx0) * s, (y1 - sy0) * s}});
+        c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
+        c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
+        c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
+        if (want_clut) {
+            memcpy(clut_data, clut, sizeof(clut));
+        } else {
+            memset(clut_data, 0, 1024);
+        }
+
+        // depth
+        if (depth) {
+            c.set_depth_test(true, !zmsk);
+            c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : ztst == 3 ? VK_COMPARE_OP_GREATER
+                                                                                       : VK_COMPARE_OP_ALWAYS);
+        } else {
+            c.set_depth_test(false, false);
+        }
+        // blending
+        if (abe && !shader_blend) {
+            float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
+            c.set_blend_enable(true);
+            c.set_blend_constants(constants);
+            bool alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
+            c.set_blend_factors(blend.src, alpha_factor ? VK_BLEND_FACTOR_CONSTANT_ALPHA : VK_BLEND_FACTOR_ONE, blend.dst,
+                                VK_BLEND_FACTOR_ZERO);
+            c.set_blend_op(blend.op, VK_BLEND_OP_ADD);
+        } else {
+            c.set_blend_enable(false);
+        }
+
+        // the vertices
+        size_t bytes = size_t(count) * sizeof(Vtx);
+        void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
+        memcpy(vdata, gs->verts.data() + first, bytes);
+        c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
+        c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
+        c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
+        c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
+        c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
+
+        for (int i = 0; i < npasses; i++) {
+            Push p = push;
+            p.flags |= passes[i].select << F_PASS_SHIFT;
+            c.set_color_write_mask(passes[i].mask);
+            if (depth) {
+                c.set_depth_test(true, passes[i].zwrite);
+            }
+            c.push_constants(&p, 0, sizeof(p));
+            c.draw(count);
+            gsn_stats.draws++;
+        }
     }
     color->dirty = true;
     if (depth && zwrite) {
