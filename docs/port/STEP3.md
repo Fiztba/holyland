@@ -45,8 +45,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
   of the run's time to a sixth. Shaders are left as an option (below).
 - **Speed** (2,000 vblanks, new game then map 000): paraLLEl-GS with the interpreter 6.4 s (main
   today); paraLLEl-GS with VU1 in C 3.2 s; the native GS with VU1 in C 4.4 s.
-- **Stage 4 (the default)** is the next decision: `--renderer native` and `--vu1 hle` are opt-in
-  until they have been played through.
+- **Stage 4, started**: `--vu1 hle` is the default (bit for bit, so no switch to keep the PS2's
+  behaviour is needed). `--renderer native` stays opt-in until it has been played through.
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
   there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
   texture's target on map 000) has the target written back through the CPU each frame;
@@ -239,7 +239,7 @@ Ahead of stage 3, program 0x000 has a CPU version that computes its results dire
 time, instead of interpreting its 289 software-pipelined instruction pairs:
 `port/platform/vu1_hle.c` (its top comment describes the program). It is the specification of the
 0x000 shader, and a speed switch now: its results are the interpreter's to the bit, so it is not a
-divergence. `--vu1 interp` (the default) keeps the interpreter; `--vu1 check` runs both and compares
+divergence. `--vu1 hle` is the default; `--vu1 interp` keeps the interpreter; `--vu1 check` runs both and compares
 them run by run.
 
 - **Bit for bit.** Every FMAC operation is the interpreter's own helper (`v4_op`, shared through
