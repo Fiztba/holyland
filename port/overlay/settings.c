@@ -4,7 +4,7 @@
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "widescreen": false, "widescreen_hud": "corner", "renderer": "gs", "native_scale": 1,
-                    "presenter": "sdl"},
+                    "native_widescreen": false, "presenter": "sdl"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -277,6 +277,7 @@ void port_settings_load(void) {
         }
     }
     s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 1, 4);
+    s->native_widescreen = read_bool(display, "native_widescreen", s->native_widescreen);
     {
         const char *presenter = read_string(display, "presenter");
 
@@ -321,6 +322,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
+    }
+    if (!port_options.native_widescreen_forced) {
+        port_options.native_widescreen = s->native_widescreen;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -430,6 +434,7 @@ void port_settings_save(void) {
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
     put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
+    put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

@@ -91,7 +91,7 @@ static void open_backend(void *unused) {
         }
         have_native = gsn_open(NULL);
         if (have_native) {
-            gsn_set_scale(port_options.native_scale, port_options.native_scale);
+            gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
         }
     }
     backend = have_gs || have_native;
@@ -733,9 +733,24 @@ void port_gs_set_native_scale(int scale) {
     port_options.native_scale = scale;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_scale(scale, scale);
+        gsn_set_scale(port_gs_native_scale_x(), scale);
     }
 #endif
+}
+
+/* --native-widescreen: the widescreen picture is the GS's 640x448 shown at 16:9, its 3D drawn with a
+   16:9 field of view and its 2D squeezed (above). The native GS draws it as it is, only with more
+   pixels across than down: 4/3 of --native-scale, rounded up (1x: 2, 2x: 3, 3x: 4, exactly 4/3; 4x: 6),
+   so that a GS pixel's width on the 16:9 screen is never more than one of the target's pixels'
+   height, and the window shrinks the picture across instead of stretching it. Nothing in the game or
+   the GS's coordinates changes: the targets are only drawn finer across. */
+int port_gs_native_scale_x(void) {
+    int s = port_options.native_scale < 1 ? 1 : port_options.native_scale;
+
+    if (port_options.native_widescreen && port_options.widescreen) {
+        return (4 * s + 2) / 3;
+    }
+    return s;
 }
 
 /* --stats: what the native GS did */
@@ -807,6 +822,10 @@ void port_gs_run_vsync(void) {
     if (frame.rgba == NULL) {
         frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+    }
+    if (have_native) {
+        /* (widescreen and --native-widescreen change live: the scale follows, from this vblank's end) */
+        gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
     }
     if (present_frames(request, shown, dump)) {
     } else if (dump) {

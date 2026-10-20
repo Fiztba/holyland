@@ -40,6 +40,11 @@ typedef struct {
     int presenter_forced;    /* --presenter: this run's, whatever settings.json says */
     int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
     int native_scale_forced;
+    /* --native-widescreen: with widescreen on and the native GS, the render targets wider still
+       (port_gs_native_scale_x(), port/platform/gs.c): the 16:9 picture drawn with square pixels
+       instead of 640 columns stretched. Off by default; live from the overlay. */
+    int native_widescreen;
+    int native_widescreen_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_INTERP, the interpreter, is the default;
        PORT_VU1_HLE computes the same results directly, to the bit (faster); PORT_VU1_CHECK runs
@@ -249,8 +254,11 @@ extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
 /* The native GS's scale (port_options.native_scale), from the next vblank */
 void port_gs_set_native_scale(int scale);
+/* The native GS's scale across: native_scale, or with --native-widescreen (and widescreen on) the
+   smallest whole number at least 4/3 of it */
+int port_gs_native_scale_x(void);
 
-#define PORT_GS_FRAME_PIXELS (2560u * 2048u) /* the native GS at 4 times the PS2's 640x448 */
+#define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {
     uint32_t width, height;
     uint32_t *rgba; /* width * height pixels, R in the low byte */

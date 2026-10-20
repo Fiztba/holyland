@@ -692,6 +692,16 @@ void renderer_section() {
         tooltip("The native GS draws its frame buffers at this many times the PS2's 640x448 (2x: 1280x896,\n"
                 "4x: 2560x1792). 1x is the PS2's picture; with --renderer both the comparison is made at 1x\n"
                 "pixels either way.");
+        bool wide = port_options.native_widescreen != 0;
+        if (ImGui::Checkbox("Native widescreen", &wide)) {
+            port_options.native_widescreen = port_settings.native_widescreen = wide;
+            port_gs_set_native_scale(port_options.native_scale);
+            port_settings_changed();
+        }
+        tooltip("With widescreen on: the native GS draws the 16:9 picture with more pixels across, about\n"
+                "square ones, instead of the 640 columns the PS2 has stretched to 16:9 (at 1x 1280x448,\n"
+                "2x 1920x896, 3x 2560x1344, 4x 3840x1792). The picture is the same, sharper across.\n"
+                "Without widescreen it changes nothing. (--native-widescreen)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan)"};
     int presenter = port_video_presenter();

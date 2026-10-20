@@ -21,6 +21,9 @@
                          GPU; port/platform/present_vk.cpp); vulkan falls back to sdl if it
                          cannot start
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
+       --native-widescreen
+                         with --widescreen, the native GS draws the 16:9 picture wider still, with
+                         square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): interp (the interpreter, the default), hle (the same
                          results to the bit, computed directly: faster; port/platform/vu1_hle*.c)
@@ -129,7 +132,8 @@ static void usage(const char *program) {
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native|heatmap]\n"
-            "          [--presenter sdl|vulkan] [--native-scale 1-4] [--vu1 interp|hle|check]\n",
+            "          [--presenter sdl|vulkan] [--native-scale 1-4] [--native-widescreen]\n"
+            "          [--vu1 interp|hle|check]\n",
             program);
     exit(2);
 }
@@ -198,6 +202,10 @@ static void parse_options(int argc, char **argv) {
             if (strcmp(option, "--widescreen-hud-centred") == 0) {
                 port_options.widescreen_hud_centred = 1;
             }
+            continue;
+        }
+        if (strcmp(option, "--native-widescreen") == 0) {
+            port_options.native_widescreen = port_options.native_widescreen_forced = 1;
             continue;
         }
         if (strcmp(option, "--invincible") == 0) {
