@@ -29,14 +29,21 @@ timings of the step 2 path, and how ico-pc built its renderer.
   from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
   PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
   captures: within 5 a channel. Live, with both renderers through 600 vblanks on all 64 maps: no
-  crash; at the end typically 3% of pixels more than 1 apart (mean 0.2 a channel). The passes that
-  carry a frame into the next (the dimming each frame, the previous frame blended in, the smear)
-  blend in the shader exactly, so they do not drift. A 2,000-vblank run takes 8.0 s against
-  paraLLEl-GS's 8.2 s.
+  crash; at the end typically 2-3% of pixels more than 1 apart (mean 0.1 a channel). The passes
+  that carry a frame into the next (the dimming each frame, the previous frame blended in, the
+  smear) blend in the shader exactly, so they do not drift. Uploads seen before come back as page
+  copies instead of being swizzled again.
 - **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
   resolution, live from the overlay).
-- **Stage 3**: the VU1 programs as C, bit for bit against the interpreter (`--vu1 hle`), which was
-  the stage's purpose (speed); shaders are left for later (below).
+- **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
+  packets through) has a high-level C version that gives the interpreter's results bit for bit
+  (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
+  captures and live runs on several maps). That was the stage's purpose: VU1 goes from two thirds
+  of the run's time to a sixth. Shaders are left as an option (below).
+- **Speed** (2,000 vblanks, new game then map 000): paraLLEl-GS with the interpreter 6.4 s (main
+  today); paraLLEl-GS with VU1 in C 3.2 s; the native GS with VU1 in C 4.4 s.
+- **Stage 4 (the default)** is the next decision: `--renderer native` and `--vu1 hle` are opt-in
+  until they have been played through.
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
   there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
   texture's target on map 000) has the target written back through the CPU each frame;
