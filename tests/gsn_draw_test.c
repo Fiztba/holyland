@@ -6,9 +6,9 @@
    Afterwards the frame buffer (all four bytes a pixel) and the Z buffer are read from each one's VRAM
    and compared. What a case draws covers what the game asks of the GS (docs/port/STEP3.md, the
    survey's table) and a little around it:
-   - sprites, triangle lists and strips (and the odd fan); flat and Gouraud; context 1 or 2; the
-     registers by A+D or by PACKED descriptors (RGBAQ, ST, UV, XYZF2, XYZ2, FOG), on PATH2 or PATH3;
-     XYOFFSET with a fraction, vertices with fractions;
+   - sprites, triangle lists and strips (and the odd fan), overlapping; flat and Gouraud; context 1
+     or 2; the registers by A+D or by PACKED descriptors (RGBAQ, ST, UV, XYZF2, XYZ2), on PATH2 or
+     PATH3; XYOFFSET with a fraction, vertices with fractions;
    - textures: PSMT8 and PSMT4 through a CT32 (sometimes CT16) CLUT, CSM1, CSA, the CLD modes (0 keeps
      the CLUT buffer of the last case, 4 and 5 compare CBP0/1); PSMCT32, CT24, CT16 and CT16S direct;
      UV or STQ (Q 0.5 to 2); nearest or bilinear; REPEAT or CLAMP; MODULATE, DECAL, HIGHLIGHT,
@@ -21,27 +21,41 @@
    The pass criterion. paraLLEl-GS emulates the GS's own scan conversion and fixed-point interpolation;
    the native GS uses Vulkan's rasteriser and float interpolation, and accepts (docs/port/PLAN.md,
    "Where the native GS differs from paraLLEl-GS"):
-   - pixels on a triangle's edge, covered by one and not the other: a pixel within 1 of a triangle's
-     edge (its integer point; the GS's sample) is not compared ("edge" below). Sprites' edges are exact
-     and compared.
-   - (Cs - Cd) C + Cd on non-sprite primitives: Vulkan rounds to nearest where the GS truncates,
-     1 a layer; colours and texture coordinates interpolated in floats: 1 off in a colour, a texel
-     boundary crossed a pixel early or late (with nearest filtering, any difference: the textures are
-     noise), a Z a few units off.
-   - the alpha test cutting a filtered alpha at AREF a little differently;
-   - the depth of a Z32 buffer above 2^24 (a D32 float holds 24 bits).
-   So a pixel "differs" when a channel is more than 1 apart (a CT16 buffer's: 1 in 5 bits; Z: more than
-   the format's tolerance). A case passes when, of the pixels not on a triangle's edge:
-   - sprites that map texels 1:1 (FST, UV a whole texel per pixel), or draw no texture: none differ;
-   - anything else: at most 1/50 of the pixels the case covers differ by more than 1 (the texel and
-     alpha cut-offs), plus 4.
-   The second limit is loose on purpose: a systematic error (a wrong blend, format, wrap, CLUT) moves
-   most pixels of a primitive.
+   - pixels on a triangle's edge, covered by one and not the other: a pixel whose integer point (the
+     GS's sample) is within 1 of a triangle's edge is not compared ("edge" below). Sprites' edges are
+     exact and compared.
+   - (Cs - Cd) C + Cd on non-sprite primitives: Vulkan rounds to nearest where the GS truncates, 1 a
+     layer; colours and texture coordinates interpolated in floats: 1 off in a colour, a texel boundary
+     crossed a pixel early or late (with nearest filtering, any difference: the textures are noise);
+   - the alpha test cutting an interpolated or filtered alpha at AREF a little differently (and what
+     overlapping primitives then blend with);
+   - ST/Q: at a texel's edge the two land either side now and then; with bilinear filtering every
+     sixteenth of a texel is such an edge, and noise turns it into differences of up to 30;
+   - Z interpolated in floats: 2 apart plus 1 in 2^20; a Z32 buffer above 2^24 (a D32 float holds 24
+     bits): 1 in 2^23 for sprites, 1 in 2^16 interpolated.
+   So a pixel "differs" when a channel is more than 1 apart (a CT16 buffer's: 1 in 5 bits; with
+   COLCLAMP 0, apart either way round 256). A case passes when, of the pixels not on a triangle's edge:
+   - sprites with no texture, sprites that map texels 1:1 (UV a texel a pixel), and nearest-filtered
+     sprites that read their own frame buffer: none differ, in colour or Z;
+   - STQ with bilinear filtering: at most 1/8 of the pixels the case covers differ, plus 4;
+   - anything else: at most 1/50 of them, plus 4.
+   The limits are loose on purpose: a systematic error (a wrong blend, format, wrap, CLUT) moves most
+   pixels of a primitive, and the strict class catches a difference of a single pixel.
+
+   Left out, as paraLLEl-GS quirks the game does not meet (PLAN.md has them): PABE with (A - A) C + Cd;
+   sprites drawn right to left or bottom to top (GSN_REVERSE=1 draws some); a draw reading its own
+   frame buffer past the buffer, or cut by the scissor (feedback sprites read inside the buffer and are
+   not scissored).
 
    gsn_draw_test [cases [seed]]: cases (300 by default) from the seed (1). Each failure prints the
-   case's parameters, its pixels differing by more than 1 and the largest difference. With GSN_DUMP
-   set, a failing case's two frame buffers and their difference are written as PPM files. Exits 77
-   (skipped) when there is no Vulkan device. */
+   case's parameters, its pixels differing by more than 1 and the largest difference. The cases share
+   one GS (targets, the CLUT buffer), as a game's draws do, so a case can depend on the ones before.
+   Switches, for narrowing a difference down: GSN_OFF=feature,... (make_case's list) turns features
+   off; GSN_CASE=n runs one case, GSN_FIRST=n the cases from n; GSN_THRESHOLD=t (1); GSN_ALL prints
+   every case; GSN_VERBOSE the vertices; GSN_DUMP writes a failing case's two frame buffers and their
+   difference as PPM files; GSN_GRADIENT makes CT32 textures their own coordinates (decal), and prints
+   how far apart the texels each renderer sampled are. Exits 77 (skipped) when there is no Vulkan
+   device. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -341,6 +355,10 @@ static void apply_off(Case *k) {
     if (off("gouraud")) k->iip = 0;
     if (off("stq")) k->fst = 1;
     if (off("bilinear")) k->mmag = k->mmin = 0;
+    if (getenv("GSN_GRADIENT") && k->tme && !k->feedback) {
+        k->tpsm = GSN_PSMCT32;
+        k->tfx = 1;
+    }
     if (off("scissor")) {
         k->sx0 = k->sy0 = 0;
         k->sx1 = k->width - 1;
@@ -455,6 +473,11 @@ static void make_case(Case *k) {
     k->colclamp = !one_in(4);
     k->fba = one_in(4);
     k->pabe = one_in(5);
+    if (k->a == k->b && k->d == 1) {
+        /* paraLLEl-GS makes (A - A) C + Cd an RGB write mask before PABE: the pixels PABE leaves
+           unblended (As under 0x80) keep Cd there, where the GS (and the native GS) writes Cs */
+        k->pabe = 0;
+    }
     k->scanmsk = one_in(6) ? 2 + rnd(2) : 0;
 
     /* the scissor: mostly the whole buffer */
@@ -526,7 +549,7 @@ static void make_case(Case *k) {
                 a->s = a->s / a->q * b->q;
             }
             /* mostly drawn left to right and top to bottom */
-            if (!one_in(6)) {
+            if (!one_in(6) || !getenv("GSN_REVERSE")) {
                 if (a->x > b->x) {
                     float t = a->x;
                     a->x = b->x;
@@ -538,9 +561,31 @@ static void make_case(Case *k) {
                     b->y = t;
                 }
             }
+            if (getenv("GSN_POT") && b->x > a->x && b->y > a->y) {
+                /* (debugging) sprites a power of two across and down */
+                b->x = a->x + (float)(1u << ilog2((uint32_t)(b->x - a->x) + 1)) / 2;
+                b->y = a->y + (float)(1u << ilog2((uint32_t)(b->y - a->y) + 1)) / 2;
+            }
             if (k->feedback) {
                 /* the frame shifted by a few pixels */
                 int dx = (int)rnd(17) - 8, dy = (int)rnd(17) - 8;
+                /* read within the frame buffer: past it is VRAM the case neither sets nor compares, and
+                   the native GS's target ends at the scissor (the game's passes read inside the frame) */
+                a->x = fmaxf(a->x, 9.0f);
+                a->y = fmaxf(a->y, 9.0f);
+                b->x = fminf(b->x, (float)k->width - 9.0f);
+                b->y = fminf(b->y, (float)k->height - 9.0f);
+                /* and the whole buffer drawn: where a scissor cuts it, the pixels on the cut read
+                   what paraLLEl-GS's feedback emulation has there */
+                k->sx0 = k->sy0 = 0;
+                k->sx1 = k->width - 1;
+                k->sy1 = k->height - 1;
+                if (b->x < a->x) {
+                    b->x = a->x;
+                }
+                if (b->y < a->y) {
+                    b->y = a->y;
+                }
                 a->u = (uint32_t)((int)(a->x * 16.0f) + dx * 16) & 0x3FFF;
                 a->v = (uint32_t)((int)(a->y * 16.0f) + dy * 16) & 0x3FFF;
                 b->u = a->u + (uint32_t)((b->x - a->x) * 16.0f);
@@ -553,8 +598,8 @@ static void make_case(Case *k) {
                 }
             } else if (k->unit_uv) {
                 /* a texel a pixel: UV runs as X and Y do */
-                b->u = a->u + (uint32_t)((b->x - a->x) * 16.0f);
-                b->v = a->v + (uint32_t)((b->y - a->y) * 16.0f);
+                b->u = (uint32_t)((int)a->u + (int)((b->x - a->x) * 16.0f)) & 0x3FFF;
+                b->v = (uint32_t)((int)a->v + (int)((b->y - a->y) * 16.0f)) & 0x3FFF;
                 if (b->x < a->x || b->y < a->y) {
                     k->unit_uv = 0;
                 }
@@ -564,12 +609,6 @@ static void make_case(Case *k) {
 }
 
 /* ---- Sending a case ---------------------------------------------------------------------------- */
-static float as_float(uint32_t v) {
-    float f;
-    memcpy(&f, &v, 4);
-    return f;
-}
-
 static uint32_t float_bits(float f) {
     uint32_t v;
     memcpy(&v, &f, 4);
@@ -577,8 +616,6 @@ static uint32_t float_bits(float f) {
 }
 
 static uint8_t *data_buf;
-
-static uint32_t clut_cbp_last[2] = {UINT32_MAX, UINT32_MAX};
 
 static void send_case(const Case *k) {
     uint32_t c2 = k->ctxt;
@@ -614,6 +651,12 @@ static void send_case(const Case *k) {
     if (k->tme && !k->feedback) {
         uint32_t w = 1u << k->tw, h = 1u << k->th;
         fill_random(data_buf, (size_t)w * h * 4);
+        if (getenv("GSN_GRADIENT") && k->tpsm == GSN_PSMCT32) {
+            /* (debugging) each texel its coordinates: R = U, G = V */
+            for (uint32_t i = 0; i < w * h; i++) {
+                ((uint32_t *)data_buf)[i] = (i % w) | (i / w) << 8 | 0x80000000u;
+            }
+        }
         upload(k->tbp, k->tbw, k->tpsm, 0, 0, w, h, data_buf);
         if (k->tpsm == GSN_PSMT8 || k->tpsm == GSN_PSMT4) {
             uint32_t cw = k->tpsm == GSN_PSMT8 ? 16 : 8, ch = k->tpsm == GSN_PSMT8 ? 16 : 2;
@@ -689,8 +732,6 @@ static void send_case(const Case *k) {
     }
     put_qword(gif_tag(0, 1, 0, 1), 0xE); /* the end of the packet */
     send_both(k->path);
-    (void)as_float;
-    (void)clut_cbp_last;
 }
 
 /* ---- Coverage: which pixels a case's primitives cover, and which are on a triangle's edge ---------- */
@@ -768,6 +809,7 @@ static void mark_coverage(const Case *k) {
 /* ---- Comparing --------------------------------------------------------------------------------- */
 static uint32_t *fb_a, *fb_b, *z_a, *z_b;
 static int failures;
+static uint32_t threshold = 1; /* a pixel differs when a channel is more than this apart (GSN_THRESHOLD) */
 
 static void dump_ppm(const char *name, const uint32_t *rgba, uint32_t w, uint32_t h) {
     FILE *f = fopen(name, "wb");
@@ -788,10 +830,14 @@ static void dump_ppm(const char *name, const uint32_t *rgba, uint32_t w, uint32_
 static uint32_t pixel_diff(const Case *k, uint32_t p, uint32_t q) {
     uint32_t worst = 0;
     int channels = k->fpsm == GSN_PSMCT24 ? 3 : 4;
+    int dst16 = k->fpsm == GSN_PSMCT16 || k->fpsm == GSN_PSMCT16S;
     for (int c = 0; c < channels; c++) {
         int e = (int)((p >> (c * 8)) & 0xFF) - (int)((q >> (c * 8)) & 0xFF);
         uint32_t m = (uint32_t)(e < 0 ? -e : e);
-        if (k->fpsm == GSN_PSMCT16 || k->fpsm == GSN_PSMCT16S) {
+        if (k->abe && !k->colclamp && c < 3 && m > 128) {
+            m = 256 - m; /* COLCLAMP 0 wraps: 1 apart either side of 256 is 1 apart */
+        }
+        if (dst16) {
             m = c == 3 ? (m ? 1 : 0) : m >> 3;
         }
         worst = m > worst ? m : worst;
@@ -805,7 +851,7 @@ static int z_differs(const Case *k, uint32_t p, uint32_t q) {
     uint32_t tol = k->prim == 6 ? 0 : 2;
     uint32_t big = p > q ? p : q;
     if (k->zpsm == GSN_PSMZ32 && big >= (1u << 24)) {
-        tol += big >> 23; /* a D32 float holds 24 bits */
+        tol += big >> (k->prim == 6 ? 23 : 16); /* a D32 float holds 24 bits (interpolated: less) */
     }
     if (k->prim != 6) {
         tol += big >> 20; /* interpolated in floats */
@@ -838,12 +884,12 @@ static int run_case(int index, const Case *k) {
         int zd = z_differs(k, z_a[i], z_b[i]);
         cover += covered[i];
         edges += edge[i];
-        bad_any += d > 1;
+        bad_any += d > threshold;
         max_any = d > max_any ? d : max_any;
         if (edge[i]) {
             continue;
         }
-        if (d > 1) {
+        if (d > threshold) {
             if (!bad) {
                 first_x = (int)(i % k->width);
                 first_y = (int)(i / k->width);
@@ -854,9 +900,29 @@ static int run_case(int index, const Case *k) {
         zbad += zd;
     }
 
+    if (getenv("GSN_GRADIENT") && k->tme && k->tpsm == GSN_PSMCT32 && k->tfx == 1 && !k->fbmsk) {
+        /* (debugging) how far apart the texels each sampled are: native less paraLLEl, wrapped */
+        int hist[2][5] = {{0}};
+        int tw = 1 << k->tw, th = 1 << k->th;
+        for (size_t i = 0; i < n; i++) {
+            int du = (int)(fb_b[i] & 0xFF) - (int)(fb_a[i] & 0xFF), dv = (int)((fb_b[i] >> 8) & 0xFF) - (int)((fb_a[i] >> 8) & 0xFF);
+            if (!covered[i] || edge[i] || fb_a[i] == fb_b[i]) {
+                continue;
+            }
+            du = ((du % tw) + tw + tw / 2) % tw - tw / 2;
+            dv = ((dv % th) + th + th / 2) % th - th / 2;
+            hist[0][du < -1 ? 0 : du > 1 ? 4 : du + 2]++;
+            hist[1][dv < -1 ? 0 : dv > 1 ? 4 : dv + 2]++;
+        }
+        printf("  texel differences, native less paraLLEl: U <-1 %d, -1 %d, 0 %d, 1 %d, >1 %d; V %d %d %d %d %d\n",
+               hist[0][0], hist[0][1], hist[0][2], hist[0][3], hist[0][4], hist[1][0], hist[1][1], hist[1][2], hist[1][3], hist[1][4]);
+    }
     /* the criterion (the header comment) */
-    int exact = k->prim == 6 && (!k->tme || (k->unit_uv && !k->feedback) || (k->feedback && k->fst));
+    int exact = k->prim == 6 && (!k->tme || (k->unit_uv && !k->feedback) || (k->feedback && k->fst && !k->mmag));
     uint32_t allowed = exact ? 0 : cover / 50 + 4;
+    if (k->tme && !k->fst && (k->mmag || k->mmin)) {
+        allowed = cover / 8 + 4; /* STQ and bilinear: each sixteenth of a texel is a boundary */
+    }
     int ok = bad <= allowed && zbad <= allowed;
     if (getenv("GSN_ALL") || !ok) {
         printf("%s case %d (seed %u): %u pixels differ by more than 1 (of %u covered, %u on edges, %u allowed), "
@@ -878,7 +944,7 @@ static int run_case(int index, const Case *k) {
             dump_ppm(name, fb_b, k->width, k->height);
             for (size_t i = 0; i < n; i++) {
                 uint32_t d = pixel_diff(k, fb_a[i], fb_b[i]);
-                diff[i] = edge[i] ? 0x404040 : d > 1 ? 0x0000FF : covered[i] ? 0x00FF00 : 0;
+                diff[i] = edge[i] ? 0x404040 : d > threshold ? 0x0000FF : covered[i] ? 0x00FF00 : 0;
             }
             snprintf(name, sizeof(name), "case%d_diff.ppm", index);
             dump_ppm(name, diff, k->width, k->height);
@@ -894,7 +960,11 @@ int main(int argc, char **argv) {
     int cases = argc > 1 ? atoi(argv[1]) : 300;
     uint32_t seed = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 0) : 1;
     int only = getenv("GSN_CASE") ? atoi(getenv("GSN_CASE")) : -1;
+    int first = getenv("GSN_FIRST") ? atoi(getenv("GSN_FIRST")) : 0; /* the cases before, left out */
     off_list = getenv("GSN_OFF");
+    if (getenv("GSN_THRESHOLD")) {
+        threshold = (uint32_t)atoi(getenv("GSN_THRESHOLD"));
+    }
 
     setvbuf(stdout, NULL, _IONBF, 0);
     if (!port_gs_backend_open()) {
@@ -923,7 +993,7 @@ int main(int argc, char **argv) {
         make_case(&k);
         k.seed = seed;
         apply_off(&k);
-        if (only >= 0 && i != only) {
+        if ((only >= 0 && i != only) || i < first) {
             continue;
         }
         if (!run_case(i, &k)) {
