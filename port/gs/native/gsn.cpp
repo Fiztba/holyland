@@ -165,7 +165,7 @@ enum : uint32_t {
     SRC_CLUT = 0, SRC_CT32 = 1, SRC_CT24 = 2, SRC_CT16 = 3, SRC_TARGET_CT32 = 4, SRC_TARGET_CT24 = 5,
     SRC_TARGET_CT16 = 6,
 };
-enum : uint32_t { M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10 };
+enum : uint32_t { M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
 struct Target {
@@ -990,7 +990,7 @@ void flush_batch() {
     push.fbmsk = fbmsk;
     push.misc = (bits(gs->reg[R_FBA_1 + ctxt], 0, 1) ? M_FBA : 0) | (bits(gs->reg[R_COLCLAMP], 0, 1) ? M_COLCLAMP : 0) |
                 (dst16 ? M_DST16 : 0) | (fpsm == GSN_PSMCT24 ? M_DST24 : 0) |
-                (bits(gs->reg[R_PABE], 0, 1) ? M_PABE : 0);
+                (bits(gs->reg[R_PABE], 0, 1) ? M_PABE : 0) | (bits(gs->reg[R_SCANMSK], 0, 2) << M_SCANMSK_SHIFT);
     push.flags = (fge ? F_FGE : 0);
 
     // the texture

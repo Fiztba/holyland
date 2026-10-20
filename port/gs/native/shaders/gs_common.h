@@ -44,3 +44,4 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_DST16 0x4u  // the frame buffer is 16-bit: colours keep their top 5 bits, alpha its top bit
 #define GSN_M_DST24 0x8u  // the frame buffer has no alpha
 #define GSN_M_PABE 0x10u
+#define GSN_M_SCANMSK_SHIFT 5u // SCANMSK: 2 draws no even lines, 3 no odd ones

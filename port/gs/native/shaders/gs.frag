@@ -187,6 +187,11 @@ void main() {
         c.rgb = ivec3(floor(vec3(fog) + vec3((c.rgb - fog) * f) / 256.0 + 0.5));
     }
 
+    uint scanmsk = field(pc.misc, GSN_M_SCANMSK_SHIFT, 2u);
+    if (scanmsk >= 2u && (uint(gl_FragCoord.y) & 1u) == scanmsk - 2u) {
+        discard;
+    }
+
     uint pass = field(pc.flags, GSN_F_PASS_SHIFT, 2u);
     if (pass != 0u && alpha_test(c.a) != (pass == 1u)) {
         discard;
