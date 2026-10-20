@@ -375,6 +375,49 @@ extern "C" const void *port_gs_backend_vram(void) {
     return gs->map_vram_read(0, vram_bytes);
 }
 
+// A rectangle of a buffer as the GS has it, read back through the GS itself (a local-to-host
+// transfer, as a game would), into RGBA (the 32-bit formats as they are; the 16-bit ones widened, their
+// alpha bit 0x80). paraLLEl-GS's VRAM mirror (below) can be stale for pages draws wrote. The transfer
+// registers are put back. For comparing the renderers.
+extern "C" void port_gs_backend_read_rect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w,
+                                          uint32_t h, uint32_t *rgba) {
+    RegisterState saved = gs->get_register_state();
+    bool half = psm == 0x02 || psm == 0x0A;
+    uint64_t packet[2 * 5];
+    packet[0] = 4 | (1ull << 15) | (1ull << 60); // GIF tag: NLOOP 4, EOP, PACKED, one register: A+D
+    packet[1] = 0xE;
+    packet[2] = uint64_t(bp) | (uint64_t(bw) << 16) | (uint64_t(psm) << 24);
+    packet[3] = 0x50;
+    packet[4] = uint64_t(x) | (uint64_t(y) << 16);
+    packet[5] = 0x51;
+    packet[6] = w | (uint64_t(h) << 32);
+    packet[7] = 0x52;
+    packet[8] = 1; // TRXDIR: local to host
+    packet[9] = 0x53;
+    gs->gif_transfer(2, packet, 5 * 16);
+    size_t bpp = half ? 2 : psm == 0x01 ? 3 : 4;
+    size_t bytes = size_t(w) * h * bpp;
+    std::vector<uint8_t> data((bytes + 15) & ~size_t(15));
+    gs->read_transfer_fifo(data.data(), uint32_t(data.size() / 16));
+    for (size_t i = 0; i < size_t(w) * h; i++) {
+        if (half) {
+            uint32_t v = data[i * 2] | (data[i * 2 + 1] << 8);
+            rgba[i] = ((v & 0x1F) << 3) | (((v >> 5) & 0x1F) << 11) | (((v >> 10) & 0x1F) << 19) |
+                      ((v & 0x8000) ? 0x80000000u : 0);
+        } else if (bpp == 3) {
+            rgba[i] = data[i * 3] | (data[i * 3 + 1] << 8) | (uint32_t(data[i * 3 + 2]) << 16);
+        } else {
+            memcpy(&rgba[i], &data[i * 4], 4);
+        }
+    }
+    RegisterState &now = gs->get_register_state();
+    now.bitbltbuf = saved.bitbltbuf;
+    now.trxpos = saved.trxpos;
+    now.trxreg = saved.trxreg;
+    now.trxdir = saved.trxdir;
+}
+
+
 extern "C" void port_gs_backend_capture(void (*emit)(uint32_t type, const void *data, size_t size)) {
     emit(KF4GS_VRAM, port_gs_backend_vram(), vram_bytes);
 

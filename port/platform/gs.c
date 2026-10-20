@@ -552,7 +552,7 @@ static void compare_buffers(VsyncRequest *request, int dump) {
     }
     a.width = b.width = rect.w;
     a.height = b.height = rect.h;
-    gsn_decode_rect((const uint8_t *)port_gs_backend_vram(), &rect, a.rgba);
+    port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a.rgba);
     gsn_read_rect(&rect, b.rgba);
     compare_frames(&a, &b, request->vblank);
     if (dump) {

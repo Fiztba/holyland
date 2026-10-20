@@ -689,7 +689,7 @@ static void compare_draw(Run *r, long index) {
     }
     a = malloc(n * 4);
     b = malloc(n * 4);
-    gsn_decode_rect(port_gs_backend_vram(), &rect, a);
+    port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a);
     gsn_read_rect(&rect, b);
     for (i = 0; i < n; i++) {
         uint32_t worst = 0;
@@ -707,7 +707,7 @@ static void compare_draw(Run *r, long index) {
     r->compared++;
     if (r->resync) {
         /* the next draw starts from the same picture: what it shows is its own difference */
-        gsn_decode_rect(port_gs_backend_vram(), &rect, a);
+        port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a);
         gsn_write_rect(&rect, a);
     }
     if (pixels) {
@@ -900,7 +900,7 @@ static void vsync(Run *r, const Record *rec) {
             size_t i, n = (size_t)rect.w * rect.h;
             uint32_t *a = malloc(n * 4), *b = malloc(n * 4), max = 0, pixels = 0;
 
-            gsn_decode_rect(port_gs_backend_vram(), &rect, a);
+            port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a);
             gsn_read_rect(&rect, b);
             for (i = 0; i < n; i++) {
                 uint32_t worst = 0;
