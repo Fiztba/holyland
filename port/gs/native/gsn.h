@@ -32,6 +32,10 @@ int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFram
    and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
 #define GSN_MAX_SCALE_X 6
 void gsn_set_scale(int x_scale, int y_scale);
+/* --native-msaa: the samples a pixel of the targets the 3D is drawn into has, from the next vblank
+   (1, the default, is the PS2's picture; 2, 4 or 8). Returns the count used: the most the GPU has up
+   to `samples`. */
+int gsn_set_msaa(int samples);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {
@@ -102,6 +106,7 @@ typedef struct {
     /* what it holds now: render targets, textures, decoded images (and their MB), uploads kept */
     uint64_t targets, textures, pool_images, pool_mb, upload_copies;
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
+    uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
 } GsnStats;
 extern GsnStats gsn_stats;
 

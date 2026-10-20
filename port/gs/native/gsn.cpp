@@ -184,6 +184,10 @@ struct Target {
     bool depth;
     bool dirty; // newer than the CPU's VRAM
     uint64_t used;
+    // --native-msaa: the multisampled image the 3D is drawn into (made when first drawn so), and which
+    // of the two has pixels the other does not (msaa_settle, msaa_ready)
+    ImageHandle ms;
+    bool ms_newer, image_newer;
 };
 
 struct Texture {
@@ -229,6 +233,7 @@ struct Gs {
     Device *device = nullptr;
     Program *program = nullptr;
     Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
+    Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
@@ -239,6 +244,7 @@ struct Gs {
     // the render pass under way
     Target *pass_color = nullptr;
     Target *pass_depth = nullptr;
+    bool pass_ms = false; // drawing into the targets' multisampled images
     bool in_pass = false;
 
     // ---- the batch being gathered: triangles since the last register write
@@ -257,6 +263,10 @@ Gs *gs;
 // when every target goes back to VRAM and comes again at the new size.
 uint32_t target_sx = 1, target_sy = 1;
 volatile uint32_t wanted_scale = 1 | 1 << 8; // sx | sy << 8
+// --native-msaa: the samples a pixel of the 3D's targets has (1: none, the PS2's picture; 2, 4, 8).
+// Changed at a vblank (gsn_set_msaa), as the scale is.
+uint32_t target_samples = 1;
+volatile uint32_t wanted_samples = 1;
 
 // Time spent in a function, added to a counter of gsn_stats
 struct Timer {
@@ -292,6 +302,7 @@ void end_pass() {
         gs->in_pass = false;
         gs->pass_color = nullptr;
         gs->pass_depth = nullptr;
+        gs->pass_ms = false;
         gs->cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -360,6 +371,194 @@ void done_reading() {
     gs->device->unmap_host_buffer(*gs->readback_buffer, MEMORY_ACCESS_READ_BIT);
 }
 
+// ---- --native-msaa ------------------------------------------------------------------------------
+// With MSAA on (target_samples above 1), the 3D is drawn into multisampled images: a target drawn into
+// with a Z buffer gets one (Target::ms, as large as its image), and so does its Z buffer. Every draw
+// with a Z buffer goes to them; so does a draw without one into a target whose multisampled image is
+// newer than its image, unless it reads that target as its texture (flush_batch). Everything else uses
+// the image as before: draws without Z (the 2D, the passes over the whole frame), textures read from
+// targets, write-backs, frame copies, uploads, the scanout. The two are kept in step lazily, at most
+// one of them newer: before the image is read or written, a newer multisampled image is resolved
+// into it (msaa_settle: colour, each pixel the mean of its samples; Z, its first sample); before the
+// multisampled image is drawn into, a newer image is copied into every sample of it (msaa_ready).
+// Draws into the multisampled images are shaded once a pixel, as without MSAA: only coverage and Z
+// are per sample, so the pixels inside a primitive are what they are without MSAA, and its edges are
+// smoothed when resolved. A draw that blends in the shader reads the target's resolved pixels
+// (snapshot_of), which keeps a blended pixel's samples as one colour.
+
+// Granite's cache of render passes does not tell them apart by their attachments' sample counts: a
+// pass into multisampled images names its one subpass, where the passes into the images have the
+// default (so the two kinds are not mixed up), and one run uses one sample count (msaa_samples_used).
+uint32_t msaa_samples_used;
+
+void msaa_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
+    subpass = {};
+    subpass.num_color_attachments = rp.num_color_attachments;
+    subpass.color_attachments[0] = 0;
+    subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
+    rp.subpasses = &subpass;
+    rp.num_subpasses = 1;
+}
+
+ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
+    msaa_samples_used = target_samples;
+    ImageCreateInfo info = ImageCreateInfo::render_target(width, height, depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM);
+    info.samples = VkSampleCountFlagBits(target_samples);
+    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                 (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    info.layout = ImageLayout::General;
+    info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+    return gs->device->create_image(info, nullptr);
+}
+
+// One of the copying passes (shaders/msaa.vert): src read at each pixel of dst, written to its colour
+// or (depth) its Z
+void msaa_copy_pass(const Image &dst, const Image &src, Program *program, bool depth) {
+    end_pass();
+    RenderPassInfo rp;
+    RenderPassInfo::Subpass subpass;
+    if (depth) {
+        rp.depth_stencil = &dst.get_view();
+        rp.op_flags = RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+    } else {
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &dst.get_view();
+        rp.store_attachments = 1;
+    }
+    if (dst.get_create_info().samples != VK_SAMPLE_COUNT_1_BIT) {
+        msaa_subpass(rp, subpass);
+    }
+    CommandBuffer &c = cmd();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    c.begin_render_pass(rp);
+    c.set_opaque_state();
+    c.set_program(program);
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_test(depth, depth);
+    c.set_depth_compare(VK_COMPARE_OP_ALWAYS);
+    c.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp);
+    c.draw(3);
+    c.end_render_pass();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+}
+
+// A rectangle of a multisampled colour image resolved into a single-sampled one, at the same place
+void msaa_resolve(const Image &dst, const Image &src, VkOffset3D at, VkExtent3D size) {
+    end_pass();
+    transfer_barrier();
+    VkImageResolve region = {};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.srcOffset = at;
+    region.dstOffset = at;
+    region.extent = size;
+    gs->device->get_device_table().vkCmdResolveImage(cmd().get_command_buffer(), src.get_image(),
+                                                     src.get_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL), dst.get_image(),
+                                                     dst.get_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL), 1, &region);
+    transfer_barrier();
+    gsn_stats.ms_resolves++;
+}
+
+// The target's image made current: what was drawn into the multisampled image, resolved into it.
+// (Called before anything reads or writes the image; nothing when MSAA is off.)
+void msaa_settle(Target &t) {
+    if (!t.ms_newer) {
+        return;
+    }
+    if (t.depth) {
+        msaa_copy_pass(*t.image, *t.ms, gs->program_ms_depth, true);
+        gsn_stats.ms_resolves++;
+    } else {
+        msaa_resolve(*t.image, *t.ms, {0, 0, 0}, {t.image->get_width(), t.image->get_height(), 1});
+    }
+    t.ms_newer = false;
+}
+
+// The target's image has been written (a draw without MSAA, an upload, a copy): the multisampled
+// image, if there is one, is behind it
+void msaa_image_written(Target &t) {
+    if (t.ms) {
+        t.image_newer = true;
+    }
+}
+
+// The target's multisampled image made, and current, to be drawn into
+void msaa_ready(Target &t) {
+    if (!t.ms) {
+        t.ms = make_ms_image(t.image->get_width(), t.image->get_height(), t.depth);
+        t.image_newer = true;
+    }
+    if (t.image_newer) {
+        msaa_copy_pass(*t.ms, *t.image, t.depth ? gs->program_ms_load_depth : gs->program_ms_load, t.depth);
+        t.image_newer = false;
+        gsn_stats.ms_loads++;
+    }
+}
+
+// The multisampled image let go (the target's image was made again at another size)
+void msaa_forget(Target &t) {
+    t.ms.reset();
+    t.ms_newer = t.image_newer = false;
+}
+
+// The 2D drawn into a multisampled image covers the same pixels it does without MSAA, whole. Its
+// primitives are rectangles on the screen (sprites, and the menus' quads: two triangles of a strip
+// with one Z), each triangle half of one: its corners are those of its bounding box. Such a
+// triangle's corners are moved out to the edges of the pixels it covers (those whose middle, a GS
+// pixel's integer point, is inside: from ceil(x0) to ceil(x1) - 1 across, the same down), and its
+// texture coordinates and fog carried along their slopes, so that each pixel's middle has what it had.
+// (Left as they are, the samples of an edge pixel on the far side of its middle would not be covered:
+// a rectangle over the whole frame would leave half of its first column and row as they were, and
+// every box and letter of the menus would be blurred by half a pixel.) A triangle with a slant, or
+// with its colour or Z not the same at its corners, is left as it is: the 3D, whose edges are smoothed.
+void msaa_flat_2d(std::vector<Vtx> &verts) {
+    for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
+        Vtx *v = &verts[i];
+        if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
+            continue;
+        }
+        float x0 = std::min(v[0].x, std::min(v[1].x, v[2].x)), x1 = std::max(v[0].x, std::max(v[1].x, v[2].x));
+        float y0 = std::min(v[0].y, std::min(v[1].y, v[2].y)), y1 = std::max(v[0].y, std::max(v[1].y, v[2].y));
+        bool corners = x0 < x1 && y0 < y1;
+        for (int k = 0; k < 3 && corners; k++) {
+            corners = (v[k].x == x0 || v[k].x == x1) && (v[k].y == y0 || v[k].y == y1);
+        }
+        if (!corners) {
+            continue;
+        }
+        // the attributes' slopes across and down (the plane through the three corners)
+        double ax = double(v[1].x) - v[0].x, ay = double(v[1].y) - v[0].y;
+        double bx = double(v[2].x) - v[0].x, by = double(v[2].y) - v[0].y;
+        double det = ax * by - bx * ay;
+        if (det == 0) {
+            continue; // (two corners the same)
+        }
+        float *attr[3][4];
+        for (int k = 0; k < 3; k++) {
+            attr[k][0] = &v[k].s, attr[k][1] = &v[k].t, attr[k][2] = &v[k].q, attr[k][3] = &v[k].fog;
+        }
+        double dx[4], dy[4];
+        for (int a = 0; a < 4; a++) {
+            double da = double(*attr[1][a]) - *attr[0][a], db = double(*attr[2][a]) - *attr[0][a];
+            dx[a] = (da * by - db * ay) / det;
+            dy[a] = (db * ax - da * bx) / det;
+        }
+        for (int k = 0; k < 3; k++) {
+            // (the vertex shader adds half a pixel: an edge at a pixel's edge is half a pixel less)
+            double nx = ceil(double(v[k].x)) - 0.5, ny = ceil(double(v[k].y)) - 0.5;
+            for (int a = 0; a < 4; a++) {
+                *attr[k][a] = float(*attr[k][a] + dx[a] * (nx - v[k].x) + dy[a] * (ny - v[k].y));
+            }
+            v[k].x = float(nx);
+            v[k].y = float(ny);
+        }
+    }
+}
+
 // ---- The CPU's VRAM ----------------------------------------------------------------------------
 void pages_written(uint32_t lo, uint32_t count) {
     gs->vram_writes++;
@@ -423,6 +622,7 @@ void write_back(Target &t) {
     if (!t.dirty) {
         return;
     }
+    msaa_settle(t);
     gsn_stats.writebacks++;
     GSN_LOG(1, "write back target bp %#x bw %u psm %#x %ux%u\n", t.bp, t.bw, t.psm, t.width, t.height);
     uint32_t sx = t.sx, sy = t.sy, pw = t.width * sx;
@@ -463,6 +663,7 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     if (w == 0 || h == 0) {
         return;
     }
+    msaa_settle(t); // (the rest of the image stays)
     end_pass();
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -487,6 +688,7 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
         }
     }
     transfer_barrier();
+    msaa_image_written(t);
 }
 
 void drop_target(Target *t) {
@@ -545,9 +747,11 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         uint32_t new_w = std::max(width, t->width), new_h = std::max(height, t->height);
         ImageHandle image = make_image(new_w * t->sx, new_h * t->sy, format, 1, true);
         end_pass();
+        msaa_settle(*t);
         Target old = *t;
         t->psm = psm;
         t->image = image;
+        msaa_forget(*t);
         t->width = new_w;
         t->height = new_h;
         // what the old target did not cover comes from VRAM: the whole of it first, then the old on top
@@ -941,19 +1145,24 @@ bool fixed_blend(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fix, F
     return false; // (A - B) C + D with D one of A and B: a factor of 1 + C
 }
 
-void begin_pass(Target *color, Target *depth) {
-    if (gs->in_pass && gs->pass_color == color && gs->pass_depth == depth) {
+// (ms: into the targets' multisampled images, --native-msaa)
+void begin_pass(Target *color, Target *depth, bool ms = false) {
+    if (gs->in_pass && gs->pass_color == color && gs->pass_depth == depth && gs->pass_ms == ms) {
         return;
     }
     end_pass();
     RenderPassInfo rp;
     rp.num_color_attachments = 1;
-    rp.color_attachments[0] = &color->image->get_view();
+    rp.color_attachments[0] = ms ? &color->ms->get_view() : &color->image->get_view();
     rp.load_attachments = 1;
     rp.store_attachments = 1;
     if (depth) {
-        rp.depth_stencil = &depth->image->get_view();
+        rp.depth_stencil = ms ? &depth->ms->get_view() : &depth->image->get_view();
         rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+    }
+    RenderPassInfo::Subpass subpass;
+    if (ms) {
+        msaa_subpass(rp, subpass);
     }
     cmd().barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -961,6 +1170,7 @@ void begin_pass(Target *color, Target *depth) {
     gs->in_pass = true;
     gs->pass_color = color;
     gs->pass_depth = depth;
+    gs->pass_ms = ms;
     gsn_stats.passes++;
 }
 
@@ -986,6 +1196,11 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
         }
         at = {x0, y0, 0};
         size = {uint32_t(x1 - x0), uint32_t(y1 - y0), 1};
+    }
+    if (t.ms_newer) {
+        // --native-msaa: the target's resolved pixels
+        msaa_resolve(*gs->snapshot, *t.ms, at, size);
+        return *gs->snapshot;
     }
     cmd().copy_image(*gs->snapshot, *t.image, at, at, size, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
@@ -1195,6 +1410,7 @@ void flush_batch() {
             if (source == color) {
                 reads_own_target = true;
             } else {
+                msaa_settle(*source);
                 target_view = &source->image->get_view();
             }
         } else {
@@ -1365,6 +1581,24 @@ void flush_batch() {
     // after another: such a batch is drawn in runs of primitives that do not overlap, each with its
     // own copy and passes. (A draw whose texture is its own target reads one copy, taken before the
     // batch, for both.)
+    // --native-msaa: the draws with Z to the multisampled images, and those without while they are newer
+    // (unless they read their own target, which is resolved for it); the rest to the image
+    bool ms = target_samples > 1 && (depth || (color->ms_newer && !reads_own_target));
+    if (ms) {
+        msaa_ready(*color);
+        if (depth) {
+            msaa_ready(*depth);
+        }
+        // (from here on: each run's copy of the target, below, is resolved from it)
+        color->ms_newer = true;
+        if (depth && zwrite) {
+            depth->ms_newer = true;
+        }
+        msaa_flat_2d(gs->verts);
+    } else {
+        msaa_settle(*color);
+    }
+
     std::vector<uint32_t> runs(1, 0);
     if ((shader_blend || npasses > 1) && !reads_own_target) {
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
@@ -1401,7 +1635,7 @@ void flush_batch() {
             }
         }
 
-        begin_pass(color, depth);
+        begin_pass(color, depth, ms);
         CommandBuffer &c = cmd();
         c.set_opaque_state();
         c.set_program(zclamp ? gs->program_zclamp : gs->program);
@@ -1466,6 +1700,9 @@ void flush_batch() {
     color->dirty = true;
     if (depth && zwrite) {
         depth->dirty = true;
+    }
+    if (!ms) {
+        msaa_image_written(*color);
     }
     gsn_stats.primitives += gs->verts.size() / 3;
     gs->verts.clear();
@@ -1903,6 +2140,8 @@ void begin_transfer(uint32_t dir) {
             src = find_target(sbp, sbw, spsm);
             dst = find_target(d.bp, d.bw, d.psm);
             if (src && dst) {
+                msaa_settle(*src);
+                msaa_settle(*dst);
                 end_pass();
                 transfer_barrier();
                 uint32_t kx = src->sx, ky = src->sy;
@@ -1911,6 +2150,7 @@ void begin_transfer(uint32_t dir) {
                                  {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
                 transfer_barrier();
                 dst->dirty = true;
+                msaa_image_written(*dst);
                 gsn_stats.target_copies++;
                 gs->transfer_dir = 3;
                 return;
@@ -2187,6 +2427,7 @@ void read_buffer(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y,
         got_scale[0] = got_scale[1] = 1;
     }
     if (t && x + w <= t->width && y + h <= t->height) {
+        msaa_settle(*t);
         uint32_t sx = t->sx, sy = t->sy;
         const uint8_t *pixels = read_image(*t->image, x * sx, y * sy, w * sx, h * sy);
         if (scaled) {
@@ -2261,6 +2502,22 @@ void make_program() {
     gs->program = gs->device->request_program(vs, fs);
     Shader *fs_zclamp = gs->device->request_shader(gsn_spv_gs_zclamp_frag, sizeof(gsn_spv_gs_zclamp_frag), &frag);
     gs->program_zclamp = gs->device->request_program(vs, fs_zclamp);
+
+    // --native-msaa's copying passes: a texture in, a colour or a depth out
+    ResourceLayout copy_vert = {};
+    ResourceLayout copy_frag = {};
+    copy_frag.sets[0].sampled_image_mask = 1u << 0;
+    copy_frag.sets[0].fp_mask = 1u << 0;
+    copy_frag.sets[0].meta[0].array_size = 1;
+    ResourceLayout copy_colour = copy_frag;
+    copy_colour.output_mask = 1;
+    Shader *copy_vs = gs->device->request_shader(gsn_spv_msaa_vert, sizeof(gsn_spv_msaa_vert), &copy_vert);
+    gs->program_ms_load = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_msaa_load_frag, sizeof(gsn_spv_msaa_load_frag), &copy_colour));
+    gs->program_ms_load_depth = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_msaa_load_depth_frag, sizeof(gsn_spv_msaa_load_depth_frag), &copy_frag));
+    gs->program_ms_depth = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_msaa_depth_frag, sizeof(gsn_spv_msaa_depth_frag), &copy_frag));
 }
 
 void reset_gs() {
@@ -2355,6 +2612,9 @@ int scanout_to_image(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uin
     uint32_t parity_lo = field_mode && !fresh ? uint32_t(field & 1) : 0;
     uint32_t parity_hi = field_mode ? (fresh ? 1 : uint32_t(field & 1)) : 0;
     const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    if (from_target) {
+        msaa_settle(*t);
+    }
     end_pass();
     transfer_barrier();
     if (from_target) {
@@ -2569,7 +2829,7 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
     gsn_stats.pool_mb = decoded_pool_bytes >> 20;
     gsn_stats.upload_copies = page_images.size();
     uint32_t wanted = wanted_scale;
-    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy) {
+    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         for (auto &t : gs->targets) {
             write_back(*t);
@@ -2578,6 +2838,7 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
         gs->targets.clear();
         target_sx = wanted & 0xFF;
         target_sy = wanted >> 8;
+        target_samples = wanted_samples;
         gs->fields[0].clear();
         gs->fields[1].clear();
     }
@@ -2588,6 +2849,23 @@ extern "C" void gsn_set_scale(int x_scale, int y_scale) {
     uint32_t x = uint32_t(x_scale < 1 ? 1 : x_scale > GSN_MAX_SCALE_X ? GSN_MAX_SCALE_X : x_scale);
     uint32_t y = uint32_t(y_scale < 1 ? 1 : y_scale > 4 ? 4 : y_scale);
     wanted_scale = x | y << 8;
+}
+
+extern "C" int gsn_set_msaa(int samples) {
+    // the most this GPU has for colour and depth attachments both, and depth read in a shader
+    const VkPhysicalDeviceLimits &limits = gs->device->get_gpu_properties().limits;
+    uint32_t have = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts &
+                    limits.sampledImageDepthSampleCounts;
+    uint32_t n = 1;
+    while (n * 2 <= uint32_t(samples) && n < 8 && (have & (n * 2))) {
+        n *= 2;
+    }
+    // (off and on again is live; another count once one has been drawn with, from the next start)
+    if (n > 1 && msaa_samples_used) {
+        n = msaa_samples_used;
+    }
+    wanted_samples = n;
+    return int(n);
 }
 
 extern "C" int gsn_display_rect(const uint64_t *privileged, GsnRect *rect) {
@@ -2613,6 +2891,8 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
     flush_batch();
     Target *t = find_target(r->bp, r->bw, r->psm);
     if (t && t->sx == 1 && t->sy == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
+        msaa_settle(*t);
+        msaa_image_written(*t);
         end_pass();
         transfer_barrier();
         uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0},
@@ -2707,6 +2987,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         memcpy(gs->vram.data(), data, GSN_VRAM_BYTES);
         pages_written(0, vram_pages);
         reset_gs();
+        target_samples = wanted_samples; // (no targets: a capture is drawn with MSAA from its start)
         return 1;
     case KF4GS_GS_REGS: {
         const Kf4GsReg *regs = static_cast<const Kf4GsReg *>(data);
