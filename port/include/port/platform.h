@@ -326,6 +326,8 @@ void port_video_dump_named(const PortGsFrame *frame, const char *name);
 int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture and keeps the window alive */
 void port_video_present(void);
+/* --stats: how the pictures reached the window */
+void port_video_print_stats(void);
 
 /* ---- The disc (port/platform/disc.c) --------------------------------------------------------
    The user's own disc, as an ISO 9660 image or as the folder it was extracted to, read by sector
