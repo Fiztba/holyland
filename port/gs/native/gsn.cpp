@@ -180,7 +180,10 @@ struct Target {
     uint32_t scale;
     ImageHandle image;
     bool depth;
-    bool dirty; // newer than the CPU's VRAM
+    bool dirty; // newer than the CPU's VRAM (somewhere: dirty_pages says where)
+    // which of its pages (target_pages' order: rows of bw pages, when the target is `regular`) are
+    // newer than the CPU's VRAM; the others hold what VRAM does
+    std::vector<uint8_t> dirty_pages;
     uint64_t used;
 };
 
@@ -386,6 +389,55 @@ void target_pages(const Target &t, uint32_t *lo, uint32_t *count) {
     buffer_pages(t.bp, t.bw, t.psm, t.width, t.height, lo, count);
 }
 
+// A target whose pages are rows of bw pages from bp (on a page, and as wide as its buffer): each of
+// its pages is a known 64-pixel-wide rectangle of it, so what is newer than VRAM is kept by page.
+// (Otherwise all of a dirty target counts as dirty.)
+bool regular(const Target &t) {
+    return t.bp % 32 == 0 && t.bw > 0 && t.width == t.bw * 64;
+}
+
+// The target's pages, none newer than VRAM
+void clear_dirty(Target &t) {
+    uint32_t lo, count;
+    target_pages(t, &lo, &count);
+    t.dirty_pages.assign(count, 0);
+    t.dirty = false;
+}
+
+// Rows y0..y1-1 of the target drawn into (all of it, for one that is not regular)
+void mark_dirty(Target &t, uint32_t y0, uint32_t y1) {
+    t.dirty = true;
+    if (!regular(t)) {
+        std::fill(t.dirty_pages.begin(), t.dirty_pages.end(), 1);
+        return;
+    }
+    y1 = std::min(y1, t.height);
+    uint32_t ph = page_height(t.psm);
+    for (uint32_t r = y0 / ph; y0 < y1 && r <= (y1 - 1) / ph; r++) {
+        for (uint32_t c = 0; c < t.bw && size_t(r) * t.bw + c < t.dirty_pages.size(); c++) {
+            t.dirty_pages[size_t(r) * t.bw + c] = 1;
+        }
+    }
+}
+
+// Whether a page of these is one of the target's newer than VRAM
+bool dirty_in(const Target &t, uint32_t lo, uint32_t count) {
+    if (!t.dirty) {
+        return false;
+    }
+    uint32_t tlo, tcount;
+    target_pages(t, &tlo, &tcount);
+    if (!regular(t)) {
+        return pages_overlap(lo, count, tlo, tcount);
+    }
+    for (uint32_t k = 0; k < tcount && k < t.dirty_pages.size(); k++) {
+        if (t.dirty_pages[k] && pages_overlap(lo, count, (tlo + k) % vram_pages, 1)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---- Targets ------------------------------------------------------------------------------------
 // The GS's bytes of one pixel of a colour target's image (RGBA8), for its format
 uint32_t target_pixel_to_vram(uint32_t rgba, uint32_t psm) {
@@ -422,13 +474,37 @@ void write_back(Target &t) {
     }
     gsn_stats.writebacks++;
     GSN_LOG(1, "write back target bp %#x bw %u psm %#x %ux%u\n", t.bp, t.bw, t.psm, t.width, t.height);
+    uint32_t lo, count;
+    target_pages(t, &lo, &count);
+    // the rows of pages with a page newer than VRAM, read; those pages written
+    uint32_t ph = page_height(t.psm), row0 = 0, row1 = t.height;
+    bool by_page = regular(t) && t.dirty_pages.size() == count;
+    if (by_page) {
+        uint32_t first = count, last = 0;
+        for (uint32_t k = 0; k < count; k++) {
+            if (t.dirty_pages[k]) {
+                first = std::min(first, k);
+                last = k;
+            }
+        }
+        if (first == count) {
+            t.dirty = false;
+            return;
+        }
+        row0 = first / t.bw * ph;
+        row1 = std::min(t.height, (last / t.bw + 1) * ph);
+    }
     uint32_t s = t.scale, pw = t.width * s;
-    const uint8_t *pixels = read_image(*t.image, 0, 0, pw, t.height * s);
-    for (uint32_t y = 0; y < t.height; y++) {
+    const uint8_t *pixels = read_image(*t.image, 0, row0 * s, pw, (row1 - row0) * s);
+    for (uint32_t y = row0; y < row1; y++) {
         for (uint32_t x = 0; x < t.width; x++) {
+            if (by_page && !t.dirty_pages[(y / ph) * t.bw + x / 64]) {
+                x += 63; // (a page is 64 pixels across)
+                continue;
+            }
             uint32_t v;
             // a scaled target: the pixel in the middle of the GS pixel's
-            memcpy(&v, pixels + (size_t(y * s + s / 2) * pw + x * s + s / 2) * 4, 4);
+            memcpy(&v, pixels + (size_t((y - row0) * s + s / 2) * pw + x * s + s / 2) * 4, 4);
             if (t.depth) {
                 float f;
                 memcpy(&f, &v, 4);
@@ -444,10 +520,16 @@ void write_back(Target &t) {
         }
     }
     done_reading();
-    uint32_t lo, count;
-    target_pages(t, &lo, &count);
-    pages_written(lo, count);
-    t.dirty = false;
+    if (by_page) {
+        for (uint32_t k = 0; k < count; k++) {
+            if (t.dirty_pages[k]) {
+                pages_written((lo + k) % vram_pages, 1);
+            }
+        }
+    } else {
+        pages_written(lo, count);
+    }
+    clear_dirty(t);
 }
 
 // The CPU's VRAM into a rectangle of the target
@@ -484,6 +566,19 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
         }
     }
     transfer_barrier();
+    // the pages wholly inside the rectangle hold what VRAM does now
+    if (t.dirty && regular(t)) {
+        uint32_t pgh = page_height(t.psm);
+        // (the last row of pages may go past the target's height: it has only the rows above that)
+        for (uint32_t r = (y0 + pgh - 1) / pgh; r * pgh < t.height && std::min((r + 1) * pgh, t.height) <= y0 + h; r++) {
+            for (uint32_t c = (x0 + 63) / 64; (c + 1) * 64 <= x0 + w && c < t.bw; c++) {
+                if (size_t(r) * t.bw + c < t.dirty_pages.size()) {
+                    t.dirty_pages[size_t(r) * t.bw + c] = 0;
+                }
+            }
+        }
+        t.dirty = std::find(t.dirty_pages.begin(), t.dirty_pages.end(), 1) != t.dirty_pages.end();
+    }
 }
 
 void drop_target(Target *t) {
@@ -508,10 +603,14 @@ void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop) {
         uint32_t tlo, tcount;
         target_pages(*t, &tlo, &tcount);
         if (t != keep && pages_overlap(lo, count, tlo, tcount)) {
-            write_back(*t);
             if (drop) {
+                write_back(*t);
                 drop_target(t);
                 continue;
+            }
+            // (a target whose pages here hold what VRAM does need not go back)
+            if (dirty_in(*t, lo, count)) {
+                write_back(*t);
             }
         }
         i++;
@@ -527,6 +626,39 @@ Target *find_target(uint32_t bp, uint32_t bw, uint32_t psm) {
     return nullptr;
 }
 
+// A colour buffer that starts a whole number of page rows from a colour target's start, as wide and in
+// the same layout, is the target's memory from that row on: its pixel (x, y) is the target's pixel
+// (x, y + *rows). (*rows below 0: the buffer starts above the target.)
+bool row_alias(const Target &t, uint32_t bp, uint32_t bw, uint32_t psm, int32_t *rows) {
+    if (t.depth || psm_is_depth(psm) || t.bw != bw || bw == 0 || psm_layout(t.psm) != psm_layout(psm)) {
+        return false;
+    }
+    // (a colour format's page is 64 pixels across: a row of pages is bw pages, 32 blocks each)
+    int32_t d = int32_t(bp) - int32_t(t.bp), row = int32_t(bw) * 32;
+    if (d % row != 0) {
+        return false;
+    }
+    *rows = d / row * int32_t(page_height(t.psm));
+    return true;
+}
+
+// A target made again in a new size, its old picture copied in `rows` rows down: what was newer than
+// VRAM in the old one is in the new one
+void carry_dirty(Target &t, const Target &old, uint32_t rows) {
+    if (!old.dirty) {
+        return;
+    }
+    t.dirty = true;
+    if (regular(t) && regular(old) && old.bw == t.bw && rows % page_height(t.psm) == 0) {
+        size_t shift = size_t(rows / page_height(t.psm)) * t.bw;
+        for (size_t k = 0; k < old.dirty_pages.size() && k + shift < t.dirty_pages.size(); k++) {
+            t.dirty_pages[k + shift] |= old.dirty_pages[k];
+        }
+    } else {
+        std::fill(t.dirty_pages.begin(), t.dirty_pages.end(), 1);
+    }
+}
+
 // The target that is the buffer at bp, at least width x height, made (from the CPU's VRAM) or grown
 Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
     Target *t = find_target(bp, bw, psm);
@@ -537,6 +669,46 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         return t;
     }
     VkFormat format = psm_is_depth(psm) ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+    if (!t) {
+        // A buffer that starts some rows above a target and runs into it (a scrolling texture's
+        // target, drawn into from a page row higher the next time): the target grows upwards to start
+        // where the buffer does, instead of going back to VRAM to be made again in the new shape
+        Target *below = nullptr;
+        int32_t rows = 0;
+        for (auto &o : gs->targets) {
+            if (row_alias(*o, bp, bw, psm, &rows) && rows < 0 && int32_t(height) > -rows) {
+                below = o.get();
+                break;
+            }
+        }
+        if (below) {
+            uint32_t down = uint32_t(-rows), s = below->scale;
+            uint32_t new_w = std::max(width, below->width), new_h = std::max(height, down + below->height);
+            GSN_LOG(1, "target bp %#x grows up to bp %#x: %ux%u\n", below->bp, bp, new_w, new_h);
+            end_pass();
+            Target old = *below;
+            below->bp = bp;
+            below->psm = psm;
+            below->image = make_image(new_w * s, new_h * s, format, 1, true);
+            below->width = new_w;
+            below->height = new_h;
+            clear_dirty(*below);
+            uint32_t lo, count;
+            target_pages(*below, &lo, &count);
+            claim_pages(lo, count, below, true);
+            // VRAM where the old picture is not, then the old picture
+            load_target_rect(*below, 0, 0, new_w, down);
+            load_target_rect(*below, 0, down + old.height, new_w, new_h - (down + old.height));
+            load_target_rect(*below, old.width, down, new_w - old.width, old.height);
+            cmd().copy_image(*below->image, *old.image, {0, int32_t(down * s), 0}, {0, 0, 0},
+                             {old.width * s, old.height * s, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                             {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+            transfer_barrier();
+            carry_dirty(*below, old, down);
+            below->used = gs->tick;
+            return below;
+        }
+    }
     if (t) {
         // grown: the old picture kept, the new part from VRAM
         uint32_t new_w = std::max(width, t->width), new_h = std::max(height, t->height);
@@ -547,6 +719,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         t->image = image;
         t->width = new_w;
         t->height = new_h;
+        clear_dirty(*t);
         // what the old target did not cover comes from VRAM: the whole of it first, then the old on top
         uint32_t lo, count;
         target_pages(*t, &lo, &count);
@@ -556,6 +729,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         cmd().copy_image(*t->image, *old.image, {0, 0, 0}, {0, 0, 0}, {old.width * t->scale, old.height * t->scale, 1},
                          {aspect, 0, 0, 1}, {aspect, 0, 0, 1});
         transfer_barrier();
+        carry_dirty(*t, old, 0);
         t->used = gs->tick;
         return t;
     }
@@ -566,7 +740,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
     made->width = width;
     made->height = height;
     made->depth = psm_is_depth(psm);
-    made->dirty = false;
+    clear_dirty(*made);
     made->used = gs->tick;
     made->scale = target_scale;
     made->image = make_image(width * made->scale, height * made->scale, format, 1, true);
@@ -1096,6 +1270,18 @@ void flush_batch() {
     bool need_depth = !(always_passes && !any_zwrite);
     Target *color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
     Target *depth = nullptr;
+    if (need_depth && color->height > sy1 + 1) {
+        // a colour target taller than the draw needs (one drawn over both frame buffers once, say) that
+        // runs into the Z buffer: back to VRAM, and made again as tall as the draw needs
+        uint32_t clo, ccount, zlo, zcount;
+        target_pages(*color, &clo, &ccount);
+        buffer_pages(zbp, fbw, zpsm, fbw * 64, sy1 + 1, &zlo, &zcount);
+        if (pages_overlap(clo, ccount, zlo, zcount)) {
+            write_back(*color);
+            drop_target(color);
+            color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
+        }
+    }
     if (need_depth) {
         // a Vulkan frame buffer's attachments are as big as each other. Making one may drop the other
         // (when their pages overlap, as the menus' Z buffer does the play's frame buffers), so both
@@ -1459,9 +1645,17 @@ void flush_batch() {
             gsn_stats.draws++;
         }
     }
-    color->dirty = true;
+    // the rows the batch can have drawn into (its vertices' within the scissor, a row more each way)
+    float vy0 = gs->verts[0].y, vy1 = vy0;
+    for (const Vtx &v : gs->verts) {
+        vy0 = std::min(vy0, v.y);
+        vy1 = std::max(vy1, v.y);
+    }
+    uint32_t dirty0 = uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
+    uint32_t dirty1 = uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
+    mark_dirty(*color, dirty0, dirty1);
     if (depth && zwrite) {
-        depth->dirty = true;
+        mark_dirty(*depth, dirty0, dirty1);
     }
     gsn_stats.primitives += gs->verts.size() / 3;
     gs->verts.clear();
@@ -1650,20 +1844,47 @@ void rect_pages(const TransferRect &r, uint32_t *lo, uint32_t *count) {
     buffer_pages(r.bp, r.bw, r.psm, r.x + r.w, r.y + r.h, lo, count);
 }
 
-// The rectangle has just been written in the CPU's VRAM: the targets over it, the same shape as it,
-// take it too; the others were written back and dropped before
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+
+// The rectangle has just been written in the CPU's VRAM: the targets over it, the same shape as it
+// (row_alias: perhaps starting some rows apart), take it too; those in another shape that were kept
+// (prepare_write: it writes whole pages of them) take those pages again; the others were written back
+// and dropped before
 void sync_targets(const TransferRect &r) {
+    std::vector<uint32_t> whole = whole_pages(gs->reg[R_BITBLTBUF], gs->reg[R_TRXPOS], gs->reg[R_TRXREG]);
     for (auto &t : gs->targets) {
-        if (!t->depth && t->bp == r.bp && t->bw == r.bw && psm_layout(t->psm) == psm_layout(r.psm)) {
-            load_target_rect(*t, r.x, r.y, r.w, r.h);
+        int32_t rows;
+        if (!row_alias(*t, r.bp, r.bw, r.psm, &rows)) {
+            if (!regular(*t)) {
+                continue;
+            }
+            uint32_t tlo, tcount;
+            target_pages(*t, &tlo, &tcount);
+            uint32_t ph = page_height(t->psm);
+            for (uint32_t page : whole) {
+                uint32_t k = (page + vram_pages - tlo) % vram_pages;
+                if (k < tcount) {
+                    load_target_rect(*t, (k % t->bw) * 64, (k / t->bw) * ph, 64, ph);
+                }
+            }
+        } else {
+            int32_t y = int32_t(r.y) + rows;
+            uint32_t h = r.h;
+            if (y < 0) {
+                if (uint32_t(-y) >= h) {
+                    continue;
+                }
+                h -= uint32_t(-y);
+                y = 0;
+            }
+            load_target_rect(*t, r.x, uint32_t(y), r.w, h);
         }
     }
 }
 
-// Before the rectangle is written in the CPU's VRAM: the targets over it in another shape go back to
-// VRAM and stop being targets
-std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 
+// Before the rectangle is written in the CPU's VRAM: the targets over it in another shape go back to
+// VRAM and stop being targets (unless it writes whole pages of them, or all of them)
 void prepare_write(const TransferRect &r) {
     uint32_t lo, count;
     rect_pages(r, &lo, &count);
@@ -1675,16 +1896,31 @@ void prepare_write(const TransferRect &r) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
         target_pages(*t, &tlo, &tcount);
-        bool same = !t->depth && t->bp == r.bp && t->bw == r.bw && psm_layout(t->psm) == psm_layout(r.psm);
+        int32_t rows;
+        bool same = row_alias(*t, r.bp, r.bw, r.psm, &rows);
         if (pages_overlap(lo, count, tlo, tcount)) {
-            if (same) {
-                // the rest of the target stays newer than VRAM; the rectangle, after the write, both
-                i++;
-                continue;
-            }
             bool covered = !whole.empty() && t->bp % 32 == 0;
             for (uint32_t k = 0; covered && k < tcount; k++) {
                 covered = std::binary_search(whole.begin(), whole.end(), (tlo + k) % vram_pages);
+            }
+            if (same && (rows == 0 || !covered)) {
+                // the rest of the target stays newer than VRAM; the rectangle, after the write, both
+                // (sync_targets). (A target some rows from the transfer that it covers whole is let go.)
+                i++;
+                continue;
+            }
+            // A target whose pages under the transfer are all written whole keeps the rest, and takes
+            // those pages from VRAM after the write (sync_targets): it need not go back to VRAM first
+            bool keep = !covered && !whole.empty() && regular(*t);
+            for (uint32_t k = 0; keep && k < tcount; k++) {
+                uint32_t page = (tlo + k) % vram_pages;
+                if (pages_overlap(lo, count, page, 1)) {
+                    keep = std::binary_search(whole.begin(), whole.end(), page);
+                }
+            }
+            if (keep) {
+                i++;
+                continue;
             }
             if (!covered) {
                 write_back(*t);
@@ -1906,7 +2142,7 @@ void begin_transfer(uint32_t dir) {
                                  {int32_t(sx * s), int32_t(sy * s), 0}, {w * s, h * s, 1},
                                  {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
                 transfer_barrier();
-                dst->dirty = true;
+                mark_dirty(*dst, d.y, d.y + h);
                 gsn_stats.target_copies++;
                 gs->transfer_dir = 3;
                 return;
