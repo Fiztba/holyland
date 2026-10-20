@@ -16,10 +16,11 @@
                          port/gs/native/) or both (side by side, their pictures compared; the
                          window shows gs's, --renderer-shown native shows the other)
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
-       --vu1 NAME        who runs VU1's programs 0x000 and 0x280 (most of the 3D): interp (the
-                         interpreter, the default), hle (the same results to the bit, computed
-                         directly: faster; port/platform/vu1_hle.c) or check (both, compared run by run,
-                         differences on stderr and counted by --stats)
+       --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
+                         packets through): interp (the interpreter, the default), hle (the same
+                         results to the bit, computed directly: faster; port/platform/vu1_hle*.c)
+                         or check (both, compared run by run, differences on stderr and counted
+                         by --stats)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width
                          turn off one of the ways the PC picture differs from the GS's raw output
        --ps2-scanout     turn them all off

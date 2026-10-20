@@ -206,7 +206,7 @@ Stage 2 before stage 3 is deliberate: with the CPU's VU1 output drawn natively, 
 the picture is the native GS's fault; once that is clean, every difference after stage 3 is the
 shaders'.
 
-### VU1 programs 0x000 and 0x280 without the interpreter (`--vu1 hle`)
+### The VU1 programs without the interpreter (`--vu1 hle`)
 
 Ahead of stage 3, program 0x000 has a CPU version that computes its results directly, a vertex at a
 time, instead of interpreting its 289 software-pipelined instruction pairs:
@@ -246,6 +246,24 @@ them run by run.
 - **Speed** (that run, `--fast --headless --renderer native`, Ryzen 9 9900X3D): VU1 3.3 s with the
   interpreter, 1.14 s with `--vu1 hle` (0.59 s of it program 0x000's 499,185 runs: 4.7 times faster
   than interpreted); the run's wall time 7.9 s to 5.4 s.
+- **Program 0x5A0** (the silhouettes) has its own: `port/platform/vu1_hle_5a0.c`, the same way
+  (exact helpers only, no SSE fast path), MSCAL 0x5A0 and MSCNT 0x640, n = 3..49, recognised by a
+  hash of 0x5A0-0x641; vu1.c's `hle_try` hands its runs on. Checked: the 78 captures, 94,086 runs
+  (3,288 of them 0x5A0's), none different; in the game on maps 035, 112 and 115 (2500 frames,
+  `--vu1 check`) none different, and `--vu1 hle`'s PATH1 hash is `--vu1 interp`'s. On map 035 its
+  117,384 runs take VU1 from 2.94 s to 2.62 s with `--vu1 hle`.
+
+### VU1 program 0x700 without the interpreter
+
+Program 0x700 draws the effects (sfx.dat models: fire, glows, magic) and has its HLE in
+`port/platform/vu1_hle_700.c` (its top comment describes the program), reached through
+vu1.c's `hle_try` and recognised by a hash of 0x700-0x7D1. It is not pipelined: a vertex a loop pass,
+directional light, one colour for the model (VU 0x64), and the texture animation (TEX0 replaced by
+VU 0x66 when its TBP0 is 0x65.w). What it leaves past the batch is reproduced: a "vertex -1" from the
+raw qword at the previous run's vi07 + 1, and an extra vertex n (the loop's IBGTZ reads its counter
+before the decrement, so it runs n + 1 times). Its timing is a formula in n and its two branches.
+Checked as 0x000: the 78 captures (2,423 runs of 0x700, both entries, both branches each) and the
+game on maps 009, 025 and 000 with `--vu1 check`, none different.
 
 Program 0x280 (skinned models: two matrix sets chosen per vertex by ST's w, float vertices, a colour
 scale and bias, point lights in the vertex's set, and the optional sphere-mapped second pass gated

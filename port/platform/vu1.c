@@ -37,8 +37,9 @@
    VI register, and an ILW (which stalls the branch), are seen at once. Of the game's programs only
    the one at 0x700 relies on it (its loop at 0x7BE).
 
-   With --vu1 hle, programs 0x000 and 0x280 (their MSCAL and the MSCNTs that go on from it) run in
-   port/platform/vu1_hle.c and vu1_hle_280.c instead (hle_try), which leave the same memory, packets,
+   With --vu1 hle, the programs 0x000, 0x280, 0x5A0 and 0x700 (their MSCAL and the MSCNTs that go on
+   from it) run in port/platform/vu1_hle.c, vu1_hle_280.c, vu1_hle_5a0.c and vu1_hle_700.c instead
+   (hle_try; 0x276 only passes packets through), which leave the same memory, packets,
    registers, flags and clock; --vu1 check runs both and compares them (check_run). The float
    helpers and the state are shared with them through vu1_internal.h.
 
@@ -112,8 +113,9 @@ typedef struct {
 } VuInsn;
 
 static Vu1State vu;
-/* micro memory holds the program as the game uploads it: 0x000 (vu1_hle.c), 0x280 (vu1_hle_280.c) */
-static int hle_000, hle_280;
+/* micro memory holds the program as the game uploads it: 0x000 (vu1_hle.c), 0x280 (vu1_hle_280.c),
+   0x5A0 (vu1_hle_5a0.c), 0x700 (vu1_hle_700.c) */
+static int hle_000, hle_280, hle_5a0, hle_700;
 static int check_kicks; /* --vu1 check: XGKICK records its packets (check_kick) */
 static void check_kick(uint32_t address);
 
@@ -1249,6 +1251,12 @@ static uint64_t hle_try(uint32_t pc, uint32_t top) {
     if (!pairs && hle_280) {
         pairs = vu1_hle_280_run(&vu, data, pc, top);
     }
+    if (!pairs && hle_5a0) {
+        pairs = vu1_hle_5a0_run(&vu, data, pc, top);
+    }
+    if (!pairs && hle_700) {
+        pairs = vu1_hle_700_run(&vu, data, pc, top);
+    }
     return pairs;
 }
 
@@ -1352,6 +1360,8 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         decode_all();
         hle_000 = vu1_hle_recognise(micro);
         hle_280 = vu1_hle_280_recognise(micro);
+        hle_5a0 = vu1_hle_5a0_recognise(micro);
+        hle_700 = vu1_hle_700_recognise(micro);
     }
     fesetround(port_vu1_round_nearest ? FE_TONEAREST : FE_TOWARDZERO);
 #if VU_DAZ
