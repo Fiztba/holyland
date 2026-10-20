@@ -3,7 +3,8 @@
      {
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "widescreen": false, "widescreen_hud": "corner", "renderer": "gs", "native_scale": 1},
+                    "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "gs",
+                    "native_scale": 1},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -40,6 +41,7 @@ PortSettings port_settings = {
     .progressive = 1,
     .anti_blur = 1,
     .adapt_width = 1,
+    .frame_rate = 30,
     .volume = 100,
     .layout = "ps2",
     .ui_scale = 1.0f,
@@ -266,6 +268,7 @@ void port_settings_load(void) {
             s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
         }
     }
+    s->frame_rate = read_number(display, "frame_rate", s->frame_rate, 30, 60) > 45 ? 60 : 30;
     {
         const char *renderer = read_string(display, "renderer");
 
@@ -307,6 +310,9 @@ void port_settings_load(void) {
     }
     if (!port_options.myus_necklace_forced) {
         port_options.myus_necklace = s->myus_necklace;
+    }
+    if (!port_options.frame_rate_forced) {
+        port_options.frame_rate = s->frame_rate;
     }
     if (!port_options.renderer_forced) {
         port_options.renderer = s->renderer;
@@ -418,6 +424,7 @@ void port_settings_save(void) {
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
+    put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
     put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"

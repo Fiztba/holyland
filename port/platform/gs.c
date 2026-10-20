@@ -721,6 +721,10 @@ int port_gs_vsync_pending(void) {
     return __atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) != __atomic_load_n(&queue_tail, __ATOMIC_RELAXED);
 }
 
+#ifdef KF4_HAVE_PARALLEL_GS
+static int interp_on; /* --frame-rate 60 was on at the last vblank */
+#endif
+
 void port_gs_run_vsync(void) {
     uint64_t tail = __atomic_load_n(&queue_tail, __ATOMIC_RELAXED);
     uint64_t start = port_options.stats ? port_ticks() : 0;
@@ -747,6 +751,10 @@ void port_gs_run_vsync(void) {
             port_interp_vsync(request->privileged, replay_gif);
         }
         port_interp_reset(idle);
+        interp_on = 1;
+    } else if (interp_on) {
+        port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
+        interp_on = 0;
     }
     if (present_frames(request, shown, dump)) {
     } else if (dump) {

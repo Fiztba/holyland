@@ -29,6 +29,7 @@ typedef struct {
     int adapt_width;
     int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
     int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
+    int frame_rate;        /* 30 (the PS2's) or the opt-in 60, interpolated (port_options.frame_rate) */
     int renderer;          /* who draws, from the next start: PORT_RENDERER_ (port_options.renderer) */
     int native_scale;      /* the native GS's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
     /* Audio */
