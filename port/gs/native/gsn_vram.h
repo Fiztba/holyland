@@ -56,6 +56,12 @@ int gsn_psm_valid(uint32_t psm);
    16-bit formats a halfword, PSMT8/T8H a byte, the 4-bit formats a nibble. */
 uint32_t gsn_vram_read(const uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y);
 void gsn_vram_write(uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, uint32_t value);
+/* The same for `count` pixels of a row, from (x, y) rightwards: what gsn_vram_read would give for
+   each, into out; each of in written as gsn_vram_write would */
+void gsn_vram_read_row(const uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y,
+                       uint32_t count, uint32_t *out);
+void gsn_vram_write_row(uint8_t *vram, uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y,
+                        uint32_t count, const uint32_t *in);
 
 /* The byte offset in VRAM of the unit that holds the pixel: the 32-bit word for PSMCT32/24, Z32/24,
    PSMT8H and PSMT4HL/HH (these own only part of it), the halfword for the 16-bit formats, the byte
