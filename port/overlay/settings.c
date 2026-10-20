@@ -1,9 +1,11 @@
 /* settings.json (port/include/port/settings.h): the player's settings, in the user's data folder.
 
      {
+       "version":  2,
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "widescreen": false, "widescreen_hud": "corner", "renderer": "gs", "native_scale": 1},
+                    "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
+                    "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -14,7 +16,15 @@
 
    "bindings" holds only the actions that differ from their layout's defaults (port/sdk/controls.c),
    each as its three slots: two keys or mouse buttons, and a controller button. Keys this version does
-   not know are kept as they are. A missing or broken file means the defaults. */
+   not know are kept as they are. A missing or broken file means the defaults.
+
+   "version" is the file's: 2 from stage 4 (docs/port/STEP3.md), when the native GS and the Vulkan
+   presenter became the defaults. Every save writes every setting out, so a file from before (no
+   "version") says "renderer": "gs" and "presenter": "sdl" whether the player chose them or never
+   looked: there those two values are read as the old defaults, and the new ones are used (and the
+   file written again, as version 2). A file from before that says "native", "both" or "vulkan" is
+   kept as it is; from version 2 on, "gs" and "sdl" are the player's choice and kept too. */
+#define SETTINGS_VERSION 2
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,9 +50,12 @@ PortSettings port_settings = {
     .progressive = 1,
     .anti_blur = 1,
     .adapt_width = 1,
+    .frame_rate = 30,
     .volume = 100,
     .layout = "ps2",
     .ui_scale = 1.0f,
+    .renderer = PORT_RENDERER_NATIVE,
+    .presenter = PORT_PRESENTER_VULKAN,
 };
 
 static int active;
@@ -209,6 +222,8 @@ void port_settings_load(void) {
     const cJSON *audio;
     const cJSON *overlay;
     const char *aspect;
+    int version;
+    int migrated = 0;
     char *text = NULL;
     long size = 0;
     FILE *file;
@@ -242,6 +257,7 @@ void port_settings_load(void) {
         document = cJSON_CreateObject();
     }
 
+    version = (int)read_number(document, "version", 1, 1, 1000000);
     display = cJSON_GetObjectItemCaseSensitive(document, "display");
     /* the first settings files kept a multiple of 448 */
     s->window_height = (int)read_number(display, "window_scale", s->window_height / 448, 1, 4) * 448;
@@ -266,16 +282,30 @@ void port_settings_load(void) {
             s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
         }
     }
+    s->frame_rate = read_number(display, "frame_rate", s->frame_rate, 30, 60) > 45 ? 60 : 30;
     {
         const char *renderer = read_string(display, "renderer");
 
-        if (renderer != NULL) {
+        if (renderer != NULL && version < 2 && strcmp(renderer, "gs") == 0) {
+            migrated = 1; /* the old default, written out: the new default (port_settings above) */
+        } else if (renderer != NULL) {
             s->renderer = strcmp(renderer, "native") == 0 ? PORT_RENDERER_NATIVE
                           : strcmp(renderer, "both") == 0 ? PORT_RENDERER_BOTH
                                                           : PORT_RENDERER_GS;
         }
     }
     s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 1, 4);
+    s->native_widescreen = read_bool(display, "native_widescreen", s->native_widescreen);
+    s->native_msaa = (int)read_number(display, "native_msaa", s->native_msaa, 1, 8);
+    {
+        const char *presenter = read_string(display, "presenter");
+
+        if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
+            migrated = 1;
+        } else if (presenter != NULL) {
+            s->presenter = strcmp(presenter, "vulkan") == 0 ? PORT_PRESENTER_VULKAN : PORT_PRESENTER_SDL;
+        }
+    }
     audio = cJSON_GetObjectItemCaseSensitive(document, "audio");
     s->volume = (int)read_number(audio, "volume", s->volume, 0, 100);
     s->mute = read_bool(audio, "mute", s->mute);
@@ -308,11 +338,23 @@ void port_settings_load(void) {
     if (!port_options.myus_necklace_forced) {
         port_options.myus_necklace = s->myus_necklace;
     }
+    if (!port_options.frame_rate_forced) {
+        port_options.frame_rate = s->frame_rate;
+    }
     if (!port_options.renderer_forced) {
         port_options.renderer = s->renderer;
     }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
+    }
+    if (!port_options.native_widescreen_forced) {
+        port_options.native_widescreen = s->native_widescreen;
+    }
+    if (!port_options.native_msaa_forced) {
+        port_options.native_msaa = s->native_msaa;
+    }
+    if (!port_options.presenter_forced) {
+        port_options.presenter = s->presenter;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -320,6 +362,13 @@ void port_settings_load(void) {
     port_settings_apply_audio();
     if (file == NULL) {
         dirty = 1; /* the first run writes the defaults, so the file is there to find */
+    }
+    if (migrated && active == 1) {
+        dirty = 1;
+        fprintf(stderr, "[settings] from before the native GS was the default: renderer \"%s\", presenter \"%s\" "
+                        "(the overlay's Debug page, or --renderer gs / --presenter sdl, go back)\n",
+                s->renderer == PORT_RENDERER_NATIVE ? "native" : s->renderer == PORT_RENDERER_BOTH ? "both" : "gs",
+                s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl");
     }
     fprintf(stderr, "[settings] %s%s\n", port_settings_path(), file == NULL ? " (new)" : "");
     atexit(port_settings_save);
@@ -404,6 +453,7 @@ void port_settings_save(void) {
     if (active == 2) {
         return; /* a broken file is left for the player to mend */
     }
+    put(document, "version", cJSON_CreateNumber(SETTINGS_VERSION));
     display = section("display");
     put(display, "window_height", cJSON_CreateNumber(s->window_height));
     put(display, "window_width", cJSON_CreateNumber(s->window_width));
@@ -418,10 +468,14 @@ void port_settings_save(void) {
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
+    put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
     put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
+    put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
+    put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));
+    put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));

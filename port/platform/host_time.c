@@ -35,8 +35,16 @@ double port_ticks_per_second(void) {
     return (double)frequency.QuadPart;
 }
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
 void port_sleep(double seconds) {
     static int period_set;
+    /* a high-resolution waitable timer (Windows 10 1803 on), a thread's own: it wakes within a tenth of
+       a millisecond or so, where Sleep's whole milliseconds woke the vblank pacing 0 to 2.5 ms late */
+    static __thread HANDLE timer;
+    static __thread int timer_tried;
     DWORD ms;
 
     if (!period_set) {
@@ -46,6 +54,18 @@ void port_sleep(double seconds) {
     }
     if (seconds <= 0) {
         return;
+    }
+    if (!timer_tried) {
+        timer_tried = 1;
+        timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    }
+    if (timer != NULL) {
+        LARGE_INTEGER due;
+
+        due.QuadPart = -(LONGLONG)(seconds * 1e7); /* relative, in 100 ns */
+        if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE) && WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0) {
+            return;
+        }
     }
     ms = (DWORD)(seconds * 1000.0);
     Sleep(ms);

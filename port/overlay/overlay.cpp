@@ -1,5 +1,6 @@
 // The settings overlay (port/include/port/overlay.h): F1 opens a menu bar and the Settings window,
-// drawn with Dear ImGui (third_party/imgui) on the window's SDL_Renderer over the game's picture. The
+// drawn with Dear ImGui (third_party/imgui) over the game's picture, on the window's SDL_Renderer or by
+// the Vulkan presenter (port/platform/present_vk.cpp, --presenter vulkan) with ImGui's Vulkan backend. The
 // pages are those of KF1 Enhanced and KF3-Enhanced: Display, Audio, Controls, Save states, Debug and
 // Interface. Every way the PC differs from the PS2 is a switch that starts as the port has it.
 //
@@ -24,6 +25,9 @@
 
 #include "backends/imgui_impl_sdl2.h"
 #include "backends/imgui_impl_sdlrenderer2.h"
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+#include "backends/imgui_impl_vulkan.h"
+#endif
 #include "imgui.h"
 
 extern "C" {
@@ -33,6 +37,7 @@ extern "C" {
 #include "port/debug.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/present_vk.h"
 #include "port/quicksave.h"
 #include "port/savestate.h"
 #include "port/settings.h"
@@ -49,8 +54,9 @@ const ImVec4 colour_note(0.95f, 0.8f, 0.45f, 1.0f);
 const ImVec4 colour_good(0.55f, 0.85f, 0.55f, 1.0f);
 
 SDL_Window *window;
-SDL_Renderer *renderer;
+SDL_Renderer *renderer; // NULL on the Vulkan presenter
 bool ready;
+bool drawn; // the Vulkan presenter: this vblank's draw lists are ImGui's draw data
 bool overlay_open;
 bool show_settings = true;
 bool show_about;
@@ -257,6 +263,19 @@ void display_page() {
     }
     ImGui::EndDisabled();
     tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
+    bool sixty = port_options.frame_rate > 30;
+    if (ImGui::Checkbox("60 pictures a second in play", &sixty)) {
+        s.frame_rate = port_options.frame_rate = sixty ? 60 : 30;
+        changed();
+    }
+    tooltip("Off: the PS2's 30 pictures a second in play.\nOn: a picture between each two of the game's, "
+            "the world seen from the camera half\nway between them, so turning and walking look smooth. "
+            "The game still runs at 30:\nenemies and effects move 30 times a second, and the picture is "
+            "no later than off.\nThe menus are as they were. Applies at once. (--frame-rate 60)");
+    if (port_options.frame_rate != s.frame_rate) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(for this run: command line)");
+    }
     bool smooth = s.smooth != 0;
     if (ImGui::Checkbox("Smooth scaling", &smooth)) {
         s.smooth = smooth;
@@ -664,7 +683,8 @@ std::string bug_report() {
 // The renderer (docs/port/STEP3.md): which draws from the next start; with both, which is shown and how
 // their pictures compare
 void renderer_section() {
-    static const char *const names[] = {"paraLLEl-GS (gs)", "Native GS (native, step 3)", "Both, compared (both)"};
+    static const char *const names[] = {"paraLLEl-GS (gs, the reference)", "Native GS (native, the default)",
+                                        "Both, compared (both)"};
     ImGui::SeparatorText("Renderer");
     ImGui::Text("This run: %s", names[port_options.renderer]);
     int next = port_settings.renderer;
@@ -672,9 +692,10 @@ void renderer_section() {
         port_settings.renderer = next;
         port_settings_changed();
     }
-    tooltip("paraLLEl-GS emulates the PS2's GS and is the reference. The native GS (step 3) draws with\n"
-            "the GPU's own rasteriser: faster, and the base for higher resolutions later. Both runs the\n"
-            "two side by side and compares the pictures every vblank (slower; for testing).\n"
+    tooltip("The native GS (step 3, the default) draws with the GPU's own rasteriser: faster, and the\n"
+            "base for the higher resolutions, true widescreen and anti-aliasing. paraLLEl-GS emulates the\n"
+            "PS2's GS and is the reference to compare with (and what draws if the native GS cannot start).\n"
+            "Both runs the two side by side and compares the pictures every vblank (slower; for testing).\n"
             "--renderer on the command line wins over this.");
     if (port_options.renderer != PORT_RENDERER_GS) {
         int scale = port_options.native_scale;
@@ -686,11 +707,63 @@ void renderer_section() {
         tooltip("The native GS draws its frame buffers at this many times the PS2's 640x448 (2x: 1280x896,\n"
                 "4x: 2560x1792). 1x is the PS2's picture; with --renderer both the comparison is made at 1x\n"
                 "pixels either way.");
+        bool wide = port_options.native_widescreen != 0;
+        if (ImGui::Checkbox("Native widescreen", &wide)) {
+            port_options.native_widescreen = port_settings.native_widescreen = wide;
+            port_gs_set_native_scale(port_options.native_scale);
+            port_settings_changed();
+        }
+        tooltip("With widescreen on: the native GS draws the 16:9 picture with more pixels across, about\n"
+                "square ones, instead of the 640 columns the PS2 has stretched to 16:9 (at 1x 1280x448,\n"
+                "2x 1920x896, 3x 2560x1344, 4x 3840x1792). The picture is the same, sharper across.\n"
+                "Without widescreen it changes nothing. (--native-widescreen)");
+        static const char *const msaa_names[] = {"Off", "2x", "4x", "8x"};
+        int msaa_at = port_settings.native_msaa >= 8 ? 3 : port_settings.native_msaa >= 4 ? 2 : port_settings.native_msaa >= 2 ? 1 : 0;
+        if (ImGui::Combo("Native GS anti-aliasing (MSAA)", &msaa_at, msaa_names, 4)) {
+            port_settings.native_msaa = 1 << msaa_at;
+            port_gs_set_native_msaa(port_settings.native_msaa);
+            port_settings_changed();
+        }
+        if (port_settings.native_msaa != port_options.native_msaa) {
+            ImGui::TextDisabled("This run: %s (from one count to another takes a restart, or the GPU has fewer)",
+                                port_options.native_msaa > 1 ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
+                                                             : "Off");
+        }
+        tooltip("The native GS draws the 3D with this many samples a pixel, which smooths its edges (the 2D,\n"
+                "the passes over the whole frame and the alpha test's cut-outs stay as they are). Off is the\n"
+                "PS2's picture. Costs GPU time, more with the resolution above. Off and back on is live;\n"
+                "from one count to another takes a restart. (--native-msaa)");
     }
+    static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
+    int presenter = port_video_presenter();
+    if (port_options.presenter == PORT_PRESENTER_VULKAN && presenter != PORT_PRESENTER_VULKAN)
+        ImGui::Text("Presenter this run: %s (vulkan %s)", presenters[presenter],
+                    port_options.renderer == PORT_RENDERER_GS ? "needs the native GS" : "did not start");
+    else
+        ImGui::Text("Presenter this run: %s", presenters[presenter]);
+    int next_presenter = port_settings.presenter;
+    if (ImGui::Combo("Presenter, from the next start", &next_presenter, presenters, 2)) {
+        port_settings.presenter = next_presenter;
+        port_settings_changed();
+    }
+    tooltip("How the picture reaches the window. SDL_Renderer copies each picture through the CPU into\n"
+            "a texture. Vulkan presents on the native GS's own device: the native GS's picture goes to\n"
+            "the window without leaving the GPU (faster, most of all at higher resolutions). Vulkan needs\n"
+            "the native GS (renderer native or both); without it, or if it fails, the window is\n"
+            "SDL_Renderer's. --presenter on the command line wins over this.");
     if (port_options.renderer == PORT_RENDERER_BOTH) {
         bool native = port_options.renderer_shown == PORT_RENDERER_NATIVE;
+        ImGui::BeginDisabled(port_options.renderer_heatmap != 0);
         if (ImGui::Checkbox("Show the native GS's picture", &native))
             port_options.renderer_shown = native ? PORT_RENDERER_NATIVE : PORT_RENDERER_GS;
+        ImGui::EndDisabled();
+        bool heatmap = port_options.renderer_heatmap != 0;
+        if (ImGui::Checkbox("Show where they differ (heat map)", &heatmap))
+            port_options.renderer_heatmap = heatmap;
+        tooltip("The window shows the displayed frame buffer's difference, pixel by pixel: grey where the\n"
+                "two are within 1 in every channel, else coloured by the largest difference, from blue (2)\n"
+                "through green and yellow (16) to red (64 and more). At the PS2's resolution. Not saved.\n"
+                "(--renderer-shown heatmap)");
         const PortRendererDiff &d = port_renderer_diff;
         ImGui::Text("Last picture: %u pixels differ by more than 1, at most %u (mean %.3f)", d.last_pixels, d.last_max,
                     d.last_mean);
@@ -1071,22 +1144,18 @@ void shot_open() {
     }
 }
 
-void shot_take() {
-    if (shot_next >= shots.size())
-        return;
+bool shot_due() {
+    return ready && shot_next < shots.size() && port_vblank_count() >= shots[shot_next].vblank + SHOT_SETTLE;
+}
+
+// The window's picture (NULL: it could not be read back) as the next test picture
+void shot_write(const uint32_t *pixels, int width, int height) {
     const Shot &shot = shots[shot_next];
-    if (port_vblank_count() < shot.vblank + SHOT_SETTLE)
-        return;
-    int width = 0, height = 0;
-    SDL_GetRendererOutputSize(renderer, &width, &height);
-    std::vector<uint32_t> pixels((size_t)width * height);
-    if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, pixels.data(), width * 4) != 0) {
-        std::fprintf(stderr, "[overlay] cannot read the window back: %s\n", SDL_GetError());
-    } else {
+    if (pixels != nullptr) {
         char path[4096];
         std::snprintf(path, sizeof(path), "%s/overlay_%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
                       shot.page == PAGE_COUNT ? "closed" : page_ids[shot.page]);
-        if (port_png_write(path, pixels.data(), (uint32_t)width, (uint32_t)height))
+        if (port_png_write(path, pixels, (uint32_t)width, (uint32_t)height))
             std::fprintf(stderr, "[overlay] vblank %llu: %dx%d, %s\n", (unsigned long long)port_vblank_count(), width,
                          height, path);
     }
@@ -1095,6 +1164,30 @@ void shot_take() {
     if (shot_next == shots.size())
         port_settings_changed();
 }
+
+void shot_take() {
+    if (!shot_due())
+        return;
+    int width = 0, height = 0;
+    SDL_GetRendererOutputSize(renderer, &width, &height);
+    std::vector<uint32_t> pixels((size_t)width * height);
+    if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, pixels.data(), width * 4) != 0) {
+        std::fprintf(stderr, "[overlay] cannot read the window back: %s\n", SDL_GetError());
+        shot_write(nullptr, 0, 0);
+    } else {
+        shot_write(pixels.data(), width, height);
+    }
+}
+
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+// The mouse indicator's squares (port_controls_draw) into ImGui's draw list, under the windows
+void fill_rect(void *context, int x, int y, int width, int height, unsigned int rgba) {
+    ImDrawList *list = static_cast<ImDrawList *>(context);
+    ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+    float sx = scale.x > 0.0f ? scale.x : 1.0f, sy = scale.y > 0.0f ? scale.y : 1.0f;
+    list->AddRectFilled(ImVec2(x / sx, y / sy), ImVec2((x + width) / sx, (y + height) / sy), rgba);
+}
+#endif
 
 bool shot_pending() {
     return shot_next < shots.size() && port_vblank_count() >= shots[shot_next].vblank;
@@ -1139,7 +1232,17 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     load_font();
     apply_style();
-    if (!ImGui_ImplSDL2_InitForSDLRenderer(window, renderer) || !ImGui_ImplSDLRenderer2_Init(renderer)) {
+    bool started;
+    if (renderer != nullptr) {
+        started = ImGui_ImplSDL2_InitForSDLRenderer(window, renderer) && ImGui_ImplSDLRenderer2_Init(renderer);
+    } else {
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+        started = ImGui_ImplSDL2_InitForVulkan(window) && port_vk_imgui_init();
+#else
+        started = false;
+#endif
+    }
+    if (!started) {
         std::fprintf(stderr, "[overlay] Dear ImGui did not start: no overlay\n");
         return;
     }
@@ -1177,7 +1280,21 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 
 extern "C" int port_overlay_visible(void) {
     return ready && (overlay_open || port_settings.show_fps || shot_pending() ||
-                     (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0));
+                     (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) ||
+                     (renderer == nullptr && port_controls_indicator_shown()));
+}
+
+extern "C" void *port_overlay_draw_data(void) {
+    return drawn ? ImGui::GetDrawData() : nullptr;
+}
+
+extern "C" int port_overlay_shot_due(void) {
+    return shot_due();
+}
+
+extern "C" void port_overlay_shot(const unsigned int *rgba, int width, int height) {
+    if (shot_due())
+        shot_write(rgba, width, height);
 }
 
 extern "C" int port_overlay_open(void) {
@@ -1198,7 +1315,8 @@ extern "C" void port_overlay_notify_quick(void) {
     toast_until = SDL_GetTicks() + 3000;
 }
 
-extern "C" void port_overlay_draw(void) {
+extern "C" void port_overlay_draw(int x, int y, int width, int height) {
+    drawn = false;
     if (!ready)
         return;
     pictures++;
@@ -1222,7 +1340,13 @@ extern "C" void port_overlay_draw(void) {
     else
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
-    ImGui_ImplSDLRenderer2_NewFrame();
+    if (renderer != nullptr) {
+        ImGui_ImplSDLRenderer2_NewFrame();
+    } else {
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+        ImGui_ImplVulkan_NewFrame();
+#endif
+    }
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     if (pad_quiet && !listening) {
@@ -1246,7 +1370,18 @@ extern "C" void port_overlay_draw(void) {
         if (show_about)
             about_window();
     }
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+    // (SDL_Renderer's window draws the indicator itself, port/platform/video.c)
+    if (renderer == nullptr)
+        port_controls_draw(fill_rect, ImGui::GetBackgroundDrawList(), x, y, width, height);
+#else
+    (void)x, (void)y, (void)width, (void)height;
+#endif
     ImGui::Render();
+    if (renderer == nullptr) {
+        drawn = true; // the presenter records it, and takes the test picture
+        return;
+    }
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
     shot_take();
 }

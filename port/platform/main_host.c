@@ -12,10 +12,21 @@
        --headless        no SDL at all: no window, and the GS draws only for --dump-frames and
                          GS captures (--gs-capture-at, KF4_DEBUG_AT)
        --no-gs           draw nothing (VIF1 and VU1 still run)
-       --renderer NAME   who draws: gs (paraLLEl-GS, the default), native (step 3's renderer,
-                         port/gs/native/) or both (side by side, their pictures compared; the
-                         window shows gs's, --renderer-shown native shows the other)
+       --renderer NAME   who draws: native (step 3's renderer, port/gs/native/, the default; if
+                         it cannot start, paraLLEl-GS), gs (paraLLEl-GS, the reference) or both
+                         (side by side, their pictures compared; the window shows gs's,
+                         --renderer-shown native shows the other, and --renderer-shown heatmap
+                         where they differ)
+       --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
+                         the native GS's device, the picture kept on the GPU;
+                         port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
+                         GS, or if vulkan cannot start, sdl
        --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
+       --native-widescreen
+                         with --widescreen, the native GS draws the 16:9 picture wider still, with
+                         square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6)
+       --native-msaa N   the native GS draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
+                         by default): its edges smoothed
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -27,6 +38,10 @@
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
+       --frame-rate 30|60
+                         the opt-in 60: a picture at every vblank in play, the one between the
+                         game's two drawn with the camera half way (port/platform/frame_interp.c);
+                         30, the PS2's, by default
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
@@ -123,8 +138,9 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer gs|native|both] [--renderer-shown gs|native]\n"
-            "          [--native-scale 1-4] [--vu1 interp|hle|check]\n",
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
+            "          [--presenter vulkan|sdl] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
+            "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
             program);
     exit(2);
 }
@@ -148,6 +164,10 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.native_scale = 1;
+    port_options.frame_rate = 30;
+    port_options.native_msaa = 1;
+    port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
+    port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
     for (i = 1; i < argc; i++) {
         const char *option = argv[i];
@@ -196,6 +216,10 @@ static void parse_options(int argc, char **argv) {
             }
             continue;
         }
+        if (strcmp(option, "--native-widescreen") == 0) {
+            port_options.native_widescreen = port_options.native_widescreen_forced = 1;
+            continue;
+        }
         if (strcmp(option, "--invincible") == 0) {
             port_options.invincible = 1;
             continue;
@@ -216,12 +240,14 @@ static void parse_options(int argc, char **argv) {
             port_options.disc = value;
         } else if (strcmp(option, "--renderer") == 0 || strcmp(option, "--renderer-shown") == 0) {
             int both = strcmp(option, "--renderer") == 0;
-            int which = strcmp(value, "gs") == 0             ? PORT_RENDERER_GS
+            int heatmap = !both && strcmp(value, "heatmap") == 0;
+            int which = heatmap                              ? PORT_RENDERER_NATIVE
+                        : strcmp(value, "gs") == 0           ? PORT_RENDERER_GS
                         : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : "", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
@@ -229,7 +255,18 @@ static void parse_options(int argc, char **argv) {
                 port_options.renderer_forced = 1;
             } else {
                 port_options.renderer_shown = which;
+                port_options.renderer_heatmap = heatmap;
             }
+        } else if (strcmp(option, "--presenter") == 0) {
+            if (strcmp(value, "sdl") == 0) {
+                port_options.presenter = PORT_PRESENTER_SDL;
+            } else if (strcmp(value, "vulkan") == 0) {
+                port_options.presenter = PORT_PRESENTER_VULKAN;
+            } else {
+                fprintf(stderr, "--presenter wants sdl or vulkan, not %s\n", value);
+                exit(2);
+            }
+            port_options.presenter_forced = 1;
         } else if (strcmp(option, "--native-scale") == 0) {
             port_options.native_scale = atoi(value);
             if (port_options.native_scale < 1 || port_options.native_scale > 4) {
@@ -237,6 +274,21 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_scale_forced = 1;
+        } else if (strcmp(option, "--frame-rate") == 0) {
+            port_options.frame_rate = atoi(value);
+            if (port_options.frame_rate != 30 && port_options.frame_rate != 60) {
+                fprintf(stderr, "--frame-rate wants 30 or 60, not %s\n", value);
+                exit(2);
+            }
+            port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--native-msaa") == 0) {
+            port_options.native_msaa = atoi(value);
+            if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
+                port_options.native_msaa != 8) {
+                fprintf(stderr, "--native-msaa wants 1, 2, 4 or 8, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_msaa_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;
@@ -423,6 +475,10 @@ static void print_stats(void) {
     port_dmac_call(drained, NULL);
     fprintf(stderr, "[stats] wall %.3f s\n", port_wall_seconds() - start_seconds);
     port_gs_print_stats();
+    if (port_frame_interp()) {
+        port_interp_print_stats();
+    }
+    port_video_print_stats();
     if (port_options.renderer == PORT_RENDERER_BOTH) {
         const PortRendererDiff *d = &port_renderer_diff;
 

@@ -26,14 +26,32 @@ typedef struct {
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
     int headless;            /* --headless: no SDL at all, and no window */
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
-    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_GS, paraLLEl-GS, is the default;
-       PORT_RENDERER_NATIVE is step 3's (port/gs/native/); PORT_RENDERER_BOTH runs the two side by side
-       and compares their pictures, showing renderer_shown's. */
+    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_NATIVE, step 3's (port/gs/native/),
+       is the default (paraLLEl-GS instead if it cannot start: the renderers that did start are
+       written back here); PORT_RENDERER_GS is paraLLEl-GS, the reference; PORT_RENDERER_BOTH runs
+       the two side by side and compares their pictures, showing renderer_shown's. */
     int renderer;
     int renderer_shown;
     int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
+    int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
+    /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
+       the default, a swapchain on the native GS's own device (port/platform/present_vk.cpp), with the
+       native GS's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the
+       window's when the native GS is not running or the Vulkan one does not start). */
+    int presenter;
+    int presenter_forced;    /* --presenter: this run's, whatever settings.json says */
     int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
     int native_scale_forced;
+    /* --native-widescreen: with widescreen on and the native GS, the render targets wider still
+       (port_gs_native_scale_x(), port/platform/gs.c): the 16:9 picture drawn with square pixels
+       instead of 640 columns stretched. Off by default; live from the overlay. */
+    int native_widescreen;
+    int native_widescreen_forced;
+    /* --native-msaa: the native GS draws the 3D with this many samples a pixel (1, the default: none,
+       the PS2's picture; 2, 4 or 8), its edges smoothed. Live from the overlay (but for a change from
+       one count to another, which takes a restart). */
+    int native_msaa;
+    int native_msaa_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
        the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
@@ -51,6 +69,11 @@ typedef struct {
     int widescreen;
     int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
     int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
+    /* The opt-in higher frame rate (port_frame_interp(), port/platform/frame_interp.c): 30 (the
+       PS2's: a picture every second vblank in play) by default, 60 with --frame-rate 60 or
+       settings.json, live from the overlay. */
+    int frame_rate;
+    int frame_rate_forced;   /* --frame-rate: this run's, whatever settings.json says */
     /* The opt-in mods (port/include/port/host.h): off by default, turned on by their switch or
        settings.json, live from the overlay. */
     int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */
@@ -220,6 +243,12 @@ uint8_t *port_vu1_data(void);
 void port_vu1_start(uint32_t address, uint32_t top, uint32_t itop);
 /* MSCNT: runs on from where the last one ended. */
 void port_vu1_continue(uint32_t top, uint32_t itop);
+/* The address (in instructions) the running or last run started at: which program XGKICKs */
+extern uint32_t port_vu1_run_pc;
+/* --frame-rate 60: the running or last run's batch, a hash of what was unpacked for it (vif1.c), and
+   the runs' count */
+extern uint64_t port_vif1_run_key;
+extern uint32_t port_vif1_run_serial;
 /* --vu1 */
 enum { PORT_VU1_INTERP, PORT_VU1_HLE, PORT_VU1_CHECK };
 /* --vu1 check: the runs compared, and those where the HLE and the interpreter differed (each
@@ -229,6 +258,7 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
 enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2 };
+enum { PORT_PRESENTER_SDL = 0, PORT_PRESENTER_VULKAN = 1 };
 /* --renderer both: how the last pictures of the two compared (port/platform/gs.c) */
 typedef struct {
     uint64_t frames;          /* pictures compared */
@@ -243,8 +273,14 @@ extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
 /* The native GS's scale (port_options.native_scale), from the next vblank */
 void port_gs_set_native_scale(int scale);
+/* The native GS's scale across: native_scale, or with --native-widescreen (and widescreen on) the
+   smallest whole number at least 4/3 of it */
+int port_gs_native_scale_x(void);
+/* The native GS's MSAA (port_options.native_msaa), from the next vblank; returns the count the GPU
+   gives (see gsn_set_msaa) */
+int port_gs_set_native_msaa(int samples);
 
-#define PORT_GS_FRAME_PIXELS (2560u * 2048u) /* the native GS at 4 times the PS2's 640x448 */
+#define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {
     uint32_t width, height;
     uint32_t *rgba; /* width * height pixels, R in the low byte */
@@ -267,10 +303,28 @@ void port_gs_finish(void);
 int port_gs_vsync_pending(void);
 void port_gs_run_vsync(void);
 
+/* --frame-rate 60 (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to
+   the GS is kept (port_interp_keep) until the vblank; port_interp_vsync, before the vblank's
+   scanout, keeps them on when they drew the game's world into the buffer not shown, and at the vblank
+   after sends them again through send, changed, into the buffer shown (1 when it did); then
+   port_interp_reset starts the next vblank's (whole: every path is between packets).
+   port_interp_forget drops what was kept and the last frame's camera (a state was loaded). */
+void port_interp_keep(int path, const void *data, size_t bytes);
+int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes));
+void port_interp_reset(int whole);
+void port_interp_forget(void);
+void port_interp_print_stats(void);
+
 /* ---- The window (port/platform/video.c) -------------------------------------------------- */
 void port_video_init(void);
 /* (the controller's thread) the newest picture, for the window */
 void port_video_submit(const PortGsFrame *frame);
+/* (the controller's thread) the newest picture is the native GS's image on the GPU (gsn_scanout_take) */
+void port_video_submit_image(void);
+/* 1 while the window is the Vulkan presenter's, which takes the native GS's picture as an image */
+int port_video_takes_images(void);
+/* the presenter running: PORT_PRESENTER_ (SDL when the Vulkan one was asked for and did not start) */
+int port_video_presenter(void);
 /* (the controller's thread) writes the picture as <dump-dir>/frame_<vblank>.png */
 void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
 /* the same, under its own name in --dump-dir */
@@ -279,6 +333,8 @@ void port_video_dump_named(const PortGsFrame *frame, const char *name);
 int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture and keeps the window alive */
 void port_video_present(void);
+/* --stats: how the pictures reached the window */
+void port_video_print_stats(void);
 
 /* ---- The disc (port/platform/disc.c) --------------------------------------------------------
    The user's own disc, as an ISO 9660 image or as the folder it was extracted to, read by sector

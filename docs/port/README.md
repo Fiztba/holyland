@@ -81,9 +81,10 @@ If not, it keeps the scratch copy so the conflicts can be resolved there, and th
 ## Building
 
 The game code is GNU C, so build it with clang or gcc (not MSVC's cl). You need CMake 3.21 or newer
-and Ninja. The renderer, paraLLEl-GS, is C++ (clang++ or g++, which the presets name). It runs on
-desktop Vulkan GPUs (its README lists the features it needs); running it needs a Vulkan driver,
-building it does not.
+and Ninja. The renderers, the native GS (`port/gs/native/`, the default) and paraLLEl-GS (the
+reference), are C++ (clang++ or g++, which the presets name) on Vulkan, through paraLLEl-GS's Granite.
+They run on desktop Vulkan GPUs (paraLLEl-GS's README lists the features it needs); running them needs
+a Vulkan driver, building them does not.
 
 **Windows:** use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw), or LLVM's clang, on the PATH:
 
@@ -104,8 +105,8 @@ cmake --build out/linux-gcc
 ```
 
 The program is `out/<preset>/kf4`. SDL2 is used for the window and the pad if CMake finds it
-(`-DKF4_USE_SDL=OFF` turns it off). paraLLEl-GS is built when it is checked out
-(`-DKF4_USE_PARALLEL_GS=OFF` turns it off); without it the game runs and draws nothing.
+(`-DKF4_USE_SDL=OFF` turns it off). The renderers are built when paraLLEl-GS is checked out
+(`-DKF4_USE_PARALLEL_GS=OFF` turns them off); without them the game runs and draws nothing.
 
 ## Running
 
@@ -116,11 +117,14 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | Option | What |
 |---|---|
 | `--disc PATH` | the game's disc image (or set `KF4_DISC`) |
-| `--fast` | run as fast as possible instead of at 60 vblanks a second |
+| `--fast` | run as fast as possible instead of at 60 vblanks a second (59.94: each vblank waits for the host's clock, on Windows a high-resolution waitable timer; the window shows each vblank's picture, waiting up to half a vblank for it; one later than that is shown at the next vblank, and a window still a vblank behind at the next present catches up by leaving one out) |
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
-| `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (step 3, [STEP3.md](STEP3.md)), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
+| `--renderer native\|gs\|both` | who draws: the native GS (the default; step 3, [STEP3.md](STEP3.md)), paraLLEl-GS (the reference, kept for comparison; it draws instead if the native GS cannot start), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
 | `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
+| `--native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`) |
+| `--native-msaa N` | the native GS draws the 3D with N samples a pixel (1, the default: off; 2, 4 or 8), smoothing its edges (on the Debug page, live but for a change of count, which takes a restart; `settings.json` `display.native_msaa`) |
+| `--presenter vulkan\|sdl` | how the picture reaches the window: a Vulkan swapchain on the native GS's device, the native GS's picture never leaving the GPU (the default; `port/platform/present_vk.cpp`), or SDL_Renderer. Vulkan needs the native GS (`--renderer native` or `both`): with paraLLEl-GS alone the window is SDL_Renderer's, as it is if the swapchain cannot be made. The Debug page sets it for the next start (`settings.json`, `display.presenter`) |
 | `--vu1 interp\|hle\|check` | who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through): `hle` (the default), computed directly with the interpreter's results to the bit (`port/platform/vu1_hle*.c`), or `interp`, the cycle-accurate interpreter; `check` runs both and compares them run by run (`--stats` counts the differences) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
@@ -149,6 +153,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
+| `--frame-rate 30\|60` | 60 is the opt-in higher frame rate (also on the overlay's Display page; 30, the PS2's, by default): in play, a picture at every vblank, the one between the game's two drawn with the camera half way (see "60 pictures a second") |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
@@ -181,7 +186,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
+| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, 60 pictures a second in play, live, smooth or sharp scaling, vsync, and the four switches of the PC picture (deinterlace, progressive, anti-blur, adapt width), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
@@ -197,15 +202,22 @@ The overlay's window places go beside it in `overlay.ini`. It is written a secon
 the overlay closes and at exit; keys it does not know are kept, and a file that is not valid JSON is
 reported and left alone (the defaults are used). The controls keep only the bindings that differ from
 the layout's defaults, as `"key:Space"`, `"mouse:left"`, `"pad:a"` or `"trigger:lefttrigger"`.
+`"version"` is 2 since the native GS and the Vulkan presenter became the defaults: every save writes
+every setting, so an older file says `"renderer": "gs"` and `"presenter": "sdl"` whether the player
+chose them or not. In a file without a version those two values are taken as the old defaults and the
+new ones are used (the file is written again as version 2, with a line on stderr); `"native"`,
+`"both"` and `"vulkan"` are kept. From version 2 on, `"gs"` and `"sdl"` are kept as chosen.
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width` and `--ps2-scanout` keep their switches off,
-`--widescreen` keeps widescreen on, `--myus-necklace` keeps that mod on,
-and `--controls` picks the layout.
+`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` keeps that mod
+on, and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
 settings.json and has no overlay, so `boot_test.py` and `frame_test.py` run the same whatever the
-player has chosen. Built without SDL there is no overlay at all.
+player has chosen. `frame_test.py` and `map_tour.py` ask for `--renderer gs` (paraLLEl-GS, the
+reference), whatever the program's default; `--renderer native` runs them on the native GS. Built
+without SDL there is no overlay at all.
 
 `KF4_OVERLAY_SHOT=page@vblank,...` is for checking the overlay without anyone at the screen: it opens
 the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
@@ -233,7 +245,8 @@ the two logs match and reach the first map. It runs headless with no GS, so it n
 `tools/frame_test.py --disc kfiv_us.iso` is step 2's: the same boot with the GS, dumping the logo,
 the title menu, the brightness screen, the opening and the first map, and every picture of vblanks 990
 to 1010 (`--dense`). It checks two runs (`--runs N` for more) give the same pictures byte for byte and
-that none is blank (`--keep DIR` keeps them to look at).
+that none is blank (`--keep DIR` keeps them to look at). It draws with paraLLEl-GS; `--renderer native`
+makes the same check of the native GS.
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
@@ -278,6 +291,40 @@ turns it on:
 - Not done: the 2D is squeezed into 480 of the 640 columns, so it is a little softer than at 4:3 (a
   higher internal resolution, step 3, would mend that). Anything the game sizes in screen pixels around
   a projected point would come out a third wider; none has been seen yet.
+
+## 60 pictures a second
+
+Off by default (30 pictures a second in play, as on the PS2). `--frame-rate 60`, or the overlay's
+Display page (live), turns it on. The game itself still runs at 30 frames a second: in play it draws
+a frame every second vblank and shows it for two. With the switch on, the vblank in between shows a
+picture of its own: the frame the game has just drawn (shown at the next vblank), drawn again with the
+3D world seen from a camera half way between the frame shown and that one
+(`port/platform/frame_interp.c`; STEP3.md, "Higher frame rates").
+- **Turning and walking are smooth**, which is most of what moves in a first-person game, and so are
+  the enemies, the arm's swing, the effects and moving objects: each model part is paired with itself
+  in the frame before and drawn half way. Animated textures and what the CPU makes anew each frame
+  still change 30 times a second, the HUD and the 2D change when the game draws them, and a cut (a
+  teleport, a map change, a scripted jump of the camera) is not interpolated.
+- **No input lag is added.** The picture between shows half of the camera's next move one vblank
+  early; everything else is shown when it was. (Turning from standing: the first picture that moves
+  comes at the fifth vblank after the input, the sixth with the switch off.)
+- **The menus, the title and the movies** are as they were: they draw no world.
+- **The native GS** (`--renderer native`) is the one to use. paraLLEl-GS (`--renderer gs`) draws the
+  pictures between as well, but its picture of a vblank weaves in the field of the vblank before, so
+  each of its pictures mixes two of the game's; and the game's own turn smear
+  (`Game_ShiftScreenByViewTurn`, which moves one field by the turn) adds to the move.
+- The cost is the GS's: each frame is drawn twice (VU1 is not run again). 2,030 vblanks (new game, map 000),
+  headless with `--fast`: 2.15 s to 2.57 s on a Ryzen 9 9900X3D.
+- Both presenters show every vblank's picture in turn, evenly (`--stats` counts what reached the window).
+  At `--native-scale` above 1 the game's own frames differ from the switch off in a few strips at the
+  top and left edges, where the native GS's picture depends on its targets' history anyway (STEP3.md).
+- Off, nothing changes: the game queues no marks and the GS front end keeps nothing; the frame and boot
+  tests and `--stats`' PATH1 hash are as without the switch. On, the game's own frames (the even
+  vblanks) are still the same pixels, byte for byte; only the pictures between are new.
+  `KF4_INTERP_STILL=1` draws the pictures between with the frame's own camera, so each must equal
+  the next vblank's (it does, within 2 on a few dozen pixels): a check of the replay.
+- `--gs-capture-at` and F9 record the GS's packets as the game sent them, without the pictures
+  between.
 
 ## Saving: quick saves, save states and the memory card
 

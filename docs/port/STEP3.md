@@ -12,11 +12,19 @@ timings of the step 2 path, and how ico-pc built its renderer.
 
 ## Progress (October 2026)
 
-- **Stage 0, mostly done.** `--renderer gs|native|both`, the Debug page's switch and
+- **Stage 0, done.** `--renderer gs|native|both`, the Debug page's switch and
   `settings.json`; with `both`, the displayed frame buffers compared every vblank (the overlay and
-  `--stats`). `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank).
-  Not done: the presenter on Granite's WSI and ImGui on Vulkan (the native GS's picture still goes
-  through the CPU to SDL, as paraLLEl-GS's does). Interlace settled: in play and the in-game menus
+  `--stats`), and shown as a heat map (the renderer section's "Show where they differ",
+  `--renderer-shown heatmap`; computed from the pixels the comparison reads on the CPU).
+  `kf4-gsreplay --renderer` and `--compare-renderers` (draw by draw, and each vblank). The presenter
+  on Vulkan, opt-in: `--presenter vulkan` (the Debug page, `settings.json` `display.presenter`)
+  makes the window's swapchain (through SDL_Vulkan_CreateSurface, not Granite's WSI) on the native
+  GS's device; the native GS copies the displayed buffer on the GPU into an image (field mode woven
+  there) which is blitted into the window, and the overlay and the mouse indicator are drawn with
+  ImGui's Vulkan backend (`port/platform/present_vk.cpp`). No read-back: 2,000 vblanks windowed at
+  4x went from 16-22 s to 8.1-8.2 s, at 1x from 7.6 s to 7.2-7.6 s. paraLLEl-GS keeps
+  SDL_Renderer (`--renderer gs` falls back to it); with `both` the paraLLEl-GS picture is uploaded.
+  The Vulkan presenter is the default since stage 4 (below). Interlace settled: in play and the in-game menus
   draw one 448-line frame (SMODE2 FFMD 0); the title, the memory card screens and the movies draw
   224-line fields, FBP 0 and 0x46 in turn.
 - **Stages 1 and 2, working.** The native GS (`port/gs/native/`) draws the whole game from the VU1
@@ -27,7 +35,9 @@ timings of the step 2 path, and how ico-pc built its renderer.
   MTBA mipmaps, SCANMSK, save states. `tests/gsn_draw_test.c` draws random batches (every primitive,
   texture and frame buffer format, CLUT, blend, alpha and Z test, DATE, FBMSK, SCANMSK, fog) on both
   renderers and compares their VRAM: 300 cases a run pass, and paraLLEl-GS's own quirks the game
-  does not reach are listed in PLAN.md. The 64 map tour captures, each frame drawn from
+  does not reach are listed in PLAN.md; then as many rounds of buffers that share memory (128-wide
+  buffers page rows apart drawn into, uploaded into in their shape and in others, copied and read
+  as textures, as the scrolling textures do), which must leave VRAM the same byte for byte. The 64 map tour captures, each frame drawn from
   paraLLEl-GS's state: no crash; on average 2% of the frame's pixels are more than 1 a channel
   from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
   PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
@@ -37,19 +47,83 @@ timings of the step 2 path, and how ico-pc built its renderer.
   smear) blend in the shader exactly, so they do not drift. Uploads seen before come back as page
   copies instead of being swizzled again.
 - **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
-  resolution, live from the overlay).
+  resolution, live from the overlay). `--native-widescreen`: with `--widescreen`, the targets are
+  drawn 4/3 of that across (rounded up: 2, 3, 4, 6 for 1x to 4x), so the 16:9 picture has square
+  pixels instead of 640 columns stretched; the native GS keeps a scale per axis, and nothing else
+  changes (the 2D squeeze and the GS's coordinates stay `--widescreen`'s). Live from the overlay.
+  `--native-msaa 2|4|8`: the 3D (every draw with a Z buffer) drawn into multisampled images, resolved
+  wherever the target is read (textures, the shader's blending, write-backs, frame copies, the
+  scanout), the 2D drawn with Z snapped to whole pixels so the menus and movies are unchanged; the
+  alpha test's cut-outs and draws without Z stay as they are. Combines with the two above; 2% (4x)
+  to 5% (8x) of a run's time at 1x, 6% to 12% at `--native-scale 4`. PLAN.md's opt-in table.
+  `--frame-rate 60`: a picture at every vblank in play, the camera interpolated (below, "Higher
+  frame rates").
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
   packets through) has a high-level C version that gives the interpreter's results bit for bit
   (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
   captures and live runs on several maps). That was the stage's purpose: VU1 goes from two thirds
   of the run's time to a sixth. Shaders are left as an option (below).
-- **Speed** (2,000 vblanks, new game then map 000): paraLLEl-GS with the interpreter 6.4 s (main
-  today); paraLLEl-GS with VU1 in C 3.2 s; the native GS with VU1 in C 4.4 s.
-- **Stage 4, started**: `--vu1 hle` is the default (bit for bit, so no switch to keep the PS2's
-  behaviour is needed). `--renderer native` stays opt-in until it has been played through.
+- **Speed** (2,000 vblanks, new game then map 000, `--fast --headless`, Ryzen 9 9900X3D):
+  paraLLEl-GS with the interpreter 6.4 s (main today); paraLLEl-GS with VU1 in C 3.3-3.6 s; the
+  native GS with VU1 in C 2.0 s (4.4 s before stage 4's speed work); no GS at all 1.5 s. Maps 004,
+  029, 112 and 116 the same way: 1.9-2.1 s, paraLLEl-GS 3.3-3.5 s. With a picture for the window
+  every vblank (the window's path made to run in a headless build): 2.2 s, paraLLEl-GS 8.8 s.
+  What stage 4's speed work did (feat/gsn-speed):
+  - the native GS has a thread of its own: the DMA controller's thread copies the GIF packets and
+    vblanks into a ring and goes on with VU1; whatever wants something back (the FIFO read-back, a
+    dumped picture, a save state, kf4-gsreplay) waits for the ring to empty; a picture for the
+    window is handed to it by the GS's thread (`GSN_PRESENT`), so nothing waits for that either
+    (`KF4_GSN_THREAD=0`: no thread);
+  - four frame contexts, where two left a vblank waiting for the GPU's work of the one before;
+  - targets keep which pages are newer than VRAM (the rows their draws reach): a write-back writes
+    only those, a texture or CLUT read of the others needs none; a buffer whole page rows above a
+    target, in its layout, makes the target grow upwards; uploads into a target at such an offset
+    go into it, and an upload that writes whole pages of a target in another shape keeps the rest.
+    Map 000's scrolling textures no longer go back through the CPU every frame (713 write-backs in
+    the run to 133, those left at the title, the menus and map 008's reflection);
+  - uploads: a hash four lanes wide, no copy of an upload that comes whole, 24-bit uploads (the
+    title's) found again as pages; VRAM read and written a row at a time, each format's swizzle
+    and row loop made on its own;
+  - a Vulkan pipeline cache in the data folder (`native_gs_pipelines.bin`): where the driver keeps
+    none (a new build, its own cache full) the first minutes made pipelines for 1.6 s;
+  - VU1's code aligned to 64 bytes (`-falign-functions=64 -falign-loops=64` for vu1*.c): its speed
+    moved by a third with where the linker put it.
+- **Stage 4, done pending a play-through.** The defaults: the native GS (`--renderer native`), the
+  Vulkan presenter (`--presenter vulkan`) and the VU1 programs in C (`--vu1 hle`; bit for bit, so no
+  switch to keep the PS2's behaviour is needed). paraLLEl-GS stays behind `--renderer gs` (and
+  `both`) for comparison; it draws instead when the native GS cannot start (no Vulkan device it can
+  use), and with it alone the window is SDL_Renderer's. `settings.json` has a `"version"` (2): older
+  files wrote `"gs"` and `"sdl"` out whether chosen or not, so in them those two are read as the old
+  defaults (README.md, "settings.json"). `frame_test.py` and `map_tour.py` ask for `--renderer gs`;
+  `frame_test.py --renderer native` passes too (the native GS's pictures the same every run). CI
+  builds and runs the unit tests only, none of which depends on the default.
+  Frame pacing, measured windowed at 59.94 Hz pacing over 2,300 vblanks (new game, then map 000 from
+  vblank 1900; a 144 Hz monitor, vsync off; per-present timestamps in a test build):
+  - the vblank wake-up: Windows' Sleep in whole milliseconds woke it 0 to 2.5 ms late (presents a
+    deviation of 0.60 ms apart); a high-resolution waitable timer wakes it 0.3 ms late (p99 0.5 ms),
+    0.22 ms deviation (`port_sleep`, `host_time.c`; Linux's nanosleep was already exact);
+  - the picture of a vblank reaches the window from the renderer's thread about when the window
+    wakes for it (on map 000: the native GS 9 ms after the vblank before, paraLLEl-GS 14-22 ms); a
+    late one was shown at the next vblank, the one before twice and one dropped. In a run: the native
+    GS with the Vulkan presenter 1, with SDL_Renderer 3-93, paraLLEl-GS 7-77 (it varies run to run).
+    The window now waits for it up to half a vblank while pictures are coming (not with `--fast`):
+    0, 1 and 0, with 0-12 presents of 2,300 waiting more than 1.5 ms;
+  - pipeline compiles: no present more than 23.7 ms after the one before, with the native GS's cache
+    new and NVIDIA's shader cache off (`__GL_SHADER_DISK_CACHE=0`) or with both;
+  - with vsync, presents are as even (0.61 ms deviation; FIFO with 3 images never waited at
+    144 Hz), but 59.94 pictures a second on a 144 Hz screen are shown 2 and 3 refreshes in turn: only
+    a 60 Hz (or variable-refresh) screen shows them evenly.
+  Left for the owner: the play-through; paraLLEl-GS's LGPL question before release builds ship it
+  (`-DKF4_USE_PARALLEL_GS=OFF` leaves it out today only by taking the native GS with it: the two
+  are one library, `kf4_gs`, on the Granite that comes with paraLLEl-GS; a build of the native GS
+  alone needs them split).
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
-  there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
-  texture's target on map 000) has the target written back through the CPU each frame;
+  there; the scanouts agree); write-backs still left: the title's 640x224 field buffer (61 in the
+  run), the menus' Z buffer over the play's frame buffers, and map 008's reflection drawn with the
+  main Z buffer at 256 wide, which sends the main Z back to VRAM; at the title and in the menus each
+  field is read back for the weave, wanted or not;
+  the Vulkan instance and device take a fifth of a second to make at start-up, waited for by the
+  boot's read-back;
   `--renderer both` on Mesa's lavapipe needs `LP_NUM_THREADS=1`.
 
 ### What could come next
@@ -62,10 +136,9 @@ timings of the step 2 path, and how ico-pc built its renderer.
 - **Uploads on the GPU.** The swizzle runs on the CPU (and is mostly skipped now: uploads seen before
   are copied in as pages). A compute pass writing a GPU copy of VRAM, with textures read from it,
   would take the rest off the CPU and remove the write-backs.
-- **The presenter on Vulkan.** The picture still goes to the window through the CPU, as
-  paraLLEl-GS's does; at 4x that is 18 MB a vblank, which the measurements show is affordable. A
-  swapchain on the native GS's device would need the overlay and the on-screen controls (both drawn
-  with SDL_Renderer today) on Vulkan too.
+- **paraLLEl-GS's picture on the Vulkan presenter.** The Vulkan presenter is the default (stage 4,
+  Progress above), for the native GS. paraLLEl-GS's picture could go the same way
+  (uploaded, or its image on a shared device) so that `--renderer gs` needs no SDL_Renderer either.
 - **VU1 on the GPU.** The C programs (stage 3) take VU1 from two thirds of the run's time to a
   sixth; shaders would take the rest, at the cost of a second implementation to keep bit for bit.
 
@@ -223,7 +296,7 @@ for one person working steadily with agents; they will move.
 | **2. Native GS, 3D from the interpreter** | the VU1 interpreter still runs on the CPU, and its GIF output is drawn natively: the whole game on the native GS. Fog, mipmaps, contexts, DATE/FBA, the frame copies and feedback passes (integer arithmetic where they feed back), the scroll targets, the reflection, the wobble | the diff over the 64 map tour views and the step 2 checklist's spots; feedback passes exact over 600 frames | 3-5 weeks |
 | **3. VU1 on the GPU** | the programs as vertex shaders, 0x000 first (86% of draws), then 0x280, 0x5A0, 0x700; the interpreter stays as a test mode | per program: shader output against the interpreter's (X/Y within 1/16 pixel, Z and ST within a small relative error, colour within 1, ADC exact); then the picture diff | 3-5 weeks |
 | **4. Default and speed** | batching, pipeline cache, frame pacing; native becomes the default; paraLLEl-GS stays behind `--renderer gs` for comparison (and its LGPL question is settled before release builds ship it) | timings: the busiest maps at full speed with room to spare | 1-2 weeks |
-| **5. Improvements, opt-in** | resolution scale (scene targets scaled, work buffers kept at PS2 size), a native widescreen frame instead of the 2D squeeze, MSAA, higher frame rates with interpolation | each off by default; with all off, the picture equals stage 4's | open-ended |
+| **5. Improvements, opt-in** | resolution scale (scene targets scaled, work buffers kept at PS2 size), a native widescreen frame instead of the 2D squeeze (done as square pixels across: `--native-widescreen`), MSAA (done for the 3D: `--native-msaa`), higher frame rates with interpolation | each off by default; with all off, the picture equals stage 4's | open-ended |
 
 In all, roughly 3 to 4 months to a native default (stages 0-4), then improvements as wanted. ico-pc's
 renderer grew to about 155,000 lines with a long tail of driver fixes; KF4 needs less (fewer GS
@@ -301,6 +374,181 @@ vertex is clipped). The arithmetic is shared through `port/platform/vu1_hle_ops.
 21,390 runs of 0x280 in the 78 captures (90,798 + 21,390 = 112,188 compared, none different, with and
 without the fast path) and 160,207 in the game run above (659,392 compared with 0x000's). With both,
 that run's VU1 time is 0.76 s (from 3.3 s), its wall time 5.2 s.
+
+### Higher frame rates (`--frame-rate 60`)
+
+Stage 5's "higher frame rates, with interpolation while the game itself keeps its 30 Hz". A first
+version is in: `--frame-rate 60` (the overlay's Display page, `settings.json` `display.frame_rate`),
+off by default. `port/platform/frame_interp.c`'s top comment has the details.
+
+**What the game does.**
+- In play, `GameLoop_Run`'s loop runs once every two vblanks. `Display_SwapBuffers` waits until
+  `sceGsSyncV` returns field 1, so a pass that is done early waits for the second vblank; one that runs
+  past 0x4B0C7 timer ticks swaps without waiting (`allow_late_swap`), which the PC does not reach.
+- The swap shows the buffer drawn last time and sets the other to be drawn: libgraph's draw environment
+  by PATH3, with a clear of colour and Z (`sceGsSetDefDBuff(..., 1)`), for both contexts.
+- `Packet_SendChain` then sends the chain the previous pass built. It draws the whole frame: the world,
+  the screen passes, the arm, the HUD. Then the game moves on by one frame (input, scripts, player,
+  entities, camera: `GameLoop_UpdateCamera`, `GameLoop_SetCameraMatrices`) and builds the next chain
+  (`GameLoop_DrawFrame`).
+- The display registers a vblank scans out are those it found, before the game's swap after it. So
+  the chain drawn after vblank 2k - 1 is shown at 2k + 2 and 2k + 3. A frame's camera is that of the
+  pass before the one that sends it. From the pad to the screen: about 6 vblanks, most of it the
+  game's own pipeline.
+- Evidence: pictures dumped in play change at even vblanks only. The GIF packets between two vblanks
+  hold a whole frame at even vblanks and nothing at odd ones.
+- The menus, the title, the memory card screens and the movies have loops of their own. They draw
+  fields (FFMD 1), and no world.
+
+**What reaches VU1.**
+- `GsDraw_QueueVu1Matrix(world_screen_matrix)` puts the camera's world-to-screen matrix at VU 0x00-0x03,
+  where program 0x000 multiplies it with each part's model matrix (VU 0x04-0x07).
+- Many other draws get matrices the CPU has already multiplied with `world_screen_matrix`
+  (`Matrix_Multiply(model, world_screen_matrix, ...)` in model/, map/, player/; 0x280's skinned models,
+  0x700's effects).
+- The CPU also projects points itself (`Vu0_ProjectToScreen`: the turn smear) and cuts the near
+  triangles of map records.
+- So there is no single matrix to swap. Re-running the chain with another camera would mean finding
+  every matrix in it, and it would still miss what the CPU worked out.
+
+**The choice.** The changes are made after VU1, in the GIF packets, at the GS front end:
+- Every vertex of the world reaches the GS as a screen position, a Z and (textured) Q = 1/w. That is
+  enough to undo the projection and do it again from another camera: back to the camera's space, the
+  camera's change, projected again, S and T scaled for the new Q, Z moved by what the projection's Z
+  moves by (the flames carry a Z offset of their own).
+- It does not care which program or which matrix made the vertex. It costs no VU1 run.
+- The game tells, by marks in its chain, where the world is and with which camera.
+- The other way, the game drawing twice a pass, would run the draw code's side effects twice (the wobble
+  sines, the message dimming, effects' state, `rand`), and the game would no longer be the PS2's.
+
+**How it goes.** At vblank 2k:
+- The packets of the last vblank (the clear and the whole chain) drew the world into the buffer not
+  shown, so they are kept.
+- At 2k + 1 they are sent again: the frame into the buffer shown, the world's vertices from the camera
+  half way between the frame shown and the one drawn.
+- The frame drawn is shown at 2k + 2 as before.
+- The camera half way: the rotation by quaternion slerp, the position half way. A turn of more than
+  0.8 radians or a move of more than 400 units is a cut: not interpolated.
+- With the native GS on its own thread, the replay's packets go into its ring like the game's, ahead
+  of the vblank's scanout, so its thread draws the picture between and hands it to the window as
+  that vblank's (`GSN_PRESENT`); MSAA targets are resolved by the same draws.
+- The window shows the pictures in the order they come, up to two waiting
+  (`port/platform/video.c`): with every vblank's picture its own, one that the GS's thread hands over
+  just after a vblank's present is shown at the next vblank instead of being replaced.
+- Nothing of it is left behind:
+  - the next clear wipes the buffer shown;
+  - the other targets are drawn again from the same packets;
+  - uploads go again in their order;
+  - local-to-local copies into anything but the frame, and local-to-host transfers, are not started;
+  - FRAME, TEX0 and BITBLTBUF are written back to what the game last wrote.
+
+**Checked.**
+- With the switch on, the game's own pictures (the even vblanks) are byte for byte those of a build
+  without the change. Native GS, in play on maps 099, 000, 008, 009, 035 and 112, and through the title,
+  the opening, a teleport and the menus; with `--widescreen` too, and with `--native-msaa 4`.
+- At `--native-scale 2` (or `--native-widescreen`) the game's own pictures differ from the switch off
+  in about 4,000 of 1.1 million pixels (at most 35), all in the top rows and a strip at the left edge,
+  where the turn smear reads past the picture. The native GS's picture there depends on what its targets
+  held before at scales above 1: with the switch off, a run loaded from a state at vblank 1990 differs
+  from the run that went on in the same strips (7,398 pixels, at most 252). The pictures between move
+  half way at every scale (map 000: 15.5 then 14.5 px of 30.5 at 2x).
+- With `KF4_INTERP_STILL=1` (the frame's own camera) the picture between equals the next vblank's,
+  within 2 on a few dozen pixels.
+- Turning on map 000 the picture moves 7.5 px, then 7 px, where the game's frames move 14.5. A save
+  state taken with it on loads with it on or off.
+- Off: boot_test and frame_test as before (the logs and the 52 pictures the same as the build without
+  the change), `--stats`' PATH1 hash and VU1 cycles the same, vu1_test passes, gsn_draw_test's 300
+  cases and 300 shared-memory rounds pass, and the map tour's replay
+  (`kf4-gsreplay --compare-renderers`) gives the same differences on every map (366,070 pixels in all).
+- The window, not `--fast`, turning on map 000 for 410 vblanks: with either presenter 408 or 409 of the
+  vblanks show a new picture one vblank after the last (16.7 ms apart, sd 1.0 to 1.7 ms), and none or two
+  of the 410 pictures are replaced before they are shown. Before the window kept two, SDL's presenter
+  lost 11 of them with the switch on (48 with it off). `--stats` prints these counts.
+- With stage 4's wait for the vblank's picture (Progress, "Frame pacing"), turning and walking on
+  map 000 (vblanks 1961-2600, 640 presents, per-present timestamps in a test build): the Vulkan
+  presenter at 30 and 60 shows every picture at its vblank (none late, repeated or dropped; presents
+  0.23 ms apart in deviation). SDL_Renderer and paraLLEl-GS with the two-picture queue alone were a
+  vblank late at 394 to 640 of the 640 presents (the queue, once two deep, never emptied with a
+  picture every vblank); with the wait and a queue that leaves its oldest out when it was late at two
+  presents in turn: 0 to 26 late, at most 1 repeated and 1 left out (`--stats`: "left out to catch
+  up"), the presents 0.6 to 1.2 ms apart in deviation from the wait (up to 8.7 ms, over 1 ms at 13 to
+  155 of them).
+- Cost: the GS draws each frame twice. 2,030 vblanks headless (new game, map 000), on the GS's thread:
+  2.15 s to 2.57 s at 1x, 2.42 s to 2.80 s at 2x, 2.50 s to 3.09 s at 2x with `--native-widescreen` and
+  `--native-msaa 8`.
+
+**Latency.**
+- Nothing is shown later than on the PS2: the frame the game drew is shown at the same vblank.
+- The picture between shows half of the camera's next move one vblank early.
+- Turning from standing (map 000): the first picture that moves is the fifth vblank after the pad's
+  input with the switch on, the sixth off.
+- The window: with SDL's presenter (and paraLLEl-GS) the GS's thread hands most pictures over just
+  after the game's thread wakes for them (the pixels are read back first). The window waits for the
+  vblank's picture up to half a vblank, so it is shown at its own vblank; one later than that is kept
+  and shown at the next (the queue of two), and a queue still late at the next present leaves its
+  oldest out, so the window does not stay a vblank behind. With the Vulkan presenter nearly all are
+  there in time, with no wait.
+
+**What is left.**
+- **Things that move by themselves**, first version (below, "What moves by itself"): the enemies, the
+  arm and held item, the effects and moving objects are drawn half way when their batch pairs with
+  the frame before. Still at 30 Hz: what the CPU draws anew each frame (its batches do not pair),
+  animated textures (a texture's frame is not interpolated), the HUD and messages.
+- **The screen effects that copy the frame** (the wobble of status bit 39 and the MP drain's tint, both
+  through `GsDraw_CopyFrame(0x2BC0)`) draw the copy the frame made, so in those states the picture
+  between is the frame drawn, not interpolated. Allowing the copy into 0x2BC0 would leave the picture
+  between there, where `MapChange_CaptureFrame` leaves a frame for `MapChange_FadeOutCapture` to fade
+  out over the frames after.
+- **`Game_BlendPreviousFrame`** (on with `map_draw_state.bit40`, and while aiming) blends nothing in the
+  picture between: its "previous frame" is the buffer being drawn.
+- **2D drawn in the world as sprites** (none seen; the triangles are moved) would stay where the frame
+  put them. Sprites are not moved, as the full-screen clears and passes are sprites too.
+- **paraLLEl-GS** (`--renderer gs`) gets the same packets, but its scanout weaves each vblank with the
+  field before. Its pictures then mix two of the game's, and the game's turn smear
+  (`Game_ShiftScreenByViewTurn`, one field moved by the turn) adds to the move. The native GS shows
+  the frame whole.
+- **More than 60.** 120 or 144 Hz needs pictures at times between vblanks, from the wall clock, more
+  than one replay a frame (each a fraction of the way), and a presenter that shows them at the
+  screen's rate.
+
+### What moves by itself
+
+The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned
+ones), multiplied on the CPU, so the replay cannot take the camera out of them. It pairs what was
+drawn instead, frame to frame, in the GIF packets (`port/platform/frame_interp.c`, "What moves by
+itself"):
+- **A run is a model part.** Each VU1 run of a 3D program draws one batch of one part. VIF1 hashes
+  what it unpacks at VU 0x80 and up for the run (the batch: the part's own vertices, before any
+  matrix; below 0x80 are the matrices and lights), only with the switch on (`port_vif1_run_key`).
+- **Places.** Each frame's 3D vertices are kept as places in the world: unprojected from the screen
+  and the depth with that frame's camera (before the eye: in the camera's space).
+- **Pairs.** A run pairs with the run of the frame before with the same batch and as many vertices
+  whose middle is nearest, if it is the nearest to that one in turn (the map's pieces repeat; one that
+  came into view is not taken for the one beside it), and less than 400 units away.
+- **The picture between.** A paired run that moved (a vertex by more than a 500th of its distance from
+  the eye) is drawn half way between its two places, from the camera half way. A run that did not
+  move, or has no pair, moves with the camera as before (in the world), or stays as it is (the arm,
+  before the eye).
+- **The arm** is marked by the game (`FrameInterp_BeginArm` before `Player_DrawArm`): it is in the
+  world, by the camera of the world, moving with the swing.
+- **Depth.** From Q where Q is 1/w; the sphere-mapped second pass of program 0x280 has Q 1.0 and goes
+  over its first pass's points, whose depth it takes (the arm's Z is pulled near the eye, so Z gives the
+  wrong depth). This also mends the camera's move of such passes in the world.
+- **Not paired:** a run whose half-way place cuts in front of the eye (the arm turning round the
+  shoulder in one frame: the straight line between cuts the corner). A vertex with ADC in either frame
+  may have been clipped there (its place wrapped round) while this frame's triangles use it: it is
+  taken only when it is as far from its run's middle in both frames, else it moves with the middle.
+- **Checked.** Switch off: boot_test, frame_test, `--stats`' PATH1 hash, gsn_draw_test and the map
+  tour (366,070) as before. Switch on: the game's own frames byte for byte as with it off (map 000:
+  walking, turning, swinging the arm). Pictures: the arm's swing on map 000 (vblanks 2034-2036,
+  2046-2048: the hand half way, where the camera-only picture showed the next frame's pose), the bats
+  of map 016, the plant creature and the torches of map 000.
+- **Cost:** the walk keeps every frame's vertices and pairs the runs (sorted by batch): about 0.4 ms
+  a frame on the DMA controller's thread (2,300 vblanks headless: 3.79 s to 4.23 s).
+- **Left:** two things that share a batch and cross (both are drawn at the wrong one's place half
+  way); `Game_BlendPreviousFrame` while the arm swings (the game's frames are blended with the frame
+  before, the picture between is not: the arm is a little sharper there); what the CPU makes anew
+  each frame.
 
 ## Testing
 
