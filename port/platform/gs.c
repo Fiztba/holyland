@@ -21,6 +21,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/savestate.h"
+#include "port/settings.h"
 
 #ifdef KF4_HAVE_PARALLEL_GS
 int port_gs_backend_open(void);
@@ -91,7 +92,12 @@ static void open_backend(void *unused) {
         }
         have_native = gsn_open(NULL);
         if (have_native) {
+            char path[1100];
+
             gsn_set_scale(port_options.native_scale);
+            gsn_set_presenter(port_video_submit, port_video_submit_image);
+            snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
+            gsn_pipeline_cache(path);
         }
     }
     backend = have_gs || have_native;
@@ -631,6 +637,12 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         got_gs = port_gs_backend_vsync(request->privileged, request->field, want, &frame);
     }
     if (have_native) {
+        if (!have_gs && shown && !dump) {
+            /* the native GS's thread hands the window the picture (or with the Vulkan presenter word of
+               the new image) when it has it, and this thread goes on */
+            return gsn_vsync(request->privileged, request->field,
+                             GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0), NULL) != 0;
+        }
         got_native = gsn_vsync(request->privileged, request->field, want_native, &native_frame);
     }
     if (have_gs && have_native) {
@@ -744,6 +756,7 @@ void port_gs_print_stats(void) {
     if (have_native) {
         const GsnStats *s = &gsn_stats;
 
+        gsn_wait();
         fprintf(stderr,
                 "[stats] native GS: %llu draws, %llu triangles, %llu render passes, %llu shader blends, %llu target "
                 "copies, %llu write-backs; %llu textures decoded (%llu texels), %llu found again; %llu uploads (%.1f MB, %llu found in VRAM already, %llu copied in whole)\n",

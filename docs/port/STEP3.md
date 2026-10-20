@@ -35,7 +35,9 @@ timings of the step 2 path, and how ico-pc built its renderer.
   MTBA mipmaps, SCANMSK, save states. `tests/gsn_draw_test.c` draws random batches (every primitive,
   texture and frame buffer format, CLUT, blend, alpha and Z test, DATE, FBMSK, SCANMSK, fog) on both
   renderers and compares their VRAM: 300 cases a run pass, and paraLLEl-GS's own quirks the game
-  does not reach are listed in PLAN.md. The 64 map tour captures, each frame drawn from
+  does not reach are listed in PLAN.md; then as many rounds of buffers that share memory (128-wide
+  buffers page rows apart drawn into, uploaded into in their shape and in others, copied and read
+  as textures, as the scrolling textures do), which must leave VRAM the same byte for byte. The 64 map tour captures, each frame drawn from
   paraLLEl-GS's state: no crash; on average 2% of the frame's pixels are more than 1 a channel
   from paraLLEl-GS's (edges, alpha-test cut-offs, flames, 3D blending rounded by Vulkan; worst 118);
   PLAN.md, "Where the native GS differs". Title, memory card, menus, journal, magic and movie
@@ -51,13 +53,40 @@ timings of the step 2 path, and how ico-pc built its renderer.
   (`--vu1 hle`; `--vu1 check` runs both and compares them run by run: 0 differences over all 78
   captures and live runs on several maps). That was the stage's purpose: VU1 goes from two thirds
   of the run's time to a sixth. Shaders are left as an option (below).
-- **Speed** (2,000 vblanks, new game then map 000): paraLLEl-GS with the interpreter 6.4 s (main
-  today); paraLLEl-GS with VU1 in C 3.2 s; the native GS with VU1 in C 4.4 s.
+- **Speed** (2,000 vblanks, new game then map 000, `--fast --headless`, Ryzen 9 9900X3D):
+  paraLLEl-GS with the interpreter 6.4 s (main today); paraLLEl-GS with VU1 in C 3.3-3.6 s; the
+  native GS with VU1 in C 2.0 s (4.4 s before stage 4's speed work); no GS at all 1.5 s. Maps 004,
+  029, 112 and 116 the same way: 1.9-2.1 s, paraLLEl-GS 3.3-3.5 s. With a picture for the window
+  every vblank (the window's path made to run in a headless build): 2.2 s, paraLLEl-GS 8.8 s.
+  What stage 4's speed work did (feat/gsn-speed):
+  - the native GS has a thread of its own: the DMA controller's thread copies the GIF packets and
+    vblanks into a ring and goes on with VU1; whatever wants something back (the FIFO read-back, a
+    dumped picture, a save state, kf4-gsreplay) waits for the ring to empty; a picture for the
+    window is handed to it by the GS's thread (`GSN_PRESENT`), so nothing waits for that either
+    (`KF4_GSN_THREAD=0`: no thread);
+  - four frame contexts, where two left a vblank waiting for the GPU's work of the one before;
+  - targets keep which pages are newer than VRAM (the rows their draws reach): a write-back writes
+    only those, a texture or CLUT read of the others needs none; a buffer whole page rows above a
+    target, in its layout, makes the target grow upwards; uploads into a target at such an offset
+    go into it, and an upload that writes whole pages of a target in another shape keeps the rest.
+    Map 000's scrolling textures no longer go back through the CPU every frame (713 write-backs in
+    the run to 133, those left at the title, the menus and map 008's reflection);
+  - uploads: a hash four lanes wide, no copy of an upload that comes whole, 24-bit uploads (the
+    title's) found again as pages; VRAM read and written a row at a time, each format's swizzle
+    and row loop made on its own;
+  - a Vulkan pipeline cache in the data folder (`native_gs_pipelines.bin`): where the driver keeps
+    none (a new build, its own cache full) the first minutes made pipelines for 1.6 s;
+  - VU1's code aligned to 64 bytes (`-falign-functions=64 -falign-loops=64` for vu1*.c): its speed
+    moved by a third with where the linker put it.
 - **Stage 4 (the default)** is the next decision: `--renderer native` and `--vu1 hle` are opt-in
   until they have been played through.
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
-  there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
-  texture's target on map 000) has the target written back through the CPU each frame;
+  there; the scanouts agree); write-backs still left: the title's 640x224 field buffer (61 in the
+  run), the menus' Z buffer over the play's frame buffers, and map 008's reflection drawn with the
+  main Z buffer at 256 wide, which sends the main Z back to VRAM; at the title and in the menus each
+  field is read back for the weave, wanted or not;
+  the Vulkan instance and device take a fifth of a second to make at start-up, waited for by the
+  boot's read-back;
   `--renderer both` on Mesa's lavapipe needs `LP_NUM_THREADS=1`.
 
 ### What could come next
