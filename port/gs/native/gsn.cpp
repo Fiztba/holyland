@@ -1895,9 +1895,12 @@ void flush_batch() {
         }
     }
     push.misc |= scale_y << M_SCALE_SHIFT; // (SCANMSK's lines)
-    // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
-    // and keeps each pixel's within the format, where clamping the vertices would tilt the plane
-    bool zclamp = depth && zmax > depth_max(zpsm);
+    // Each pixel's Z as the GS has it: the vertices' Z interpolated, rounded to a whole Z and kept
+    // within the Z buffer's format (gs_zclamp.frag writes the depth). The GPU's own interpolation keeps
+    // the fraction, so of two draws over the same plane (the lava's glow over the lava, ZTST GEQUAL)
+    // the second could come out a hair behind the first where the GS has them equal; and clamping a
+    // vertex beyond the format would tilt the plane.
+    bool zclamp = depth != nullptr;
     if (zclamp) {
         push.misc |= M_ZCLAMP;
     }
