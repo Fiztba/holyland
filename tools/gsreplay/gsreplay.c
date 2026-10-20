@@ -79,7 +79,11 @@ void *ee_hw_ptr(uint32_t ee_address) {
 uint64_t port_ticks(void) {
     struct timespec t;
 
+#ifdef _WIN32
     timespec_get(&t, TIME_UTC);
+#else
+    clock_gettime(CLOCK_MONOTONIC, &t);
+#endif
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
 
