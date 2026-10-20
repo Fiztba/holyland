@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <mutex>
 #include <vector>
 
 #include "context.hpp"
@@ -24,6 +25,14 @@ Device *device;
 GSInterface *gs;
 BufferHandle readback;
 VkDeviceSize readback_size;
+// The Vulkan queue, which the native GS shares when it runs beside (--renderer both): each Granite
+// device locks only its own submissions, and paraLLEl-GS submits from threads of its own
+std::mutex queue_mutex;
+}
+
+// A Granite device on paraLLEl-GS's context takes the same queue lock (port/gs/native/gsn.cpp)
+extern "C" void port_gs_backend_share_queue(void *other_device) {
+    static_cast<Device *>(other_device)->set_queue_lock([] { queue_mutex.lock(); }, [] { queue_mutex.unlock(); });
 }
 
 extern "C" int port_gs_backend_open(void) {
@@ -45,6 +54,7 @@ extern "C" int port_gs_backend_open(void) {
     device = new Device;
     device->set_context(*context);
     device->init_frame_contexts(4);
+    device->set_queue_lock([] { queue_mutex.lock(); }, [] { queue_mutex.unlock(); });
 
     gs = new GSInterface;
     GSOptions options = {};
