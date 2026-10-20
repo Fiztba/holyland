@@ -452,11 +452,10 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
   Vulkan presenter nearly all are there in time.
 
 **What is left.**
-- **Things that move by themselves** move at 30 Hz: enemies, NPCs, effects, the arm, animated textures,
-  and the HUD and messages change when the game draws them. Interpolating them would need the
-  previous frame's matrix for each draw: a mark per model with its model matrix (or its world-space
-  position), matched from frame to frame by model and draw order, in `ModelScreen_*`, `MapObject_*`,
-  `Entity_*`.
+- **Things that move by themselves**, first version (below, "What moves by itself"): the enemies, the
+  arm and held item, the effects and moving objects are drawn half way when their batch pairs with
+  the frame before. Still at 30 Hz: what the CPU draws anew each frame (its batches do not pair),
+  animated textures (a texture's frame is not interpolated), the HUD and messages.
 - **The screen effects that copy the frame** (the wobble of status bit 39 and the MP drain's tint, both
   through `GsDraw_CopyFrame(0x2BC0)`) draw the copy the frame made, so in those states the picture
   between is the frame drawn, not interpolated. Allowing the copy into 0x2BC0 would leave the picture
@@ -473,6 +472,45 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
 - **More than 60.** 120 or 144 Hz needs pictures at times between vblanks, from the wall clock, more
   than one replay a frame (each a fraction of the way), and a presenter that shows them at the
   screen's rate.
+
+### What moves by itself
+
+The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned
+ones), multiplied on the CPU, so the replay cannot take the camera out of them. It pairs what was
+drawn instead, frame to frame, in the GIF packets (`port/platform/frame_interp.c`, "What moves by
+itself"):
+- **A run is a model part.** Each VU1 run of a 3D program draws one batch of one part. VIF1 hashes
+  what it unpacks at VU 0x80 and up for the run (the batch: the part's own vertices, before any
+  matrix; below 0x80 are the matrices and lights), only with the switch on (`port_vif1_run_key`).
+- **Places.** Each frame's 3D vertices are kept as places in the world: unprojected from the screen
+  and the depth with that frame's camera (before the eye: in the camera's space).
+- **Pairs.** A run pairs with the run of the frame before with the same batch and as many vertices
+  whose middle is nearest, if it is the nearest to that one in turn (the map's pieces repeat; one that
+  came into view is not taken for the one beside it), and less than 400 units away.
+- **The picture between.** A paired run that moved (a vertex by more than a 500th of its distance from
+  the eye) is drawn half way between its two places, from the camera half way. A run that did not
+  move, or has no pair, moves with the camera as before (in the world), or stays as it is (the arm,
+  before the eye).
+- **The arm** is marked by the game (`FrameInterp_BeginArm` before `Player_DrawArm`): it is in the
+  world, by the camera of the world, moving with the swing.
+- **Depth.** From Q where Q is 1/w; the sphere-mapped second pass of program 0x280 has Q 1.0 and goes
+  over its first pass's points, whose depth it takes (the arm's Z is pulled near the eye, so Z gives the
+  wrong depth). This also mends the camera's move of such passes in the world.
+- **Not paired:** a run whose half-way place cuts in front of the eye (the arm turning round the
+  shoulder in one frame: the straight line between cuts the corner). A vertex with ADC in either frame
+  may have been clipped there (its place wrapped round) while this frame's triangles use it: it is
+  taken only when it is as far from its run's middle in both frames, else it moves with the middle.
+- **Checked.** Switch off: boot_test, frame_test, `--stats`' PATH1 hash, gsn_draw_test and the map
+  tour (366,070) as before. Switch on: the game's own frames byte for byte as with it off (map 000:
+  walking, turning, swinging the arm). Pictures: the arm's swing on map 000 (vblanks 2034-2036,
+  2046-2048: the hand half way, where the camera-only picture showed the next frame's pose), the bats
+  of map 016, the plant creature and the torches of map 000.
+- **Cost:** the walk keeps every frame's vertices and pairs the runs (sorted by batch): about 0.4 ms
+  a frame on the DMA controller's thread (2,300 vblanks headless: 3.79 s to 4.23 s).
+- **Left:** two things that share a batch and cross (both are drawn at the wrong one's place half
+  way); `Game_BlendPreviousFrame` while the arm swings (the game's frames are blended with the frame
+  before, the picture between is not: the arm is a little sharper there); what the CPU makes anew
+  each frame.
 
 ## Testing
 
