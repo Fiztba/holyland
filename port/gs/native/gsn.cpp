@@ -1170,8 +1170,6 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
         uint32_t h = std::max(th, gs->snapshot ? gs->snapshot->get_height() : 0u);
         gs->snapshot = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
     }
-    end_pass();
-    transfer_barrier();
     VkOffset3D at = {0, 0, 0};
     VkExtent3D size = {tw, th, 1};
     if (box) {
@@ -1179,11 +1177,13 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
         int32_t x0 = std::max(box[0], 0) * s, y0 = std::max(box[1], 0) * s;
         int32_t x1 = std::min(box[2] * s, int32_t(tw)), y1 = std::min(box[3] * s, int32_t(th));
         if (x1 <= x0 || y1 <= y0) {
-            return *gs->snapshot;
+            return *gs->snapshot; // (nothing of it on the target: no copy, and the render pass goes on)
         }
         at = {x0, y0, 0};
         size = {uint32_t(x1 - x0), uint32_t(y1 - y0), 1};
     }
+    end_pass();
+    transfer_barrier();
     cmd().copy_image(*gs->snapshot, *t.image, at, at, size, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
     transfer_barrier();
@@ -1531,6 +1531,35 @@ void flush_batch() {
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
         return;
+    }
+    // Triangles wholly outside the scissor draw nothing: left out, before the runs below are cut (a
+    // reflection drawn into its 256 x 256 target from the whole scene had most of its triangles off it,
+    // each a run of its own). (A pixel's margin each way.)
+    {
+        float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
+        size_t kept = 0, n = gs->verts.size();
+        Vtx *v = gs->verts.data();
+        for (size_t i = 0; i + 2 < n; i += 3) {
+            float tx0 = std::min(v[i].x, std::min(v[i + 1].x, v[i + 2].x));
+            float tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
+            float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y));
+            float ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
+            if (tx1 < cx0 || tx0 > cx1 || ty1 < cy0 || ty0 > cy1) {
+                continue;
+            }
+            if (kept != i) {
+                v[kept] = v[i];
+                v[kept + 1] = v[i + 1];
+                v[kept + 2] = v[i + 2];
+            }
+            kept += 3;
+        }
+        gsn_stats.primitives += (n - kept) / 3;
+        gs->verts.resize(kept);
+        if (kept == 0) {
+            gs->batch_sprites = false;
+            return;
+        }
     }
     push.misc |= s << M_SCALE_SHIFT;
     // A vertex with a Z beyond what the Z buffer's format holds: the GS interpolates the vertices' Z
