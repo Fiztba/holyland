@@ -34,7 +34,9 @@
                         beside each draw_NNNNN.png, and --frames frame_NNNNNN_native.png
      --compare-renderers
                         both renderers, and after every draw (or each of --draws) the pixels of its box
-                        compared: the draws after which they differ, and by how much (up to --limit)
+                        compared: the draws after which they differ, and by how much (up to --limit).
+                        After each, the native GS's box is made paraLLEl-GS's, so a draw listed made
+                        the difference itself (--no-resync: not, the differences carry on)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -619,6 +621,7 @@ typedef struct {
     int mode;
     int render;           /* the renderers that draw: RENDER_GS, RENDER_NATIVE */
     int compare_renderers; /* --compare-renderers */
+    int resync;            /* (not --no-resync) after each draw, the native GS takes paraLLEl-GS's pixels */
     int limit;
     uint64_t compared, compared_differ;
     Gif gif;
@@ -682,7 +685,7 @@ static void compare_draw(Run *r, long index) {
     size_t i, n = (size_t)rect.w * rect.h;
 
     if (n == 0) {
-        return;
+        return; /* off the frame buffer */
     }
     a = malloc(n * 4);
     b = malloc(n * 4);
@@ -702,6 +705,11 @@ static void compare_draw(Run *r, long index) {
         pixels += worst > 1;
     }
     r->compared++;
+    if (r->resync) {
+        /* the next draw starts from the same picture: what it shows is its own difference */
+        gsn_decode_rect(port_gs_backend_vram(), &rect, a);
+        gsn_write_rect(&rect, a);
+    }
     if (pixels) {
         r->compared_differ++;
         if (r->compared_differ <= (uint64_t)r->limit) {
@@ -825,10 +833,10 @@ static void draw_ended(Run *r, long index) {
         dump_draw_buffers(r, index);
     }
     if (r->compare_renderers && in_range) {
-        compare_draw(r, index);
         if (r->draw_from >= 0) {
-            dump_draw_buffers(r, index);
+            dump_draw_buffers(r, index); /* (before the native GS is put back in step) */
         }
+        compare_draw(r, index);
     }
     if (r->pixel) {
         pixel_after(r, index);
@@ -1291,6 +1299,8 @@ int main(int argc, char **argv) {
             run.frames = 1;
         } else if (strcmp(a, "--zbuf") == 0) {
             run.zbuf = 1;
+        } else if (strcmp(a, "--no-resync") == 0) {
+            run.resync = -1;
         } else if (strcmp(a, "--compare-renderers") == 0) {
             run.compare_renderers = 1;
             renderer = RENDER_GS | RENDER_NATIVE;
@@ -1374,6 +1384,7 @@ int main(int argc, char **argv) {
     port_options.adapt_width = (int)meta_int(&capture, "adapt_width", 1);
     port_options.dump_dir = run.out;
     run.limit = limit;
+    run.resync = run.resync == 0 && run.compare_renderers;
     run.render = run.frames || run.draw_from >= 0 || run.pixel || run.compare_renderers ? renderer : 0;
     if (run.render) {
         if ((run.render & RENDER_GS) && !port_gs_backend_open()) {

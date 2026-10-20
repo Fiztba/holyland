@@ -88,20 +88,31 @@ ivec4 texel(ivec2 c, int level) {
     return t;
 }
 
+// v / 2^bits, rounded to nearest, ties to even: the filters' weighted sums
+ivec4 round_shift(ivec4 v, int bits) {
+    ivec4 q = v >> bits;
+    ivec4 r = v & ((1 << bits) - 1);
+    int half_ = 1 << (bits - 1);
+    return q + ivec4(greaterThan(r, ivec4(half_))) + ivec4(equal(r, ivec4(half_))) * (q & 1);
+}
+
 // The texture at texel coordinates `tc` (level 0's), one level, nearest or bilinear
 ivec4 sample_level(vec2 tc, int level, bool linear) {
     vec2 at = tc / float(1 << level);
+    // the GS's texel coordinates have 4 bits of fraction; interpolated in floats, a coordinate that is
+    // exactly on one comes out a hair under it, which the bias puts back
+    ivec2 p = ivec2(floor(at * 16.0 + 1.0 / 64.0));
     if (!linear) {
-        return texel(ivec2(floor(at)), level);
+        return texel(p >> 4, level);
     }
-    ivec2 p = ivec2(floor(at * 16.0)) - 8;
+    p -= 8;
     ivec2 i = p >> 4;
     ivec2 f = p & 15;
     ivec4 c00 = texel(i, level);
     ivec4 c10 = texel(i + ivec2(1, 0), level);
     ivec4 c01 = texel(i + ivec2(0, 1), level);
     ivec4 c11 = texel(i + ivec2(1, 1), level);
-    return (c00 * (16 - f.x) * (16 - f.y) + c10 * f.x * (16 - f.y) + c01 * (16 - f.x) * f.y + c11 * f.x * f.y) >> 8;
+    return round_shift(c00 * (16 - f.x) * (16 - f.y) + c10 * f.x * (16 - f.y) + c01 * (16 - f.x) * f.y + c11 * f.x * f.y, 8);
 }
 
 ivec4 sample_texture() {
@@ -128,7 +139,7 @@ ivec4 sample_texture() {
     int l0 = int(floor(lod));
     int l1 = min(l0 + 1, mxl);
     int w = int(floor(fract(lod) * 16.0));
-    return (sample_level(tc, l0, linear) * (16 - w) + sample_level(tc, l1, linear) * w) >> 4;
+    return round_shift(sample_level(tc, l0, linear) * (16 - w) + sample_level(tc, l1, linear) * w, 4);
 }
 
 bool alpha_test(int a) {
@@ -169,9 +180,11 @@ void main() {
         }
     }
     if ((pc.flags & GSN_F_FGE) != 0u) {
-        int f = clamp(int(floor(v_fog + 1.0 / 256.0)), 0, 255);
+        // F rounded, and the blend towards FOGCOL rounded too (as paraLLEl-GS has it, from tests on the
+        // hardware: F 255, FOGCOL 128 and a colour of 128 give 128, not 127)
+        int f = clamp(int(roundEven(v_fog)), 0, 255);
         ivec3 fog = ivec3(unpack32(pc.fogcol).rgb);
-        c.rgb = (c.rgb * f + fog * (255 - f)) >> 8;
+        c.rgb = ivec3(floor(vec3(fog) + vec3((c.rgb - fog) * f) / 256.0 + 0.5));
     }
 
     uint pass = field(pc.flags, GSN_F_PASS_SHIFT, 2u);

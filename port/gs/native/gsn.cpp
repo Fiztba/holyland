@@ -428,7 +428,7 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     end_pass();
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0), int32_t(y0), 0}, {w, h, 1}, 0, 0,
+    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0), int32_t(y0), 0}, {w, h, 1}, w, h,
                                                                {aspect, 0, 0, 1}));
     for (uint32_t y = 0; y < h; y++) {
         for (uint32_t x = 0; x < w; x++) {
@@ -568,7 +568,7 @@ void decode_texture(Texture &tex) {
     transfer_barrier();
     for (uint32_t l = 0; l < tex.levels; l++) {
         uint32_t w = std::max(1u, (1u << tex.tw) >> l), h = std::max(1u, (1u << tex.th) >> l);
-        void *out = cmd().update_image(*tex.image, {0, 0, 0}, {w, h, 1}, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1});
+        void *out = cmd().update_image(*tex.image, {0, 0, 0}, {w, h, 1}, w, h, {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1});
         uint32_t bp = tex.mip_tbp[l], bw = tex.mip_tbw[l];
         for (uint32_t y = 0; y < h; y++) {
             for (uint32_t x = 0; x < w; x++) {
@@ -1431,6 +1431,31 @@ void image_data(const uint8_t *data, size_t bytes) {
 }
 
 // ---- Register writes ----------------------------------------------------------------------------
+// TEX1's MTBA: a TEX0 written makes MIPTBP1 itself, levels 1 to 3 packed after level 0, each a quarter
+// of the one before and half its buffer width
+void mip_addresses(uint32_t ctxt) {
+    if (!bits(gs->reg[R_TEX1_1 + ctxt], 9, 1)) {
+        return;
+    }
+    uint64_t tex0 = gs->reg[R_TEX0_1 + ctxt];
+    uint32_t psm = bits(tex0, 20, 6);
+    uint32_t w = 1u << bits(tex0, 26, 4), h = 1u << bits(tex0, 30, 4);
+    // a block of the format, in pixels
+    uint32_t bw = psm == GSN_PSMT4 ? 32 : psm == GSN_PSMT8 || psm_is_16(psm) ? 16 : 8;
+    uint32_t bh = psm == GSN_PSMT8 ? 16 : psm == GSN_PSMT4 ? 16 : 8;
+    uint32_t base = bits(tex0, 0, 14);
+    uint32_t blocks = (w / bw) * (h / bh);
+    uint32_t row = w / 64;
+    uint64_t miptbp1 = 0;
+    for (int l = 0; l < 3; l++) {
+        base += blocks;
+        blocks /= 4;
+        row /= 2;
+        miptbp1 |= (uint64_t(base & 0x3FFF) | (uint64_t(row & 0x3F) << 14)) << (l * 20);
+    }
+    gs->reg[R_MIPTBP1_1 + ctxt] = miptbp1;
+}
+
 void gs_write(uint32_t address, uint64_t value) {
     switch (address) {
     case R_XYZF2:
@@ -1474,6 +1499,7 @@ void gs_write(uint32_t address, uint64_t value) {
             memcpy(gs->clut, now, sizeof(now));
         }
         gs->reg[address] = value;
+        mip_addresses(address - R_TEX0_1);
         return;
     }
     case R_TEX2_1:
@@ -1827,9 +1853,34 @@ extern "C" void gsn_decode_rect(const uint8_t *vram, const GsnRect *r, uint32_t 
     for (uint32_t j = 0; j < r->h; j++) {
         for (uint32_t i = 0; i < r->w; i++) {
             uint32_t v = gsn_vram_read(vram, r->psm, r->bp, r->bw, r->x + i, r->y + j);
-            rgba[size_t(j) * r->w + i] = vram_to_target_pixel(v, r->psm) | 0xFF000000u;
+            rgba[size_t(j) * r->w + i] = vram_to_target_pixel(v, r->psm);
         }
     }
+}
+
+extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
+    flush_batch();
+    Target *t = find_target(r->bp, r->bw, r->psm);
+    if (t && r->x + r->w <= t->width && r->y + r->h <= t->height) {
+        end_pass();
+        transfer_barrier();
+        uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0},
+                                                                   {r->w, r->h, 1}, r->w, r->h,
+                                                                   {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}));
+        memcpy(out, rgba, size_t(r->w) * r->h * 4);
+        transfer_barrier();
+        return;
+    }
+    uint32_t lo, count;
+    buffer_pages(r->bp, r->bw, r->psm, r->x + r->w, r->y + r->h, &lo, &count);
+    claim_pages(lo, count, nullptr, true);
+    for (uint32_t j = 0; j < r->h; j++) {
+        for (uint32_t i = 0; i < r->w; i++) {
+            gsn_vram_write(gs->vram.data(), r->psm, r->bp, r->bw, r->x + i, r->y + j,
+                           target_pixel_to_vram(rgba[size_t(j) * r->w + i], r->psm));
+        }
+    }
+    pages_written(lo, count);
 }
 
 extern "C" const void *gsn_vram(void) {

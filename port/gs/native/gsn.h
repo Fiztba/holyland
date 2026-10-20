@@ -33,8 +33,11 @@ typedef struct {
 int gsn_display_rect(const uint64_t *privileged, GsnRect *rect);
 /* A rectangle as RGBA (alpha 255): from the native GS's targets, or its VRAM */
 void gsn_read_rect(const GsnRect *rect, uint32_t *rgba);
-/* The same from a VRAM image of the GS's (paraLLEl-GS's, to compare) */
+/* The same from a VRAM image of the GS's (paraLLEl-GS's, to compare), alpha as the buffer has it */
 void gsn_decode_rect(const uint8_t *vram, const GsnRect *rect, uint32_t *rgba);
+/* A rectangle of a buffer made these pixels (as gsn_decode_rect gives them): kf4-gsreplay's
+   --compare-renderers starts each draw from paraLLEl-GS's picture */
+void gsn_write_rect(const GsnRect *rect, const uint32_t *rgba);
 
 /* The GS's state in the GS capture's records (port/include/port/gs_capture_format.h): what a capture,
    a save state or kf4-gsreplay start from. gsn_vram is the 4 MB as the GS has it, render targets
