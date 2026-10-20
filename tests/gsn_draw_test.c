@@ -122,6 +122,14 @@ static uint64_t gif_tag(uint32_t nloop, int eop, uint32_t flg, uint32_t nreg) {
     return (uint64_t)nloop | (uint64_t)(eop ? 1 : 0) << 15 | (uint64_t)flg << 58 | (uint64_t)(nreg & 15) << 60;
 }
 
+/* A vblank for the native GS, with no display: its GPU work of the vblanks before is let go (images
+   dropped, command pools recycled), as it would be in the game. Without one the test's memory grows
+   all the while (gigabytes with lavapipe). */
+static void native_vblank(void) {
+    static const uint64_t privileged[0xF0 / 8];
+    gsn_vsync(privileged, 0, 0, NULL);
+}
+
 /* The packet so far, to both renderers (or to neither: test_shared_memory's GSN_SKIP) */
 static int discard;
 
@@ -878,6 +886,7 @@ static int run_case(int index, const Case *k) {
     vram = port_gs_backend_vram();
     gsn_decode_rect(vram, &fr, fb_a);
     gsn_decode_rect(vram, &zr, z_a);
+    native_vblank();
     vram = gsn_vram();
     gsn_decode_rect(vram, &fr, fb_b);
     gsn_decode_rect(vram, &zr, z_b);
@@ -1102,6 +1111,7 @@ static int test_shared_memory(int rounds, uint32_t seed) {
         discard = 0;
         parallel_refresh(SHARED_PAGE * 32, 2, GSN_PSMCT32, 128, 256);
         parallel_refresh(SCRATCH_PAGE * 32, 2, GSN_PSMCT32, 128, 128);
+        native_vblank();
         const uint8_t *a = port_gs_backend_vram(), *b = gsn_vram();
         int differ = memcmp(a + SHARED_PAGE * 8192, b + SHARED_PAGE * 8192, SHARED_PAGES * 8192) != 0 ||
                      memcmp(a + SCRATCH_PAGE * 8192, b + SCRATCH_PAGE * 8192, 4 * 8192) != 0;
