@@ -35,12 +35,29 @@ timings of the step 2 path, and how ico-pc built its renderer.
   paraLLEl-GS's 8.2 s.
 - **Stage 5, started**: `--native-scale 1-4` (the render targets at up to 4 times the PS2's
   resolution, live from the overlay).
-- **Stage 3, started**: the VU1 programs, first as C (bit for bit against the interpreter), then as
-  shaders.
+- **Stage 3**: the VU1 programs as C, bit for bit against the interpreter (`--vu1 hle`), which was
+  the stage's purpose (speed); shaders are left for later (below).
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
-  there; the scanouts agree); a draw that samples a target as another format (the scrolling textures,
-  T4/T8 over CT32) writes the target back through the CPU once a frame; `--renderer both` aborts in
-  Mesa's lavapipe (each renderer alone runs there).
+  there; the scanouts agree); a texture whose pages a target shares (a T8 texture beside a scrolling
+  texture's target on map 000) has the target written back through the CPU each frame;
+  `--renderer both` on Mesa's lavapipe needs `LP_NUM_THREADS=1`.
+
+### What could come next
+
+- **Exact blending everywhere.** The one difference left by design is Vulkan's rounding of
+  (Cs - Cd) C + Cd on 3D geometry (1 a channel, drawn again each frame). Fragment shader interlock
+  (VK_EXT_fragment_shader_interlock) would let the shader read and write the target in primitive
+  order: every blend exact, and DATE per pixel. Granite does not turn the feature on; the native GS
+  would need its own device set-up for it.
+- **Uploads on the GPU.** The swizzle runs on the CPU (and is mostly skipped now: uploads seen before
+  are copied in as pages). A compute pass writing a GPU copy of VRAM, with textures read from it,
+  would take the rest off the CPU and remove the write-backs.
+- **The presenter on Vulkan.** The picture still goes to the window through the CPU, as
+  paraLLEl-GS's does; at 4x that is 18 MB a vblank, which the measurements show is affordable. A
+  swapchain on the native GS's device would need the overlay and the on-screen controls (both drawn
+  with SDL_Renderer today) on Vulkan too.
+- **VU1 on the GPU.** The C programs (stage 3) take VU1 from two thirds of the run's time to a
+  sixth; shaders would take the rest, at the cost of a second implementation to keep bit for bit.
 
 ## Why
 
