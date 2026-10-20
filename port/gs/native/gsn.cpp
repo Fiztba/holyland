@@ -1397,6 +1397,24 @@ void flush_batch() {
             if (y0 >= t->height) {
                 continue;
             }
+            // A texture whose rows the batch reads run past the target's is decoded from VRAM, the
+            // targets' pages back there first: the rows past are VRAM's, or another target's. (The
+            // rows read, from the vertices' V, or T/Q: a frame read as a 1024 x 512 texture reads
+            // only the frame's rows. A pixel samples above its V's largest, which is at a vertex
+            // when Q stays above 0; bilinear filtering's row past that has no weight.)
+            uint32_t rows = 1u << th;
+            float vmin = 0.0f, vmax = 0.0f;
+            for (const Vtx &v : gs->verts) {
+                float tv = fst ? v.t : v.q > 0.0f ? v.t / v.q * float(rows) : -1.0f;
+                vmin = std::min(vmin, tv);
+                vmax = std::max(vmax, tv);
+            }
+            if (vmin >= 0.0f && vmax < float(rows)) {
+                rows = std::max(1u, uint32_t(ceilf(vmax)));
+            }
+            if (y0 + rows > t->height) {
+                break;
+            }
             source = t.get();
             push.src_offset[0] = int32_t(x0);
             push.src_offset[1] = int32_t(y0);
