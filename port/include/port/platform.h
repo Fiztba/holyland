@@ -242,6 +242,10 @@ void port_vu1_start(uint32_t address, uint32_t top, uint32_t itop);
 void port_vu1_continue(uint32_t top, uint32_t itop);
 /* The address (in instructions) the running or last run started at: which program XGKICKs */
 extern uint32_t port_vu1_run_pc;
+/* --frame-rate 60: the running or last run's batch, a hash of what was unpacked for it (vif1.c), and
+   the runs' count */
+extern uint64_t port_vif1_run_key;
+extern uint32_t port_vif1_run_serial;
 /* --vu1 */
 enum { PORT_VU1_INTERP, PORT_VU1_HLE, PORT_VU1_CHECK };
 /* --vu1 check: the runs compared, and those where the HLE and the interpreter differed (each

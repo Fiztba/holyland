@@ -138,6 +138,7 @@ int port_frame_interp(void);
 #define PORT_FRAME_INTERP_VIEW 1    /* 1-12: world_view_matrix's columns' x, y, z */
 #define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */
 #define PORT_FRAME_INTERP_END 0xFFFF /* the header after the world: what follows stays as it is */
+#define PORT_FRAME_INTERP_ARM 0xFFFE /* the header before the arm: models in the world, moved as they move */
 
 /* ---- Opt-in mods the game code reads ---------------------------------------------------------
    Each changes the game, so each is off by default; while it is off the game does what it did on

@@ -83,10 +83,14 @@ int port_frame_interp(void) {
 }
 
 /* ---- The GIF packets of the last vblank --------------------------------------------------------
-   Each as a record: its path (bits 0-7), 1 << 8 when VU1's 3D programs sent it, its size. */
+   Each as a record: its path (bits 0-7), 1 << 8 when VU1's 3D programs sent it, its size, and for
+   those the run that sent it (port_vif1_run_serial) and what that run's batch was (port_vif1_run_key). */
 typedef struct {
     uint32_t what;
     uint32_t bytes;
+    uint32_t serial;
+    uint32_t unused;
+    uint64_t key;
 } Record;
 #define RECORD_3D 0x100
 
@@ -121,6 +125,9 @@ void port_interp_keep(int path, const void *data, size_t bytes) {
         r.what |= RECORD_3D; /* not program 0x276, which passes the game's own GIF packets on */
     }
     r.bytes = (uint32_t)bytes;
+    r.serial = port_vif1_run_serial;
+    r.unused = 0;
+    r.key = port_vif1_run_key;
     memcpy(kept + kept_size, &r, sizeof(r));
     memcpy(kept + kept_size + sizeof(r), data, bytes);
     kept_size += sizeof(r) + bytes;
@@ -275,7 +282,174 @@ static void move_between(const Camera *from, const Camera *to, Move *m) {
 /* ---- Walking the packets -------------------------------------------------------------------------
    One walk reads the kept packets (SCAN), another sends a changed copy of them to the GS (REPLAY). */
 enum { SCAN, REPLAY };
-enum { SECTION_NONE, SECTION_WORLD, SECTION_OTHER };
+/* WORLD: the world (projection 0, modes 0 and 1); EYE: models before the eye (mode 2), in the camera's
+   space; ARM: the arm and the held item, in the world but moving only as they move */
+enum { SECTION_NONE, SECTION_WORLD, SECTION_OTHER, SECTION_EYE, SECTION_ARM };
+
+/* ---- What moves by itself ------------------------------------------------------------------------
+   Each VU1 run of a 3D program draws one batch of one model part. A run is known again in the next
+   frame by its batch (the hash of what VIF1 unpacked for it: the part's vertices as they are in the
+   model, before any matrix) and, among the runs of the frame before with the same batch and as many
+   vertices, as the one whose middle is nearest, it being the nearest to that one in turn (the map's
+   pieces repeat: the same batch is drawn in many places, and one that came into view is not taken for
+   the one beside it). Its vertices, in the order the GS gets them, are kept for each frame as places
+   in the world (before the eye, in the camera's space).
+   - A paired run that moved (a vertex of it by more than a 500th of its distance from the eye) is drawn
+     half way between its two places, seen from the camera half way: the enemies, the arm and the held
+     item, the effects and the moving objects move at 60 too.
+   - One that did not move is moved with the camera alone, as before; so is one with no pair (a model
+     that came or went, a batch the CPU made this frame) in the world. Before the eye and in the arm,
+     a run with no pair is left as it is.
+   - Not paired: runs more than INTERP_MAX_MOVE apart (two things that share a batch), and runs whose
+     half-way place comes much nearer the eye than both ends (the arm's swing turns round the shoulder,
+     past the eye, in one frame: the straight line between cuts the corner).
+   - A vertex's depth comes from Q (1/w), or from Z when its Q is not 1/w; the sphere-mapped second pass
+     of program 0x280 (Q 1.0) goes over the first pass's points, and takes their depth (the arm's Z is
+     pulled near, so its Z gives the wrong depth).
+   - Vertices with ADC may have been clipped in one of the frames (object_between). */
+typedef struct {
+    uint64_t key;
+    uint32_t first;    /* its first vertex in pos */
+    uint32_t count;    /* its vertices */
+    int section;
+    int placed;        /* it has a vertex with a place */
+    double middle[3];  /* the mean of its vertices' places (those without ADC) */
+} Run;
+
+#define VERTEX_SURE 1  /* a vertex without ADC: never one the VU1 program clipped */
+#define VERTEX_MAYBE 2 /* with ADC: maybe one the VU1 program clipped, its place past the guard band
+                          wrapped round (object_between). It is kept out of its run's middle and of how
+                          far the run moved. */
+
+typedef struct {
+    Run *runs;
+    size_t nruns, runs_room;
+    double (*pos)[3];
+    uint8_t *valid;
+    size_t npos, pos_room;
+    uint32_t *by_key; /* the runs' numbers, in the order of their batches */
+    size_t by_key_room;
+} Objects;
+
+static void objects_reset(Objects *o) {
+    o->nruns = 0;
+    o->npos = 0;
+}
+
+static void objects_add_run(Objects *o, uint64_t key, int section) {
+    Run *r;
+
+    if (o->nruns == o->runs_room) {
+        o->runs_room = o->runs_room ? o->runs_room * 2 : 4096;
+        o->runs = realloc(o->runs, o->runs_room * sizeof(*o->runs));
+        if (o->runs == NULL) {
+            PORT_FATAL("out of memory");
+        }
+    }
+    r = &o->runs[o->nruns++];
+    r->key = key;
+    r->first = (uint32_t)o->npos;
+    r->count = 0;
+    r->section = section;
+}
+
+static void objects_add_vertex(Objects *o, const double place[3], int valid) {
+    if (o->npos == o->pos_room) {
+        o->pos_room = o->pos_room ? o->pos_room * 2 : 65536;
+        o->pos = realloc(o->pos, o->pos_room * sizeof(*o->pos));
+        o->valid = realloc(o->valid, o->pos_room);
+        if (o->pos == NULL || o->valid == NULL) {
+            PORT_FATAL("out of memory");
+        }
+    }
+    memcpy(o->pos[o->npos], place, sizeof(o->pos[0]));
+    o->valid[o->npos] = (uint8_t)valid;
+    o->npos++;
+    o->runs[o->nruns - 1].count++;
+}
+
+/* After the walk: each run's middle, and the runs in the order of their batches */
+static const Objects *sorting;
+
+static int by_key(const void *a, const void *b) {
+    uint64_t x = sorting->runs[*(const uint32_t *)a].key, y = sorting->runs[*(const uint32_t *)b].key;
+
+    return x < y ? -1 : x > y ? 1 : (int)(*(const uint32_t *)a - *(const uint32_t *)b);
+}
+
+static void objects_finish(Objects *o) {
+    size_t i, k;
+
+    for (i = 0; i < o->nruns; i++) {
+        Run *r = &o->runs[i];
+        double sum[3] = {0, 0, 0};
+        uint32_t n = 0;
+
+        for (k = r->first; k < r->first + r->count; k++) {
+            if (o->valid[k] == VERTEX_SURE) {
+                sum[0] += o->pos[k][0];
+                sum[1] += o->pos[k][1];
+                sum[2] += o->pos[k][2];
+                n++;
+            }
+        }
+        r->placed = n != 0;
+        for (k = 0; k < 3; k++) {
+            r->middle[k] = n ? sum[k] / n : 0;
+        }
+    }
+    if (o->by_key_room < o->nruns) {
+        o->by_key_room = o->nruns * 2;
+        free(o->by_key);
+        o->by_key = malloc(o->by_key_room * sizeof(*o->by_key));
+        if (o->by_key == NULL) {
+            PORT_FATAL("out of memory");
+        }
+    }
+    for (i = 0; i < o->nruns; i++) {
+        o->by_key[i] = (uint32_t)i;
+    }
+    sorting = o;
+    qsort(o->by_key, o->nruns, sizeof(*o->by_key), by_key);
+}
+
+/* The run of the frame before that is this one (cur, of this frame), or NULL */
+static const Run *objects_find(const Objects *o, const Run *cur) {
+    size_t lo = 0, hi, i;
+    const Run *best = NULL;
+    double best_d2 = INTERP_MAX_MOVE * INTERP_MAX_MOVE;
+
+    if (o == NULL || !cur->placed) {
+        return NULL;
+    }
+    hi = o->nruns;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+
+        if (o->runs[o->by_key[mid]].key < cur->key) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    for (i = lo; i < o->nruns && o->runs[o->by_key[i]].key == cur->key; i++) {
+        const Run *r = &o->runs[o->by_key[i]];
+        double d2 = 0;
+        int k;
+
+        if (r->count != cur->count || !r->placed || r->section != cur->section) {
+            continue;
+        }
+        for (k = 0; k < 3; k++) {
+            d2 += (r->middle[k] - cur->middle[k]) * (r->middle[k] - cur->middle[k]);
+        }
+        if (d2 < best_d2) {
+            best_d2 = d2;
+            best = r;
+        }
+    }
+    return best;
+}
 
 typedef struct {
     uint32_t left, flg, nreg, reg, dwords;
@@ -298,10 +472,25 @@ typedef struct {
     /* the GS registers as the game wrote them */
     uint64_t frame[2], tex0[2], bitbltbuf, prmodecont, prmode;
     int frame_set[2], tex0_set[2], bitbltbuf_set;
+    /* the runs: SCAN adds them to objects; both walks number them the same way */
+    Objects *objects;    /* SCAN: this frame's (or NULL); REPLAY: the pending frame's */
+    const Objects *prev; /* REPLAY: the frame's before it, or NULL */
+    uint32_t serial;     /* the run of the last 3D record */
+    long run;            /* its number in this walk, -1 before the first */
+    uint32_t run_vertex; /* the next vertex's number in the run */
+    const Run *run_prev; /* REPLAY: the same run in the frame before, when there is one */
+    int run_moving;      /* REPLAY: it moved */
+    /* the run's points so far with a Q that is 1/w: X and Y, Z, and the depth (vertex_view) */
+#define SEEN 128
+    uint64_t seen_xy[SEEN];
+    double seen_z[SEEN], seen_depth[SEEN];
+    int nseen;
+    double run_most;     /* REPLAY: the most a vertex of it without ADC moved */
     /* REPLAY */
     uint32_t shown_fbp; /* the buffer the replay draws into, in place of draw_fbp */
     Move move;          /* the frame's view to the camera between */
-    uint64_t moved, dropped; /* vertices moved, and dropped (ADC) */
+    Camera mid;         /* the camera between */
+    uint64_t moved, dropped, objects_moved[5]; /* vertices moved, dropped (ADC), moved as their model moved (by section) */
 } Walk;
 
 /* A primitive draws into the frame: its context's FRAME is the buffer drawn (PRIM's CTXT, or PRMODE's
@@ -329,8 +518,16 @@ static void mark(Walk *w, uint64_t value) {
         w->section = SECTION_NONE;
         return;
     }
-    if ((bits >> 8) == 2 || (bits & 0xFF) != 0) {
-        w->section = SECTION_OTHER; /* before the eye, or the 256x256 view of the reflection */
+    if (bits == PORT_FRAME_INTERP_ARM) {
+        w->section = w->world_seen ? SECTION_ARM : SECTION_NONE;
+        return;
+    }
+    if ((bits & 0xFF) != 0) {
+        w->section = SECTION_OTHER; /* the 256x256 view of the reflection */
+        return;
+    }
+    if ((bits >> 8) == 2) {
+        w->section = w->world_seen ? SECTION_EYE : SECTION_OTHER; /* models before the eye */
         return;
     }
     w->section = SECTION_WORLD;
@@ -349,37 +546,244 @@ static void mark(Walk *w, uint64_t value) {
     w->world_seen = 1;
 }
 
-/* A vertex of the world (PACKED XYZF2 or XYZ2, q its qword) seen from the camera between */
-static void move_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf) {
+/* A vertex in the camera's space of its frame (v), from its screen place and depth: 0 if it has none
+   (behind the camera, or no Q and no Z to tell) */
+/* The vertex's Q is 1/w: textured by ST, and not 1.0, which is the Q of the sphere-mapped second pass
+   of program 0x280 (its ST is a direction, not a place on the model: no depth in it) */
+static int perspective_q(const GifWalk *p) {
+    float sq[3];
+
+    if (p->st == NULL || !(p->prim & 0x10) || (p->prim & 0x100)) {
+        return 0;
+    }
+    memcpy(sq, p->st, 12);
+    return sq[2] > 0 && isfinite(sq[2]) && sq[2] != 1.0f;
+}
+
+static int vertex_view(Walk *w, const GifWalk *p, const uint8_t *q, int xyzf, double v[3], double *depth_out,
+                       double *z_out) {
     const Screen *s = &w->screen;
     uint64_t lo, hi;
-    double X, Y, z, depth = 0, v[3], m[3], nx, ny, nz;
+    double X, Y, z, depth = 0;
+    float sq[3];
+
+    memcpy(&lo, q, 8);
+    memcpy(&hi, q + 8, 8);
+    X = (double)(lo & 0xFFFF) / 16.0;
+    Y = (double)((lo >> 32) & 0xFFFF) / 16.0;
+    z = xyzf ? (double)((hi >> 4) & 0xFFFFFF) : (double)(uint32_t)hi;
+    if (perspective_q(p)) {
+        memcpy(sq, p->st, 12);
+        depth = 1.0 / sq[2];
+        if (w->nseen < SEEN) {
+            /* (for a second pass over the same points) */
+            w->seen_xy[w->nseen] = lo & 0x0000FFFF0000FFFFull;
+            w->seen_z[w->nseen] = z;
+            w->seen_depth[w->nseen++] = depth;
+        }
+    } else {
+        /* A point the run drew before with a Q that is 1/w (the second pass of program 0x280 goes over
+           the first's points): that depth. The Z alone can be off: the arm's Z is pulled near. */
+        int i;
+
+        for (i = 0; i < w->nseen; i++) {
+            if (w->seen_xy[i] == (lo & 0x0000FFFF0000FFFFull) && w->seen_z[i] == z) {
+                depth = w->seen_depth[i];
+                break;
+            }
+        }
+    }
+    if (depth == 0 && z - s->cz > 0) {
+        depth = s->az / (z - s->cz);
+    }
+    if (!(depth > 0) || !isfinite(depth) || s->sx == 0 || s->sy == 0) {
+        return 0;
+    }
+    v[0] = (X - s->cx) * depth / s->sx;
+    v[1] = (Y - s->cy) * depth / s->sy;
+    v[2] = depth;
+    *depth_out = depth;
+    *z_out = z;
+    return 1;
+}
+
+/* The place a vertex is kept as: in the world, or before the eye in the camera's space */
+static void view_to_place(const Walk *w, int section, const double v[3], double place[3]) {
+    const Camera *c = &w->camera;
+    int i;
+
+    if (section == SECTION_EYE) {
+        memcpy(place, v, sizeof(double) * 3);
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        place[i] = c->r[0][i] * (v[0] - c->t[0]) + c->r[1][i] * (v[1] - c->t[1]) + c->r[2][i] * (v[2] - c->t[2]);
+    }
+}
+
+/* SCAN: a vertex of a 3D run, kept as its place */
+static void keep_vertex(Walk *w, const GifWalk *p, const uint8_t *q, int xyzf) {
+    double v[3], place[3] = {0, 0, 0}, depth, z;
+    const Run *r = &w->objects->runs[w->objects->nruns - 1];
+    int valid = r->section >= SECTION_EYE || r->section == SECTION_WORLD;
+
+    uint64_t hi;
+
+    /* A vertex with ADC (the first two of every strip, and those around one the VU1 program clipped):
+       VERTEX_MAYBE */
+    memcpy(&hi, q + 8, 8);
+    valid = valid && vertex_view(w, p, q, xyzf, v, &depth, &z);
+    if (valid) {
+        view_to_place(w, r->section, v, place);
+    }
+    objects_add_vertex(w->objects, place, !valid ? 0 : ((hi >> 47) & 1) ? VERTEX_MAYBE : VERTEX_SURE);
+}
+
+/* REPLAY, at a run's start: whether it moved since the frame before, from its vertices without ADC:
+   the most any of them moved (run_most), against a 500th of the middle's distance from the camera */
+static void run_motion(Walk *w) {
+    const Objects *o = w->objects;
+    const Run *cur, *prev = w->run_prev;
+    double most = 0, dist2 = 0;
+    uint32_t k;
+    int i;
+
+    w->run_moving = 0;
+    w->run_most = 0;
+    if (prev == NULL) {
+        return;
+    }
+    cur = &o->runs[w->run];
+    for (k = 0; k < cur->count; k++) {
+        const double *a = w->prev->pos[prev->first + k], *b = o->pos[cur->first + k];
+        double d2 = 0;
+
+        if (o->valid[cur->first + k] != VERTEX_SURE || w->prev->valid[prev->first + k] != VERTEX_SURE) {
+            continue;
+        }
+        for (i = 0; i < 3; i++) {
+            d2 += (b[i] - a[i]) * (b[i] - a[i]);
+        }
+        most = d2 > most ? d2 : most;
+        {
+            /* the place half way, on the line between, must not come much nearer the eye than both
+               ends: the arm's swing turns a long way round the shoulder, by the eye, in one frame */
+            double mid[3], za, zb, zm;
+
+            for (i = 0; i < 3; i++) {
+                mid[i] = (a[i] + b[i]) * 0.5;
+            }
+            if (cur->section == SECTION_EYE) {
+                za = a[2];
+                zb = b[2];
+                zm = mid[2];
+            } else {
+                za = w->camera.r[2][0] * a[0] + w->camera.r[2][1] * a[1] + w->camera.r[2][2] * a[2] + w->camera.t[2];
+                zb = w->camera.r[2][0] * b[0] + w->camera.r[2][1] * b[1] + w->camera.r[2][2] * b[2] + w->camera.t[2];
+                zm = w->mid.r[2][0] * mid[0] + w->mid.r[2][1] * mid[1] + w->mid.r[2][2] * mid[2] + w->mid.t[2];
+            }
+            if (zm < 0.75 * (za < zb ? za : zb)) {
+                w->run_prev = NULL;
+                return;
+            }
+        }
+    }
+    most = sqrt(most);
+    if (most > INTERP_MAX_MOVE) {
+        w->run_prev = NULL; /* two things that share a batch */
+        return;
+    }
+    if (cur->section == SECTION_EYE) {
+        dist2 = cur->middle[0] * cur->middle[0] + cur->middle[1] * cur->middle[1] + cur->middle[2] * cur->middle[2];
+    } else {
+        for (i = 0; i < 3; i++) {
+            dist2 += (cur->middle[i] - w->camera.eye[i]) * (cur->middle[i] - w->camera.eye[i]);
+        }
+    }
+    w->run_most = most;
+    w->run_moving = most > sqrt(dist2) * 0.002;
+}
+
+static double distance(const double *a, const double *b) {
+    return sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+}
+
+/* REPLAY: where a vertex of a moving model is half way, in the camera's space between (m); 0 when its
+   run is not paired or did not move. A vertex with ADC in either frame may have been clipped in the
+   other (its place there wrapped round) while the triangles of this frame use it: it is taken as it is
+   only when it is as far from its run's middle in both frames, as a model's points are; otherwise it
+   moves by half its run's middle's move. */
+static int object_between(Walk *w, double m[3]) {
+    const Objects *o = w->objects;
+    const Run *cur, *prev = w->run_prev;
+    const double *a, *b;
+    double mid[3];
+    uint32_t k = w->run_vertex;
+    int i;
+
+    if (prev == NULL || !w->run_moving) {
+        return 0;
+    }
+    cur = &o->runs[w->run];
+    if (k >= cur->count || !o->valid[cur->first + k]) {
+        return 0;
+    }
+    a = w->prev->pos[prev->first + k];
+    b = o->pos[cur->first + k];
+    if (w->prev->valid[prev->first + k] == VERTEX_SURE && o->valid[cur->first + k] == VERTEX_SURE) {
+        for (i = 0; i < 3; i++) {
+            mid[i] = (a[i] + b[i]) * 0.5;
+        }
+    } else {
+        double ra = distance(a, prev->middle), rb = distance(b, cur->middle);
+        double most = ra > rb ? ra : rb;
+
+        if (w->prev->valid[prev->first + k] && fabs(ra - rb) <= most * 0.25 + 2.0) {
+            for (i = 0; i < 3; i++) {
+                mid[i] = (a[i] + b[i]) * 0.5;
+            }
+        } else {
+            for (i = 0; i < 3; i++) {
+                mid[i] = b[i] + (prev->middle[i] - cur->middle[i]) * 0.5;
+            }
+        }
+    }
+    if (cur->section == SECTION_EYE) {
+        memcpy(m, mid, sizeof(mid));
+    } else {
+        for (i = 0; i < 3; i++) {
+            m[i] = w->mid.r[i][0] * mid[0] + w->mid.r[i][1] * mid[1] + w->mid.r[i][2] * mid[2] + w->mid.t[i];
+        }
+    }
+    return 1;
+}
+
+/* A vertex of the world (PACKED XYZF2 or XYZ2, q its qword) seen from the camera between: moved with
+   its model when it is paired, else with the camera (the world) or not at all (before the eye, the arm) */
+static void move_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf, int section) {
+    const Screen *s = &w->screen;
+    uint64_t lo, hi;
+    double z, depth = 0, v[3], m[3], nx, ny, nz;
     int64_t ix, iy;
     int i, drop = 0;
     float sq[3] = {0, 0, 0};
 
     memcpy(&lo, q, 8);
     memcpy(&hi, q + 8, 8);
-    X = (double)(lo & 0xFFFF) / 16.0;
-    Y = (double)((lo >> 32) & 0xFFFF) / 16.0;
     if (p->st != NULL && (p->prim & 0x10) && !(p->prim & 0x100)) {
         memcpy(sq, p->st, 12);
-        if (sq[2] > 0 && isfinite(sq[2])) {
-            depth = 1.0 / sq[2];
-        }
     }
-    z = xyzf ? (double)((hi >> 4) & 0xFFFFFF) : (double)(uint32_t)hi;
-    if (depth == 0 && z - s->cz > 0) {
-        depth = s->az / (z - s->cz);
-    }
-    if (!(depth > 0) || !isfinite(depth)) {
+    if (!vertex_view(w, p, q, xyzf, v, &depth, &z)) {
         return;
     }
-    v[0] = (X - s->cx) * depth / s->sx;
-    v[1] = (Y - s->cy) * depth / s->sy;
-    v[2] = depth;
-    for (i = 0; i < 3; i++) {
-        m[i] = w->move.r[i][0] * v[0] + w->move.r[i][1] * v[1] + w->move.r[i][2] * v[2] + w->move.t[i];
+    if (object_between(w, m)) {
+        w->objects_moved[section]++;
+    } else if (section == SECTION_WORLD) {
+        for (i = 0; i < 3; i++) {
+            m[i] = w->move.r[i][0] * v[0] + w->move.r[i][1] * v[1] + w->move.r[i][2] * v[2] + w->move.t[i];
+        }
+    } else {
+        return;
     }
     if (!(m[2] > 0)) {
         drop = 1;
@@ -406,7 +810,7 @@ static void move_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf) {
 
                 hi = (hi & ~(uint64_t)0xFFFFFFFF) | z;
             }
-            if (p->st != NULL && (p->prim & 0x10) && !(p->prim & 0x100) && sq[2] > 0) {
+            if (perspective_q(p)) {
                 double f = depth / m[2];
 
                 sq[0] = (float)(sq[0] * f);
@@ -510,11 +914,32 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
 }
 
 /* One record: in REPLAY, data is the copy to send, and is changed */
-static void walk_record(Walk *w, int path, int is_3d, uint8_t *data, size_t bytes) {
+static void walk_record(Walk *w, const Record *r, uint8_t *data) {
+    int path = (int)(r->what & 0xFF), is_3d = (r->what & RECORD_3D) != 0;
     GifWalk *p = &w->paths[path];
-    size_t count = bytes / 16, i = 0;
+    size_t count = r->bytes / 16, i = 0;
 
     p->st = NULL;
+    if (is_3d && (w->run < 0 || r->serial != w->serial)) {
+        /* a new VU1 run */
+        w->serial = r->serial;
+        w->run++;
+        w->run_vertex = 0;
+        w->nseen = 0;
+        if (w->mode == SCAN && w->objects != NULL) {
+            objects_add_run(w->objects, r->key, w->section);
+        } else if (w->mode == REPLAY) {
+            const Objects *o = w->objects;
+
+            w->run_prev = o != NULL && (size_t)w->run < o->nruns ? objects_find(w->prev, &o->runs[w->run]) : NULL;
+            /* and this run the nearest to it: a piece of the map that came into view is not paired
+               with the same piece beside it, which is there in both frames */
+            if (w->run_prev != NULL && objects_find(o, w->run_prev) != &o->runs[w->run]) {
+                w->run_prev = NULL;
+            }
+            run_motion(w);
+        }
+    }
     while (i < count) {
         uint8_t *q = data + i * 16;
 
@@ -560,9 +985,23 @@ static void walk_record(Walk *w, int path, int is_3d, uint8_t *data, size_t byte
                 break;
             case 0x4:
             case 0x5:
-                if (w->mode == REPLAY && is_3d && w->section == SECTION_WORLD && (p->prim & 7) >= 3 &&
-                    (p->prim & 7) <= 5 && draws_frame(w, p->prim)) {
-                    move_vertex(w, p, q, d == 0x4);
+                if (is_3d) {
+                    int section = w->section;
+                    int moves = (section == SECTION_WORLD || section == SECTION_EYE || section == SECTION_ARM) &&
+                                (p->prim & 7) >= 3 && (p->prim & 7) <= 5 && draws_frame(w, p->prim);
+
+                    if (w->mode == SCAN && w->objects != NULL) {
+                        if (moves) {
+                            keep_vertex(w, p, q, d == 0x4);
+                        } else {
+                            static const double none[3] = {0, 0, 0};
+
+                            objects_add_vertex(w->objects, none, 0);
+                        }
+                    } else if (w->mode == REPLAY && moves) {
+                        move_vertex(w, p, q, d == 0x4, section);
+                    }
+                    w->run_vertex++;
                 }
                 p->st = NULL;
                 break;
@@ -625,7 +1064,13 @@ typedef struct {
     uint32_t shown;   /* the buffer shown at the vblank that kept it */
     Camera before;    /* the camera of the frame shown then */
     int have_before;
+    const Objects *objects, *objects_before; /* its runs, and the frame's before (NULL: none) */
 } Pending;
+
+/* The runs of the last frame drawn and of the one before, and one to walk the next into */
+static Objects objects_pool[3];
+static Objects *objects_new = &objects_pool[0], *objects_last = &objects_pool[1], *objects_before = &objects_pool[2];
+static int objects_last_set, objects_before_set;
 
 static Pending pending; /* a frame drawn and not yet shown (size 0: none) */
 static size_t pending_room;
@@ -633,10 +1078,11 @@ static Camera last_camera; /* the camera of the last frame drawn */
 static int last_camera_set;
 static uint8_t *copy;
 static size_t copy_room;
-static uint64_t stat_replays, stat_cuts, stat_moved, stat_dropped;
+static uint64_t stat_replays, stat_cuts, stat_moved, stat_dropped, stat_objects[5];
 
 void port_interp_forget(void) {
     last_camera_set = 0;
+    objects_last_set = objects_before_set = 0;
     pending.size = 0;
     pending.have_before = 0;
     port_interp_reset(0);
@@ -653,18 +1099,26 @@ static int interp_still(void) {
     return still;
 }
 
-static void walk_all(Walk *w, uint8_t *data, size_t size, int mode) {
+static void walk_all(Walk *w, uint8_t *data, size_t size, int mode, Objects *objects) {
     size_t at;
 
     memset(w, 0, sizeof(*w));
     w->mode = mode;
     w->prmodecont = 1;
+    w->run = -1;
+    w->objects = objects;
+    if (objects != NULL) {
+        objects_reset(objects);
+    }
     for (at = 0; at < size;) {
         Record r;
 
         memcpy(&r, data + at, sizeof(r));
-        walk_record(w, (int)(r.what & 0xFF), (r.what & RECORD_3D) != 0, data + at + sizeof(r), r.bytes);
+        walk_record(w, &r, data + at + sizeof(r));
         at += sizeof(r) + r.bytes;
+    }
+    if (objects != NULL) {
+        objects_finish(objects);
     }
 }
 
@@ -679,10 +1133,15 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
     memset(&w, 0, sizeof(w));
     w.mode = REPLAY;
     w.prmodecont = 1;
+    w.run = -1;
     w.draw_fbp = scan->draw_fbp;
     w.shown_fbp = pending.shown;
     w.screen = scan->screen;
-    move_between(&scan->camera, interp_still() ? &scan->camera : between, &w.move);
+    w.camera = scan->camera;
+    w.mid = interp_still() ? scan->camera : *between;
+    w.objects = interp_still() ? NULL : (Objects *)pending.objects;
+    w.prev = pending.objects_before;
+    move_between(&scan->camera, &w.mid, &w.move);
     for (at = 0; at < pending.size;) {
         Record r;
 
@@ -696,7 +1155,7 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
             }
         }
         memcpy(copy, pending.data + at + sizeof(r), r.bytes);
-        walk_record(&w, (int)(r.what & 0xFF), (r.what & RECORD_3D) != 0, copy, r.bytes);
+        walk_record(&w, &r, copy);
         send((int)(r.what & 0xFF), copy, r.bytes);
         at += sizeof(r) + r.bytes;
     }
@@ -727,6 +1186,9 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
     stat_replays++;
     stat_moved += w.moved;
     stat_dropped += w.dropped;
+    for (i = 0; i < 5; i++) {
+        stat_objects[i] += w.objects_moved[i];
+    }
 }
 
 int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes)) {
@@ -753,9 +1215,19 @@ int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const v
     if (!kept_whole || kept_size == 0) {
         return done;
     }
-    walk_all(&w, kept, kept_size, SCAN);
+    walk_all(&w, kept, kept_size, SCAN, objects_new);
     if (!w.world_seen) {
         return done;
+    }
+    {
+        /* this frame's runs become the last frame's */
+        Objects *free_one = objects_before;
+
+        objects_before = objects_last;
+        objects_before_set = objects_last_set;
+        objects_last = objects_new;
+        objects_last_set = 1;
+        objects_new = free_one;
     }
     if (w.draw_fbp != 0xFFFFFFFFu && w.draw_fbp != shown && w.screen.sx != 0 && w.screen.sy != 0) {
         /* kept for the next vblank: the buffers swap, so the packets' becomes the pending one's */
@@ -772,6 +1244,8 @@ int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const v
         pending.shown = shown;
         pending.before = last_camera;
         pending.have_before = last_camera_set;
+        pending.objects = objects_last;
+        pending.objects_before = objects_before_set ? objects_before : NULL;
     }
     last_camera = w.camera;
     last_camera_set = 1;
@@ -779,7 +1253,10 @@ int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const v
 }
 
 void port_interp_print_stats(void) {
-    fprintf(stderr, "[stats] frame rate 60: %llu pictures between drawn, %llu cuts not; %llu vertices moved, %llu dropped\n",
+    fprintf(stderr,
+            "[stats] frame rate 60: %llu pictures between drawn, %llu cuts not; %llu vertices moved (with their model: "
+            "%llu in the world, %llu of the arm, %llu before the eye), %llu dropped\n",
             (unsigned long long)stat_replays, (unsigned long long)stat_cuts, (unsigned long long)stat_moved,
-            (unsigned long long)stat_dropped);
+            (unsigned long long)stat_objects[SECTION_WORLD], (unsigned long long)stat_objects[SECTION_ARM],
+            (unsigned long long)stat_objects[SECTION_EYE], (unsigned long long)stat_dropped);
 }
