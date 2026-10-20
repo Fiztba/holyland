@@ -1981,22 +1981,32 @@ std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t 
     return pages;
 }
 
-uint64_t upload_hash(const PendingUpload &p) {
-    uint64_t h = 0x9E3779B97F4A7C15ull ^ p.bitbltbuf;
-    h = (h ^ p.trxpos) * 0x100000001B3ull;
-    h = (h ^ p.trxreg) * 0x100000001B3ull;
-    size_t n = p.data.size() / 8;
-    const uint8_t *d = p.data.data();
-    for (size_t i = 0; i < n; i++) {
-        uint64_t v;
-        memcpy(&v, d + i * 8, 8);
-        h = (h ^ v) * 0x100000001B3ull;
-        h ^= h >> 31;
+inline uint64_t rotate_left(uint64_t v, int n) {
+    return (v << n) | (v >> (64 - n));
+}
+
+// An upload's bytes, and where they go, as 64 bits. (Four lanes of 8 bytes each, so that the
+// multiplies do not wait for each other: it runs at about the speed of reading the bytes.)
+uint64_t upload_hash(const PendingUpload &p, const uint8_t *d, size_t size) {
+    const uint64_t K1 = 0x9E3779B97F4A7C15ull, K2 = 0xC2B2AE3D27D4EB4Full, K3 = 0x165667B19E3779F9ull;
+    uint64_t lane[4] = {p.bitbltbuf ^ K1, p.trxpos ^ K2, p.trxreg ^ K3, size};
+    size_t i = 0;
+    for (; i + 32 <= size; i += 32) {
+        for (int k = 0; k < 4; k++) {
+            uint64_t v;
+            memcpy(&v, d + i + k * 8, 8);
+            lane[k] = rotate_left(lane[k] + v * K2, 31) * K1;
+        }
     }
-    for (size_t i = n * 8; i < p.data.size(); i++) {
-        h = (h ^ d[i]) * 0x100000001B3ull;
+    uint64_t h = rotate_left(lane[0], 1) + rotate_left(lane[1], 7) + rotate_left(lane[2], 12) + rotate_left(lane[3], 18);
+    for (; i < size; i++) {
+        h = (h ^ d[i]) * K3;
     }
-    return h ^ p.data.size();
+    h ^= h >> 33;
+    h *= K2;
+    h ^= h >> 29;
+    h *= K3;
+    return h ^ (h >> 32);
 }
 
 // An upload's bytes, swizzled into VRAM as they are
@@ -2020,10 +2030,10 @@ void upload_done() {
 }
 
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
-void complete_upload() {
+void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
     std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg);
-    uint64_t key = upload_hash(p);
+    uint64_t key = upload_hash(p, data, size);
     auto found = pages.empty() ? page_images.end() : page_images.find(key);
     if (found != page_images.end() && found->second.pages == pages) {
         bool changed = false;
@@ -2041,7 +2051,7 @@ void complete_upload() {
         upload_done();
         return;
     }
-    swizzle_upload(p.data.data(), p.data.size());
+    swizzle_upload(data, size);
     if (!pages.empty()) {
         PageImage image;
         image.pages = pages;
@@ -2178,9 +2188,13 @@ void image_data(const uint8_t *data, size_t bytes) {
         }
         return;
     }
+    if (p.data.empty() && bytes >= p.expect) {
+        complete_upload(data, bytes); // (all of it at once: no need to keep it)
+        return;
+    }
     p.data.insert(p.data.end(), data, data + bytes);
     if (p.data.size() >= p.expect) {
-        complete_upload();
+        complete_upload(p.data.data(), p.data.size());
     }
 }
 
