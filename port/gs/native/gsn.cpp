@@ -2116,6 +2116,7 @@ void scanmsk_seen(float y0, float y1) {
     uint64_t scissor = gs->reg[R_SCISSOR_1 + ((gs->batch_prim >> 9) & 1)];
     float top = std::max(y0, float(bits(scissor, 32, 11))), bottom = std::min(y1, float(bits(scissor, 48, 11)));
     if (bottom - top > 400.0f) {
+        GSN_LOG(3, "SCANMSK %u primitive over lines %.1f-%.1f\n", uint32_t(gs->reg[R_SCANMSK] & 3), top, bottom);
         gs->field_scan_vblanks = 4;
     }
 }
@@ -3176,24 +3177,32 @@ void forget_history() {
     gs->history_filled = 0;
 }
 
-// The buffer at this vblank into the deinterlace's history (SCAN_DEINTERLACE), the newest first: kept
-// at every vblank read a field at a time, a picture wanted or not
-void record_history(const Shown &s) {
-    uint32_t iw = s.w * s.sx, ih = s.h * s.sy;
+// This vblank's field (the buffer's lines of parity `parity`, one under the other) into the
+// deinterlace's history (SCAN_DEINTERLACE), the newest first: kept at every vblank read a field at a
+// time, a picture wanted or not. (The history is fields as paraLLEl-GS keeps them, which a GS capture
+// carries: KF4GS_GS_HISTORY.)
+void record_history(const Shown &s, int parity) {
+    uint32_t iw = s.w * s.sx, ih = s.h / 2 * s.sy;
     if (gs->history_filled && (gs->history[0]->get_width() != iw || gs->history[0]->get_height() != ih)) {
         forget_history();
     }
     ImageHandle oldest = gs->history_filled == 4 ? gs->history[3] : ImageHandle();
+    for (int i = 0; i < 3 && oldest; i++) {
+        if (gs->history[i] == oldest) {
+            oldest.reset(); // (the same image twice, from a capture: not to be written over)
+        }
+    }
     for (int i = 3; i > 0; i--) {
         gs->history[i] = gs->history[i - 1];
     }
     gs->history[0] = oldest ? oldest : make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
     gs->history_filled = std::min(gs->history_filled + 1, 4u);
-    copy_lines(*gs->history[0], s, 0, 1, s.h, 0, 1);
+    copy_lines(*gs->history[0], s, uint32_t(parity), 2, s.h / 2, 0, 1);
 }
 
-// The picture of the deinterlace into dst (as tall as the buffer), from the history: the vblanks
-// before that are not there yet are the oldest that is (the newest for the first)
+// The picture of the deinterlace into dst (as tall as the buffer), from the history: a field before
+// that is not there yet is this one (the vblank three before: the one before), so that with none
+// before this field's lines are taken twice
 void deinterlace_pass(const Image &dst, int parity, uint32_t sy, uint32_t lines) {
     const Image *before[4];
     for (uint32_t i = 0; i < 4; i++) {
@@ -3707,7 +3716,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
             size_t(w) * h * sx * sy * (mode == SCAN_WEAVE ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
             Shown shown = shown_buffer(fbp, fbw, psm, dbx, dby, w, h);
             if (mode == SCAN_DEINTERLACE) {
-                record_history(shown);
+                record_history(shown, parity);
                 history_kept = true;
             }
             if (want_pixels & GSN_WANT_IMAGE) {
@@ -3924,6 +3933,38 @@ extern "C" void gsn_capture(void (*emit)(uint32_t type, const void *data, size_t
     regs.push_back({KF4GS_REG_CACHED_CBP0, 0, gs->clut_cbp[0]});
     regs.push_back({KF4GS_REG_CACHED_CBP1, 0, gs->clut_cbp[1]});
     emit(KF4GS_GS_REGS, regs.data(), regs.size() * sizeof(Kf4GsReg));
+
+    // the scanout's history, as paraLLEl-GS's: the countdown, then the four fields (at the GS's
+    // resolution only: a larger --native-scale's are left out, as paraLLEl-GS could not use them)
+    std::vector<uint8_t> history;
+    auto put = [&](const void *data, size_t size) {
+        history.insert(history.end(), static_cast<const uint8_t *>(data), static_cast<const uint8_t *>(data) + size);
+    };
+    uint32_t head[2] = {gs->field_scan_vblanks, 4};
+    put(head, sizeof(head));
+    bool gs_size = target_sx == 1 && target_sy == 1;
+    for (uint32_t i = 0; i < 4; i++) {
+        Kf4GsField f = {-1, 0, 0, 0};
+        const Image *image = gs_size && i < gs->history_filled ? gs->history[i].get() : nullptr;
+        if (image) {
+            f.present = 1;
+            f.width = image->get_width();
+            f.height = image->get_height();
+            for (uint32_t j = 0; j < i; j++) {
+                if (gs->history[j].get() == image) {
+                    f.same_as = int32_t(j);
+                }
+            }
+        }
+        put(&f, sizeof(f));
+        if (image && f.same_as < 0) {
+            flush_batch();
+            const uint8_t *pixels = read_image(*image, 0, 0, f.width, f.height);
+            put(pixels, size_t(f.width) * f.height * 4);
+            done_reading();
+        }
+    }
+    emit(KF4GS_GS_HISTORY, history.data(), history.size());
 }
 
 extern "C" size_t gsn_state_size(void) {
@@ -3981,6 +4022,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         memcpy(gs->vram.data(), data, GSN_VRAM_BYTES);
         pages_written(0, vram_pages);
         reset_gs();
+        forget_history(); // (a capture's comes after: KF4GS_GS_HISTORY)
         target_samples = wanted_samples; // (no targets: a capture is drawn with MSAA from its start)
         return 1;
     case KF4GS_GS_REGS: {
@@ -3997,8 +4039,53 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         return 1;
     }
     case KF4GS_GS_PRIV:
-    case KF4GS_GS_HISTORY:
         return 1;
+    case KF4GS_GS_HISTORY: {
+        // the countdown and the fields, as gsn_capture writes them (or paraLLEl-GS)
+        const uint8_t *at = static_cast<const uint8_t *>(data), *end = at + size;
+        uint32_t head[2];
+        if (size < sizeof(head)) {
+            return 0;
+        }
+        memcpy(head, at, sizeof(head));
+        at += sizeof(head);
+        gs->field_scan_vblanks = head[0];
+        forget_history();
+        ImageHandle fields[4];
+        for (uint32_t i = 0; i < head[1] && i < 4; i++) {
+            Kf4GsField f;
+            if (size_t(end - at) < sizeof(f)) {
+                return 0;
+            }
+            memcpy(&f, at, sizeof(f));
+            at += sizeof(f);
+            if (!f.present) {
+                continue;
+            }
+            if (f.same_as >= 0 && uint32_t(f.same_as) < i) {
+                fields[i] = fields[f.same_as];
+                continue;
+            }
+            size_t bytes = size_t(f.width) * f.height * 4;
+            if (size_t(end - at) < bytes || !f.width || !f.height || f.width > 8192 || f.height > 8192) {
+                return 0;
+            }
+            fields[i] = make_image(f.width, f.height, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+            end_pass();
+            transfer_barrier();
+            void *out = cmd().update_image(*fields[i], {0, 0, 0}, {f.width, f.height, 1}, f.width, f.height,
+                                           {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+            memcpy(out, at, bytes);
+            transfer_barrier();
+            at += bytes;
+        }
+        // the fields there from the newest on (paraLLEl-GS's fills a missing one as its deinterlace does)
+        while (gs->history_filled < 4 && fields[gs->history_filled]) {
+            gs->history[gs->history_filled] = fields[gs->history_filled];
+            gs->history_filled++;
+        }
+        return 1;
+    }
     }
     return 0;
 }
