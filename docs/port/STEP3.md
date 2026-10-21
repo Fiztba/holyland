@@ -252,7 +252,9 @@ GEQUAL stays GEQUAL. Each pixel's Z is rounded to a whole Z as the GS rounds it 
 writes the depth for every draw with a Z buffer): with the fraction the GPU's interpolation keeps, a
 draw over the same plane as the one before (the lava's glow, ZTST GEQUAL) came out a hair behind it
 in places, which showed the lava through in dark specks (map tour: `end-other` 366,070 to 362,601
-pixels, the worst difference 118 to 53).
+pixels, the worst difference 118 to 53). ZTE 0 (undefined on the GS) neither tests nor writes the Z buffer, as
+paraLLEl-GS has it: the movies draw their fields with ZTE 0 and ZBUF over the movie's own picture
+(0x1180), and writing Z there put black and cyan bands over the opening movie.
 
 ### Interlace
 

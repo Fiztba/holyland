@@ -1605,6 +1605,12 @@ void flush_batch() {
     uint32_t atst = bits(test, 1, 3), afail = bits(test, 12, 2);
     bool date = bits(test, 14, 1);
     uint32_t ztst = bits(test, 16, 1) ? bits(test, 17, 2) : 1;
+    if (!bits(test, 16, 1)) {
+        // ZTE 0 (undefined on the GS): the Z buffer is neither tested nor written, as paraLLEl-GS has
+        // it. The movies draw each field with ZTE 0 and ZBUF at 0x1180, the movie's own picture:
+        // writing Z there wrote zeros over the frame being shown (black and cyan bands at the top)
+        zmsk = true;
+    }
 
     if (sx1 < sx0 || sy1 < sy0 || (fpsm != GSN_PSMCT32 && fpsm != GSN_PSMCT24 && fpsm != GSN_PSMCT16 &&
                                    fpsm != GSN_PSMCT16S)) {
