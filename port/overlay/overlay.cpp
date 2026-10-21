@@ -316,11 +316,11 @@ void display_page() {
         {"Picture width follows the game's (adapt width)",
          "On: the picture is scanned out at the game's width.\nOff: at the TV's width. (--no-adapt-width)",
          &s.adapt_width, &port_options.adapt_width},
-        {"Whole frames only (no turn comb)",
+        {"Whole frames only (no interlace comb)",
          "On: the game leaves out the picture between it draws over every other line while the view\n"
          "turns, for the other field of an interlaced TV, which on a PC screen is a comb trailing what\n"
-         "moves (--frame-rate 60 draws real pictures between). Off: drawn, as on the PS2.\n"
-         "(--no-whole-frame)",
+         "moves (--frame-rate 60 draws real pictures between), and shows the movies' pictures whole\n"
+         "instead of as two fields (from the next movie). Off: as on the PS2. (--no-whole-frame)",
          &s.whole_frame, &port_options.whole_frame},
     };
     for (Switch &item : switches) {

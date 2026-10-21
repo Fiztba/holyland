@@ -64,8 +64,9 @@ typedef struct {
     int progressive;         /* a frame-mode interlaced picture is read whole, not a field at a time */
     int anti_blur;           /* undo the blur of a game that blends its two read circuits */
     int adapt_width;         /* the picture's width follows the game's, not the 640 of the TV */
-    int whole_frame;         /* the game draws no picture between for an interlaced TV's other field
-                                (port_whole_frame(): Game_ShiftScreenByViewTurn is left out) */
+    int whole_frame;         /* the game draws whole pictures, not fields for an interlaced TV
+                                (port_whole_frame(): Game_ShiftScreenByViewTurn is left out, movies
+                                are shown in frame mode) */
     /* The opt-in 16:9 picture (port_widescreen(), port/platform/gs.c): off by default, turned on by
        --widescreen or settings.json, live from the overlay. */
     int widescreen;

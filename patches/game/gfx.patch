@@ -237,7 +237,7 @@ index 9632089b07a8631adfbaad8c3b7755ccc0d01f47..3709bacd447fef6c0e297ef5d02c945a
      sprite.prim = 0x156;
      sprite.rgba[3] = sprite.rgba[2] = sprite.rgba[1] = sprite.rgba[0] = 0x80;
 diff --git a/src/game/gfx/movie.c b/src/game/gfx/movie.c
-index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d7193e2f9 100644
+index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d639571006df52 100644
 --- a/src/game/gfx/movie.c
 +++ b/src/game/gfx/movie.c
 @@ -5,36 +5,25 @@
@@ -732,7 +732,17 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
              Movie_DebugPrint("sceMpegGetPicture() decode error");
          }
          MovieOut_Commit(&movie_out_buffer);
-@@ -1597,7 +1582,7 @@ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y,
+@@ -1591,13 +1576,17 @@ static void MovieOut_DropOldest(MovieOutBuffer *buffer) {
+ 
+ #define ROUND_UP(value, unit) ((((value) + (unit) - 1) / (unit)) * (unit))
+ 
++/* PC: port_whole_frame() when the movie started: its pictures are shown whole, in frame mode, instead of
++   as two fields (MovieDisplay_Init, MovieDisplay_BuildFieldPackets, MovieDisplay_ShowField) */
++static s32 movie_whole_frame;
++
+ /* Sets the movie's display up: two fields of half the height, one after the other in GS memory. */
+ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y, s32 width, s32 height,
+                               s32 picture_width, s32 picture_height) {
      s32 field_height = height / 2;
      s32 buffer_width = (width + 63) / 64;
      s32 packet_start;
@@ -741,7 +751,22 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
  
      movie_pictures_enabled = 0;
      movie_picture_vblanks = 0;
-@@ -1617,8 +1602,8 @@ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y,
+@@ -1612,13 +1601,21 @@ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y,
+     display->picture_height = picture_height;
+     display->frame_base[0] = 0;
+     display->screen_y = screen_y;
+-    sceGsResetGraph(0, 1, movie_thread.video_mode, 1);
+-    sceGsSetDefDispEnv((sceGsDispEnv *)display, 0, width, field_height, movie_thread.display_x, movie_thread.display_y);
++    /* PC: whole frames (--no-whole-frame keeps the fields): the two fields' frame buffers, one after the
++       other, are one frame of the whole height, shown in frame mode. A field shows every other line of
++       a picture, so a TV saw each picture's two fields in turn; a PC screen weaves a field with the one
++       before, and the first field of each new picture was woven with the last picture's other: a comb
++       every other vblank. */
++    movie_whole_frame = port_whole_frame() && picture_width == width && picture_height == height &&
++                        field_height == ROUND_UP(field_height, 32);
++    sceGsResetGraph(0, 1, movie_thread.video_mode, movie_whole_frame ? 0 : 1);
++    sceGsSetDefDispEnv((sceGsDispEnv *)display, 0, width, movie_whole_frame ? height : field_height,
++                       movie_thread.display_x, movie_thread.display_y);
      display->dispfb = (display->dispfb & ~0x7E00) | ((buffer_width & 0x3F) << 9);
      FlushCache(0);
      sceGsPutDispEnv(display);
@@ -752,7 +777,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      packet = GsPacket_AddPrmodecont(packet, 1);
      packet = GsPacket_AddFrame(packet, display->frame_base[0], ROUND_UP(display->width, 64) / 64, 0, 0);
      packet = GsPacket_AddTest(packet, 0, 0, 0, 0, 0, 0, 0, 0);
-@@ -1637,7 +1622,7 @@ static void MovieDisplay_Delete(MovieDisplay *display) {
+@@ -1637,7 +1634,7 @@ static void MovieDisplay_Delete(MovieDisplay *display) {
  
  /* Builds the GIF chain that shows a decoded picture on one field: for the first field it uploads the picture as
     a texture, one 16x16 macroblock at a time, and for both it draws the texture over the field's frame buffer. */
@@ -761,7 +786,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      s32 screen_rect[4];
      s32 texture_rect[4];
      s32 picture_width = display->picture_width;
-@@ -1646,7 +1631,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+@@ -1646,7 +1643,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
      s32 field_height = display->height / 2;
      s32 rows = picture_height >> 4;
      s32 columns = picture_width >> 4;
@@ -770,7 +795,61 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      s32 field_pages = (field_height + 31) / 32;      /* a field's frame buffer, in rows of GS pages */
      s32 buffer_width = ROUND_UP(width, 64) / 64;
      s32 buffer_pixels = buffer_width * 64;
-@@ -1713,14 +1698,14 @@ static void MovieDisplay_ShowField(MovieDisplay *display, s32 second) {
+@@ -1654,6 +1651,14 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+     s32 column;
+     s32 row;
+ 
++    if (movie_whole_frame && field != 0) {
++        /* PC: whole frames: the picture is drawn whole at the first field. The second sends the GIF a
++           TEXFLUSH alone, so that its end (Movie_GifDmaHandler) still lets the picture go. */
++        packet = GsPacket_AddDmaTag(packet, 0, 0, 0, 7, 0, 2);
++        packet = GsPacket_AddGifTag(packet, 0xE, 1, 0, 0, 0, 1, 1);
++        GsPacket_AddTexflush(packet);
++        return;
++    }
+     if (field == 0) {
+         screen_rect[0] = display->screen_x << 4;
+         screen_rect[1] = display->screen_y << 4;
+@@ -1689,6 +1694,29 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+             }
+         }
+     }
++    if (movie_whole_frame) {
++        /* PC: whole frames: the picture a texel a pixel over both fields' frame buffers (one frame), in
++           two halves. The texture starts where the second half is drawn: the first half reads the
++           picture's top half and draws above it, the second its bottom half over the top half, read
++           already. */
++        packet = GsPacket_AddDmaTag(packet, 0, 0, 0, 7, 0, 14);
++        packet = GsPacket_AddGifTag(packet, 0xE, 1, 0, 0, 0, 1, 13);
++        packet = GsPacket_AddTexflush(packet);
++        packet = GsPacket_AddTex0(packet, texture_base, buffer_width, 0, 10, 10, 0, 1, 0, 0, 0, 0, 0);
++        packet = GsPacket_AddTex1(packet, 0, 0, 1, 1, 0, 0, 0);
++        for (row = 0; row < 2; row++) {
++            screen_rect[0] = display->screen_x << 4;
++            screen_rect[1] = (display->screen_y + row * field_height) << 4;
++            screen_rect[2] = width << 4;
++            screen_rect[3] = field_height << 4;
++            texture_rect[0] = 8;
++            texture_rect[1] = ((row * field_height) << 4) + 8;
++            texture_rect[2] = picture_width << 4;
++            texture_rect[3] = field_height << 4;
++            packet = GsPacket_AddTexturedSprite(packet, screen_rect, texture_rect);
++        }
++        return;
++    }
+     packet = GsPacket_AddDmaTag(packet, 0, 0, 0, 7, 0, 9);
+     packet = GsPacket_AddGifTag(packet, 0xE, 1, 0, 0, 0, 1, 8);
+     packet = GsPacket_AddTexflush(packet);
+@@ -1701,7 +1729,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+ static void MovieDisplay_ShowField(MovieDisplay *display, s32 second) {
+     s32 frame_base;
+ 
+-    if (second) {
++    if (second && !movie_whole_frame) { /* PC: whole frames: one frame, the first field's buffer on */
+         frame_base = display->frame_base[1];
+     } else {
+         frame_base = display->frame_base[0];
+@@ -1713,14 +1741,14 @@ static void MovieDisplay_ShowField(MovieDisplay *display, s32 second) {
  /* Fills both fields' frame buffers with one color. */
  static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
      s32 rect[4];
@@ -788,7 +867,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      packet = GS_PACKET_ADD_SCISSOR_32(packet, 0, display->width, 0, display->height << 1);
      packet = GsPacket_AddColorSprite(packet, rect, color);
      GS_PACKET_ADD_SCISSOR_32(packet, 0, display->width - 1, 0, display->height - 1);
-@@ -1731,7 +1716,7 @@ static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
+@@ -1731,7 +1759,7 @@ static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
  }
  
  /* Adds a textured sprite: screen_rect and texture_rect are x, y, width, height. */
@@ -797,7 +876,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      return GsPacket_AddXyz2(
          GsPacket_AddUv(
              GsPacket_AddXyz2(GsPacket_AddUv(GsPacket_AddPrim(packet, 6, 0, 1, 0, 0, 0, 1, 0, 0), texture_rect[0],
-@@ -1742,7 +1727,7 @@ static int GsPacket_AddTexturedSprite(int packet, s32 *screen_rect, s32 *texture
+@@ -1742,7 +1770,7 @@ static int GsPacket_AddTexturedSprite(int packet, s32 *screen_rect, s32 *texture
  }
  
  /* Adds a sprite of one color over rect (x, y, width, height), color as RGBA bytes. */
@@ -806,7 +885,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      return GsPacket_AddXyz2(
          GsPacket_AddRgbaq(GsPacket_AddXyz2(GsPacket_AddPrim(packet, 6, 0, 0, 0, 0, 0, 1, 0, 0), rect[0], rect[1], 0),
                            color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF, color >> 24, 0),
-@@ -1751,44 +1736,44 @@ static int GsPacket_AddColorSprite(int packet, s32 *rect, u32 color) {
+@@ -1751,44 +1779,44 @@ static int GsPacket_AddColorSprite(int packet, s32 *rect, u32 color) {
  
  /* Writes a DMA tag at address packet (one doubleword; the other half of its quadword is left alone). Returns the
     address after the quadword. */
@@ -859,7 +938,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      u64 low = ((u64)lcm) | (lod_k << 32);
      u64 middle = (((u64)mxl) << 2) | (((u64)mtba) << 9);
      u64 high = ((((u64)mmin) << 6) | (((u64)mmag) << 5)) | (((u64)lod_l) << 19);
-@@ -1797,7 +1782,7 @@ static int GsPacket_AddTex1(s64 packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u3
+@@ -1797,7 +1825,7 @@ static int GsPacket_AddTex1(s64 packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u3
  }
  
  /* Adds a TEX0_1: the texture's place, size and format. */
@@ -868,7 +947,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
                              u32 tcc, u32 tfx, u32 cbp, u32 cpsm, u32 csm, u32 csa, u32 cld) {
      u64 value;
  
-@@ -1806,18 +1791,18 @@ static int GsPacket_AddTex0(s64 packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_widt
+@@ -1806,18 +1834,18 @@ static int GsPacket_AddTex0(s64 packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_widt
  }
  
  /* Adds a PRIM. */
@@ -890,7 +969,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      u64 low = ((u64)blue << 16) | ((u64)green << 8);
      u64 high = red | (q_value << 32);
  
-@@ -1825,12 +1810,12 @@ static int GsPacket_AddRgbaq(s64 packet, u32 red, u32 green, u32 blue, u32 alpha
+@@ -1825,12 +1853,12 @@ static int GsPacket_AddRgbaq(s64 packet, u32 red, u32 green, u32 blue, u32 alpha
  }
  
  /* Adds an XYZ2: a vertex, which draws. */
@@ -905,7 +984,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      u64 low = fbp | (fbmsk << 32);
      u64 high = ((u64)psm << 24) | ((u64)fbw << 16);
  
-@@ -1838,13 +1823,13 @@ static int GsPacket_AddFrame(s64 packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk) {
+@@ -1838,13 +1866,13 @@ static int GsPacket_AddFrame(s64 packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk) {
  }
  
  /* Adds a TEST_1: alpha, destination alpha and depth tests. */
@@ -921,7 +1000,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      u64 low = scax0 | (scay1 << 48);
      u64 high = ((u64)scay0 << 32) | ((u64)scax1 << 16);
  
-@@ -1852,22 +1837,22 @@ static int GsPacket_AddScissor(s64 packet, u32 scax0, u32 scax1, u32 scay0, u64
+@@ -1852,22 +1880,22 @@ static int GsPacket_AddScissor(s64 packet, u32 scax0, u32 scax1, u32 scay0, u64
  }
  
  /* Adds an XYOFFSET_1. */
@@ -948,7 +1027,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      u64 low = ((wms << 32) >> 32) | (maxv << 34);
      u64 middle = ((maxu << 32) >> 18) | ((minu << 32) >> 28);
      u64 high = ((wmt << 32) >> 30) | ((minv << 32) >> 8);
-@@ -1876,22 +1861,22 @@ static int GsPacket_AddClamp(s64 packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u
+@@ -1876,22 +1904,22 @@ static int GsPacket_AddClamp(s64 packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u
  }
  
  /* Adds a BITBLTBUF: destination buffer of a transfer. */
@@ -975,7 +1054,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      return GsPacket_AddReg(packet, GS_REG_TRXDIR, (u64)direction);
  }
  
-@@ -1900,8 +1885,8 @@ static const char field_names[] = "EVEN\0ODD ";
+@@ -1900,8 +1928,8 @@ static const char field_names[] = "EVEN\0ODD ";
  static const char vblank_format[] = "GS_CSR=%s vbct=%d isvb%d\n";
  
  /* Starts the GIF DMA channel on a chain of packets. */
@@ -986,7 +1065,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      *D2_QWC = 0;
      *D2_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
  }
-@@ -1919,24 +1904,20 @@ static int Movie_VblankHandler(int cause) {
+@@ -1919,24 +1947,20 @@ static int Movie_VblankHandler(int cause) {
              tag = MovieOut_GetOldestTag(&movie_out_buffer);
              if (tag == NULL) {
                  movie_idle_vblanks++;
@@ -1013,7 +1092,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      return 0;
  }
  
-@@ -1946,8 +1927,6 @@ static int Movie_GifDmaHandler(void) {
+@@ -1946,8 +1970,6 @@ static int Movie_GifDmaHandler(void) {
          MovieOut_DropOldest(&movie_out_buffer);
          movie_picture_shown = 0;
      }
@@ -1022,7 +1101,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
      return 0;
  }
  
-@@ -2021,14 +2000,14 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+@@ -2021,14 +2043,14 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
      s32 i;
      char *suffix;
  
@@ -1040,7 +1119,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
              file->is_cd_stream = TRUE;
              for (i = 0; i < name_length; i++) {
                  if (name[i] == '/') {
-@@ -2036,7 +2015,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+@@ -2036,7 +2058,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
                  }
                  name[i] = toupper(name[i]);
              }
@@ -1049,7 +1128,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..70e238c94766447071c994443aace48d
              sprintf(full_path, (char *)cd_path_format, name, suffix);
          } else {
              file->is_cd_stream = FALSE;
-@@ -2054,7 +2033,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+@@ -2054,7 +2076,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
              printf("SifAllocIopHeap Error\n");
              return 0;
          }

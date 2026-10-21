@@ -131,7 +131,10 @@ int port_widescreen(void);
    does what it did on the PS2. On, GameLoop_DrawFrame leaves out Game_ShiftScreenByViewTurn: the
    frame before, moved by half the view's turn, drawn over the even lines (SCANMSK), a picture between
    for the field an interlaced TV shows next. On a PC screen, which shows both fields at once, it is a
-   comb trailing what moves; --frame-rate 60 draws real pictures between instead. */
+   comb trailing what moves; --frame-rate 60 draws real pictures between instead. And the movie player
+   (game/gfx/movie.c, MovieDisplay_Init) shows each decoded picture whole, in frame mode, instead of
+   as two fields: a PC screen weaves a field with the one before, and the first field of each new
+   picture with the last picture's other, a comb every other vblank. */
 int port_whole_frame(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */

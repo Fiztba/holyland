@@ -130,7 +130,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-progressive` | read a frame-mode interlaced picture a field at a time |
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
 | `--no-adapt-width` | scan out at the TV's width, not the game's |
-| `--no-whole-frame` | let the game draw its picture between over every other line while the view turns (`Game_ShiftScreenByViewTurn`, for the other field of an interlaced TV): the picture is then read a field at a time and deinterlaced, as on the PS2 (docs/port/PLAN.md) |
+| `--no-whole-frame` | let the game draw its picture between over every other line while the view turns (`Game_ShiftScreenByViewTurn`, for the other field of an interlaced TV): the picture is then read a field at a time and deinterlaced; and show the movies as two fields, woven with a comb wherever the picture changes; as on the PS2 (docs/port/PLAN.md) |
 | `--ps2-scanout` | all five of the above: the GS's raw output, for comparing with the PS2 or PCSX2 |
 | `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
 | `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
