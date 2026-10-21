@@ -2,14 +2,18 @@
 """Step 2's check: the game's pictures, drawn by paraLLEl-GS, the same every run.
 
     tools/frame_test.py [--disc ISO] [--exe PATH] [--keep DIR] [--frames N,N,...] [--dense A-B] [--runs N]
+                        [--renderer gs|native]
 
 Plays tests/newgame.pad as tools/boot_test.py does, headless with a fixed clock, and writes the picture
 shown at a few vblanks (--dump-frames): the Agetec logo, the title menu, the brightness screen, the
 opening movie, the opening, and the first map. Runs twice (--runs) and compares the pictures byte for byte, then checks none
 of them is a single colour. It also writes every picture of a stretch of the opening (--dense, "none"
 for none), where the frame's clear, its scene and its overlays come by both DMA channels, so the order
-the GS gets them in is checked frame by frame. Needs a Vulkan GPU that paraLLEl-GS runs on. The pictures
-are kept with --keep, for looking at; the disc comes from --disc or KF4_DISC.
+the GS gets them in is checked frame by frame. Then one more run dumps the last of the pictures alone,
+which must be byte for byte the one the runs that dumped them all wrote: reading a picture back must
+leave nothing behind in the GS (the native GS's read-backs write its render targets back to VRAM). Needs
+a Vulkan GPU that paraLLEl-GS runs on (or the native GS, --renderer native). The pictures are kept with
+--keep, for looking at; the disc comes from --disc or KF4_DISC.
 """
 import argparse
 import hashlib
@@ -37,19 +41,20 @@ def find_exe():
     sys.exit("frame_test: no built program under out/; build one or pass --exe")
 
 
-def run(exe, disc, frames, folder):
+def run(exe, disc, frames, folder, renderer):
     os.makedirs(folder, exist_ok=True)
     last = max(int(n) for n in frames.split(","))
     cmd = [exe, "--disc", disc, "--fast", "--headless", "--frames", str(last + 1),
            "--clock", "2026-01-01T12:00:00", "--memcard", "none", "--input", PAD,
-           "--dump-frames", frames, "--dump-dir", folder]
+           "--renderer", renderer, "--dump-frames", frames, "--dump-dir", folder]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
         sys.stdout.write(result.stdout)
         sys.exit("frame_test: the program exited with %d" % result.returncode)
-    if "[gs] paraLLEl-GS on" not in result.stdout:
+    started = "[gs] paraLLEl-GS on" if renderer == "gs" else "[gsn] the native GS on"
+    if started not in result.stdout:
         sys.stdout.write(result.stdout)
-        sys.exit("frame_test: paraLLEl-GS did not start (no Vulkan GPU, or built without it)")
+        sys.exit("frame_test: the %s renderer did not start (no Vulkan GPU, or built without it)" % renderer)
 
 
 def colours(path):
@@ -77,6 +82,7 @@ def main():
     parser.add_argument("--dense", default=DENSE, help="also every vblank from A to B (default %s)" % DENSE)
     parser.add_argument("--runs", type=int, default=2, help="runs to compare (default 2)")
     parser.add_argument("--keep", help="write the pictures into this folder")
+    parser.add_argument("--renderer", default="gs", choices=("gs", "native"), help="who draws (default gs)")
     args = parser.parse_args()
     if not args.disc:
         sys.exit("frame_test: pass --disc or set KF4_DISC")
@@ -92,7 +98,11 @@ def main():
     folder = args.keep or tempfile.mkdtemp(prefix="kf4_frames_")
     run_names = ["run%d" % i for i in range(args.runs)]
     for run_name in run_names:
-        run(exe, args.disc, ",".join(str(n) for n in sorted(frames + dense)), os.path.join(folder, run_name))
+        run(exe, args.disc, ",".join(str(n) for n in sorted(frames + dense)), os.path.join(folder, run_name),
+            args.renderer)
+    # the last picture alone: the read-backs of the others must not have changed it
+    last = max(frames)
+    run(exe, args.disc, str(last), os.path.join(folder, "alone"), args.renderer)
 
     ok = True
     dense_differ = []
@@ -124,6 +134,14 @@ def main():
             print("vblanks %s: NOT THE SAME every run: %s" % (args.dense, " ".join(str(n) for n in dense_differ)))
         else:
             print("vblanks %s: the same every run" % args.dense)
+    name = "frame_%06d.png" % last
+    alone, together = os.path.join(folder, "alone", name), os.path.join(folder, run_names[0], name)
+    if not os.path.exists(alone) or not os.path.exists(together) or \
+            open(alone, "rb").read() != open(together, "rb").read():
+        ok = False
+        print("vblank %5d alone: NOT THE SAME as with the other pictures dumped" % last)
+    else:
+        print("vblank %5d alone: the same as with the other pictures dumped" % last)
     print("pictures in %s" % folder)
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1

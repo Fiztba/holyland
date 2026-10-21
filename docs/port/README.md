@@ -238,7 +238,9 @@ the two logs match and reach the first map. It runs headless with no GS, so it n
 `tools/frame_test.py --disc kfiv_us.iso` is step 2's: the same boot with the GS, dumping the logo,
 the title menu, the brightness screen, the opening and the first map, and every picture of vblanks 990
 to 1010 (`--dense`). It checks two runs (`--runs N` for more) give the same pictures byte for byte and
-that none is blank (`--keep DIR` keeps them to look at).
+that none is blank (`--keep DIR` keeps them to look at), and that a third run dumping only the last
+picture gets it byte for byte as well: reading pictures back must leave nothing behind in the GS.
+`--renderer native` runs it on the native GS.
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
