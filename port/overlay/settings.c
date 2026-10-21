@@ -4,6 +4,7 @@
        "version":  2,
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
+                    "whole_frame": true,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
                     "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
@@ -50,6 +51,7 @@ PortSettings port_settings = {
     .progressive = 1,
     .anti_blur = 1,
     .adapt_width = 1,
+    .whole_frame = 1,
     .frame_rate = 30,
     .volume = 100,
     .layout = "ps2",
@@ -274,6 +276,7 @@ void port_settings_load(void) {
     s->progressive = read_bool(display, "progressive", s->progressive);
     s->anti_blur = read_bool(display, "anti_blur", s->anti_blur);
     s->adapt_width = read_bool(display, "adapt_width", s->adapt_width);
+    s->whole_frame = read_bool(display, "whole_frame", s->whole_frame);
     s->widescreen = read_bool(display, "widescreen", s->widescreen);
     {
         const char *hud = read_string(display, "widescreen_hud");
@@ -330,6 +333,9 @@ void port_settings_load(void) {
     }
     if (port_options.adapt_width) {
         port_options.adapt_width = s->adapt_width;
+    }
+    if (port_options.whole_frame) {
+        port_options.whole_frame = s->whole_frame;
     }
     if (!port_options.widescreen_forced) {
         port_options.widescreen = s->widescreen;
@@ -466,6 +472,7 @@ void port_settings_save(void) {
     put(display, "progressive", cJSON_CreateBool(s->progressive));
     put(display, "anti_blur", cJSON_CreateBool(s->anti_blur));
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
+    put(display, "whole_frame", cJSON_CreateBool(s->whole_frame));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
     put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));

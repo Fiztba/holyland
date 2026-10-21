@@ -18,8 +18,8 @@ layout(location = 3) noperspective out float v_z; // (gs_zclamp.frag's)
 
 void main() {
     vec2 ndc = (a_pos + 0.5) * pc.inv_size * 2.0 - 1.0;
-    // the GS keeps Z within what the Z buffer's format holds (with a vertex beyond it, per pixel:
-    // gs_zclamp.frag writes the depth, and the vertices' is left where nothing clips it)
+    // the GS keeps Z within what the Z buffer's format holds (with a Z buffer gs_zclamp.frag writes
+    // the depth per pixel, and the vertices' is left where nothing clips it)
     float z = (pc.misc & GSN_M_ZCLAMP) != 0u ? 0.0 : float(min(a_z, pc.zmax)) * pc.zscale;
     gl_Position = vec4(ndc, z, 1.0);
     v_z = float(a_z);

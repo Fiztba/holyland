@@ -111,7 +111,8 @@ void port_fatal(const char *file, int line, const char *fmt, ...) __attribute__(
 #define PORT_FATAL(...) port_fatal(__FILE__, __LINE__, __VA_ARGS__)
 
 /* ---- PC presentation switches the game code reads -------------------------------------------
-   Each is off by default, and the game code does exactly what it did on the PS2 while it is off.
+   Each is off by default (but port_whole_frame(), below), and the game code does exactly what it did
+   on the PS2 while it is off.
 
    port_widescreen(): 1 while the opt-in 16:9 picture is on (--widescreen, or the overlay's Display
    page; port/platform/gs.c). The game's patches then widen the 3D projection, and tell the GS front
@@ -123,6 +124,18 @@ int port_widescreen(void);
 #define PORT_GS_REG_WIDESCREEN 0x7E
 #define PORT_WIDESCREEN_3D 0      /* what follows is the 3D world: drawn as it comes (the default) */
 #define PORT_WIDESCREEN_2D 1      /* 2D at 4:3, squeezed into the middle of the 16:9 picture */
+
+/* port_whole_frame(): 1 while the game draws whole frames only (port_options.whole_frame). Unlike the
+   switches above it is on by default, as one of the ways the PC picture differs from the GS's raw
+   output (docs/port/PLAN.md); --no-whole-frame and --ps2-scanout turn it off, and the game code then
+   does what it did on the PS2. On, GameLoop_DrawFrame leaves out Game_ShiftScreenByViewTurn: the
+   frame before, moved by half the view's turn, drawn over the even lines (SCANMSK), a picture between
+   for the field an interlaced TV shows next. On a PC screen, which shows both fields at once, it is a
+   comb trailing what moves; --frame-rate 60 draws real pictures between instead. And the movie player
+   (game/gfx/movie.c, MovieDisplay_Init) shows each decoded picture whole, in frame mode, instead of
+   as two fields: a PC screen weaves a field with the one before, and the first field of each new
+   picture with the last picture's other, a comb every other vblank. */
+int port_whole_frame(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 

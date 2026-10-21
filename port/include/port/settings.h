@@ -23,10 +23,11 @@ typedef struct {
     int aspect;            /* ASPECT_ */
     int vsync;             /* wait for the screen's refresh to show each picture */
     int smooth;            /* scale the picture with bilinear filtering (else nearest) */
-    int deinterlace;       /* the four ways the PC picture differs from the GS's (port_options) */
+    int deinterlace;       /* the five ways the PC picture differs from the GS's (port_options) */
     int progressive;
     int anti_blur;
     int adapt_width;
+    int whole_frame;
     int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
     int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
     int frame_rate;        /* 30 (the PS2's) or the opt-in 60, interpolated (port_options.frame_rate) */

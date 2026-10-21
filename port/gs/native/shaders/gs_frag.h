@@ -7,9 +7,10 @@
 // filtered here as the GS filters (4 bits of fraction), so a CLUT change needs no new texture.
 //
 // Two shaders are made of it: gs.frag, and gs_zclamp.frag (GSN_ZCLAMP), which writes the depth
-// itself: Z interpolated as the vertices have it, then kept within what the Z buffer's format holds,
-// as the GS does per pixel. It is used only for the draws with a vertex beyond that (the others keep
-// the GPU's early depth test).
+// itself as the GS has it per pixel: Z interpolated as the vertices have it, rounded to a whole Z
+// (ties to even) and kept within what the Z buffer's format holds. It is used for every draw with a Z
+// buffer: a fraction left in would put a second draw over the same plane (ZTST GEQUAL) a hair behind
+// the first where the GS has them equal. gs.frag is for the draws without one.
 #include "gs_common.h"
 
 layout(location = 0) noperspective in vec4 v_color;
@@ -180,7 +181,7 @@ bool alpha_test(int a) {
 
 void main() {
 #ifdef GSN_ZCLAMP
-    gl_FragDepth = min(v_z, float(pc.zmax)) * pc.zscale;
+    gl_FragDepth = roundEven(min(v_z, float(pc.zmax))) * pc.zscale;
 #endif
     // GS colours are integers; a colour that is the same at every corner comes through exactly
     ivec4 cf = ivec4(floor(v_color + 1.0 / 256.0));

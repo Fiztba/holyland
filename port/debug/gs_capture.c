@@ -240,10 +240,11 @@ static void start(uint64_t vblank, int vblanks) {
     snprintf(meta, sizeof(meta),
              "format=kf4gs %d\nstart_vblank=%llu\nvblanks=%d\ngame_vblank=%llu\ngame=%.511s\nbuild=%s (%s %s)\n"
              "deinterlace=%d\nprogressive=%d\nanti_blur=%d\nadapt_width=%d\nwidescreen=%d\n"
-             "widescreen_hud_centred=%d\n",
+             "widescreen_hud_centred=%d\nwhole_frame=%d\n",
              KF4GS_VERSION, (unsigned long long)vblank, vblanks, (unsigned long long)best, game, KF4_BUILD_REV,
              __DATE__, __TIME__, port_options.deinterlace, port_options.progressive, port_options.anti_blur,
-             port_options.adapt_width, port_options.widescreen, port_options.widescreen_hud_centred);
+             port_options.adapt_width, port_options.widescreen, port_options.widescreen_hud_centred,
+             port_options.whole_frame);
     put(KF4GS_META, meta, strlen(meta));
 #ifdef KF4_HAVE_PARALLEL_GS
     port_gs_state_records(emit); /* (without a renderer no capture starts: why_not_now) */

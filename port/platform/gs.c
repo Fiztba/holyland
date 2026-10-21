@@ -280,6 +280,10 @@ int port_widescreen(void) {
     return port_options.widescreen;
 }
 
+int port_whole_frame(void) {
+    return port_options.whole_frame;
+}
+
 /* A mark from the game: PATH1 and PATH2 come in the order of the one packet chain (VU1's packets and
    VIF1's DIRECT ones), so a mark in either goes for both. */
 static void widescreen_marked(int path, int mode) {
