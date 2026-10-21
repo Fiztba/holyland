@@ -12,8 +12,11 @@ for none), where the frame's clear, its scene and its overlays come by both DMA 
 the GS gets them in is checked frame by frame. Then one more run dumps the last of the pictures alone,
 which must be byte for byte the one the runs that dumped them all wrote: reading a picture back must
 leave nothing behind in the GS (the native GS's read-backs write its render targets back to VRAM). Needs
-a Vulkan GPU that paraLLEl-GS runs on (or the native GS, --renderer native). The pictures are kept with
---keep, for looking at; the disc comes from --disc or KF4_DISC.
+a Vulkan GPU that paraLLEl-GS runs on. The pictures are kept with --keep, for looking at; the disc comes
+from --disc or KF4_DISC.
+
+The runs ask for --renderer gs: the program's default is the native GS since stage 4, and this test is
+paraLLEl-GS's (the reference's) determinism. --renderer native runs the same checks on the native GS.
 """
 import argparse
 import hashlib
@@ -41,20 +44,23 @@ def find_exe():
     sys.exit("frame_test: no built program under out/; build one or pass --exe")
 
 
+STARTED = {"gs": ("[gs] paraLLEl-GS on", "paraLLEl-GS"), "native": ("[gsn] the native GS on", "the native GS")}
+
+
 def run(exe, disc, frames, folder, renderer):
     os.makedirs(folder, exist_ok=True)
     last = max(int(n) for n in frames.split(","))
     cmd = [exe, "--disc", disc, "--fast", "--headless", "--frames", str(last + 1),
            "--clock", "2026-01-01T12:00:00", "--memcard", "none", "--input", PAD,
-           "--renderer", renderer, "--dump-frames", frames, "--dump-dir", folder]
+           "--dump-frames", frames, "--dump-dir", folder, "--renderer", renderer]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
         sys.stdout.write(result.stdout)
         sys.exit("frame_test: the program exited with %d" % result.returncode)
-    started = "[gs] paraLLEl-GS on" if renderer == "gs" else "[gsn] the native GS on"
+    started, name = STARTED[renderer]
     if started not in result.stdout:
         sys.stdout.write(result.stdout)
-        sys.exit("frame_test: the %s renderer did not start (no Vulkan GPU, or built without it)" % renderer)
+        sys.exit("frame_test: %s did not start (no Vulkan GPU, or built without it)" % name)
 
 
 def colours(path):
@@ -82,7 +88,8 @@ def main():
     parser.add_argument("--dense", default=DENSE, help="also every vblank from A to B (default %s)" % DENSE)
     parser.add_argument("--runs", type=int, default=2, help="runs to compare (default 2)")
     parser.add_argument("--keep", help="write the pictures into this folder")
-    parser.add_argument("--renderer", default="gs", choices=("gs", "native"), help="who draws (default gs)")
+    parser.add_argument("--renderer", default="gs", choices=sorted(STARTED),
+                        help="who draws (default gs, paraLLEl-GS, whatever the program's default)")
     args = parser.parse_args()
     if not args.disc:
         sys.exit("frame_test: pass --disc or set KF4_DISC")

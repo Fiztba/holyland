@@ -26,16 +26,18 @@ typedef struct {
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
     int headless;            /* --headless: no SDL at all, and no window */
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
-    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_GS, paraLLEl-GS, is the default;
-       PORT_RENDERER_NATIVE is step 3's (port/gs/native/); PORT_RENDERER_BOTH runs the two side by side
-       and compares their pictures, showing renderer_shown's. */
+    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_NATIVE, step 3's (port/gs/native/),
+       is the default (paraLLEl-GS instead if it cannot start: the renderers that did start are
+       written back here); PORT_RENDERER_GS is paraLLEl-GS, the reference; PORT_RENDERER_BOTH runs
+       the two side by side and compares their pictures, showing renderer_shown's. */
     int renderer;
     int renderer_shown;
     int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
     int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
-    /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_SDL, the
-       default, through SDL_Renderer; PORT_PRESENTER_VULKAN, a swapchain on the native GS's own device
-       (port/platform/present_vk.cpp), with the native GS's picture taken from the GPU as it is. */
+    /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
+       the default, a swapchain on the native GS's own device (port/platform/present_vk.cpp), with the
+       native GS's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the
+       window's when the native GS is not running or the Vulkan one does not start). */
     int presenter;
     int presenter_forced;    /* --presenter: this run's, whatever settings.json says */
     int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
@@ -51,9 +53,10 @@ typedef struct {
     int native_msaa;
     int native_msaa_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
-       port/platform/vu1.c, vu1_hle*.c). PORT_VU1_INTERP, the interpreter, is the default;
-       PORT_VU1_HLE computes the same results directly, to the bit (faster); PORT_VU1_CHECK runs
-       both and compares them, run by run. */
+       port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
+       the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
+       interpreter (and what any other program runs on); PORT_VU1_CHECK runs both and compares them,
+       run by run. */
     int vu1;
     /* How the GS's output becomes a PC picture (port/gs/gs_parallel.cpp). Each is on by default and
        turned off by --no-<name>; --ps2-scanout turns them all off (the GS's raw output). */

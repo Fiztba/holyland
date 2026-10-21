@@ -24,7 +24,7 @@ timings of the step 2 path, and how ico-pc built its renderer.
   ImGui's Vulkan backend (`port/platform/present_vk.cpp`). No read-back: 2,000 vblanks windowed at
   4x went from 16-22 s to 8.1-8.2 s, at 1x from 7.6 s to 7.2-7.6 s. paraLLEl-GS keeps
   SDL_Renderer (`--renderer gs` falls back to it); with `both` the paraLLEl-GS picture is uploaded.
-  `sdl` stays the default until the Vulkan one has been played with. Interlace settled: in play and the in-game menus
+  The Vulkan presenter is the default since stage 4 (below). Interlace settled: in play and the in-game menus
   draw one 448-line frame (SMODE2 FFMD 0); the title, the memory card screens and the movies draw
   224-line fields, FBP 0 and 0x46 in turn.
 - **Stages 1 and 2, working.** The native GS (`port/gs/native/`) draws the whole game from the VU1
@@ -88,8 +88,35 @@ timings of the step 2 path, and how ico-pc built its renderer.
     none (a new build, its own cache full) the first minutes made pipelines for 1.6 s;
   - VU1's code aligned to 64 bytes (`-falign-functions=64 -falign-loops=64` for vu1*.c): its speed
     moved by a third with where the linker put it.
-- **Stage 4 (the default)** is the next decision: `--renderer native` and `--vu1 hle` are opt-in
-  until they have been played through.
+- **Stage 4, done pending a play-through.** The defaults: the native GS (`--renderer native`), the
+  Vulkan presenter (`--presenter vulkan`) and the VU1 programs in C (`--vu1 hle`; bit for bit, so no
+  switch to keep the PS2's behaviour is needed). paraLLEl-GS stays behind `--renderer gs` (and
+  `both`) for comparison; it draws instead when the native GS cannot start (no Vulkan device it can
+  use), and with it alone the window is SDL_Renderer's. `settings.json` has a `"version"` (2): older
+  files wrote `"gs"` and `"sdl"` out whether chosen or not, so in them those two are read as the old
+  defaults (README.md, "settings.json"). `frame_test.py` and `map_tour.py` ask for `--renderer gs`;
+  `frame_test.py --renderer native` passes too (the native GS's pictures the same every run). CI
+  builds and runs the unit tests only, none of which depends on the default.
+  Frame pacing, measured windowed at 59.94 Hz pacing over 2,300 vblanks (new game, then map 000 from
+  vblank 1900; a 144 Hz monitor, vsync off; per-present timestamps in a test build):
+  - the vblank wake-up: Windows' Sleep in whole milliseconds woke it 0 to 2.5 ms late (presents a
+    deviation of 0.60 ms apart); a high-resolution waitable timer wakes it 0.3 ms late (p99 0.5 ms),
+    0.22 ms deviation (`port_sleep`, `host_time.c`; Linux's nanosleep was already exact);
+  - the picture of a vblank reaches the window from the renderer's thread about when the window
+    wakes for it (on map 000: the native GS 9 ms after the vblank before, paraLLEl-GS 14-22 ms); a
+    late one was shown at the next vblank, the one before twice and one dropped. In a run: the native
+    GS with the Vulkan presenter 1, with SDL_Renderer 3-93, paraLLEl-GS 7-77 (it varies run to run).
+    The window now waits for it up to half a vblank while pictures are coming (not with `--fast`):
+    0, 1 and 0, with 0-12 presents of 2,300 waiting more than 1.5 ms;
+  - pipeline compiles: no present more than 23.7 ms after the one before, with the native GS's cache
+    new and NVIDIA's shader cache off (`__GL_SHADER_DISK_CACHE=0`) or with both;
+  - with vsync, presents are as even (0.61 ms deviation; FIFO with 3 images never waited at
+    144 Hz), but 59.94 pictures a second on a 144 Hz screen are shown 2 and 3 refreshes in turn: only
+    a 60 Hz (or variable-refresh) screen shows them evenly.
+  Left for the owner: the play-through; paraLLEl-GS's LGPL question before release builds ship it
+  (`-DKF4_USE_PARALLEL_GS=OFF` leaves it out today only by taking the native GS with it: the two
+  are one library, `kf4_gs`, on the Granite that comes with paraLLEl-GS; a build of the native GS
+  alone needs them split).
 - Open: the renderers' comparison of field-mode menu buffers (paraLLEl-GS's read-back is stale
   there; the scanouts agree); write-backs still left: the title's 640x224 field buffer (61 in the
   run), the menus' Z buffer over the play's frame buffers, and map 008's reflection drawn with the
@@ -109,8 +136,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
 - **Uploads on the GPU.** The swizzle runs on the CPU (and is mostly skipped now: uploads seen before
   are copied in as pages). A compute pass writing a GPU copy of VRAM, with textures read from it,
   would take the rest off the CPU and remove the write-backs.
-- **The Vulkan presenter as the default.** Done as an opt-in (`--presenter vulkan`, Progress above);
-  the default can change once it has been played with. paraLLEl-GS's picture could go the same way
+- **paraLLEl-GS's picture on the Vulkan presenter.** The Vulkan presenter is the default (stage 4,
+  Progress above), for the native GS. paraLLEl-GS's picture could go the same way
   (uploaded, or its image on a shared device) so that `--renderer gs` needs no SDL_Renderer either.
 - **VU1 on the GPU.** The C programs (stage 3) take VU1 from two thirds of the run's time to a
   sixth; shaders would take the rest, at the cost of a second implementation to keep bit for bit.
@@ -317,7 +344,7 @@ Ahead of stage 3, program 0x000 has a CPU version that computes its results dire
 time, instead of interpreting its 289 software-pipelined instruction pairs:
 `port/platform/vu1_hle.c` (its top comment describes the program). It is the specification of the
 0x000 shader, and a speed switch now: its results are the interpreter's to the bit, so it is not a
-divergence. `--vu1 interp` (the default) keeps the interpreter; `--vu1 check` runs both and compares
+divergence. `--vu1 hle` is the default; `--vu1 interp` keeps the interpreter; `--vu1 check` runs both and compares
 them run by run.
 
 - **Bit for bit.** Every FMAC operation is the interpreter's own helper (`v4_op`, shared through
@@ -469,6 +496,15 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
   vblanks show a new picture one vblank after the last (16.7 ms apart, sd 1.0 to 1.7 ms), and none or two
   of the 410 pictures are replaced before they are shown. Before the window kept two, SDL's presenter
   lost 11 of them with the switch on (48 with it off). `--stats` prints these counts.
+- With stage 4's wait for the vblank's picture (Progress, "Frame pacing"), turning and walking on
+  map 000 (vblanks 1961-2600, 640 presents, per-present timestamps in a test build): the Vulkan
+  presenter at 30 and 60 shows every picture at its vblank (none late, repeated or dropped; presents
+  0.23 ms apart in deviation). SDL_Renderer and paraLLEl-GS with the two-picture queue alone were a
+  vblank late at 394 to 640 of the 640 presents (the queue, once two deep, never emptied with a
+  picture every vblank); with the wait and a queue that leaves its oldest out when it was late at two
+  presents in turn: 0 to 26 late, at most 1 repeated and 1 left out (`--stats`: "left out to catch
+  up"), the presents 0.6 to 1.2 ms apart in deviation from the wait (up to 8.7 ms, over 1 ms at 13 to
+  155 of them).
 - Cost: the GS draws each frame twice. 2,030 vblanks headless (new game, map 000), on the GS's thread:
   2.15 s to 2.57 s at 1x, 2.42 s to 2.80 s at 2x, 2.50 s to 3.09 s at 2x with `--native-widescreen` and
   `--native-msaa 8`.
@@ -478,10 +514,12 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
 - The picture between shows half of the camera's next move one vblank early.
 - Turning from standing (map 000): the first picture that moves is the fifth vblank after the pad's
   input with the switch on, the sixth off.
-- The window: with SDL's presenter the GS's thread hands most pictures over just after the game's
-  thread has shown a vblank's (the pixels are read back first), so most are shown a vblank later, as
-  before; the window now shows each in turn instead of skipping one when two arrive together. With the
-  Vulkan presenter nearly all are there in time.
+- The window: with SDL's presenter (and paraLLEl-GS) the GS's thread hands most pictures over just
+  after the game's thread wakes for them (the pixels are read back first). The window waits for the
+  vblank's picture up to half a vblank, so it is shown at its own vblank; one later than that is kept
+  and shown at the next (the queue of two), and a queue still late at the next present leaves its
+  oldest out, so the window does not stay a vblank behind. With the Vulkan presenter nearly all are
+  there in time, with no wait.
 
 **What is left.**
 - **Things that move by themselves**, first version (below, "What moves by itself"): the enemies, the

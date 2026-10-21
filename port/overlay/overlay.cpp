@@ -689,7 +689,8 @@ std::string bug_report() {
 // The renderer (docs/port/STEP3.md): which draws from the next start; with both, which is shown and how
 // their pictures compare
 void renderer_section() {
-    static const char *const names[] = {"paraLLEl-GS (gs)", "Native GS (native, step 3)", "Both, compared (both)"};
+    static const char *const names[] = {"paraLLEl-GS (gs, the reference)", "Native GS (native, the default)",
+                                        "Both, compared (both)"};
     ImGui::SeparatorText("Renderer");
     ImGui::Text("This run: %s", names[port_options.renderer]);
     int next = port_settings.renderer;
@@ -697,9 +698,10 @@ void renderer_section() {
         port_settings.renderer = next;
         port_settings_changed();
     }
-    tooltip("paraLLEl-GS emulates the PS2's GS and is the reference. The native GS (step 3) draws with\n"
-            "the GPU's own rasteriser: faster, and the base for higher resolutions later. Both runs the\n"
-            "two side by side and compares the pictures every vblank (slower; for testing).\n"
+    tooltip("The native GS (step 3, the default) draws with the GPU's own rasteriser: faster, and the\n"
+            "base for the higher resolutions, true widescreen and anti-aliasing. paraLLEl-GS emulates the\n"
+            "PS2's GS and is the reference to compare with (and what draws if the native GS cannot start).\n"
+            "Both runs the two side by side and compares the pictures every vblank (slower; for testing).\n"
             "--renderer on the command line wins over this.");
     if (port_options.renderer != PORT_RENDERER_GS) {
         int scale = port_options.native_scale;
@@ -738,10 +740,11 @@ void renderer_section() {
                 "PS2's picture. Costs GPU time, more with the resolution above. Off and back on is live;\n"
                 "from one count to another takes a restart. (--native-msaa)");
     }
-    static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan)"};
+    static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();
     if (port_options.presenter == PORT_PRESENTER_VULKAN && presenter != PORT_PRESENTER_VULKAN)
-        ImGui::Text("Presenter this run: %s (vulkan did not start)", presenters[presenter]);
+        ImGui::Text("Presenter this run: %s (vulkan %s)", presenters[presenter],
+                    port_options.renderer == PORT_RENDERER_GS ? "needs the native GS" : "did not start");
     else
         ImGui::Text("Presenter this run: %s", presenters[presenter]);
     int next_presenter = port_settings.presenter;

@@ -2,7 +2,7 @@
 """A tour of the game's maps: every map visited and pictured, without playing there.
 
     tools/map_tour.py --out DIR [--disc ISO] [--exe PATH] [--maps 0,99,...] [--positions N]
-                      [--headings N] [--jobs N] [--base FILE] [--no-capture]
+                      [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|native]
 
 A quick save is the game's own save image with the map and the player's place in it, loaded through the
 game's card-load path (docs/port/README.md, "Quick saves"). This makes one for any map and any place:
@@ -17,9 +17,11 @@ The places come from the map file itself (read from KF4.DAT on the disc): the ma
 the biggest boxes of the records that have floors to stand on. Each place is seen at --headings
 headings.
 
-Each map is one run of the program: headless with the GS on, it loads the map's quick saves one after
-another (--quick-load A,V:B,...), writes the picture of each view once the fade-in is over, and a GS
-frame capture of the first view (--gs-capture-at). Then kf4-gsreplay lists the capture's draws (the
+Each map is one run of the program: headless with the GS on (paraLLEl-GS, the reference, so the
+pictures compare with the tours from before the native GS became the default; --renderer native for
+the native GS's), it loads the map's quick saves one after another (--quick-load A,V:B,...), writes
+the picture of each view once the fade-in is over, and a GS frame capture of the first view
+(--gs-capture-at). Then kf4-gsreplay lists the capture's draws (the
 census: VU1 programs, PRIM, TEX0 PSM, ALPHA, TEST, ZBUF, FRAME) and runs its VIF1 stream through the
 VU1 interpreter again (--mode vif: VU1 runs and cycles for the frame, and packets that come out
 differently).
@@ -442,7 +444,8 @@ def run_map(args, base, number, name, places, folder):
     log = os.path.join(folder, "log.txt")
     cmd = [args.exe, "--disc", args.disc, "--fast", "--headless", "--frames", str(last), "--clock", CLOCK,
            "--memcard", "none", "--input", pad, "--quick-load", loads, "--stats", "--log", log,
-           "--dump-frames", ",".join(str(v["picture_at"]) for v in views), "--dump-dir", pictures]
+           "--dump-frames", ",".join(str(v["picture_at"]) for v in views), "--dump-dir", pictures,
+           "--renderer", args.renderer]
     if not args.no_capture:
         cmd += ["--gs-capture-at", str(views[0]["picture_at"])]
     env = dict(os.environ, KF4_DATA_DIR=data_dir)
@@ -625,6 +628,8 @@ def main():
     parser.add_argument("--jobs", type=int, default=3, help="maps run at once (default 3)")
     parser.add_argument("--base", help="the quick save to start from (default: made from tests/newgame.pad)")
     parser.add_argument("--no-capture", action="store_true", help="no GS capture, so no census")
+    parser.add_argument("--renderer", default="gs", choices=("gs", "native"),
+                        help="who draws the pictures (default gs, paraLLEl-GS)")
     args = parser.parse_args()
     if not args.disc:
         sys.exit("map_tour: pass --disc or set KF4_DISC")
