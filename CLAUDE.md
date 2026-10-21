@@ -13,3 +13,13 @@ The PC port of King's Field IV, built from the kfiv-decomp source. Start with
 - Never hand-edit the files in `patches/`; `patches.py save` writes them.
 - Fixes to the reconstruction itself (names, types, structs) go to kfiv-decomp, not here.
 - `game/` and `port/` are ordinary source, edited in place.
+
+## Before changing anything that draws
+
+Read [docs/port/RENDERER.md](docs/port/RENDERER.md): where the native GS, the VU1 programs in C and
+the presenters are, and the checks a renderer change must pass (gsn_draw_test, the map tour
+comparison including the scanouts, frame_test with `--renderer native`).
+
+## Tests never touch the player's data
+
+Every run of the game in a test sets `KF4_DATA_DIR` to a temporary folder.

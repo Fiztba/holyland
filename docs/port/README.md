@@ -618,9 +618,15 @@ from boot to a new game with nothing drawn, deterministically (`tools/boot_test.
 pad or the keyboard. The DMA controller reads the VIF1 and GIF chains; VIF1 and an interpreter of
 VU1 run the game's microprograms; the GS is paraLLEl-GS (`tools/frame_test.py`).
 
-Next:
-1. **Graphics, stage 2:** the VU1 programs become native renderers.
-2. **Sound.**
+**Step 3** (done, October 2026): a renderer of our own. The native GS (`port/gs/native/`) draws on
+Vulkan, the VU1 programs run as C (bit for bit the interpreter's), and the window is presented on
+Vulkan; all three are the defaults, with paraLLEl-GS behind `--renderer gs` for comparison. Opt-in
+on top: `--native-scale`, `--native-widescreen`, `--native-msaa`, `--frame-rate 60`.
+[STEP3.md](STEP3.md) has the design and the progress; [RENDERER.md](RENDERER.md) is where to start
+before changing anything that draws (the map of the code, the rules and the checks).
+
+Sound (step 4) and movies (step 5) are in as well ([AUDIO.md](AUDIO.md)). What is left is in
+STEP3.md's "What could come next" and PLAN.md.
 
 ## Layout
 
@@ -632,7 +638,7 @@ Next:
 | `work/` | git-ignored: the decomp with the patches applied, for editing (`tools/patches.py apply`) |
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
 | `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, the IPU's input DMA, VIF1, VU1, the GS's front end, the window and frame dumps, the disc, save states, quick saves |
-| `port/gs/` | the GS backend: paraLLEl-GS behind a small C interface |
+| `port/gs/` | the GS backends behind one small C interface: `native/`, our own GS on Vulkan (the default; RENDERER.md), and `gs_parallel.cpp`, paraLLEl-GS |
 | `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc, libsdr, libmpeg on the port's MPEG-2 decoder (`mpeg2.c`), and the PS2's math library (`libm_ps2.c`: newlib's, from the decomp's sources) |
 | `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |
 | `port/debug/` | the debugging tools: the GS frame capture (`gs_capture.c`, F9), the game's state as JSON (`game_dump.c`, F10), the sound's last 20 seconds and the captures folder (`debug.c`, F12) |
