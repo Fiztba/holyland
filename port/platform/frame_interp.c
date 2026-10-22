@@ -486,6 +486,7 @@ typedef struct {
     double seen_z[SEEN], seen_depth[SEEN];
     int nseen;
     double run_most;     /* REPLAY: the most a vertex of it without ADC moved */
+    double eye_move[3];  /* REPLAY: how far the camera moved from the frame before to this one */
     /* REPLAY */
     uint32_t shown_fbp; /* the buffer the replay draws into, in place of draw_fbp */
     Move move;          /* the frame's view to the camera between */
@@ -640,12 +641,21 @@ static void keep_vertex(Walk *w, const GifWalk *p, const uint8_t *q, int xyzf) {
 }
 
 /* REPLAY, at a run's start: whether it moved since the frame before, from its vertices without ADC:
-   the most any of them moved (run_most), against a 500th of the middle's distance from the camera */
+   the most any of them moved (run_most), against a 500th of the middle's distance from the camera;
+   or, in the world, all of them as far as the camera moved, and the same way: a model that goes with
+   the camera. The sky's dome on map 000 is one: its strips, a few thousand to twenty thousand away,
+   go with the player, and those nearer than a 500th of their move (6,000 at a walking step of 12)
+   were moved with it while the others stayed in the world, half a step behind in the picture between:
+   thin lines along the strips' shared edges, dark (a gap in the additive sky) walking forward and
+   bright (two strips over each other) walking back. A model that goes with the camera is moved with
+   its model whatever its distance, so the strips stay together. (A model that does not move taken
+   for one that goes with the camera, far away while the player creeps, is drawn half way between its
+   two places, which are the same: no harm.) */
 static void run_motion(Walk *w) {
     const Objects *o = w->objects;
     const Run *cur, *prev = w->run_prev;
-    double most = 0, dist2 = 0;
-    uint32_t k;
+    double most = 0, dist2 = 0, sum[3] = {0, 0, 0};
+    uint32_t k, n = 0;
     int i;
 
     w->run_moving = 0;
@@ -663,7 +673,9 @@ static void run_motion(Walk *w) {
         }
         for (i = 0; i < 3; i++) {
             d2 += (b[i] - a[i]) * (b[i] - a[i]);
+            sum[i] += b[i] - a[i];
         }
+        n++;
         most = d2 > most ? d2 : most;
         {
             /* the place half way, on the line between, must not come much nearer the eye than both
@@ -702,6 +714,21 @@ static void run_motion(Walk *w) {
     }
     w->run_most = most;
     w->run_moving = most > sqrt(dist2) * 0.002;
+    if (!w->run_moving && cur->section == SECTION_WORLD && n > 0) {
+        /* with the camera: every vertex moved by the camera's move, within a tenth of it */
+        double step = sqrt(w->eye_move[0] * w->eye_move[0] + w->eye_move[1] * w->eye_move[1] +
+                           w->eye_move[2] * w->eye_move[2]),
+               off = 0;
+
+        for (i = 0; i < 3; i++) {
+            off += (sum[i] / n - w->eye_move[i]) * (sum[i] / n - w->eye_move[i]);
+        }
+        /* (a vertex's place, from its screen place and Q, is off by up to about a 10,000th of its
+           distance: the dome's far strips, 20,000 away, by 1 to 2) */
+        double noise = sqrt(dist2) * 0.0001;
+
+        w->run_moving = step > 1.0 && sqrt(off) <= step * 0.1 + noise && most <= step * 1.1 + 2 * noise;
+    }
 }
 
 static double distance(const double *a, const double *b) {
@@ -1146,6 +1173,9 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
     w.mid = interp_still() ? scan->camera : *between;
     w.objects = interp_still() ? NULL : (Objects *)pending.objects;
     w.prev = pending.objects_before;
+    for (i = 0; i < 3; i++) {
+        w.eye_move[i] = scan->camera.eye[i] - pending.before.eye[i];
+    }
     move_between(&scan->camera, &w.mid, &w.move);
     for (at = 0; at < pending.size;) {
         Record r;
