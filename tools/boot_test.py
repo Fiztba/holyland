@@ -39,7 +39,7 @@ def find_exe():
 
 def run(exe, disc, frames, log):
     cmd = [exe, "--disc", disc, "--fast", "--headless", "--frames", str(frames),
-           "--clock", "2026-01-01T12:00:00", "--memcard", "none", "--input", PAD, "--log", log]
+           "--clock", "2026-01-01T12:00:00", "--memcard", "none", "--no-audio", "--input", PAD, "--log", log]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
         sys.stdout.write(result.stdout)
@@ -55,6 +55,8 @@ def main():
     parser.add_argument("--frames", type=int, default=3000, help="vblanks to run (default 3000)")
     parser.add_argument("--keep", help="write the two logs into this folder")
     args = parser.parse_args()
+    # never the player's data folder: settings, saves and caches go to a temporary one
+    os.environ.setdefault("KF4_DATA_DIR", tempfile.mkdtemp(prefix="kf4_data_"))
     if not args.disc:
         sys.exit("boot_test: pass --disc or set KF4_DISC")
     exe = args.exe or find_exe()

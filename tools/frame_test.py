@@ -51,7 +51,7 @@ def run(exe, disc, frames, folder, renderer):
     os.makedirs(folder, exist_ok=True)
     last = max(int(n) for n in frames.split(","))
     cmd = [exe, "--disc", disc, "--fast", "--headless", "--frames", str(last + 1),
-           "--clock", "2026-01-01T12:00:00", "--memcard", "none", "--input", PAD,
+           "--clock", "2026-01-01T12:00:00", "--memcard", "none", "--no-audio", "--input", PAD,
            "--dump-frames", frames, "--dump-dir", folder, "--renderer", renderer]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
@@ -91,6 +91,8 @@ def main():
     parser.add_argument("--renderer", default="gs", choices=sorted(STARTED),
                         help="who draws (default gs, paraLLEl-GS, whatever the program's default)")
     args = parser.parse_args()
+    # never the player's data folder: settings, saves and caches go to a temporary one
+    os.environ.setdefault("KF4_DATA_DIR", tempfile.mkdtemp(prefix="kf4_data_"))
     if not args.disc:
         sys.exit("frame_test: pass --disc or set KF4_DISC")
     if args.runs < 2:
