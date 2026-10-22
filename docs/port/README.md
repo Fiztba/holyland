@@ -121,8 +121,9 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
 | `--renderer native\|gs\|both` | who draws: the native GS (the default; step 3, [STEP3.md](STEP3.md)), paraLLEl-GS (the reference, kept for comparison; it draws instead if the native GS cannot start), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
-| `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
-| `--native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`) |
+| `--native-scale auto\|N` | the native GS draws at N times the PS2's resolution, 1 to 4, or `auto` (the default): the multiple of 448 lines nearest the height the window shows the picture at (1080: 2, 1440: 3, 2160: 4; at most 2 on an integrated GPU; 1 headless) (live on the Debug page; `settings.json` `display.native_scale`, a number or `"auto"`) |
+| `--native-widescreen`, `--no-native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`, on by default there; off on the command line alone) |
+| `--flicker-filter` | draw the game's flicker filter, as on the PS2: every frame of play it blends each row of the picture half with the row above, so that thin lines do not flicker between an interlaced TV's two fields. Off by default: on a PC screen it blurs the picture up and down, and above 1x shows it twice a GS row apart (the Display page's "No flicker filter"; `settings.json` `display.flicker_filter`) |
 | `--native-msaa N` | the native GS draws the 3D with N samples a pixel (1, the default: off; 2, 4 or 8), smoothing its edges (on the Debug page, live but for a change of count, which takes a restart; `settings.json` `display.native_msaa`) |
 | `--presenter vulkan\|sdl` | how the picture reaches the window: a Vulkan swapchain on the native GS's device, the native GS's picture never leaving the GPU (the default; `port/platform/present_vk.cpp`), or SDL_Renderer. Vulkan needs the native GS (`--renderer native` or `both`): with paraLLEl-GS alone the window is SDL_Renderer's, as it is if the swapchain cannot be made. The Debug page sets it for the next start (`settings.json`, `display.presenter`) |
 | `--vu1 interp\|hle\|check` | who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through): `hle` (the default), computed directly with the interpreter's results to the bit (`port/platform/vu1_hle*.c`), or `interp`, the cycle-accurate interpreter; `check` runs both and compares them run by run (`--stats` counts the differences) |
@@ -131,7 +132,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
 | `--no-adapt-width` | scan out at the TV's width, not the game's |
 | `--no-whole-frame` | let the game draw its picture between over every other line while the view turns (`Game_ShiftScreenByViewTurn`, for the other field of an interlaced TV): the picture is then read a field at a time and deinterlaced; and show the movies as two fields, woven with a comb wherever the picture changes; and weave each picture of the menus (drawn a field a vblank) with the one before; as on the PS2 (docs/port/PLAN.md) |
-| `--ps2-scanout` | all five of the above: the GS's raw output, for comparing with the PS2 or PCSX2 |
+| `--ps2-scanout` | all five of the above, and `--flicker-filter`: the GS's raw output, for comparing with the PS2 or PCSX2 |
 | `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
 | `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
 | `--frames N` | stop after N vblanks |
@@ -209,9 +210,14 @@ every setting, so an older file says `"renderer": "gs"` and `"presenter": "sdl"`
 chose them or not. In a file without a version those two values are taken as the old defaults and the
 new ones are used (the file is written again as version 2, with a line on stderr); `"native"`,
 `"both"` and `"vulkan"` are kept. From version 2 on, `"gs"` and `"sdl"` are kept as chosen.
+`"version"` is 3 since `"native_scale": "auto"` and `"native_widescreen": true` became the defaults
+(October 2026): in an older file `"native_scale": 1` and `"native_widescreen": false` are taken as the
+old defaults written out, and the new ones are used (the file is written again as version 3); other
+scales, and native widescreen on, are kept.
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
-`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off,
+`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off
+(and `--flicker-filter` and `--ps2-scanout` the flicker filter on),
 `--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` and `--separate-run` keep
 those mods on, and `--controls` picks the layout.
 

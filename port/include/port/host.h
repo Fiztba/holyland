@@ -136,6 +136,15 @@ int port_widescreen(void);
    as two fields: a PC screen weaves a field with the one before, and the first field of each new
    picture with the last picture's other, a comb every other vblank. */
 int port_whole_frame(void);
+
+/* port_flicker_filter(): 1 while the game draws its flicker filter (port_options.flicker_filter; off by
+   default, on with --flicker-filter, --ps2-scanout or the overlay's Display page). Every frame of play
+   Game_BlendScreenOffsetDown blends the picture over itself one row lower at half strength, so that a
+   line one row thin is in both fields of an interlaced TV and does not flicker between them. A PC
+   screen shows every row at once: there it is a blur up and down at 1x, and at a larger
+   --native-scale (one GS row is N rows of the picture) a double image. Off, the game writes the
+   pass's registers but draws none of its strips. */
+int port_flicker_filter(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 

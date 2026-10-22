@@ -45,6 +45,12 @@ void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(v
    and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
 #define GSN_MAX_SCALE_X 6
 void gsn_set_scale(int x_scale, int y_scale);
+/* The GPU the native GS is on: GSN_GPU_DISCRETE, GSN_GPU_INTEGRATED or GSN_GPU_OTHER (a CPU, virtual,
+   or none open): --native-scale auto draws at most 4x, 2x and 1x on them */
+#define GSN_GPU_OTHER 0
+#define GSN_GPU_INTEGRATED 1
+#define GSN_GPU_DISCRETE 2
+int gsn_gpu_kind(void);
 /* --native-lod: the mipmap level a texture is read at. The GS picks it from the distance (Q), for the
    PS2's 640x448: GSN_LOD_PS2 keeps that; GSN_LOD_SCALE (the default) takes it log2 of --native-scale
    finer, the detail the GS would give the larger picture (at 1x, the PS2's); GSN_LOD_FULL reads

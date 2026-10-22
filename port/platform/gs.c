@@ -94,7 +94,7 @@ static void open_backend(void *unused) {
         if (have_native) {
             char path[1100];
 
-            gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
+            gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
             if (port_options.native_msaa > 1) {
                 port_options.native_msaa = gsn_set_msaa(port_options.native_msaa);
             }
@@ -292,6 +292,10 @@ int port_widescreen(void) {
 
 int port_whole_frame(void) {
     return port_options.whole_frame;
+}
+
+int port_flicker_filter(void) {
+    return port_options.flicker_filter;
 }
 
 /* A mark from the game: PATH1 and PATH2 come in the order of the one packet chain (VU1's packets and
@@ -799,9 +803,35 @@ void port_gs_set_native_scale(int scale) {
     port_options.native_scale = scale;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_scale(port_gs_native_scale_x(), scale);
+        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
 #endif
+}
+
+/* --native-scale auto: the picture drawn about as tall as the window shows it, so that the window
+   scales it by about 1 (1440 lines: 3x, 1344, a little up; 2160: 4x, 1792; 1080: 2x, 896; 448 * 2.5 and
+   up round up), not a 640x448 picture blown up by bilinear filtering. A larger scale than the window's
+   is thrown away by the window's shrinking. At most 2x on an integrated GPU, and 1x on a GPU that is
+   not a real one (lavapipe) or with no window. */
+int port_gs_native_scale(void) {
+    int h, s, most = 4;
+
+    if (port_options.native_scale >= 1) {
+        return port_options.native_scale > 4 ? 4 : port_options.native_scale;
+    }
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        int kind = gsn_gpu_kind();
+
+        most = kind == GSN_GPU_DISCRETE ? 4 : kind == GSN_GPU_INTEGRATED ? 2 : 1;
+    }
+#endif
+    h = port_video_picture_height();
+    if (h <= 0) {
+        return 1;
+    }
+    s = (h + 224) / 448;
+    return s < 1 ? 1 : s > most ? most : s;
 }
 
 void port_gs_set_native_lod(int mode) {
@@ -830,7 +860,7 @@ int port_gs_set_native_msaa(int samples) {
    height, and the window shrinks the picture across instead of stretching it. Nothing in the game or
    the GS's coordinates changes: the targets are only drawn finer across. */
 int port_gs_native_scale_x(void) {
-    int s = port_options.native_scale < 1 ? 1 : port_options.native_scale;
+    int s = port_gs_native_scale();
 
     if (port_options.native_widescreen && port_options.widescreen) {
         return (4 * s + 2) / 3;
@@ -958,7 +988,7 @@ void port_gs_run_vsync(void) {
     }
     if (have_native) {
         /* (widescreen and --native-widescreen change live: the scale follows, from this vblank's end) */
-        gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
+        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
     if (present_frames(request, shown, dump)) {
     } else if (dump) {

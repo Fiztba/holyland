@@ -1,12 +1,12 @@
 /* settings.json (port/include/port/settings.h): the player's settings, in the user's data folder.
 
      {
-       "version":  2,
+       "version":  3,
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "whole_frame": true,
+                    "whole_frame": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
-                    "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "native_lod": "scale",
+                    "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -25,8 +25,13 @@
    "version") says "renderer": "gs" and "presenter": "sdl" whether the player chose them or never
    looked: there those two values are read as the old defaults, and the new ones are used (and the
    file written again, as version 2). A file from before that says "native", "both" or "vulkan" is
-   kept as it is; from version 2 on, "gs" and "sdl" are the player's choice and kept too. */
-#define SETTINGS_VERSION 2
+   kept as it is; from version 2 on, "gs" and "sdl" are the player's choice and kept too.
+
+   3 from October 2026, when "native_scale" got "auto" (port_gs_native_scale: the picture drawn about as
+   tall as the window shows it) and it and "native_widescreen": true became the defaults. A file from
+   before says "native_scale": 1 and "native_widescreen": false whether the player chose them or not:
+   there the two are read as the new defaults. Other scales, and native widescreen on, are kept. */
+#define SETTINGS_VERSION 3
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +65,8 @@ PortSettings port_settings = {
     .renderer = PORT_RENDERER_NATIVE,
     .presenter = PORT_PRESENTER_VULKAN,
     .native_lod = 1, /* GSN_LOD_SCALE */
+    .native_scale = 0, /* auto */
+    .native_widescreen = 1,
 };
 
 static int active;
@@ -279,6 +286,7 @@ void port_settings_load(void) {
     s->anti_blur = read_bool(display, "anti_blur", s->anti_blur);
     s->adapt_width = read_bool(display, "adapt_width", s->adapt_width);
     s->whole_frame = read_bool(display, "whole_frame", s->whole_frame);
+    s->flicker_filter = read_bool(display, "flicker_filter", s->flicker_filter);
     s->widescreen = read_bool(display, "widescreen", s->widescreen);
     {
         const char *hud = read_string(display, "widescreen_hud");
@@ -299,8 +307,24 @@ void port_settings_load(void) {
                                                           : PORT_RENDERER_GS;
         }
     }
-    s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 1, 4);
+    {
+        const char *scale = read_string(display, "native_scale");
+
+        if (scale != NULL) {
+            s->native_scale = strcmp(scale, "auto") == 0 ? 0 : s->native_scale;
+        } else {
+            s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 0, 4);
+        }
+        if (version < 3 && s->native_scale == 1) {
+            s->native_scale = 0; /* the old default, written out: auto */
+            migrated = 1;
+        }
+    }
     s->native_widescreen = read_bool(display, "native_widescreen", s->native_widescreen);
+    if (version < 3 && !s->native_widescreen) {
+        s->native_widescreen = 1; /* (as above) */
+        migrated = 1;
+    }
     s->native_msaa = (int)read_number(display, "native_msaa", s->native_msaa, 1, 8);
     {
         const char *lod = read_string(display, "native_lod");
@@ -346,6 +370,9 @@ void port_settings_load(void) {
     }
     if (port_options.whole_frame) {
         port_options.whole_frame = s->whole_frame;
+    }
+    if (!port_options.flicker_filter_forced) {
+        port_options.flicker_filter = s->flicker_filter;
     }
     if (!port_options.widescreen_forced) {
         port_options.widescreen = s->widescreen;
@@ -489,10 +516,11 @@ void port_settings_save(void) {
     put(display, "anti_blur", cJSON_CreateBool(s->anti_blur));
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "whole_frame", cJSON_CreateBool(s->whole_frame));
+    put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
     put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
-    put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
+    put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));

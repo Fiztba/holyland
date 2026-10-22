@@ -421,6 +421,8 @@ void done_reading() {
 // the counts this GPU has, set by gsn_open, so gsn_set_msaa needs nothing of Granite's.)
 std::atomic<uint32_t> msaa_samples_used{0};
 uint32_t msaa_samples_have = 1;
+// The GPU's kind (gsn_gpu_kind), set by gsn_open: --native-scale auto's most
+int gpu_kind = GSN_GPU_OTHER;
 
 void msaa_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
     subpass = {};
@@ -3645,6 +3647,17 @@ extern "C" int gsn_open(void *shared_context) {
     const VkPhysicalDeviceLimits &limits = gs->device->get_gpu_properties().limits;
     msaa_samples_have = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts &
                         limits.sampledImageDepthSampleCounts;
+    switch (gs->device->get_gpu_properties().deviceType) {
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+        gpu_kind = GSN_GPU_DISCRETE;
+        break;
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+        gpu_kind = GSN_GPU_INTEGRATED;
+        break;
+    default:
+        gpu_kind = GSN_GPU_OTHER;
+        break;
+    }
     ring_start();
     return 1;
 }
@@ -3886,6 +3899,10 @@ extern "C" void gsn_set_scale(int x_scale, int y_scale) {
     uint32_t x = uint32_t(x_scale < 1 ? 1 : x_scale > GSN_MAX_SCALE_X ? GSN_MAX_SCALE_X : x_scale);
     uint32_t y = uint32_t(y_scale < 1 ? 1 : y_scale > 4 ? 4 : y_scale);
     wanted_scale = x | y << 8;
+}
+
+extern "C" int gsn_gpu_kind(void) {
+    return gpu_kind;
 }
 
 extern "C" void gsn_set_lod(int mode) {

@@ -28,6 +28,7 @@ typedef struct {
     int anti_blur;
     int adapt_width;
     int whole_frame;
+    int flicker_filter;    /* the game's flicker filter, as on the PS2 (port_options.flicker_filter; off) */
     int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
     int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
     int frame_rate;        /* 30 (the PS2's) or the opt-in 60, interpolated (port_options.frame_rate) */

@@ -21,10 +21,15 @@
                          the native GS's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
                          GS, or if vulkan cannot start, sdl
-       --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
-       --native-widescreen
+       --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4), or auto (the
+                         default): the multiple of 448 lines nearest the picture's height in the
+                         window (1440: 3; 2160: 4), at most 2 on an integrated GPU, 1 with no window
+       --native-widescreen, --no-native-widescreen
                          with --widescreen, the native GS draws the 16:9 picture wider still, with
-                         square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6)
+                         square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6); on in
+                         a new settings.json, off without one (headless)
+       --flicker-filter  the game's flicker filter, as on the PS2: each row of the picture blended
+                         half with the row above (port_flicker_filter()); off by default
        --native-msaa N   the native GS draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
                          by default): its edges smoothed
        --native-lod MODE the mipmap level the native GS reads textures at: scale (the default: the
@@ -38,7 +43,7 @@
                          and counted by --stats)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width, --no-whole-frame
                          turn off one of the ways the PC picture differs from the GS's raw output
-       --ps2-scanout     turn them all off
+       --ps2-scanout     turn them all off (and --flicker-filter on)
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
@@ -144,7 +149,8 @@ static void usage(const char *program) {
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
-            "          [--presenter vulkan|sdl] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
+            "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
+            "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
             program);
@@ -170,7 +176,7 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.whole_frame = 1;
-    port_options.native_scale = 1;
+    port_options.native_scale = 0; /* auto: port_gs_native_scale() */
     port_options.frame_rate = 30;
     port_options.native_msaa = 1;
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
@@ -200,6 +206,11 @@ static void parse_options(int argc, char **argv) {
         if (strcmp(option, "--ps2-scanout") == 0) {
             port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 0;
             port_options.whole_frame = 0;
+            port_options.flicker_filter = port_options.flicker_filter_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--flicker-filter") == 0) {
+            port_options.flicker_filter = port_options.flicker_filter_forced = 1;
             continue;
         }
         if (strcmp(option, "--no-deinterlace") == 0) {
@@ -229,8 +240,9 @@ static void parse_options(int argc, char **argv) {
             }
             continue;
         }
-        if (strcmp(option, "--native-widescreen") == 0) {
-            port_options.native_widescreen = port_options.native_widescreen_forced = 1;
+        if (strcmp(option, "--native-widescreen") == 0 || strcmp(option, "--no-native-widescreen") == 0) {
+            port_options.native_widescreen = strcmp(option, "--native-widescreen") == 0;
+            port_options.native_widescreen_forced = 1;
             continue;
         }
         if (strcmp(option, "--invincible") == 0) {
@@ -285,9 +297,9 @@ static void parse_options(int argc, char **argv) {
             }
             port_options.presenter_forced = 1;
         } else if (strcmp(option, "--native-scale") == 0) {
-            port_options.native_scale = atoi(value);
-            if (port_options.native_scale < 1 || port_options.native_scale > 4) {
-                fprintf(stderr, "--native-scale wants 1 to 4, not %s\n", value);
+            port_options.native_scale = strcmp(value, "auto") == 0 ? 0 : atoi(value);
+            if ((port_options.native_scale < 1 && strcmp(value, "auto") != 0) || port_options.native_scale > 4) {
+                fprintf(stderr, "--native-scale wants auto or 1 to 4, not %s\n", value);
                 exit(2);
             }
             port_options.native_scale_forced = 1;

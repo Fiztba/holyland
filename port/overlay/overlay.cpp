@@ -300,6 +300,7 @@ void display_page() {
         const char *tip;
         int *setting;
         int *option;
+        bool ps2_when_on; /* the option on is the PS2's way: the box shows it off */
     } switches[] = {
         {"Weave the two fields (deinterlace)",
          "The game draws each field as its own 224-line picture, half a line apart.\nOn: the two are woven "
@@ -323,11 +324,17 @@ void display_page() {
          "instead of as two fields (from the next movie), and the menus, drawn a field at a time, as one\n"
          "moment each picture. Off: as on the PS2. (--no-whole-frame)",
          &s.whole_frame, &port_options.whole_frame},
+        {"No flicker filter (no up-and-down blur)",
+         "On (the default): the rows as the game drew them. Off: as on the PS2, every frame the game\n"
+         "blends each row of the picture half with the row above, so that thin lines do not flicker\n"
+         "between an interlaced TV's two fields; on a PC screen that blurs the picture up and down, and\n"
+         "at a native GS resolution above 1x shows it twice, a GS row apart. (--flicker-filter)",
+         &s.flicker_filter, &port_options.flicker_filter, true},
     };
     for (Switch &item : switches) {
-        bool value = *item.option != 0;
+        bool value = (*item.option != 0) != item.ps2_when_on;
         if (ImGui::Checkbox(item.label, &value)) {
-            *item.setting = *item.option = value;
+            *item.setting = *item.option = value != item.ps2_when_on;
             changed();
         }
         tooltip(item.tip);
@@ -338,13 +345,13 @@ void display_page() {
     }
     if (ImGui::Button("All off: as the PS2 shows it")) {
         for (Switch &item : switches)
-            *item.setting = *item.option = 0;
+            *item.setting = *item.option = item.ps2_when_on;
         changed();
     }
     ImGui::SameLine();
     if (ImGui::Button("All on: the PC's picture")) {
         for (Switch &item : switches)
-            *item.setting = *item.option = 1;
+            *item.setting = *item.option = !item.ps2_when_on;
         changed();
     }
 }
@@ -706,14 +713,21 @@ void renderer_section() {
             "--renderer on the command line wins over this.");
     if (port_options.renderer != PORT_RENDERER_GS) {
         int scale = port_options.native_scale;
-        if (ImGui::SliderInt("Native GS resolution", &scale, 1, 4, "%dx")) {
+        char scale_name[32];
+        if (scale >= 1) {
+            snprintf(scale_name, sizeof(scale_name), "%dx", scale);
+        } else {
+            snprintf(scale_name, sizeof(scale_name), "Auto (%dx)", port_gs_native_scale());
+        }
+        if (ImGui::SliderInt("Native GS resolution", &scale, 0, 4, scale_name)) {
             port_gs_set_native_scale(scale);
             port_settings.native_scale = scale;
             port_settings_changed();
         }
         tooltip("The native GS draws its frame buffers at this many times the PS2's 640x448 (2x: 1280x896,\n"
                 "4x: 2560x1792). 1x is the PS2's picture; with --renderer both the comparison is made at 1x\n"
-                "pixels either way.");
+                "pixels either way. Auto (the default): the multiple of 448 lines nearest the height the\n"
+                "window shows the picture at (1080: 2x, 1440: 3x, 2160: 4x), at most 2x on an integrated GPU.");
         bool wide = port_options.native_widescreen != 0;
         if (ImGui::Checkbox("Native widescreen", &wide)) {
             port_options.native_widescreen = port_settings.native_widescreen = wide;

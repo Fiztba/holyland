@@ -109,6 +109,12 @@ int port_video_presenter(void) {
     return __atomic_load_n(&presenter, __ATOMIC_ACQUIRE);
 }
 
+static int picture_out_height; /* port_video_picture_height: written by port_video_present */
+
+int port_video_picture_height(void) {
+    return __atomic_load_n(&picture_out_height, __ATOMIC_ACQUIRE);
+}
+
 #ifdef KF4_HAVE_SDL
 /* The picture's place in a window of out_w x out_h pixels: the TV's 4:3, whatever the scanout's size;
    with --widescreen a 16:9 TV's (the game drew its picture squeezed for it, port/platform/gs.c); or
@@ -287,6 +293,20 @@ void port_video_present(void) {
 
     if (window == NULL) {
         return;
+    }
+    {
+        /* the height the picture is shown at, for --native-scale auto (port_gs_native_scale) */
+        int out_w, out_h, x, y, w, h;
+
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+        SDL_GetWindowSizeInPixels(window, &out_w, &out_h);
+#else
+        SDL_GetWindowSize(window, &out_w, &out_h);
+#endif
+        if (out_w > 0 && out_h > 0) {
+            port_video_fit(out_w, out_h, &x, &y, &w, &h);
+            __atomic_store_n(&picture_out_height, h, __ATOMIC_RELEASE);
+        }
     }
     /* The picture of the vblank just begun comes from the renderer's thread about when this one wakes
        for it, sometimes a little after. Shown at the next vblank instead, the one before was shown

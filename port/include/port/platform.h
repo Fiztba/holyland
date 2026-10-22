@@ -40,7 +40,8 @@ typedef struct {
        window's when the native GS is not running or the Vulkan one does not start). */
     int presenter;
     int presenter_forced;    /* --presenter: this run's, whatever settings.json says */
-    int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
+    int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size,
+                                or 0, auto (port_gs_native_scale()) */
     int native_scale_forced;
     /* --native-widescreen: with widescreen on and the native GS, the render targets wider still
        (port_gs_native_scale_x(), port/platform/gs.c): the 16:9 picture drawn with square pixels
@@ -72,6 +73,10 @@ typedef struct {
     int whole_frame;         /* the game draws whole pictures, not fields for an interlaced TV
                                 (port_whole_frame(): Game_ShiftScreenByViewTurn is left out, movies
                                 are shown in frame mode) */
+    int flicker_filter;      /* the game's flicker filter is drawn (port_flicker_filter(): each row half
+                                the row above, for an interlaced TV); off by default, on with
+                                --flicker-filter or --ps2-scanout */
+    int flicker_filter_forced;
     /* The opt-in 16:9 picture (port_widescreen(), port/platform/gs.c): off by default, turned on by
        --widescreen or settings.json, live from the overlay. */
     int widescreen;
@@ -281,8 +286,16 @@ typedef struct {
 } PortRendererDiff;
 extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
-/* The native GS's scale (port_options.native_scale), from the next vblank */
+/* The native GS's scale (port_options.native_scale: 1 to 4, or 0 for auto), from the next vblank */
 void port_gs_set_native_scale(int scale);
+/* The scale the native GS draws at: port_options.native_scale, or for auto (0) the multiple of 448 lines
+   nearest the height the window shows the picture at (port_video_picture_height()), 1 to 4; at most 2
+   on an integrated GPU, 1 on any other that is not a discrete one (lavapipe) and with no window
+   (headless) */
+int port_gs_native_scale(void);
+/* The height in pixels the window shows the picture at (port_video_fit), 0 with no window: written
+   at each present, read by the GS's thread */
+int port_video_picture_height(void);
 /* The native GS's scale across: native_scale, or with --native-widescreen (and widescreen on) the
    smallest whole number at least 4/3 of it */
 int port_gs_native_scale_x(void);
