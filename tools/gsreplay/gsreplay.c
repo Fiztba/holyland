@@ -95,6 +95,11 @@ uint64_t port_ticks(void) {
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
 
+/* video.c's picture queue times pictures with this */
+double port_wall_seconds(void) {
+    return (double)port_ticks() / 1e9;
+}
+
 void port_todo(const char *what, const char *file, int line) {
     fprintf(stderr, "todo: %s (%s:%d)\n", what, file, line);
 }
