@@ -77,6 +77,15 @@ int gsn_set_msaa(int samples);
 #define GSN_CUTOUT_AA_OFF 0
 #define GSN_CUTOUT_AA_SSAA 1
 void gsn_set_cutout_aa(int mode);
+/* --native-colour: how precisely colours are kept, from the next vblank. GSN_COLOUR_EXACT (the default)
+   is the GS's: 8 bits a channel, every step of its arithmetic rounded as the GS rounds it, the PS2's
+   picture. GSN_COLOUR_HIGH keeps the 32-bit targets at 16 bits a channel and the colour arithmetic in
+   floats (the texture filter, texture function, fog, blending, and the frame's passes that read it
+   again), alpha and 16-bit targets as the GS has them; the picture is dithered to 8 bits as it is
+   scanned out, and anything read back (write-backs to VRAM, captures) is rounded to 8 bits. */
+#define GSN_COLOUR_EXACT 0
+#define GSN_COLOUR_HIGH 1
+void gsn_set_colour(int mode);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {

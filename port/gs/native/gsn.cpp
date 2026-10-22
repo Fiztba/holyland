@@ -185,7 +185,7 @@ enum : uint32_t {
 };
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
-    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14,
+    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -258,10 +258,12 @@ struct Gs {
     Program *program_zclamp_sample = nullptr; // (shaders/gs_zclamp_sample.frag: the same at every sample)
     Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
     Program *program_deinterlace = nullptr; // (the scanout's: shaders/deinterlace.frag)
+    Program *program_narrow = nullptr;      // (--native-colour high's scanout: shaders/narrow.frag)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
     VkDeviceSize readback_size = 0;
+    std::vector<uint8_t> narrowed; // read_image's pixels of a 16-bit image, rounded to 8 bits
     std::vector<std::unique_ptr<Target>> targets;
     std::vector<std::unique_ptr<Texture>> textures;
     uint64_t tick = 0;
@@ -306,6 +308,52 @@ volatile uint32_t wanted_samples = 1;
 // sample; sample_shading, whether the GPU can (sampleRateShading)
 volatile int cutout_aa_mode = GSN_CUTOUT_AA_OFF;
 bool sample_shading = false;
+
+// --native-colour (gsn_set_colour): the 32-bit colour targets at 8 bits a channel, as the GS has them
+// (GSN_COLOUR_EXACT), or 16 (GSN_COLOUR_HIGH: "--native-colour high" below). Changed at a vblank, as the
+// scale is.
+uint32_t target_colour = GSN_COLOUR_EXACT;
+volatile uint32_t wanted_colour = GSN_COLOUR_EXACT;
+
+// The colour targets' format: 16-bit UNORM holds every 8-bit value exactly (v * 257), so what the GS's
+// arithmetic writes there reads back as it is
+VkFormat colour_format() {
+    return target_colour == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+}
+
+bool wide(const Image &image) {
+    return image.get_format() == VK_FORMAT_R16G16B16A16_UNORM;
+}
+
+// An 8-bit RGBA pixel as a 16-bit one, each channel v * 257
+uint64_t widen(uint32_t v) {
+    uint64_t x = v;
+    x = (x | x << 16) & 0x0000FFFF0000FFFFull;
+    x = (x | x << 8) & 0x00FF00FF00FF00FFull; // each byte in a 16-bit lane
+    return x | x << 8;
+}
+
+// A 16-bit RGBA pixel rounded to 8 bits a channel
+uint32_t narrow(uint64_t v) {
+    uint32_t out = 0;
+    for (int c = 0; c < 4; c++) {
+        uint32_t x = uint32_t(v >> (c * 16)) & 0xFFFF;
+        out |= ((x * 255u + 32767u) / 65535u) << (c * 8);
+    }
+    return out;
+}
+
+// n pixels into an image's update_image memory at pixel `at`, as the image holds them
+void put_pixels(void *out, const Image &image, size_t at, const uint32_t *rgba, size_t n) {
+    if (wide(image)) {
+        uint64_t *o = static_cast<uint64_t *>(out) + at;
+        for (size_t i = 0; i < n; i++) {
+            o[i] = widen(rgba[i]);
+        }
+    } else {
+        memcpy(static_cast<uint32_t *>(out) + at, rgba, n * 4);
+    }
+}
 
 // Time spent in a function, added to a counter of gsn_stats
 struct Timer {
@@ -385,7 +433,7 @@ ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_
 
 // Pixels from the GPU: an image's rectangle, as RGBA8 (or D32 floats), when the GPU is done
 const uint8_t *read_image(const Image &image, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
-    VkDeviceSize size = VkDeviceSize(w) * h * 4;
+    VkDeviceSize size = VkDeviceSize(w) * h * (wide(image) ? 8 : 4);
     if (!gs->readback_buffer || gs->readback_size < size) {
         BufferCreateInfo info = {};
         info.domain = BufferDomain::CachedHost;
@@ -403,7 +451,20 @@ const uint8_t *read_image(const Image &image, uint32_t x, uint32_t y, uint32_t w
     cmd().barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
     submit(true);
-    return static_cast<const uint8_t *>(gs->device->map_host_buffer(*gs->readback_buffer, MEMORY_ACCESS_READ_BIT));
+    const uint8_t *mapped =
+        static_cast<const uint8_t *>(gs->device->map_host_buffer(*gs->readback_buffer, MEMORY_ACCESS_READ_BIT));
+    if (!wide(image)) {
+        return mapped;
+    }
+    // (--native-colour high: rounded to 8 bits)
+    gs->narrowed.resize(size_t(w) * h * 4);
+    for (size_t i = 0; i < size_t(w) * h; i++) {
+        uint64_t v;
+        memcpy(&v, mapped + i * 8, 8);
+        uint32_t n = narrow(v);
+        memcpy(gs->narrowed.data() + i * 4, &n, 4);
+    }
+    return gs->narrowed.data();
 }
 
 void done_reading() {
@@ -446,7 +507,7 @@ void msaa_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
 
 ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
     msaa_samples_used = target_samples;
-    ImageCreateInfo info = ImageCreateInfo::render_target(width, height, depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM);
+    ImageCreateInfo info = ImageCreateInfo::render_target(width, height, depth ? VK_FORMAT_D32_SFLOAT : colour_format());
     info.samples = VkSampleCountFlagBits(target_samples);
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                  (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
@@ -811,9 +872,10 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     uint32_t sx = t.sx, sy = t.sy, pw = w * sx, ph = h * sy;
-    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0},
-                                                               {pw, ph, 1}, pw, ph, {aspect, 0, 0, 1}));
-    std::vector<uint32_t> row(w);
+    void *out = cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0}, {pw, ph, 1}, pw, ph,
+                                   {aspect, 0, 0, 1});
+    std::vector<uint32_t> row(w), line(pw);
+    std::vector<uint8_t> converted;
     for (uint32_t y = 0; y < h; y++) {
         // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
         gsn_vram_read_row(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0, y0 + y, w, row.data());
@@ -825,11 +887,16 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
             } else {
                 v = vram_to_target_pixel(v, t.psm);
             }
-            for (uint32_t j = 0; j < sy; j++) {
-                for (uint32_t i = 0; i < sx; i++) {
-                    out[size_t(y * sy + j) * pw + x * sx + i] = v;
-                }
+            for (uint32_t i = 0; i < sx; i++) {
+                line[x * sx + i] = v;
             }
+        }
+        // (the row made here, then copied: the upload's memory is not for reading)
+        size_t row_bytes = size_t(pw) * (wide(*t.image) ? 8 : 4);
+        converted.resize(row_bytes);
+        put_pixels(converted.data(), *t.image, 0, line.data(), pw);
+        for (uint32_t j = 0; j < sy; j++) {
+            memcpy(static_cast<uint8_t *>(out) + size_t(y * sy + j) * row_bytes, converted.data(), row_bytes);
         }
     }
     transfer_barrier();
@@ -1028,7 +1095,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         t->used = gs->tick;
         return t;
     }
-    VkFormat format = psm_is_depth(psm) ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat format = psm_is_depth(psm) ? VK_FORMAT_D32_SFLOAT : colour_format();
     if (!t) {
         // A buffer that starts some rows above a target and runs into it (a scrolling texture's
         // target, drawn into from a page row higher the next time): the target grows upwards to start
@@ -1525,10 +1592,13 @@ void begin_pass(Target *color, Target *depth, bool ms = false) {
 // (box: only the target's pixels a draw can cover, x0 y0 x1 y1 in GS pixels; NULL: all of it)
 const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
     uint32_t tw = t.width * t.sx, th = t.height * t.sy;
+    if (!gs->snapshot || gs->snapshot->get_format() != t.image->get_format()) {
+        gs->snapshot.reset();
+    }
     if (!gs->snapshot || gs->snapshot->get_width() < tw || gs->snapshot->get_height() < th) {
         uint32_t w = std::max(tw, gs->snapshot ? gs->snapshot->get_width() : 0u);
         uint32_t h = std::max(th, gs->snapshot ? gs->snapshot->get_height() : 0u);
-        gs->snapshot = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+        gs->snapshot = make_image(w, h, t.image->get_format(), 1, false);
     }
     VkOffset3D at = {0, 0, 0};
     VkExtent3D size = {tw, th, 1};
@@ -1744,6 +1814,9 @@ void flush_batch() {
     push.misc = (bits(gs->reg[R_FBA_1 + ctxt], 0, 1) ? M_FBA : 0) | (bits(gs->reg[R_COLCLAMP], 0, 1) ? M_COLCLAMP : 0) |
                 (dst16 ? M_DST16 : 0) | (fpsm == GSN_PSMCT24 ? M_DST24 : 0) |
                 (bits(gs->reg[R_PABE], 0, 1) ? M_PABE : 0) | (bits(gs->reg[R_SCANMSK], 0, 2) << M_SCANMSK_SHIFT);
+    if (wide(*color->image) && !dst16) {
+        push.misc |= M_HIGH; // --native-colour high: the colours' arithmetic in floats
+    }
     push.flags = (fge ? F_FGE : 0);
 
     // the texture
@@ -3171,6 +3244,12 @@ void make_program() {
     }
     gs->program_deinterlace = gs->device->request_program(
         copy_vs, gs->device->request_shader(gsn_spv_deinterlace_frag, sizeof(gsn_spv_deinterlace_frag), &deinterlace));
+
+    // --native-colour high's scanout: a 16-bit target in, an 8-bit picture out
+    ResourceLayout narrowing = copy_colour;
+    narrowing.push_constant_size = 8 * sizeof(int32_t);
+    gs->program_narrow = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_narrow_frag, sizeof(gsn_spv_narrow_frag), &narrowing));
 }
 
 void reset_gs() {
@@ -3273,6 +3352,34 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
                 uint32_t dst_step) {
     const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     uint32_t iw = s.w * s.sx, sy = s.sy;
+    if (s.t && s.t->image->get_format() != dst.get_format()) {
+        // --native-colour high: the 16-bit target dithered into the 8-bit image (shaders/narrow.frag)
+        msaa_settle(*s.t);
+        end_pass();
+        RenderPassInfo rp;
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &dst.get_view();
+        rp.load_attachments = 1;
+        rp.store_attachments = 1;
+        CommandBuffer &c = cmd();
+        c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        c.begin_render_pass(rp);
+        c.set_opaque_state();
+        c.set_program(gs->program_narrow);
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
+        c.set_depth_test(false, false);
+        c.set_texture(0, 0, s.t->image->get_view(), StockSampler::NearestClamp);
+        int32_t push[8] = {int32_t(s.dbx * s.sx), int32_t(s.dby * sy), int32_t(first), int32_t(step),
+                           int32_t(dst_first), int32_t(dst_step), int32_t(count), int32_t(sy)};
+        c.push_constants(push, 0, sizeof(push));
+        c.draw(3);
+        c.end_render_pass();
+        c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        return;
+    }
     if (s.t) {
         msaa_settle(*s.t);
         end_pass();
@@ -3333,7 +3440,7 @@ void record_history(const Shown &s, int parity) {
     for (int i = 3; i > 0; i--) {
         gs->history[i] = gs->history[i - 1];
     }
-    gs->history[0] = oldest ? oldest : make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+    gs->history[0] = oldest ? oldest : make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
     gs->history_filled = std::min(gs->history_filled + 1, 4u);
     copy_lines(*gs->history[0], s, uint32_t(parity), 2, s.h / 2, 0, 1);
 }
@@ -3906,8 +4013,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     frame->height = h * 2 * sy;
                     ok = 1;
                 }
-            } else if (mode != SCAN_WHOLE) {
-                // (on the GPU, as for the presenter, and read back)
+            } else if (mode != SCAN_WHOLE || (shown.t && wide(*shown.t->image))) {
+                // (on the GPU, as for the presenter, and read back; --native-colour high's picture so
+                // too, dithered as the window has it)
                 if (want_pixels) {
                     ok = (scanout_to_image(shown, mode, parity, frame) & GSN_WANT_PIXELS) ? 1 : 0;
                 }
@@ -3938,7 +4046,8 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     gsn_stats.pool_mb = decoded_pool_bytes >> 20;
     gsn_stats.upload_copies = page_images.size();
     uint32_t wanted = wanted_scale;
-    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples) {
+    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples ||
+        wanted_colour != target_colour) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         for (auto &t : gs->targets) {
             write_back(*t);
@@ -3948,6 +4057,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         target_sx = wanted & 0xFF;
         target_sy = wanted >> 8;
         target_samples = wanted_samples;
+        target_colour = wanted_colour;
         gs->fields[0].clear();
         gs->fields[1].clear();
         forget_history();
@@ -4019,6 +4129,10 @@ extern "C" void gsn_set_cutout_aa(int mode) {
     cutout_aa_mode = mode;
 }
 
+extern "C" void gsn_set_colour(int mode) {
+    wanted_colour = mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
+}
+
 extern "C" int gsn_set_msaa(int samples) {
     // the most this GPU has up to `samples` (msaa_samples_have)
     uint32_t n = 1;
@@ -4070,10 +4184,9 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
         msaa_image_written(*t);
         end_pass();
         transfer_barrier();
-        uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0},
-                                                                   {r->w, r->h, 1}, r->w, r->h,
-                                                                   {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}));
-        memcpy(out, rgba, size_t(r->w) * r->h * 4);
+        void *out = cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0}, {r->w, r->h, 1}, r->w, r->h,
+                                       {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+        put_pixels(out, *t->image, 0, rgba, size_t(r->w) * r->h);
         transfer_barrier();
         return;
     }
@@ -4204,6 +4317,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         forget_history(); // (a capture's comes after: KF4GS_GS_HISTORY)
         // (no targets: a capture is drawn with MSAA, and at the scale, from its start)
         target_samples = wanted_samples;
+        target_colour = wanted_colour;
         target_sx = wanted_scale & 0xFF;
         target_sy = wanted_scale >> 8;
         return 1;
@@ -4252,7 +4366,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
             if (size_t(end - at) < bytes || !f.width || !f.height || f.width > 8192 || f.height > 8192) {
                 return 0;
             }
-            fields[i] = make_image(f.width, f.height, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+            fields[i] = make_image(f.width, f.height, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
             end_pass();
             transfer_barrier();
             void *out = cmd().update_image(*fields[i], {0, 0, 0}, {f.width, f.height, 1}, f.width, f.height,
