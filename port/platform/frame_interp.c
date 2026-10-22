@@ -371,6 +371,7 @@ typedef struct {
     uint32_t prim;     /* PRIM at its first vertex */
     uint64_t tex;      /* and TEX0's texture and CLUT */
     int32_t pair;      /* the run of the frame before that is this one (objects_pair), -1: none */
+    int sky;           /* of the sky (PORT_FRAME_INTERP_SKY: a map record that follows the player) */
 } Run;
 
 #define VERTEX_SURE 1  /* a vertex without ADC: never one the VU1 program clipped */
@@ -386,14 +387,17 @@ typedef struct {
     size_t npos, pos_room;
     uint32_t *by_key; /* the runs' numbers, in the order of their batches */
     size_t by_key_room;
+    double sky_move[3]; /* the sky's move from the frame before (objects_sky_move), when sky_ok */
+    int sky_ok;
 } Objects;
 
 static void objects_reset(Objects *o) {
     o->nruns = 0;
     o->npos = 0;
+    o->sky_ok = 0;
 }
 
-static void objects_add_run(Objects *o, uint64_t key, int section) {
+static void objects_add_run(Objects *o, uint64_t key, int section, int sky) {
     Run *r;
 
     if (o->nruns == o->runs_room) {
@@ -408,6 +412,7 @@ static void objects_add_run(Objects *o, uint64_t key, int section) {
     r->first = (uint32_t)o->npos;
     r->count = 0;
     r->section = section;
+    r->sky = sky && section == SECTION_WORLD;
     r->prim = 0;
     r->tex = 0;
     r->pair = -1;
@@ -830,6 +835,82 @@ static void flat_pair(Flat *f, const Flat *o, const Uploads *u) {
    more than that, and the place between does not cut past the eye. */
 static uint64_t stat_runs, stat_runs_key, stat_runs_order;
 
+static int compare_double(const void *a, const void *b) {
+    double x = *(const double *)a, y = *(const double *)b;
+
+    return x < y ? -1 : x > y;
+}
+
+/* The sky's move from the frame before (o->sky_move): the median, each way, of its paired runs' mean
+   moves (their vertices without ADC in both frames). The sky (the map records that follow the player:
+   map 000's dome, in strips a few thousand to twenty thousand away) goes with the player, and each
+   picture between moves all of it by this one move (object_between), paired or not, so its strips stay
+   together. Deciding it run by run, by whether each strip moved with the camera, came apart whenever
+   the strips disagreed: the eye rises and falls with the step while the dome goes along the ground,
+   and the places of the far strips are less sure, so some passed and others did not when the player
+   set off, stopped, ran or turned while walking: thin bright and dark lines along the strips' edges,
+   for a frame. (One place's error, a 10,000th of its distance, is averaged out over each strip's
+   vertices and then left out by the median.) */
+static void objects_sky_move(Objects *o, const Objects *prev) {
+    static double *moves;
+    static size_t room;
+    size_t i, n = 0;
+    int c;
+
+    o->sky_ok = 0;
+    for (i = 0; i < o->nruns; i++) {
+        const Run *r = &o->runs[i], *a;
+        double sum[3] = {0, 0, 0};
+        uint32_t k, count = 0;
+
+        if (!r->sky || r->pair < 0) {
+            continue;
+        }
+        a = &prev->runs[r->pair];
+        for (k = 0; k < r->count && k < a->count; k++) {
+            if (o->valid[r->first + k] != VERTEX_SURE || prev->valid[a->first + k] != VERTEX_SURE) {
+                continue;
+            }
+            for (c = 0; c < 3; c++) {
+                sum[c] += o->pos[r->first + k][c] - prev->pos[a->first + k][c];
+            }
+            count++;
+        }
+        if (count == 0) {
+            continue;
+        }
+        if (room < (n + 1) * 3) {
+            room = room ? room * 2 : 3 * 256;
+            moves = realloc(moves, room * sizeof(*moves));
+            if (moves == NULL) {
+                PORT_FATAL("out of memory");
+            }
+        }
+        for (c = 0; c < 3; c++) {
+            moves[n * 3 + c] = sum[c] / count;
+        }
+        n++;
+    }
+    if (n == 0) {
+        return;
+    }
+    for (c = 0; c < 3; c++) {
+        double *column = malloc(n * sizeof(*column));
+
+        if (column == NULL) {
+            PORT_FATAL("out of memory");
+        }
+        for (i = 0; i < n; i++) {
+            column[i] = moves[i * 3 + c];
+        }
+        qsort(column, n, sizeof(*column), compare_double);
+        o->sky_move[c] = n % 2 ? column[n / 2] : (column[n / 2 - 1] + column[n / 2]) / 2;
+        free(column);
+    }
+    o->sky_ok = o->sky_move[0] * o->sky_move[0] + o->sky_move[1] * o->sky_move[1] + o->sky_move[2] * o->sky_move[2] <
+                INTERP_MAX_MOVE * INTERP_MAX_MOVE;
+}
+
 static void objects_pair(Objects *o, const Objects *prev) {
     size_t i, at = 0, k;
     uint8_t *taken;
@@ -883,6 +964,7 @@ static void objects_pair(Objects *o, const Objects *prev) {
         }
     }
     free(taken);
+    objects_sky_move(o, prev);
 }
 
 typedef struct {
@@ -905,6 +987,7 @@ typedef struct {
     float fields[19];
     int section;
     int world_seen;   /* a world mark has been seen */
+    int sky;          /* the runs from here are the sky's (PORT_FRAME_INTERP_SKY) */
     Camera camera;    /* SCAN: the first world mark's camera */
     Screen screen;
     Screen screen_reflect; /* the reflection's projection (SECTION_REFLECT) */
@@ -982,11 +1065,16 @@ static void mark(Walk *w, uint64_t value) {
         memcpy(&w->fields[index], &bits, 4);
         return;
     }
+    if (index == PORT_FRAME_INTERP_SKY) {
+        w->sky = bits != 0;
+        return;
+    }
     if (index != PORT_FRAME_INTERP_HEADER) {
         return;
     }
     if (bits == PORT_FRAME_INTERP_END) {
         w->section = SECTION_NONE;
+        w->sky = 0;
         return;
     }
     if (bits == PORT_FRAME_INTERP_ARM) {
@@ -1154,6 +1242,13 @@ static void keep_vertex(Walk *w, const GifWalk *p, const uint8_t *q, int xyzf) {
    places are less sure: the noise) passed as going with the camera and the near ones stayed in the
    world: thin bright and dark lines along their edges in the pictures between, for a frame, each time
    the player set off or stopped. */
+/* REPLAY: the run is the sky's, and the sky's move is known (objects_sky_move) */
+static int run_is_sky(const Walk *w) {
+    const Objects *o = w->objects;
+
+    return o != NULL && w->run >= 0 && (size_t)w->run < o->nruns && o->runs[w->run].sky && o->sky_ok;
+}
+
 static int goes_with_camera(const double eye_move[3], const double sum[3], uint32_t n, double most, double dist2) {
     /* (a vertex's place, from its screen place and Q, is off by up to about a 10,000th of its
        distance: the dome's far strips, 20,000 away, by 1 to 2) */
@@ -1187,6 +1282,10 @@ static void run_motion(Walk *w) {
 
     w->run_moving = 0;
     w->run_most = 0;
+    if (run_is_sky(w)) {
+        w->run_moving = 1; /* (all of the sky by one move: object_between) */
+        return;
+    }
     if (prev == NULL) {
         return;
     }
@@ -1263,6 +1362,20 @@ static int object_between(Walk *w, double m[3]) {
     uint32_t k = w->run_vertex;
     int i;
 
+    if (run_is_sky(w) && w->run_moving) {
+        cur = &o->runs[w->run];
+        if (k >= cur->count || !o->valid[cur->first + k]) {
+            return 0;
+        }
+        b = o->pos[cur->first + k];
+        for (i = 0; i < 3; i++) {
+            mid[i] = b[i] - o->sky_move[i] * (1.0 - w->t);
+        }
+        for (i = 0; i < 3; i++) {
+            m[i] = w->mid.r[i][0] * mid[0] + w->mid.r[i][1] * mid[1] + w->mid.r[i][2] * mid[2] + w->mid.t[i];
+        }
+        return 1;
+    }
     if (prev == NULL || !w->run_moving) {
         return 0;
     }
@@ -1739,6 +1852,9 @@ static int gpu_run_static(Walk *w) {
     uint32_t k, n = 0;
     int i;
 
+    if (run_is_sky(w)) {
+        return 1; /* (all of the sky by one move: gpu_vertex) */
+    }
     if (prev == NULL) {
         return 0;
     }
@@ -1834,7 +1950,21 @@ static void gpu_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf, int sect
     e->w[7] = float_bits(depth);
     e->w[14] = float_bits(z - w->screen.cz);
     w->screen = world;
-    if (section != SECTION_REFLECT && w->run_prev != NULL && (size_t)w->run < w->objects->nruns &&
+    if (section == SECTION_WORLD && run_is_sky(w) && (size_t)w->run < gpu_run_room && gpu_run_ok[w->run]) {
+        /* object_between's sky: b less the sky's move (1 - t) */
+        const Objects *o = w->objects;
+        const Run *cur = &o->runs[w->run];
+        uint32_t k = w->run_vertex;
+        int i;
+
+        if (k < cur->count && o->valid[cur->first + k]) {
+            for (i = 0; i < 3; i++) {
+                e->w[8 + i] = float_bits(-o->sky_move[i]);
+                e->w[11 + i] = float_bits(o->sky_move[i]);
+            }
+            e->w[0] |= GSN_IM_OBJ;
+        }
+    } else if (section != SECTION_REFLECT && w->run_prev != NULL && (size_t)w->run < w->objects->nruns &&
         gpu_run_ok[w->run]) {
         /* object_between's two places, as a start and a move */
         const Objects *o = w->objects;
@@ -1940,7 +2070,7 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
         w->run_vertex = 0;
         w->nseen = 0;
         if (w->mode == SCAN && w->objects != NULL) {
-            objects_add_run(w->objects, r->key, w->section);
+            objects_add_run(w->objects, r->key, w->section, w->sky);
         } else if (w->mode == REPLAY) {
             const Objects *o = w->objects;
 
@@ -2660,8 +2790,8 @@ static void gpu_picture(const Camera *between, double t) {
     for (r = 0; o != NULL && r < o->nruns && r < gpu_run_room; r++) {
         const Run *run = &o->runs[r];
 
-        if (gpu_run_ok[r] && run->pair >= 0 && pending.objects_before != NULL &&
-            gpu_zm_ok(o, pending.objects_before, run, c, between, t)) {
+        if (gpu_run_ok[r] && ((run->sky && o->sky_ok) || (run->pair >= 0 && pending.objects_before != NULL &&
+                                                         gpu_zm_ok(o, pending.objects_before, run, c, between, t)))) {
             bits[r >> 5] |= 1u << (r & 31);
         }
     }
