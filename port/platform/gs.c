@@ -156,6 +156,7 @@ int port_gs_enabled(void) {
 #define GS_REG_XYZF3 0x0C
 #define GS_REG_XYZ3 0x0D
 #define GS_REG_XYOFFSET_1 0x18
+#define GS_REG_XYOFFSET_2 0x19
 #define GS_REG_TEX0_1 0x06
 #define GS_REG_FRAME_1 0x4C
 #define GS_REG_FRAME_2 0x4D
@@ -268,6 +269,11 @@ static void image_data(size_t qwords) {
    - the 3D world (PATH1, and the triangles the game cuts up on the CPU, PATH2), projected wide;
    - anything drawn while the draw offset is not the 640x448 frame's (XYOFFSET_1 X 0x6C00): copies of
      the frame into a texture, scrolling textures, the 256x256 draw environment;
+     (a primitive of context 2 drawn into the frame buffer of context 1 is the frame's too, at a draw
+     offset of its own: the menus place their models and pictures so, the Equipment screen's weapon at
+     XYOFFSET_2 X 0x7580 and the Journal's picture at 0x7660. It is squeezed about the frame's middle
+     where its draw offset puts it, XYOFFSET_2 X plus 320 pixels: about X 0x8000, its own middle,
+     each kept its 4:3 place, off to the left of its squeezed frame);
    - a vertex of an untextured primitive at or past the frame's left or right edge: full-screen fades
      and fills, and panels that reach the edge, stay reaching the 16:9 picture's edge;
    - a primitive textured with a picture of the frame (TBP0 0 or 0x1180, the two frame buffers, or
@@ -276,6 +282,9 @@ static void image_data(size_t qwords) {
    middle of that frame, and its black clear, which reaches the edges, becomes the bars.
    With the switch off nothing here runs, and the packets go to the GS untouched. */
 static uint32_t draw_offset_x = 0x6C00; /* XYOFFSET_1's X as last written, 12.4 */
+static uint32_t draw_offset_x2 = 0x6C00; /* XYOFFSET_2's */
+static uint32_t frame_fbp[2];            /* FRAME_1's and FRAME_2's FBP as last written (these two are
+                                            not in save states: the game writes them again each frame) */
 
 int port_widescreen(void) {
     return port_options.widescreen;
@@ -321,7 +330,11 @@ static void squeeze_x(int path, uint8_t *data) {
     int mode = widescreen_mode(path);
     int x = data[0] | (data[1] << 8);
     int anchor = 0x8000;
+    int shift = 0; /* the frame's place in this context's coordinates, from context 1's */
 
+    if ((p->prim & 0x200) && frame_fbp[1] == frame_fbp[0]) {
+        shift = (int)draw_offset_x2 - (int)draw_offset_x; /* context 2, into the frame (above) */
+    }
     if (path == 3 && draw_offset_x == 0 && port_movie_playing()) {
         /* a movie (gfx/movie.c) draws its pictures into its own frame, with a draw offset of 0:
            squeezed about that frame's middle, between the bars of its black clear */
@@ -329,7 +342,7 @@ static void squeeze_x(int path, uint8_t *data) {
     } else if (mode == PORT_WIDESCREEN_3D || (draw_offset_x >> 4) != 0x6C0) {
         return;
     }
-    if (!(p->prim & 0x10) && (x <= 0x6C00 || x >= 0x9400)) {
+    if (!(p->prim & 0x10) && (x <= 0x6C00 + shift || x >= 0x9400 + shift)) {
         return;
     }
     if ((p->prim & 0x10) && is_frame_picture(p->tbp[(p->prim >> 9) & 1])) {
@@ -338,6 +351,7 @@ static void squeeze_x(int path, uint8_t *data) {
     if (mode == PORT_WIDESCREEN_HUD_LEFT && !port_options.widescreen_hud_centred) {
         anchor = 0x6C00;
     }
+    anchor += shift;
     x = anchor + (x - anchor) * 3 / 4;
     data[0] = (uint8_t)x;
     data[1] = (uint8_t)(x >> 8);
@@ -416,8 +430,11 @@ static void read_gif(int path, uint64_t *qwords, size_t count, int squeeze) {
                     image_register(reg, qwords[i * 2]);
                 } else if (reg == GS_REG_FRAME_1 || reg == GS_REG_FRAME_2) {
                     frame_picture((uint32_t)(qwords[i * 2] & 0x1FF) << 5, 1);
+                    frame_fbp[reg - GS_REG_FRAME_1] = (uint32_t)(qwords[i * 2] & 0x1FF);
                 } else if (reg == GS_REG_XYOFFSET_1) {
                     draw_offset_x = (uint32_t)(qwords[i * 2] & 0xFFFF);
+                } else if (reg == GS_REG_XYOFFSET_2) {
+                    draw_offset_x2 = (uint32_t)(qwords[i * 2] & 0xFFFF);
                 } else if (p->squeezing && squeeze) {
                     if (reg == PORT_GS_REG_WIDESCREEN) {
                         widescreen_marked(path, (int)(qwords[i * 2] & 0xFF));
@@ -489,6 +506,9 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     }
     if (port_frame_interp() && backend) {
         port_interp_keep(path, data, bytes); /* --frame-rate 60 (port/platform/frame_interp.c) */
+    }
+    if (port_whole_frame() && backend) {
+        port_field_frames_keep(path, data, bytes); /* the fields' screens whole (port/platform/field_frames.c) */
     }
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_gs) {
@@ -910,6 +930,32 @@ void port_gs_run_vsync(void) {
         port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
         interp_on = 0;
     }
+    if (port_whole_frame()) {
+        /* a screen drawn as fields (the menus): the picture just drawn drawn again into the buffer shown,
+           for the other field, and given to the renderers as that field first, so that the vblank's
+           woven picture is one moment (port/platform/field_frames.c) */
+        int idle = port_gs_path_idle(1) && port_gs_path_idle(2) && port_gs_path_idle(3);
+        uint32_t drawn;
+
+        if (idle && port_field_frames_vsync(request->privileged, replay_gif, &drawn)) {
+            uint64_t other[0xF0 / 8];
+            int i;
+
+            memcpy(other, request->privileged, sizeof(other));
+            for (i = 0x70 / 8; i <= 0x90 / 8; i += 0x20 / 8) {
+                other[i] = (other[i] & ~(uint64_t)0x1FF) | drawn; /* DISPFB1 and DISPFB2 */
+            }
+            if (have_gs) {
+                port_gs_backend_vsync(other, request->field ^ 1, 0, &frame);
+            }
+            if (have_native) {
+                gsn_vsync(other, request->field ^ 1, 0, NULL);
+            }
+        }
+        port_field_frames_reset(idle);
+    } else {
+        port_field_frames_reset(0);
+    }
     if (have_native) {
         /* (widescreen and --native-widescreen change live: the scale follows, from this vblank's end) */
         gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
@@ -976,6 +1022,7 @@ void port_gs_state(PortStateIo *io) {
 
     if (io->loading) {
         port_interp_forget(); /* (--frame-rate 60) the packets kept are not this state's */
+        port_field_frames_reset(0); /* (whole frames) nor are these */
     }
     PORT_STATE(io, gif_paths);
     PORT_STATE(io, draw_offset_x);

@@ -327,6 +327,19 @@ void port_interp_reset(int whole);
 void port_interp_forget(void);
 void port_interp_print_stats(void);
 
+/* Whole frames of the screens drawn as fields (port_whole_frame(); port/platform/field_frames.c), on
+   the controller's thread: each GIF packet sent to the GS is kept (port_field_frames_keep) until the
+   vblank; port_field_frames_vsync, before the vblank's scanout, when the display is in field mode and
+   they drew one picture into the buffer not shown, sends them again through send into the buffer
+   shown, half a line the other way, and gives 1 and the buffer they drew (*drawn), to be scanned out
+   as the other field first; port_field_frames_reset starts the next vblank's (whole: every path is
+   between packets; 0 also drops what was kept). */
+void port_field_frames_keep(int path, const void *data, size_t bytes);
+int port_field_frames_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes),
+                            uint32_t *drawn);
+void port_field_frames_reset(int whole);
+uint64_t port_field_frames_replays(void);
+
 /* ---- The window (port/platform/video.c) -------------------------------------------------- */
 void port_video_init(void);
 /* (the controller's thread) the newest picture, for the window */
