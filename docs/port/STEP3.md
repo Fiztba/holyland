@@ -450,8 +450,14 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
 **The choice.** The changes are made after VU1, in the GIF packets, at the GS front end:
 - Every vertex of the world reaches the GS as a screen position, a Z and (textured) Q = 1/w. That is
   enough to undo the projection and do it again from another camera: back to the camera's space, the
-  camera's change, projected again, S and T scaled for the new Q, Z moved by what the projection's Z
-  moves by (the flames carry a Z offset of their own).
+  camera's change, projected again, S and T scaled for the new Q, and Z as cz + k / w with the
+  vertex's own k, (Z - cz) w. For the world k is the projection's az; program 0x700's flames and
+  lights' glows have about 16 times that, which pulls them in front of what is near them. (Until
+  October 2026 the replay moved every Z by the world's az alone: a glow's Z moved a 16th of the way,
+  so in the pictures between the glows came through the walls before them, and walking toward the
+  wall lights of map 000 made them flicker at 30 Hz. Checked on that walk: the pictures between now
+  lie between the frames on each side in the glow's bright pixels, where they were 1,000 to 2,000
+  above both, with either renderer, MSAA 1 or 2, widescreen or not.)
 - It does not care which program or which matrix made the vertex. It costs no VU1 run.
 - The game tells, by marks in its chain, where the world is and with which camera.
 - The other way, the game drawing twice a pass, would run the draw code's side effects twice (the wobble
