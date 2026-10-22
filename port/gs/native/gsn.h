@@ -40,7 +40,15 @@ void gsn_read_fifo(void *dst, uint32_t qwords);
 #define GSN_WANT_IMAGE 2
 #define GSN_PRESENT 4
 int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
-void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(void));
+/* The same with the picture's tag (PORT_PICTURE_TAG: its vblank and when in it), which the presenter
+   gets with it. With GSN_EXTRA it is not a vblank but one more picture between two (--frame-rate above
+   60): the buffer shown read again, whole (none when the display reads it a field at a time), with
+   nothing of the vblank's own done (the deinterlace's history, a new scale). */
+#define GSN_EXTRA 16
+int gsn_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
+/* The vblanks sent to the native GS's thread that it has not done yet */
+int gsn_backlog(void);
+void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag), void (*image)(uint64_t tag));
 /* The render targets' size, from the next vblank: x_scale times the PS2's across (1 to GSN_MAX_SCALE_X)
    and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
 #define GSN_MAX_SCALE_X 6
@@ -142,13 +150,17 @@ void gsn_queue_unlock(void);
    GENERAL layout, width x height. The native GS writes it again at each vblank, with a barrier after
    whatever was submitted to the queue before, so a presenter's command buffer, submitted to the same
    queue with a barrier before it reads, sees one whole picture. Between take and release (once the
-   presenter's command buffer is submitted) the image is not destroyed. serial counts the pictures. */
+   presenter's command buffer is submitted) the image is not destroyed. serial counts the pictures.
+   The native GS keeps the last few pictures (a ring of images): gsn_scanout_take_tag takes the newest
+   with that tag (gsn_picture's), or the newest of all when it is no longer there. */
 typedef struct {
     uint64_t image;
     uint32_t width, height;
     uint64_t serial;
+    uint64_t tag;
 } GsnScanout;
 int gsn_scanout_take(GsnScanout *out);
+int gsn_scanout_take_tag(GsnScanout *out, uint64_t tag);
 void gsn_scanout_release(void);
 
 /* What the last frames cost and did (--stats, the overlay) */
@@ -159,6 +171,7 @@ typedef struct {
     uint64_t ns_gif, ns_flush, ns_upload, ns_writeback, ns_decode, ns_vsync, ns_swizzle, ns_sync;
     /* what it holds now: render targets, textures, decoded images (and their MB), uploads kept */
     uint64_t targets, textures, pool_images, pool_mb, upload_copies;
+    uint64_t replay_uploads, replay_misses; /* uploads asked for again by --frame-rate's pictures between */
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
     uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */

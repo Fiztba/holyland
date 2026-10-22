@@ -51,6 +51,7 @@ static volatile uint64_t queue_head; /* written by the game thread */
 static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
 static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
+static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
 
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
@@ -687,6 +688,7 @@ static int compare_buffers(VsyncRequest *request, int dump, PortGsFrame *heat) {
    only for a dump. */
 static int present_frames(VsyncRequest *request, int shown, int dump) {
     static PortGsFrame heat;
+    uint64_t tag = PORT_PICTURE_TAG(request->vblank, 0);
     int want = shown || dump;
     int want_native = shown && port_video_takes_images() ? GSN_WANT_IMAGE | (dump ? GSN_WANT_PIXELS : 0)
                       : want                             ? GSN_WANT_PIXELS
@@ -701,10 +703,10 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         if (!have_gs && shown && !dump) {
             /* the native GS's thread hands the window the picture (or with the Vulkan presenter word of
                the new image) when it has it, and this thread goes on */
-            return gsn_vsync(request->privileged, request->field,
-                             GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0), NULL) != 0;
+            return gsn_picture(request->privileged, request->field,
+                               GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0), NULL, tag) != 0;
         }
-        got_native = gsn_vsync(request->privileged, request->field, want_native, &native_frame);
+        got_native = gsn_picture(request->privileged, request->field, want_native, &native_frame, tag);
     }
     if (have_gs && have_native) {
         if (heat.rgba == NULL) {
@@ -726,7 +728,7 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
     } else if (have_gs && have_native) {
         show = port_options.renderer_shown == PORT_RENDERER_NATIVE ? &native_frame : &frame;
         if (show == &native_frame && !(got_native & GSN_WANT_PIXELS) && (got_native & GSN_WANT_IMAGE)) {
-            port_video_submit_image();
+            port_video_submit_image(tag);
             return 1;
         }
         if (dump && got_gs && (got_native & GSN_WANT_PIXELS)) {
@@ -745,7 +747,7 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         }
         if (show == &native_frame && (got_native & GSN_WANT_IMAGE) && shown) {
             /* (dumped above) the window takes the image */
-            port_video_submit_image();
+            port_video_submit_image(tag);
             return 1;
         }
     } else if (have_native) {
@@ -753,7 +755,7 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
             if (dump && (got_native & GSN_WANT_PIXELS)) {
                 port_video_dump(&native_frame, request->vblank);
             }
-            port_video_submit_image();
+            port_video_submit_image(tag);
             return 1;
         }
         if (!got_native) {
@@ -770,9 +772,49 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         port_video_dump(show, request->vblank);
     }
     if (shown) {
-        port_video_submit(show);
+        port_video_submit(show, tag);
     }
     return 1;
+}
+
+/* --frame-rate above 60: a picture between two vblanks (phase of the way from this one to the next),
+   drawn into the buffer shown: the native GS's, read again whole (gsn_picture with GSN_EXTRA), for the
+   window (shown) and as frame_<vblank>_<phase in thousandths>.png (dump) */
+static void present_extra(VsyncRequest *request, double phase, int shown, int dump) {
+    uint64_t tag = PORT_PICTURE_TAG(request->vblank, phase);
+    int images = shown && (port_video_takes_images() || port_options.headless);
+
+    if (dump) {
+        int got = gsn_picture(request->privileged, request->field,
+                              GSN_EXTRA | GSN_WANT_PIXELS | (images ? GSN_WANT_IMAGE : 0), &native_frame, tag);
+        char name[64];
+
+        if (got & GSN_WANT_PIXELS) {
+            snprintf(name, sizeof(name), "frame_%06llu_%03d.png", (unsigned long long)request->vblank,
+                     (int)(phase * 1000.0 + 0.5));
+            port_video_dump_named(&native_frame, name);
+            if (shown) {
+                if (images) {
+                    port_video_submit_image(tag);
+                } else {
+                    port_video_submit(&native_frame, tag);
+                }
+            }
+        }
+    } else if (shown) {
+        gsn_picture(request->privileged, request->field, GSN_EXTRA | GSN_PRESENT | (images ? GSN_WANT_IMAGE : 0), NULL,
+                    tag);
+    }
+}
+
+/* KF4_INTERP_DRAW_ALL=1 (a speed test): headless, every picture between drawn as for a window */
+static int draw_all(void) {
+    static int all = -1;
+
+    if (all < 0) {
+        all = getenv("KF4_INTERP_DRAW_ALL") != NULL;
+    }
+    return all;
 }
 #endif
 
@@ -921,6 +963,14 @@ void port_gs_print_stats(void) {
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
+        if (interp_behind) {
+            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu\n",
+                    (unsigned long long)interp_behind);
+        }
+        if (s->replay_uploads || s->replay_misses) {
+            fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",
+                    (unsigned long long)s->replay_uploads, (unsigned long long)s->replay_misses);
+        }
         if (s->ms_resolves || s->ms_loads) {
             fprintf(stderr,
                     "[stats] native GS MSAA: %llu resolves, %llu loads into the multisampled images, %llu cut-out "
@@ -954,12 +1004,16 @@ void port_gs_finish(void) {
     }
 }
 
+int port_gs_replay_uploads(void) {
+    return have_native && !have_gs && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
+}
+
 int port_gs_vsync_pending(void) {
     return __atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) != __atomic_load_n(&queue_tail, __ATOMIC_RELAXED);
 }
 
 #ifdef KF4_HAVE_PARALLEL_GS
-static int interp_on; /* --frame-rate 60 was on at the last vblank */
+static int interp_on;           /* --frame-rate above 30 was on at the last vblank */
 #endif
 
 void port_gs_run_vsync(void) {
@@ -968,7 +1022,11 @@ void port_gs_run_vsync(void) {
 #ifdef KF4_HAVE_PARALLEL_GS
     VsyncRequest *request = &queue[tail % VSYNC_QUEUE];
     int dump = 0;
-    int shown = !port_options.headless;
+    int shown = !port_options.headless || port_video_simulated();
+    /* --frame-rate: the times in this vblank of the pictures shown (port_interp_schedule), whether a game
+       frame is being drawn between (interp_live), and whether the vblank's own picture is one */
+    double interp_phases[16];
+    int interp_count = 0, interp_live = 0, own_shown = 1;
 
     while (dump_next < dump_count && dump_at[dump_next] < request->vblank) {
         dump_next++;
@@ -981,13 +1039,29 @@ void port_gs_run_vsync(void) {
         native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
     if (port_frame_interp()) {
-        /* the game's world drawn again into the buffer shown, the camera half way */
+        /* the game's frame drawn again into the buffer shown, for the pictures between: at this vblank's
+           start when the vblank's own picture is one (the second vblank of a game frame), and after it
+           (frame rates above 60) */
         int idle = port_gs_path_idle(1) && port_gs_path_idle(2) && port_gs_path_idle(3);
+        /* the pictures between are the native GS's (paraLLEl-GS is the reference, at the vblanks only),
+           whole frames (not read a field at a time) */
+        int extras = have_native && (!have_gs || port_options.renderer_shown == PORT_RENDERER_NATIVE) &&
+                     port_whole_frame();
 
+        interp_count = extras ? port_interp_schedule(request->vblank, interp_phases, 16) : 1;
+        if (!extras) {
+            interp_phases[0] = 0;
+        }
         if (idle) {
-            port_interp_vsync(request->privileged, replay_gif);
+            port_interp_vsync(request->privileged);
         }
         port_interp_reset(idle);
+        interp_live = idle && port_interp_active();
+        /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
+        own_shown = interp_phases[0] == 0 || !interp_live;
+        if (interp_live && (own_shown || dump)) {
+            port_interp_picture(0, replay_gif);
+        }
         interp_on = 1;
     } else if (interp_on) {
         port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
@@ -1023,9 +1097,29 @@ void port_gs_run_vsync(void) {
         /* (widescreen and --native-widescreen change live: the scale follows, from this vblank's end) */
         gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
-    if (present_frames(request, shown, dump)) {
+    if (present_frames(request, shown && own_shown, dump)) {
     } else if (dump) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
+    }
+    if (interp_live && interp_count > 0) {
+        /* the pictures between this vblank and the next: for the window, only while this thread and the
+           native GS's keep up with the game (a picture between left out rather than the game held up) */
+        int i, more = shown || draw_all();
+
+        for (i = 0; i < interp_count; i++) {
+            if (interp_phases[i] <= 0 || !(more || dump)) {
+                continue;
+            }
+            if (!dump && !port_options.fast && shown &&
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1)) {
+                interp_behind++;
+                continue;
+            }
+            if (port_interp_picture(interp_phases[i], replay_gif)) {
+                present_extra(request, interp_phases[i], more, dump);
+            }
+        }
+        port_interp_end_vblank(replay_gif);
     }
     if (port_gs_capture_armed) {
         port_gs_capture_vsync(request->privileged, request->field, request->vblank);

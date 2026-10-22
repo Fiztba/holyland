@@ -59,10 +59,12 @@
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
-       --frame-rate 30|60
-                         the opt-in 60: a picture at every vblank in play, the one between the
-                         game's two drawn with the camera half way (port/platform/frame_interp.c);
-                         30, the PS2's, by default
+       --frame-rate 30|60|120|144|240|N|monitor
+                         the opt-in higher frame rates: pictures between the game's 30 a second
+                         in play, each drawn from the game's frame with the camera, the moving
+                         models, the HUD, fades and scrolling textures moved to where they are at
+                         that time (port/platform/frame_interp.c); monitor: the window's screen's
+                         refresh rate; 30, the PS2's, by default
        --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
                          PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
        --draw-distance-sky ps2|push
@@ -170,7 +172,7 @@ static void usage(const char *program) {
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-colour exact|high]\n"
-            "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n"
+            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
     exit(2);
@@ -325,9 +327,10 @@ static void parse_options(int argc, char **argv) {
             }
             port_options.native_scale_forced = 1;
         } else if (strcmp(option, "--frame-rate") == 0) {
-            port_options.frame_rate = atoi(value);
-            if (port_options.frame_rate != 30 && port_options.frame_rate != 60) {
-                fprintf(stderr, "--frame-rate wants 30 or 60, not %s\n", value);
+            port_options.frame_rate = strcmp(value, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : atoi(value);
+            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR &&
+                (port_options.frame_rate < 30 || port_options.frame_rate > 500)) {
+                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...) or monitor, not %s\n", value);
                 exit(2);
             }
             port_options.frame_rate_forced = 1;

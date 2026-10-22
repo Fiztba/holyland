@@ -300,7 +300,16 @@ void port_settings_load(void) {
             s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
         }
     }
-    s->frame_rate = read_number(display, "frame_rate", s->frame_rate, 30, 60) > 45 ? 60 : 30;
+    {
+        /* 30 (the PS2's), a number of pictures a second, or "monitor" (PORT_FRAME_RATE_MONITOR) */
+        const char *rate = read_string(display, "frame_rate");
+
+        if (rate != NULL) {
+            s->frame_rate = strcmp(rate, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : s->frame_rate;
+        } else {
+            s->frame_rate = (int)read_number(display, "frame_rate", s->frame_rate, 30, 500);
+        }
+    }
     {
         const char *draw_distance = read_string(display, "draw_distance");
         const char *sky = read_string(display, "draw_distance_sky");
@@ -565,7 +574,8 @@ void port_settings_save(void) {
     put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
-    put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
+    put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR ? cJSON_CreateString("monitor")
+                                                                        : cJSON_CreateNumber(s->frame_rate));
     put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));
     put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));

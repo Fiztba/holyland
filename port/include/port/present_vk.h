@@ -19,10 +19,11 @@ void port_video_fit(int out_w, int out_h, int *x, int *y, int *width, int *heigh
    it cannot be (no native GS, or its device has no swapchain, or the surface fails), and the window
    is then SDL_Renderer's. */
 int port_vk_open(void *sdl_window);
-/* The vblank's picture: pixels (width x height, R in the low byte) to upload, or with image the
-   native GS's (gsn_scanout_take); with neither, the last one again, and only if the overlay draws.
-   Presented with the overlay over it. */
-void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image);
+/* A picture: pixels (width x height, R in the low byte) to upload, or with image the native GS's of
+   that tag (gsn_scanout_take_tag); with neither, the last one again, and only if the overlay draws.
+   With overlay (the game's thread), presented with the overlay over it; without, as it is (the pictures
+   between vblanks, from a thread of their own, port/platform/video.c). One thread at a time. */
+void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag, int overlay);
 /* Waits for the screen's refresh (FIFO) or not (immediate, else mailbox), from the next picture */
 void port_vk_set_vsync(int on);
 /* (port/overlay/overlay.cpp) Dear ImGui's Vulkan backend on the presenter's render pass: 1 when up */

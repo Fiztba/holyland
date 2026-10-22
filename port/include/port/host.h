@@ -148,14 +148,15 @@ int port_flicker_filter(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 
-/* port_frame_interp(): 1 while the opt-in higher frame rate is on (--frame-rate 60;
+/* port_frame_interp(): 1 while the opt-in higher frame rates are on (--frame-rate 60 to 240;
    port/platform/frame_interp.c). The patched GameLoop_DrawFrame then marks, in its packet chain, where
    the 3D world is and the cameras that drew it (game/frame_interp.c), with A+D writes to
    PORT_GS_REG_FRAME_INTERP, another address the GS does not have: bits 32-39 of the data are one of
    PORT_FRAME_INTERP_, bits 0-31 its value (a float's bits, or the header). The GS front end draws the
-   world once more for the vblank in between, with the camera half way. */
+   frame again for each picture between, everything moved to that picture's time. */
 int port_frame_interp(void);
 #define PORT_GS_REG_FRAME_INTERP 0x7D
+#define PORT_GS_REG_REPLAY_UPLOAD 0x7C /* (port/platform/frame_interp.c to the native GS) */
 #define PORT_FRAME_INTERP_HEADER 0  /* last: projection | mode << 8 (GameLoop_SetCameraMatrices'), or _END */
 #define PORT_FRAME_INTERP_VIEW 1    /* 1-12: world_view_matrix's columns' x, y, z */
 #define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */

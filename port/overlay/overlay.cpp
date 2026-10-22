@@ -263,15 +263,37 @@ void display_page() {
     }
     ImGui::EndDisabled();
     tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
-    bool sixty = port_options.frame_rate > 30;
-    if (ImGui::Checkbox("60 pictures a second in play", &sixty)) {
-        s.frame_rate = port_options.frame_rate = sixty ? 60 : 30;
-        changed();
+    {
+        static const int rates[] = {30, 60, 120, 144, 165, 240, PORT_FRAME_RATE_MONITOR};
+        static const char *const names[] = {"30 (the PS2's)", "60", "120", "144", "165", "240", "The screen's refresh rate"};
+        char other[48];
+        int at = -1, i;
+
+        for (i = 0; i < 7; i++) {
+            at = rates[i] == port_options.frame_rate ? i : at;
+        }
+        if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR) {
+            snprintf(other, sizeof(other), "The screen's refresh rate (%d)", port_frame_rate_hz());
+        } else {
+            snprintf(other, sizeof(other), "%d", port_options.frame_rate);
+        }
+        if (ImGui::BeginCombo("Pictures a second in play", other)) {
+            for (i = 0; i < 7; i++) {
+                if (ImGui::Selectable(names[i], i == at)) {
+                    s.frame_rate = port_options.frame_rate = rates[i];
+                    changed();
+                }
+            }
+            ImGui::EndCombo();
+        }
     }
-    tooltip("Off: the PS2's 30 pictures a second in play.\nOn: a picture between each two of the game's, "
-            "the world seen from the camera half\nway between them, so turning and walking look smooth. "
-            "The game still runs at 30:\nenemies and effects move 30 times a second, and the picture is "
-            "no later than off.\nThe menus are as they were. Applies at once. (--frame-rate 60)");
+    tooltip("30: the PS2's 30 pictures a second in play.\nMore: pictures between each two of the game's, "
+            "the world seen from the camera on its way\nbetween them, models, the HUD's gauges, fades and "
+            "scrolling textures where they are at that\ntime, so turning and walking look smooth. The game "
+            "still runs at 30: what it does is the\nsame, and the picture is no later. What changes by "
+            "frames (the orb's flames, flipbook\neffects) still changes 30 times a second. Above 60 the "
+            "window shows each picture at its\ntime; with VSync, choose the screen's rate. The menus are "
+            "as they were. Applies at once.\n(--frame-rate 30|60|120|144|240|monitor)");
     if (port_options.frame_rate != s.frame_rate) {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
