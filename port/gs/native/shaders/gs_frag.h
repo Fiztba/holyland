@@ -121,6 +121,8 @@ ivec4 round_shift(ivec4 v, int bits) {
 // where the PS2 reads its texel, and whether the target is larger than the PS2's
 vec2 tc_gs;
 bool scaled;
+// the texture coordinates' change a pixel across and down (sample_texture; --native-aniso)
+vec2 tc_dx, tc_dy;
 
 // The texture at texel coordinates `tc` (level 0's), one level, nearest or bilinear
 ivec4 sample_level(vec2 tc, int level, bool linear) {
@@ -156,13 +158,26 @@ ivec4 sample_level(vec2 tc, int level, bool linear) {
     return (c00 * (16 - f.x) * (16 - f.y) + c10 * f.x * (16 - f.y) + c01 * (16 - f.x) * f.y + c11 * f.x * f.y + 128) >> 8;
 }
 
+// A mipmapped texture at level `lod` (clamped already): the nearer level or the two around it
+ivec4 sample_mip(vec2 tc, float lod, int mxl, uint mmin, bool linear) {
+    if (mmin == 2u || mmin == 4u) {
+        return sample_level(tc, min(int(floor(lod + 0.5)), mxl), linear);
+    }
+    int l0 = int(floor(lod));
+    int l1 = min(l0 + 1, mxl);
+    int w = int(floor(fract(lod) * 16.0));
+    return round_shift(sample_level(tc, l0, linear) * (16 - w) + sample_level(tc, l1, linear) * w, 4);
+}
+
 ivec4 sample_texture() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
     vec2 tc = (pc.flags & GSN_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
     // the GS pixel's integer point: the middle of its pixels of the target, (x + 0.5) scale (gs.vert)
     vec2 scale = vec2(float(max(field(pc.misc, GSN_M_SCALE_X_SHIFT, 3u), 1u)), float(max(field(pc.misc, GSN_M_SCALE_SHIFT, 3u), 1u)));
     vec2 to_gs = (floor(floor(gl_FragCoord.xy) / scale) + 0.5) * scale - (floor(gl_FragCoord.xy) + 0.5);
-    tc_gs = tc + dFdxFine(tc) * to_gs.x + dFdyFine(tc) * to_gs.y;
+    tc_dx = dFdxFine(tc);
+    tc_dy = dFdyFine(tc);
+    tc_gs = tc + tc_dx * to_gs.x + tc_dy * to_gs.y;
     scaled = scale != vec2(1.0);
     uint mmag = field(pc.tex1, 0u, 1u);
     uint mmin = field(pc.tex1, 1u, 3u);
@@ -180,13 +195,31 @@ ivec4 sample_texture() {
     bool linear = mmin == 4u || mmin == 5u;
     // (--native-lod moves which level, never the choice between MMAG and MMIN above)
     lod = clamp(lod + pc.lod_bias, 0.0, float(mxl));
-    if (mmin == 2u || mmin == 4u) {
-        return sample_level(tc, min(int(floor(lod + 0.5)), mxl), linear);
+    uint aniso = field(pc.misc, GSN_M_ANISO_SHIFT, 3u);
+    if (aniso != 0u) {
+        // --native-aniso: the GS picks the level from the distance alone, the same along a surface and
+        // across it, so a floor or wall seen at a grazing angle can get a level coarser than its texels
+        // across the pixel want. The pixel's footprint on the texture (its change across and down, in
+        // level 0's texels) is long: n reads spread along its long axis (n its length over its width, at
+        // most the switch's), each at the level of the long axis over n (about the short axis's), never
+        // coarser than the GS's level, averaged. Where that is no finer than the GS's level (a footprint
+        // about as long as wide, or the GS's level fine enough already, as at a larger --native-scale
+        // with --native-lod scale), the texture is read as without it.
+        float lx = length(tc_dx);
+        float ly = length(tc_dy);
+        float lmax = max(lx, ly);
+        int n = min(int(ceil(lmax / max(min(lx, ly), 1e-8) - 0.01)), 1 << aniso);
+        float alod = clamp(log2(max(lmax / float(n), 1e-8)), 0.0, lod);
+        if (n > 1 && alod < lod - 1.0 / 16.0) {
+            vec2 major = lx > ly ? tc_dx : tc_dy;
+            ivec4 sum = ivec4(0);
+            for (int i = 0; i < n; i++) {
+                sum += sample_mip(tc + major * ((float(i) + 0.5) / float(n) - 0.5), alod, mxl, mmin, linear);
+            }
+            return (sum + n / 2) / n;
+        }
     }
-    int l0 = int(floor(lod));
-    int l1 = min(l0 + 1, mxl);
-    int w = int(floor(fract(lod) * 16.0));
-    return round_shift(sample_level(tc, l0, linear) * (16 - w) + sample_level(tc, l1, linear) * w, 4);
+    return sample_mip(tc, lod, mxl, mmin, linear);
 }
 
 bool alpha_test(int a) {

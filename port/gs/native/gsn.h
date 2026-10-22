@@ -59,6 +59,11 @@ int gsn_gpu_kind(void);
 #define GSN_LOD_SCALE 1
 #define GSN_LOD_FULL 2
 void gsn_set_lod(int mode);
+/* --native-aniso: anisotropic filtering of mipmapped textures, from the next draw: up to `taps` reads
+   (1, off, the default: the GS's picture; 2, 4, 8 or 16) along the long axis of a pixel's footprint on
+   the texture, each at a level finer than the GS's by log2 of the reads (gs_frag.h, sample_texture).
+   Returns the count used (a power of two, at most 16). */
+int gsn_set_aniso(int taps);
 /* --native-msaa: the samples a pixel of the targets the 3D is drawn into has, from the next vblank
    (1, the default, is the PS2's picture; 2, 4 or 8). Returns the count used: the most the GPU has up
    to `samples`. */

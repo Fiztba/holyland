@@ -52,3 +52,4 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_SCALE_SHIFT 7u   // the target's pixels a GS pixel is down (--native-scale), 3 bits
 #define GSN_M_ZCLAMP 0x400u    // gs_zclamp.frag writes the depth (every draw with a Z buffer)
 #define GSN_M_SCALE_X_SHIFT 11u // the target's pixels a GS pixel is across (--native-scale), 3 bits
+#define GSN_M_ANISO_SHIFT 14u   // --native-aniso: log2 of the most taps along a mipmapped texture's footprint, 3 bits (0: off)

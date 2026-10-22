@@ -184,7 +184,7 @@ enum : uint32_t {
 };
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
-    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11,
+    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -291,6 +291,8 @@ uint32_t target_sx = 1, target_sy = 1;
 volatile uint32_t wanted_scale = 1 | 1 << 8; // sx | sy << 8
 // --native-lod (gsn_set_lod): which mipmap level a texture is read at, at a larger --native-scale
 volatile int lod_mode = GSN_LOD_SCALE;
+// --native-aniso (gsn_set_aniso): log2 of the most taps along a mipmapped texture's footprint (0: off)
+volatile int aniso_log2 = 0;
 // --native-msaa: the samples a pixel of the 3D's targets has (1: none, the PS2's picture; 2, 4, 8).
 // Changed at a vblank (gsn_set_msaa), as the scale is.
 uint32_t target_samples = 1;
@@ -1750,6 +1752,7 @@ void flush_batch() {
         uint32_t finer = std::min(target_sx, target_sy);
         int mode = lod_mode;
         push.lod_bias = mode == GSN_LOD_FULL ? -64.0f : mode == GSN_LOD_SCALE ? -log2f(float(finer)) : 0.0f;
+        push.misc |= uint32_t(aniso_log2) << M_ANISO_SHIFT; // (--native-aniso: gs_frag.h, sample_texture)
 
         // a texture that is a target, or in one: read from the target
         Target *source = nullptr;
@@ -3907,6 +3910,15 @@ extern "C" int gsn_gpu_kind(void) {
 
 extern "C" void gsn_set_lod(int mode) {
     lod_mode = mode;
+}
+
+extern "C" int gsn_set_aniso(int taps) {
+    int l = 0;
+    while (l < 4 && (2 << l) <= taps) {
+        l++;
+    }
+    aniso_log2 = l;
+    return 1 << l;
 }
 
 extern "C" int gsn_set_msaa(int samples) {

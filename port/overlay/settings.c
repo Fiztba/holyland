@@ -6,7 +6,7 @@
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
-                    "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale",
+                    "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -67,6 +67,7 @@ PortSettings port_settings = {
     .native_lod = 1, /* GSN_LOD_SCALE */
     .native_scale = 0, /* auto */
     .native_widescreen = 1,
+    .native_aniso = 1,
 };
 
 static int active;
@@ -326,6 +327,7 @@ void port_settings_load(void) {
         migrated = 1;
     }
     s->native_msaa = (int)read_number(display, "native_msaa", s->native_msaa, 1, 8);
+    s->native_aniso = (int)read_number(display, "native_aniso", s->native_aniso, 1, 16);
     {
         const char *lod = read_string(display, "native_lod");
 
@@ -401,6 +403,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_lod_forced) {
         port_options.native_lod = s->native_lod;
+    }
+    if (!port_options.native_aniso_forced) {
+        port_options.native_aniso = s->native_aniso;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -523,6 +528,7 @@ void port_settings_save(void) {
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
+    put(display, "native_aniso", cJSON_CreateNumber(s->native_aniso));
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"

@@ -58,6 +58,10 @@ typedef struct {
        which at 1x is the GS's own; 2 full, level 0 at every distance). Live from the overlay. */
     int native_lod;
     int native_lod_forced;
+    /* --native-aniso: anisotropic filtering of the native GS's mipmapped textures, the most reads along
+       a pixel's footprint (1, off, the default; 2, 4, 8, 16; gsn_set_aniso) */
+    int native_aniso;
+    int native_aniso_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
        the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
@@ -304,6 +308,8 @@ int port_gs_native_scale_x(void);
 int port_gs_set_native_msaa(int samples);
 /* The native GS's mipmap levels (port_options.native_lod), from the next draw */
 void port_gs_set_native_lod(int mode);
+/* The native GS's anisotropic filtering (port_options.native_aniso: 1 off, 2 to 16), from the next draw */
+void port_gs_set_native_aniso(int taps);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {

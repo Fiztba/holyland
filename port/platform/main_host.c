@@ -36,6 +36,9 @@
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
                          full (level 0, the finest, at every distance)
+       --native-aniso N  anisotropic filtering of mipmapped textures: up to N reads (1, off, the
+                         default; 2, 4, 8 or 16) along a pixel's footprint on the texture, for floors
+                         and walls at a grazing angle (gs_frag.h, sample_texture)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -151,7 +154,7 @@ static void usage(const char *program) {
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
-            "          [--native-lod scale|ps2|full]\n"
+            "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
             program);
     exit(2);
@@ -180,6 +183,7 @@ static void parse_options(int argc, char **argv) {
     port_options.frame_rate = 30;
     port_options.native_msaa = 1;
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
+    port_options.native_aniso = 1;
     port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
@@ -330,6 +334,14 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_lod_forced = 1;
+        } else if (strcmp(option, "--native-aniso") == 0) {
+            port_options.native_aniso = atoi(value);
+            if (port_options.native_aniso != 1 && port_options.native_aniso != 2 && port_options.native_aniso != 4 &&
+                port_options.native_aniso != 8 && port_options.native_aniso != 16) {
+                fprintf(stderr, "--native-aniso wants 1, 2, 4, 8 or 16, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_aniso_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;

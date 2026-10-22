@@ -768,6 +768,18 @@ void renderer_section() {
                 "would pick at this resolution (at 1x, the PS2's own). PS2's: its level at any resolution.\n"
                 "Finest: the whole texture at every distance (at 1x too), sharpest, but far surfaces can\n"
                 "shimmer. (--native-lod)");
+        static const char *const aniso_names[] = {"Off", "2x", "4x", "8x", "16x"};
+        int aniso_at = port_options.native_aniso >= 16 ? 4 : port_options.native_aniso >= 8 ? 3 : port_options.native_aniso >= 4 ? 2 : port_options.native_aniso >= 2 ? 1 : 0;
+        if (ImGui::Combo("Native GS anisotropic filtering", &aniso_at, aniso_names, 5)) {
+            port_gs_set_native_aniso(1 << aniso_at);
+            port_settings.native_aniso = port_options.native_aniso;
+            port_settings_changed();
+        }
+        tooltip("Floors and walls seen at a grazing angle: the PS2 reads a texture's mipmap level from the\n"
+                "distance alone, the same along the surface and across it, so they blur with distance. This\n"
+                "reads up to this many times along a pixel's footprint on the texture, each at a finer level,\n"
+                "for the detail across. Off is the PS2's picture. Costs GPU time on mipmapped surfaces.\n"
+                "(--native-aniso)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();
