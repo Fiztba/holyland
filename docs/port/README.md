@@ -158,6 +158,8 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
 | `--frame-rate 30\|60` | 60 is the opt-in higher frame rate (also on the overlay's Display page; 30, the PS2's, by default): in play, a picture at every vblank, the one between the game's two drawn with the camera half way (see "60 pictures a second") |
+| `--draw-distance 1\|1.5\|2\|4\|max` | the opt-in longer view (also on the overlay's Display page, live; 1, the PS2's, by default): the fog and the far plane that many times as far, max without distance fog (see "Draw distance") |
+| `--draw-distance-sky ps2\|push` | with `--draw-distance`, the sky keeps the PS2's fog (the default) or has it pushed out too |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
@@ -191,7 +193,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, 60 pictures a second in play, live, smooth or sharp scaling, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames), live, for comparing with the GS's raw output |
+| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, 60 pictures a second in play, live, the draw distance and the sky's fog, live, smooth or sharp scaling, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
@@ -220,7 +222,7 @@ scales, and native widescreen on, are kept.
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off
 (and `--flicker-filter` and `--ps2-scanout` the flicker filter on),
-`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` and `--separate-run` keep
+`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--draw-distance` and `--draw-distance-sky` set those, `--myus-necklace` and `--separate-run` keep
 those mods on, and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
@@ -309,6 +311,41 @@ turns it on:
 - Not done: the 2D is squeezed into 480 of the 640 columns, so it is a little softer than at 4:3 (a
   higher internal resolution, step 3, would mend that). Anything the game sizes in screen pixels around
   a projected point would come out a third wider; none has been seen yet.
+
+## Draw distance
+
+Off by default (1x, the PS2's fog). `--draw-distance 1.5|2|4|max`, or the overlay's Display page (live),
+lets the player see further. What ends the view in this game is the fog, not a cut: the game draws every
+map record the visibility table of the record the player stands on lists (`func_00112BD0`: a half-plane
+behind the player and that table; the map header's draw distance at 0x7C would cut by distance, but it is
+0 in all 64 maps), with the objects, entities and items on them, and no distance cut of their own; the
+far plane (`GameLoop_SetCameraMatrices`, Z 0 at about 70,000) lies beyond everything the fog leaves.
+- **The fog goes out N times as far** (`game/draw_distance.c`). A fog block is `near + far / w` (the GS's
+  fog value, w the distance), so the same fog N times as far only scales the far term. Each map's blocks
+  are copied into `map_draw_state` every frame, and every model points into that copy, so the copy is
+  scaled; the current block eases to the new value over 30 frames, so a change in play fades in.
+  Blocks of constant fog (a tint, far 0) stay as they are. Max scales by 1024: no distance fog, also not
+  the mist that is part of a place's look (the Holy Forest, map 013, loses its haze).
+- **The far plane** moves out with it (at most 16 times, from where Z never reaches 0): with the fog kept,
+  moving the far plane alone changes nothing that shows (map 000's long view: 65 pixels of 6.9M, Z
+  rounding), so there is no switch for it alone.
+- **The sky keeps the PS2's fog** (`--draw-distance-sky ps2`, the default): the records that follow the
+  player (flags bit 31: the sky dome on maps 000 and 013, backdrops on 002, 004, 021, 027, 098 and 099)
+  are a backdrop at a fixed distance, so pushing their fog out shows nothing further away, it only
+  lightens the sky (map 000's dark sky shows its clouds at 2x). `push` (or the overlay) does it anyway.
+- **What it shows:** on the outdoor maps the far walls, ruins and the lava mountains of map 000, the end
+  of long corridors (021), the back of caves. **Where the game draws nothing** (a record the visibility
+  table leaves out, behind a turn the PS2 never shows, or the neighbouring map not streamed in yet) the
+  background is the fog's colour, as before; with the fog further out such an edge can show as a straight
+  line into the fog's colour (map 016's halls: black, so it reads as a dark doorway). The game's
+  visibility tables and its two map slots are not changed.
+- **Gameplay is the PS2's**: only fog values and the projection's Z change; which records, objects and
+  entities are drawn, wake and act is not (the game's log of a new game is byte for byte the same at
+  max). The cost is nothing measurable: the same draws and VU1 work (2,100 vblanks at `--native-scale 4`,
+  MSAA 2, 60 a second on maps 000, 009 and 013: the same VU1 runs and instructions, the times within the
+  runs' noise).
+- Off, the game code does exactly what it did (the fog blocks and the far plane untouched): the pictures
+  and `--stats`' PATH1 hash are the build's before, byte for byte.
 
 ## 60 pictures a second
 

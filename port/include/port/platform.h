@@ -101,6 +101,13 @@ typedef struct {
        settings.json, live from the overlay. */
     int frame_rate;
     int frame_rate_forced;   /* --frame-rate: this run's, whatever settings.json says */
+    /* --draw-distance (port_draw_distance(), port/include/port/host.h): how much further the game
+       draws, PORT_DRAW_DISTANCE_ (1x, the PS2's, by default); and whether the sky's fog goes out with
+       it (draw_distance_sky 1) or stays the PS2's (0, the default). Live from the overlay. */
+    int draw_distance;
+    int draw_distance_forced; /* --draw-distance: this run's, whatever settings.json says */
+    int draw_distance_sky;
+    int draw_distance_sky_forced; /* --draw-distance-sky */
     /* The opt-in mods (port/include/port/host.h): off by default, turned on by their switch or
        settings.json, live from the overlay. */
     int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */
@@ -287,6 +294,12 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
 enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2 };
+/* port_options.draw_distance: --draw-distance 1, 1.5, 2, 4 or max */
+enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, PORT_DRAW_DISTANCE_4, PORT_DRAW_DISTANCE_MAX,
+       PORT_DRAW_DISTANCE_COUNT };
+/* the level a name ("1", "1.5", "2", "4", "max") stands for, -1 for none; and a level's name */
+int port_draw_distance_parse(const char *name);
+const char *port_draw_distance_name(int level);
 enum { PORT_PRESENTER_SDL = 0, PORT_PRESENTER_VULKAN = 1 };
 /* --renderer both: how the last pictures of the two compared (port/platform/gs.c) */
 typedef struct {

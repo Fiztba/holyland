@@ -162,6 +162,20 @@ int port_frame_interp(void);
 #define PORT_FRAME_INTERP_END 0xFFFF /* the header after the world: what follows stays as it is */
 #define PORT_FRAME_INTERP_ARM 0xFFFE /* the header before the arm: models in the world, moved as they move */
 
+/* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
+   default) unless --draw-distance or the overlay's Display page says 1.5, 2, 4 or max
+   (PORT_DRAW_DISTANCE_MAX_FOG: no distance fog within the far plane). The game draws every map record
+   the visibility table of the player's record lists, with no distance cut, so what ends the view is the
+   fog (game/draw_distance.c). port_draw_distance_far(): the far plane's factor (GameLoop_SetCameraMatrices'
+   65535; at most 16, from where nothing is cut by it). port_draw_distance_sky(): 1 when the sky (the map
+   records that follow the player) has its fog pushed out too; 0, the default, keeps the PS2's fog on it,
+   as it is a backdrop at a fixed distance, not something further away. Only the drawing changes: which
+   records, objects and entities exist, are drawn and wake is the PS2's. */
+float port_draw_distance(void);
+float port_draw_distance_far(void);
+int port_draw_distance_sky(void);
+#define PORT_DRAW_DISTANCE_MAX_FOG 1024.0f
+
 /* ---- Opt-in mods the game code reads ---------------------------------------------------------
    Each changes the game, so each is off by default; while it is off the game does what it did on
    the PS2.

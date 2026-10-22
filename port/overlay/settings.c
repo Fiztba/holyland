@@ -6,6 +6,7 @@
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
+                    "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa",
                     "native_colour": "exact",
@@ -301,6 +302,17 @@ void port_settings_load(void) {
     }
     s->frame_rate = read_number(display, "frame_rate", s->frame_rate, 30, 60) > 45 ? 60 : 30;
     {
+        const char *draw_distance = read_string(display, "draw_distance");
+        const char *sky = read_string(display, "draw_distance_sky");
+
+        if (draw_distance != NULL && port_draw_distance_parse(draw_distance) >= 0) {
+            s->draw_distance = port_draw_distance_parse(draw_distance);
+        }
+        if (sky != NULL) {
+            s->draw_distance_sky = strcmp(sky, "push") == 0;
+        }
+    }
+    {
         const char *renderer = read_string(display, "renderer");
 
         if (renderer != NULL && version < 2 && strcmp(renderer, "gs") == 0) {
@@ -405,6 +417,12 @@ void port_settings_load(void) {
     }
     if (!port_options.frame_rate_forced) {
         port_options.frame_rate = s->frame_rate;
+    }
+    if (!port_options.draw_distance_forced) {
+        port_options.draw_distance = s->draw_distance;
+    }
+    if (!port_options.draw_distance_sky_forced) {
+        port_options.draw_distance_sky = s->draw_distance_sky;
     }
     if (!port_options.renderer_forced) {
         port_options.renderer = s->renderer;
@@ -548,6 +566,8 @@ void port_settings_save(void) {
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
     put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
+    put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));
+    put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));

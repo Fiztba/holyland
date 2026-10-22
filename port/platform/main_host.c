@@ -63,6 +63,11 @@
                          the opt-in 60: a picture at every vblank in play, the one between the
                          game's two drawn with the camera half way (port/platform/frame_interp.c);
                          30, the PS2's, by default
+       --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
+                         PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
+       --draw-distance-sky ps2|push
+                         with --draw-distance, the sky keeps the PS2's fog (the default) or has its
+                         fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
@@ -165,7 +170,8 @@ static void usage(const char *program) {
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-colour exact|high]\n"
-            "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
+            "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n"
+            "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
     exit(2);
 }
@@ -325,6 +331,23 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--draw-distance") == 0) {
+            port_options.draw_distance = port_draw_distance_parse(value);
+            if (port_options.draw_distance < 0) {
+                fprintf(stderr, "--draw-distance wants 1, 1.5, 2, 4 or max, not %s\n", value);
+                exit(2);
+            }
+            port_options.draw_distance_forced = 1;
+        } else if (strcmp(option, "--draw-distance-sky") == 0) {
+            if (strcmp(value, "push") == 0) {
+                port_options.draw_distance_sky = 1;
+            } else if (strcmp(value, "ps2") == 0) {
+                port_options.draw_distance_sky = 0;
+            } else {
+                fprintf(stderr, "--draw-distance-sky wants ps2 or push, not %s\n", value);
+                exit(2);
+            }
+            port_options.draw_distance_sky_forced = 1;
         } else if (strcmp(option, "--native-msaa") == 0) {
             port_options.native_msaa = atoi(value);
             if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
@@ -435,6 +458,41 @@ static void parse_options(int argc, char **argv) {
         fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso or folder> (or KF4_DISC)\n");
         usage(argv[0]);
     }
+}
+
+static const char *const draw_distance_names[PORT_DRAW_DISTANCE_COUNT] = {"1", "1.5", "2", "4", "max"};
+static const float draw_distance_factors[PORT_DRAW_DISTANCE_COUNT] = {1.0f, 1.5f, 2.0f, 4.0f,
+                                                                      PORT_DRAW_DISTANCE_MAX_FOG};
+
+int port_draw_distance_parse(const char *name) {
+    int i;
+
+    for (i = 0; i < PORT_DRAW_DISTANCE_COUNT; i++) {
+        if (strcmp(name, draw_distance_names[i]) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+const char *port_draw_distance_name(int level) {
+    return level >= 0 && level < PORT_DRAW_DISTANCE_COUNT ? draw_distance_names[level] : draw_distance_names[0];
+}
+
+float port_draw_distance(void) {
+    int level = port_options.draw_distance;
+
+    return level > 0 && level < PORT_DRAW_DISTANCE_COUNT ? draw_distance_factors[level] : 1.0f;
+}
+
+int port_draw_distance_sky(void) {
+    return port_options.draw_distance_sky != 0;
+}
+
+float port_draw_distance_far(void) {
+    float factor = port_draw_distance();
+
+    return factor > 16.0f ? 16.0f : factor;
 }
 
 int port_myus_necklace(void) {

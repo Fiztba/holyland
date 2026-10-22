@@ -276,6 +276,31 @@ void display_page() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
     }
+    static const char *const distances[PORT_DRAW_DISTANCE_COUNT] = {"1x (PS2)", "1.5x", "2x", "4x", "Max (no distance fog)"};
+    int distance = port_options.draw_distance;
+    if (ImGui::Combo("Draw distance", &distance, distances, PORT_DRAW_DISTANCE_COUNT)) {
+        s.draw_distance = port_options.draw_distance = distance;
+        changed();
+    }
+    tooltip("1x: the PS2's fog.\nFurther: the fog starts and ends that many times as far away, so more of "
+            "the world\nshows through it (the far plane moves out with it). The game already draws\nwhat "
+            "is behind the fog; it only hides it. Max removes the distance fog,\nalso the mist that is part "
+            "of a place's look (the Holy Forest).\nWhere the game draws nothing (behind a turn the game "
+            "never shows),\nthe background shows in the fog's colour. Applies at once. (--draw-distance)");
+    if (port_options.draw_distance != s.draw_distance) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(for this run: command line)");
+    }
+    ImGui::BeginDisabled(port_options.draw_distance == PORT_DRAW_DISTANCE_1);
+    bool sky = port_options.draw_distance_sky != 0;
+    if (ImGui::Checkbox("Push the sky's fog out too", &sky)) {
+        s.draw_distance_sky = port_options.draw_distance_sky = sky;
+        changed();
+    }
+    ImGui::EndDisabled();
+    tooltip("Off: the sky keeps the PS2's fog (the sky is a dome around you, not further away).\nOn: its fog "
+            "goes out as well, which lightens it: the dark sky of the Village\nRuins shows its clouds. "
+            "(--draw-distance-sky push)");
     bool smooth = s.smooth != 0;
     if (ImGui::Checkbox("Smooth scaling", &smooth)) {
         s.smooth = smooth;
