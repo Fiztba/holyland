@@ -45,6 +45,14 @@ void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(v
    and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
 #define GSN_MAX_SCALE_X 6
 void gsn_set_scale(int x_scale, int y_scale);
+/* --native-lod: the mipmap level a texture is read at. The GS picks it from the distance (Q), for the
+   PS2's 640x448: GSN_LOD_PS2 keeps that; GSN_LOD_SCALE (the default) takes it log2 of --native-scale
+   finer, the detail the GS would give the larger picture (at 1x, the PS2's); GSN_LOD_FULL reads
+   level 0 at every distance (at 1x too). From the next draw. */
+#define GSN_LOD_PS2 0
+#define GSN_LOD_SCALE 1
+#define GSN_LOD_FULL 2
+void gsn_set_lod(int mode);
 /* --native-msaa: the samples a pixel of the targets the 3D is drawn into has, from the next vblank
    (1, the default, is the PS2's picture; 2, 4 or 8). Returns the count used: the most the GPU has up
    to `samples`. */
@@ -59,6 +67,10 @@ typedef struct {
 int gsn_display_rect(const uint64_t *privileged, GsnRect *rect);
 /* A rectangle as RGBA (alpha 255): from the native GS's targets, or its VRAM */
 void gsn_read_rect(const GsnRect *rect, uint32_t *rgba);
+/* The same at the target's own pixels (--native-scale): rect->w * scale[0] by rect->h * scale[1] of
+   them into rgba (room for GSN_MAX_SCALE_X * 4 times the rectangle), the scale across and down into
+   scale (1 and 1 where it is not a target) */
+void gsn_read_rect_scaled(const GsnRect *rect, uint32_t *rgba, uint32_t *scale);
 /* The same from a VRAM image of the GS's (paraLLEl-GS's, to compare), alpha as the buffer has it */
 void gsn_decode_rect(const uint8_t *vram, const GsnRect *rect, uint32_t *rgba);
 /* A rectangle of a buffer made these pixels (as gsn_decode_rect gives them): kf4-gsreplay's

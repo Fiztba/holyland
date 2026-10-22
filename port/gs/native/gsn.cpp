@@ -169,8 +169,9 @@ struct Push {
     uint32_t fbmsk;
     uint32_t tscale; // a texture that is a render target: how many of its pixels a GS pixel is, across
                      // (bits 0-15) and down (16-31)
+    float lod_bias;  // --native-lod: added to the mipmap level the GS picks (only to which level)
 };
-static_assert(sizeof(Push) == 84, "Push is the shaders' push constant block");
+static_assert(sizeof(Push) == 88, "Push is the shaders' push constant block");
 
 enum : uint32_t {
     F_TME = 0x1, F_FST = 0x2, F_TFX_SHIFT = 2, F_TCC = 0x10, F_FGE = 0x20, F_SHADER_BLEND = 0x40,
@@ -183,7 +184,7 @@ enum : uint32_t {
 };
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
-    M_ZCLAMP = 0x400,
+    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -288,6 +289,8 @@ Gs *gs;
 // when every target goes back to VRAM and comes again at the new size.
 uint32_t target_sx = 1, target_sy = 1;
 volatile uint32_t wanted_scale = 1 | 1 << 8; // sx | sy << 8
+// --native-lod (gsn_set_lod): which mipmap level a texture is read at, at a larger --native-scale
+volatile int lod_mode = GSN_LOD_SCALE;
 // --native-msaa: the samples a pixel of the 3D's targets has (1: none, the PS2's picture; 2, 4, 8).
 // Changed at a vblank (gsn_set_msaa), as the scale is.
 uint32_t target_samples = 1;
@@ -533,18 +536,22 @@ void msaa_forget(Target &t) {
     t.ms_newer = t.image_newer = false;
 }
 
-// The 2D drawn into a multisampled image covers the same pixels it does without MSAA, whole. Its
+// The 2D covers the same GS pixels it does on the PS2, whole: drawn into a multisampled image
+// (--native-msaa), or into a target larger than the PS2's (--native-scale, --native-widescreen). Its
 // primitives are rectangles on the screen (sprites, and the menus' quads: two triangles of a strip
 // with one Z), each triangle half of one: its corners are those of its bounding box. Such a
-// triangle's corners are moved out to the edges of the pixels it covers (those whose middle, a GS
-// pixel's integer point, is inside: from ceil(x0) to ceil(x1) - 1 across, the same down; at a larger
-// --native-scale, the target's pixels), and its texture coordinates and fog carried along their
-// slopes, so that each pixel's middle has what it had.
-// (Left as they are, the samples of an edge pixel on the far side of its middle would not be covered:
-// a rectangle over the whole frame would leave half of its first column and row as they were, and
-// every box and letter of the menus would be blurred by half a pixel.) A triangle with a slant, or
-// with its colour or Z not the same at its corners, is left as it is: the 3D, whose edges are smoothed.
-void msaa_flat_2d(std::vector<Vtx> &verts, uint32_t sx, uint32_t sy) {
+// triangle's corners are moved out to the edges of the GS pixels it covers (those whose integer point
+// is inside: from ceil(x0) to ceil(x1) - 1 across, the same down), and its texture coordinates and fog
+// carried along their slopes, so that each pixel's middle has what it had.
+// (Left as they are, an edge GS pixel's samples, or its pixels of a larger target, on the far side
+// of its integer point would not be covered: a rectangle over the whole frame would leave half of its
+// first column and row as they were, and every box and letter of the menus would be blurred by half
+// a pixel. At --native-scale 2, a picture drawn into a 128 x 128 target by a sprite from 0 to 127.5
+// left the target's first column and row as they were: the sky's clouds on map 000 are such a
+// picture, and showed it as bright lines where their texture repeats; the frame's passes over the
+// whole picture left its first column and row: a line down the screen's left edge.) A triangle with a slant, or with its colour or Z not
+// the same at its corners, is left as it is: the 3D.
+void flat_2d(std::vector<Vtx> &verts) {
     for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
         Vtx *v = &verts[i];
         if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
@@ -577,9 +584,9 @@ void msaa_flat_2d(std::vector<Vtx> &verts, uint32_t sx, uint32_t sy) {
             dy[a] = (db * ax - da * bx) / det;
         }
         for (int k = 0; k < 3; k++) {
-            // in the target's pixels (sx and sy a GS pixel) a corner is at (x + 0.5) sx (the vertex shader
-            // adds half a GS pixel), and a pixel is covered when its middle, j + 0.5, is inside
-            double nx = ceil((v[k].x + 0.5) * sx - 0.5) / sx - 0.5, ny = ceil((v[k].y + 0.5) * sy - 0.5) / sy - 0.5;
+            // the vertex shader adds half a GS pixel: ceil(x) - 0.5 puts the corner on the left edge of
+            // GS pixel ceil(x) (at any scale, of its first pixel of the target)
+            double nx = ceil(v[k].x) - 0.5, ny = ceil(v[k].y) - 0.5;
             for (int a = 0; a < 4; a++) {
                 *attr[k][a] = float(*attr[k][a] + dx[a] * (nx - v[k].x) + dy[a] * (ny - v[k].y));
             }
@@ -1719,6 +1726,16 @@ void flush_batch() {
                     (bits(tex1, 19, 2) << 8);
         int32_t k = int32_t(bits(tex1, 32, 12) << 20) >> 20; // signed 7.4
         push.lod_k = float(k) / 16.0f;
+        // The GS picks a mipmap level from Q, the distance, not from the pixels a texel covers: at a
+        // larger --native-scale a surface has more pixels at the same distance, and the level the PS2
+        // picked for 640x448 is too coarse for them (further away, the picture blurs where the PS2's
+        // was sharp). GSN_LOD_SCALE takes the level log2 of the scale finer (of the smaller of the two
+        // scales: --native-widescreen's across is the larger), the detail the GS would show at that
+        // resolution; GSN_LOD_FULL level 0 everywhere; GSN_LOD_PS2 the GS's own. At 1x GSN_LOD_SCALE is
+        // the GS's own; GSN_LOD_FULL is level 0 at 1x too.
+        uint32_t finer = std::min(target_sx, target_sy);
+        int mode = lod_mode;
+        push.lod_bias = mode == GSN_LOD_FULL ? -64.0f : mode == GSN_LOD_SCALE ? -log2f(float(finer)) : 0.0f;
 
         // a texture that is a target, or in one: read from the target
         Target *source = nullptr;
@@ -1900,7 +1917,7 @@ void flush_batch() {
             return;
         }
     }
-    push.misc |= scale_y << M_SCALE_SHIFT; // (SCANMSK's lines)
+    push.misc |= scale_y << M_SCALE_SHIFT | scale_x << M_SCALE_X_SHIFT; // (SCANMSK's lines; nearest reads, gs_frag.h)
     // Each pixel's Z as the GS has it: the vertices' Z interpolated, rounded to a whole Z and kept
     // within the Z buffer's format (gs_zclamp.frag writes the depth). The GPU's own interpolation keeps
     // the fraction, so of two draws over the same plane (the lava's glow over the lava, ZTST GEQUAL)
@@ -1974,9 +1991,12 @@ void flush_batch() {
         if (depth && zwrite) {
             depth->ms_newer = true;
         }
-        msaa_flat_2d(gs->verts, color->sx, color->sy);
+        flat_2d(gs->verts);
     } else {
         msaa_settle(*color);
+        if (scale_x > 1 || scale_y > 1) {
+            flat_2d(gs->verts);
+        }
     }
 
     std::vector<uint32_t> runs(1, 0);
@@ -3856,6 +3876,10 @@ extern "C" void gsn_set_scale(int x_scale, int y_scale) {
     wanted_scale = x | y << 8;
 }
 
+extern "C" void gsn_set_lod(int mode) {
+    lod_mode = mode;
+}
+
 extern "C" int gsn_set_msaa(int samples) {
     // the most this GPU has up to `samples` (msaa_samples_have)
     uint32_t n = 1;
@@ -3879,6 +3903,13 @@ extern "C" void gsn_read_rect(const GsnRect *r, uint32_t *rgba) {
     ring_idle();
     flush_batch();
     read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba);
+    submit(false);
+}
+
+extern "C" void gsn_read_rect_scaled(const GsnRect *r, uint32_t *rgba, uint32_t *scale) {
+    ring_idle();
+    flush_batch();
+    read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba, true, scale);
     submit(false);
 }
 
@@ -4032,7 +4063,10 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         pages_written(0, vram_pages);
         reset_gs();
         forget_history(); // (a capture's comes after: KF4GS_GS_HISTORY)
-        target_samples = wanted_samples; // (no targets: a capture is drawn with MSAA from its start)
+        // (no targets: a capture is drawn with MSAA, and at the scale, from its start)
+        target_samples = wanted_samples;
+        target_sx = wanted_scale & 0xFF;
+        target_sy = wanted_scale >> 8;
         return 1;
     case KF4GS_GS_REGS: {
         const Kf4GsReg *regs = static_cast<const Kf4GsReg *>(data);

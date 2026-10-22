@@ -43,6 +43,9 @@
                         the difference itself (--no-resync: not, the differences carry on). A pixel
                         differs when a channel is more than 1 apart (--exact: at all)
      --msaa N           the native GS draws the 3D with N samples a pixel (2, 4 or 8: --native-msaa)
+     --scale X[,Y]      the native GS's render targets X times the PS2's across and Y down (Y = X if left
+                        out): --native-scale, --native-widescreen. --frames and --draws write the larger pictures
+     --lod MODE         the native GS's mipmap levels: scale (the default), ps2 or full (--native-lod)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -651,6 +654,7 @@ typedef struct {
     /* what to do at the end of a draw */
     long draw_from, draw_to; /* --draw / --draws (-1: none) */
     int zbuf;
+    int scaled; /* --scale: --draws writes the native GS's targets at their own pixels */
     int pixel_x, pixel_y, pixel; /* --pixel */
     long fbp_filter;
     const char *out;
@@ -751,9 +755,17 @@ static void dump_draw_buffers(Run *r, long index) {
         uint32_t *rgba = malloc((size_t)rect.w * rect.h * 4);
         char name[64];
 
-        gsn_read_rect(&rect, rgba);
+        uint32_t scale[2] = {1, 1};
+
+        if (r->scaled) {
+            /* (--scale: the native GS's target at its own pixels) */
+            rgba = realloc(rgba, (size_t)rect.w * rect.h * 4 * GSN_MAX_SCALE_X * 4);
+            gsn_read_rect_scaled(&rect, rgba, scale);
+        } else {
+            gsn_read_rect(&rect, rgba);
+        }
         snprintf(name, sizeof(name), (r->render & RENDER_GS) ? "draw_%05ld_native.png" : "draw_%05ld.png", index);
-        write_png(r, name, rgba, rect.w, rect.h);
+        write_png(r, name, rgba, rect.w * scale[0], rect.h * scale[1]);
         free(rgba);
     }
     if (!(r->render & RENDER_GS)) {
@@ -1408,6 +1420,7 @@ static void usage(void) {
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
             "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
+            "                    [--scale X[,Y]] [--lod scale|ps2|full]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1419,7 +1432,7 @@ int main(int argc, char **argv) {
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
     long vertices = -1;
     int renderer = RENDER_GS;
-    int exact = 0, msaa = 1;
+    int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1456,6 +1469,14 @@ int main(int argc, char **argv) {
             usage();
         } else if (strcmp(a, "--msaa") == 0) {
             msaa = atoi(v);
+            i++;
+        } else if (strcmp(a, "--lod") == 0) {
+            lod = strcmp(v, "ps2") == 0 ? 0 : strcmp(v, "full") == 0 ? 2 : 1;
+            i++;
+        } else if (strcmp(a, "--scale") == 0) {
+            const char *comma = strchr(v, ',');
+            scale_x = atoi(v);
+            scale_y = comma ? atoi(comma + 1) : scale_x;
             i++;
         } else if (strcmp(a, "--mode") == 0 || strcmp(a, "--compare-mode") == 0) {
             int m = strcmp(v, "vif") == 0 ? MODE_VIF : strcmp(v, "gif") == 0 ? MODE_GIF : -1;
@@ -1552,6 +1573,13 @@ int main(int argc, char **argv) {
         }
         if ((run.render & RENDER_NATIVE) && msaa > 1) {
             fprintf(stderr, "native GS: MSAA %dx\n", gsn_set_msaa(msaa));
+        }
+        if ((run.render & RENDER_NATIVE) && (scale_x > 1 || scale_y > 1)) {
+            gsn_set_scale(scale_x, scale_y);
+            run.scaled = 1;
+        }
+        if (run.render & RENDER_NATIVE) {
+            gsn_set_lod(lod);
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);

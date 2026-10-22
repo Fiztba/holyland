@@ -6,7 +6,8 @@
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
-                    "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "presenter": "vulkan"},
+                    "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "native_lod": "scale",
+                    "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
@@ -58,6 +59,7 @@ PortSettings port_settings = {
     .ui_scale = 1.0f,
     .renderer = PORT_RENDERER_NATIVE,
     .presenter = PORT_PRESENTER_VULKAN,
+    .native_lod = 1, /* GSN_LOD_SCALE */
 };
 
 static int active;
@@ -301,6 +303,13 @@ void port_settings_load(void) {
     s->native_widescreen = read_bool(display, "native_widescreen", s->native_widescreen);
     s->native_msaa = (int)read_number(display, "native_msaa", s->native_msaa, 1, 8);
     {
+        const char *lod = read_string(display, "native_lod");
+
+        if (lod != NULL) {
+            s->native_lod = strcmp(lod, "ps2") == 0 ? 0 : strcmp(lod, "full") == 0 ? 2 : 1;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -362,6 +371,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_msaa_forced) {
         port_options.native_msaa = s->native_msaa;
+    }
+    if (!port_options.native_lod_forced) {
+        port_options.native_lod = s->native_lod;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -483,6 +495,7 @@ void port_settings_save(void) {
     put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
+    put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

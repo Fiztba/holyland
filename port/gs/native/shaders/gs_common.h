@@ -19,6 +19,7 @@ layout(push_constant, std430) uniform Push {
     uint misc;        // GSN_M_* below
     uint fbmsk;       // FRAME's FBMSK: the bits not written
     uint tscale;      // a texture that is a render target: its pixels a GS pixel is, across (bits 0-15) and down (16-31)
+    float lod_bias;   // --native-lod: added to the mipmap level the GS picks (only to which level)
 } pc;
 
 #define GSN_F_TME 0x1u
@@ -50,3 +51,4 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_SCANMSK_SHIFT 5u // SCANMSK: 2 draws no even lines, 3 no odd ones
 #define GSN_M_SCALE_SHIFT 7u   // the target's pixels a GS pixel is down (--native-scale), 3 bits
 #define GSN_M_ZCLAMP 0x400u    // gs_zclamp.frag writes the depth (every draw with a Z buffer)
+#define GSN_M_SCALE_X_SHIFT 11u // the target's pixels a GS pixel is across (--native-scale), 3 bits
