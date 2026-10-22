@@ -52,6 +52,11 @@ typedef struct {
        one count to another, which takes a restart). */
     int native_msaa;
     int native_msaa_forced;
+    /* --native-lod: the mipmap level the native GS reads a texture at (GSN_LOD_*, port/gs/native/gsn.h:
+       0 ps2, the GS's own, picked for 640x448; 1 scale, the default, finer by log2 of --native-scale,
+       which at 1x is the GS's own; 2 full, level 0 at every distance). Live from the overlay. */
+    int native_lod;
+    int native_lod_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
        the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
@@ -284,6 +289,8 @@ int port_gs_native_scale_x(void);
 /* The native GS's MSAA (port_options.native_msaa), from the next vblank; returns the count the GPU
    gives (see gsn_set_msaa) */
 int port_gs_set_native_msaa(int samples);
+/* The native GS's mipmap levels (port_options.native_lod), from the next draw */
+void port_gs_set_native_lod(int mode);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {

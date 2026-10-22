@@ -77,6 +77,12 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 - **Blending:** Vulkan's fixed function where the equation maps onto it exactly, the shader (from a
   copy of the target) elsewhere: sprites, draws reading their own target, DATE, 16-bit targets,
   As above 0x80. Overlapping primitives in such a batch are drawn in runs that don't overlap.
+- **A larger `--native-scale` is not just more pixels.** A GS pixel is drawn when its integer point
+  is inside; a target pixel at scale N samples the middle of its own area, half of which is left of
+  that point for the GS pixel's first pixels. So 2D (sprites from 0, or ending at 127.5) loses or gains
+  a column, and nearest reads with coordinates on texel edges take the texel before: `flat_2d` and
+  `sample_level`'s scaled path put both back on the GS's integer points. `kf4-gsreplay --scale X[,Y]`
+  draws a capture at a scale (`--draws` then writes the targets at their own pixels).
 - **Granite:** `update_image` with row length 0 means the image's width; there is no SPIRV-Cross,
   so resource layouts are written by hand; its render pass cache ignores the sample count (MSAA
   passes name their subpass).

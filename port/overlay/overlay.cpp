@@ -739,6 +739,20 @@ void renderer_section() {
                 "the passes over the whole frame and the alpha test's cut-outs stay as they are). Off is the\n"
                 "PS2's picture. Costs GPU time, more with the resolution above. Off and back on is live;\n"
                 "from one count to another takes a restart. (--native-msaa)");
+        static const char *const lod_names[] = {"PS2's (ps2)", "Matched to the resolution (scale, the default)",
+                                                "Finest everywhere (full)"};
+        int lod = port_options.native_lod;
+        if (ImGui::Combo("Native GS texture detail", &lod, lod_names, 3)) {
+            port_gs_set_native_lod(lod);
+            port_settings.native_lod = lod;
+            port_settings_changed();
+        }
+        tooltip("Which of a texture's mipmap levels (its smaller copies; about half the maps have them) the\n"
+                "native GS reads. The PS2 picks the level from the distance alone, for its 640x448, so at a\n"
+                "higher resolution far surfaces blur where the PS2's were sharp. Matched: the level the PS2\n"
+                "would pick at this resolution (at 1x, the PS2's own). PS2's: its level at any resolution.\n"
+                "Finest: the whole texture at every distance (at 1x too), sharpest, but far surfaces can\n"
+                "shimmer. (--native-lod)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();
