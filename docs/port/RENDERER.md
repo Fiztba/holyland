@@ -77,7 +77,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   and the next field's clear and backdrop were drawn without Z: every other line of the Equipment and
   Journal screens black (October 2026).
 - **Z is a whole number per pixel.** The GS rounds the interpolated Z; keeping the fraction hid the
-  lava's glow behind the lava it is drawn on (with a GEQUAL test).
+  lava's glow behind the lava it is drawn on (with a GEQUAL test). The rounding is also what makes the
+  hatching on the game's layered walls and the sawtooth where surfaces meet: `--native-layer-z
+  tolerant` (the default) keeps the fraction and passes a draw half a Z behind what is there, Z drawn
+  in a pass of its own first (PLAN.md); `ps2` is the GS's.
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a

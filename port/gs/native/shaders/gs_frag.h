@@ -326,7 +326,14 @@ bool alpha_test(int a) {
 
 void main() {
 #ifdef GSN_ZCLAMP
-    gl_FragDepth = roundEven(min(v_z, float(pc.zmax))) * pc.zscale;
+    {
+        // (--native-layer-z tolerant, GSN_M_ZFINE: the fraction kept, and the colour pass's tolerance)
+        float z = min(v_z, float(pc.zmax));
+        if ((pc.misc & GSN_M_ZFINE) == 0u) {
+            z = roundEven(z);
+        }
+        gl_FragDepth = min(z + pc.zbias, float(pc.zmax)) * pc.zscale;
+    }
 #endif
     high = (pc.misc & GSN_M_HIGH) != 0u;
     // GS colours are integers; a colour that is the same at every corner comes through exactly

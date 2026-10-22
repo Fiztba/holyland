@@ -104,6 +104,7 @@ static void open_backend(void *unused) {
             port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
             gsn_set_cutout_aa(port_options.native_cutout_aa);
             gsn_set_colour(port_options.native_colour);
+            gsn_set_layer_z(port_options.native_layer_z);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -935,6 +936,15 @@ void port_gs_set_native_colour(int mode) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
         gsn_set_colour(mode);
+    }
+#endif
+}
+
+void port_gs_set_native_layer_z(int mode) {
+    port_options.native_layer_z = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_layer_z(mode);
     }
 #endif
 }

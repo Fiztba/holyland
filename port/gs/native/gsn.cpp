@@ -171,8 +171,9 @@ struct Push {
     uint32_t tscale; // a texture that is a render target: how many of its pixels a GS pixel is, across
                      // (bits 0-15) and down (16-31)
     float lod_bias;  // --native-lod: added to the mipmap level the GS picks (only to which level)
+    float zbias;     // --native-layer-z tolerant: added to the pixel's Z (a draw's colour pass)
 };
-static_assert(sizeof(Push) == 88, "Push is the shaders' push constant block");
+static_assert(sizeof(Push) == 92, "Push is the shaders' push constant block");
 
 enum : uint32_t {
     F_TME = 0x1, F_FST = 0x2, F_TFX_SHIFT = 2, F_TCC = 0x10, F_FGE = 0x20, F_SHADER_BLEND = 0x40,
@@ -185,7 +186,7 @@ enum : uint32_t {
 };
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
-    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000,
+    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000, M_ZFINE = 0x40000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -402,6 +403,9 @@ volatile uint32_t wanted_samples = 1;
 // sample; sample_shading, whether the GPU can (sampleRateShading)
 volatile int cutout_aa_mode = GSN_CUTOUT_AA_OFF;
 bool sample_shading = false;
+// --native-layer-z (gsn_set_layer_z): Z as the GS has it (GSN_LAYER_Z_PS2), or kept fine and tested
+// with a tolerance (GSN_LAYER_Z_TOLERANT: "--native-layer-z tolerant" in flush_batch)
+volatile int layer_z_mode = GSN_LAYER_Z_PS2;
 
 // --native-colour (gsn_set_colour): the 32-bit colour targets at 8 bits a channel, as the GS has them
 // (GSN_COLOUR_EXACT), or 16 (GSN_COLOUR_HIGH: "--native-colour high" below). Changed at a vblank, as the
@@ -3417,6 +3421,29 @@ void flush_batch() {
     if (zclamp) {
         push.misc |= M_ZCLAMP;
     }
+    // --native-layer-z tolerant. The game draws much of a map twice: a surface, then a second texture
+    // over it, blended by its vertices' alpha (ZTST GEQUAL, Z written). The second mesh's vertices are not
+    // quite the first's (a quarter of a pixel and two Z apart), and Z is rounded to a whole number per
+    // pixel, so on the GS the second fails the Z test in a pattern: where it is less than about half a Z
+    // behind, mostly passing; further behind, mostly failing; in between, a comb of teeth along its edges
+    // and scattered pixels, fine dark hatching at a larger --native-scale. Where two surfaces meet at a
+    // shallow angle, the rounding makes the line a sawtooth (where both round to the same Z the later
+    // one wins). Here a pixel's Z keeps its fraction, and a draw testing GEQUAL or GREATER passes up to
+    // half a Z behind what is there, the slack the GS's rounding gives on average: its Z is written first,
+    // as the GS would (the depth pass below: the nearer of its own and what was there), then its colour
+    // drawn with the tolerance and no Z written. So a layer shows where the GS mostly showed it and not
+    // where it mostly did not, with a straight edge between, and surfaces meet in straight lines. (A
+    // whole Z let a layer's mesh show past where the GS had hidden it, its own edges in view, on the
+    // tower on map 000; two let a far wall 2 to 4 Z behind a nearer one at Z 0x84 show through, and the
+    // flames in a brazier, 1 to 6 Z behind its front at Z 0x128.)
+    bool tolerant = zclamp && layer_z_mode == GSN_LAYER_Z_TOLERANT;
+    float layer_tolerance = 0.0f;
+    if (tolerant) {
+        push.misc |= M_ZFINE;
+        // (in a 16-bit Z's steps: 24 and 32-bit formats' are 256 and 65536 times finer)
+        layer_tolerance = 0.5f * (zpsm == 0x30 ? 65536.0f : zpsm == 0x31 ? 256.0f : 1.0f);
+        tolerant = ztst == 2 || ztst == 3;
+    }
     uint32_t write_mask = 0;
     for (int i = 0; i < 4; i++) {
         if (shader_blend || ((fbmsk >> (i * 8)) & 0xFF) != 0xFF) {
@@ -3659,16 +3686,43 @@ void flush_batch() {
         c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
 
-        for (int i = 0; i < npasses; i++) {
-            Push p = push;
-            p.flags |= passes[i].select << F_PASS_SHIFT;
-            c.set_color_write_mask(passes[i].mask);
-            if (depth) {
-                c.set_depth_test(true, passes[i].zwrite);
+        if (tolerant) {
+            // (--native-layer-z tolerant: the Z first, then the colour within the tolerance; above)
+            for (int i = 0; i < npasses; i++) {
+                if (passes[i].zwrite) {
+                    Push p = push;
+                    p.flags |= passes[i].select << F_PASS_SHIFT;
+                    c.set_color_write_mask(0);
+                    c.set_depth_test(true, true);
+                    c.push_constants(&p, 0, sizeof(p));
+                    c.draw(count);
+                    gsn_stats.draws++;
+                }
             }
-            c.push_constants(&p, 0, sizeof(p));
-            c.draw(count);
-            gsn_stats.draws++;
+            for (int i = 0; i < npasses; i++) {
+                if (passes[i].mask) {
+                    Push p = push;
+                    p.flags |= passes[i].select << F_PASS_SHIFT;
+                    p.zbias = layer_tolerance;
+                    c.set_color_write_mask(passes[i].mask);
+                    c.set_depth_test(true, false);
+                    c.push_constants(&p, 0, sizeof(p));
+                    c.draw(count);
+                    gsn_stats.draws++;
+                }
+            }
+        } else {
+            for (int i = 0; i < npasses; i++) {
+                Push p = push;
+                p.flags |= passes[i].select << F_PASS_SHIFT;
+                c.set_color_write_mask(passes[i].mask);
+                if (depth) {
+                    c.set_depth_test(true, passes[i].zwrite);
+                }
+                c.push_constants(&p, 0, sizeof(p));
+                c.draw(count);
+                gsn_stats.draws++;
+            }
         }
     }
     // the rows the batch can have drawn into (its vertices' within the scissor, a row more each way)
@@ -6397,6 +6451,10 @@ extern "C" int gsn_set_aniso(int taps) {
 
 extern "C" void gsn_set_cutout_aa(int mode) {
     cutout_aa_mode = mode;
+}
+
+extern "C" void gsn_set_layer_z(int mode) {
+    layer_z_mode = mode == GSN_LAYER_Z_TOLERANT ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
 }
 
 extern "C" void gsn_set_colour(int mode) {

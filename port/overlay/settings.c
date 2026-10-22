@@ -9,7 +9,7 @@
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa",
-                    "native_colour": "exact",
+                    "native_colour": "exact", "native_layer_z": "tolerant",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -74,6 +74,7 @@ PortSettings port_settings = {
     .native_widescreen = 1,
     .native_aniso = 1,
     .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
+    .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
 };
 
 static int active;
@@ -391,6 +392,13 @@ void port_settings_load(void) {
         }
     }
     {
+        const char *layer_z = read_string(display, "native_layer_z");
+
+        if (layer_z != NULL) {
+            s->native_layer_z = strcmp(layer_z, "ps2") == 0 ? 0 : 1;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -473,6 +481,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_colour_forced) {
         port_options.native_colour = s->native_colour;
+    }
+    if (!port_options.native_layer_z_forced) {
+        port_options.native_layer_z = s->native_layer_z;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -606,6 +617,7 @@ void port_settings_save(void) {
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
     put(display, "native_cutout_aa", cJSON_CreateString(s->native_cutout_aa == 0 ? "off" : "ssaa"));
     put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
+    put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));
