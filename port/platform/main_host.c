@@ -507,6 +507,10 @@ static void print_stats(void) {
     if (port_frame_interp()) {
         port_interp_print_stats();
     }
+    if (port_whole_frame()) {
+        fprintf(stderr, "[stats] whole frames: %llu fields drawn again for the other field\n",
+                (unsigned long long)port_field_frames_replays());
+    }
     port_video_print_stats();
     if (port_options.renderer == PORT_RENDERER_BOTH) {
         const PortRendererDiff *d = &port_renderer_diff;

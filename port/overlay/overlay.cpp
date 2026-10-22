@@ -320,7 +320,8 @@ void display_page() {
          "On: the game leaves out the picture between it draws over every other line while the view\n"
          "turns, for the other field of an interlaced TV, which on a PC screen is a comb trailing what\n"
          "moves (--frame-rate 60 draws real pictures between), and shows the movies' pictures whole\n"
-         "instead of as two fields (from the next movie). Off: as on the PS2. (--no-whole-frame)",
+         "instead of as two fields (from the next movie), and the menus, drawn a field at a time, as one\n"
+         "moment each picture. Off: as on the PS2. (--no-whole-frame)",
          &s.whole_frame, &port_options.whole_frame},
     };
     for (Switch &item : switches) {
