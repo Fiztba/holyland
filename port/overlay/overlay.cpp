@@ -871,6 +871,19 @@ void renderer_section() {
                 "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
                 "screen's 8 bits, so the gradients are smooth. Alpha, and what the game reads back, stay the\n"
                 "PS2's. (--native-colour)");
+        static const char *const layer_z_names[] = {"PS2's (whole numbers)", "Tolerant (clean layers and seams, the default)"};
+        int layer_z = port_options.native_layer_z;
+        if (ImGui::Combo("Native GS depth", &layer_z, layer_z_names, 2)) {
+            port_gs_set_native_layer_z(layer_z);
+            port_settings.native_layer_z = layer_z;
+            port_settings_changed();
+        }
+        tooltip("How the native GS keeps the 3D's depth. Much of a map is drawn twice, a surface and then a\n"
+                "second texture over it, and on the PS2 the second fails the depth test in places: dark\n"
+                "hatching and combs of teeth, very visible at a higher resolution. Where two surfaces meet\n"
+                "at a shallow angle the PS2's whole-number depth makes a sawtooth. Tolerant keeps depth's\n"
+                "fraction and lets a surface pass a hair behind what is drawn: clean layers and straight\n"
+                "seams. PS2's is the PS2's picture. (--native-layer-z)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();

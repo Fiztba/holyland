@@ -20,6 +20,7 @@ layout(push_constant, std430) uniform Push {
     uint fbmsk;       // FRAME's FBMSK: the bits not written
     uint tscale;      // a texture that is a render target: its pixels a GS pixel is, across (bits 0-15) and down (16-31)
     float lod_bias;   // --native-lod: added to the mipmap level the GS picks (only to which level)
+    float zbias;      // --native-layer-z tolerant: added to the pixel's Z (a draw's colour pass)
 } pc;
 
 #define GSN_F_TME 0x1u
@@ -53,4 +54,5 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_ZCLAMP 0x400u    // gs_zclamp.frag writes the depth (every draw with a Z buffer)
 #define GSN_M_SCALE_X_SHIFT 11u // the target's pixels a GS pixel is across (--native-scale), 3 bits
 #define GSN_M_ANISO_SHIFT 14u   // --native-aniso: log2 of the most taps along a mipmapped texture's footprint, 3 bits (0: off)
-#define GSN_M_HIGH 0x20000u     // --native-colour high: colours in floats, the target 16-bit (alpha as the GS's)
+#define GSN_M_HIGH 0x20000u
+#define GSN_M_ZFINE 0x40000u    // --native-layer-z tolerant: the pixel's Z keeps its fraction (and zbias is added)     // --native-colour high: colours in floats, the target 16-bit (alpha as the GS's)

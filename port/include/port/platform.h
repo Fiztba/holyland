@@ -72,6 +72,12 @@ typedef struct {
        colours' arithmetic in floats, dithered to 8 bits on the way out). Live from the overlay. */
     int native_colour;
     int native_colour_forced;
+    /* --native-layer-z: how the native GS keeps and tests the 3D's Z (GSN_LAYER_Z_*, port/gs/native/gsn.h:
+       0 ps2, the GS's whole numbers, a texture drawn over a surface failing the test in places and
+       surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and half a Z of
+       tolerance, clean layers and seams). Live from the overlay. */
+    int native_layer_z;
+    int native_layer_z_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
        the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
@@ -351,6 +357,8 @@ void port_gs_set_native_aniso(int taps);
 void port_gs_set_native_cutout_aa(int mode);
 /* The native GS's colour precision (port_options.native_colour), from the next vblank */
 void port_gs_set_native_colour(int mode);
+/* The native GS's Z (port_options.native_layer_z), from the next draw */
+void port_gs_set_native_layer_z(int mode);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {

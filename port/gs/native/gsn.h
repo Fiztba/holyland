@@ -103,6 +103,14 @@ void gsn_set_cutout_aa(int mode);
 #define GSN_COLOUR_EXACT 0
 #define GSN_COLOUR_HIGH 1
 void gsn_set_colour(int mode);
+/* --native-layer-z: how the 3D's Z is kept and tested, from the next draw. GSN_LAYER_Z_PS2 is the GS's:
+   a whole number per pixel, so a second texture drawn over a surface whose vertices are a hair behind
+   the first's fails the test in places (teeth and dark hatching), and surfaces meeting at a shallow
+   angle meet in a sawtooth. GSN_LAYER_Z_TOLERANT keeps Z's fraction and lets a draw pass half a Z
+   behind what is drawn (without writing its Z there): clean layers and straight seams. */
+#define GSN_LAYER_Z_PS2 0
+#define GSN_LAYER_Z_TOLERANT 1
+void gsn_set_layer_z(int mode);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {
