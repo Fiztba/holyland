@@ -1232,14 +1232,14 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360
      }
  }
 diff --git a/src/game/player/player_update.c b/src/game/player/player_update.c
-index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a74071716d 100644
+index 0bb4b0efa70e9591ff4b71939f79236f831481a0..b448ac70d552df218dafaf893d5a56176dc60efe 100644
 --- a/src/game/player/player_update.c
 +++ b/src/game/player/player_update.c
 @@ -8,9 +8,14 @@
  #include "map/map.h"
  #include "model/model.h"
  #include "player/player.h"
-+#include "port/controls.h" /* PC: mouse look */
++#include "port/controls.h" /* PC: mouse look, the run key */
  #include "effect/shot.h"
  #include "sound/sound.h"
  #include "math/vu0.h"
@@ -1280,7 +1280,15 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  extern LevelRecord weapon_level_records[70];
  extern LevelDef item_name_defs[0x17C];
  
-@@ -515,7 +517,7 @@ void Player_Update(void) {
+@@ -253,6 +255,7 @@ void Player_Update(void) {
+     }
+     held = pad_state[0];
+     pressed = pad_state[1];
++    held = port_controls_run_held(held, action_button); /* PC: running on a key of its own */
+     player_previous = player_state;
+ 
+     PLAYER_STATUS(&player_state)->bit35 = FALSE;
+@@ -515,7 +518,7 @@ void Player_Update(void) {
      game_status.movement_input_enabled = 1;
  }
  
@@ -1289,7 +1297,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  
  /* Draws the colours that lie over the screen (PlayerScreenTint). */
  void Player_DrawScreenTints(void) {
-@@ -890,11 +892,10 @@ void Player_SwingWeapon(u16 held, u16 pressed) {
+@@ -890,11 +893,10 @@ void Player_SwingWeapon(u16 held, u16 pressed) {
      }
  }
  
@@ -1302,7 +1310,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  }
  
  /* Handler of an item that shoots: on the button, starts the motion and launches the item's shot. */
-@@ -921,7 +922,7 @@ void Player_FireProjectile(u16 held, u16 pressed) {
+@@ -921,7 +923,7 @@ void Player_FireProjectile(u16 held, u16 pressed) {
      }
  }
  
@@ -1311,7 +1319,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  static u8 D_0057A348[8] __attribute__((section(".bss")));  /* 0x57A348 the eight bytes before the requests */
  static Unk1B1470Request bow_shot_requests[32];                     /* 0x57A350 the bow's requests, one per shot */
  
-@@ -1019,11 +1020,12 @@ void Player_HolsterWeapon(void) {
+@@ -1019,11 +1021,12 @@ void Player_HolsterWeapon(void) {
      ModelMotion_Step(WEAPON_MODEL);
      if (MODEL_CHANNEL(WEAPON_MODEL)->blend_left == 0) {
          Effect_FreePlayerWeaponKinds();
@@ -1326,7 +1334,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  
  int Player_CanFireAtAim(void) {
      float vec[4];
-@@ -1039,8 +1041,6 @@ int Player_CanFireAtAim(void) {
+@@ -1039,8 +1042,6 @@ int Player_CanFireAtAim(void) {
      return result;
  }
  
@@ -1335,7 +1343,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  
  void Player_UpdateWeaponAim(void) {
      float vec[4];
-@@ -1060,11 +1060,6 @@ extern f32 identity_matrix[16];
+@@ -1060,11 +1061,6 @@ extern f32 identity_matrix[16];
  
  /* the pad bits of each control */
  
@@ -1347,7 +1355,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  float Angle_Wrap(float);
  int Angle_Approach(float *, float, float);
  int Sound_PlayMap(int);
-@@ -1074,8 +1069,8 @@ void Player_FindFloorMaterial(void);
+@@ -1074,8 +1070,8 @@ void Player_FindFloorMaterial(void);
  void Player_CollideWithEntities(int);
  void Player_CollideWithMapObjects(int);
  
@@ -1358,7 +1366,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  
  #define STEP_LENGTH 25.0f
  
-@@ -1365,6 +1360,21 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1365,6 +1361,21 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
          delta.x *= 0.5f;
          delta.y *= 0.5f;
      }
@@ -1380,7 +1388,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
      player_state.rotation.y = Angle_Wrap(player_state.rotation.y + delta.y);
      player_state.rotation.x += delta.x;
      if (player_state.rotation.x > 1.012291f) {
-@@ -1447,7 +1457,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1447,7 +1458,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
      }
  
      if ((s32)(player_state.status_bits >> 37) & 1) {
@@ -1389,7 +1397,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
          if (player_state.landing_dip_frame++ >= player_state.landing_dip_frames) {
              player_state.status_bits &= ~PLAYER_FLAG_37;
              player_state.landing_dip_offset = 0.0f;
-@@ -1500,7 +1510,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1500,7 +1511,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
          }
      }
  
@@ -1398,7 +1406,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
          player_state.hp_now = 0;
          player_state.hp_bar_level = 0;
          Player_UpdateDying();
-@@ -1509,7 +1519,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1509,7 +1520,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
  
  /* What the ground under the player does to him: death, poison (by chance or at once), damage, or experience. */
  void Player_ApplyGroundEffects(void) {
@@ -1407,7 +1415,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
          player_state.hp_now = 0;
          player_state.hp_bar_level = 0;
          if (player_state.death_timer == 0) {
-@@ -1575,7 +1585,7 @@ void Player_TakeFallDamage(float speed) {
+@@ -1575,7 +1586,7 @@ void Player_TakeFallDamage(float speed) {
      if (player_state.stepped_on_entity != 0) {
          amount = amount * 60 / 100;
      } else if ((player_state.status_bits >> 38 & 1) == 1) {
@@ -1416,7 +1424,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
              amount = amount * 80 / 100;
          }
      }
-@@ -1608,7 +1618,7 @@ void Player_StopWalking(void) {
+@@ -1608,7 +1619,7 @@ void Player_StopWalking(void) {
      player_state.look_speed = 0.0f;
      player_state.turn_speed = 0.0f;
      player_state.stride_phase = 0;
@@ -1425,7 +1433,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..96ef076c6a9dc086975b56f64be1e2a7
  }
  
  /* The breath bar under water (status bit 39, which Player_CollideWithMap sets while the water surface, strip
-@@ -1623,7 +1633,7 @@ void Player_UpdateBreath(void) {
+@@ -1623,7 +1634,7 @@ void Player_UpdateBreath(void) {
      int filled;
  
      player = &player_state;

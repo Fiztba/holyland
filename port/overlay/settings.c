@@ -11,7 +11,7 @@
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"verdite": {"square": ["key:Space", "mouse:left", "pad:x"]}}},
-       "mods":     {"myus_necklace": false},
+       "mods":     {"myus_necklace": false, "separate_run": false},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
@@ -314,6 +314,7 @@ void port_settings_load(void) {
     s->mute = read_bool(audio, "mute", s->mute);
     read_controls(cJSON_GetObjectItemCaseSensitive(document, "controls"));
     s->myus_necklace = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "myus_necklace", s->myus_necklace);
+    s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
     overlay = cJSON_GetObjectItemCaseSensitive(document, "overlay");
     s->pause_when_open = read_bool(overlay, "pause_when_open", s->pause_when_open);
     s->show_fps = read_bool(overlay, "show_fps", s->show_fps);
@@ -343,6 +344,9 @@ void port_settings_load(void) {
     }
     if (!port_options.myus_necklace_forced) {
         port_options.myus_necklace = s->myus_necklace;
+    }
+    if (!port_options.separate_run_forced) {
+        port_options.separate_run = s->separate_run;
     }
     if (!port_options.frame_rate_forced) {
         port_options.frame_rate = s->frame_rate;
@@ -488,6 +492,7 @@ void port_settings_save(void) {
     put(audio, "mute", cJSON_CreateBool(s->mute));
     write_controls(section("controls"));
     put(section("mods"), "myus_necklace", cJSON_CreateBool(s->myus_necklace));
+    put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
     overlay = section("overlay");
     put(overlay, "pause_when_open", cJSON_CreateBool(s->pause_when_open));
     put(overlay, "show_fps", cJSON_CreateBool(s->show_fps));

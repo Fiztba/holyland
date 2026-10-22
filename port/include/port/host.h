@@ -162,6 +162,9 @@ int port_frame_interp(void);
    the amulet slot holds. */
 int port_myus_necklace(void);
 
+/* The separate run key (--separate-run, or the Mods page) is read through port_controls_run_held()
+   (port/include/port/controls.h). */
+
 /* port_invincible(): 1 while the debug option is on (--invincible, or the overlay's Debug page; never
    saved). The player then loses no HP: hits still land, flash and knock back, but take nothing
    (Player_LoseHp), and falls, deadly ground and scripted kills or damage do not kill. For testing

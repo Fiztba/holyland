@@ -43,6 +43,7 @@
                          game's two drawn with the camera half way (port/platform/frame_interp.c);
                          30, the PS2's, by default
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
+       --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
                          or all), as the Debug page's buttons do; spells1, spells2 or spells3 for the
@@ -137,7 +138,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
@@ -232,6 +233,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--myus-necklace") == 0) {
             port_options.myus_necklace = port_options.myus_necklace_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--separate-run") == 0) {
+            port_options.separate_run = port_options.separate_run_forced = 1;
             continue;
         }
         if (strcmp(option, "--stats") == 0) {

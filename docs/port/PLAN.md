@@ -392,6 +392,10 @@ Still open:
 ## Step 6: PC features and releases
 
 - Features: a settings menu, rebinding, mouse look.
+- The separate run key mod (`--separate-run`, the Mods page; off by default): running on the
+  Controls page's "Run (hold)" (Left Shift, a controller's left stick press) instead of the action
+  button, which then only uses things. `Player_Update` (game patch) passes the held buttons through
+  `port_controls_run_held`; off, or with a pad script, they are the pad's (README, "Mods").
 - First run extracts the game from the user's ISO.
 - Builds and releases come from CI. CI builds and tests on Linux (gcc) and on Windows (llvm-mingw
   20260616 and 20261006, SDL2 2.30.9): `.github/workflows/ci.yml`. Releases do not yet.

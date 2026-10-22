@@ -156,6 +156,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
 | `--frame-rate 30\|60` | 60 is the opt-in higher frame rate (also on the overlay's Display page; 30, the PS2's, by default): in play, a picture at every vblank, the one between the game's two drawn with the camera half way (see "60 pictures a second") |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
+| `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
 
@@ -211,8 +212,8 @@ new ones are used (the file is written again as version 2, with a line on stderr
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off,
-`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` keeps that mod
-on, and `--controls` picks the layout.
+`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` and `--separate-run` keep
+those mods on, and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
 settings.json and has no overlay, so `boot_test.py` and `frame_test.py` run the same whatever the
@@ -264,6 +265,13 @@ it does without it.
   `MapObject_DrawAll` decides each frame whether the necklace is worn, from the amulet slot; with the
   mod on it counts as worn whatever the slot holds, so the objects it makes glow always glow (their
   pulse starts when the mod is turned on), and the slot is free for another amulet.
+- **Separate run key** (`--separate-run`, `port_controls_run_held()`). The game runs while its
+  action button (cross by default) is held with a move, and uses what is in front when it is
+  pressed. With the mod on, `Player_Update` has the action button's held bit be the Run control's
+  (Left Shift and a controller's left stick press in both layouts, rebindable on the Controls page,
+  shown there only with the mod on), so the action button only uses things. Pressed buttons are
+  untouched, and everything that stops running (weight, item use, death) still does. A pad script
+  (`--input`, `--record-input`) keeps the pad as it is.
 
 ## Widescreen
 

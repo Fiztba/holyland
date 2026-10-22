@@ -18,6 +18,10 @@
    triangle, middle cross (the mouse bindings of the table). Otherwise (menus, pause, dialogue): left
    cross, right circle, middle cross (the menu mouse), the wheel up / down.
 
+   In both, with the separate run mod on (--separate-run, the Mods page), Left Shift and the
+   controller's left stick press run while held, and the action button (cross; F in Verdite) only
+   uses things. Off, Run is not used and the action button runs, as on the PS2.
+
    In both, a controller's buttons are as the PS2 pad's (A cross, B circle, X square, Y triangle, the
    shoulders and triggers L1 R1 L2 R2), F2 / F4 take and load a quick save (port/platform/quicksave.c), and
    F5 / F7 save and load the quick slot's save state.
@@ -66,6 +70,7 @@ static struct {
     uint32_t wheel_until[2];
     uint32_t indicator_time;     /* when the capture last changed (0: never) */
     int indicator_captured;
+    int run;                     /* Run is held */
     int listen_action;           /* rebinding: the slot waiting for a press (-1: none) */
     int listen_slot;
     uint32_t listen_until;
@@ -101,6 +106,7 @@ static const struct {
     [ACTION_RIGHT_STICK_DOWN] = {"right_stick_down", "Right stick down", 0},
     [ACTION_RIGHT_STICK_LEFT] = {"right_stick_left", "Right stick left", 0},
     [ACTION_RIGHT_STICK_RIGHT] = {"right_stick_right", "Right stick right", 0},
+    [ACTION_RUN] = {"run", "Run (hold)", 0},
     [ACTION_CAPTURE_MOUSE] = {"capture_mouse", "Capture / release the mouse", 0},
     [ACTION_QUICK_SAVE] = {"quick_save", "Save state (debugging, same build)", 0},
     [ACTION_QUICK_LOAD] = {"quick_load", "Load state (debugging, same build)", 0},
@@ -122,6 +128,9 @@ const char *port_controls_action_id(int action) {
 int port_controls_action_used(int layout, int action) {
     if (action == ACTION_CAPTURE_MOUSE) {
         return layout == CONTROLS_VERDITE;
+    }
+    if (action == ACTION_RUN) {
+        return port_options.separate_run;
     }
     return action >= 0 && action < ACTION_COUNT;
 }
@@ -157,6 +166,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_R3] = {0, 0, PAD(RIGHTSTICK)},
         [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
         [ACTION_SELECT] = {KEY(BACKSPACE), 0, PAD(BACK)},
+        [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFTSTICK)},
         [ACTION_LEFT_STICK_UP] = {KEY(W)},
         [ACTION_LEFT_STICK_DOWN] = {KEY(S)},
         [ACTION_LEFT_STICK_LEFT] = {KEY(A)},
@@ -190,6 +200,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_R3] = {0, 0, PAD(RIGHTSTICK)},
         [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
         [ACTION_SELECT] = {KEY(RSHIFT), 0, PAD(BACK)},
+        [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFTSTICK)},
         [ACTION_CAPTURE_MOUSE] = {KEY(ESCAPE)},
         [ACTION_QUICK_SAVE] = {KEY(F5)},
         [ACTION_QUICK_LOAD] = {KEY(F7)},
@@ -366,6 +377,21 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     *yaw = (float)y;
     *pitch = (float)p;
     return 1;
+}
+
+/* Running is Run's with the mod on and Run bound, and no pad script playing or recorded */
+unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit) {
+    int slot;
+
+    if (!port_options.separate_run || port_options.input != NULL || port_options.record_input != NULL) {
+        return held;
+    }
+    for (slot = 0; slot < BINDING_SLOTS; slot++) {
+        if (port_controls_binding(pc.layout, ACTION_RUN, slot) != BINDING_NONE) {
+            return pc.run ? held | action_bit : held & ~action_bit;
+        }
+    }
+    return held;
 }
 
 #ifndef KF4_HAVE_SDL
@@ -723,6 +749,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (pc.blocked) {
         pc.wheel = 0;
         pc.previous_buttons = 0;
+        pc.run = 0;
         return;
     }
     if (pc.focused) {
@@ -793,6 +820,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     }
     edges = held & ~pc.previous_actions;
     pc.previous_actions = held;
+    pc.run = (held >> ACTION_RUN & 1u) != 0;
 
     /* the PC's own keys */
     if (edges >> ACTION_QUICK_SAVE & 1u) {

@@ -908,6 +908,18 @@ void mods_page() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(on for this run: command line)");
     }
+    bool separate_run = port_options.separate_run != 0;
+    if (ImGui::Checkbox("Separate run key", &separate_run)) {
+        s.separate_run = port_options.separate_run = separate_run;
+        changed();
+    }
+    tooltip("Run while Left Shift (or a controller's left stick press) is held, instead of while the\naction "
+            "button is: the action button then only talks, picks up and opens. Rebind it on the\nControls "
+            "page (Run). Applies at once. (--separate-run)");
+    if (port_options.separate_run != s.separate_run) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(on for this run: command line)");
+    }
 }
 
 void debug_page() {
