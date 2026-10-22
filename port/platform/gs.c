@@ -100,6 +100,7 @@ static void open_backend(void *unused) {
             }
             gsn_set_lod(port_options.native_lod);
             port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
+            gsn_set_cutout_aa(port_options.native_cutout_aa);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -853,6 +854,15 @@ void port_gs_set_native_lod(int mode) {
 #endif
 }
 
+void port_gs_set_native_cutout_aa(int mode) {
+    port_options.native_cutout_aa = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_cutout_aa(mode);
+    }
+#endif
+}
+
 int port_gs_set_native_msaa(int samples) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
@@ -902,8 +912,11 @@ void port_gs_print_stats(void) {
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
         if (s->ms_resolves || s->ms_loads) {
-            fprintf(stderr, "[stats] native GS MSAA: %llu resolves, %llu loads into the multisampled images\n",
-                    (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads);
+            fprintf(stderr,
+                    "[stats] native GS MSAA: %llu resolves, %llu loads into the multisampled images, %llu cut-out "
+                    "draws shaded at every sample\n",
+                    (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
+                    (unsigned long long)s->cutout_draws);
         }
         fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
                 (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,

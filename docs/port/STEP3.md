@@ -54,7 +54,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
   `--native-msaa 2|4|8`: the 3D (every draw with a Z buffer) drawn into multisampled images, resolved
   wherever the target is read (textures, the shader's blending, write-backs, frame copies, the
   scanout), the 2D drawn with Z snapped to whole pixels so the menus and movies are unchanged; the
-  alpha test's cut-outs and draws without Z stay as they are. Combines with the two above; 2% (4x)
+  draws without Z stay as they are (the cut-outs, textures see-through in places, are shaded at every
+  sample: `--native-cutout-aa`, on with MSAA by default). Combines with the two above; 2% (4x)
   to 5% (8x) of a run's time at 1x, 6% to 12% at `--native-scale 4`. PLAN.md's opt-in table.
   Above 1x, the 2D (rectangles of one colour and Z) covers whole GS pixels and nearest reads take the
   GS's texel at the GS pixel's integer point (the sky's seams on map 000, the line down the screen's left

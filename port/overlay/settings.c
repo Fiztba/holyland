@@ -7,6 +7,7 @@
                     "whole_frame": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
+                    "native_cutout_aa": "ssaa",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -68,6 +69,7 @@ PortSettings port_settings = {
     .native_scale = 0, /* auto */
     .native_widescreen = 1,
     .native_aniso = 1,
+    .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
 };
 
 static int active;
@@ -336,6 +338,13 @@ void port_settings_load(void) {
         }
     }
     {
+        const char *cutout = read_string(display, "native_cutout_aa");
+
+        if (cutout != NULL) {
+            s->native_cutout_aa = strcmp(cutout, "off") == 0 ? 0 : 1;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -406,6 +415,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_aniso_forced) {
         port_options.native_aniso = s->native_aniso;
+    }
+    if (!port_options.native_cutout_aa_forced) {
+        port_options.native_cutout_aa = s->native_cutout_aa;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -530,6 +542,7 @@ void port_settings_save(void) {
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
     put(display, "native_aniso", cJSON_CreateNumber(s->native_aniso));
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
+    put(display, "native_cutout_aa", cJSON_CreateString(s->native_cutout_aa == 0 ? "off" : "ssaa"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

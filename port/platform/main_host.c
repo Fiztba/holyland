@@ -32,6 +32,10 @@
                          half with the row above (port_flicker_filter()); off by default
        --native-msaa N   the native GS draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
                          by default): its edges smoothed
+       --native-cutout-aa MODE
+                         with --native-msaa, the cut-outs (netting, foliage, fences, grates):
+                         ssaa (the default: shaded at every sample, their edges smoothed) or off
+                         (shaded once a pixel, as the rest of the 3D)
        --native-lod MODE the mipmap level the native GS reads textures at: scale (the default: the
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
@@ -155,6 +159,7 @@ static void usage(const char *program) {
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
+            "          [--native-cutout-aa ssaa|off]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
             program);
     exit(2);
@@ -184,6 +189,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_msaa = 1;
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
+    port_options.native_cutout_aa = 1; /* GSN_CUTOUT_AA_SSAA */
     port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
@@ -342,6 +348,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_aniso_forced = 1;
+        } else if (strcmp(option, "--native-cutout-aa") == 0) {
+            if (strcmp(value, "off") == 0) {
+                port_options.native_cutout_aa = 0;
+            } else if (strcmp(value, "ssaa") == 0) {
+                port_options.native_cutout_aa = 1;
+            } else {
+                fprintf(stderr, "--native-cutout-aa wants ssaa or off, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_cutout_aa_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;

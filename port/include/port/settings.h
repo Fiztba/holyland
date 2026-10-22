@@ -38,6 +38,7 @@ typedef struct {
     int native_msaa;       /* the native GS's samples a pixel for the 3D: 1, 2, 4, 8 (port_options.native_msaa) */
     int native_lod;        /* the native GS's mipmap levels: 0 ps2, 1 scale, 2 full (port_options.native_lod) */
     int native_aniso;      /* the native GS's anisotropic filtering: 1 off, 2 to 16 (port_options.native_aniso) */
+    int native_cutout_aa;  /* with MSAA, the native GS's cut-outs: 0 off, 1 ssaa (port_options.native_cutout_aa) */
     int presenter;         /* how the picture reaches the window, from the next start: PORT_PRESENTER_ */
     /* Audio */
     int volume;            /* 0 to 100 */
