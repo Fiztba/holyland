@@ -329,7 +329,9 @@ static void move_between(const Camera *from, const Camera *to, Move *m) {
 enum { SCAN, REPLAY };
 /* WORLD: the world (projection 0, modes 0 and 1); EYE: models before the eye (mode 2), in the camera's
    space; ARM: the arm and the held item, in the world but moving only as they move */
-enum { SECTION_NONE, SECTION_WORLD, SECTION_OTHER, SECTION_EYE, SECTION_ARM };
+/* REFLECT: the reflection's view of the world (projection 1, mode 1, into a 256x256 target before the
+   world), by the same camera as the world's (its own projection to the target) */
+enum { SECTION_NONE, SECTION_WORLD, SECTION_OTHER, SECTION_EYE, SECTION_ARM, SECTION_REFLECT, SECTIONS };
 
 /* ---- What moves by itself ------------------------------------------------------------------------
    Each VU1 run of a 3D program draws one batch of one model part. A run is known again in the next
@@ -512,10 +514,15 @@ typedef struct {
 typedef struct {
     Event *ev;
     size_t nev, ev_room;
+    /* the copies of the frame drawn into another buffer (GsDraw_CopyFrame: the haze, the wobble, the
+       screen's picture on a model), by their events */
+    uint32_t *copies;
+    size_t ncopies, copies_room;
 } Uploads;
 
 static void uploads_reset(Uploads *u) {
     u->nev = 0;
+    u->ncopies = 0;
 }
 
 /* The pages a buffer covers: from block bp, bw * 64 pixels wide, rows rows of psm */
@@ -586,6 +593,12 @@ typedef struct {
     size_t nverts, verts_room;
     uint32_t draw_fbp, shown_fbp; /* the frame's buffers */
     int restore;                   /* a paired item draws into a buffer read before it is drawn in the frame */
+    /* by copy of the frame (Uploads): made again in the pictures between, from their own frame. Only a
+       copy the frame itself reads after it, and not before: then the next frame makes its own before it
+       reads it (the haze, the wobble). One it does not read (the map change keeps its last frame there,
+       for the frames after to fade out) is left as the game's frame made it. */
+    uint8_t *copy_ok;
+    size_t ncopies, copy_room;
 } Flat;
 
 static void flat_reset(Flat *f) {
@@ -635,8 +648,12 @@ static int items_alike(const Flat *fa, const Item *a, const Flat *fb, const Item
     uint64_t ta = a->tex, tb = b->tex;
     uint32_t ba = (uint32_t)(ta & 0x3FFF), bb = (uint32_t)(tb & 0x3FFF);
 
-    ba = ba == fa->draw_fbp * 32 ? 0x4000 : ba == fa->shown_fbp * 32 ? 0x4001 : ba;
-    bb = bb == fb->draw_fbp * 32 ? 0x4000 : bb == fb->shown_fbp * 32 ? 0x4001 : bb;
+    if (a->prim & 0x10) {
+        ba = ba == fa->draw_fbp * 32 ? 0x4000 : ba == fa->shown_fbp * 32 ? 0x4001 : ba;
+    }
+    if (b->prim & 0x10) {
+        bb = bb == fb->draw_fbp * 32 ? 0x4000 : bb == fb->shown_fbp * 32 ? 0x4001 : bb;
+    }
     return a->prim == b->prim && a->count == b->count && pa == pb && ba == bb &&
            (ta & ~(uint64_t)0x3FFF) == (tb & ~(uint64_t)0x3FFF);
 }
@@ -646,7 +663,7 @@ static int items_alike(const Flat *fa, const Item *a, const Flat *fb, const Item
 static int items_pair(const Flat *fa, const Item *a, const Flat *fb, const Item *b, float *wrap_s, float *wrap_t) {
     uint32_t k;
     int changed = 0, uniform = 1, moved_only = 1;
-    float ds0 = 0, dt0 = 0, smin = 1e30f, smax = -1e30f, tmin = 1e30f, tmax = -1e30f;
+    float ds0 = 0, dt0 = 0, smin = 1e30f, smax = -1e30f, tmin = 1e30f, tmax = -1e30f, dsmost = 0, dtmost = 0;
     /* the texture's size: 1.0 in ST, its texels in UV */
     float tw = (float)(1u << ((b->tex >> 26) & 0xF)), th = (float)(1u << ((b->tex >> 30) & 0xF));
 
@@ -675,6 +692,8 @@ static int items_pair(const Flat *fa, const Item *a, const Flat *fb, const Item 
             if ((fabsf(ds) > eps || fabsf(dt) > eps) && dx == 0 && dy == 0) {
                 moved_only = 0;
             }
+            dsmost = fabsf(ds) > dsmost ? fabsf(ds) : dsmost;
+            dtmost = fabsf(dt) > dtmost ? fabsf(dt) : dtmost;
             smin = vb->s < smin ? vb->s : smin;
             smax = vb->s > smax ? vb->s : smax;
             tmin = vb->t < tmin ? vb->t : tmin;
@@ -696,13 +715,67 @@ static int items_pair(const Flat *fa, const Item *a, const Flat *fb, const Item 
             *wrap_t = dt0 - t;
             changed = 1;
         } else if (!uniform) {
-            if (!moved_only) {
+            /* changed only where the vertices moved (a gauge), or, not a sprite, each vertex's by a little
+               of the item's width of texture (a flame's or the water's surface flowing); not a sprite's
+               texture changed in place (a glyph) */
+            if (!moved_only && ((b->prim & 7) == 6 || b->count < 3 || dsmost > 0.25f * (smax - smin) + eps ||
+                                dtmost > 0.25f * (tmax - tmin) + eps)) {
                 return 0;
             }
             changed = 1;
         }
     }
     return changed;
+}
+
+/* The frame reads the buffer at fbp before it draws into it, or uploads into it */
+static int read_first(const Uploads *u, uint32_t fbp) {
+    uint32_t first, last;
+    size_t e;
+
+    pages_of(fbp * 32, 1, 0, 1, &first, &last);
+    for (e = 0; e < u->nev; e++) {
+        const Event *ev = &u->ev[e];
+
+        if (ev->kind == EV_READ && ev->first <= first && ev->last >= first) {
+            return 1;
+        }
+        if (ev->kind != EV_READ && ev->first == first) {
+            return 0; /* (drawn, or uploaded, before it is read) */
+        }
+    }
+    return 0;
+}
+
+/* Which copies of the frame the pictures between make again (Flat's copy_ok) */
+static void flat_copies(Flat *f, const Uploads *u) {
+    size_t c, e;
+
+    if (f->copy_room < u->ncopies) {
+        f->copy_room = u->ncopies * 2;
+        f->copy_ok = realloc(f->copy_ok, f->copy_room);
+        if (f->copy_ok == NULL) {
+            PORT_FATAL("out of memory");
+        }
+    }
+    f->ncopies = u->ncopies;
+    for (c = 0; c < u->ncopies; c++) {
+        const Event *copy = &u->ev[u->copies[c]];
+        int read_after = 0, read_before = 0;
+
+        for (e = 0; e < u->nev; e++) {
+            const Event *ev = &u->ev[e];
+
+            if (ev->kind == EV_READ && ev->first <= copy->last && ev->last >= copy->first) {
+                if (e < u->copies[c]) {
+                    read_before = 1;
+                } else {
+                    read_after = 1;
+                }
+            }
+        }
+        f->copy_ok[c] = (uint8_t)(read_after && !read_before);
+    }
 }
 
 /* Pairs this frame's items (f) with the frame before's (o): in order, each with the first alike among
@@ -727,24 +800,10 @@ static void flat_pair(Flat *f, const Flat *o, const Uploads *u) {
                 break;
             }
         }
-        if (b->pair >= 0 && b->fbp != f->draw_fbp && u != NULL) {
-            /* drawn into another buffer (a scrolling texture's): if the frame reads that buffer before it
-               draws into it, the pictures between leave it as the game's frame has it (port_interp_end_vblank) */
-            uint32_t first, last;
-            size_t e;
-
-            pages_of(b->fbp * 32, 1, 0, 1, &first, &last);
-            for (e = 0; e < u->nev; e++) {
-                const Event *ev = &u->ev[e];
-
-                if (ev->kind == EV_READ && ev->first <= first && ev->last >= first) {
-                    f->restore = 1;
-                    break;
-                }
-                if (ev->kind != EV_READ && ev->first == first) {
-                    break; /* (drawn, or uploaded, before it is read) */
-                }
-            }
+        if (b->pair >= 0 && b->fbp != f->draw_fbp && u != NULL && read_first(u, b->fbp)) {
+            /* drawn into another buffer (a scrolling texture's) that the frame reads before it draws into
+               it: the pictures between leave it as the game's frame has it (port_interp_end_vblank) */
+            f->restore = 1;
         }
     }
 }
@@ -770,6 +829,10 @@ typedef struct {
     int world_seen;   /* a world mark has been seen */
     Camera camera;    /* SCAN: the first world mark's camera */
     Screen screen;
+    Screen screen_reflect; /* the reflection's projection (SECTION_REFLECT) */
+    float reflect_view[12];
+    uint32_t reflect_fbp;  /* the reflection's target */
+    int have_reflect;      /* there is one, by the world's camera */
     uint32_t draw_fbp; /* SCAN: FRAME_1's FBP at the first world mark: the buffer drawn */
     /* the GS registers as the game wrote them */
     uint64_t frame[2], tex0[2], bitbltbuf, prmodecont, prmode;
@@ -778,6 +841,8 @@ typedef struct {
     /* the pages read and written (SCAN), and the uploads */
     Uploads *uploads;    /* SCAN: this frame's events */
     uint32_t upload;     /* the next upload's number in the frame */
+    uint32_t copy;       /* the next copy of the frame's */
+    const Flat *copies;  /* REPLAY: the frame's, for its copies (NULL: none made) */
     int ask_uploads;     /* REPLAY: the native GS has the frame's uploads: ask for them again */
     int skip_image;      /* REPLAY: the next IMAGE data is an upload asked for again: left out */
     uint64_t upload_bytes_left_out;
@@ -808,16 +873,20 @@ typedef struct {
     int exact;          /* the frame as it was, for the buffers other than the frame (port_interp_end_vblank) */
     Move move;          /* the frame's view to the camera between */
     Camera mid;         /* the camera between */
-    uint64_t moved, dropped, objects_moved[5]; /* vertices moved, dropped (ADC), moved as their model moved (by section) */
+    uint64_t moved, dropped, objects_moved[SECTIONS]; /* vertices moved, dropped (ADC), moved as their model moved (by section) */
 } Walk;
 
 /* A primitive draws into the frame: its context's FRAME is the buffer drawn (PRIM's CTXT, or PRMODE's
    when PRMODECONT says so). Only those vertices are moved: whatever else the world draws into (none
    seen so far) is drawn again as it was. */
-static int draws_frame(const Walk *w, uint32_t prim) {
+static int draws_into(const Walk *w, uint32_t prim, uint32_t fbp) {
     int n = (w->prmodecont & 1) ? (int)((prim >> 9) & 1) : (int)((w->prmode >> 9) & 1);
 
-    return w->frame_set[n] && (w->frame[n] & 0x1FF) == w->draw_fbp;
+    return w->frame_set[n] && (w->frame[n] & 0x1FF) == fbp;
+}
+
+static int draws_frame(const Walk *w, uint32_t prim) {
+    return draws_into(w, prim, w->draw_fbp);
 }
 
 static void mark(Walk *w, uint64_t value) {
@@ -841,7 +910,21 @@ static void mark(Walk *w, uint64_t value) {
         return;
     }
     if ((bits & 0xFF) != 0) {
-        w->section = SECTION_OTHER; /* the 256x256 view of the reflection */
+        /* the 256x256 view of the reflection (mode 1, the mirror image), or another projection */
+        w->section = (bits >> 8) == 1 ? SECTION_REFLECT : SECTION_OTHER;
+        if (w->section == SECTION_REFLECT && w->mode == SCAN && !w->have_reflect) {
+            const float *s = &w->fields[PORT_FRAME_INTERP_SCREEN];
+
+            memcpy(w->reflect_view, &w->fields[PORT_FRAME_INTERP_VIEW], sizeof(w->reflect_view));
+            w->screen_reflect.sx = s[0];
+            w->screen_reflect.sy = s[1];
+            w->screen_reflect.cx = s[2];
+            w->screen_reflect.cy = s[3];
+            w->screen_reflect.cz = s[4];
+            w->screen_reflect.az = s[5];
+            w->reflect_fbp = w->frame_set[0] ? (uint32_t)(w->frame[0] & 0x1FF) : 0xFFFFFFFFu;
+            w->have_reflect = 1;
+        }
         return;
     }
     if ((bits >> 8) == 2) {
@@ -853,6 +936,16 @@ static void mark(Walk *w, uint64_t value) {
         const float *s = &w->fields[PORT_FRAME_INTERP_SCREEN];
 
         camera_from_fields(&w->camera, &w->fields[PORT_FRAME_INTERP_VIEW]);
+        if (w->have_reflect) {
+            /* the reflection's view moves with the world's when it is the world's camera */
+            int k;
+
+            for (k = 0; k < 12; k++) {
+                if (fabsf(w->reflect_view[k] - w->fields[PORT_FRAME_INTERP_VIEW + k]) > 1e-3f * (1.0f + fabsf(w->reflect_view[k]))) {
+                    w->have_reflect = 0;
+                }
+            }
+        }
         w->screen.sx = s[0];
         w->screen.sy = s[1];
         w->screen.cx = s[2];
@@ -943,7 +1036,7 @@ static void view_to_place(const Walk *w, int section, const double v[3], double 
 static void keep_vertex(Walk *w, const GifWalk *p, const uint8_t *q, int xyzf) {
     double v[3], place[3] = {0, 0, 0}, depth, z;
     const Run *r = &w->objects->runs[w->objects->nruns - 1];
-    int valid = r->section >= SECTION_EYE || r->section == SECTION_WORLD;
+    int valid = r->section == SECTION_EYE || r->section == SECTION_ARM || r->section == SECTION_WORLD;
 
     uint64_t hi;
 
@@ -1104,12 +1197,10 @@ static int object_between(Walk *w, double m[3]) {
 
 /* A vertex of the world (PACKED XYZF2 or XYZ2, q its qword) seen from the camera between: moved with
    its model when it is paired, else with the camera (the world) or not at all (before the eye, the arm) */
+static void move_vertex_in(Walk *w, GifWalk *p, uint8_t *q, int xyzf, int section, uint64_t lo, uint64_t hi, float *sq);
+
 static void move_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf, int section) {
-    const Screen *s = &w->screen;
     uint64_t lo, hi;
-    double z, depth = 0, v[3], m[3], nx, ny, nz;
-    int64_t ix, iy;
-    int i, drop = 0;
     float sq[3] = {0, 0, 0};
 
     memcpy(&lo, q, 8);
@@ -1117,12 +1208,30 @@ static void move_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf, int section) 
     if (p->st != NULL && (p->prim & 0x10) && !(p->prim & 0x100)) {
         memcpy(sq, p->st, 12);
     }
+    if (section == SECTION_REFLECT) {
+        /* (by the reflection's projection, below too) */
+        Screen world = w->screen;
+
+        w->screen = w->screen_reflect;
+        move_vertex_in(w, p, q, xyzf, section, lo, hi, sq);
+        w->screen = world;
+        return;
+    }
+    move_vertex_in(w, p, q, xyzf, section, lo, hi, sq);
+}
+
+static void move_vertex_in(Walk *w, GifWalk *p, uint8_t *q, int xyzf, int section, uint64_t lo, uint64_t hi, float *sq) {
+    const Screen *s = &w->screen;
+    double z, depth = 0, v[3], m[3], nx, ny, nz;
+    int64_t ix, iy;
+    int i, drop = 0;
+
     if (!vertex_view(w, p, q, xyzf, v, &depth, &z)) {
         return;
     }
-    if (object_between(w, m)) {
+    if (section != SECTION_REFLECT && object_between(w, m)) {
         w->objects_moved[section]++;
-    } else if (section == SECTION_WORLD) {
+    } else if (section == SECTION_WORLD || section == SECTION_REFLECT) {
         for (i = 0; i < 3; i++) {
             m[i] = w->move.r[i][0] * v[0] + w->move.r[i][1] * v[1] + w->move.r[i][2] * v[2] + w->move.t[i];
         }
@@ -1286,15 +1395,31 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
         uint32_t dbp = (uint32_t)(w->bitbltbuf >> 32) & 0x3FFF;
         uint32_t dir = (uint32_t)(*value & 3);
 
+        int frame_copy = dir == 2 && dbp != w->draw_fbp * 32 && (uint32_t)(w->bitbltbuf & 0x3FFF) == w->draw_fbp * 32;
+
         if (w->mode == SCAN && w->uploads != NULL && (dir == 0 || dir == 2)) {
             /* written: from the destination's first block, to the rows the transfer reaches */
             uint32_t first, last;
+            Uploads *u = w->uploads;
 
             pages_of(dbp, (uint32_t)(w->bitbltbuf >> 48) & 0x3F, (uint32_t)(w->bitbltbuf >> 56) & 0x3F,
                      (uint32_t)((w->trxpos >> 48) & 0x7FF) + (uint32_t)((w->trxreg >> 32) & 0xFFF), &first, &last);
-            uploads_event(w->uploads, dir == 0 ? EV_UPLOAD : EV_WRITE, first, last);
+            uploads_event(u, dir == 0 ? EV_UPLOAD : EV_WRITE, first, last);
+            if (frame_copy) {
+                if (u->ncopies == u->copies_room) {
+                    u->copies_room = u->copies_room ? u->copies_room * 2 : 16;
+                    u->copies = realloc(u->copies, u->copies_room * sizeof(*u->copies));
+                    if (u->copies == NULL) {
+                        PORT_FATAL("out of memory");
+                    }
+                }
+                u->copies[u->ncopies++] = (uint32_t)(u->nev - 1);
+            }
         }
-        if (w->mode == REPLAY) {
+        if (w->mode == REPLAY && frame_copy && w->copies != NULL && w->copy < w->copies->ncopies && w->copies->copy_ok[w->copy]) {
+            /* a copy of the frame the frame reads: made from the picture between (BITBLTBUF's source is the
+               buffer shown) */
+        } else if (w->mode == REPLAY) {
             /* (bitbltbuf is the game's: a transfer into the buffer drawn goes into the one shown) */
             if (dir == 1 || (dir == 2 && dbp != w->draw_fbp * 32)) {
                 *reg = PORT_GS_REG_FRAME_INTERP;
@@ -1310,6 +1435,7 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
         if (dir == 0) {
             w->upload++;
         }
+        w->copy += frame_copy;
         break;
     }
     case GS_SIGNAL:
@@ -1503,8 +1629,10 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
             case 0x5:
                 if (is_3d) {
                     int section = w->section;
-                    int moves = (section == SECTION_WORLD || section == SECTION_EYE || section == SECTION_ARM) &&
-                                (p->prim & 7) >= 3 && (p->prim & 7) <= 5 && draws_frame(w, p->prim);
+                    int tri = (p->prim & 7) >= 3 && (p->prim & 7) <= 5;
+                    int moves = ((section == SECTION_WORLD || section == SECTION_EYE || section == SECTION_ARM) && tri &&
+                                 draws_frame(w, p->prim)) ||
+                                (section == SECTION_REFLECT && tri && w->have_reflect && draws_into(w, p->prim, w->reflect_fbp));
 
                     if (w->mode == SCAN && w->objects != NULL) {
                         if (moves) {
@@ -1639,7 +1767,7 @@ static Camera last_camera; /* the camera of the last frame drawn */
 static int last_camera_set;
 static uint8_t *copy;
 static size_t copy_room;
-static uint64_t stat_replays, stat_cuts, stat_moved, stat_dropped, stat_objects[5], stat_items, stat_left_out, stat_restores;
+static uint64_t stat_replays, stat_cuts, stat_moved, stat_dropped, stat_objects[SECTIONS], stat_items, stat_left_out, stat_restores;
 static uint64_t stat_ticks; /* the replays' walks, on this thread */
 static uint64_t stat_sent;  /* the bytes they sent */
 
@@ -1713,12 +1841,16 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
     w.draw_fbp = scan->draw_fbp;
     w.shown_fbp = pending.shown;
     w.screen = scan->screen;
+    w.screen_reflect = scan->screen_reflect;
+    w.reflect_fbp = scan->reflect_fbp;
+    w.have_reflect = scan->have_reflect && !exact;
     w.camera = scan->camera;
     w.mid = interp_still() || exact ? scan->camera : *between;
     w.objects = interp_still() || exact ? NULL : (Objects *)pending.objects;
     w.prev = pending.objects_before;
     w.item = -1;
     w.flat = interp_still() || exact || pending.flat_before == NULL ? NULL : pending.flat;
+    w.copies = exact ? NULL : pending.flat;
     w.flat_prev = pending.flat_before;
     w.ask_uploads = port_gs_replay_uploads();
     {
@@ -1802,7 +1934,7 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
     stat_left_out += w.upload_bytes_left_out;
     stat_moved += w.moved;
     stat_dropped += w.dropped;
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < SECTIONS; i++) {
         stat_objects[i] += w.objects_moved[i];
     }
     if (port_options.stats) {
@@ -1869,6 +2001,10 @@ void port_interp_vsync(const uint64_t *privileged) {
         pending.flat_before = objects_before_set ? flat_before : NULL;
         pending.dirty = 0;
         flat_pair(flat_last, pending.flat_before, uploads_new);
+        flat_copies(flat_last, uploads_new);
+        if (w.have_reflect && read_first(uploads_new, w.reflect_fbp)) {
+            flat_last->restore = 1; /* (the reflection drawn from the camera between: as for the 2D) */
+        }
         {
             Camera between;
 
