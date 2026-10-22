@@ -3148,10 +3148,10 @@ void make_program() {
         copy_vs, gs->device->request_shader(gsn_spv_deinterlace_frag, sizeof(gsn_spv_deinterlace_frag), &deinterlace));
 
     // --native-colour high's scanout: a 16-bit target in, an 8-bit picture out
-    ResourceLayout narrow = copy_colour;
-    narrow.push_constant_size = 8 * sizeof(int32_t);
+    ResourceLayout narrowing = copy_colour;
+    narrowing.push_constant_size = 8 * sizeof(int32_t);
     gs->program_narrow = gs->device->request_program(
-        copy_vs, gs->device->request_shader(gsn_spv_narrow_frag, sizeof(gsn_spv_narrow_frag), &narrow));
+        copy_vs, gs->device->request_shader(gsn_spv_narrow_frag, sizeof(gsn_spv_narrow_frag), &narrowing));
 }
 
 void reset_gs() {
