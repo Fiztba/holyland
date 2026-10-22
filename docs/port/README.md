@@ -121,9 +121,12 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
 | `--renderer native\|gs\|both` | who draws: the native GS (the default; step 3, [STEP3.md](STEP3.md)), paraLLEl-GS (the reference, kept for comparison; it draws instead if the native GS cannot start), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
-| `--native-scale N` | the native GS draws at N times the PS2's resolution, 1 to 4 (live on the Debug page; `settings.json` `display.native_scale`) |
-| `--native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`) |
+| `--native-scale auto\|N` | the native GS draws at N times the PS2's resolution, 1 to 4, or `auto` (the default): the multiple of 448 lines nearest the height the window shows the picture at (1080: 2, 1440: 3, 2160: 4; at most 2 on an integrated GPU; 1 headless) (live on the Debug page; `settings.json` `display.native_scale`, a number or `"auto"`) |
+| `--native-widescreen`, `--no-native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`, on by default there; off on the command line alone) |
+| `--flicker-filter` | draw the game's flicker filter, as on the PS2: every frame of play it blends each row of the picture half with the row above, so that thin lines do not flicker between an interlaced TV's two fields. Off by default: on a PC screen it blurs the picture up and down, and above 1x shows it twice a GS row apart (the Display page's "No flicker filter"; `settings.json` `display.flicker_filter`) |
 | `--native-msaa N` | the native GS draws the 3D with N samples a pixel (1, the default: off; 2, 4 or 8), smoothing its edges (on the Debug page, live but for a change of count, which takes a restart; `settings.json` `display.native_msaa`) |
+| `--native-aniso N` | anisotropic filtering of the native GS's mipmapped textures: up to N reads along a pixel's footprint (1, the default: off; 2, 4, 8 or 16), for floors and walls at a grazing angle (live on the Debug page; `settings.json` `display.native_aniso`) |
+| `--native-colour exact\|high` | how precisely the native GS keeps colours: `exact` (the default), the GS's 8 bits a channel and its roundings; `high`, 16 bits a channel and the colours' arithmetic without the roundings, the picture dithered to 8 bits, so smooth dark gradients (the sky, glows) have no bands (on the Debug page, live; `settings.json` `display.native_colour`; PLAN.md) |
 | `--presenter vulkan\|sdl` | how the picture reaches the window: a Vulkan swapchain on the native GS's device, the native GS's picture never leaving the GPU (the default; `port/platform/present_vk.cpp`), or SDL_Renderer. Vulkan needs the native GS (`--renderer native` or `both`): with paraLLEl-GS alone the window is SDL_Renderer's, as it is if the swapchain cannot be made. The Debug page sets it for the next start (`settings.json`, `display.presenter`) |
 | `--vu1 interp\|hle\|check` | who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through): `hle` (the default), computed directly with the interpreter's results to the bit (`port/platform/vu1_hle*.c`), or `interp`, the cycle-accurate interpreter; `check` runs both and compares them run by run (`--stats` counts the differences) |
 | `--no-deinterlace` | show each field as the GS scans it out (224 lines), not the two fields woven into one picture |
@@ -131,7 +134,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
 | `--no-adapt-width` | scan out at the TV's width, not the game's |
 | `--no-whole-frame` | let the game draw its picture between over every other line while the view turns (`Game_ShiftScreenByViewTurn`, for the other field of an interlaced TV): the picture is then read a field at a time and deinterlaced; and show the movies as two fields, woven with a comb wherever the picture changes; and weave each picture of the menus (drawn a field a vblank) with the one before; as on the PS2 (docs/port/PLAN.md) |
-| `--ps2-scanout` | all five of the above: the GS's raw output, for comparing with the PS2 or PCSX2 |
+| `--ps2-scanout` | all five of the above, and `--flicker-filter`: the GS's raw output, for comparing with the PS2 or PCSX2 |
 | `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
 | `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
 | `--frames N` | stop after N vblanks |
@@ -154,7 +157,10 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--record-input FILE` | write what the pad and keyboard send as a pad script, to replay with `--input` |
 | `--widescreen` | the opt-in 16:9 picture (also on the overlay's Display page; off by default): the game's view is widened, the menus, message boxes and HUD keep their 4:3 shape, and the window shows it at 16:9 (see "Widescreen") |
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
-| `--frame-rate 30\|60` | 60 is the opt-in higher frame rate (also on the overlay's Display page; 30, the PS2's, by default): in play, a picture at every vblank, the one between the game's two drawn with the camera half way (see "60 pictures a second") |
+| `--present-scaling sharp\|smooth\|best`, `--present-sharpen X` | how the picture is fitted to the window: nearest, bilinear, or best (the default: a cubic filter on the GPU, area-weighted when the picture is larger than the window, sharper than bilinear when it is smaller); and an optional contrast-adaptive sharpening, 0 to 1 (also on the overlay's Display page, live; `settings.json` `display.scaling`, `display.sharpen`). `--dump-present WxH` makes `--dump-frames` write the picture as a window of that size shows it |
+| `--frame-rate 30\|60\|120\|144\|240\|N\|monitor` | the opt-in higher frame rates (also on the overlay's Display page; 30, the PS2's, by default): in play, pictures between the game's frames, the camera, the models, the HUD and the scrolling textures where they are at each picture's time; `monitor` is the screen's refresh rate (see "Higher frame rates") |
+| `--draw-distance 1\|1.5\|2\|4\|max` | the opt-in longer view (also on the overlay's Display page, live; 1, the PS2's, by default): the fog and the far plane that many times as far, max without distance fog (see "Draw distance") |
+| `--draw-distance-sky ps2\|push` | with `--draw-distance`, the sky keeps the PS2's fog (the default) or has it pushed out too |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
@@ -188,7 +194,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, 60 pictures a second in play, live, smooth or sharp scaling, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames), live, for comparing with the GS's raw output |
+| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, pictures a second in play (30 to 240, or the screen's rate), live, the draw distance and the sky's fog, live, the scaling to the window (sharp, smooth or best) and sharpening, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
@@ -209,10 +215,15 @@ every setting, so an older file says `"renderer": "gs"` and `"presenter": "sdl"`
 chose them or not. In a file without a version those two values are taken as the old defaults and the
 new ones are used (the file is written again as version 2, with a line on stderr); `"native"`,
 `"both"` and `"vulkan"` are kept. From version 2 on, `"gs"` and `"sdl"` are kept as chosen.
+`"version"` is 3 since `"native_scale": "auto"` and `"native_widescreen": true` became the defaults
+(October 2026): in an older file `"native_scale": 1` and `"native_widescreen": false` are taken as the
+old defaults written out, and the new ones are used (the file is written again as version 3); other
+scales, and native widescreen on, are kept.
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
-`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off,
-`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` and `--separate-run` keep
+`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off
+(and `--flicker-filter` and `--ps2-scanout` the flicker filter on),
+`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--draw-distance` and `--draw-distance-sky` set those, `--myus-necklace` and `--separate-run` keep
 those mods on, and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
@@ -302,36 +313,91 @@ turns it on:
   higher internal resolution, step 3, would mend that). Anything the game sizes in screen pixels around
   a projected point would come out a third wider; none has been seen yet.
 
-## 60 pictures a second
+## Draw distance
 
-Off by default (30 pictures a second in play, as on the PS2). `--frame-rate 60`, or the overlay's
-Display page (live), turns it on. The game itself still runs at 30 frames a second: in play it draws
-a frame every second vblank and shows it for two. With the switch on, the vblank in between shows a
-picture of its own: the frame the game has just drawn (shown at the next vblank), drawn again with the
-3D world seen from a camera half way between the frame shown and that one
-(`port/platform/frame_interp.c`; STEP3.md, "Higher frame rates").
-- **Turning and walking are smooth**, which is most of what moves in a first-person game, and so are
-  the enemies, the arm's swing, the effects and moving objects: each model part is paired with itself
-  in the frame before and drawn half way. Animated textures and what the CPU makes anew each frame
-  still change 30 times a second, the HUD and the 2D change when the game draws them, and a cut (a
-  teleport, a map change, a scripted jump of the camera) is not interpolated.
-- **No input lag is added.** The picture between shows half of the camera's next move one vblank
-  early; everything else is shown when it was. (Turning from standing: the first picture that moves
-  comes at the fifth vblank after the input, the sixth with the switch off.)
-- **The menus, the title and the movies** are as they were: they draw no world.
-- **Both renderers** show the pictures between the same. With `--no-whole-frame` the game's own turn
-  effect (`Game_ShiftScreenByViewTurn`, the frame before over every other line) comes back, and each
-  vblank's picture is read a field at a time and deinterlaced, mixing in the field before.
-- The cost is the GS's: each frame is drawn twice (VU1 is not run again). 2,030 vblanks (new game, map 000),
-  headless with `--fast`: 2.15 s to 2.57 s on a Ryzen 9 9900X3D.
-- Both presenters show every vblank's picture in turn, evenly (`--stats` counts what reached the window).
-  At `--native-scale` above 1 the game's own frames differ from the switch off in a few strips at the
-  top and left edges, where the native GS's picture depends on its targets' history anyway (STEP3.md).
-- Off, nothing changes: the game queues no marks and the GS front end keeps nothing; the frame and boot
-  tests and `--stats`' PATH1 hash are as without the switch. On, the game's own frames (the even
-  vblanks) are still the same pixels, byte for byte; only the pictures between are new.
-  `KF4_INTERP_STILL=1` draws the pictures between with the frame's own camera, so each must equal
-  the next vblank's (it does, within 2 on a few dozen pixels): a check of the replay.
+Off by default (1x, the PS2's fog). `--draw-distance 1.5|2|4|max`, or the overlay's Display page (live),
+lets the player see further. What ends the view in this game is the fog, not a cut: the game draws every
+map record the visibility table of the record the player stands on lists (`func_00112BD0`: a half-plane
+behind the player and that table; the map header's draw distance at 0x7C would cut by distance, but it is
+0 in all 64 maps), with the objects, entities and items on them, and no distance cut of their own; the
+far plane (`GameLoop_SetCameraMatrices`, Z 0 at about 70,000) lies beyond everything the fog leaves.
+- **The fog goes out N times as far** (`game/draw_distance.c`). A fog block is `near + far / w` (the GS's
+  fog value, w the distance), so the same fog N times as far only scales the far term. Each map's blocks
+  are copied into `map_draw_state` every frame, and every model points into that copy, so the copy is
+  scaled; the current block eases to the new value over 30 frames, so a change in play fades in.
+  Blocks of constant fog (a tint, far 0) stay as they are. Max scales by 1024: no distance fog, also not
+  the mist that is part of a place's look (the Holy Forest, map 013, loses its haze).
+- **The far plane** moves out with it (at most 16 times, from where Z never reaches 0): with the fog kept,
+  moving the far plane alone changes nothing that shows (map 000's long view: 65 pixels of 6.9M, Z
+  rounding), so there is no switch for it alone.
+- **The sky keeps the PS2's fog** (`--draw-distance-sky ps2`, the default): the records that follow the
+  player (flags bit 31: the sky dome on maps 000 and 013, backdrops on 002, 004, 021, 027, 098 and 099)
+  are a backdrop at a fixed distance, so pushing their fog out shows nothing further away, it only
+  lightens the sky (map 000's dark sky shows its clouds at 2x). `push` (or the overlay) does it anyway.
+- **What it shows:** on the outdoor maps the far walls, ruins and the lava mountains of map 000, the end
+  of long corridors (021), the back of caves. **Where the game draws nothing** (a record the visibility
+  table leaves out, behind a turn the PS2 never shows, or the neighbouring map not streamed in yet) the
+  background is the fog's colour, as before; with the fog further out such an edge can show as a straight
+  line into the fog's colour (map 016's halls: black, so it reads as a dark doorway). The game's
+  visibility tables and its two map slots are not changed.
+- **Gameplay is the PS2's**: only fog values and the projection's Z change; which records, objects and
+  entities are drawn, wake and act is not (the game's log of a new game is byte for byte the same at
+  max). The cost is nothing measurable: the same draws and VU1 work (2,100 vblanks at `--native-scale 4`,
+  MSAA 2, 60 a second on maps 000, 009 and 013: the same VU1 runs and instructions, the times within the
+  runs' noise).
+- Off, the game code does exactly what it did (the fog blocks and the far plane untouched): the pictures
+  and `--stats`' PATH1 hash are the build's before, byte for byte.
+
+## Higher frame rates
+
+Off by default (30 pictures a second in play, as on the PS2). `--frame-rate 60|120|144|240|N|monitor`,
+or the overlay's Display page (live; `settings.json` `display.frame_rate`, a number or `"monitor"`),
+turns it on; `monitor` is the refresh rate of the window's screen. The game itself still runs at 30
+frames a second: in play it draws a frame every second vblank and shows it for two, and what it does
+is the PS2's, input for input. With the switch on, the pictures between two of its frames are drawn
+by the PC from the frame it has just drawn (shown at the next vblank), everything in it moved to where
+it is at that picture's time, t of the way from the frame shown to the one drawn
+(`port/platform/frame_interp.c`; STEP3.md, "Higher frame rates"):
+- **The camera** (turning and walking): the rotation by slerp, the place along the line.
+- **Models and effects**: each model part is paired with itself in the frame before (by its batch, or,
+  where the CPU makes it anew each frame, by its order and what it is drawn with) and drawn t of the
+  way between its two places: the enemies, the arm's swing, a spell's sparks, moving objects.
+- **The HUD and the 2D**: each item the CPU draws (a sprite, a strip) is paired with the frame
+  before's in order and drawn with its places, colours and texture coordinates t of the way: a gauge
+  growing, a fade, the brightness passes, the scrolling textures' copies (the sky, the water's ripple
+  strips).
+- **The reflection** (the water on map 009) moves with the camera too, and the previous frame blended
+  in (`Game_BlendPreviousFrame`, while aiming) blends the frame shown into every picture between, so
+  the trail is as long and as soft as the game's.
+- **Not interpolated**, as no interpolation can make them: pictures the game makes anew (the HUD
+  orb's swirl, the fire's flames and the other flipbook animations change texture, not place: they
+  change once a frame, at the first picture after it), a model that comes or goes, things two frames
+  apart that the pairing cannot tell apart (two look-alike models crossing), a cut (a teleport, a map
+  change, a scripted jump of the camera). A fade steps with the GS's 8-bit alpha: at 240, a step every
+  second picture.
+- **No input lag is added.** The pictures between show the camera's next move early; the game's own
+  frame is shown at its vblank as before.
+- **The window.** At 60 every vblank has its picture. Above 60 the pictures are timed: n a vblank when
+  the rate is n times 59.94 (120, 240), else at even steps wherever they fall (144, 165). With the
+  Vulkan presenter a thread of its own shows each a quarter of a vblank after its time (so each is
+  there before it is due); with SDL_Renderer the game's thread shows them while it waits for the next
+  vblank and from its kernel calls. With vsync, choose the screen's rate (or `monitor`). If the renderer
+  cannot keep up, pictures between are left out rather than the game held up (`--stats` counts them).
+- **The menus, the title and the movies** are as they were: they draw no world. paraLLEl-GS
+  (`--renderer gs`) and `--no-whole-frame` stay at one picture a vblank (60).
+- **The cost** is the GS's: each picture between draws the frame again (VU1 is not run again, and
+  the frame's uploads are asked for again from the native GS rather than sent). About 1.1 to 1.5 ms
+  a picture on a Ryzen 9 9900X3D with an RTX 5080: 2,000 vblanks headless with `--fast`, walking on
+  map 000, take 3.0 s at 30, 4.2 s at 60, 5.9 s at 120, 7.8 s at 144 and 9.7 s at 240 (map 009: 2.8,
+  3.8, 5.0, 6.2, 7.6 s). In real time 240 is shown at 240 a second on map 009 and at 228 walking up to
+  the gate of map 000, the heaviest place tried.
+- Off, nothing changes: the game queues no marks and the GS front end keeps nothing. On, the game's
+  own frames (the even vblanks) are still the same pixels, byte for byte, at every rate; only the
+  pictures between are new. `--dump-frames V` also writes the pictures between of vblank V, as
+  `frame_V_PPP.png` (PPP: thousandths of the vblank), the same every run. `KF4_INTERP_STILL=1`
+  draws the pictures between with the frame's own camera (a check of the replay);
+  `KF4_INTERP_DRAW_ALL=1` draws every picture between headless (for speed tests); `KF4_PRESENT_SIM=HZ`
+  runs the window's pacing headless with nothing drawn (`KF4_PRESENT_LOG=FILE` writes each present).
 - `--gs-capture-at` and F9 record the GS's packets as the game sent them, without the pictures
   between.
 
@@ -629,7 +695,7 @@ VU1 run the game's microprograms; the GS is paraLLEl-GS (`tools/frame_test.py`).
 **Step 3** (done, October 2026): a renderer of our own. The native GS (`port/gs/native/`) draws on
 Vulkan, the VU1 programs run as C (bit for bit the interpreter's), and the window is presented on
 Vulkan; all three are the defaults, with paraLLEl-GS behind `--renderer gs` for comparison. Opt-in
-on top: `--native-scale`, `--native-widescreen`, `--native-msaa`, `--frame-rate 60`.
+on top: `--native-scale`, `--native-widescreen`, `--native-msaa`, `--frame-rate` (60 to 240).
 [STEP3.md](STEP3.md) has the design and the progress; [RENDERER.md](RENDERER.md) is where to start
 before changing anything that draws (the map of the code, the rules and the checks).
 

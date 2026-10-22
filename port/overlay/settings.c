@@ -1,12 +1,15 @@
 /* settings.json (port/include/port/settings.h): the player's settings, in the user's data folder.
 
      {
-       "version":  2,
+       "version":  3,
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "whole_frame": true,
+                    "whole_frame": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
-                    "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "native_lod": "scale",
+                    "draw_distance": "1", "draw_distance_sky": "ps2",
+                    "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
+                    "native_cutout_aa": "ssaa",
+                    "native_colour": "exact",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -25,8 +28,13 @@
    "version") says "renderer": "gs" and "presenter": "sdl" whether the player chose them or never
    looked: there those two values are read as the old defaults, and the new ones are used (and the
    file written again, as version 2). A file from before that says "native", "both" or "vulkan" is
-   kept as it is; from version 2 on, "gs" and "sdl" are the player's choice and kept too. */
-#define SETTINGS_VERSION 2
+   kept as it is; from version 2 on, "gs" and "sdl" are the player's choice and kept too.
+
+   3 from October 2026, when "native_scale" got "auto" (port_gs_native_scale: the picture drawn about as
+   tall as the window shows it) and it and "native_widescreen": true became the defaults. A file from
+   before says "native_scale": 1 and "native_widescreen": false whether the player chose them or not:
+   there the two are read as the new defaults. Other scales, and native widescreen on, are kept. */
+#define SETTINGS_VERSION 3
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +56,8 @@
 PortSettings port_settings = {
     .window_height = 896,
     .smooth = 1,
+    .scaling = PORT_SCALING_BEST,
+    .sharpen = 0,
     .deinterlace = 1,
     .progressive = 1,
     .anti_blur = 1,
@@ -60,6 +70,10 @@ PortSettings port_settings = {
     .renderer = PORT_RENDERER_NATIVE,
     .presenter = PORT_PRESENTER_VULKAN,
     .native_lod = 1, /* GSN_LOD_SCALE */
+    .native_scale = 0, /* auto */
+    .native_widescreen = 1,
+    .native_aniso = 1,
+    .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
 };
 
 static int active;
@@ -274,11 +288,27 @@ void port_settings_load(void) {
     }
     s->vsync = read_bool(display, "vsync", s->vsync);
     s->smooth = read_bool(display, "smooth", s->smooth);
+    {
+        /* "scaling": "sharp", "smooth" or "best"; files from before it had "smooth" alone: true is now
+           the best scaling (the presenter's own filter), false sharp pixels as before */
+        const char *scaling = read_string(display, "scaling");
+
+        if (scaling != NULL) {
+            s->scaling = strcmp(scaling, "sharp") == 0    ? PORT_SCALING_SHARP
+                         : strcmp(scaling, "smooth") == 0 ? PORT_SCALING_SMOOTH
+                                                          : PORT_SCALING_BEST;
+        } else {
+            s->scaling = s->smooth ? PORT_SCALING_BEST : PORT_SCALING_SHARP;
+        }
+        s->smooth = s->scaling != PORT_SCALING_SHARP;
+        s->sharpen = (float)read_number(display, "sharpen", s->sharpen, 0, 1);
+    }
     s->deinterlace = read_bool(display, "deinterlace", s->deinterlace);
     s->progressive = read_bool(display, "progressive", s->progressive);
     s->anti_blur = read_bool(display, "anti_blur", s->anti_blur);
     s->adapt_width = read_bool(display, "adapt_width", s->adapt_width);
     s->whole_frame = read_bool(display, "whole_frame", s->whole_frame);
+    s->flicker_filter = read_bool(display, "flicker_filter", s->flicker_filter);
     s->widescreen = read_bool(display, "widescreen", s->widescreen);
     {
         const char *hud = read_string(display, "widescreen_hud");
@@ -287,7 +317,27 @@ void port_settings_load(void) {
             s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
         }
     }
-    s->frame_rate = read_number(display, "frame_rate", s->frame_rate, 30, 60) > 45 ? 60 : 30;
+    {
+        /* 30 (the PS2's), a number of pictures a second, or "monitor" (PORT_FRAME_RATE_MONITOR) */
+        const char *rate = read_string(display, "frame_rate");
+
+        if (rate != NULL) {
+            s->frame_rate = strcmp(rate, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : s->frame_rate;
+        } else {
+            s->frame_rate = (int)read_number(display, "frame_rate", s->frame_rate, 30, 500);
+        }
+    }
+    {
+        const char *draw_distance = read_string(display, "draw_distance");
+        const char *sky = read_string(display, "draw_distance_sky");
+
+        if (draw_distance != NULL && port_draw_distance_parse(draw_distance) >= 0) {
+            s->draw_distance = port_draw_distance_parse(draw_distance);
+        }
+        if (sky != NULL) {
+            s->draw_distance_sky = strcmp(sky, "push") == 0;
+        }
+    }
     {
         const char *renderer = read_string(display, "renderer");
 
@@ -299,14 +349,45 @@ void port_settings_load(void) {
                                                           : PORT_RENDERER_GS;
         }
     }
-    s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 1, 4);
+    {
+        const char *scale = read_string(display, "native_scale");
+
+        if (scale != NULL) {
+            s->native_scale = strcmp(scale, "auto") == 0 ? 0 : s->native_scale;
+        } else {
+            s->native_scale = (int)read_number(display, "native_scale", s->native_scale, 0, 4);
+        }
+        if (version < 3 && s->native_scale == 1) {
+            s->native_scale = 0; /* the old default, written out: auto */
+            migrated = 1;
+        }
+    }
     s->native_widescreen = read_bool(display, "native_widescreen", s->native_widescreen);
+    if (version < 3 && !s->native_widescreen) {
+        s->native_widescreen = 1; /* (as above) */
+        migrated = 1;
+    }
     s->native_msaa = (int)read_number(display, "native_msaa", s->native_msaa, 1, 8);
+    s->native_aniso = (int)read_number(display, "native_aniso", s->native_aniso, 1, 16);
     {
         const char *lod = read_string(display, "native_lod");
 
         if (lod != NULL) {
             s->native_lod = strcmp(lod, "ps2") == 0 ? 0 : strcmp(lod, "full") == 0 ? 2 : 1;
+        }
+    }
+    {
+        const char *cutout = read_string(display, "native_cutout_aa");
+
+        if (cutout != NULL) {
+            s->native_cutout_aa = strcmp(cutout, "off") == 0 ? 0 : 1;
+        }
+    }
+    {
+        const char *colour = read_string(display, "native_colour");
+
+        if (colour != NULL) {
+            s->native_colour = strcmp(colour, "high") == 0 ? 1 : 0;
         }
     }
     {
@@ -347,6 +428,9 @@ void port_settings_load(void) {
     if (port_options.whole_frame) {
         port_options.whole_frame = s->whole_frame;
     }
+    if (!port_options.flicker_filter_forced) {
+        port_options.flicker_filter = s->flicker_filter;
+    }
     if (!port_options.widescreen_forced) {
         port_options.widescreen = s->widescreen;
         port_options.widescreen_hud_centred = s->widescreen_hud_centred;
@@ -359,6 +443,12 @@ void port_settings_load(void) {
     }
     if (!port_options.frame_rate_forced) {
         port_options.frame_rate = s->frame_rate;
+    }
+    if (!port_options.draw_distance_forced) {
+        port_options.draw_distance = s->draw_distance;
+    }
+    if (!port_options.draw_distance_sky_forced) {
+        port_options.draw_distance_sky = s->draw_distance_sky;
     }
     if (!port_options.renderer_forced) {
         port_options.renderer = s->renderer;
@@ -374,6 +464,15 @@ void port_settings_load(void) {
     }
     if (!port_options.native_lod_forced) {
         port_options.native_lod = s->native_lod;
+    }
+    if (!port_options.native_aniso_forced) {
+        port_options.native_aniso = s->native_aniso;
+    }
+    if (!port_options.native_cutout_aa_forced) {
+        port_options.native_cutout_aa = s->native_cutout_aa;
+    }
+    if (!port_options.native_colour_forced) {
+        port_options.native_colour = s->native_colour;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -484,18 +583,29 @@ void port_settings_save(void) {
     put(display, "aspect", cJSON_CreateString(s->aspect == ASPECT_STRETCH ? "stretch" : "4:3"));
     put(display, "vsync", cJSON_CreateBool(s->vsync));
     put(display, "smooth", cJSON_CreateBool(s->smooth));
+    put(display, "scaling", cJSON_CreateString(s->scaling == PORT_SCALING_SHARP    ? "sharp"
+                                               : s->scaling == PORT_SCALING_SMOOTH ? "smooth"
+                                                                                   : "best"));
+    put(display, "sharpen", cJSON_CreateNumber(s->sharpen));
     put(display, "deinterlace", cJSON_CreateBool(s->deinterlace));
     put(display, "progressive", cJSON_CreateBool(s->progressive));
     put(display, "anti_blur", cJSON_CreateBool(s->anti_blur));
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "whole_frame", cJSON_CreateBool(s->whole_frame));
+    put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
-    put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
-    put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
+    put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR ? cJSON_CreateString("monitor")
+                                                                        : cJSON_CreateNumber(s->frame_rate));
+    put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));
+    put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
+    put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
+    put(display, "native_aniso", cJSON_CreateNumber(s->native_aniso));
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
+    put(display, "native_cutout_aa", cJSON_CreateString(s->native_cutout_aa == 0 ? "off" : "ssaa"));
+    put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

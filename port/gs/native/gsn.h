@@ -40,11 +40,34 @@ void gsn_read_fifo(void *dst, uint32_t qwords);
 #define GSN_WANT_IMAGE 2
 #define GSN_PRESENT 4
 int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
-void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(void));
+/* The same with the picture's tag (PORT_PICTURE_TAG: its vblank and when in it), which the presenter
+   gets with it. With GSN_EXTRA it is not a vblank but one more picture between two (--frame-rate above
+   60): the buffer shown read again, whole (none when the display reads it a field at a time), with
+   nothing of the vblank's own done (the deinterlace's history, a new scale). */
+#define GSN_EXTRA 16
+/* With GSN_WANT_IMAGE and GSN_WANT_PIXELS: the pixels are the picture as the window shows it (the
+   scaled image, gsn_set_present_scale) when there is one */
+#define GSN_WANT_SCALED 32
+/* The presenter's scaling: each picture made into an image width x height (the size the window shows
+   it at) on the GPU, with a Catmull-Rom cubic (stretched by the ratio when it is made smaller, on linear
+   light) and a contrast-adaptive sharpening of that strength (0: none); 0 x 0: none. From the next
+   picture. gsn_present_scale_passes counts the pictures scaled. */
+void gsn_set_present_scale(int width, int height, float sharpen);
+uint64_t gsn_present_scale_passes(void);
+int gsn_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
+/* The vblanks sent to the native GS's thread that it has not done yet */
+int gsn_backlog(void);
+void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag), void (*image)(uint64_t tag));
 /* The render targets' size, from the next vblank: x_scale times the PS2's across (1 to GSN_MAX_SCALE_X)
    and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
 #define GSN_MAX_SCALE_X 6
 void gsn_set_scale(int x_scale, int y_scale);
+/* The GPU the native GS is on: GSN_GPU_DISCRETE, GSN_GPU_INTEGRATED or GSN_GPU_OTHER (a CPU, virtual,
+   or none open): --native-scale auto draws at most 4x, 2x and 1x on them */
+#define GSN_GPU_OTHER 0
+#define GSN_GPU_INTEGRATED 1
+#define GSN_GPU_DISCRETE 2
+int gsn_gpu_kind(void);
 /* --native-lod: the mipmap level a texture is read at. The GS picks it from the distance (Q), for the
    PS2's 640x448: GSN_LOD_PS2 keeps that; GSN_LOD_SCALE (the default) takes it log2 of --native-scale
    finer, the detail the GS would give the larger picture (at 1x, the PS2's); GSN_LOD_FULL reads
@@ -53,10 +76,33 @@ void gsn_set_scale(int x_scale, int y_scale);
 #define GSN_LOD_SCALE 1
 #define GSN_LOD_FULL 2
 void gsn_set_lod(int mode);
+/* --native-aniso: anisotropic filtering of mipmapped textures, from the next draw: up to `taps` reads
+   (1, off, the default: the GS's picture; 2, 4, 8 or 16) along the long axis of a pixel's footprint on
+   the texture, each at a level finer than the GS's by log2 of the reads (gs_frag.h, sample_texture).
+   Returns the count used (a power of two, at most 16). */
+int gsn_set_aniso(int taps);
 /* --native-msaa: the samples a pixel of the targets the 3D is drawn into has, from the next vblank
    (1, the default, is the PS2's picture; 2, 4 or 8). Returns the count used: the most the GPU has up
    to `samples`. */
 int gsn_set_msaa(int samples);
+/* --native-cutout-aa: with MSAA (gsn_set_msaa), the edges inside cut-outs (netting, foliage, fences,
+   grates, hair: textures see-through in places, by the alpha test or blending; flush_batch says which).
+   GSN_CUTOUT_AA_OFF shades them once a pixel as the rest of the 3D, so each pixel sees the texture's
+   alpha at one point; GSN_CUTOUT_AA_SSAA shades them at every sample (transparency supersampling):
+   each sample is textured, tested and blended at its own place. Nothing without MSAA, or on a GPU
+   without sample-rate shading. From the next draw. */
+#define GSN_CUTOUT_AA_OFF 0
+#define GSN_CUTOUT_AA_SSAA 1
+void gsn_set_cutout_aa(int mode);
+/* --native-colour: how precisely colours are kept, from the next vblank. GSN_COLOUR_EXACT (the default)
+   is the GS's: 8 bits a channel, every step of its arithmetic rounded as the GS rounds it, the PS2's
+   picture. GSN_COLOUR_HIGH keeps the 32-bit targets at 16 bits a channel and the colour arithmetic in
+   floats (the texture filter, texture function, fog, blending, and the frame's passes that read it
+   again), alpha and 16-bit targets as the GS has them; the picture is dithered to 8 bits as it is
+   scanned out, and anything read back (write-backs to VRAM, captures) is rounded to 8 bits. */
+#define GSN_COLOUR_EXACT 0
+#define GSN_COLOUR_HIGH 1
+void gsn_set_colour(int mode);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {
@@ -113,13 +159,19 @@ void gsn_queue_unlock(void);
    GENERAL layout, width x height. The native GS writes it again at each vblank, with a barrier after
    whatever was submitted to the queue before, so a presenter's command buffer, submitted to the same
    queue with a barrier before it reads, sees one whole picture. Between take and release (once the
-   presenter's command buffer is submitted) the image is not destroyed. serial counts the pictures. */
+   presenter's command buffer is submitted) the image is not destroyed. serial counts the pictures.
+   The native GS keeps the last few pictures (a ring of images): gsn_scanout_take_tag takes the newest
+   with that tag (gsn_picture's), or the newest of all when it is no longer there. */
 typedef struct {
     uint64_t image;
     uint32_t width, height;
     uint64_t serial;
+    uint64_t tag;
+    uint64_t scaled; /* the picture at the window's size (VkImage, GENERAL), 0: none */
+    uint32_t scaled_width, scaled_height;
 } GsnScanout;
 int gsn_scanout_take(GsnScanout *out);
+int gsn_scanout_take_tag(GsnScanout *out, uint64_t tag);
 void gsn_scanout_release(void);
 
 /* What the last frames cost and did (--stats, the overlay) */
@@ -130,8 +182,10 @@ typedef struct {
     uint64_t ns_gif, ns_flush, ns_upload, ns_writeback, ns_decode, ns_vsync, ns_swizzle, ns_sync;
     /* what it holds now: render targets, textures, decoded images (and their MB), uploads kept */
     uint64_t targets, textures, pool_images, pool_mb, upload_copies;
+    uint64_t replay_uploads, replay_misses; /* uploads asked for again by --frame-rate's pictures between */
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
+    uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
 } GsnStats;
 extern GsnStats gsn_stats;
 

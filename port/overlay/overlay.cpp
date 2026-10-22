@@ -263,25 +263,93 @@ void display_page() {
     }
     ImGui::EndDisabled();
     tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
-    bool sixty = port_options.frame_rate > 30;
-    if (ImGui::Checkbox("60 pictures a second in play", &sixty)) {
-        s.frame_rate = port_options.frame_rate = sixty ? 60 : 30;
-        changed();
+    {
+        static const int rates[] = {30, 60, 120, 144, 165, 240, PORT_FRAME_RATE_MONITOR};
+        static const char *const names[] = {"30 (the PS2's)", "60", "120", "144", "165", "240", "The screen's refresh rate"};
+        char other[48];
+        int at = -1, i;
+
+        for (i = 0; i < 7; i++) {
+            at = rates[i] == port_options.frame_rate ? i : at;
+        }
+        if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR) {
+            snprintf(other, sizeof(other), "The screen's refresh rate (%d)", port_frame_rate_hz());
+        } else {
+            snprintf(other, sizeof(other), "%d", port_options.frame_rate);
+        }
+        if (ImGui::BeginCombo("Pictures a second in play", other)) {
+            for (i = 0; i < 7; i++) {
+                if (ImGui::Selectable(names[i], i == at)) {
+                    s.frame_rate = port_options.frame_rate = rates[i];
+                    changed();
+                }
+            }
+            ImGui::EndCombo();
+        }
     }
-    tooltip("Off: the PS2's 30 pictures a second in play.\nOn: a picture between each two of the game's, "
-            "the world seen from the camera half\nway between them, so turning and walking look smooth. "
-            "The game still runs at 30:\nenemies and effects move 30 times a second, and the picture is "
-            "no later than off.\nThe menus are as they were. Applies at once. (--frame-rate 60)");
+    tooltip("30: the PS2's 30 pictures a second in play.\nMore: pictures between each two of the game's, "
+            "the world seen from the camera on its way\nbetween them, models, the HUD's gauges, fades and "
+            "scrolling textures where they are at that\ntime, so turning and walking look smooth. The game "
+            "still runs at 30: what it does is the\nsame, and the picture is no later. What changes by "
+            "frames (the orb's flames, flipbook\neffects) still changes 30 times a second. Above 60 the "
+            "window shows each picture at its\ntime; with VSync, choose the screen's rate. The menus are "
+            "as they were. Applies at once.\n(--frame-rate 30|60|120|144|240|monitor)");
     if (port_options.frame_rate != s.frame_rate) {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
     }
-    bool smooth = s.smooth != 0;
-    if (ImGui::Checkbox("Smooth scaling", &smooth)) {
-        s.smooth = smooth;
+    static const char *const distances[PORT_DRAW_DISTANCE_COUNT] = {"1x (PS2)", "1.5x", "2x", "4x", "Max (no distance fog)"};
+    int distance = port_options.draw_distance;
+    if (ImGui::Combo("Draw distance", &distance, distances, PORT_DRAW_DISTANCE_COUNT)) {
+        s.draw_distance = port_options.draw_distance = distance;
         changed();
     }
-    tooltip("On: the picture is scaled to the window with bilinear filtering.\nOff: sharp, blocky pixels.");
+    tooltip("1x: the PS2's fog.\nFurther: the fog starts and ends that many times as far away, so more of "
+            "the world\nshows through it (the far plane moves out with it). The game already draws\nwhat "
+            "is behind the fog; it only hides it. Max removes the distance fog,\nalso the mist that is part "
+            "of a place's look (the Holy Forest).\nWhere the game draws nothing (behind a turn the game "
+            "never shows),\nthe background shows in the fog's colour. Applies at once. (--draw-distance)");
+    if (port_options.draw_distance != s.draw_distance) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(for this run: command line)");
+    }
+    ImGui::BeginDisabled(port_options.draw_distance == PORT_DRAW_DISTANCE_1);
+    bool sky = port_options.draw_distance_sky != 0;
+    if (ImGui::Checkbox("Push the sky's fog out too", &sky)) {
+        s.draw_distance_sky = port_options.draw_distance_sky = sky;
+        changed();
+    }
+    ImGui::EndDisabled();
+    tooltip("Off: the sky keeps the PS2's fog (the sky is a dome around you, not further away).\nOn: its fog "
+            "goes out as well, which lightens it: the dark sky of the Village\nRuins shows its clouds. "
+            "(--draw-distance-sky push)");
+    {
+        static const char *const scalings[] = {"Sharp pixels", "Smooth (bilinear)", "Best"};
+        int scaling = s.scaling;
+        if (ImGui::Combo("Scaling to the window", &scaling, scalings, 3)) {
+            s.scaling = scaling;
+            s.smooth = scaling != PORT_SCALING_SHARP;
+            changed();
+        }
+        tooltip("How the picture is fitted to the window.\nSharp pixels: each pixel repeated, blocky.\n"
+                "Smooth: bilinear filtering, as before. Made much smaller (a large native scale in a smaller\n"
+                "window) it reads only 2 x 2 pixels for each, so fine detail flickers and edges step.\n"
+                "Best (the default): the native GS scales the picture itself, with a cubic filter that\n"
+                "averages every pixel the window's pixel covers when made smaller, and keeps edges sharp\n"
+                "when made larger, on linear light. About 0.2 to 0.4 ms of the GPU a picture.\n"
+                "(--present-scaling sharp|smooth|best)");
+        if (port_options.present_scaling >= 0 && port_options.present_scaling != s.scaling) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(for this run: command line)");
+        }
+        float sharpen = s.sharpen;
+        if (ImGui::SliderFloat("Sharpen", &sharpen, 0.0f, 1.0f, sharpen > 0 ? "%.2f" : "off")) {
+            s.sharpen = sharpen < 0.02f ? 0.0f : sharpen;
+            changed();
+        }
+        tooltip("Contrast-adaptive sharpening after the scaling: fine detail crisper, hard edges left\n"
+                "alone. 0: off (the default). It uses the best scaling. (--present-sharpen 0 to 1)");
+    }
     bool vsync = s.vsync != 0;
     if (ImGui::Checkbox("VSync", &vsync)) {
         s.vsync = vsync;
@@ -300,6 +368,7 @@ void display_page() {
         const char *tip;
         int *setting;
         int *option;
+        bool ps2_when_on; /* the option on is the PS2's way: the box shows it off */
     } switches[] = {
         {"Weave the two fields (deinterlace)",
          "The game draws each field as its own 224-line picture, half a line apart.\nOn: the two are woven "
@@ -323,11 +392,17 @@ void display_page() {
          "instead of as two fields (from the next movie), and the menus, drawn a field at a time, as one\n"
          "moment each picture. Off: as on the PS2. (--no-whole-frame)",
          &s.whole_frame, &port_options.whole_frame},
+        {"No flicker filter (no up-and-down blur)",
+         "On (the default): the rows as the game drew them. Off: as on the PS2, every frame the game\n"
+         "blends each row of the picture half with the row above, so that thin lines do not flicker\n"
+         "between an interlaced TV's two fields; on a PC screen that blurs the picture up and down, and\n"
+         "at a native GS resolution above 1x shows it twice, a GS row apart. (--flicker-filter)",
+         &s.flicker_filter, &port_options.flicker_filter, true},
     };
     for (Switch &item : switches) {
-        bool value = *item.option != 0;
+        bool value = (*item.option != 0) != item.ps2_when_on;
         if (ImGui::Checkbox(item.label, &value)) {
-            *item.setting = *item.option = value;
+            *item.setting = *item.option = value != item.ps2_when_on;
             changed();
         }
         tooltip(item.tip);
@@ -338,13 +413,13 @@ void display_page() {
     }
     if (ImGui::Button("All off: as the PS2 shows it")) {
         for (Switch &item : switches)
-            *item.setting = *item.option = 0;
+            *item.setting = *item.option = item.ps2_when_on;
         changed();
     }
     ImGui::SameLine();
     if (ImGui::Button("All on: the PC's picture")) {
         for (Switch &item : switches)
-            *item.setting = *item.option = 1;
+            *item.setting = *item.option = !item.ps2_when_on;
         changed();
     }
 }
@@ -706,14 +781,21 @@ void renderer_section() {
             "--renderer on the command line wins over this.");
     if (port_options.renderer != PORT_RENDERER_GS) {
         int scale = port_options.native_scale;
-        if (ImGui::SliderInt("Native GS resolution", &scale, 1, 4, "%dx")) {
+        char scale_name[32];
+        if (scale >= 1) {
+            snprintf(scale_name, sizeof(scale_name), "%dx", scale);
+        } else {
+            snprintf(scale_name, sizeof(scale_name), "Auto (%dx)", port_gs_native_scale());
+        }
+        if (ImGui::SliderInt("Native GS resolution", &scale, 0, 4, scale_name)) {
             port_gs_set_native_scale(scale);
             port_settings.native_scale = scale;
             port_settings_changed();
         }
         tooltip("The native GS draws its frame buffers at this many times the PS2's 640x448 (2x: 1280x896,\n"
                 "4x: 2560x1792). 1x is the PS2's picture; with --renderer both the comparison is made at 1x\n"
-                "pixels either way.");
+                "pixels either way. Auto (the default): the multiple of 448 lines nearest the height the\n"
+                "window shows the picture at (1080: 2x, 1440: 3x, 2160: 4x), at most 2x on an integrated GPU.");
         bool wide = port_options.native_widescreen != 0;
         if (ImGui::Checkbox("Native widescreen", &wide)) {
             port_options.native_widescreen = port_settings.native_widescreen = wide;
@@ -736,10 +818,20 @@ void renderer_section() {
                                 port_options.native_msaa > 1 ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
                                                              : "Off");
         }
-        tooltip("The native GS draws the 3D with this many samples a pixel, which smooths its edges (the 2D,\n"
-                "the passes over the whole frame and the alpha test's cut-outs stay as they are). Off is the\n"
-                "PS2's picture. Costs GPU time, more with the resolution above. Off and back on is live;\n"
-                "from one count to another takes a restart. (--native-msaa)");
+        tooltip("The native GS draws the 3D with this many samples a pixel, which smooths its edges (the 2D\n"
+                "and the passes over the whole frame stay as they are). Off is the PS2's picture. Costs GPU\n"
+                "time, more with the resolution above. Off and back on is live; from one count to another\n"
+                "takes a restart. (--native-msaa)");
+        bool cutout = port_options.native_cutout_aa != 0;
+        if (ImGui::Checkbox("Native GS anti-aliasing: smooth cut-outs too", &cutout)) {
+            port_gs_set_native_cutout_aa(cutout ? 1 : 0);
+            port_settings.native_cutout_aa = cutout ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("With MSAA above: textures see-through in places (netting, foliage, fences, grates, hair) are\n"
+                "shaded at every sample instead of once a pixel, so the edges inside them are smoothed and\n"
+                "shimmer less (more so with more samples). Costs GPU time only where they are drawn.\n"
+                "Without MSAA it changes nothing. (--native-cutout-aa ssaa|off)");
         static const char *const lod_names[] = {"PS2's (ps2)", "Matched to the resolution (scale, the default)",
                                                 "Finest everywhere (full)"};
         int lod = port_options.native_lod;
@@ -754,6 +846,30 @@ void renderer_section() {
                 "would pick at this resolution (at 1x, the PS2's own). PS2's: its level at any resolution.\n"
                 "Finest: the whole texture at every distance (at 1x too), sharpest, but far surfaces can\n"
                 "shimmer. (--native-lod)");
+        static const char *const aniso_names[] = {"Off", "2x", "4x", "8x", "16x"};
+        int aniso_at = port_options.native_aniso >= 16 ? 4 : port_options.native_aniso >= 8 ? 3 : port_options.native_aniso >= 4 ? 2 : port_options.native_aniso >= 2 ? 1 : 0;
+        if (ImGui::Combo("Native GS anisotropic filtering", &aniso_at, aniso_names, 5)) {
+            port_gs_set_native_aniso(1 << aniso_at);
+            port_settings.native_aniso = port_options.native_aniso;
+            port_settings_changed();
+        }
+        tooltip("Floors and walls seen at a grazing angle: the PS2 reads a texture's mipmap level from the\n"
+                "distance alone, the same along the surface and across it, so they blur with distance. This\n"
+                "reads up to this many times along a pixel's footprint on the texture, each at a finer level,\n"
+                "for the detail across. Off is the PS2's picture. Costs GPU time on mipmapped surfaces.\n"
+                "(--native-aniso)");
+        static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
+        int colour = port_options.native_colour;
+        if (ImGui::Combo("Native GS colour precision", &colour, colour_names, 2)) {
+            port_gs_set_native_colour(colour);
+            port_settings.native_colour = colour;
+            port_settings_changed();
+        }
+        tooltip("How precisely the native GS keeps colours. The PS2's: 8 bits a channel, every step rounded as\n"
+                "the GS rounds it, which shows as steps in smooth dark gradients (the sky, dim walls, glows).\n"
+                "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
+                "screen's 8 bits, so the gradients are smooth. Alpha, and what the game reads back, stay the\n"
+                "PS2's. (--native-colour)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();

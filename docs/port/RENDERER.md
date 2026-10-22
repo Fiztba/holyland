@@ -18,10 +18,10 @@ draws instead when the native GS cannot start.
 | `port/gs/native/shaders/` | GLSL; `python tools/build_shaders.py --glslang PATH` writes the committed `gsn_shaders.h` (only needed when a shader changes) |
 | `port/gs/gs_parallel.cpp` | paraLLEl-GS behind the same C interface |
 | `port/platform/gs.c` | picks the renderer(s), compares them with `--renderer both`, hands pictures to the window |
-| `port/platform/present_vk.cpp` | the Vulkan presenter: a swapchain on the native GS's device, the overlay through ImGui's Vulkan backend |
+| `port/platform/present_vk.cpp` | the Vulkan presenter: a swapchain on the native GS's device, the overlay through ImGui's Vulkan backend; the picture is scaled to the window by the native GS (`present_scale`, `shaders/present_scale.frag`, `present_sharpen.frag`) and copied a pixel a pixel, or blitted (sharp, smooth) |
 | `port/platform/video.c` | the window, SDL_Renderer, frame pacing and dumps |
 | `port/platform/vu1.c`, `vu1_hle*.c` | the VU1 interpreter and the four programs in C (bit for bit the interpreter's) |
-| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60`: a frame's packets drawn again between two frames, camera and moving parts half way |
+| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times |
 | `tools/gsreplay/` | `kf4-gsreplay`: a GS capture (F9) drawn again by either renderer, compared draw by draw and picture by picture |
 
 ## The rules
@@ -56,7 +56,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
    for each, `kf4-gsreplay DIR/NNN/capture.kf4gs --compare-renderers --no-resync --draws
    999999-999999 --limit 0` and read the `end-other` and `scanouts:` lines. Keep the sum of
    differing pixels over the 64 maps from before your change; no map should get worse without a
-   reason you can name (October 2026: 362,601 pixels, worst difference 53, all scanouts identical).
+   reason you can name. Captures made with today's defaults (the game's flicker filter off): 414,901
+   pixels, worst difference 53 x 2 = 106, all scanouts identical. Captures with `--flicker-filter`
+   (or older ones, such as October 2026's): 362,601 pixels, worst 53. The filter blends every row
+   half over the row above, which halves any difference between the renderers.
 5. **Live:** a few maps (`--teleport 1900:N:0` after `tests/newgame.pad`) with `--renderer both
    --vu1 check --stats`, 2,500 vblanks: no crash, VU1 0 differ, the pictures' differences as before.
 6. **Speed**, if the change could cost: 2,000 vblanks `--fast --headless --dump-frames 1999` on map
@@ -101,8 +104,12 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   against the interpreter (tests/vu1_test.c and `--vu1 check` are the oracle).
 - **paraLLEl-GS's licence before release builds**: the native GS and paraLLEl-GS are one library
   (`kf4_gs`) on paraLLEl-GS's copy of Granite; a release without paraLLEl-GS needs them split.
-- **60 pictures a second:** the HUD, animated textures and what the CPU builds anew each frame stay
-  at 30; two look-alike models crossing can swap for one picture.
-- **MSAA:** the alpha test's cut-outs (foliage, fences) and draws without Z are not smoothed.
+- **Higher frame rates:** flipbook animations and pictures the CPU makes anew (the HUD orb) change
+  once a frame; two look-alike models crossing can swap for a few pictures; the renderer's cost is one
+  frame's draw a picture (1.1 to 1.5 ms here), so 240 skips a few pictures in the heaviest places: a
+  draw of the frame again on the GPU from recorded commands would be the next step (STEP3.md).
+- **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
+  sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
+  mipmaps made for cut-out textures would be the next step.
 - STEP3.md, "Progress" and "What could come next", has the rest (write-backs left, uploads on the
   GPU, exact blending by fragment shader interlock).

@@ -136,22 +136,46 @@ int port_widescreen(void);
    as two fields: a PC screen weaves a field with the one before, and the first field of each new
    picture with the last picture's other, a comb every other vblank. */
 int port_whole_frame(void);
+
+/* port_flicker_filter(): 1 while the game draws its flicker filter (port_options.flicker_filter; off by
+   default, on with --flicker-filter, --ps2-scanout or the overlay's Display page). Every frame of play
+   Game_BlendScreenOffsetDown blends the picture over itself one row lower at half strength, so that a
+   line one row thin is in both fields of an interlaced TV and does not flicker between them. A PC
+   screen shows every row at once: there it is a blur up and down at 1x, and at a larger
+   --native-scale (one GS row is N rows of the picture) a double image. Off, the game writes the
+   pass's registers but draws none of its strips. */
+int port_flicker_filter(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 
-/* port_frame_interp(): 1 while the opt-in higher frame rate is on (--frame-rate 60;
+/* port_frame_interp(): 1 while the opt-in higher frame rates are on (--frame-rate 60 to 240;
    port/platform/frame_interp.c). The patched GameLoop_DrawFrame then marks, in its packet chain, where
    the 3D world is and the cameras that drew it (game/frame_interp.c), with A+D writes to
    PORT_GS_REG_FRAME_INTERP, another address the GS does not have: bits 32-39 of the data are one of
    PORT_FRAME_INTERP_, bits 0-31 its value (a float's bits, or the header). The GS front end draws the
-   world once more for the vblank in between, with the camera half way. */
+   frame again for each picture between, everything moved to that picture's time. */
 int port_frame_interp(void);
 #define PORT_GS_REG_FRAME_INTERP 0x7D
+#define PORT_GS_REG_REPLAY_UPLOAD 0x7C /* (port/platform/frame_interp.c to the native GS) */
 #define PORT_FRAME_INTERP_HEADER 0  /* last: projection | mode << 8 (GameLoop_SetCameraMatrices'), or _END */
 #define PORT_FRAME_INTERP_VIEW 1    /* 1-12: world_view_matrix's columns' x, y, z */
 #define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */
 #define PORT_FRAME_INTERP_END 0xFFFF /* the header after the world: what follows stays as it is */
 #define PORT_FRAME_INTERP_ARM 0xFFFE /* the header before the arm: models in the world, moved as they move */
+
+/* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
+   default) unless --draw-distance or the overlay's Display page says 1.5, 2, 4 or max
+   (PORT_DRAW_DISTANCE_MAX_FOG: no distance fog within the far plane). The game draws every map record
+   the visibility table of the player's record lists, with no distance cut, so what ends the view is the
+   fog (game/draw_distance.c). port_draw_distance_far(): the far plane's factor (GameLoop_SetCameraMatrices'
+   65535; at most 16, from where nothing is cut by it). port_draw_distance_sky(): 1 when the sky (the map
+   records that follow the player) has its fog pushed out too; 0, the default, keeps the PS2's fog on it,
+   as it is a backdrop at a fixed distance, not something further away. Only the drawing changes: which
+   records, objects and entities exist, are drawn and wake is the PS2's. */
+float port_draw_distance(void);
+float port_draw_distance_far(void);
+int port_draw_distance_sky(void);
+#define PORT_DRAW_DISTANCE_MAX_FOG 1024.0f
 
 /* ---- Opt-in mods the game code reads ---------------------------------------------------------
    Each changes the game, so each is off by default; while it is off the game does what it did on

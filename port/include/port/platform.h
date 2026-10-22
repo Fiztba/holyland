@@ -40,7 +40,8 @@ typedef struct {
        window's when the native GS is not running or the Vulkan one does not start). */
     int presenter;
     int presenter_forced;    /* --presenter: this run's, whatever settings.json says */
-    int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size */
+    int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size,
+                                or 0, auto (port_gs_native_scale()) */
     int native_scale_forced;
     /* --native-widescreen: with widescreen on and the native GS, the render targets wider still
        (port_gs_native_scale_x(), port/platform/gs.c): the 16:9 picture drawn with square pixels
@@ -57,6 +58,20 @@ typedef struct {
        which at 1x is the GS's own; 2 full, level 0 at every distance). Live from the overlay. */
     int native_lod;
     int native_lod_forced;
+    /* --native-aniso: anisotropic filtering of the native GS's mipmapped textures, the most reads along
+       a pixel's footprint (1, off, the default; 2, 4, 8, 16; gsn_set_aniso) */
+    int native_aniso;
+    int native_aniso_forced;
+    /* --native-cutout-aa: with MSAA, the native GS's cut-outs (netting, foliage, fences, grates: textures
+       see-through in places) shaded at every sample (GSN_CUTOUT_AA_*, port/gs/native/gsn.h: 0 off, 1
+       ssaa, the default). Nothing without MSAA. Live from the overlay. */
+    int native_cutout_aa;
+    int native_cutout_aa_forced;
+    /* --native-colour: how precisely the native GS keeps colours (GSN_COLOUR_*, port/gs/native/gsn.h: 0
+       exact, the default, the GS's 8 bits a channel and its roundings; 1 high, 16 bits a channel and the
+       colours' arithmetic in floats, dithered to 8 bits on the way out). Live from the overlay. */
+    int native_colour;
+    int native_colour_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
        the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
@@ -72,16 +87,35 @@ typedef struct {
     int whole_frame;         /* the game draws whole pictures, not fields for an interlaced TV
                                 (port_whole_frame(): Game_ShiftScreenByViewTurn is left out, movies
                                 are shown in frame mode) */
+    int flicker_filter;      /* the game's flicker filter is drawn (port_flicker_filter(): each row half
+                                the row above, for an interlaced TV); off by default, on with
+                                --flicker-filter or --ps2-scanout */
+    int flicker_filter_forced;
     /* The opt-in 16:9 picture (port_widescreen(), port/platform/gs.c): off by default, turned on by
        --widescreen or settings.json, live from the overlay. */
     int widescreen;
     int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
     int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
-    /* The opt-in higher frame rate (port_frame_interp(), port/platform/frame_interp.c): 30 (the
-       PS2's: a picture every second vblank in play) by default, 60 with --frame-rate 60 or
-       settings.json, live from the overlay. */
+    /* The opt-in higher frame rates (port_frame_interp(), port/platform/frame_interp.c): 30 (the
+       PS2's: a picture every second vblank in play) by default; 60, 120, 144, 240 (pictures a second)
+       or PORT_FRAME_RATE_MONITOR (the window's screen's refresh) with --frame-rate or settings.json,
+       live from the overlay. */
+#define PORT_FRAME_RATE_MONITOR 1000
     int frame_rate;
+    /* --present-scaling, --present-sharpen: how the picture is scaled to the window (port_video_scaling,
+       port/platform/video.c), this run's whatever settings.json says (-1: the settings'); --dump-present
+       WxH: dumps write the picture as a window of that size shows it */
+    int present_scaling;
+    float present_sharpen;
+    int dump_present_width, dump_present_height;
     int frame_rate_forced;   /* --frame-rate: this run's, whatever settings.json says */
+    /* --draw-distance (port_draw_distance(), port/include/port/host.h): how much further the game
+       draws, PORT_DRAW_DISTANCE_ (1x, the PS2's, by default); and whether the sky's fog goes out with
+       it (draw_distance_sky 1) or stays the PS2's (0, the default). Live from the overlay. */
+    int draw_distance;
+    int draw_distance_forced; /* --draw-distance: this run's, whatever settings.json says */
+    int draw_distance_sky;
+    int draw_distance_sky_forced; /* --draw-distance-sky */
     /* The opt-in mods (port/include/port/host.h): off by default, turned on by their switch or
        settings.json, live from the overlay. */
     int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */
@@ -268,6 +302,12 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
 enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2 };
+/* port_options.draw_distance: --draw-distance 1, 1.5, 2, 4 or max */
+enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, PORT_DRAW_DISTANCE_4, PORT_DRAW_DISTANCE_MAX,
+       PORT_DRAW_DISTANCE_COUNT };
+/* the level a name ("1", "1.5", "2", "4", "max") stands for, -1 for none; and a level's name */
+int port_draw_distance_parse(const char *name);
+const char *port_draw_distance_name(int level);
 enum { PORT_PRESENTER_SDL = 0, PORT_PRESENTER_VULKAN = 1 };
 /* --renderer both: how the last pictures of the two compared (port/platform/gs.c) */
 typedef struct {
@@ -281,8 +321,16 @@ typedef struct {
 } PortRendererDiff;
 extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
-/* The native GS's scale (port_options.native_scale), from the next vblank */
+/* The native GS's scale (port_options.native_scale: 1 to 4, or 0 for auto), from the next vblank */
 void port_gs_set_native_scale(int scale);
+/* The scale the native GS draws at: port_options.native_scale, or for auto (0) the multiple of 448 lines
+   nearest the height the window shows the picture at (port_video_picture_height()), 1 to 4; at most 2
+   on an integrated GPU, 1 on any other that is not a discrete one (lavapipe) and with no window
+   (headless) */
+int port_gs_native_scale(void);
+/* The height in pixels the window shows the picture at (port_video_fit), 0 with no window: written
+   at each present, read by the GS's thread */
+int port_video_picture_height(void);
 /* The native GS's scale across: native_scale, or with --native-widescreen (and widescreen on) the
    smallest whole number at least 4/3 of it */
 int port_gs_native_scale_x(void);
@@ -291,6 +339,12 @@ int port_gs_native_scale_x(void);
 int port_gs_set_native_msaa(int samples);
 /* The native GS's mipmap levels (port_options.native_lod), from the next draw */
 void port_gs_set_native_lod(int mode);
+/* The native GS's anisotropic filtering (port_options.native_aniso: 1 off, 2 to 16), from the next draw */
+void port_gs_set_native_aniso(int taps);
+/* The native GS's cut-outs with MSAA (port_options.native_cutout_aa), from the next draw */
+void port_gs_set_native_cutout_aa(int mode);
+/* The native GS's colour precision (port_options.native_colour), from the next vblank */
+void port_gs_set_native_colour(int mode);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {
@@ -301,6 +355,9 @@ typedef struct {
 void port_gs_init(void);
 /* 1 when there is a renderer. */
 int port_gs_enabled(void);
+/* 1 when the native GS draws alone: --frame-rate's pictures between ask it for the frame's uploads
+   again instead of sending them (port/platform/frame_interp.c) */
+int port_gs_replay_uploads(void);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
 /* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */
@@ -315,14 +372,26 @@ void port_gs_finish(void);
 int port_gs_vsync_pending(void);
 void port_gs_run_vsync(void);
 
-/* --frame-rate 60 (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to
-   the GS is kept (port_interp_keep) until the vblank; port_interp_vsync, before the vblank's
-   scanout, keeps them on when they drew the game's world into the buffer not shown, and at the vblank
-   after sends them again through send, changed, into the buffer shown (1 when it did); then
-   port_interp_reset starts the next vblank's (whole: every path is between packets).
+/* --frame-rate (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to the
+   GS is kept (port_interp_keep) until the vblank; port_interp_vsync, before the vblank's scanout, keeps
+   them on as the pending frame when they drew the game's world into the buffer not shown (for this
+   vblank and the next); port_interp_reset starts the next vblank's (whole: every path is between
+   packets).
    port_interp_forget drops what was kept and the last frame's camera (a state was loaded). */
 void port_interp_keep(int path, const void *data, size_t bytes);
-int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes));
+void port_interp_vsync(const uint64_t *privileged);
+/* A picture between at this point of the vblank (phase 0 to 1): the frame kept drawn again into the
+   buffer shown, everything moved to where it is at that time (1 when it was drawn; 0: the buffer shown
+   is right as it is, or nothing to draw). port_interp_end_vblank after the vblank's last. */
+int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes));
+void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes));
+/* 1 while a frame kept is being drawn between (the vblank's pictures come from it) */
+int port_interp_active(void);
+/* The pictures a second (port_options.frame_rate, the screen's for PORT_FRAME_RATE_MONITOR), and the
+   times in vblank (0 to 1) of the pictures shown in it: up to max, their count returned (the
+   vblank's own, at 0, among them when it is shown) */
+int port_frame_rate_hz(void);
+int port_interp_schedule(uint64_t vblank, double *phases, int max);
 void port_interp_reset(int whole);
 void port_interp_forget(void);
 void port_interp_print_stats(void);
@@ -342,10 +411,35 @@ uint64_t port_field_frames_replays(void);
 
 /* ---- The window (port/platform/video.c) -------------------------------------------------- */
 void port_video_init(void);
-/* (the controller's thread) the newest picture, for the window */
-void port_video_submit(const PortGsFrame *frame);
-/* (the controller's thread) the newest picture is the native GS's image on the GPU (gsn_scanout_take) */
-void port_video_submit_image(void);
+/* A picture's tag: the vblank it belongs to, and when in it (phase, 0 to 1: 0 is the vblank's own
+   picture; --frame-rate above 60 has more between two vblanks). The window shows each at its time. */
+#define PORT_PICTURE_TAG(vblank, phase) (((uint64_t)(vblank) << 16) | (uint64_t)((phase) * 65536.0) & 0xFFFF)
+#define PORT_PICTURE_VBLANK(tag) ((tag) >> 16)
+#define PORT_PICTURE_PHASE(tag) ((double)((tag) & 0xFFFF) / 65536.0)
+/* (the controller's or the GS's thread) a picture for the window, with its tag */
+void port_video_submit(const PortGsFrame *frame, uint64_t tag);
+/* (the controller's or the GS's thread) a picture that is the native GS's image on the GPU
+   (gsn_scanout_take_tag) */
+void port_video_submit_image(uint64_t tag);
+/* (the game thread) the wall time (port_wall_seconds) a vblank is shown at: its pictures' times */
+void port_video_vblank(uint64_t vblank, double wall);
+/* (the game thread) until the wall time `until` (or a little before it), shows the pictures between
+   vblanks (frame rates above 60) as their times come; the caller sleeps the rest. port_video_poll, from
+   the kernel's calls between vblanks: shows one that is due. */
+void port_video_wait(double until);
+void port_video_poll(void);
+/* How the picture is scaled to the window: PORT_SCALING_ (the settings', or --present-scaling), and the
+   sharpening's strength (0 to 1) */
+enum { PORT_SCALING_SHARP = 0, PORT_SCALING_SMOOTH = 1, PORT_SCALING_BEST = 2 };
+int port_video_scaling(void);
+/* (port/platform/gs.c) the size the window shows the picture at, which the native GS scales it to with
+   the best scaling (0 x 0: none) */
+void port_gs_present_scale(int width, int height, float sharpen);
+float port_video_sharpen(void);
+/* the refresh rate of the window's screen (Hz), 0 when not known (no window) */
+int port_video_refresh_rate(void);
+/* 1 in a --headless run with KF4_PRESENT_SIM (a test of the window's pacing, with nothing drawn) */
+int port_video_simulated(void);
 /* 1 while the window is the Vulkan presenter's, which takes the native GS's picture as an image */
 int port_video_takes_images(void);
 /* the presenter running: PORT_PRESENTER_ (SDL when the Vulkan one was asked for and did not start) */
@@ -356,7 +450,7 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
 void port_video_dump_named(const PortGsFrame *frame, const char *name);
 /* writes RGBA pixels (R in the low byte) as an RGB PNG: 1 when it was written */
 int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
-/* (the game thread, at vblank) shows the newest picture and keeps the window alive */
+/* (the game thread, at vblank) shows the newest picture due and keeps the window alive */
 void port_video_present(void);
 /* --stats: how the pictures reached the window */
 void port_video_print_stats(void);

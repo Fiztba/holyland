@@ -159,6 +159,7 @@ struct Presenter {
     uint32_t upload_width = 0, upload_height = 0;
     bool upload_new = false; // made, and not yet in its layout
     Source source = SOURCE_NONE;
+    uint64_t tag = 0; // the native GS's picture shown (PORT_PICTURE_TAG)
 
     // the window read back for KF4_OVERLAY_SHOT
     VkBuffer readback = VK_NULL_HANDLE;
@@ -658,7 +659,8 @@ extern "C" int port_vk_imgui_init(void) {
     return pr.imgui;
 }
 
-extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image) {
+extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag,
+                                int overlay) {
     if (!pr.up) {
         return;
     }
@@ -716,16 +718,37 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         }
     } else if (image) {
         pr.source = SOURCE_NATIVE;
+        pr.tag = tag;
     }
+    // the native GS's picture of that tag (with nothing new, the one shown last again)
     GsnScanout scanout = {};
-    bool have_scanout = pr.source == SOURCE_NATIVE && gsn_scanout_take(&scanout);
+    bool have_scanout = pr.source == SOURCE_NATIVE && gsn_scanout_take_tag(&scanout, pr.tag);
 
-    // the overlay's draw lists, and the mouse indicator, over the picture's place
+    // the picture's place; the native GS scales its next pictures to it with the best scaling (or the
+    // sharpening), this one when it was made at this size
     int x, y, w, h;
     port_video_fit(int(pr.extent.width), int(pr.extent.height), &x, &y, &w, &h);
-    port_overlay_draw(x, y, w, h);
-    ImDrawData *draw = pr.imgui ? static_cast<ImDrawData *>(port_overlay_draw_data()) : nullptr;
-    bool shot = port_overlay_shot_due() && pr.can_read;
+    {
+        int scaling = port_video_scaling();
+        float sharpen = port_video_sharpen();
+
+        if (scaling == PORT_SCALING_BEST || sharpen > 0) {
+            gsn_set_present_scale(w, h, sharpen);
+        } else {
+            gsn_set_present_scale(0, 0, 0);
+        }
+    }
+    bool scaled = have_scanout && scanout.scaled != 0 && scanout.scaled_width == uint32_t(w) &&
+                  scanout.scaled_height == uint32_t(h);
+
+    // the overlay's draw lists, and the mouse indicator, over the picture's place
+    ImDrawData *draw = nullptr;
+    bool shot = false;
+    if (overlay) {
+        port_overlay_draw(x, y, w, h);
+        draw = pr.imgui ? static_cast<ImDrawData *>(port_overlay_draw_data()) : nullptr;
+        shot = port_overlay_shot_due() && pr.can_read;
+    }
     if (shot) {
         VkDeviceSize size = VkDeviceSize(pr.extent.width) * pr.extent.height * 4;
         if (pr.readback_size < size) {
@@ -773,6 +796,10 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         source = pr.upload;
         source_w = pr.upload_width;
         source_h = pr.upload_height;
+    } else if (scaled) {
+        source = VkImage(scanout.scaled); // (a pixel a pixel)
+        source_w = scanout.scaled_width;
+        source_h = scanout.scaled_height;
     } else if (have_scanout) {
         source = VkImage(scanout.image);
         source_w = scanout.width;
@@ -789,7 +816,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         blit.dstOffsets[0] = {x, y, 0};
         blit.dstOffsets[1] = {x + w, y + h, 1};
         vk.vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_GENERAL, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
-                          port_settings.smooth ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+                          !scaled && port_video_scaling() != PORT_SCALING_SHARP ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     }
     image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,

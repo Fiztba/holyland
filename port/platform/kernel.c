@@ -322,12 +322,26 @@ static void vblank_start(void) {
         double due = pace_start_wall + (double)ee_cycle / (double)EE_BUS_HZ;
         double now = port_wall_seconds();
 
-        if (due > now) {
-            port_sleep(due - now);
-        } else if (now - due > 0.25) {
+        if (now - due > 0.25) {
             /* the host fell behind (a breakpoint, a slow load): start counting again from here */
             pace_start_wall = now - (double)ee_cycle / (double)EE_BUS_HZ;
+            due = now;
         }
+        /* the vblank's picture is shown at due; with --frame-rate above 60 the window shows the
+           pictures between the last vblank and this one while it waits */
+        port_video_vblank(vblank_count, due);
+        if (due > now) {
+            uint32_t float_mode = port_host_float_begin();
+
+            port_video_wait(due);
+            port_host_float_end(float_mode);
+            now = port_wall_seconds();
+            if (due > now) {
+                port_sleep(due - now);
+            }
+        }
+    } else {
+        port_video_vblank(vblank_count, port_wall_seconds());
     }
     /* the pad (mouse look), the window and the overlay are the host's: its float mode */
     mode = port_host_float_begin();
@@ -358,6 +372,13 @@ static void vblank_start(void) {
 
 /* Moves EE time on to `until`, raising the vblank and timer interrupts it passes, in their order. */
 static void advance_to(uint64_t until) {
+    if (port_frame_interp()) {
+        /* (--frame-rate above 60) a picture between two vblanks that is due while the game works */
+        uint32_t mode = port_host_float_begin();
+
+        port_video_poll();
+        port_host_float_end(mode);
+    }
     for (;;) {
         uint64_t next = next_vblank_start < next_vblank_end ? next_vblank_start : next_vblank_end;
         int timer_due = -1;

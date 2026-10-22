@@ -20,6 +20,7 @@
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/present_vk.h"
 #include "port/savestate.h"
 #include "port/settings.h"
 
@@ -51,6 +52,7 @@ static volatile uint64_t queue_head; /* written by the game thread */
 static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
 static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
+static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
 
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
@@ -94,11 +96,14 @@ static void open_backend(void *unused) {
         if (have_native) {
             char path[1100];
 
-            gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
+            gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
             if (port_options.native_msaa > 1) {
                 port_options.native_msaa = gsn_set_msaa(port_options.native_msaa);
             }
             gsn_set_lod(port_options.native_lod);
+            port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
+            gsn_set_cutout_aa(port_options.native_cutout_aa);
+            gsn_set_colour(port_options.native_colour);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -292,6 +297,10 @@ int port_widescreen(void) {
 
 int port_whole_frame(void) {
     return port_options.whole_frame;
+}
+
+int port_flicker_filter(void) {
+    return port_options.flicker_filter;
 }
 
 /* A mark from the game: PATH1 and PATH2 come in the order of the one packet chain (VU1's packets and
@@ -675,15 +684,36 @@ static int compare_buffers(VsyncRequest *request, int dump, PortGsFrame *heat) {
     return 0;
 }
 
+/* With SDL_Renderer and the native GS alone, the best scaling (or the sharpening): the native GS's
+   picture at the window's size, read back (GSN_WANT_SCALED), for SDL_Renderer to draw a pixel a pixel */
+static int sdl_scaled(void) {
+    if (port_video_takes_images() || !have_native || have_gs || port_options.headless ||
+        (port_video_scaling() != PORT_SCALING_BEST && port_video_sharpen() <= 0)) {
+        return 0;
+    }
+    return GSN_WANT_IMAGE | GSN_WANT_SCALED;
+}
+
+/* The size the window shows the picture at, for the native GS's scaling (video.c's SDL_Renderer) */
+void port_gs_present_scale(int width, int height, float sharpen) {
+    if (have_native) {
+        gsn_set_present_scale(width, height, sharpen);
+    }
+}
+
 /* A picture of a renderer's (or each's, with both) for the window and --dump-frames: 1 if one is shown.
    With the Vulkan presenter the native GS's picture stays on the GPU (GSN_WANT_IMAGE), and is read back
    only for a dump. */
 static int present_frames(VsyncRequest *request, int shown, int dump) {
     static PortGsFrame heat;
+    uint64_t tag = PORT_PICTURE_TAG(request->vblank, 0);
     int want = shown || dump;
     int want_native = shown && port_video_takes_images() ? GSN_WANT_IMAGE | (dump ? GSN_WANT_PIXELS : 0)
                       : want                             ? GSN_WANT_PIXELS
                                                          : 0;
+    if (dump && port_options.dump_present_width > 0) {
+        want_native |= GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_WANT_SCALED; /* (--dump-present) */
+    }
     int got_gs = 0, got_native = 0, got_heat = 0;
     PortGsFrame *show;
 
@@ -694,10 +724,11 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         if (!have_gs && shown && !dump) {
             /* the native GS's thread hands the window the picture (or with the Vulkan presenter word of
                the new image) when it has it, and this thread goes on */
-            return gsn_vsync(request->privileged, request->field,
-                             GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0), NULL) != 0;
+            return gsn_picture(request->privileged, request->field,
+                               GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL,
+                               tag) != 0;
         }
-        got_native = gsn_vsync(request->privileged, request->field, want_native, &native_frame);
+        got_native = gsn_picture(request->privileged, request->field, want_native, &native_frame, tag);
     }
     if (have_gs && have_native) {
         if (heat.rgba == NULL) {
@@ -719,7 +750,7 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
     } else if (have_gs && have_native) {
         show = port_options.renderer_shown == PORT_RENDERER_NATIVE ? &native_frame : &frame;
         if (show == &native_frame && !(got_native & GSN_WANT_PIXELS) && (got_native & GSN_WANT_IMAGE)) {
-            port_video_submit_image();
+            port_video_submit_image(tag);
             return 1;
         }
         if (dump && got_gs && (got_native & GSN_WANT_PIXELS)) {
@@ -738,7 +769,7 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         }
         if (show == &native_frame && (got_native & GSN_WANT_IMAGE) && shown) {
             /* (dumped above) the window takes the image */
-            port_video_submit_image();
+            port_video_submit_image(tag);
             return 1;
         }
     } else if (have_native) {
@@ -746,7 +777,7 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
             if (dump && (got_native & GSN_WANT_PIXELS)) {
                 port_video_dump(&native_frame, request->vblank);
             }
-            port_video_submit_image();
+            port_video_submit_image(tag);
             return 1;
         }
         if (!got_native) {
@@ -763,9 +794,51 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         port_video_dump(show, request->vblank);
     }
     if (shown) {
-        port_video_submit(show);
+        port_video_submit(show, tag);
     }
     return 1;
+}
+
+/* --frame-rate above 60: a picture between two vblanks (phase of the way from this one to the next),
+   drawn into the buffer shown: the native GS's, read again whole (gsn_picture with GSN_EXTRA), for the
+   window (shown) and as frame_<vblank>_<phase in thousandths>.png (dump) */
+static void present_extra(VsyncRequest *request, double phase, int shown, int dump) {
+    uint64_t tag = PORT_PICTURE_TAG(request->vblank, phase);
+    int images = shown && (port_video_takes_images() || port_options.headless);
+
+    if (dump) {
+        int got = gsn_picture(request->privileged, request->field,
+                              GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
+                                  (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0),
+                              &native_frame, tag);
+        char name[64];
+
+        if (got & GSN_WANT_PIXELS) {
+            snprintf(name, sizeof(name), "frame_%06llu_%03d.png", (unsigned long long)request->vblank,
+                     (int)(phase * 1000.0 + 0.5));
+            port_video_dump_named(&native_frame, name);
+            if (shown) {
+                if (images) {
+                    port_video_submit_image(tag);
+                } else {
+                    port_video_submit(&native_frame, tag);
+                }
+            }
+        }
+    } else if (shown) {
+        gsn_picture(request->privileged, request->field,
+                    GSN_EXTRA | GSN_PRESENT | (images ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL, tag);
+    }
+}
+
+/* KF4_INTERP_DRAW_ALL=1 (a speed test): headless, every picture between drawn as for a window */
+static int draw_all(void) {
+    static int all = -1;
+
+    if (all < 0) {
+        all = getenv("KF4_INTERP_DRAW_ALL") != NULL;
+    }
+    return all;
 }
 #endif
 
@@ -799,7 +872,42 @@ void port_gs_set_native_scale(int scale) {
     port_options.native_scale = scale;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_scale(port_gs_native_scale_x(), scale);
+        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
+    }
+#endif
+}
+
+/* --native-scale auto: the picture drawn about as tall as the window shows it, so that the window
+   scales it by about 1 (1440 lines: 3x, 1344, a little up; 2160: 4x, 1792; 1080: 2x, 896; 448 * 2.5 and
+   up round up), not a 640x448 picture blown up by bilinear filtering. A larger scale than the window's
+   is thrown away by the window's shrinking. At most 2x on an integrated GPU, and 1x on a GPU that is
+   not a real one (lavapipe) or with no window. */
+int port_gs_native_scale(void) {
+    int h, s, most = 4;
+
+    if (port_options.native_scale >= 1) {
+        return port_options.native_scale > 4 ? 4 : port_options.native_scale;
+    }
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        int kind = gsn_gpu_kind();
+
+        most = kind == GSN_GPU_DISCRETE ? 4 : kind == GSN_GPU_INTEGRATED ? 2 : 1;
+    }
+#endif
+    h = port_video_picture_height();
+    if (h <= 0) {
+        return 1;
+    }
+    s = (h + 224) / 448;
+    return s < 1 ? 1 : s > most ? most : s;
+}
+
+void port_gs_set_native_aniso(int taps) {
+    port_options.native_aniso = taps < 1 ? 1 : taps;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        port_options.native_aniso = gsn_set_aniso(taps);
     }
 #endif
 }
@@ -809,6 +917,24 @@ void port_gs_set_native_lod(int mode) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
         gsn_set_lod(mode);
+    }
+#endif
+}
+
+void port_gs_set_native_cutout_aa(int mode) {
+    port_options.native_cutout_aa = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_cutout_aa(mode);
+    }
+#endif
+}
+
+void port_gs_set_native_colour(int mode) {
+    port_options.native_colour = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_colour(mode);
     }
 #endif
 }
@@ -830,7 +956,7 @@ int port_gs_set_native_msaa(int samples) {
    height, and the window shrinks the picture across instead of stretching it. Nothing in the game or
    the GS's coordinates changes: the targets are only drawn finer across. */
 int port_gs_native_scale_x(void) {
-    int s = port_options.native_scale < 1 ? 1 : port_options.native_scale;
+    int s = port_gs_native_scale();
 
     if (port_options.native_widescreen && port_options.widescreen) {
         return (4 * s + 2) / 3;
@@ -861,9 +987,20 @@ void port_gs_print_stats(void) {
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
+        if (interp_behind) {
+            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu\n",
+                    (unsigned long long)interp_behind);
+        }
+        if (s->replay_uploads || s->replay_misses) {
+            fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",
+                    (unsigned long long)s->replay_uploads, (unsigned long long)s->replay_misses);
+        }
         if (s->ms_resolves || s->ms_loads) {
-            fprintf(stderr, "[stats] native GS MSAA: %llu resolves, %llu loads into the multisampled images\n",
-                    (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads);
+            fprintf(stderr,
+                    "[stats] native GS MSAA: %llu resolves, %llu loads into the multisampled images, %llu cut-out "
+                    "draws shaded at every sample\n",
+                    (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
+                    (unsigned long long)s->cutout_draws);
         }
         fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
                 (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,
@@ -891,12 +1028,16 @@ void port_gs_finish(void) {
     }
 }
 
+int port_gs_replay_uploads(void) {
+    return have_native && !have_gs && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
+}
+
 int port_gs_vsync_pending(void) {
     return __atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) != __atomic_load_n(&queue_tail, __ATOMIC_RELAXED);
 }
 
 #ifdef KF4_HAVE_PARALLEL_GS
-static int interp_on; /* --frame-rate 60 was on at the last vblank */
+static int interp_on;           /* --frame-rate above 30 was on at the last vblank */
 #endif
 
 void port_gs_run_vsync(void) {
@@ -905,7 +1046,11 @@ void port_gs_run_vsync(void) {
 #ifdef KF4_HAVE_PARALLEL_GS
     VsyncRequest *request = &queue[tail % VSYNC_QUEUE];
     int dump = 0;
-    int shown = !port_options.headless;
+    int shown = !port_options.headless || port_video_simulated();
+    /* --frame-rate: the times in this vblank of the pictures shown (port_interp_schedule), whether a game
+       frame is being drawn between (interp_live), and whether the vblank's own picture is one */
+    double interp_phases[16];
+    int interp_count = 0, interp_live = 0, own_shown = 1;
 
     while (dump_next < dump_count && dump_at[dump_next] < request->vblank) {
         dump_next++;
@@ -917,14 +1062,40 @@ void port_gs_run_vsync(void) {
         frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
-    if (port_frame_interp()) {
-        /* the game's world drawn again into the buffer shown, the camera half way */
-        int idle = port_gs_path_idle(1) && port_gs_path_idle(2) && port_gs_path_idle(3);
+#ifdef KF4_HAVE_SDL
+    if (port_options.dump_present_width > 0 && have_native) {
+        /* --dump-present WxH: the pictures scaled as a window of that size shows them (the best scaling;
+           the others are the presenter's blit) */
+        int x, y, w, h;
 
+        port_video_fit(port_options.dump_present_width, port_options.dump_present_height, &x, &y, &w, &h);
+        gsn_set_present_scale(w, h, port_video_sharpen());
+    }
+#endif
+    if (port_frame_interp()) {
+        /* the game's frame drawn again into the buffer shown, for the pictures between: at this vblank's
+           start when the vblank's own picture is one (the second vblank of a game frame), and after it
+           (frame rates above 60) */
+        int idle = port_gs_path_idle(1) && port_gs_path_idle(2) && port_gs_path_idle(3);
+        /* the pictures between are the native GS's (paraLLEl-GS is the reference, at the vblanks only),
+           whole frames (not read a field at a time) */
+        int extras = have_native && (!have_gs || port_options.renderer_shown == PORT_RENDERER_NATIVE) &&
+                     port_whole_frame();
+
+        interp_count = extras ? port_interp_schedule(request->vblank, interp_phases, 16) : 1;
+        if (!extras) {
+            interp_phases[0] = 0;
+        }
         if (idle) {
-            port_interp_vsync(request->privileged, replay_gif);
+            port_interp_vsync(request->privileged);
         }
         port_interp_reset(idle);
+        interp_live = idle && port_interp_active();
+        /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
+        own_shown = interp_phases[0] == 0 || !interp_live;
+        if (interp_live && (own_shown || dump)) {
+            port_interp_picture(0, replay_gif);
+        }
         interp_on = 1;
     } else if (interp_on) {
         port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
@@ -958,11 +1129,31 @@ void port_gs_run_vsync(void) {
     }
     if (have_native) {
         /* (widescreen and --native-widescreen change live: the scale follows, from this vblank's end) */
-        gsn_set_scale(port_gs_native_scale_x(), port_options.native_scale);
+        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
-    if (present_frames(request, shown, dump)) {
+    if (present_frames(request, shown && own_shown, dump)) {
     } else if (dump) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
+    }
+    if (interp_live && interp_count > 0) {
+        /* the pictures between this vblank and the next: for the window, only while this thread and the
+           native GS's keep up with the game (a picture between left out rather than the game held up) */
+        int i, more = shown || draw_all();
+
+        for (i = 0; i < interp_count; i++) {
+            if (interp_phases[i] <= 0 || !(more || dump)) {
+                continue;
+            }
+            if (!dump && !port_options.fast && shown &&
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1)) {
+                interp_behind++;
+                continue;
+            }
+            if (port_interp_picture(interp_phases[i], replay_gif)) {
+                present_extra(request, interp_phases[i], more, dump);
+            }
+        }
+        port_interp_end_vblank(replay_gif);
     }
     if (port_gs_capture_armed) {
         port_gs_capture_vsync(request->privileged, request->field, request->vblank);

@@ -21,16 +21,33 @@
                          the native GS's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
                          GS, or if vulkan cannot start, sdl
-       --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4; 1 by default)
-       --native-widescreen
+       --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4), or auto (the
+                         default): the multiple of 448 lines nearest the picture's height in the
+                         window (1440: 3; 2160: 4), at most 2 on an integrated GPU, 1 with no window
+       --native-widescreen, --no-native-widescreen
                          with --widescreen, the native GS draws the 16:9 picture wider still, with
-                         square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6)
+                         square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6); on in
+                         a new settings.json, off without one (headless)
+       --flicker-filter  the game's flicker filter, as on the PS2: each row of the picture blended
+                         half with the row above (port_flicker_filter()); off by default
        --native-msaa N   the native GS draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
                          by default): its edges smoothed
+       --native-cutout-aa MODE
+                         with --native-msaa, the cut-outs (netting, foliage, fences, grates):
+                         ssaa (the default: shaded at every sample, their edges smoothed) or off
+                         (shaded once a pixel, as the rest of the 3D)
        --native-lod MODE the mipmap level the native GS reads textures at: scale (the default: the
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
                          full (level 0, the finest, at every distance)
+       --native-aniso N  anisotropic filtering of mipmapped textures: up to N reads (1, off, the
+                         default; 2, 4, 8 or 16) along a pixel's footprint on the texture, for floors
+                         and walls at a grazing angle (gs_frag.h, sample_texture)
+       --native-colour MODE
+                         how precisely the native GS keeps colours: exact (the default: the GS's 8
+                         bits a channel, rounded as the GS rounds) or high (16 bits a channel, the
+                         colours' arithmetic in floats, the picture dithered to 8 bits: smooth
+                         gradients in the dark instead of steps)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -38,14 +55,30 @@
                          and counted by --stats)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width, --no-whole-frame
                          turn off one of the ways the PC picture differs from the GS's raw output
-       --ps2-scanout     turn them all off
+       --ps2-scanout     turn them all off (and --flicker-filter on)
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
-       --frame-rate 30|60
-                         the opt-in 60: a picture at every vblank in play, the one between the
-                         game's two drawn with the camera half way (port/platform/frame_interp.c);
-                         30, the PS2's, by default
+       --present-scaling sharp|smooth|best
+                         how the picture is fitted to the window: nearest, bilinear, or best (the
+                         default: the native GS scales it with a cubic, area-weighted when made
+                         smaller, on linear light; present_scale.frag)
+       --present-sharpen X
+                         contrast-adaptive sharpening after the scaling, 0 (off) to 1
+       --dump-present WxH
+                         --dump-frames writes the picture as a WxH window shows it with the best
+                         scaling (and --present-sharpen)
+       --frame-rate 30|60|120|144|240|N|monitor
+                         the opt-in higher frame rates: pictures between the game's 30 a second
+                         in play, each drawn from the game's frame with the camera, the moving
+                         models, the HUD, fades and scrolling textures moved to where they are at
+                         that time (port/platform/frame_interp.c); monitor: the window's screen's
+                         refresh rate; 30, the PS2's, by default
+       --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
+                         PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
+       --draw-distance-sky ps2|push
+                         with --draw-distance, the sky keeps the PS2's fog (the default) or has its
+                         fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
@@ -144,9 +177,12 @@ static void usage(const char *program) {
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
-            "          [--presenter vulkan|sdl] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
-            "          [--native-lod scale|ps2|full]\n"
-            "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
+            "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
+            "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
+            "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
+            "          [--native-cutout-aa ssaa|off] [--native-colour exact|high]\n"
+            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
+            "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
     exit(2);
 }
@@ -170,10 +206,14 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.whole_frame = 1;
-    port_options.native_scale = 1;
+    port_options.native_scale = 0; /* auto: port_gs_native_scale() */
     port_options.frame_rate = 30;
+    port_options.present_scaling = -1;
+    port_options.present_sharpen = -1;
     port_options.native_msaa = 1;
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
+    port_options.native_aniso = 1;
+    port_options.native_cutout_aa = 1; /* GSN_CUTOUT_AA_SSAA */
     port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
@@ -200,6 +240,11 @@ static void parse_options(int argc, char **argv) {
         if (strcmp(option, "--ps2-scanout") == 0) {
             port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 0;
             port_options.whole_frame = 0;
+            port_options.flicker_filter = port_options.flicker_filter_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--flicker-filter") == 0) {
+            port_options.flicker_filter = port_options.flicker_filter_forced = 1;
             continue;
         }
         if (strcmp(option, "--no-deinterlace") == 0) {
@@ -229,8 +274,9 @@ static void parse_options(int argc, char **argv) {
             }
             continue;
         }
-        if (strcmp(option, "--native-widescreen") == 0) {
-            port_options.native_widescreen = port_options.native_widescreen_forced = 1;
+        if (strcmp(option, "--native-widescreen") == 0 || strcmp(option, "--no-native-widescreen") == 0) {
+            port_options.native_widescreen = strcmp(option, "--native-widescreen") == 0;
+            port_options.native_widescreen_forced = 1;
             continue;
         }
         if (strcmp(option, "--invincible") == 0) {
@@ -285,19 +331,59 @@ static void parse_options(int argc, char **argv) {
             }
             port_options.presenter_forced = 1;
         } else if (strcmp(option, "--native-scale") == 0) {
-            port_options.native_scale = atoi(value);
-            if (port_options.native_scale < 1 || port_options.native_scale > 4) {
-                fprintf(stderr, "--native-scale wants 1 to 4, not %s\n", value);
+            port_options.native_scale = strcmp(value, "auto") == 0 ? 0 : atoi(value);
+            if ((port_options.native_scale < 1 && strcmp(value, "auto") != 0) || port_options.native_scale > 4) {
+                fprintf(stderr, "--native-scale wants auto or 1 to 4, not %s\n", value);
                 exit(2);
             }
             port_options.native_scale_forced = 1;
+        } else if (strcmp(option, "--present-scaling") == 0) {
+            port_options.present_scaling = strcmp(value, "sharp") == 0    ? PORT_SCALING_SHARP
+                                           : strcmp(value, "smooth") == 0 ? PORT_SCALING_SMOOTH
+                                           : strcmp(value, "best") == 0   ? PORT_SCALING_BEST
+                                                                          : -2;
+            if (port_options.present_scaling == -2) {
+                fprintf(stderr, "--present-scaling wants sharp, smooth or best, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--present-sharpen") == 0) {
+            port_options.present_sharpen = (float)atof(value);
+            if (port_options.present_sharpen < 0 || port_options.present_sharpen > 1) {
+                fprintf(stderr, "--present-sharpen wants 0 to 1, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--dump-present") == 0) {
+            if (sscanf(value, "%dx%d", &port_options.dump_present_width, &port_options.dump_present_height) != 2 ||
+                port_options.dump_present_width < 16 || port_options.dump_present_height < 16 ||
+                port_options.dump_present_width > 8192 || port_options.dump_present_height > 8192) {
+                fprintf(stderr, "--dump-present wants WIDTHxHEIGHT, not %s\n", value);
+                exit(2);
+            }
         } else if (strcmp(option, "--frame-rate") == 0) {
-            port_options.frame_rate = atoi(value);
-            if (port_options.frame_rate != 30 && port_options.frame_rate != 60) {
-                fprintf(stderr, "--frame-rate wants 30 or 60, not %s\n", value);
+            port_options.frame_rate = strcmp(value, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : atoi(value);
+            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR &&
+                (port_options.frame_rate < 30 || port_options.frame_rate > 500)) {
+                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...) or monitor, not %s\n", value);
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--draw-distance") == 0) {
+            port_options.draw_distance = port_draw_distance_parse(value);
+            if (port_options.draw_distance < 0) {
+                fprintf(stderr, "--draw-distance wants 1, 1.5, 2, 4 or max, not %s\n", value);
+                exit(2);
+            }
+            port_options.draw_distance_forced = 1;
+        } else if (strcmp(option, "--draw-distance-sky") == 0) {
+            if (strcmp(value, "push") == 0) {
+                port_options.draw_distance_sky = 1;
+            } else if (strcmp(value, "ps2") == 0) {
+                port_options.draw_distance_sky = 0;
+            } else {
+                fprintf(stderr, "--draw-distance-sky wants ps2 or push, not %s\n", value);
+                exit(2);
+            }
+            port_options.draw_distance_sky_forced = 1;
         } else if (strcmp(option, "--native-msaa") == 0) {
             port_options.native_msaa = atoi(value);
             if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
@@ -318,6 +404,34 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_lod_forced = 1;
+        } else if (strcmp(option, "--native-aniso") == 0) {
+            port_options.native_aniso = atoi(value);
+            if (port_options.native_aniso != 1 && port_options.native_aniso != 2 && port_options.native_aniso != 4 &&
+                port_options.native_aniso != 8 && port_options.native_aniso != 16) {
+                fprintf(stderr, "--native-aniso wants 1, 2, 4, 8 or 16, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_aniso_forced = 1;
+        } else if (strcmp(option, "--native-cutout-aa") == 0) {
+            if (strcmp(value, "off") == 0) {
+                port_options.native_cutout_aa = 0;
+            } else if (strcmp(value, "ssaa") == 0) {
+                port_options.native_cutout_aa = 1;
+            } else {
+                fprintf(stderr, "--native-cutout-aa wants ssaa or off, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_cutout_aa_forced = 1;
+        } else if (strcmp(option, "--native-colour") == 0) {
+            if (strcmp(value, "exact") == 0) {
+                port_options.native_colour = 0;
+            } else if (strcmp(value, "high") == 0) {
+                port_options.native_colour = 1;
+            } else {
+                fprintf(stderr, "--native-colour wants exact or high, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_colour_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;
@@ -380,6 +494,41 @@ static void parse_options(int argc, char **argv) {
         fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso or folder> (or KF4_DISC)\n");
         usage(argv[0]);
     }
+}
+
+static const char *const draw_distance_names[PORT_DRAW_DISTANCE_COUNT] = {"1", "1.5", "2", "4", "max"};
+static const float draw_distance_factors[PORT_DRAW_DISTANCE_COUNT] = {1.0f, 1.5f, 2.0f, 4.0f,
+                                                                      PORT_DRAW_DISTANCE_MAX_FOG};
+
+int port_draw_distance_parse(const char *name) {
+    int i;
+
+    for (i = 0; i < PORT_DRAW_DISTANCE_COUNT; i++) {
+        if (strcmp(name, draw_distance_names[i]) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+const char *port_draw_distance_name(int level) {
+    return level >= 0 && level < PORT_DRAW_DISTANCE_COUNT ? draw_distance_names[level] : draw_distance_names[0];
+}
+
+float port_draw_distance(void) {
+    int level = port_options.draw_distance;
+
+    return level > 0 && level < PORT_DRAW_DISTANCE_COUNT ? draw_distance_factors[level] : 1.0f;
+}
+
+int port_draw_distance_sky(void) {
+    return port_options.draw_distance_sky != 0;
+}
+
+float port_draw_distance_far(void) {
+    float factor = port_draw_distance();
+
+    return factor > 16.0f ? 16.0f : factor;
 }
 
 int port_myus_necklace(void) {

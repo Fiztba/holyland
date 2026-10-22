@@ -46,6 +46,9 @@
      --scale X[,Y]      the native GS's render targets X times the PS2's across and Y down (Y = X if left
                         out): --native-scale, --native-widescreen. --frames and --draws write the larger pictures
      --lod MODE         the native GS's mipmap levels: scale (the default), ps2 or full (--native-lod)
+     --cutout-aa MODE   with --msaa, the alpha test's cut-outs: off (the default) or ssaa, shaded at
+                        every sample (--native-cutout-aa)
+     --colour MODE      the native GS's colour precision: exact (the default) or high (--native-colour)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -90,6 +93,11 @@ uint64_t port_ticks(void) {
     clock_gettime(CLOCK_MONOTONIC, &t);
 #endif
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
+
+/* video.c's picture queue times pictures with this */
+double port_wall_seconds(void) {
+    return (double)port_ticks() / 1e9;
 }
 
 void port_todo(const char *what, const char *file, int line) {
@@ -1420,7 +1428,7 @@ static void usage(void) {
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
             "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
-            "                    [--scale X[,Y]] [--lod scale|ps2|full]\n"
+            "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1432,7 +1440,7 @@ int main(int argc, char **argv) {
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
     long vertices = -1;
     int renderer = RENDER_GS;
-    int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1;
+    int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1, cutout_aa = GSN_CUTOUT_AA_OFF, colour = GSN_COLOUR_EXACT;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1472,6 +1480,11 @@ int main(int argc, char **argv) {
             i++;
         } else if (strcmp(a, "--lod") == 0) {
             lod = strcmp(v, "ps2") == 0 ? 0 : strcmp(v, "full") == 0 ? 2 : 1;
+            i++;
+        } else if (strcmp(a, "--cutout-aa") == 0) {
+            cutout_aa = strcmp(v, "ssaa") == 0 ? GSN_CUTOUT_AA_SSAA : GSN_CUTOUT_AA_OFF;
+        } else if (strcmp(a, "--colour") == 0) {
+            colour = strcmp(v, "high") == 0 ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
             i++;
         } else if (strcmp(a, "--scale") == 0) {
             const char *comma = strchr(v, ',');
@@ -1580,6 +1593,8 @@ int main(int argc, char **argv) {
         }
         if (run.render & RENDER_NATIVE) {
             gsn_set_lod(lod);
+            gsn_set_cutout_aa(cutout_aa);
+            gsn_set_colour(colour);
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);

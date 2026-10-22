@@ -30,6 +30,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <array>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -184,7 +185,7 @@ enum : uint32_t {
 };
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
-    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11,
+    M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -207,6 +208,15 @@ struct Target {
     bool ms_newer, image_newer;
 };
 
+// --frame-rate's pictures between (frame_interp.c): between their marks, and the frame shown before them
+// (take_snapshot)
+bool replaying;
+struct Snapshot {
+    uint32_t bp = 0;
+    ImageHandle image;
+    bool reads = false; // the draws between marks 0xF4 and 0xF5 read it in place of that buffer
+} snapshot;
+
 struct Texture {
     uint32_t tbp, tbw, psm, tw, th, levels;
     uint32_t mip_tbp[7], mip_tbw[7];
@@ -215,6 +225,9 @@ struct Texture {
     uint64_t decoded; // the VRAM write count when it was decoded
     uint64_t hash;    // of the bytes it was decoded from (texture_hash)
     uint64_t used;
+    // --native-cutout-aa: how many of its texels (all levels) have each value of the byte their alpha
+    // comes from (a palette texture's index, a 32-bit texture's alpha): which alphas it has, how often
+    uint32_t texels[256];
 };
 
 // The GIF's three paths, read as gs.c reads them
@@ -251,12 +264,17 @@ struct Gs {
     Device *device = nullptr;
     Program *program = nullptr;
     Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
+    Program *program_zclamp_sample = nullptr; // (shaders/gs_zclamp_sample.frag: the same at every sample)
     Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
     Program *program_deinterlace = nullptr; // (the scanout's: shaders/deinterlace.frag)
+    Program *program_narrow = nullptr;      // (--native-colour high's scanout: shaders/narrow.frag)
+    Program *program_present_scale = nullptr;   // (the presenter's scaling: shaders/present_scale.frag)
+    Program *program_present_sharpen = nullptr; // (and its sharpening: shaders/present_sharpen.frag)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
     VkDeviceSize readback_size = 0;
+    std::vector<uint8_t> narrowed; // read_image's pixels of a 16-bit image, rounded to 8 bits
     std::vector<std::unique_ptr<Target>> targets;
     std::vector<std::unique_ptr<Texture>> textures;
     uint64_t tick = 0;
@@ -291,10 +309,62 @@ uint32_t target_sx = 1, target_sy = 1;
 volatile uint32_t wanted_scale = 1 | 1 << 8; // sx | sy << 8
 // --native-lod (gsn_set_lod): which mipmap level a texture is read at, at a larger --native-scale
 volatile int lod_mode = GSN_LOD_SCALE;
+// --native-aniso (gsn_set_aniso): log2 of the most taps along a mipmapped texture's footprint (0: off)
+volatile int aniso_log2 = 0;
 // --native-msaa: the samples a pixel of the 3D's targets has (1: none, the PS2's picture; 2, 4, 8).
 // Changed at a vblank (gsn_set_msaa), as the scale is.
 uint32_t target_samples = 1;
 volatile uint32_t wanted_samples = 1;
+// --native-cutout-aa (gsn_set_cutout_aa): with MSAA, the cut-outs (flush_batch) shaded at every
+// sample; sample_shading, whether the GPU can (sampleRateShading)
+volatile int cutout_aa_mode = GSN_CUTOUT_AA_OFF;
+bool sample_shading = false;
+
+// --native-colour (gsn_set_colour): the 32-bit colour targets at 8 bits a channel, as the GS has them
+// (GSN_COLOUR_EXACT), or 16 (GSN_COLOUR_HIGH: "--native-colour high" below). Changed at a vblank, as the
+// scale is.
+uint32_t target_colour = GSN_COLOUR_EXACT;
+volatile uint32_t wanted_colour = GSN_COLOUR_EXACT;
+
+// The colour targets' format: 16-bit UNORM holds every 8-bit value exactly (v * 257), so what the GS's
+// arithmetic writes there reads back as it is
+VkFormat colour_format() {
+    return target_colour == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+}
+
+bool wide(const Image &image) {
+    return image.get_format() == VK_FORMAT_R16G16B16A16_UNORM;
+}
+
+// An 8-bit RGBA pixel as a 16-bit one, each channel v * 257
+uint64_t widen(uint32_t v) {
+    uint64_t x = v;
+    x = (x | x << 16) & 0x0000FFFF0000FFFFull;
+    x = (x | x << 8) & 0x00FF00FF00FF00FFull; // each byte in a 16-bit lane
+    return x | x << 8;
+}
+
+// A 16-bit RGBA pixel rounded to 8 bits a channel
+uint32_t narrow(uint64_t v) {
+    uint32_t out = 0;
+    for (int c = 0; c < 4; c++) {
+        uint32_t x = uint32_t(v >> (c * 16)) & 0xFFFF;
+        out |= ((x * 255u + 32767u) / 65535u) << (c * 8);
+    }
+    return out;
+}
+
+// n pixels into an image's update_image memory at pixel `at`, as the image holds them
+void put_pixels(void *out, const Image &image, size_t at, const uint32_t *rgba, size_t n) {
+    if (wide(image)) {
+        uint64_t *o = static_cast<uint64_t *>(out) + at;
+        for (size_t i = 0; i < n; i++) {
+            o[i] = widen(rgba[i]);
+        }
+    } else {
+        memcpy(static_cast<uint32_t *>(out) + at, rgba, n * 4);
+    }
+}
 
 // Time spent in a function, added to a counter of gsn_stats
 struct Timer {
@@ -374,7 +444,7 @@ ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_
 
 // Pixels from the GPU: an image's rectangle, as RGBA8 (or D32 floats), when the GPU is done
 const uint8_t *read_image(const Image &image, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
-    VkDeviceSize size = VkDeviceSize(w) * h * 4;
+    VkDeviceSize size = VkDeviceSize(w) * h * (wide(image) ? 8 : 4);
     if (!gs->readback_buffer || gs->readback_size < size) {
         BufferCreateInfo info = {};
         info.domain = BufferDomain::CachedHost;
@@ -392,7 +462,20 @@ const uint8_t *read_image(const Image &image, uint32_t x, uint32_t y, uint32_t w
     cmd().barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
     submit(true);
-    return static_cast<const uint8_t *>(gs->device->map_host_buffer(*gs->readback_buffer, MEMORY_ACCESS_READ_BIT));
+    const uint8_t *mapped =
+        static_cast<const uint8_t *>(gs->device->map_host_buffer(*gs->readback_buffer, MEMORY_ACCESS_READ_BIT));
+    if (!wide(image)) {
+        return mapped;
+    }
+    // (--native-colour high: rounded to 8 bits)
+    gs->narrowed.resize(size_t(w) * h * 4);
+    for (size_t i = 0; i < size_t(w) * h; i++) {
+        uint64_t v;
+        memcpy(&v, mapped + i * 8, 8);
+        uint32_t n = narrow(v);
+        memcpy(gs->narrowed.data() + i * 4, &n, 4);
+    }
+    return gs->narrowed.data();
 }
 
 void done_reading() {
@@ -421,6 +504,8 @@ void done_reading() {
 // the counts this GPU has, set by gsn_open, so gsn_set_msaa needs nothing of Granite's.)
 std::atomic<uint32_t> msaa_samples_used{0};
 uint32_t msaa_samples_have = 1;
+// The GPU's kind (gsn_gpu_kind), set by gsn_open: --native-scale auto's most
+int gpu_kind = GSN_GPU_OTHER;
 
 void msaa_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
     subpass = {};
@@ -433,7 +518,7 @@ void msaa_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
 
 ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
     msaa_samples_used = target_samples;
-    ImageCreateInfo info = ImageCreateInfo::render_target(width, height, depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM);
+    ImageCreateInfo info = ImageCreateInfo::render_target(width, height, depth ? VK_FORMAT_D32_SFLOAT : colour_format());
     info.samples = VkSampleCountFlagBits(target_samples);
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                  (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
@@ -550,8 +635,9 @@ void msaa_forget(Target &t) {
 // left the target's first column and row as they were: the sky's clouds on map 000 are such a
 // picture, and showed it as bright lines where their texture repeats; the frame's passes over the
 // whole picture left its first column and row: a line down the screen's left edge.) A triangle with a slant, or with its colour or Z not
-// the same at its corners, is left as it is: the 3D.
-void flat_2d(std::vector<Vtx> &verts) {
+// the same at its corners, is left as it is: the 3D. Returns whether it moved any.
+bool flat_2d(std::vector<Vtx> &verts) {
+    bool moved = false;
     for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
         Vtx *v = &verts[i];
         if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
@@ -593,7 +679,9 @@ void flat_2d(std::vector<Vtx> &verts) {
             v[k].x = float(nx);
             v[k].y = float(ny);
         }
+        moved = true;
     }
+    return moved;
 }
 
 // ---- The CPU's VRAM ----------------------------------------------------------------------------
@@ -795,9 +883,10 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     uint32_t sx = t.sx, sy = t.sy, pw = w * sx, ph = h * sy;
-    uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0},
-                                                               {pw, ph, 1}, pw, ph, {aspect, 0, 0, 1}));
-    std::vector<uint32_t> row(w);
+    void *out = cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0}, {pw, ph, 1}, pw, ph,
+                                   {aspect, 0, 0, 1});
+    std::vector<uint32_t> row(w), line(pw);
+    std::vector<uint8_t> converted;
     for (uint32_t y = 0; y < h; y++) {
         // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
         gsn_vram_read_row(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0, y0 + y, w, row.data());
@@ -809,11 +898,16 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
             } else {
                 v = vram_to_target_pixel(v, t.psm);
             }
-            for (uint32_t j = 0; j < sy; j++) {
-                for (uint32_t i = 0; i < sx; i++) {
-                    out[size_t(y * sy + j) * pw + x * sx + i] = v;
-                }
+            for (uint32_t i = 0; i < sx; i++) {
+                line[x * sx + i] = v;
             }
+        }
+        // (the row made here, then copied: the upload's memory is not for reading)
+        size_t row_bytes = size_t(pw) * (wide(*t.image) ? 8 : 4);
+        converted.resize(row_bytes);
+        put_pixels(converted.data(), *t.image, 0, line.data(), pw);
+        for (uint32_t j = 0; j < sy; j++) {
+            memcpy(static_cast<uint8_t *>(out) + size_t(y * sy + j) * row_bytes, converted.data(), row_bytes);
         }
     }
     transfer_barrier();
@@ -1012,7 +1106,7 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
         t->used = gs->tick;
         return t;
     }
-    VkFormat format = psm_is_depth(psm) ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat format = psm_is_depth(psm) ? VK_FORMAT_D32_SFLOAT : colour_format();
     if (!t) {
         // A buffer that starts some rows above a target and runs into it (a scrolling texture's
         // target, drawn into from a page row higher the next time): the target grows upwards to start
@@ -1147,6 +1241,7 @@ uint64_t texture_hash(const Texture &tex) {
 
 // Decoded textures by the hash of what they were decoded from
 std::unordered_map<uint64_t, ImageHandle> decoded_pool;
+std::unordered_map<uint64_t, std::array<uint32_t, 256>> decoded_texels; // (Texture::texels, by the same hash)
 std::deque<uint64_t> decoded_order;
 size_t decoded_pool_bytes;
 
@@ -1168,6 +1263,7 @@ void decode_texture(Texture &tex) {
     auto found = decoded_pool.find(hash);
     if (found != decoded_pool.end()) {
         tex.image = found->second;
+        memcpy(tex.texels, decoded_texels[hash].data(), sizeof(tex.texels));
         gsn_stats.texture_reuses++;
         return;
     }
@@ -1181,11 +1277,13 @@ void decode_texture(Texture &tex) {
         if (oldest != decoded_pool.end()) {
             decoded_pool_bytes -= image_bytes(*oldest->second);
             decoded_pool.erase(oldest);
+            decoded_texels.erase(decoded_order.front());
         }
         decoded_order.pop_front();
     }
     end_pass();
     transfer_barrier();
+    memset(tex.texels, 0, sizeof(tex.texels));
     for (uint32_t l = 0; l < tex.levels; l++) {
         uint32_t w = std::max(1u, (1u << tex.tw) >> l), h = std::max(1u, (1u << tex.th) >> l);
         void *out = cmd().update_image(*tex.image, {0, 0, 0}, {w, h, 1}, w, h, {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1});
@@ -1194,13 +1292,18 @@ void decode_texture(Texture &tex) {
         for (uint32_t y = 0; y < h; y++) {
             size_t at = size_t(y) * w;
             if (format == VK_FORMAT_R32_UINT) {
-                gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, static_cast<uint32_t *>(out) + at);
+                uint32_t *texel = static_cast<uint32_t *>(out) + at;
+                gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, texel);
+                for (uint32_t x = 0; x < w; x++) {
+                    tex.texels[texel[x] >> 24]++;
+                }
                 continue;
             }
             gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, row.data());
             for (uint32_t x = 0; x < w; x++) {
                 if (format == VK_FORMAT_R8_UINT) {
                     static_cast<uint8_t *>(out)[at + x] = uint8_t(row[x]);
+                    tex.texels[row[x] & 0xFF]++;
                 } else {
                     static_cast<uint16_t *>(out)[at + x] = uint16_t(row[x]);
                 }
@@ -1208,6 +1311,7 @@ void decode_texture(Texture &tex) {
         }
         gsn_stats.texture_bytes += size_t(w) * h;
     }
+    memcpy(decoded_texels[hash].data(), tex.texels, sizeof(tex.texels));
     transfer_barrier();
     gsn_stats.texture_decodes++;
 }
@@ -1499,10 +1603,13 @@ void begin_pass(Target *color, Target *depth, bool ms = false) {
 // (box: only the target's pixels a draw can cover, x0 y0 x1 y1 in GS pixels; NULL: all of it)
 const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
     uint32_t tw = t.width * t.sx, th = t.height * t.sy;
+    if (!gs->snapshot || gs->snapshot->get_format() != t.image->get_format()) {
+        gs->snapshot.reset();
+    }
     if (!gs->snapshot || gs->snapshot->get_width() < tw || gs->snapshot->get_height() < th) {
         uint32_t w = std::max(tw, gs->snapshot ? gs->snapshot->get_width() : 0u);
         uint32_t h = std::max(th, gs->snapshot ? gs->snapshot->get_height() : 0u);
-        gs->snapshot = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+        gs->snapshot = make_image(w, h, t.image->get_format(), 1, false);
     }
     VkOffset3D at = {0, 0, 0};
     VkExtent3D size = {tw, th, 1};
@@ -1581,12 +1688,13 @@ void flush_batch() {
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
     // largest alpha, the rows they reach
-    uint32_t zmin = UINT32_MAX, zmax = 0, as_max = 0;
+    uint32_t zmin = UINT32_MAX, zmax = 0, as_max = 0, as_min = 255;
     float vy0 = gs->verts[0].y, vy1 = vy0;
     for (const Vtx &v : gs->verts) {
         zmin = std::min(zmin, v.z);
         zmax = std::max(zmax, v.z);
         as_max = std::max(as_max, v.rgba >> 24);
+        as_min = std::min(as_min, v.rgba >> 24);
         vy0 = std::min(vy0, v.y);
         vy1 = std::max(vy1, v.y);
     }
@@ -1717,6 +1825,9 @@ void flush_batch() {
     push.misc = (bits(gs->reg[R_FBA_1 + ctxt], 0, 1) ? M_FBA : 0) | (bits(gs->reg[R_COLCLAMP], 0, 1) ? M_COLCLAMP : 0) |
                 (dst16 ? M_DST16 : 0) | (fpsm == GSN_PSMCT24 ? M_DST24 : 0) |
                 (bits(gs->reg[R_PABE], 0, 1) ? M_PABE : 0) | (bits(gs->reg[R_SCANMSK], 0, 2) << M_SCANMSK_SHIFT);
+    if (wide(*color->image) && !dst16) {
+        push.misc |= M_HIGH; // --native-colour high: the colours' arithmetic in floats
+    }
     push.flags = (fge ? F_FGE : 0);
 
     // the texture
@@ -1727,6 +1838,11 @@ void flush_batch() {
     uint32_t clut[256];
     bool want_clut = false;
     uint32_t tex_alpha_max = 255; // the largest alpha a texel can have, where it is known
+    // --native-cutout-aa: the alphas the texture's texels have, from the least to the most (only of a
+    // texture decoded from VRAM; cut_texels false where they are not known)
+    bool cut_texels = false;
+    uint32_t cut_lo = 255, cut_hi = 0;
+    uint64_t cut_clear = 0, cut_all = 0;
     if (tme) {
         uint32_t tbp = bits(tex0, 0, 14), tbw = bits(tex0, 14, 6), tpsm = bits(tex0, 20, 6);
         uint32_t tw = std::min(bits(tex0, 26, 4), 10u), th = std::min(bits(tex0, 30, 4), 10u);
@@ -1748,6 +1864,7 @@ void flush_batch() {
         uint32_t finer = std::min(target_sx, target_sy);
         int mode = lod_mode;
         push.lod_bias = mode == GSN_LOD_FULL ? -64.0f : mode == GSN_LOD_SCALE ? -log2f(float(finer)) : 0.0f;
+        push.misc |= uint32_t(aniso_log2) << M_ANISO_SHIFT; // (--native-aniso: gs_frag.h, sample_texture)
 
         // a texture that is a target, or in one: read from the target
         Target *source = nullptr;
@@ -1793,7 +1910,12 @@ void flush_batch() {
             uint32_t src = tpsm == GSN_PSMCT24 ? SRC_TARGET_CT24 : psm_is_16(tpsm) ? SRC_TARGET_CT16 : SRC_TARGET_CT32;
             push.flags |= src << F_SRC_SHIFT;
             reads_target = true;
-            if (source == color) {
+            if (replaying && snapshot.reads && snapshot.image && source->bp == snapshot.bp && source->image &&
+                source->image->get_width() == snapshot.image->get_width() &&
+                source->image->get_height() == snapshot.image->get_height()) {
+                // (a picture between reading the frame shown before it: the copy kept, take_snapshot)
+                target_view = &snapshot.image->get_view();
+            } else if (source == color) {
                 reads_own_target = true;
             } else {
                 msaa_settle(*source);
@@ -1836,6 +1958,22 @@ void flush_batch() {
                     tex_alpha_max = std::max(tex_alpha_max, clut[i] >> 24);
                 }
             }
+            if (cutout_aa_mode != GSN_CUTOUT_AA_OFF && target_samples > 1 && (src == SRC_CLUT || src == SRC_CT32)) {
+                // the least and most alpha of the indices (CLUT) or alphas (32-bit) its texels have,
+                // and how many texels have the least
+                cut_texels = true;
+                for (uint32_t i = 0; i < 256; i++) {
+                    if (tex->texels[i]) {
+                        uint32_t a = src == SRC_CLUT ? clut[i] >> 24 : i;
+                        cut_lo = std::min(cut_lo, a);
+                        cut_hi = std::max(cut_hi, a);
+                    }
+                }
+                for (uint32_t i = 0; i < 256; i++) {
+                    cut_all += tex->texels[i];
+                    cut_clear += (src == SRC_CLUT ? clut[i] >> 24 : i) == cut_lo ? tex->texels[i] : 0;
+                }
+            }
         }
     }
 
@@ -1859,6 +1997,42 @@ void flush_batch() {
     bool fixed = fixed_blend(ba, bb, bc, bd, fix, &blend);
     bool exact = fixed && (blend.premul != 0 || ba == bb);
     bool sprite = gs->batch_sprites;
+    // --native-cutout-aa: a cut-out is a draw whose texture is see-through in places and solid in
+    // others: a quarter or more of its texels have its least alpha (a mask, not a layer blended by a
+    // smooth alpha as the walls' are, or one see-through all over as the mist's), which the alpha test
+    // throws away where others pass (from the alphas its vertices and texels can make: a filtered
+    // texel's alpha is between its four's, a primitive's between its vertices'), or which is 0 and
+    // blended by. The netting, foliage, fences and grates are both: alpha > 0 drawn, blended by As.
+    // Their edges inside the primitives are where the texture's alpha falls, which a pixel shaded once
+    // sees at one point; each sample shaded on its own sees the texture, and is tested and blended, at
+    // its own place (the AFAIL modes as exact as before, a sample at a time). Not the 2D, which covers
+    // whole pixels as without MSAA, nor the frame's passes, whose textures are targets.
+    bool cutout = false;
+    if (cut_texels && bits(tex0, 34, 1) && cut_lo < cut_hi && cut_clear * 4 >= cut_all && !sprite && !fst &&
+        cutout_aa_mode == GSN_CUTOUT_AA_SSAA && sample_shading) {
+        uint32_t tfx = bits(tex0, 35, 2);
+        uint32_t lo = tfx == 0 ? (as_min * cut_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + cut_lo) : cut_lo;
+        uint32_t hi = tfx == 0 ? std::min(255u, (as_max * cut_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + cut_hi) : cut_hi;
+        uint32_t ref = bits(test, 4, 8);
+        bool splits = false;
+        if (ate) {
+            switch (atst) {
+            case 2: // LESS
+            case 5: // GEQUAL
+                splits = lo < ref && hi >= ref;
+                break;
+            case 3: // LEQUAL
+            case 6: // GREATER
+                splits = lo <= ref && hi > ref;
+                break;
+            case 4: // EQUAL
+            case 7: // NOTEQUAL
+                splits = lo <= ref && ref <= hi && lo < hi;
+                break;
+            }
+        }
+        cutout = splits || (abe && bc == 0 && ba != bb && lo == 0 && hi > 0);
+    }
     // Blending by an As above 0x80 (2.0): Vulkan's blend factor (and the alpha out that stands for it)
     // stops at 1.0. The largest As the batch can make, from its vertices and what is known of the
     // texture's alpha (a CLUT's entries, TEXA for 24 and 16-bit texels):
@@ -2003,7 +2177,10 @@ void flush_batch() {
         if (depth && zwrite) {
             depth->ms_newer = true;
         }
-        flat_2d(gs->verts);
+        // (the 2D, rectangles of one colour and Z, is shaded once a pixel: --native-cutout-aa)
+        if (flat_2d(gs->verts)) {
+            cutout = false;
+        }
     } else {
         msaa_settle(*color);
         if (scale_x > 1 || scale_y > 1) {
@@ -2050,7 +2227,12 @@ void flush_batch() {
         begin_pass(color, depth, ms);
         CommandBuffer &c = cmd();
         c.set_opaque_state();
-        c.set_program(zclamp ? gs->program_zclamp : gs->program);
+        // (the cut-outs at every sample: draws with Z into the multisampled images)
+        bool per_sample = cutout && ms && zclamp;
+        c.set_program(per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program);
+        if (per_sample && r == 0) {
+            gsn_stats.cutout_draws++;
+        }
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
         VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
@@ -2445,9 +2627,25 @@ struct PageImage {
     std::vector<uint8_t> bytes; // 8 KB a page, in pages' order
     bool rgb_only;              // a 24-bit upload: the pages' words' low three bytes only
 };
-std::unordered_map<uint64_t, PageImage> page_images;
+std::unordered_map<uint64_t, std::shared_ptr<PageImage>> page_images;
 std::deque<uint64_t> page_image_order;
 size_t page_image_bytes;
+
+// --frame-rate's pictures between (port/platform/frame_interp.c) draw the game's frame again from its
+// packets, uploads and all: some 8 MB a frame, which went through the ring, were kept whole, hashed
+// and compared with VRAM again for each picture. So the uploads of the packets between two vblanks are
+// recorded as they come (their registers, and the pages they left, or their bytes), and a picture
+// between, drawn from those packets, asks for the k-th of them again instead (PORT_GS_REG_REPLAY_UPLOAD
+// in place of TRXDIR, and no data). Between the port's marks of a picture between nothing is recorded.
+struct RecordedUpload {
+    uint64_t bitbltbuf, trxpos, trxreg;
+    std::shared_ptr<PageImage> image; // the pages it filled (complete_upload): written again from them
+    std::vector<uint8_t> bytes;       // else its bytes, sent again
+};
+std::vector<RecordedUpload> uploads_now;   // since the last vblank
+std::vector<RecordedUpload> uploads_frame; // the last vblank's that had any: what a picture between asks for
+int recording = -1;                        // the upload under way in uploads_now (-1: none)
+// (replaying: between the marks of a picture between, declared with the Target)
 
 // The pages an upload fills entirely, in order; empty if it does not fill whole pages (a format that
 // owns only part of each word, or a rectangle not on page bounds). With rgb_only, a 24-bit upload
@@ -2527,6 +2725,8 @@ void upload_done() {
     pending_upload.data.clear();
 }
 
+void write_page_image(const PageImage &image);
+
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
 void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
@@ -2534,11 +2734,54 @@ void complete_upload(const uint8_t *data, size_t size) {
     std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
     uint64_t key = upload_hash(p, data, size);
     auto found = pages.empty() ? page_images.end() : page_images.find(key);
-    if (found != page_images.end() && found->second.pages == pages && found->second.rgb_only == rgb_only) {
+    RecordedUpload *rec = recording >= 0 ? &uploads_now[size_t(recording)] : nullptr;
+    if (found != page_images.end() && found->second->pages == pages && found->second->rgb_only == rgb_only) {
+        if (rec) {
+            rec->image = found->second;
+        }
+        write_page_image(*found->second);
+        upload_done();
+        return;
+    }
+    swizzle_upload(data, size);
+    if (!pages.empty()) {
+        auto image = std::make_shared<PageImage>();
+        image->pages = pages;
+        image->rgb_only = rgb_only;
+        image->bytes.resize(pages.size() * 8192);
+        for (size_t i = 0; i < pages.size(); i++) {
+            memcpy(image->bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
+        }
+        page_image_bytes += image->bytes.size();
+        if (rec) {
+            rec->image = image;
+        }
+        page_images[key] = std::move(image);
+        page_image_order.push_back(key);
+        // the oldest let go beyond 64 MB of them (one a picture between still asks for is kept by it)
+        while (page_image_bytes > (64u << 20) && !page_image_order.empty()) {
+            auto old = page_images.find(page_image_order.front());
+            if (old != page_images.end()) {
+                page_image_bytes -= old->second->bytes.size();
+                page_images.erase(old);
+            }
+            page_image_order.pop_front();
+        }
+    } else if (rec) {
+        rec->bytes.assign(data, data + size);
+    }
+    upload_done();
+}
+
+// An upload found again: its pages copied into VRAM (those that differ)
+void write_page_image(const PageImage &image) {
+    {
+        const std::vector<uint32_t> &pages = image.pages;
+        bool rgb_only = image.rgb_only;
         bool changed = false;
         for (size_t i = 0; i < pages.size(); i++) {
             uint8_t *dst = gs->vram.data() + size_t(pages[i]) * 8192;
-            const uint8_t *src = found->second.bytes.data() + i * 8192;
+            const uint8_t *src = image.bytes.data() + i * 8192;
             if (rgb_only) {
                 // (the words' top bytes are not the upload's: they stay)
                 bool page_changed = false;
@@ -2562,32 +2805,7 @@ void complete_upload(const uint8_t *data, size_t size) {
         }
         gsn_stats.uploads_skipped += !changed;
         gsn_stats.uploads_copied += changed;
-        upload_done();
-        return;
     }
-    swizzle_upload(data, size);
-    if (!pages.empty()) {
-        PageImage image;
-        image.pages = pages;
-        image.rgb_only = rgb_only;
-        image.bytes.resize(pages.size() * 8192);
-        for (size_t i = 0; i < pages.size(); i++) {
-            memcpy(image.bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
-        }
-        page_image_bytes += image.bytes.size();
-        page_images[key] = std::move(image);
-        page_image_order.push_back(key);
-        // the oldest let go beyond 64 MB of them
-        while (page_image_bytes > (64u << 20) && !page_image_order.empty()) {
-            auto old = page_images.find(page_image_order.front());
-            if (old != page_images.end()) {
-                page_image_bytes -= old->second.bytes.size();
-                page_images.erase(old);
-            }
-            page_image_order.pop_front();
-        }
-    }
-    upload_done();
 }
 
 // Something needs VRAM before the upload under way is whole: what has come goes in now
@@ -2597,6 +2815,9 @@ void settle_upload() {
         return;
     }
     p.incremental = true;
+    if (recording >= 0) {
+        uploads_now[size_t(recording)].bytes.insert(uploads_now[size_t(recording)].bytes.end(), p.data.begin(), p.data.end());
+    }
     // A target in another shape that prepare_write kept, as the upload writes whole pages of it: those
     // pages are VRAM's from now on (half written), and must not go back over it before sync_targets
     // takes them from it
@@ -2623,6 +2844,11 @@ void settle_upload() {
 void forget_uploads() {
     pending_upload.active = false;
     pending_upload.data.clear();
+    uploads_now.clear();
+    uploads_frame.clear();
+    recording = -1;
+    replaying = false;
+    snapshot = Snapshot();
     page_images.clear();
     page_image_order.clear();
     page_image_bytes = 0;
@@ -2637,6 +2863,11 @@ void begin_transfer(uint32_t dir) {
         prepare_write(r);
         gsn_upload_begin(&gs->upload, bitbltbuf, trxpos, trxreg);
         gsn_stats.uploads++;
+        recording = -1;
+        if (!replaying) {
+            uploads_now.push_back({bitbltbuf, trxpos, trxreg, nullptr, {}});
+            recording = int(uploads_now.size() - 1);
+        }
         PendingUpload &u = pending_upload;
         u.active = gs->upload.active != 0;
         u.incremental = false;
@@ -2719,6 +2950,9 @@ void image_data(const uint8_t *data, size_t bytes) {
     gsn_stats.upload_bytes += bytes;
     PendingUpload &p = pending_upload;
     if (p.incremental) {
+        if (recording >= 0) {
+            uploads_now[size_t(recording)].bytes.insert(uploads_now[size_t(recording)].bytes.end(), data, data + bytes);
+        }
         swizzle_upload(data, bytes);
         if (!gs->upload.active) {
             upload_done();
@@ -2733,6 +2967,55 @@ void image_data(const uint8_t *data, size_t bytes) {
     if (p.data.size() >= p.expect) {
         complete_upload(p.data.data(), p.data.size());
     }
+}
+
+// --frame-rate's pictures between: the frame shown before them, kept when they begin (frame_interp.c's
+// mark 0xF2), and read in their place where they read that buffer as a texture (the previous frame
+// blended in, Game_BlendPreviousFrame): the buffer itself is the one they are drawn into.
+void take_snapshot(uint32_t fbp) {
+    flush_batch();
+    snapshot.image.reset();
+    for (auto &t : gs->targets) {
+        if (t->depth || t->bp != fbp * 32 || !t->image) {
+            continue;
+        }
+        msaa_settle(*t);
+        end_pass();
+        uint32_t w = t->image->get_width(), h = t->image->get_height();
+        ImageHandle image = make_image(w, h, t->image->get_format(), 1, true);
+        transfer_barrier();
+        cmd().copy_image(*image, *t->image, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+        transfer_barrier();
+        snapshot.bp = t->bp;
+        snapshot.image = image;
+        break;
+    }
+}
+
+// A picture between asks for the k-th upload of the frame again (PORT_GS_REG_REPLAY_UPLOAD: k, and the
+// destination's half of BITBLTBUF to check it), with this upload's registers as the frame had them
+void replay_upload(uint64_t value) {
+    uint32_t k = uint32_t(value);
+    if (k >= uploads_frame.size() || uint32_t(uploads_frame[k].bitbltbuf >> 32) != uint32_t(value >> 32) ||
+        (uploads_frame[k].bitbltbuf >> 32) != (gs->reg[R_BITBLTBUF] >> 32) || uploads_frame[k].trxpos != gs->reg[R_TRXPOS] ||
+        uploads_frame[k].trxreg != gs->reg[R_TRXREG]) {
+        gsn_stats.replay_misses++;
+        return;
+    }
+    // (kept alive here: image_data does not record, between the marks)
+    std::shared_ptr<PageImage> image = uploads_frame[k].image;
+    flush_batch();
+    gs->reg[R_TRXDIR] = 0;
+    begin_transfer(0);
+    if (image) {
+        Timer timer(gsn_stats.ns_upload);
+        write_page_image(*image);
+        upload_done();
+    } else if (!uploads_frame[k].bytes.empty()) {
+        image_data(uploads_frame[k].bytes.data(), uploads_frame[k].bytes.size());
+    }
+    gsn_stats.replay_uploads++;
 }
 
 // ---- Register writes ----------------------------------------------------------------------------
@@ -2818,7 +3101,22 @@ void gs_write(uint32_t address, uint64_t value) {
     }
     case R_TEXFLUSH:
     case 0x0F: // NOP
-    case 0x7D: // the port's frame-rate mark (frame_interp.c)
+    case 0x7D: // the port's frame-rate mark (frame_interp.c): a picture between begins or ends
+        if (bits(value, 32, 8) == 0xF0) {
+            replaying = true;
+            recording = -1;
+        } else if (bits(value, 32, 8) == 0xF1) {
+            replaying = false;
+        } else if (bits(value, 32, 8) == 0xF2) {
+            take_snapshot(bits(value, 0, 9));
+        } else if (bits(value, 32, 8) == 0xF4 || bits(value, 32, 8) == 0xF5) {
+            flush_batch();
+            snapshot.reads = bits(value, 32, 8) == 0xF4;
+        }
+        return;
+    case 0x7C: // the port's upload asked for again (frame_interp.c)
+        replay_upload(value);
+        return;
     case 0x7E: // the port's widescreen mark (gs.c)
         return;
     case R_SIGNAL:
@@ -3046,6 +3344,10 @@ void make_program() {
     gs->program = gs->device->request_program(vs, fs);
     Shader *fs_zclamp = gs->device->request_shader(gsn_spv_gs_zclamp_frag, sizeof(gsn_spv_gs_zclamp_frag), &frag);
     gs->program_zclamp = gs->device->request_program(vs, fs_zclamp);
+    if (sample_shading) {
+        Shader *fs_sample = gs->device->request_shader(gsn_spv_gs_zclamp_sample_frag, sizeof(gsn_spv_gs_zclamp_sample_frag), &frag);
+        gs->program_zclamp_sample = gs->device->request_program(vs, fs_sample);
+    }
 
     // --native-msaa's copying passes: a texture in, a colour or a depth out
     ResourceLayout copy_vert = {};
@@ -3074,6 +3376,22 @@ void make_program() {
     }
     gs->program_deinterlace = gs->device->request_program(
         copy_vs, gs->device->request_shader(gsn_spv_deinterlace_frag, sizeof(gsn_spv_deinterlace_frag), &deinterlace));
+
+    // --native-colour high's scanout: a 16-bit target in, an 8-bit picture out
+    ResourceLayout narrowing = copy_colour;
+    narrowing.push_constant_size = 8 * sizeof(int32_t);
+    gs->program_narrow = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_narrow_frag, sizeof(gsn_spv_narrow_frag), &narrowing));
+
+    // the presenter's scaling to the window, and its sharpening (present_scale)
+    ResourceLayout scaling = copy_colour;
+    scaling.push_constant_size = 5 * sizeof(int32_t);
+    gs->program_present_scale = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_present_scale_frag, sizeof(gsn_spv_present_scale_frag), &scaling));
+    ResourceLayout sharpening = copy_colour;
+    sharpening.push_constant_size = 3 * sizeof(int32_t);
+    gs->program_present_sharpen = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_present_sharpen_frag, sizeof(gsn_spv_present_sharpen_frag), &sharpening));
 }
 
 void reset_gs() {
@@ -3093,13 +3411,27 @@ void reset_gs() {
 // copied on the GPU into an image of its own, which the presenter draws from: no read-back. In field
 // mode the image is the woven picture, each field's lines copied into its own rows (line l of the
 // picture is field (l & 1)'s line l / 2), so the field before stays in the other rows.
+// The images are a ring of slots: with --frame-rate above 60 a vblank has several pictures (gsn_picture),
+// which the presenter shows at their own times, so the newest must not write over those still waiting.
+// The slot the presenter holds (gsn_scanout_take) is passed over.
+const int SCANOUT_SLOTS = 16;
+struct ScanoutSlot {
+    ImageHandle image;
+    uint32_t width = 0, height = 0;
+    ImageHandle scaled;              // the picture at the window's size (present_scale), or none
+    uint32_t scaled_width = 0, scaled_height = 0;
+    ImageHandle scaled_work;         // (the scaling's, before the sharpening)
+    uint64_t serial = 0; // 0: none published in it (or it is being written)
+    uint64_t tag = 0;    // the picture's (gsn_picture)
+};
 struct ScanoutImage {
     std::mutex lock; // (the presenter takes the image on the game's thread)
-    ImageHandle image;
+    ScanoutSlot slots[SCANOUT_SLOTS];
     std::vector<ImageHandle> retired; // images replaced while the presenter had one: dropped once it lets go
-    uint32_t width = 0, height = 0;
+    int newest = -1;  // the slot published last
+    int writing = -1; // the slot being written (the GS's thread)
+    int taken = -1;   // the slot the presenter holds
     uint64_t serial = 0;
-    bool taken = false;
 };
 ScanoutImage scanout_image;
 bool present_wanted; // gsn_enable_present
@@ -3176,6 +3508,34 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
                 uint32_t dst_step) {
     const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     uint32_t iw = s.w * s.sx, sy = s.sy;
+    if (s.t && s.t->image->get_format() != dst.get_format()) {
+        // --native-colour high: the 16-bit target dithered into the 8-bit image (shaders/narrow.frag)
+        msaa_settle(*s.t);
+        end_pass();
+        RenderPassInfo rp;
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &dst.get_view();
+        rp.load_attachments = 1;
+        rp.store_attachments = 1;
+        CommandBuffer &c = cmd();
+        c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        c.begin_render_pass(rp);
+        c.set_opaque_state();
+        c.set_program(gs->program_narrow);
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
+        c.set_depth_test(false, false);
+        c.set_texture(0, 0, s.t->image->get_view(), StockSampler::NearestClamp);
+        int32_t push[8] = {int32_t(s.dbx * s.sx), int32_t(s.dby * sy), int32_t(first), int32_t(step),
+                           int32_t(dst_first), int32_t(dst_step), int32_t(count), int32_t(sy)};
+        c.push_constants(push, 0, sizeof(push));
+        c.draw(3);
+        c.end_render_pass();
+        c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        return;
+    }
     if (s.t) {
         msaa_settle(*s.t);
         end_pass();
@@ -3236,7 +3596,7 @@ void record_history(const Shown &s, int parity) {
     for (int i = 3; i > 0; i--) {
         gs->history[i] = gs->history[i - 1];
     }
-    gs->history[0] = oldest ? oldest : make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+    gs->history[0] = oldest ? oldest : make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
     gs->history_filled = std::min(gs->history_filled + 1, 4u);
     copy_lines(*gs->history[0], s, uint32_t(parity), 2, s.h / 2, 0, 1);
 }
@@ -3274,6 +3634,106 @@ void deinterlace_pass(const Image &dst, int parity, uint32_t sy, uint32_t lines)
               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
 }
 
+// ---- The presenter's scaling ---------------------------------------------------------------------
+// The picture scaled to the size the window shows it at (gsn_set_present_scale: the presenter's, or
+// --dump-present's), on the GPU after its scanout, with shaders/present_scale.frag (a Catmull-Rom
+// cubic, stretched by the ratio when the picture is made smaller, on linear light) and, with a strength,
+// shaders/present_sharpen.frag after it; the presenter then copies it into the window a pixel a pixel.
+// None when the presenter scales by itself (sharp or smooth, and no sharpening).
+std::atomic<uint32_t> present_size{0};    // width << 16 | height, 0: none
+std::atomic<uint32_t> present_sharpen{0}; // strength in thousandths
+bool scanout_wants_scaled;                // (vsync_now: GSN_WANT_SCALED)
+uint64_t present_scale_passes;
+
+void draw_pass(const Image &dst, Program *program, const ImageView &src, const void *push, size_t push_size) {
+    end_pass();
+    RenderPassInfo rp;
+    rp.num_color_attachments = 1;
+    rp.color_attachments[0] = &dst.get_view();
+    rp.store_attachments = 1;
+    CommandBuffer &c = cmd();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    c.begin_render_pass(rp);
+    c.set_opaque_state();
+    c.set_program(program);
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_test(false, false);
+    c.set_texture(0, 0, src, StockSampler::NearestClamp);
+    c.push_constants(push, 0, push_size);
+    c.draw(3);
+    c.end_render_pass();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+}
+
+void present_scale(ScanoutSlot &sl, const Image &picture) {
+    uint32_t size = present_size.load(std::memory_order_relaxed);
+    uint32_t w = size >> 16, h = size & 0xFFFF;
+    float sharpen = float(present_sharpen.load(std::memory_order_relaxed)) / 1000.0f;
+    if (w == 0 || h == 0 || w > 8192 || h > 8192) {
+        sl.scaled.reset();
+        sl.scaled_width = sl.scaled_height = 0;
+        return;
+    }
+    if (!sl.scaled || sl.scaled_width != w || sl.scaled_height != h) {
+        sl.scaled = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
+        sl.scaled_work.reset();
+        sl.scaled_width = w;
+        sl.scaled_height = h;
+    }
+    if (sharpen > 0 && !sl.scaled_work) {
+        sl.scaled_work = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
+    }
+    uint32_t pw = picture.get_width(), ph = picture.get_height();
+    struct {
+        int32_t src[2];
+        float ratio[2];
+        int32_t linear;
+    } scale = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
+    const Image &first = sharpen > 0 ? *sl.scaled_work : *sl.scaled;
+    draw_pass(first, gs->program_present_scale, picture.get_view(), &scale, sizeof(scale));
+    if (sharpen > 0) {
+        struct {
+            int32_t size[2];
+            float strength;
+        } sharp = {{int32_t(w), int32_t(h)}, sharpen};
+        draw_pass(*sl.scaled, gs->program_present_sharpen, sl.scaled_work->get_view(), &sharp, sizeof(sharp));
+    }
+    present_scale_passes++;
+    {
+        // KF4_PRESENT_BENCH=N: the GPU's time for the scaling (and sharpening), N times over, once
+        static int bench = -1;
+        if (bench < 0) {
+            bench = getenv("KF4_PRESENT_BENCH") ? atoi(getenv("KF4_PRESENT_BENCH")) : 0;
+        }
+        if (bench > 0 && present_scale_passes == 1) {
+            submit(true);
+            auto t0 = std::chrono::steady_clock::now();
+            for (int i = 0; i < bench; i++) {
+                draw_pass(first, gs->program_present_scale, picture.get_view(), &scale, sizeof(scale));
+            }
+            submit(true);
+            auto t1 = std::chrono::steady_clock::now();
+            if (sharpen > 0) {
+                struct {
+                    int32_t size[2];
+                    float strength;
+                } sharp = {{int32_t(w), int32_t(h)}, sharpen};
+                for (int i = 0; i < bench; i++) {
+                    draw_pass(*sl.scaled, gs->program_present_sharpen, sl.scaled_work->get_view(), &sharp, sizeof(sharp));
+                }
+            }
+            submit(true);
+            auto t2 = std::chrono::steady_clock::now();
+            fprintf(stderr, "[gsn] present scaling %ux%u -> %ux%u: %.3f ms a picture, sharpening %.3f ms\n", pw, ph, w, h,
+                    std::chrono::duration<double, std::milli>(t1 - t0).count() / bench,
+                    std::chrono::duration<double, std::milli>(t2 - t1).count() / bench);
+        }
+    }
+}
+
 // The displayed buffer into scanout_image as `mode` says (parity: the lines of this vblank's field; in
 // field mode the buffer is the field's picture, and parity the lines of the woven picture it goes
 // into); with frame, read back into it too. Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has
@@ -3283,52 +3743,79 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     uint32_t lines = mode == SCAN_WEAVE ? s.h * 2 : mode == SCAN_FIELD ? s.h / 2 : s.h;
     uint32_t iw = s.w * s.sx, ih = lines * s.sy;
     bool fresh = false;
+    int slot = 0;
+    ImageHandle before; // (the weave: the picture published last, whose other field's lines are kept)
     // (images are made and let go outside the lock: Granite's device lock, which the presenter holds
     // while it releases the image (gsn_queue_lock, then gsn_scanout_release), comes before it)
     {
         std::lock_guard<std::mutex> hold(so.lock);
-        fresh = !so.image || so.width != iw || so.height != ih;
+        slot = (so.newest + 1) % SCANOUT_SLOTS;
+        if (slot == so.taken) {
+            slot = (slot + 1) % SCANOUT_SLOTS;
+        }
+        so.writing = slot;
+        so.slots[slot].serial = 0; // (not to be taken while it is written)
+        fresh = !so.slots[slot].image || so.slots[slot].width != iw || so.slots[slot].height != ih;
+        if (so.newest >= 0 && so.slots[so.newest].image && so.slots[so.newest].width == iw &&
+            so.slots[so.newest].height == ih) {
+            before = so.slots[so.newest].image;
+        }
     }
     ImageHandle made = fresh ? make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, true) : ImageHandle();
     std::vector<ImageHandle> let_go;
     {
         std::lock_guard<std::mutex> hold(so.lock);
-        if (!so.taken) {
+        if (so.taken < 0) {
             let_go.swap(so.retired);
         }
         if (fresh) {
-            if (so.taken && so.image) {
-                so.retired.push_back(so.image);
-            } else if (so.image) {
-                let_go.push_back(so.image);
+            ScanoutSlot &sl = so.slots[slot];
+            if (sl.image) {
+                let_go.push_back(sl.image); // (never the slot taken: passed over above)
             }
-            so.image = made;
-            so.width = iw;
-            so.height = ih;
+            sl.image = made;
+            sl.width = iw;
+            sl.height = ih;
         }
     }
     let_go.clear();
+    const Image &dst = *so.slots[slot].image;
     switch (mode) {
     case SCAN_WHOLE:
-        copy_lines(*so.image, s, 0, 1, s.h, 0, 1);
+        copy_lines(dst, s, 0, 1, s.h, 0, 1);
         break;
     case SCAN_WEAVE:
-        // the field into its own lines; into both when the image is new (as the read-back path starts
-        // the other field as this one)
-        for (uint32_t p = fresh ? 0 : uint32_t(parity); p <= (fresh ? 1u : uint32_t(parity)); p++) {
-            copy_lines(*so.image, s, 0, 1, s.h, p, 2);
+        // the field into its own lines, the other field's from the picture before; into both when there
+        // is none (as the read-back path starts the other field as this one)
+        if (before && before.get() != &dst) {
+            const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            end_pass();
+            transfer_barrier();
+            cmd().copy_image(dst, *before, {0, 0, 0}, {0, 0, 0}, {iw, ih, 1}, colour, colour);
+            transfer_barrier();
+        }
+        for (uint32_t p = before ? uint32_t(parity) : 0; p <= (before ? uint32_t(parity) : 1u); p++) {
+            copy_lines(dst, s, 0, 1, s.h, p, 2);
         }
         break;
     case SCAN_FIELD:
-        copy_lines(*so.image, s, uint32_t(parity), 2, lines, 0, 1);
+        copy_lines(dst, s, uint32_t(parity), 2, lines, 0, 1);
         break;
     case SCAN_DEINTERLACE:
-        deinterlace_pass(*so.image, parity, s.sy, s.h);
+        deinterlace_pass(dst, parity, s.sy, s.h);
         break;
     }
     int ok = GSN_WANT_IMAGE;
+    present_scale(so.slots[slot], dst);
+    const Image *readout = &dst;
+    if (scanout_wants_scaled && so.slots[slot].scaled) {
+        // (--dump-present: the picture as the window shows it)
+        readout = so.slots[slot].scaled.get();
+        iw = so.slots[slot].scaled_width;
+        ih = so.slots[slot].scaled_height;
+    }
     if (frame && size_t(iw) * ih <= PORT_GS_FRAME_PIXELS) {
-        const uint8_t *pixels = read_image(*so.image, 0, 0, iw, ih);
+        const uint8_t *pixels = read_image(*readout, 0, 0, iw, ih);
         for (size_t i = 0; i < size_t(iw) * ih; i++) {
             uint32_t v;
             memcpy(&v, pixels + i * 4, 4);
@@ -3342,10 +3829,17 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     return ok;
 }
 
-// After the vblank's commands went to the queue: the presenter may show the new picture
-void scanout_published() {
-    std::lock_guard<std::mutex> hold(scanout_image.lock);
-    scanout_image.serial++;
+// After the picture's commands went to the queue: the presenter may show it
+void scanout_published(uint64_t tag) {
+    ScanoutImage &so = scanout_image;
+    std::lock_guard<std::mutex> hold(so.lock);
+    if (so.writing < 0) {
+        return;
+    }
+    so.slots[so.writing].serial = ++so.serial;
+    so.slots[so.writing].tag = tag;
+    so.newest = so.writing;
+    so.writing = -1;
 }
 
 // ---- The GS's own thread ------------------------------------------------------------------------
@@ -3385,16 +3879,17 @@ struct Ring {
 
 Ring *ring; // (none: no thread)
 
-int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 
 void ring_work(const RingRecord &r, const uint8_t *data) {
     if (r.type == RING_GIF) {
         Timer timer(gsn_stats.ns_gif);
         gif(r.arg, data, r.size);
     } else if (r.type == RING_VSYNC) {
-        uint64_t privileged[vsync_bytes / 8];
+        uint64_t privileged[vsync_bytes / 8], tag;
         memcpy(privileged, data, vsync_bytes);
-        vsync_now(privileged, r.arg, int(r.want_pixels), nullptr);
+        memcpy(&tag, data + vsync_bytes, 8);
+        vsync_now(privileged, r.arg, int(r.want_pixels), nullptr, tag);
     }
 }
 
@@ -3434,7 +3929,7 @@ void ring_thread() {
         RingRecord r;
         memcpy(&r, at, sizeof(r));
         ring_work(r, at + sizeof(r));
-        if (r.type == RING_VSYNC) {
+        if (r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA)) {
             q.vsyncs_done.fetch_add(1);
         }
         q.tail.store(tail + sizeof(r) + ((size_t(r.size) + 15) & ~size_t(15)));
@@ -3632,6 +4127,8 @@ extern "C" int gsn_open(void *shared_context) {
     // a frame context a vblank: with four, the CPU waits at a vblank for the GPU's work of four vblanks
     // before (two left it waiting on the GPU with --fast, a third of the native GS's vsync time)
     gs->device->init_frame_contexts(4);
+    // --native-cutout-aa shades at every sample (the SPIR-V's SampleRateShading)
+    sample_shading = gs->device->get_device_features().enabled_features.sampleRateShading != VK_FALSE;
     make_program();
 
     gs->dummy_raw = make_image(1, 1, VK_FORMAT_R8_UINT, 1, false);
@@ -3645,6 +4142,17 @@ extern "C" int gsn_open(void *shared_context) {
     const VkPhysicalDeviceLimits &limits = gs->device->get_gpu_properties().limits;
     msaa_samples_have = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts &
                         limits.sampledImageDepthSampleCounts;
+    switch (gs->device->get_gpu_properties().deviceType) {
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+        gpu_kind = GSN_GPU_DISCRETE;
+        break;
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+        gpu_kind = GSN_GPU_INTEGRATED;
+        break;
+    default:
+        gpu_kind = GSN_GPU_OTHER;
+        break;
+    }
     ring_start();
     return 1;
 }
@@ -3699,13 +4207,27 @@ extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
 namespace {
 // gsn_set_presenter's (a picture's pixels, or a new image for gsn_scanout_take), and the pixels it
 // is given
-void (*presenter)(const PortGsFrame *frame);
-void (*presenter_image)(void);
+void (*presenter)(const PortGsFrame *frame, uint64_t tag);
+void (*presenter_image)(uint64_t tag);
 PortGsFrame presented;
 
-int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+// A vblank's picture, or with GSN_EXTRA one more picture between two vblanks (gsn_picture): the same
+// scanout, without what belongs to the vblank (the field-at-a-time countdown, the deinterlace's history,
+// a new scale or MSAA, the pipeline cache); a picture that would be read a field at a time is not made.
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     Timer timer(gsn_stats.ns_vsync);
-    if ((want_pixels & GSN_PRESENT) && !(want_pixels & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) {
+    bool extra = (want_pixels & GSN_EXTRA) != 0;
+    if (!extra && !uploads_now.empty()) {
+        // the uploads of the packets since the last vblank: what the pictures between ask for again
+        uploads_frame.swap(uploads_now);
+        uploads_now.clear();
+        recording = -1;
+    }
+    // SDL_Renderer's picture at the window's size: the scaled image read back (GSN_WANT_SCALED with
+    // GSN_PRESENT and GSN_WANT_IMAGE), for the presenter's pixels
+    bool scaled_pixels = (want_pixels & GSN_PRESENT) && (want_pixels & GSN_WANT_SCALED) &&
+                         (want_pixels & GSN_WANT_IMAGE) && !(want_pixels & GSN_WANT_PIXELS);
+    if (((want_pixels & GSN_PRESENT) && !(want_pixels & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) || scaled_pixels) {
         if (!presented.rgba) {
             presented.rgba = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS));
         }
@@ -3719,10 +4241,11 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     int circuit = (pmode & 2) ? 2 : (pmode & 1) ? 1 : 0;
     // the PC's switches (gsn_vsync)
     bool progressive = want_pixels & VSYNC_PROGRESSIVE, deinterlace = want_pixels & VSYNC_DEINTERLACE;
+    scanout_wants_scaled = (want_pixels & GSN_WANT_SCALED) != 0;
     want_pixels &= GSN_WANT_PIXELS | GSN_WANT_IMAGE | GSN_PRESENT;
     // a frame-mode picture read a field at a time: 4 vblanks after a tall SCANMSK primitive (scanmsk_seen)
     bool field_scan = gs->field_scan_vblanks > 0;
-    if (gs->field_scan_vblanks) {
+    if (gs->field_scan_vblanks && !extra) {
         gs->field_scan_vblanks--;
     }
     GSN_LOG(3, "vsync field %d%s PMODE %llx SMODE2 %llx DISPFB1 %llx DISPLAY1 %llx DISPFB2 %llx DISPLAY2 %llx\n", field,
@@ -3753,6 +4276,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
             parity = int((bits(display, 12, 11) ^ uint32_t(field)) & 1); // (DY's parity moves the fields)
         }
         uint32_t sx = target_sx, sy = target_sy;
+        if (extra && mode != SCAN_WHOLE) {
+            w = 0; // (a picture between is whole, or none)
+        }
         if (w > 0 && h > 0 && w <= 1024 && h <= 1024 &&
             size_t(w) * h * sx * sy * (mode == SCAN_WEAVE ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
             Shown shown = shown_buffer(fbp, fbw, psm, dbx, dby, w, h);
@@ -3761,7 +4287,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                 history_kept = true;
             }
             if (want_pixels & GSN_WANT_IMAGE) {
-                ok = scanout_to_image(shown, mode, parity, (want_pixels & GSN_WANT_PIXELS) ? frame : nullptr);
+                ok = scanout_to_image(shown, mode, parity, (want_pixels & GSN_WANT_PIXELS) || scaled_pixels ? frame : nullptr);
             } else if (mode == SCAN_WEAVE) {
                 // each field its own picture, woven with the one before: kept every field, wanted or not
                 int f = field & 1;
@@ -3796,8 +4322,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     frame->height = h * 2 * sy;
                     ok = 1;
                 }
-            } else if (mode != SCAN_WHOLE) {
-                // (on the GPU, as for the presenter, and read back)
+            } else if (mode != SCAN_WHOLE || (shown.t && wide(*shown.t->image))) {
+                // (on the GPU, as for the presenter, and read back; --native-colour high's picture so
+                // too, dithered as the window has it)
                 if (want_pixels) {
                     ok = (scanout_to_image(shown, mode, parity, frame) & GSN_WANT_PIXELS) ? 1 : 0;
                 }
@@ -3810,13 +4337,25 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
             }
         }
     }
-    if (!history_kept && gs->history_filled) {
+    if (!history_kept && gs->history_filled && !extra) {
         forget_history();
     }
     submit(false);
     gs->device->next_frame_context();
     if (ok & GSN_WANT_IMAGE) {
-        scanout_published();
+        scanout_published(tag);
+    }
+    if (extra) {
+        if (ok && (want_pixels & GSN_PRESENT)) {
+            if (scaled_pixels && (ok & GSN_WANT_PIXELS) && presenter) {
+                presenter(frame, tag);
+            } else if ((ok & GSN_WANT_IMAGE) && presenter_image && !scaled_pixels) {
+                presenter_image(tag);
+            } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
+                presenter(frame, tag);
+            }
+        }
+        return ok;
     }
     // the pipeline cache, written when it has grown (looked at every ten seconds)
     if (!cache_path.empty() && ++cache_vsyncs % 600 == 0) {
@@ -3828,7 +4367,8 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     gsn_stats.pool_mb = decoded_pool_bytes >> 20;
     gsn_stats.upload_copies = page_images.size();
     uint32_t wanted = wanted_scale;
-    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples) {
+    if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples ||
+        wanted_colour != target_colour) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         for (auto &t : gs->targets) {
             write_back(*t);
@@ -3838,6 +4378,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         target_sx = wanted & 0xFF;
         target_sy = wanted >> 8;
         target_samples = wanted_samples;
+        target_colour = wanted_colour;
         gs->fields[0].clear();
         gs->fields[1].clear();
         forget_history();
@@ -3845,22 +4386,28 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     if (ok && (want_pixels & GSN_PRESENT)) {
         // the window's picture, handed over now that it is there (an image: once its commands are on
         // the queue, scanout_published above)
-        if ((ok & GSN_WANT_IMAGE) && presenter_image) {
-            presenter_image();
+        if (scaled_pixels && (ok & GSN_WANT_PIXELS) && presenter) {
+            presenter(frame, tag);
+        } else if ((ok & GSN_WANT_IMAGE) && presenter_image && !scaled_pixels) {
+            presenter_image(tag);
         } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
-            presenter(frame);
+            presenter(frame, tag);
         }
     }
     return ok;
 }
 } // namespace
 
-extern "C" void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(void)) {
+extern "C" void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag), void (*image)(uint64_t tag)) {
     presenter = pixels;
     presenter_image = image;
 }
 
 extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+    return gsn_picture(privileged, field, want_pixels, frame, 0);
+}
+
+extern "C" int gsn_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     // the PC's switches for the scanout, as they are at this vblank
     want_pixels |= (port_options.progressive ? VSYNC_PROGRESSIVE : 0) | (port_options.deinterlace ? VSYNC_DEINTERLACE : 0);
     // On the GS's thread, with the sender going on: a vblank whose picture nobody waits for (none, or
@@ -3868,7 +4415,13 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
     // goes on to show itself, waits for the thread to be idle and is made here.
     bool queued = !(want_pixels & GSN_WANT_PIXELS) && (!(want_pixels & GSN_WANT_IMAGE) || (want_pixels & GSN_PRESENT));
     if (ring && queued) {
-        ring_put(RING_VSYNC, field, privileged, vsync_bytes, uint32_t(want_pixels));
+        uint8_t data[vsync_bytes + 8];
+        memcpy(data, privileged, vsync_bytes);
+        memcpy(data + vsync_bytes, &tag, 8);
+        ring_put(RING_VSYNC, field, data, sizeof(data), uint32_t(want_pixels));
+        if (want_pixels & GSN_EXTRA) {
+            return want_pixels & (GSN_PRESENT | GSN_WANT_IMAGE);
+        }
         ring->vsyncs_sent++;
         if (want_pixels & GSN_PRESENT) {
             // A window's picture is at most two vblanks behind the game: the sender waits for the GS's
@@ -3879,7 +4432,11 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
         return want_pixels & (GSN_PRESENT | GSN_WANT_IMAGE);
     }
     ring_idle();
-    return vsync_now(privileged, field, want_pixels, frame);
+    return vsync_now(privileged, field, want_pixels, frame, tag);
+}
+
+extern "C" int gsn_backlog(void) {
+    return ring ? int(ring->vsyncs_sent - ring->vsyncs_done.load()) : 0;
 }
 
 extern "C" void gsn_set_scale(int x_scale, int y_scale) {
@@ -3888,8 +4445,29 @@ extern "C" void gsn_set_scale(int x_scale, int y_scale) {
     wanted_scale = x | y << 8;
 }
 
+extern "C" int gsn_gpu_kind(void) {
+    return gpu_kind;
+}
+
 extern "C" void gsn_set_lod(int mode) {
     lod_mode = mode;
+}
+
+extern "C" int gsn_set_aniso(int taps) {
+    int l = 0;
+    while (l < 4 && (2 << l) <= taps) {
+        l++;
+    }
+    aniso_log2 = l;
+    return 1 << l;
+}
+
+extern "C" void gsn_set_cutout_aa(int mode) {
+    cutout_aa_mode = mode;
+}
+
+extern "C" void gsn_set_colour(int mode) {
+    wanted_colour = mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
 }
 
 extern "C" int gsn_set_msaa(int samples) {
@@ -3943,10 +4521,9 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
         msaa_image_written(*t);
         end_pass();
         transfer_barrier();
-        uint32_t *out = static_cast<uint32_t *>(cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0},
-                                                                   {r->w, r->h, 1}, r->w, r->h,
-                                                                   {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}));
-        memcpy(out, rgba, size_t(r->w) * r->h * 4);
+        void *out = cmd().update_image(*t->image, {int32_t(r->x), int32_t(r->y), 0}, {r->w, r->h, 1}, r->w, r->h,
+                                       {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+        put_pixels(out, *t->image, 0, rgba, size_t(r->w) * r->h);
         transfer_barrier();
         return;
     }
@@ -4077,6 +4654,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         forget_history(); // (a capture's comes after: KF4GS_GS_HISTORY)
         // (no targets: a capture is drawn with MSAA, and at the scale, from its start)
         target_samples = wanted_samples;
+        target_colour = wanted_colour;
         target_sx = wanted_scale & 0xFF;
         target_sy = wanted_scale >> 8;
         return 1;
@@ -4125,7 +4703,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
             if (size_t(end - at) < bytes || !f.width || !f.height || f.width > 8192 || f.height > 8192) {
                 return 0;
             }
-            fields[i] = make_image(f.width, f.height, VK_FORMAT_R8G8B8A8_UNORM, 1, false);
+            fields[i] = make_image(f.width, f.height, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
             end_pass();
             transfer_barrier();
             void *out = cmd().update_image(*fields[i], {0, 0, 0}, {f.width, f.height, 1}, f.width, f.height,
@@ -4173,20 +4751,55 @@ extern "C" void gsn_queue_unlock(void) {
     gs->device->external_queue_unlock();
 }
 
-extern "C" int gsn_scanout_take(GsnScanout *out) {
-    std::lock_guard<std::mutex> hold(scanout_image.lock);
-    if (!scanout_image.image || scanout_image.serial == 0) {
+extern "C" int gsn_scanout_take_tag(GsnScanout *out, uint64_t tag) {
+    ScanoutImage &so = scanout_image;
+    std::lock_guard<std::mutex> hold(so.lock);
+    int pick = so.newest;
+    for (int i = 0; i < SCANOUT_SLOTS; i++) {
+        const ScanoutSlot &sl = so.slots[i];
+        if (sl.serial != 0 && sl.tag == tag && (pick < 0 || so.slots[pick].tag != tag || sl.serial > so.slots[pick].serial)) {
+            pick = i;
+        }
+    }
+    if (pick < 0 || !so.slots[pick].image || so.slots[pick].serial == 0) {
         return 0;
     }
-    out->image = uint64_t(scanout_image.image->get_image());
-    out->width = scanout_image.width;
-    out->height = scanout_image.height;
-    out->serial = scanout_image.serial;
-    scanout_image.taken = true;
+    const ScanoutSlot &sl = so.slots[pick];
+    out->image = uint64_t(sl.image->get_image());
+    out->width = sl.width;
+    out->height = sl.height;
+    out->serial = sl.serial;
+    out->tag = sl.tag;
+    out->scaled = sl.scaled ? uint64_t(sl.scaled->get_image()) : 0;
+    out->scaled_width = sl.scaled_width;
+    out->scaled_height = sl.scaled_height;
+    so.taken = pick;
     return 1;
+}
+
+extern "C" void gsn_set_present_scale(int width, int height, float sharpen) {
+    present_size.store(width > 0 && height > 0 ? uint32_t(width) << 16 | uint32_t(height) : 0);
+    present_sharpen.store(uint32_t(sharpen > 0 ? sharpen * 1000.0f + 0.5f : 0.0f));
+}
+
+extern "C" uint64_t gsn_present_scale_passes(void) {
+    return present_scale_passes;
+}
+
+extern "C" int gsn_scanout_take(GsnScanout *out) {
+    ScanoutImage &so = scanout_image;
+    uint64_t tag;
+    {
+        std::lock_guard<std::mutex> hold(so.lock);
+        if (so.newest < 0) {
+            return 0;
+        }
+        tag = so.slots[so.newest].tag;
+    }
+    return gsn_scanout_take_tag(out, tag);
 }
 
 extern "C" void gsn_scanout_release(void) {
     std::lock_guard<std::mutex> hold(scanout_image.lock);
-    scanout_image.taken = false;
+    scanout_image.taken = -1;
 }
