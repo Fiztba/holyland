@@ -573,7 +573,11 @@ itself"):
   whose middle is nearest, if it is the nearest to that one in turn (the map's pieces repeat; one that
   came into view is not taken for the one beside it), and less than 400 units away.
 - **The picture between.** A paired run that moved (a vertex by more than a 500th of its distance from
-  the eye) is drawn half way between its two places, from the camera half way. A run that did not
+  the eye), or that went with the camera (in the world, every vertex moved by the camera's move: the
+  sky's dome on map 000), is drawn half way between its two places, from the camera half way. (By the
+  500th alone, the dome's nearer strips moved with it and the farther ones stayed in the world: thin
+  dark lines along their shared edges in the pictures between when walking forward, bright ones walking
+  back.) A run that did not
   move, or has no pair, moves with the camera as before (in the world), or stays as it is (the arm,
   before the eye).
 - **The arm** is marked by the game (`FrameInterp_BeginArm` before `Player_DrawArm`): it is in the
