@@ -361,6 +361,9 @@ typedef struct {
     int section;
     int placed;        /* it has a vertex with a place */
     double middle[3];  /* the mean of its vertices' places (those without ADC) */
+    uint32_t prim;     /* PRIM at its first vertex */
+    uint64_t tex;      /* and TEX0's texture and CLUT */
+    int32_t pair;      /* the run of the frame before that is this one (objects_pair), -1: none */
 } Run;
 
 #define VERTEX_SURE 1  /* a vertex without ADC: never one the VU1 program clipped */
@@ -398,6 +401,9 @@ static void objects_add_run(Objects *o, uint64_t key, int section) {
     r->first = (uint32_t)o->npos;
     r->count = 0;
     r->section = section;
+    r->prim = 0;
+    r->tex = 0;
+    r->pair = -1;
 }
 
 static void objects_add_vertex(Objects *o, const double place[3], int valid) {
@@ -806,6 +812,70 @@ static void flat_pair(Flat *f, const Flat *o, const Uploads *u) {
             f->restore = 1;
         }
     }
+}
+
+/* Each run of this frame (o) with the one of the frame before (prev) that is it: by its batch, the nearest
+   with the same, it the nearest to that one in turn (objects_find); then, among the runs neither pairs
+   that way (what the CPU makes anew each frame: an effect's sprites, a model it moves vertex by vertex,
+   whose batch is new every frame), in their order, each with the first of the frame before's within
+   the next few that is drawn with the same primitive and texture, as many vertices, in the same
+   section, its middle within INTERP_MAX_MOVE. run_motion then takes the pair only if no vertex moved
+   more than that, and the place between does not cut past the eye. */
+static uint64_t stat_runs, stat_runs_key, stat_runs_order;
+
+static void objects_pair(Objects *o, const Objects *prev) {
+    size_t i, at = 0, k;
+    uint8_t *taken;
+
+    for (i = 0; i < o->nruns; i++) {
+        o->runs[i].pair = -1;
+    }
+    if (prev == NULL || prev->nruns == 0) {
+        return;
+    }
+    taken = calloc(prev->nruns, 1);
+    if (taken == NULL) {
+        PORT_FATAL("out of memory");
+    }
+    for (i = 0; i < o->nruns; i++) {
+        Run *r = &o->runs[i];
+        const Run *a = objects_find(prev, r);
+
+        stat_runs += r->placed;
+        if (a != NULL && objects_find(o, a) == r) {
+            r->pair = (int32_t)(a - prev->runs);
+            taken[r->pair] = 1;
+            stat_runs_key++;
+        }
+    }
+    for (i = 0; i < o->nruns; i++) {
+        Run *r = &o->runs[i];
+
+        if (r->pair >= 0 || !r->placed || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
+            continue;
+        }
+        for (k = at; k < prev->nruns && k < at + 32; k++) {
+            const Run *a = &prev->runs[k];
+            double d2 = 0;
+            int c;
+
+            if (taken[k] || !a->placed || a->section != r->section || a->count != r->count || a->prim != r->prim ||
+                a->tex != r->tex) {
+                continue;
+            }
+            for (c = 0; c < 3; c++) {
+                d2 += (a->middle[c] - r->middle[c]) * (a->middle[c] - r->middle[c]);
+            }
+            if (d2 < INTERP_MAX_MOVE * INTERP_MAX_MOVE) {
+                r->pair = (int32_t)k;
+                taken[k] = 1;
+                at = k + 1;
+                stat_runs_order++;
+            }
+            break;
+        }
+    }
+    free(taken);
 }
 
 typedef struct {
@@ -1558,12 +1628,10 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
         } else if (w->mode == REPLAY) {
             const Objects *o = w->objects;
 
-            w->run_prev = o != NULL && (size_t)w->run < o->nruns ? objects_find(w->prev, &o->runs[w->run]) : NULL;
-            /* and this run the nearest to it: a piece of the map that came into view is not paired
-               with the same piece beside it, which is there in both frames */
-            if (w->run_prev != NULL && objects_find(o, w->run_prev) != &o->runs[w->run]) {
-                w->run_prev = NULL;
-            }
+            /* (paired once for the frame: objects_pair) */
+            w->run_prev = o != NULL && w->prev != NULL && (size_t)w->run < o->nruns && o->runs[w->run].pair >= 0
+                              ? &w->prev->runs[o->runs[w->run].pair]
+                              : NULL;
             run_motion(w);
         }
     }
@@ -1635,6 +1703,15 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                                 (section == SECTION_REFLECT && tri && w->have_reflect && draws_into(w, p->prim, w->reflect_fbp));
 
                     if (w->mode == SCAN && w->objects != NULL) {
+                        Run *run = &w->objects->runs[w->objects->nruns - 1];
+
+                        if (run->count == 0) {
+                            /* what it is drawn with */
+                            int c = (w->prmodecont & 1) ? (int)((p->prim >> 9) & 1) : (int)((w->prmode >> 9) & 1);
+
+                            run->prim = p->prim;
+                            run->tex = (p->prim & 0x10) ? w->tex0[c] & ~((uint64_t)7 << 61) : 0;
+                        }
                         if (moves) {
                             keep_vertex(w, p, q, d == 0x4);
                         } else {
@@ -2000,6 +2077,7 @@ void port_interp_vsync(const uint64_t *privileged) {
         pending.flat = flat_last;
         pending.flat_before = objects_before_set ? flat_before : NULL;
         pending.dirty = 0;
+        objects_pair(objects_last, pending.objects_before ? objects_before : NULL);
         flat_pair(flat_last, pending.flat_before, uploads_new);
         flat_copies(flat_last, uploads_new);
         if (w.have_reflect && read_first(uploads_new, w.reflect_fbp)) {
@@ -2061,5 +2139,7 @@ void port_interp_print_stats(void) {
             (unsigned long long)stat_moved, (unsigned long long)stat_objects[SECTION_WORLD],
             (unsigned long long)stat_objects[SECTION_ARM], (unsigned long long)stat_objects[SECTION_EYE],
             (unsigned long long)stat_dropped, (unsigned long long)stat_items);
-    fprintf(stderr, "[stats] frame rate: the pictures between sent %.1f MB of packets\n", (double)stat_sent / 1048576.0);
+    fprintf(stderr, "[stats] frame rate: the pictures between sent %.1f MB of packets; of %llu model parts placed, %llu "
+            "paired by their batch and %llu by their order\n", (double)stat_sent / 1048576.0, (unsigned long long)stat_runs,
+            (unsigned long long)stat_runs_key, (unsigned long long)stat_runs_order);
 }
