@@ -103,6 +103,8 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   (`kf4_gs`) on paraLLEl-GS's copy of Granite; a release without paraLLEl-GS needs them split.
 - **60 pictures a second:** the HUD, animated textures and what the CPU builds anew each frame stay
   at 30; two look-alike models crossing can swap for one picture.
-- **MSAA:** the alpha test's cut-outs (foliage, fences) and draws without Z are not smoothed.
+- **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
+  sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
+  mipmaps made for cut-out textures would be the next step.
 - STEP3.md, "Progress" and "What could come next", has the rest (write-backs left, uploads on the
   GPU, exact blending by fragment shader interlock).

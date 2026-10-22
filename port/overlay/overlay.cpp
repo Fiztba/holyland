@@ -736,10 +736,20 @@ void renderer_section() {
                                 port_options.native_msaa > 1 ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
                                                              : "Off");
         }
-        tooltip("The native GS draws the 3D with this many samples a pixel, which smooths its edges (the 2D,\n"
-                "the passes over the whole frame and the alpha test's cut-outs stay as they are). Off is the\n"
-                "PS2's picture. Costs GPU time, more with the resolution above. Off and back on is live;\n"
-                "from one count to another takes a restart. (--native-msaa)");
+        tooltip("The native GS draws the 3D with this many samples a pixel, which smooths its edges (the 2D\n"
+                "and the passes over the whole frame stay as they are). Off is the PS2's picture. Costs GPU\n"
+                "time, more with the resolution above. Off and back on is live; from one count to another\n"
+                "takes a restart. (--native-msaa)");
+        bool cutout = port_options.native_cutout_aa != 0;
+        if (ImGui::Checkbox("Native GS anti-aliasing: smooth cut-outs too", &cutout)) {
+            port_gs_set_native_cutout_aa(cutout ? 1 : 0);
+            port_settings.native_cutout_aa = cutout ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("With MSAA above: textures see-through in places (netting, foliage, fences, grates, hair) are\n"
+                "shaded at every sample instead of once a pixel, so the edges inside them are smoothed and\n"
+                "shimmer less (more so with more samples). Costs GPU time only where they are drawn.\n"
+                "Without MSAA it changes nothing. (--native-cutout-aa ssaa|off)");
         static const char *const lod_names[] = {"PS2's (ps2)", "Matched to the resolution (scale, the default)",
                                                 "Finest everywhere (full)"};
         int lod = port_options.native_lod;

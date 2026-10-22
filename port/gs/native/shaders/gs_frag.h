@@ -10,14 +10,22 @@
 // itself as the GS has it per pixel: Z interpolated as the vertices have it, rounded to a whole Z
 // (ties to even) and kept within what the Z buffer's format holds. It is used for every draw with a Z
 // buffer: a fraction left in would put a second draw over the same plane (ZTST GEQUAL) a hair behind
-// the first where the GS has them equal. gs.frag is for the draws without one.
+// the first where the GS has them equal. gs.frag is for the draws without one. gs_zclamp_sample.frag
+// is gs_zclamp.frag shaded at every sample (GSN_SAMPLE, below).
 #include "gs_common.h"
 
-layout(location = 0) noperspective in vec4 v_color;
-layout(location = 1) noperspective in vec3 v_stq;
-layout(location = 2) noperspective in float v_fog;
+// gs_zclamp_sample.frag (GSN_SAMPLE, --native-cutout-aa ssaa) is shaded once a sample, not once a
+// pixel: its inputs are taken at each sample of a multisampled target
+#ifdef GSN_SAMPLE
+#define GSN_IN sample noperspective in
+#else
+#define GSN_IN noperspective in
+#endif
+layout(location = 0) GSN_IN vec4 v_color;
+layout(location = 1) GSN_IN vec3 v_stq;
+layout(location = 2) GSN_IN float v_fog;
 #ifdef GSN_ZCLAMP
-layout(location = 3) noperspective in float v_z;
+layout(location = 3) GSN_IN float v_z;
 #endif
 
 layout(set = 0, binding = 0) uniform usampler2D u_raw;

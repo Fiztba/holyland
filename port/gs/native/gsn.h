@@ -57,6 +57,15 @@ void gsn_set_lod(int mode);
    (1, the default, is the PS2's picture; 2, 4 or 8). Returns the count used: the most the GPU has up
    to `samples`. */
 int gsn_set_msaa(int samples);
+/* --native-cutout-aa: with MSAA (gsn_set_msaa), the edges inside cut-outs (netting, foliage, fences,
+   grates, hair: textures see-through in places, by the alpha test or blending; flush_batch says which).
+   GSN_CUTOUT_AA_OFF shades them once a pixel as the rest of the 3D, so each pixel sees the texture's
+   alpha at one point; GSN_CUTOUT_AA_SSAA shades them at every sample (transparency supersampling):
+   each sample is textured, tested and blended at its own place. Nothing without MSAA, or on a GPU
+   without sample-rate shading. From the next draw. */
+#define GSN_CUTOUT_AA_OFF 0
+#define GSN_CUTOUT_AA_SSAA 1
+void gsn_set_cutout_aa(int mode);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {
@@ -132,6 +141,7 @@ typedef struct {
     uint64_t targets, textures, pool_images, pool_mb, upload_copies;
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
+    uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
 } GsnStats;
 extern GsnStats gsn_stats;
 

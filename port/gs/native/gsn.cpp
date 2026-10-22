@@ -30,6 +30,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <array>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -215,6 +216,9 @@ struct Texture {
     uint64_t decoded; // the VRAM write count when it was decoded
     uint64_t hash;    // of the bytes it was decoded from (texture_hash)
     uint64_t used;
+    // --native-cutout-aa: how many of its texels (all levels) have each value of the byte their alpha
+    // comes from (a palette texture's index, a 32-bit texture's alpha): which alphas it has, how often
+    uint32_t texels[256];
 };
 
 // The GIF's three paths, read as gs.c reads them
@@ -251,6 +255,7 @@ struct Gs {
     Device *device = nullptr;
     Program *program = nullptr;
     Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
+    Program *program_zclamp_sample = nullptr; // (shaders/gs_zclamp_sample.frag: the same at every sample)
     Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
     Program *program_deinterlace = nullptr; // (the scanout's: shaders/deinterlace.frag)
     CommandBufferHandle cmd;
@@ -295,6 +300,10 @@ volatile int lod_mode = GSN_LOD_SCALE;
 // Changed at a vblank (gsn_set_msaa), as the scale is.
 uint32_t target_samples = 1;
 volatile uint32_t wanted_samples = 1;
+// --native-cutout-aa (gsn_set_cutout_aa): with MSAA, the cut-outs (flush_batch) shaded at every
+// sample; sample_shading, whether the GPU can (sampleRateShading)
+volatile int cutout_aa_mode = GSN_CUTOUT_AA_OFF;
+bool sample_shading = false;
 
 // Time spent in a function, added to a counter of gsn_stats
 struct Timer {
@@ -550,8 +559,9 @@ void msaa_forget(Target &t) {
 // left the target's first column and row as they were: the sky's clouds on map 000 are such a
 // picture, and showed it as bright lines where their texture repeats; the frame's passes over the
 // whole picture left its first column and row: a line down the screen's left edge.) A triangle with a slant, or with its colour or Z not
-// the same at its corners, is left as it is: the 3D.
-void flat_2d(std::vector<Vtx> &verts) {
+// the same at its corners, is left as it is: the 3D. Returns whether it moved any.
+bool flat_2d(std::vector<Vtx> &verts) {
+    bool moved = false;
     for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
         Vtx *v = &verts[i];
         if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
@@ -593,7 +603,9 @@ void flat_2d(std::vector<Vtx> &verts) {
             v[k].x = float(nx);
             v[k].y = float(ny);
         }
+        moved = true;
     }
+    return moved;
 }
 
 // ---- The CPU's VRAM ----------------------------------------------------------------------------
@@ -1147,6 +1159,7 @@ uint64_t texture_hash(const Texture &tex) {
 
 // Decoded textures by the hash of what they were decoded from
 std::unordered_map<uint64_t, ImageHandle> decoded_pool;
+std::unordered_map<uint64_t, std::array<uint32_t, 256>> decoded_texels; // (Texture::texels, by the same hash)
 std::deque<uint64_t> decoded_order;
 size_t decoded_pool_bytes;
 
@@ -1168,6 +1181,7 @@ void decode_texture(Texture &tex) {
     auto found = decoded_pool.find(hash);
     if (found != decoded_pool.end()) {
         tex.image = found->second;
+        memcpy(tex.texels, decoded_texels[hash].data(), sizeof(tex.texels));
         gsn_stats.texture_reuses++;
         return;
     }
@@ -1181,11 +1195,13 @@ void decode_texture(Texture &tex) {
         if (oldest != decoded_pool.end()) {
             decoded_pool_bytes -= image_bytes(*oldest->second);
             decoded_pool.erase(oldest);
+            decoded_texels.erase(decoded_order.front());
         }
         decoded_order.pop_front();
     }
     end_pass();
     transfer_barrier();
+    memset(tex.texels, 0, sizeof(tex.texels));
     for (uint32_t l = 0; l < tex.levels; l++) {
         uint32_t w = std::max(1u, (1u << tex.tw) >> l), h = std::max(1u, (1u << tex.th) >> l);
         void *out = cmd().update_image(*tex.image, {0, 0, 0}, {w, h, 1}, w, h, {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1});
@@ -1194,13 +1210,18 @@ void decode_texture(Texture &tex) {
         for (uint32_t y = 0; y < h; y++) {
             size_t at = size_t(y) * w;
             if (format == VK_FORMAT_R32_UINT) {
-                gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, static_cast<uint32_t *>(out) + at);
+                uint32_t *texel = static_cast<uint32_t *>(out) + at;
+                gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, texel);
+                for (uint32_t x = 0; x < w; x++) {
+                    tex.texels[texel[x] >> 24]++;
+                }
                 continue;
             }
             gsn_vram_read_row(gs->vram.data(), tex.psm, bp, bw, 0, y, w, row.data());
             for (uint32_t x = 0; x < w; x++) {
                 if (format == VK_FORMAT_R8_UINT) {
                     static_cast<uint8_t *>(out)[at + x] = uint8_t(row[x]);
+                    tex.texels[row[x] & 0xFF]++;
                 } else {
                     static_cast<uint16_t *>(out)[at + x] = uint16_t(row[x]);
                 }
@@ -1208,6 +1229,7 @@ void decode_texture(Texture &tex) {
         }
         gsn_stats.texture_bytes += size_t(w) * h;
     }
+    memcpy(decoded_texels[hash].data(), tex.texels, sizeof(tex.texels));
     transfer_barrier();
     gsn_stats.texture_decodes++;
 }
@@ -1581,12 +1603,13 @@ void flush_batch() {
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
     // largest alpha, the rows they reach
-    uint32_t zmin = UINT32_MAX, zmax = 0, as_max = 0;
+    uint32_t zmin = UINT32_MAX, zmax = 0, as_max = 0, as_min = 255;
     float vy0 = gs->verts[0].y, vy1 = vy0;
     for (const Vtx &v : gs->verts) {
         zmin = std::min(zmin, v.z);
         zmax = std::max(zmax, v.z);
         as_max = std::max(as_max, v.rgba >> 24);
+        as_min = std::min(as_min, v.rgba >> 24);
         vy0 = std::min(vy0, v.y);
         vy1 = std::max(vy1, v.y);
     }
@@ -1727,6 +1750,11 @@ void flush_batch() {
     uint32_t clut[256];
     bool want_clut = false;
     uint32_t tex_alpha_max = 255; // the largest alpha a texel can have, where it is known
+    // --native-cutout-aa: the alphas the texture's texels have, from the least to the most (only of a
+    // texture decoded from VRAM; cut_texels false where they are not known)
+    bool cut_texels = false;
+    uint32_t cut_lo = 255, cut_hi = 0;
+    uint64_t cut_clear = 0, cut_all = 0;
     if (tme) {
         uint32_t tbp = bits(tex0, 0, 14), tbw = bits(tex0, 14, 6), tpsm = bits(tex0, 20, 6);
         uint32_t tw = std::min(bits(tex0, 26, 4), 10u), th = std::min(bits(tex0, 30, 4), 10u);
@@ -1836,6 +1864,22 @@ void flush_batch() {
                     tex_alpha_max = std::max(tex_alpha_max, clut[i] >> 24);
                 }
             }
+            if (cutout_aa_mode != GSN_CUTOUT_AA_OFF && target_samples > 1 && (src == SRC_CLUT || src == SRC_CT32)) {
+                // the least and most alpha of the indices (CLUT) or alphas (32-bit) its texels have,
+                // and how many texels have the least
+                cut_texels = true;
+                for (uint32_t i = 0; i < 256; i++) {
+                    if (tex->texels[i]) {
+                        uint32_t a = src == SRC_CLUT ? clut[i] >> 24 : i;
+                        cut_lo = std::min(cut_lo, a);
+                        cut_hi = std::max(cut_hi, a);
+                    }
+                }
+                for (uint32_t i = 0; i < 256; i++) {
+                    cut_all += tex->texels[i];
+                    cut_clear += (src == SRC_CLUT ? clut[i] >> 24 : i) == cut_lo ? tex->texels[i] : 0;
+                }
+            }
         }
     }
 
@@ -1859,6 +1903,42 @@ void flush_batch() {
     bool fixed = fixed_blend(ba, bb, bc, bd, fix, &blend);
     bool exact = fixed && (blend.premul != 0 || ba == bb);
     bool sprite = gs->batch_sprites;
+    // --native-cutout-aa: a cut-out is a draw whose texture is see-through in places and solid in
+    // others: a quarter or more of its texels have its least alpha (a mask, not a layer blended by a
+    // smooth alpha as the walls' are, or one see-through all over as the mist's), which the alpha test
+    // throws away where others pass (from the alphas its vertices and texels can make: a filtered
+    // texel's alpha is between its four's, a primitive's between its vertices'), or which is 0 and
+    // blended by. The netting, foliage, fences and grates are both: alpha > 0 drawn, blended by As.
+    // Their edges inside the primitives are where the texture's alpha falls, which a pixel shaded once
+    // sees at one point; each sample shaded on its own sees the texture, and is tested and blended, at
+    // its own place (the AFAIL modes as exact as before, a sample at a time). Not the 2D, which covers
+    // whole pixels as without MSAA, nor the frame's passes, whose textures are targets.
+    bool cutout = false;
+    if (cut_texels && bits(tex0, 34, 1) && cut_lo < cut_hi && cut_clear * 4 >= cut_all && !sprite && !fst &&
+        cutout_aa_mode == GSN_CUTOUT_AA_SSAA && sample_shading) {
+        uint32_t tfx = bits(tex0, 35, 2);
+        uint32_t lo = tfx == 0 ? (as_min * cut_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + cut_lo) : cut_lo;
+        uint32_t hi = tfx == 0 ? std::min(255u, (as_max * cut_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + cut_hi) : cut_hi;
+        uint32_t ref = bits(test, 4, 8);
+        bool splits = false;
+        if (ate) {
+            switch (atst) {
+            case 2: // LESS
+            case 5: // GEQUAL
+                splits = lo < ref && hi >= ref;
+                break;
+            case 3: // LEQUAL
+            case 6: // GREATER
+                splits = lo <= ref && hi > ref;
+                break;
+            case 4: // EQUAL
+            case 7: // NOTEQUAL
+                splits = lo <= ref && ref <= hi && lo < hi;
+                break;
+            }
+        }
+        cutout = splits || (abe && bc == 0 && ba != bb && lo == 0 && hi > 0);
+    }
     // Blending by an As above 0x80 (2.0): Vulkan's blend factor (and the alpha out that stands for it)
     // stops at 1.0. The largest As the batch can make, from its vertices and what is known of the
     // texture's alpha (a CLUT's entries, TEXA for 24 and 16-bit texels):
@@ -2003,7 +2083,10 @@ void flush_batch() {
         if (depth && zwrite) {
             depth->ms_newer = true;
         }
-        flat_2d(gs->verts);
+        // (the 2D, rectangles of one colour and Z, is shaded once a pixel: --native-cutout-aa)
+        if (flat_2d(gs->verts)) {
+            cutout = false;
+        }
     } else {
         msaa_settle(*color);
         if (scale_x > 1 || scale_y > 1) {
@@ -2050,7 +2133,12 @@ void flush_batch() {
         begin_pass(color, depth, ms);
         CommandBuffer &c = cmd();
         c.set_opaque_state();
-        c.set_program(zclamp ? gs->program_zclamp : gs->program);
+        // (the cut-outs at every sample: draws with Z into the multisampled images)
+        bool per_sample = cutout && ms && zclamp;
+        c.set_program(per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program);
+        if (per_sample && r == 0) {
+            gsn_stats.cutout_draws++;
+        }
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
         VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
@@ -3046,6 +3134,10 @@ void make_program() {
     gs->program = gs->device->request_program(vs, fs);
     Shader *fs_zclamp = gs->device->request_shader(gsn_spv_gs_zclamp_frag, sizeof(gsn_spv_gs_zclamp_frag), &frag);
     gs->program_zclamp = gs->device->request_program(vs, fs_zclamp);
+    if (sample_shading) {
+        Shader *fs_sample = gs->device->request_shader(gsn_spv_gs_zclamp_sample_frag, sizeof(gsn_spv_gs_zclamp_sample_frag), &frag);
+        gs->program_zclamp_sample = gs->device->request_program(vs, fs_sample);
+    }
 
     // --native-msaa's copying passes: a texture in, a colour or a depth out
     ResourceLayout copy_vert = {};
@@ -3632,6 +3724,8 @@ extern "C" int gsn_open(void *shared_context) {
     // a frame context a vblank: with four, the CPU waits at a vblank for the GPU's work of four vblanks
     // before (two left it waiting on the GPU with --fast, a third of the native GS's vsync time)
     gs->device->init_frame_contexts(4);
+    // --native-cutout-aa shades at every sample (the SPIR-V's SampleRateShading)
+    sample_shading = gs->device->get_device_features().enabled_features.sampleRateShading != VK_FALSE;
     make_program();
 
     gs->dummy_raw = make_image(1, 1, VK_FORMAT_R8_UINT, 1, false);
@@ -3890,6 +3984,10 @@ extern "C" void gsn_set_scale(int x_scale, int y_scale) {
 
 extern "C" void gsn_set_lod(int mode) {
     lod_mode = mode;
+}
+
+extern "C" void gsn_set_cutout_aa(int mode) {
+    cutout_aa_mode = mode;
 }
 
 extern "C" int gsn_set_msaa(int samples) {
