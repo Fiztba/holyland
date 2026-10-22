@@ -174,6 +174,73 @@ int gsn_scanout_take(GsnScanout *out);
 int gsn_scanout_take_tag(GsnScanout *out, uint64_t tag);
 void gsn_scanout_release(void);
 
+/* --frame-rate's pictures between drawn again on the GPU (port/platform/frame_interp.c, "On the GPU";
+   gsn.cpp, "Pictures between on the GPU"). The DMA controller's thread walks the game's frame once and
+   hands over:
+   - gsn_interp_frame: the frame's packets as a picture between draws them (the buffer shown drawn into,
+     the uploads asked for again ...), its vertices where the game put them, and for each vertex kick in
+     them (XYZ2, XYZF2, XYZ3, XYZF3, whichever way written: PACKED, A+D, REGLIST) how a picture between
+     moves it (GsnInterpMove). The native GS takes the struct and frees it, its moves and its stream
+     (free()) when done with them.
+   - gsn_interp_picture, for each picture between: its time, the cameras and the model parts that move
+     with their model at that time. The first draws the frame from its packets, recording the draws
+     (their state, and each corner as the kicks it is made of); the others draw the recording again,
+     every vertex moved in the vertex shader (shaders/gs_replay.vert), or (when the GS is not as the
+     recording found it) the packets once more.
+   A GsnInterpMove, 16 words (the vertex shader's Move):
+     w[0]: kind (GSN_IM_3D, GSN_IM_FLAT, or 0: as it is) and its flags
+     3D: w[1] the run (model part), w[2] and w[3] the two kicks before with a place in the same path
+         (GSN_IM_NONE: none: an ADC the picture adds covers the next two), w[4..6] the place in the
+         frame's view (floats), w[7] its depth, w[8..10] its model's place at t 0 less its place in this
+         frame (in the world or, before the eye, the camera's space), w[11..13] the model's move from t 0
+         to t 1, w[14] Z - cz (float). (Moves from where the vertex is, so that the floats' precision is
+         the move's, not the place's: no move, no change.)
+     FLAT (the 2D): w[1] and w[2] RGBA of the frame before and of this one, w[3] and w[4] X | Y << 16
+         (12.4) likewise, w[5] and w[6] S and T (or U and V in texels) of this one, w[7] and w[8] what is
+         added to them at t 0 (floats) */
+#define GSN_IM_NONE 0xFFFFFFFFu
+#define GSN_IM_3D 1u
+#define GSN_IM_FLAT 2u
+/* 3D */
+#define GSN_IM_VIEW 0x4u     /* it has a place (vertex_view) */
+#define GSN_IM_OBJ 0x8u      /* it can move with its model: P0, D (when its run's bit is set) */
+#define GSN_IM_WORLD 0x10u   /* the world or the reflection: else with the camera */
+#define GSN_IM_EYE 0x20u     /* before the eye: P0 and D in the camera's space */
+#define GSN_IM_REFLECT 0x40u /* by the reflection's projection */
+#define GSN_IM_SCALE_ST 0x80u /* its own ST (Q 1/w): S and T scaled, Q made 1/w again */
+#define GSN_IM_XYZF 0x100u   /* 24-bit Z */
+/* FLAT */
+#define GSN_IM_XY 0x4u
+#define GSN_IM_RGBA 0x8u
+#define GSN_IM_ST 0x10u
+#define GSN_IM_UV 0x20u
+#define GSN_IM_PREV 0x40u   /* the frame shown blended in (Game_BlendPreviousFrame): alpha (A^t) */
+#define GSN_IM_PAIRED 0x80u /* (PREV) its alpha is the frame before's to this one's */
+typedef struct {
+    uint32_t w[16];
+} GsnInterpMove;
+typedef struct {
+    uint64_t serial;       /* the frame's: the pictures say which they are of */
+    float screen[2][5];    /* the world's projection and the reflection's: sx, sy, cx, cy, cz */
+    float move0[12], mid0[12]; /* GsnInterpPicture's move and mid at t 0 (the camera of the frame shown) */
+    uint32_t kicks;        /* the vertex kicks in the stream: moves has one for each */
+    uint32_t runs;         /* the runs (model parts) the moves name */
+    GsnInterpMove *moves;  /* (malloc'd) */
+    uint8_t *stream;       /* (malloc'd) GIF packets: a uint32_t path, a uint32_t size, then the bytes */
+    size_t stream_bytes;
+} GsnInterpFrame;
+typedef struct {
+    uint64_t serial;   /* the frame's */
+    float move[12];    /* the frame's view to the picture's: rows of the rotation less the identity, each with its
+                          translation */
+    float mid[12];     /* the world to the picture's view: rows of the rotation (and the translation) */
+    float t;           /* 0 the frame shown, 1 the frame drawn */
+    uint32_t runs;     /* bits */
+    const uint32_t *run_bits; /* (runs + 31) / 32 words: the runs drawn with their model's move */
+} GsnInterpPicture;
+void gsn_interp_frame(GsnInterpFrame *frame);
+void gsn_interp_picture(const GsnInterpPicture *picture);
+
 /* What the last frames cost and did (--stats, the overlay) */
 typedef struct {
     uint64_t draws, primitives, passes, texture_decodes, texture_bytes, target_copies, writebacks,
@@ -186,6 +253,10 @@ typedef struct {
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
     uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
+    /* --frame-rate's pictures between on the GPU (gsn_interp_picture): drawn from the packets (the first
+       of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */
+    uint64_t interp_records, interp_replays, interp_misses, ns_interp_record, ns_interp_replay;
+    uint64_t interp_rerecord[4]; /* why drawn from the packets again: the GS changed, the recording could not be */
 } GsnStats;
 extern GsnStats gsn_stats;
 

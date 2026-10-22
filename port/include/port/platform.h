@@ -358,6 +358,12 @@ int port_gs_enabled(void);
 /* 1 when the native GS draws alone: --frame-rate's pictures between ask it for the frame's uploads
    again instead of sending them (port/platform/frame_interp.c) */
 int port_gs_replay_uploads(void);
+/* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"): 1 when
+   the native GS draws them (alone, and not KF4_INTERP_CPU); the frame (a GsnInterpFrame, handed over:
+   the native GS frees it) and each picture (a GsnInterpPicture) of port/gs/native/gsn.h */
+int port_gs_interp_gpu(void);
+void port_gs_interp_frame(void *frame);
+void port_gs_interp_picture(const void *picture);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
 /* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */

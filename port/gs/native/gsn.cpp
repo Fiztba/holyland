@@ -270,6 +270,9 @@ struct Gs {
     Program *program_narrow = nullptr;      // (--native-colour high's scanout: shaders/narrow.frag)
     Program *program_present_scale = nullptr;   // (the presenter's scaling: shaders/present_scale.frag)
     Program *program_present_sharpen = nullptr; // (and its sharpening: shaders/present_sharpen.frag)
+    // --frame-rate's pictures between on the GPU: the kicks moved to the picture's time (shaders/gs_replay.comp),
+    // and the vertices drawn made of them (shaders/gs_replay_corners.comp)
+    Program *program_replay_kicks = nullptr, *program_replay_corners = nullptr;
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
@@ -302,6 +305,76 @@ struct Gs {
 };
 
 Gs *gs;
+
+// --frame-rate's pictures between on the GPU ("Pictures between on the GPU" below): the frame they are
+// drawn from, and what drawing its packets (the stream) records.
+// A vertex kick as the GS queued it (shaders/gs_replay.vert's Kick): its registers, and for those a
+// picture between can change (frame_interp.c changes the qwords written since the kick before), the
+// kick in whose stretch they were last written (GSN_IM_NONE: before the stream)
+struct InterpKick {
+    uint32_t xy;     // X | Y << 16 (12.4, before XYOFFSET)
+    uint32_t z;
+    uint32_t rgba;
+    float s, t, q;
+    uint32_t uv;     // U | V << 16
+    uint32_t fog;
+    uint32_t offset; // XYOFFSET of its context, X | Y << 16
+    uint32_t st_owner, rgba_owner, q_owner, uv_owner;
+    uint32_t pad[3];
+};
+static_assert(sizeof(InterpKick) == 64, "InterpKick is gs_replay.vert's Kick");
+
+// A corner of a triangle the pictures between draw (gs_replay.vert's input): the kicks it is made of and
+// how (IC_*)
+enum : uint32_t {
+    IC_SPRITE = 0x8,      // a sprite's: w[0] and w[1] its two kicks; bits 0-1 its corner (0-3), bit 2 its triangle
+    IC_FLAT_SHADE = 0x10, // a triangle's, flat: its colour is the third kick's (bits 0-1: which of the three it is)
+    IC_FLAT_2D = 0x20,    // flat_2d's moves (--native-msaa, --native-scale above 1)
+    IC_SNAP = 0x40,       // a sprite whose UV snap_sprite_uv can put on the texels' middles
+    IC_FST = 0x80,        // UV, not STQ
+};
+
+struct InterpTargetState {
+    Target *t;
+    uint32_t bp, bw, psm;
+    bool depth, has_ms;
+    uint32_t width, height, sx, sy;
+    bool dirty, stale, ms_newer, image_newer;
+    std::vector<uint8_t> dirty_pages, stale_pages;
+};
+struct InterpState {
+    std::vector<InterpTargetState> targets;
+    bool in_pass, pass_ms;
+    Target *pass_color, *pass_depth;
+    uint64_t vram_writes, clut_version;
+};
+
+struct Interp {
+    GsnInterpFrame *frame = nullptr;
+    BufferHandle moves;            // frame->moves on the GPU
+    BufferHandle kicks, corners;   // what drawing the stream recorded (mapped while it is drawn)
+    BufferHandle resolved;         // the kicks at the picture's time (gs_replay.comp's)
+    BufferHandle vertices;         // the vertices drawn, made of them (gs_replay_corners.comp's)
+    BufferHandle picture;          // the picture's: its cameras and runs
+    InterpKick *kick_map = nullptr;          // (mapped: written only)
+    std::vector<InterpKick> kick_list;       // the same, to read
+    uint32_t (*corner_map)[4] = nullptr;
+    // while the stream is drawn
+    bool active = false;
+    bool broken = false;           // more kicks than the frame said, or more corners than there is room for
+    uint32_t kick = 0, corner = 0;
+    uint32_t st_src = GSN_IM_NONE, q_src = GSN_IM_NONE, rgba_src = GSN_IM_NONE, rgba_q_src = GSN_IM_NONE,
+             uv_src = GSN_IM_NONE;
+    uint32_t qkick[3] = {};                      // the queued vertices' kicks (gs->queue's)
+    std::vector<std::array<uint32_t, 4>> vsrc;   // each of gs->verts as a corner
+    // the recording, and the GS as it was before and after it
+    bool recorded = false;
+    InterpState start, end;
+    std::vector<uint64_t> end_regs;
+    uint64_t risky_runs = 0; // (stats: moving batches drawn in runs that do not overlap, cut where they are at t 1)
+};
+Interp interp;
+
 // --native-scale: the render targets' size, in pixels a GS pixel across (sx) and down (sy); 1 and 1
 // are the PS2's. sx is larger than sy for --native-widescreen. Changed at a vblank (gsn_set_scale),
 // when every target goes back to VRAM and comes again at the new size.
@@ -387,29 +460,663 @@ int log_level; // KF4_GSN_LOG: 1 says when targets are made and dropped, 2 every
 void settle_upload(); // (the upload under way, written so far: below)
 
 // ---- Vulkan helpers ----------------------------------------------------------------------------
-CommandBuffer &cmd() {
-    if (!gs->cmd) {
-        gs->cmd = gs->device->request_command_buffer();
+// The command buffer: Granite's, through Cmd, which hands each call on and, while a picture between is
+// recorded (--frame-rate, "Pictures between on the GPU" below), also keeps it, so that the frame's next
+// pictures between can make the same calls again (replay_ops) without the GS's work that led to them.
+// Only the calls the native GS makes are here.
+enum OpKind : uint32_t {
+    OP_BARRIER, OP_BEGIN_PASS, OP_END_PASS, OP_OPAQUE, OP_PROGRAM, OP_TOPOLOGY, OP_CULL, OP_DEPTH_TEST,
+    OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
+    OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
+    OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS,
+};
+
+// The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
+// images and buffers they name, held so they live as long as the recording
+struct Recording {
+    bool on = false;
+    bool ok = true; // nothing that cannot be made again (a read-back) was recorded
+    struct Op {
+        OpKind kind;
+        uint32_t at; // its arguments in arena
+    };
+    std::vector<Op> ops;
+    std::vector<uint8_t> arena;
+    std::vector<ImageHandle> images;
+    std::vector<BufferHandle> buffers;
+    // bytes the caller writes after the call (constant and vertex data, an image's update): it writes them
+    // into the recording, and at the next call they are copied into Granite's memory (settle). (Granite's
+    // is write-combined: reading it back is slow.)
+    struct Later {
+        uint32_t at;
+        void *to;
+        uint32_t size;
+    };
+    std::vector<Later> later;
+    uint64_t draws = 0;
+    // The images of targets the calls name, with what the target is: the calls made again name that
+    // target's images as they are then (a target drawn over after an upload is made anew each picture)
+    struct TargetImage {
+        const Image *image;
+        uint32_t bp, bw, psm;
+        bool ms;
+    };
+    std::vector<TargetImage> target_images;
+
+    void clear() {
+        ops.clear();
+        arena.clear();
+        images.clear();
+        buffers.clear();
+        later.clear();
+        target_images.clear();
+        ok = true;
+        draws = 0;
     }
-    return *gs->cmd;
+    void settle() {
+        for (const Later &l : later) {
+            memcpy(l.to, arena.data() + l.at, l.size);
+        }
+        later.clear();
+    }
+    // a call, its arguments, and room for `extra` bytes after them (returned: their place in arena)
+    template <class T> uint32_t add(OpKind kind, const T &args, size_t extra = 0) {
+        settle();
+        uint32_t at = uint32_t((arena.size() + 7) & ~size_t(7));
+        arena.resize(at + sizeof(T) + extra);
+        memcpy(arena.data() + at, &args, sizeof(T));
+        ops.push_back({kind, at});
+        return at + uint32_t(sizeof(T));
+    }
+    void hold(const Image &image) {
+        Image &i = const_cast<Image &>(image);
+        i.add_reference();
+        images.push_back(ImageHandle(&i));
+        for (const TargetImage &t : target_images) {
+            if (t.image == &image) {
+                return;
+            }
+        }
+        for (auto &t : gs->targets) {
+            if (t->image.get() == &image || t->ms.get() == &image) {
+                target_images.push_back({&image, t->bp, t->bw, t->psm, t->ms.get() == &image});
+                return;
+            }
+        }
+    }
+    void hold(const Buffer &buffer) {
+        Buffer &b = const_cast<Buffer &>(buffer);
+        b.add_reference();
+        buffers.push_back(BufferHandle(&b));
+    }
+    template <class T> const T &args(const Op &op) const {
+        return *reinterpret_cast<const T *>(arena.data() + op.at);
+    }
+};
+Recording recording_ops;
+
+struct ArgBarrier {
+    VkPipelineStageFlags2 src_stage;
+    VkAccessFlags2 src_access;
+    VkPipelineStageFlags2 dst_stage;
+    VkAccessFlags2 dst_access;
+};
+struct ArgPass {
+    RenderPassInfo info;
+    RenderPassInfo::Subpass subpasses[2];
+};
+struct ArgTexture {
+    uint32_t set, binding;
+    const ImageView *view;
+    StockSampler sampler;
+};
+struct ArgData { // constant data (set, binding), vertex data (binding, stride, rate), push constants (offset)
+    uint32_t a, b, c;
+    uint32_t size;
+};
+struct ArgBinding {
+    uint32_t binding;
+    const Buffer *buffer;
+    VkDeviceSize offset, stride;
+    VkVertexInputRate rate;
+};
+struct ArgAttrib {
+    uint32_t attrib, binding;
+    VkFormat format;
+    VkDeviceSize offset;
+};
+struct ArgDraw {
+    uint32_t count, instances, first, first_instance;
+};
+struct ArgCopy {
+    const Image *dst, *src;
+    VkOffset3D dst_offset, src_offset;
+    VkExtent3D extent;
+    VkImageSubresourceLayers dst_sub, src_sub;
+};
+struct ArgUpdate {
+    const Image *image;
+    VkOffset3D offset;
+    VkExtent3D extent;
+    uint32_t row_length, image_height;
+    VkImageSubresourceLayers sub;
+    uint32_t size;
+    const Buffer *from; // (finish: the bytes on the GPU, at from_offset, for a target's update)
+    VkDeviceSize from_offset;
+};
+struct ArgResolve {
+    const Image *dst, *src;
+    VkImageResolve region;
+};
+struct ArgClear {
+    const Image *image;
+    VkClearValue value;
+};
+struct ArgValues {
+    uint32_t v[4];
+    float f[4];
+};
+
+void bind_replay_buffers(CommandBuffer &c); // (the pictures between's own: below)
+void interp_kicks_pass(CommandBuffer &c);    // (and their kicks moved to the picture's time)
+
+// Bytes a texel of these formats takes (update_image's staging)
+uint32_t texel_bytes(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_R8_UINT:
+        return 1;
+    case VK_FORMAT_R16_UINT:
+        return 2;
+    case VK_FORMAT_R16G16B16A16_UNORM:
+        return 8;
+    default:
+        return 4; // RGBA8, R32_UINT, D32
+    }
+}
+
+class Cmd {
+public:
+    CommandBuffer &raw() {
+        if (!gs->cmd) {
+            gs->cmd = gs->device->request_command_buffer();
+        }
+        return *gs->cmd;
+    }
+    VkCommandBuffer get_command_buffer() {
+        return raw().get_command_buffer();
+    }
+    void barrier(VkPipelineStageFlags2 ss, VkAccessFlags2 sa, VkPipelineStageFlags2 ds, VkAccessFlags2 da) {
+        if (on()) {
+            rec().add(OP_BARRIER, ArgBarrier{ss, sa, ds, da});
+        }
+        raw().barrier(ss, sa, ds, da);
+    }
+    void begin_render_pass(const RenderPassInfo &info) {
+        if (on()) {
+            ArgPass a;
+            a.info = info;
+            for (unsigned i = 0; i < info.num_subpasses && i < 2; i++) {
+                a.subpasses[i] = info.subpasses[i];
+            }
+            if (info.num_subpasses > 2) {
+                rec().ok = false;
+            }
+            for (unsigned i = 0; i < info.num_color_attachments; i++) {
+                rec().hold(info.color_attachments[i]->get_image());
+            }
+            if (info.depth_stencil) {
+                rec().hold(info.depth_stencil->get_image());
+            }
+            rec().add(OP_BEGIN_PASS, a);
+        }
+        raw().begin_render_pass(info);
+    }
+    void end_render_pass() {
+        if (on()) {
+            rec().add(OP_END_PASS, ArgValues{});
+        }
+        raw().end_render_pass();
+    }
+    void set_opaque_state() {
+        if (on()) {
+            rec().add(OP_OPAQUE, ArgValues{});
+        }
+        raw().set_opaque_state();
+    }
+    void set_program(Program *program) {
+        if (on()) {
+            rec().add(OP_PROGRAM, program);
+        }
+        raw().set_program(program);
+    }
+    void set_primitive_topology(VkPrimitiveTopology topology) {
+        if (on()) {
+            rec().add(OP_TOPOLOGY, ArgValues{{uint32_t(topology)}, {}});
+        }
+        raw().set_primitive_topology(topology);
+    }
+    void set_cull_mode(VkCullModeFlags mode) {
+        if (on()) {
+            rec().add(OP_CULL, ArgValues{{uint32_t(mode)}, {}});
+        }
+        raw().set_cull_mode(mode);
+    }
+    void set_depth_test(bool test, bool write) {
+        if (on()) {
+            rec().add(OP_DEPTH_TEST, ArgValues{{test, write}, {}});
+        }
+        raw().set_depth_test(test, write);
+    }
+    void set_depth_compare(VkCompareOp op) {
+        if (on()) {
+            rec().add(OP_DEPTH_COMPARE, ArgValues{{uint32_t(op)}, {}});
+        }
+        raw().set_depth_compare(op);
+    }
+    void set_viewport(const VkViewport &vp) {
+        if (on()) {
+            rec().add(OP_VIEWPORT, vp);
+        }
+        raw().set_viewport(vp);
+    }
+    void set_scissor(const VkRect2D &rect) {
+        if (on()) {
+            rec().add(OP_SCISSOR, rect);
+        }
+        raw().set_scissor(rect);
+    }
+    void set_texture(unsigned set, unsigned binding, const ImageView &view, StockSampler sampler) {
+        if (on()) {
+            rec().hold(view.get_image());
+            rec().add(OP_TEXTURE, ArgTexture{set, binding, &view, sampler});
+        }
+        raw().set_texture(set, binding, view, sampler);
+    }
+    template <class T> T *allocate_typed_constant_data(unsigned set, unsigned binding, unsigned count) {
+        return static_cast<T *>(allocate_constant_data(set, binding, count * sizeof(T)));
+    }
+    void *allocate_constant_data(unsigned set, unsigned binding, VkDeviceSize size) {
+        void *p = raw().allocate_constant_data(set, binding, size);
+        if (on()) {
+            uint32_t at = rec().add(OP_CONSTANT, ArgData{set, binding, 0, uint32_t(size)}, size_t(size));
+            rec().later.push_back({at, p, uint32_t(size)});
+            return rec().arena.data() + at;
+        }
+        return p;
+    }
+    void set_blend_enable(bool enable) {
+        if (on()) {
+            rec().add(OP_BLEND_ENABLE, ArgValues{{enable}, {}});
+        }
+        raw().set_blend_enable(enable);
+    }
+    void set_blend_constants(const float constants[4]) {
+        if (on()) {
+            rec().add(OP_BLEND_CONSTANTS, ArgValues{{}, {constants[0], constants[1], constants[2], constants[3]}});
+        }
+        raw().set_blend_constants(constants);
+    }
+    void set_blend_factors(VkBlendFactor sc, VkBlendFactor sa, VkBlendFactor dc, VkBlendFactor da) {
+        if (on()) {
+            rec().add(OP_BLEND_FACTORS, ArgValues{{uint32_t(sc), uint32_t(sa), uint32_t(dc), uint32_t(da)}, {}});
+        }
+        raw().set_blend_factors(sc, sa, dc, da);
+    }
+    void set_blend_op(VkBlendOp colour, VkBlendOp alpha) {
+        if (on()) {
+            rec().add(OP_BLEND_OP, ArgValues{{uint32_t(colour), uint32_t(alpha)}, {}});
+        }
+        raw().set_blend_op(colour, alpha);
+    }
+    void *allocate_vertex_data(unsigned binding, VkDeviceSize size, VkDeviceSize stride) {
+        void *p = raw().allocate_vertex_data(binding, size, stride);
+        if (on()) {
+            uint32_t at = rec().add(OP_VERTEX_DATA, ArgData{binding, uint32_t(stride), 0, uint32_t(size)}, size_t(size));
+            rec().later.push_back({at, p, uint32_t(size)});
+            return rec().arena.data() + at;
+        }
+        return p;
+    }
+    void set_vertex_binding(uint32_t binding, const Buffer &buffer, VkDeviceSize offset, VkDeviceSize stride) {
+        if (on()) {
+            rec().hold(buffer);
+            rec().add(OP_VERTEX_BINDING, ArgBinding{binding, &buffer, offset, stride, VK_VERTEX_INPUT_RATE_VERTEX});
+        }
+        raw().set_vertex_binding(binding, buffer, offset, stride);
+    }
+    void set_vertex_attrib(uint32_t attrib, uint32_t binding, VkFormat format, VkDeviceSize offset) {
+        if (on()) {
+            rec().add(OP_VERTEX_ATTRIB, ArgAttrib{attrib, binding, format, offset});
+        }
+        raw().set_vertex_attrib(attrib, binding, format, offset);
+    }
+    void set_color_write_mask(uint32_t mask) {
+        if (on()) {
+            rec().add(OP_WRITE_MASK, ArgValues{{mask}, {}});
+        }
+        raw().set_color_write_mask(mask);
+    }
+    void push_constants(const void *data, VkDeviceSize offset, VkDeviceSize range) {
+        if (on()) {
+            uint32_t at = rec().add(OP_PUSH, ArgData{uint32_t(offset), 0, 0, uint32_t(range)}, size_t(range));
+            memcpy(rec().arena.data() + at, data, size_t(range));
+        }
+        raw().push_constants(data, offset, range);
+    }
+    void draw(uint32_t count) {
+        if (on()) {
+            rec().add(OP_DRAW, ArgDraw{count, 1, 0, 0});
+            rec().draws++;
+        }
+        raw().draw(count);
+    }
+    void copy_image(const Image &dst, const Image &src, const VkOffset3D &dst_offset, const VkOffset3D &src_offset,
+                    const VkExtent3D &extent, const VkImageSubresourceLayers &dst_sub, const VkImageSubresourceLayers &src_sub) {
+        if (on()) {
+            rec().hold(dst);
+            rec().hold(src);
+            rec().add(OP_COPY_IMAGE, ArgCopy{&dst, &src, dst_offset, src_offset, extent, dst_sub, src_sub});
+        }
+        raw().copy_image(dst, src, dst_offset, src_offset, extent, dst_sub, src_sub);
+    }
+    void *update_image(const Image &image, const VkOffset3D &offset, const VkExtent3D &extent, uint32_t row_length,
+                       uint32_t image_height, const VkImageSubresourceLayers &sub) {
+        void *p = raw().update_image(image, offset, extent, row_length, image_height, sub);
+        if (on()) {
+            uint32_t rl = row_length ? row_length : image.get_width(sub.mipLevel);
+            uint32_t ih = image_height ? image_height : image.get_height(sub.mipLevel);
+            uint32_t size = rl * ih * sub.layerCount * texel_bytes(image.get_format());
+            rec().hold(image);
+            uint32_t at = rec().add(OP_UPDATE_IMAGE,
+                                    ArgUpdate{&image, offset, extent, row_length, image_height, sub, size, nullptr, 0}, size);
+            rec().later.push_back({at, p, size});
+            return rec().arena.data() + at;
+        }
+        return p;
+    }
+    void resolve_image(const Image &dst, const Image &src, const VkImageResolve &region) {
+        if (on()) {
+            rec().hold(dst);
+            rec().hold(src);
+            rec().add(OP_RESOLVE, ArgResolve{&dst, &src, region});
+        }
+        resolve_raw(raw(), dst, src, region);
+    }
+    static void resolve_raw(CommandBuffer &c, const Image &dst, const Image &src, const VkImageResolve &region) {
+        gs->device->get_device_table().vkCmdResolveImage(c.get_command_buffer(), src.get_image(),
+                                                         src.get_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL), dst.get_image(),
+                                                         dst.get_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL), 1, &region);
+    }
+    void clear_image(const Image &image, const VkClearValue &value) {
+        if (on()) {
+            rec().hold(image);
+            rec().add(OP_CLEAR_IMAGE, ArgClear{&image, value});
+        }
+        raw().clear_image(image, value);
+    }
+    void copy_image_to_buffer(const Buffer &dst, const Image &src, VkDeviceSize buffer_offset, const VkOffset3D &offset,
+                              const VkExtent3D &extent, unsigned row_length, unsigned slice_height,
+                              const VkImageSubresourceLayers &sub) {
+        if (on()) {
+            rec().ok = false; // (a read-back: what it reads is the picture's, and the CPU's work after it too)
+        }
+        raw().copy_image_to_buffer(dst, src, buffer_offset, offset, extent, row_length, slice_height, sub);
+    }
+    // (and each picture's kicks moved to its time: gs_replay.comp, before its draws)
+    void interp_kicks() {
+        if (on()) {
+            rec().add(OP_INTERP_KICKS, ArgValues{});
+        }
+        interp_kicks_pass(raw());
+    }
+
+private:
+    static bool on() {
+        return recording_ops.on;
+    }
+    static Recording &rec() {
+        return recording_ops;
+    }
+};
+Cmd cmd_layer;
+
+Cmd &cmd() {
+    return cmd_layer;
+}
+
+// A recording made ready to be made again: barriers one after another made one (each is of all
+// commands, before and after: one with all their stages and accesses orders as much), and the bytes of
+// the updates of targets' images (their pixels from VRAM, the same each time) put in a buffer on the GPU
+// once, to be copied from
+void finish_recording(Recording &r) {
+    std::vector<Recording::Op> ops;
+    ops.reserve(r.ops.size());
+    for (const Recording::Op &op : r.ops) {
+        if (op.kind == OP_BARRIER && !ops.empty() && ops.back().kind == OP_BARRIER) {
+            ArgBarrier &last = *reinterpret_cast<ArgBarrier *>(r.arena.data() + ops.back().at);
+            const ArgBarrier &b = r.args<ArgBarrier>(op);
+            last.src_stage |= b.src_stage;
+            last.src_access |= b.src_access;
+            last.dst_stage |= b.dst_stage;
+            last.dst_access |= b.dst_access;
+            continue;
+        }
+        ops.push_back(op);
+    }
+    r.ops.swap(ops);
+    VkDeviceSize bytes = 0;
+    for (const Recording::Op &op : r.ops) {
+        if (op.kind == OP_UPDATE_IMAGE) {
+            const ArgUpdate &a = r.args<ArgUpdate>(op);
+            for (const Recording::TargetImage &t : r.target_images) {
+                if (t.image == a.image) {
+                    bytes = (bytes + 15) & ~VkDeviceSize(15);
+                    bytes += a.size;
+                }
+            }
+        }
+    }
+    if (!bytes) {
+        return;
+    }
+    BufferCreateInfo info = {};
+    info.domain = BufferDomain::Device;
+    info.size = bytes;
+    info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    std::vector<uint8_t> data(bytes);
+    VkDeviceSize at = 0;
+    std::vector<std::pair<ArgUpdate *, VkDeviceSize>> updates;
+    for (const Recording::Op &op : r.ops) {
+        if (op.kind == OP_UPDATE_IMAGE) {
+            ArgUpdate &a = *reinterpret_cast<ArgUpdate *>(r.arena.data() + op.at);
+            for (const Recording::TargetImage &t : r.target_images) {
+                if (t.image == a.image) {
+                    at = (at + 15) & ~VkDeviceSize(15);
+                    memcpy(data.data() + at, r.arena.data() + op.at + sizeof(ArgUpdate), a.size);
+                    updates.push_back({&a, at});
+                    at += a.size;
+                }
+            }
+        }
+    }
+    BufferHandle buffer = gs->device->create_buffer(info, data.data());
+    for (auto &u : updates) {
+        u.first->from = buffer.get();
+        u.first->from_offset = u.second;
+    }
+    r.buffers.push_back(buffer);
+}
+
+// The recorded calls made again: the targets' images they name as the targets have them now
+std::vector<std::pair<const Image *, const Image *>> replay_images;
+
+const Image &now_image(const Image *image) {
+    for (const auto &p : replay_images) {
+        if (p.first == image) {
+            return *p.second;
+        }
+    }
+    return *image;
+}
+
+const ImageView &now_view(const ImageView *view) {
+    const Image &image = view->get_image();
+    const Image &now = now_image(&image);
+    return &now == &image ? *view : now.get_view();
+}
+
+// The recorded calls made again into the command buffer
+void replay_ops(const Recording &r) {
+    CommandBuffer &c = cmd().raw();
+    for (const Recording::Op &op : r.ops) {
+        switch (op.kind) {
+        case OP_BARRIER: {
+            const ArgBarrier &a = r.args<ArgBarrier>(op);
+            c.barrier(a.src_stage, a.src_access, a.dst_stage, a.dst_access);
+            break;
+        }
+        case OP_BEGIN_PASS: {
+            ArgPass a = r.args<ArgPass>(op);
+            if (a.info.num_subpasses) {
+                a.info.subpasses = a.subpasses;
+            }
+            for (unsigned i = 0; i < a.info.num_color_attachments; i++) {
+                a.info.color_attachments[i] = &now_view(a.info.color_attachments[i]);
+            }
+            if (a.info.depth_stencil) {
+                a.info.depth_stencil = &now_view(a.info.depth_stencil);
+            }
+            c.begin_render_pass(a.info);
+            break;
+        }
+        case OP_END_PASS:
+            c.end_render_pass();
+            break;
+        case OP_OPAQUE:
+            c.set_opaque_state();
+            break;
+        case OP_PROGRAM:
+            c.set_program(r.args<Program *>(op));
+            break;
+        case OP_TOPOLOGY:
+            c.set_primitive_topology(VkPrimitiveTopology(r.args<ArgValues>(op).v[0]));
+            break;
+        case OP_CULL:
+            c.set_cull_mode(VkCullModeFlags(r.args<ArgValues>(op).v[0]));
+            break;
+        case OP_DEPTH_TEST:
+            c.set_depth_test(r.args<ArgValues>(op).v[0] != 0, r.args<ArgValues>(op).v[1] != 0);
+            break;
+        case OP_DEPTH_COMPARE:
+            c.set_depth_compare(VkCompareOp(r.args<ArgValues>(op).v[0]));
+            break;
+        case OP_VIEWPORT:
+            c.set_viewport(r.args<VkViewport>(op));
+            break;
+        case OP_SCISSOR:
+            c.set_scissor(r.args<VkRect2D>(op));
+            break;
+        case OP_TEXTURE: {
+            const ArgTexture &a = r.args<ArgTexture>(op);
+            c.set_texture(a.set, a.binding, now_view(a.view), a.sampler);
+            break;
+        }
+        case OP_CONSTANT: {
+            const ArgData &a = r.args<ArgData>(op);
+            memcpy(c.allocate_constant_data(a.a, a.b, a.size), r.arena.data() + op.at + sizeof(ArgData), a.size);
+            break;
+        }
+        case OP_BLEND_ENABLE:
+            c.set_blend_enable(r.args<ArgValues>(op).v[0] != 0);
+            break;
+        case OP_BLEND_CONSTANTS:
+            c.set_blend_constants(r.args<ArgValues>(op).f);
+            break;
+        case OP_BLEND_FACTORS: {
+            const ArgValues &a = r.args<ArgValues>(op);
+            c.set_blend_factors(VkBlendFactor(a.v[0]), VkBlendFactor(a.v[1]), VkBlendFactor(a.v[2]), VkBlendFactor(a.v[3]));
+            break;
+        }
+        case OP_BLEND_OP:
+            c.set_blend_op(VkBlendOp(r.args<ArgValues>(op).v[0]), VkBlendOp(r.args<ArgValues>(op).v[1]));
+            break;
+        case OP_VERTEX_DATA: {
+            const ArgData &a = r.args<ArgData>(op);
+            memcpy(c.allocate_vertex_data(a.a, a.size, a.b), r.arena.data() + op.at + sizeof(ArgData), a.size);
+            break;
+        }
+        case OP_VERTEX_BINDING: {
+            const ArgBinding &a = r.args<ArgBinding>(op);
+            c.set_vertex_binding(a.binding, *a.buffer, a.offset, a.stride, a.rate);
+            break;
+        }
+        case OP_VERTEX_ATTRIB: {
+            const ArgAttrib &a = r.args<ArgAttrib>(op);
+            c.set_vertex_attrib(a.attrib, a.binding, a.format, a.offset);
+            break;
+        }
+        case OP_WRITE_MASK:
+            c.set_color_write_mask(r.args<ArgValues>(op).v[0]);
+            break;
+        case OP_PUSH: {
+            const ArgData &a = r.args<ArgData>(op);
+            c.push_constants(r.arena.data() + op.at + sizeof(ArgData), a.a, a.size);
+            break;
+        }
+        case OP_DRAW: {
+            const ArgDraw &a = r.args<ArgDraw>(op);
+            c.draw(a.count, a.instances, a.first, a.first_instance);
+            break;
+        }
+        case OP_COPY_IMAGE: {
+            const ArgCopy &a = r.args<ArgCopy>(op);
+            c.copy_image(now_image(a.dst), now_image(a.src), a.dst_offset, a.src_offset, a.extent, a.dst_sub, a.src_sub);
+            break;
+        }
+        case OP_UPDATE_IMAGE: {
+            const ArgUpdate &a = r.args<ArgUpdate>(op);
+            if (a.from) {
+                // (a target's pixels from VRAM: the bytes recorded, already on the GPU)
+                c.copy_buffer_to_image(now_image(a.image), *a.from, a.from_offset, a.offset, a.extent, a.row_length,
+                                       a.image_height, a.sub);
+            }
+            // (else a texture decoded: its image is written once, and keeps it)
+            break;
+        }
+        case OP_RESOLVE: {
+            const ArgResolve &a = r.args<ArgResolve>(op);
+            Cmd::resolve_raw(c, now_image(a.dst), now_image(a.src), a.region);
+            break;
+        }
+        case OP_CLEAR_IMAGE: {
+            const ArgClear &a = r.args<ArgClear>(op);
+            c.clear_image(now_image(a.image), a.value);
+            break;
+        }
+        case OP_INTERP_KICKS:
+            interp_kicks_pass(c);
+            break;
+        }
+    }
 }
 
 void end_pass() {
     if (gs->in_pass) {
-        gs->cmd->end_render_pass();
+        cmd().end_render_pass();
         gs->in_pass = false;
         gs->pass_color = nullptr;
         gs->pass_depth = nullptr;
         gs->pass_ms = false;
-        gs->cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                         VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        cmd().barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     }
 }
 
 // Everything recorded so far, sent; with wait, finished too
 void submit(bool wait) {
     end_pass();
+    recording_ops.settle();
     if (!gs->cmd) {
         return;
     }
@@ -544,7 +1251,7 @@ void msaa_copy_pass(const Image &dst, const Image &src, Program *program, bool d
     if (dst.get_create_info().samples != VK_SAMPLE_COUNT_1_BIT) {
         msaa_subpass(rp, subpass);
     }
-    CommandBuffer &c = cmd();
+    Cmd &c = cmd();
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
               VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     c.begin_render_pass(rp);
@@ -572,9 +1279,7 @@ void msaa_resolve(const Image &dst, const Image &src, VkOffset3D at, VkExtent3D 
     region.srcOffset = at;
     region.dstOffset = at;
     region.extent = size;
-    gs->device->get_device_table().vkCmdResolveImage(cmd().get_command_buffer(), src.get_image(),
-                                                     src.get_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL), dst.get_image(),
-                                                     dst.get_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL), 1, &region);
+    cmd().resolve_image(dst, src, region);
     transfer_barrier();
     gsn_stats.ms_resolves++;
 }
@@ -1678,12 +2383,215 @@ uint32_t effective_prim() {
     return prim;
 }
 
+// ---- Pictures between on the GPU: a batch of the frame's packets drawn for them ----------------------
+// (gsn_interp_picture, below.) The batch's vertices are where the game drew them (t 1); each picture
+// between draws them where they are at its time, in gs_replay.vert. What flush_batch decides from the
+// vertices is decided here for every time a picture can have: a batch with vertices that move is
+// neither cut to the scissor nor copied in part for its blending, its rows and the alphas it can blend
+// by are those of either end, and its Z is not taken to stay at the format's largest.
+bool interp_moving(uint32_t k, bool only_3d) {
+    if (k >= interp.frame->kicks) {
+        return false;
+    }
+    uint32_t w = interp.frame->moves[k].w[0];
+    if ((w & 3) == GSN_IM_3D) {
+        return (w & GSN_IM_VIEW) && (w & (GSN_IM_WORLD | GSN_IM_OBJ));
+    }
+    return !only_3d && (w & 3) == GSN_IM_FLAT && (w & GSN_IM_XY);
+}
+
+// The kick whose colour a corner has (the third's of a flat triangle; the second's of a sprite)
+uint32_t interp_colour_kick(const std::array<uint32_t, 4> &c) {
+    if (c[3] & IC_SPRITE) {
+        return c[1];
+    }
+    return (c[3] & IC_FLAT_SHADE) ? c[2] : c[c[3] & 3];
+}
+
+// The kick whose T a corner has (its own: the sprites' corners 0 and 1 a's, 2 and 3 b's)
+uint32_t interp_t_kick(const std::array<uint32_t, 4> &c) {
+    if (c[3] & IC_SPRITE) {
+        return (c[3] & 3) < 2 ? c[0] : c[1];
+    }
+    return c[c[3] & 3];
+}
+
+struct InterpBatch {
+    bool moves = false, moves_3d = false;
+};
+
+InterpBatch interp_batch() {
+    InterpBatch b;
+    for (const auto &c : interp.vsrc) {
+        int n = (c[3] & IC_SPRITE) ? 2 : 3;
+        for (int i = 0; i < n; i++) {
+            b.moves_3d = b.moves_3d || interp_moving(c[i], true);
+            b.moves = b.moves || interp_moving(c[i], false);
+        }
+        if (b.moves_3d) {
+            break;
+        }
+    }
+    return b;
+}
+
+// The alphas the batch's colours can have at the pictures' times (the 2D's paired fades, the previous
+// frame blended in by A^t)
+void interp_alpha_range(uint32_t &lo, uint32_t &hi) {
+    for (const auto &c : interp.vsrc) {
+        uint32_t k = interp_colour_kick(c);
+        if (k >= interp.frame->kicks) {
+            continue;
+        }
+        k = interp.kick_list[k].rgba_owner;
+        if (k >= interp.frame->kicks) {
+            continue;
+        }
+        const GsnInterpMove &m = interp.frame->moves[k];
+        if ((m.w[0] & 3) != GSN_IM_FLAT) {
+            continue;
+        }
+        if (m.w[0] & GSN_IM_PREV) {
+            uint32_t a = std::min(m.w[1] >> 24, m.w[2] >> 24);
+            lo = std::min(lo, std::min(a, 128u));
+            hi = std::max(hi, 128u);
+        } else if (m.w[0] & GSN_IM_RGBA) {
+            lo = std::min(lo, std::min(m.w[1] >> 24, m.w[2] >> 24));
+            hi = std::max(hi, std::max(m.w[1] >> 24, m.w[2] >> 24));
+        }
+    }
+}
+
+// A corner's texture T at t 0 (a paired 2D item's, where it was in the frame before), as flush_batch's
+// rows of a texture read from a target take it: false when it does not move
+bool interp_t_at_0(const std::array<uint32_t, 4> &c, bool fst, float rows, float q, float *tv) {
+    uint32_t k = interp_t_kick(c);
+    if (k >= interp.frame->kicks) {
+        return false;
+    }
+    k = fst ? interp.kick_list[k].uv_owner : interp.kick_list[k].st_owner;
+    if (k >= interp.frame->kicks) {
+        return false;
+    }
+    const GsnInterpMove &m = interp.frame->moves[k];
+    if ((m.w[0] & 3) != GSN_IM_FLAT || !(m.w[0] & (fst ? GSN_IM_UV : GSN_IM_ST))) {
+        return false;
+    }
+    float t, add;
+    memcpy(&t, &m.w[6], 4);
+    memcpy(&add, &m.w[8], 4);
+    *tv = fst ? t + add : q > 0.0f ? (t + add) / q * rows : -1.0f;
+    return true;
+}
+
+// A kick's place at t 0 (gs_replay.comp's moved at the frame's t 0 cameras, frame->move0 and mid0), in GS
+// pixels less its XYOFFSET: with its model and with the camera when it may be either. Adds to box (x0 y0 x1
+// y1); how far it is from where it is at t 1 (x, y) to most.
+void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most) {
+    if (k >= interp.frame->kicks) {
+        return;
+    }
+    const GsnInterpMove &m = interp.frame->moves[k];
+    const InterpKick &kick = interp.kick_list[k];
+    float ox = float(kick.offset & 0xFFFF), oy = float(kick.offset >> 16);
+    float places[2][2];
+    int n = 0;
+    auto f = [&](int i) {
+        float v;
+        memcpy(&v, &m.w[i], 4);
+        return v;
+    };
+    if ((m.w[0] & 3) == GSN_IM_FLAT && (m.w[0] & GSN_IM_XY)) {
+        places[n][0] = (float(m.w[3] & 0xFFFF) - ox) / 16.0f;
+        places[n][1] = (float(m.w[3] >> 16) - oy) / 16.0f;
+        n++;
+    } else if ((m.w[0] & 3) == GSN_IM_3D && (m.w[0] & GSN_IM_VIEW)) {
+        const float *screen = interp.frame->screen[(m.w[0] & GSN_IM_REFLECT) ? 1 : 0];
+        for (int obj = 0; obj < 2; obj++) {
+            // (gs_replay.comp's moved at t 0: v + dm)
+            float p[3], v[3], e[3];
+            if (obj ? !(m.w[0] & GSN_IM_OBJ) : !(m.w[0] & GSN_IM_WORLD)) {
+                continue;
+            }
+            const float *r = interp.frame->move0, *mid = interp.frame->mid0;
+            for (int i = 0; i < 3; i++) {
+                p[i] = f(4 + i);
+                e[i] = f(8 + i);
+            }
+            for (int i = 0; i < 3; i++) {
+                if (obj && (m.w[0] & GSN_IM_EYE)) {
+                    v[i] = p[i] + e[i];
+                } else {
+                    v[i] = p[i] + r[i * 4] * p[0] + r[i * 4 + 1] * p[1] + r[i * 4 + 2] * p[2] + r[i * 4 + 3];
+                    if (obj) {
+                        v[i] += mid[i * 4] * e[0] + mid[i * 4 + 1] * e[1] + mid[i * 4 + 2] * e[2];
+                    }
+                }
+            }
+            if (!(v[2] > 0.0f)) {
+                continue;
+            }
+            float nx = screen[0] * v[0] / v[2] + screen[2], ny = screen[1] * v[1] / v[2] + screen[3];
+            if (!(fabsf(nx - 2048.0f) <= 2047.0f && fabsf(ny - 2048.0f) <= 2047.0f)) {
+                continue;
+            }
+            places[n][0] = nx - ox / 16.0f;
+            places[n][1] = ny - oy / 16.0f;
+            n++;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        box[0] = std::min(box[0], int32_t(floorf(places[i][0])) - 1);
+        box[1] = std::min(box[1], int32_t(floorf(places[i][1])) - 1);
+        box[2] = std::max(box[2], int32_t(ceilf(places[i][0])) + 2);
+        box[3] = std::max(box[3], int32_t(ceilf(places[i][1])) + 2);
+        *most = std::max(*most, std::max(fabsf(places[i][0] - x), fabsf(places[i][1] - y)));
+    }
+}
+
+// A run of a batch with vertices that move: the pixels its blending reads at any time between the frame
+// shown and this one. Those its triangles cover at t 1 (box), and at t 0; the camera turns on the way,
+// so the corners are not on the line between: a margin of a quarter of the furthest a corner went, and
+// four pixels.
+void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
+    float most = 0.0f;
+    for (uint32_t i = first; i < first + count && i < interp.vsrc.size(); i++) {
+        const auto &c = interp.vsrc[i];
+        const Vtx &v = gs->verts[i];
+        if (c[3] & IC_SPRITE) {
+            interp_place_at_0(c[0], v.x, v.y, box, &most);
+            interp_place_at_0(c[1], v.x, v.y, box, &most);
+        } else {
+            interp_place_at_0(c[c[3] & 3], v.x, v.y, box, &most);
+        }
+    }
+    int32_t margin = 4 + int32_t(ceilf(most * 0.25f));
+    box[0] -= margin;
+    box[1] -= margin;
+    box[2] += margin;
+    box[3] += margin;
+}
+
 // The batch, drawn
 void flush_batch() {
     Timer timer(gsn_stats.ns_flush);
     settle_upload();
     if (gs->verts.empty()) {
         return;
+    }
+    // (a picture between drawn from the frame's packets: interp.vsrc is gs->verts as corners)
+    struct ForgetCorners {
+        ~ForgetCorners() {
+            interp.vsrc.clear();
+        }
+    } forget_corners;
+    InterpBatch moving;
+    if (interp.active) {
+        if (interp.vsrc.size() != gs->verts.size()) {
+            interp.broken = true; // (never: every triangle added is added to both)
+            interp.vsrc.resize(gs->verts.size(), {GSN_IM_NONE, GSN_IM_NONE, GSN_IM_NONE, 0});
+        }
+        moving = interp_batch();
     }
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
@@ -1697,6 +2605,9 @@ void flush_batch() {
         as_min = std::min(as_min, v.rgba >> 24);
         vy0 = std::min(vy0, v.y);
         vy1 = std::max(vy1, v.y);
+    }
+    if (interp.active) {
+        interp_alpha_range(as_min, as_max);
     }
     uint32_t prim = gs->batch_prim;
     uint32_t ctxt = (prim >> 9) & 1;
@@ -1752,7 +2663,7 @@ void flush_batch() {
     bool any_zwrite = !zmsk && (!ate || atst != 0 || afail == 2);
     bool always_passes = ztst == 1;
     if (ztst == 2) {
-        always_passes = std::min(zmin, depth_max(zpsm)) == depth_max(zpsm);
+        always_passes = std::min(zmin, depth_max(zpsm)) == depth_max(zpsm) && !moving.moves_3d;
     }
     bool need_depth = !(always_passes && !any_zwrite);
     // The rows the targets need: to the scissor's bottom; for a draw with Z, only to the last row its
@@ -1764,7 +2675,7 @@ void flush_batch() {
     // backdrop failed the Z test, and every other line of the Equipment and Journal screens was black.
     // Those draws reach row 223 (a sprite to 223.5 covers row 223 last), as on the GS.
     uint32_t need_h = sy1 + 1;
-    if (need_depth) {
+    if (need_depth && !moving.moves_3d) {
         need_h = std::min(need_h, uint32_t(std::max(0.0f, floorf(vy1))) + 1);
     }
     Target *color = get_target(fbp, fbw, fpsm, fbw * 64, need_h);
@@ -1893,6 +2804,14 @@ void flush_batch() {
                 float tv = fst ? v.t : v.q > 0.0f ? v.t / v.q * float(rows) : -1.0f;
                 vmin = std::min(vmin, tv);
                 vmax = std::max(vmax, tv);
+            }
+            for (size_t i = 0; interp.active && moving.moves && i < interp.vsrc.size(); i++) {
+                // (a picture between: also where a paired 2D item's texture was in the frame before)
+                float tv;
+                if (interp_t_at_0(interp.vsrc[i], fst, float(rows), gs->verts[i].q, &tv)) {
+                    vmin = std::min(vmin, tv);
+                    vmax = std::max(vmax, tv);
+                }
             }
             if (vmin >= 0.0f && vmax < float(rows)) {
                 rows = std::max(1u, uint32_t(ceilf(vmax)));
@@ -2086,18 +3005,38 @@ void flush_batch() {
             float tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
             float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y));
             float ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
-            if (tx1 < cx0 || tx0 > cx1 || ty1 < cy0 || ty0 > cy1) {
+            if (moving.moves && !(tx1 < cx0 || tx0 > cx1 || ty1 < cy0 || ty0 > cy1)) {
+                // (inside at t 1)
+            } else if (moving.moves) {
+                // a picture between's moving vertices: left out only when outside at t 0 too, by a margin
+                int32_t box[4] = {int32_t(floorf(tx0)) - 1, int32_t(floorf(ty0)) - 1, int32_t(ceilf(tx1)) + 2,
+                                  int32_t(ceilf(ty1)) + 2};
+                interp_box_at_0(uint32_t(i), 3, box);
+                if (!(float(box[2]) < cx0 || float(box[0]) > cx1 || float(box[3]) < cy0 || float(box[1]) > cy1)) {
+                    goto keep;
+                }
+                continue;
+            } else if (tx1 < cx0 || tx0 > cx1 || ty1 < cy0 || ty0 > cy1) {
                 continue;
             }
+        keep:
             if (kept != i) {
                 v[kept] = v[i];
                 v[kept + 1] = v[i + 1];
                 v[kept + 2] = v[i + 2];
+                if (interp.active) {
+                    interp.vsrc[kept] = interp.vsrc[i];
+                    interp.vsrc[kept + 1] = interp.vsrc[i + 1];
+                    interp.vsrc[kept + 2] = interp.vsrc[i + 2];
+                }
             }
             kept += 3;
         }
         gsn_stats.primitives += (n - kept) / 3;
         gs->verts.resize(kept);
+        if (interp.active) {
+            interp.vsrc.resize(kept);
+        }
         if (kept == 0) {
             gs->batch_sprites = false;
             return;
@@ -2204,6 +3143,23 @@ void flush_batch() {
         }
     }
     runs.push_back(uint32_t(gs->verts.size()));
+    // a picture between drawn from the frame's packets: the batch's corners, for gs_replay.vert
+    uint32_t corners_at = 0;
+    if (interp.active) {
+        interp.risky_runs += moving.moves && runs.size() > 2;
+        corners_at = interp.corner;
+        if (size_t(corners_at) + interp.vsrc.size() > size_t(interp.frame->kicks) * 3 + 5) {
+            interp.broken = true; // (never: a kick adds three corners at most)
+            corners_at = 0;
+        } else {
+            uint32_t flags = ms || scale_x > 1 || scale_y > 1 ? IC_FLAT_2D : 0;
+            for (size_t i = 0; i < interp.vsrc.size(); i++) {
+                uint32_t c[4] = {interp.vsrc[i][0], interp.vsrc[i][1], interp.vsrc[i][2], interp.vsrc[i][3] | flags};
+                memcpy(interp.corner_map[1 + corners_at + i], c, sizeof(c)); // (after the count)
+            }
+            interp.corner += uint32_t(interp.vsrc.size());
+        }
+    }
 
     for (size_t r = 0; r + 1 < runs.size(); r++) {
         uint32_t first = runs[r], count = runs[r + 1] - runs[r];
@@ -2218,6 +3174,11 @@ void flush_batch() {
                 box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
                 box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
             }
+            // (a picture between's moving vertices: wherever they are, the whole target)
+            if (interp.active && moving.moves) {
+                // (a picture between's moving vertices: where they are at t 0 too)
+                interp_box_at_0(first, count, box);
+            }
             dest_copy = &snapshot_of(*color, reads_own_target ? nullptr : box);
             if (reads_own_target) {
                 target_view = &dest_copy->get_view();
@@ -2225,7 +3186,7 @@ void flush_batch() {
         }
 
         begin_pass(color, depth, ms);
-        CommandBuffer &c = cmd();
+        Cmd &c = cmd();
         c.set_opaque_state();
         // (the cut-outs at every sample: draws with Z into the multisampled images)
         bool per_sample = cutout && ms && zclamp;
@@ -2270,9 +3231,14 @@ void flush_batch() {
         }
 
         // the vertices
-        size_t bytes = size_t(count) * sizeof(Vtx);
-        void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
-        memcpy(vdata, gs->verts.data() + first, bytes);
+        if (interp.active) {
+            // (a picture between's: made of its kicks at its time by gs_replay_corners.comp)
+            c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at + first) * sizeof(Vtx), sizeof(Vtx));
+        } else {
+            size_t bytes = size_t(count) * sizeof(Vtx);
+            void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
+            memcpy(vdata, gs->verts.data() + first, bytes);
+        }
         c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
         c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
         c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
@@ -2294,6 +3260,10 @@ void flush_batch() {
     // the rows the batch can have drawn into (its vertices' within the scissor, a row more each way)
     uint32_t dirty0 = uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
     uint32_t dirty1 = uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
+    if (moving.moves) {
+        dirty0 = sy0; // (a picture between's moving vertices: anywhere within the scissor)
+        dirty1 = y1;
+    }
     mark_dirty(*color, dirty0, dirty1);
     if (depth && zwrite) {
         mark_dirty(*depth, dirty0, dirty1);
@@ -2354,6 +3324,13 @@ void add_triangle(const Vtx &a, const Vtx &b, const Vtx &c) {
         // flat: the last vertex's colour
         Vtx *v = &gs->verts[gs->verts.size() - 3];
         v[0].rgba = v[1].rgba = c.rgba;
+    }
+    if (interp.active) {
+        // (a picture between's: each corner as the three kicks)
+        uint32_t info = (gouraud ? 0 : IC_FLAT_SHADE) | (((gs->batch_prim >> 8) & 1) ? IC_FST : 0);
+        for (uint32_t i = 0; i < 3; i++) {
+            interp.vsrc.push_back({interp.qkick[0], interp.qkick[1], interp.qkick[2], info | i});
+        }
     }
 }
 
@@ -2419,6 +3396,45 @@ void add_sprite(const QVertex &a, const QVertex &b) {
     gs->verts.push_back(v[1]);
     gs->verts.push_back(v[3]);
     gs->verts.push_back(v[2]);
+    if (interp.active) {
+        // (a picture between's: the two kicks, which corner, which triangle)
+        uint32_t ctxt = (prim >> 9) & 1;
+        uint32_t info = IC_SPRITE | (((prim >> 8) & 1) ? IC_FST : 0) |
+                        (((prim >> 8) & 1) && bits(gs->reg[R_TEX1_1 + ctxt], 5, 1) ? IC_SNAP : 0);
+        static const uint32_t corners[6] = {0, 1, 2, 1 | 4, 3 | 4, 2 | 4};
+        for (uint32_t i = 0; i < 6; i++) {
+            interp.vsrc.push_back({interp.qkick[0], interp.qkick[1], 0, info | corners[i]});
+        }
+    }
+}
+
+// A picture between drawn from the frame's packets: the kick, as gs_replay.vert reads it; its number
+uint32_t interp_kick(const QVertex &v, uint32_t prim) {
+    uint32_t k = interp.kick++;
+    if (k >= interp.frame->kicks) {
+        interp.broken = true;
+        return GSN_IM_NONE;
+    }
+    uint64_t offset = gs->reg[R_XYOFFSET_1 + ((prim >> 9) & 1)];
+    InterpKick &out = interp.kick_map[k];
+    InterpKick e;
+    e.xy = v.x | v.y << 16;
+    e.z = v.z;
+    e.rgba = v.rgba;
+    e.s = v.s;
+    e.t = v.t;
+    e.q = v.q;
+    e.uv = v.u | v.v << 16;
+    e.fog = v.fog;
+    e.offset = bits(offset, 0, 16) | bits(offset, 32, 16) << 16;
+    e.st_owner = interp.st_src;
+    e.rgba_owner = interp.rgba_src;
+    e.q_owner = interp.rgba_q_src;
+    e.uv_owner = interp.uv_src;
+    e.pad[0] = e.pad[1] = e.pad[2] = 0;
+    memcpy(&out, &e, sizeof(e)); // (one write to the mapped buffer)
+    interp.kick_list[k] = e;
+    return k;
 }
 
 void vertex_kick(uint32_t address, uint64_t value) {
@@ -2441,12 +3457,16 @@ void vertex_kick(uint32_t address, uint64_t value) {
         gs->batch_prim = prim;
         gs->batch_sprites = false;
     }
+    // (a picture between drawn from the frame's packets: the kick recorded, its number kept with the queue's)
+    uint32_t kick_no = interp.active ? interp_kick(v, prim) : 0;
+    uint32_t *qk = interp.qkick;
     uint32_t type = prim & 7;
     QVertex *q = gs->queue;
     Vtx *qv = gs->queued;
     switch (type) {
     case 3: // triangles
         qv[gs->queue_count] = make_vtx(v, prim, v);
+        qk[gs->queue_count] = kick_no;
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3) {
             if (draw) {
@@ -2461,9 +3481,12 @@ void vertex_kick(uint32_t address, uint64_t value) {
             q[1] = q[2];
             qv[0] = qv[1];
             qv[1] = qv[2];
+            qk[0] = qk[1];
+            qk[1] = qk[2];
             gs->queue_count = 2;
         }
         qv[gs->queue_count] = make_vtx(v, prim, v);
+        qk[gs->queue_count] = kick_no;
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3 && draw) {
             add_triangle(qv[0], qv[1], qv[2]);
@@ -2473,15 +3496,18 @@ void vertex_kick(uint32_t address, uint64_t value) {
         if (gs->queue_count == 3) {
             q[1] = q[2];
             qv[1] = qv[2];
+            qk[1] = qk[2];
             gs->queue_count = 2;
         }
         qv[gs->queue_count] = make_vtx(v, prim, v);
+        qk[gs->queue_count] = kick_no;
         q[gs->queue_count++] = v;
         if (gs->queue_count == 3 && draw) {
             add_triangle(qv[0], qv[1], qv[2]);
         }
         break;
     case 6: // sprites
+        qk[gs->queue_count] = kick_no;
         q[gs->queue_count++] = v;
         if (gs->queue_count == 2) {
             if (draw) {
@@ -2841,7 +3867,10 @@ void settle_upload() {
     p.data.clear();
 }
 
+void interp_forget();
+
 void forget_uploads() {
+    interp_forget();
     pending_upload.active = false;
     pending_upload.data.clear();
     uploads_now.clear();
@@ -3057,6 +4086,18 @@ void gs_write(uint32_t address, uint64_t value) {
     case R_UV:
     case R_FOG:
         gs->reg[address] = value;
+        if (interp.active) {
+            // (a picture between drawn from the frame's packets: in whose stretch it was written; packed()
+            // has RGBAQ's Q from the last PACKED ST)
+            if (address == R_RGBAQ) {
+                interp.rgba_src = interp.kick;
+                interp.rgba_q_src = GSN_IM_NONE;
+            } else if (address == R_ST) {
+                interp.st_src = interp.kick;
+            } else if (address == R_UV) {
+                interp.uv_src = interp.kick;
+            }
+        }
         return;
     case R_PRIM:
         gs->queue_count = 0;
@@ -3156,9 +4197,11 @@ void packed(uint32_t desc, const uint64_t q[2]) {
     case 0x1:
         gs_write(R_RGBAQ, (q[0] & 0xFF) | ((q[0] >> 24) & 0xFF00) | ((q[1] & 0xFF) << 16) |
                               ((q[1] >> 8) & 0xFF000000u) | (uint64_t(gs->internal_q) << 32));
+        interp.rgba_q_src = interp.q_src;
         break;
     case 0x2:
         gs->internal_q = uint32_t(q[1]);
+        interp.q_src = interp.kick;
         gs_write(R_ST, q[0]);
         break;
     case 0x3:
@@ -3230,6 +4273,7 @@ void gif(int path, const uint8_t *data, size_t bytes) {
             }
             p->in_packet = !(p->eop && p->left == 0);
             gs->internal_q = 0x3F800000u; // a tag sets Q to 1
+            interp.q_src = GSN_IM_NONE;
             continue;
         }
         if (p->flg == 0) {
@@ -3348,6 +4392,17 @@ void make_program() {
         Shader *fs_sample = gs->device->request_shader(gsn_spv_gs_zclamp_sample_frag, sizeof(gsn_spv_gs_zclamp_sample_frag), &frag);
         gs->program_zclamp_sample = gs->device->request_program(vs, fs_sample);
     }
+    // --frame-rate's pictures between on the GPU: the picture's buffer, the frame's kicks, their moves, the
+    // kicks moved, the corners, the vertices made of them (set 1)
+    ResourceLayout replay = {};
+    replay.sets[1].storage_buffer_mask = 0x3F;
+    for (int b = 0; b < 6; b++) {
+        replay.sets[1].meta[b].array_size = 1;
+    }
+    gs->program_replay_kicks = gs->device->request_program(
+        gs->device->request_shader(gsn_spv_gs_replay_comp, sizeof(gsn_spv_gs_replay_comp), &replay));
+    gs->program_replay_corners = gs->device->request_program(
+        gs->device->request_shader(gsn_spv_gs_replay_corners_comp, sizeof(gsn_spv_gs_replay_corners_comp), &replay));
 
     // --native-msaa's copying passes: a texture in, a colour or a depth out
     ResourceLayout copy_vert = {};
@@ -3517,7 +4572,7 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
         rp.color_attachments[0] = &dst.get_view();
         rp.load_attachments = 1;
         rp.store_attachments = 1;
-        CommandBuffer &c = cmd();
+        Cmd &c = cmd();
         c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
         c.begin_render_pass(rp);
@@ -3614,7 +4669,7 @@ void deinterlace_pass(const Image &dst, int parity, uint32_t sy, uint32_t lines)
     rp.num_color_attachments = 1;
     rp.color_attachments[0] = &dst.get_view();
     rp.store_attachments = 1;
-    CommandBuffer &c = cmd();
+    Cmd &c = cmd();
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
               VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     c.begin_render_pass(rp);
@@ -3651,7 +4706,7 @@ void draw_pass(const Image &dst, Program *program, const ImageView &src, const v
     rp.num_color_attachments = 1;
     rp.color_attachments[0] = &dst.get_view();
     rp.store_attachments = 1;
-    CommandBuffer &c = cmd();
+    Cmd &c = cmd();
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
               VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     c.begin_render_pass(rp);
@@ -3842,6 +4897,351 @@ void scanout_published(uint64_t tag) {
     so.writing = -1;
 }
 
+// ---- Pictures between on the GPU ----------------------------------------------------------------
+// --frame-rate above 30 draws pictures between the game's frames (port/platform/frame_interp.c): the
+// frame's packets once more for each, every vertex moved to the picture's time. Walking the packets and
+// moving the vertices on the CPU, then working through them here, cost about a game frame's CPU work a
+// picture. Instead, for each frame:
+// - frame_interp.c walks the packets once and hands them over (gsn_interp_frame) with, for each vertex
+//   kick in them, how a picture between moves it (GsnInterpMove: with the camera, with its model, a 2D
+//   item's place, colour and texture between the two frames', or not at all).
+// - The first picture between (gsn_interp_picture) draws the packets as the pictures between always
+//   were drawn, but each kick is recorded as the GS queued it (InterpKick), each corner of each triangle
+//   as the kicks it is made of (interp.vsrc, flush_batch), and the triangles are drawn by
+//   shaders/gs_replay.vert, which moves the kicks to the picture's time as frame_interp.c moved them on
+//   the CPU, from a buffer of the picture's (its cameras, the model parts that move with their model at
+//   that time). Every call into the command buffer is recorded too (Cmd, Recording).
+// - The frame's next pictures between make the recorded calls again (replay_ops) with only the
+//   picture's buffer new: no packets, no GS state worked out, no uploads asked for again.
+// The recorded calls are only right if the GS is as it was before the recording (its targets, what of
+// theirs is newer, the render pass, its registers, VRAM). When it is not, or something recorded cannot
+// be made again (a read-back), the picture is drawn from the packets again and recorded anew.
+
+// The picture's buffer (gs_replay.vert's Picture): its header, then the runs' bits
+struct InterpPictureHeader {
+    float move[12], mid[12];
+    float screen[2][4]; // sx sy cx cy: the world's, the reflection's
+    float zt[4];        // cz (the world's, the reflection's), t, 1 - t
+    uint32_t kicks, runs, pad[2];
+};
+static_assert(sizeof(InterpPictureHeader) == 160, "InterpPictureHeader is gs_replay.vert's Picture");
+
+// A picture as it comes through the ring: the frame's serial, the header, then the bits
+struct InterpPictureMessage {
+    uint64_t serial;
+    uint64_t pad;
+    InterpPictureHeader header;
+};
+
+void interp_free_frame() {
+    if (interp.frame) {
+        free(interp.frame->moves);
+        free(interp.frame->stream);
+        free(interp.frame);
+        interp.frame = nullptr;
+    }
+}
+
+// Nothing kept of the frame (a state loaded, the GS's VRAM replaced)
+void interp_forget() {
+    interp_free_frame();
+    interp.moves.reset();
+    interp.kicks.reset();
+    interp.corners.reset();
+    interp.resolved.reset();
+    interp.vertices.reset();
+    interp.picture.reset();
+    interp.recorded = false;
+    recording_ops.clear();
+}
+
+void bind_replay_buffers(CommandBuffer &c) {
+    if (interp.picture && interp.kicks && interp.moves && interp.resolved && interp.corners && interp.vertices) {
+        c.set_storage_buffer(1, 0, *interp.picture);
+        c.set_storage_buffer(1, 1, *interp.kicks);
+        c.set_storage_buffer(1, 2, *interp.moves);
+        c.set_storage_buffer(1, 3, *interp.resolved);
+        c.set_storage_buffer(1, 4, *interp.corners);
+        c.set_storage_buffer(1, 5, *interp.vertices);
+    }
+}
+
+// The frame's kicks at the picture's time (gs_replay.comp), for its draws after
+void interp_kicks_pass(CommandBuffer &c) {
+    if (!interp.frame || !interp.frame->kicks) {
+        return;
+    }
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    c.set_program(gs->program_replay_kicks);
+    bind_replay_buffers(c);
+    c.dispatch((interp.frame->kicks + 63) / 64, 1, 1);
+    c.barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    // (as many corners as the frame's kicks can make: the shader stops at the count the recording wrote)
+    c.set_program(gs->program_replay_corners);
+    bind_replay_buffers(c);
+    c.dispatch((interp.frame->kicks * 3 + 5 + 63) / 64, 1, 1);
+    c.barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+}
+
+BufferHandle interp_buffer(VkDeviceSize size, VkBufferUsageFlags usage, const void *initial) {
+    BufferCreateInfo info = {};
+    info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+    info.size = std::max<VkDeviceSize>(size, 16);
+    info.usage = usage;
+    return gs->device->create_buffer(info, initial);
+}
+
+void interp_capture(InterpState &s) {
+    s.targets.clear();
+    for (auto &t : gs->targets) {
+        s.targets.push_back({t.get(), t->bp, t->bw, psm_layout(t->psm), t->depth, bool(t->ms), t->width, t->height, t->sx,
+                             t->sy, t->dirty, t->stale, t->ms_newer, t->image_newer, t->dirty_pages, t->stale_pages});
+    }
+    // (by what the targets are, not which: gs->targets is reordered as targets come and go, and a target
+    // drawn over after an upload is made anew each picture)
+    std::sort(s.targets.begin(), s.targets.end(), [](const InterpTargetState &a, const InterpTargetState &b) {
+        return std::make_tuple(a.bp, a.bw, a.psm, a.depth) < std::make_tuple(b.bp, b.bw, b.psm, b.depth);
+    });
+    s.in_pass = gs->in_pass;
+    s.pass_ms = gs->pass_ms;
+    s.pass_color = gs->pass_color;
+    s.pass_depth = gs->pass_depth;
+    s.vram_writes = gs->vram_writes;
+    s.clut_version = gs->clut_version;
+}
+
+bool interp_same(const InterpState &a, const InterpState &b) {
+    if (a.targets.size() != b.targets.size() || a.in_pass != b.in_pass || a.pass_ms != b.pass_ms ||
+        a.pass_color != b.pass_color || a.pass_depth != b.pass_depth || a.vram_writes != b.vram_writes ||
+        a.clut_version != b.clut_version) {
+        GSN_LOG(1, "interp: GS differs: targets %zu/%zu pass %d/%d ms %d/%d vram %llu/%llu clut %llu/%llu\n", a.targets.size(),
+                b.targets.size(), a.in_pass, b.in_pass, a.pass_ms, b.pass_ms, (unsigned long long)a.vram_writes,
+                (unsigned long long)b.vram_writes, (unsigned long long)a.clut_version, (unsigned long long)b.clut_version);
+        return false;
+    }
+    for (size_t i = 0; i < a.targets.size(); i++) {
+        const InterpTargetState &x = a.targets[i], &y = b.targets[i];
+        if (x.bp != y.bp || x.bw != y.bw || x.psm != y.psm || x.depth != y.depth || x.has_ms != y.has_ms ||
+            x.width != y.width || x.height != y.height || x.sx != y.sx || x.sy != y.sy || x.dirty != y.dirty ||
+            x.stale != y.stale || x.ms_newer != y.ms_newer || x.image_newer != y.image_newer ||
+            x.dirty_pages != y.dirty_pages || x.stale_pages != y.stale_pages) {
+            GSN_LOG(1, "interp: target %zu (bp %#x) differs: same %d image %d ms %d size %d dirty %d/%d stale %d/%d "
+                       "ms_newer %d/%d image_newer %d/%d pages %d %d\n",
+                    i, x.bp, x.bp == y.bp && x.bw == y.bw && x.psm == y.psm && x.depth == y.depth, 1, x.has_ms == y.has_ms,
+                    x.width == y.width && x.height == y.height,
+                    x.dirty, y.dirty, x.stale, y.stale, x.ms_newer, y.ms_newer, x.image_newer, y.image_newer,
+                    x.dirty_pages == y.dirty_pages, x.stale_pages == y.stale_pages);
+            if (log_level >= 2) {
+                for (const InterpState *st : {&a, &b}) {
+                    for (const InterpTargetState &z : st->targets) {
+                        GSN_LOG(2, "  %s target %p bp %#x bw %u psm %#x %ux%u depth %d ms %d\n", st == &a ? "now" : "then",
+                                (void *)z.t, z.bp, z.bw, z.psm, z.width, z.height, z.depth, z.has_ms);
+                    }
+                }
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+// The targets' flags and the render pass as the recording left them (its calls made again: the targets
+// are the same, interp_same)
+void interp_restore(const InterpState &s) {
+    for (const InterpTargetState &x : s.targets) {
+        Target *found = nullptr;
+        for (auto &t : gs->targets) {
+            if (t->bp == x.bp && t->bw == x.bw && psm_layout(t->psm) == x.psm && t->depth == x.depth) {
+                found = t.get();
+            }
+        }
+        if (!found) {
+            continue;
+        }
+        Target &t = *found;
+        t.dirty = x.dirty;
+        t.stale = x.stale;
+        t.ms_newer = x.ms_newer;
+        t.image_newer = x.image_newer;
+        t.dirty_pages = x.dirty_pages;
+        t.stale_pages = x.stale_pages;
+        t.used = gs->tick;
+    }
+    gs->in_pass = s.in_pass;
+    gs->pass_ms = s.pass_ms;
+    gs->pass_color = s.pass_color;
+    gs->pass_depth = s.pass_depth;
+    if (s.in_pass) {
+        // (the render pass the recording left open is the targets' now)
+        for (const InterpTargetState &x : s.targets) {
+            for (auto &t : gs->targets) {
+                if (t->bp == x.bp && t->bw == x.bw && psm_layout(t->psm) == x.psm && t->depth == x.depth) {
+                    if (x.t == s.pass_color) {
+                        gs->pass_color = t.get();
+                    }
+                    if (x.t == s.pass_depth) {
+                        gs->pass_depth = t.get();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The frame (from frame_interp.c): kept, its moves on the GPU
+void interp_frame_now(GsnInterpFrame *f) {
+    interp_forget();
+    interp.frame = f;
+    interp.moves = interp_buffer(VkDeviceSize(f->kicks) * sizeof(GsnInterpMove), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                 f->kicks ? f->moves : nullptr);
+}
+
+void gif(int path, const uint8_t *data, size_t bytes);
+
+// The picture drawn from the frame's packets, and recorded
+void interp_record() {
+    Timer timer(gsn_stats.ns_interp_record);
+    GsnInterpFrame *f = interp.frame;
+    flush_batch(); // (nothing of before the picture in its recording)
+    interp.kicks = interp_buffer(VkDeviceSize(f->kicks) * sizeof(InterpKick), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, nullptr);
+    interp.corners = interp_buffer((VkDeviceSize(f->kicks) * 3 + 6) * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, nullptr);
+    if (!interp.resolved) {
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::Device;
+        info.size = std::max<VkDeviceSize>(VkDeviceSize(f->kicks) * 32, 16);
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        interp.resolved = gs->device->create_buffer(info, nullptr);
+        info.size = std::max<VkDeviceSize>((VkDeviceSize(f->kicks) * 3 + 5) * sizeof(Vtx), 16);
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        interp.vertices = gs->device->create_buffer(info, nullptr);
+    }
+    interp.kick_map = static_cast<InterpKick *>(gs->device->map_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT));
+    interp.kick_list.resize(f->kicks);
+    interp.corner_map = static_cast<uint32_t(*)[4]>(gs->device->map_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT));
+    end_pass(); // (the recording starts outside a render pass: its kicks moved first)
+    interp_capture(interp.start);
+    recording_ops.clear();
+    recording_ops.on = true;
+    cmd().interp_kicks();
+    interp.active = true;
+    interp.broken = false;
+    interp.kick = interp.corner = 0;
+    interp.st_src = interp.q_src = interp.rgba_src = interp.rgba_q_src = interp.uv_src = GSN_IM_NONE;
+    interp.qkick[0] = interp.qkick[1] = interp.qkick[2] = GSN_IM_NONE;
+    interp.vsrc.clear();
+    uint32_t field_scan = gs->field_scan_vblanks;
+    for (size_t at = 0; at + 8 <= f->stream_bytes;) {
+        uint32_t head[2];
+        memcpy(head, f->stream + at, 8);
+        Timer gif_timer(gsn_stats.ns_gif);
+        gif(int(head[0]), f->stream + at + 8, head[1]);
+        at += 8 + head[1];
+    }
+    flush_batch(); // (the last batch is the picture's)
+    recording_ops.settle();
+    recording_ops.on = false;
+    interp.active = false;
+    finish_recording(recording_ops);
+    uint32_t count[4] = {interp.corner, 0, 0, 0}; // (the corners' count, before them)
+    memcpy(interp.corner_map[0], count, sizeof(count));
+    gs->device->unmap_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT);
+    gs->device->unmap_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT);
+    interp.kick_map = nullptr;
+    interp.corner_map = nullptr;
+    if (interp.kick != f->kicks || interp.broken) {
+        static int told;
+        if (!told++) {
+            fprintf(stderr, "[gsn] a picture between drawn on the GPU: %u vertex kicks where the frame has %u%s\n",
+                    interp.kick, f->kicks, interp.broken ? " (broken)" : "");
+        }
+        interp.broken = true;
+    }
+    interp_capture(interp.end);
+    interp.end_regs.assign(gs->reg, gs->reg + 256);
+    interp.recorded = !interp.broken && recording_ops.ok && gs->field_scan_vblanks == field_scan;
+    gsn_stats.interp_records++;
+    GSN_LOG(2, "interp: %llu recorded, %llu batches moving drawn in runs, %zu calls\n",
+            (unsigned long long)gsn_stats.interp_records, (unsigned long long)interp.risky_runs, recording_ops.ops.size());
+}
+
+// Why the recording cannot be made again for this picture: 0 it can; 1 the GS is not as it was before it
+// (targets, their state, the render pass, VRAM, the CLUT); 2 its registers differ; 3 nothing recorded
+int interp_cannot_replay() {
+    if (!interp.recorded) {
+        return 3;
+    }
+    flush_batch();
+    // (the targets as before the recording; VRAM and the CLUT as after it: its uploads and CLUT loads leave
+    // them as the frame left them, which is how they were before it too)
+    InterpState now;
+    interp_capture(now);
+    if (now.vram_writes != interp.end.vram_writes || now.clut_version != interp.end.clut_version) {
+        GSN_LOG(1, "interp: VRAM or the CLUT written since the recording\n");
+        return 1;
+    }
+    now.vram_writes = interp.start.vram_writes;
+    now.clut_version = interp.start.clut_version;
+    if (!interp_same(now, interp.start)) {
+        return 1;
+    }
+    if (memcmp(gs->reg, interp.end_regs.data(), sizeof(gs->reg)) != 0) {
+        return 2;
+    }
+    // the targets' images the recording names, as those targets have them now
+    replay_images.clear();
+    for (const Recording::TargetImage &ti : recording_ops.target_images) {
+        Target *t = find_target(ti.bp, ti.bw, ti.psm);
+        const Image *now = !t ? nullptr : ti.ms ? t->ms.get() : t->image.get();
+        if (!now || now->get_width() != ti.image->get_width() || now->get_height() != ti.image->get_height() ||
+            now->get_format() != ti.image->get_format()) {
+            GSN_LOG(1, "interp: target bp %#x%s is not as recorded\n", ti.bp, ti.ms ? " (multisampled)" : "");
+            return 1;
+        }
+        if (now != ti.image) {
+            replay_images.push_back({ti.image, now});
+        }
+    }
+    return 0;
+}
+
+void interp_picture_now(const uint8_t *data, size_t size) {
+    InterpPictureMessage m;
+    if (size < sizeof(m)) {
+        return;
+    }
+    memcpy(&m, data, sizeof(m));
+    if (!interp.frame || interp.frame->serial != m.serial) {
+        gsn_stats.interp_misses++;
+        return;
+    }
+    // the picture's buffer: the header (the frame's projections and kicks added), then the runs' bits
+    std::vector<uint8_t> buffer(size - offsetof(InterpPictureMessage, header));
+    memcpy(buffer.data(), data + offsetof(InterpPictureMessage, header), buffer.size());
+    InterpPictureHeader *h = reinterpret_cast<InterpPictureHeader *>(buffer.data());
+    for (int i = 0; i < 2; i++) {
+        memcpy(h->screen[i], interp.frame->screen[i], 4 * sizeof(float));
+        h->zt[i] = interp.frame->screen[i][4];
+    }
+    h->kicks = interp.frame->kicks;
+    interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
+    flush_batch();
+    end_pass(); // (a picture between starts outside a render pass: its kicks moved first)
+    int why = interp_cannot_replay();
+    if (why == 0) {
+        Timer timer(gsn_stats.ns_interp_replay);
+        replay_ops(recording_ops);
+        interp_restore(interp.end);
+        gsn_stats.draws += recording_ops.draws;
+        gsn_stats.interp_replays++;
+        return;
+    }
+    gsn_stats.interp_rerecord[why]++;
+    interp_record();
+}
+
 // ---- The GS's own thread ------------------------------------------------------------------------
 // The native GS works on a thread of its own, as the GS is a chip of its own: what is sent to it (GIF
 // packets, vblanks) is copied into a ring, and its thread takes it from there while the thread that
@@ -3849,7 +5249,7 @@ void scanout_published(uint64_t tag) {
 // something back (a read-back, a picture to show, the GS's state) first waits until the ring is
 // empty and the GS's thread idle, then does it on its own thread. (KF4_GSN_THREAD=0: no thread, all
 // of it done as it is sent.)
-enum : uint32_t { RING_GIF, RING_VSYNC, RING_SKIP };
+enum : uint32_t { RING_GIF, RING_VSYNC, RING_SKIP, RING_INTERP_FRAME, RING_INTERP_PICTURE };
 
 // A record in the ring: this header, then its bytes, padded to 16
 struct RingRecord {
@@ -3890,6 +5290,12 @@ void ring_work(const RingRecord &r, const uint8_t *data) {
         memcpy(privileged, data, vsync_bytes);
         memcpy(&tag, data + vsync_bytes, 8);
         vsync_now(privileged, r.arg, int(r.want_pixels), nullptr, tag);
+    } else if (r.type == RING_INTERP_FRAME) {
+        GsnInterpFrame *f;
+        memcpy(&f, data, sizeof(f));
+        interp_frame_now(f);
+    } else if (r.type == RING_INTERP_PICTURE) {
+        interp_picture_now(data, r.size);
     }
 }
 
@@ -4175,6 +5581,34 @@ extern "C" void gsn_gif(int path, const void *data, size_t bytes) {
 
 extern "C" void gsn_wait(void) {
     ring_idle();
+}
+
+extern "C" void gsn_interp_frame(GsnInterpFrame *frame) {
+    if (ring) {
+        ring_put(RING_INTERP_FRAME, 0, &frame, sizeof(frame));
+        return;
+    }
+    interp_frame_now(frame);
+}
+
+extern "C" void gsn_interp_picture(const GsnInterpPicture *p) {
+    std::vector<uint8_t> data(sizeof(InterpPictureMessage) + size_t((p->runs + 31) / 32) * 4);
+    InterpPictureMessage m = {};
+    m.serial = p->serial;
+    memcpy(m.header.move, p->move, sizeof(m.header.move));
+    memcpy(m.header.mid, p->mid, sizeof(m.header.mid));
+    m.header.zt[2] = p->t;
+    m.header.zt[3] = 1.0f - p->t;
+    m.header.runs = p->runs;
+    memcpy(data.data(), &m, sizeof(m));
+    if (p->runs) {
+        memcpy(data.data() + sizeof(m), p->run_bits, size_t((p->runs + 31) / 32) * 4);
+    }
+    if (ring) {
+        ring_put(RING_INTERP_PICTURE, 0, data.data(), data.size());
+        return;
+    }
+    interp_picture_now(data.data(), data.size());
 }
 
 extern "C" void gsn_pipeline_cache(const char *path) {

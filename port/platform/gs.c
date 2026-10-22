@@ -991,6 +991,18 @@ void port_gs_print_stats(void) {
             fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu\n",
                     (unsigned long long)interp_behind);
         }
+        if (s->interp_records || s->interp_replays || s->interp_misses) {
+            fprintf(stderr,
+                    "[stats] native GS pictures between on the GPU: %llu drawn from the packets (%.3f s, %.1f us each), "
+                    "%llu from the recording (%.3f s, %.1f us each), %llu of no frame; drawn from the packets again as "
+                    "the GS was not as recorded: %llu (targets), %llu (registers)\n",
+                    (unsigned long long)s->interp_records, s->ns_interp_record / 1e9,
+                    s->interp_records ? s->ns_interp_record / 1e3 / (double)s->interp_records : 0.0,
+                    (unsigned long long)s->interp_replays, s->ns_interp_replay / 1e9,
+                    s->interp_replays ? s->ns_interp_replay / 1e3 / (double)s->interp_replays : 0.0,
+                    (unsigned long long)s->interp_misses, (unsigned long long)s->interp_rerecord[1],
+                    (unsigned long long)s->interp_rerecord[2]);
+        }
         if (s->replay_uploads || s->replay_misses) {
             fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",
                     (unsigned long long)s->replay_uploads, (unsigned long long)s->replay_misses);
@@ -1030,6 +1042,26 @@ void port_gs_finish(void) {
 
 int port_gs_replay_uploads(void) {
     return have_native && !have_gs && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
+}
+
+int port_gs_interp_gpu(void) {
+    return port_gs_replay_uploads();
+}
+
+void port_gs_interp_frame(void *frame) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    gsn_interp_frame((GsnInterpFrame *)frame);
+#else
+    (void)frame;
+#endif
+}
+
+void port_gs_interp_picture(const void *picture) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    gsn_interp_picture((const GsnInterpPicture *)picture);
+#else
+    (void)picture;
+#endif
 }
 
 int port_gs_vsync_pending(void) {
