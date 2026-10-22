@@ -7,6 +7,7 @@
                     "whole_frame": true,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
                     "native_scale": 1, "native_widescreen": false, "native_msaa": 1, "native_lod": "scale",
+                    "native_colour": "exact",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -310,6 +311,13 @@ void port_settings_load(void) {
         }
     }
     {
+        const char *colour = read_string(display, "native_colour");
+
+        if (colour != NULL) {
+            s->native_colour = strcmp(colour, "high") == 0 ? 1 : 0;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -374,6 +382,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_lod_forced) {
         port_options.native_lod = s->native_lod;
+    }
+    if (!port_options.native_colour_forced) {
+        port_options.native_colour = s->native_colour;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -496,6 +507,7 @@ void port_settings_save(void) {
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
+    put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

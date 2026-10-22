@@ -754,6 +754,18 @@ void renderer_section() {
                 "would pick at this resolution (at 1x, the PS2's own). PS2's: its level at any resolution.\n"
                 "Finest: the whole texture at every distance (at 1x too), sharpest, but far surfaces can\n"
                 "shimmer. (--native-lod)");
+        static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
+        int colour = port_options.native_colour;
+        if (ImGui::Combo("Native GS colour precision", &colour, colour_names, 2)) {
+            port_gs_set_native_colour(colour);
+            port_settings.native_colour = colour;
+            port_settings_changed();
+        }
+        tooltip("How precisely the native GS keeps colours. The PS2's: 8 bits a channel, every step rounded as\n"
+                "the GS rounds it, which shows as steps in smooth dark gradients (the sky, dim walls, glows).\n"
+                "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
+                "screen's 8 bits, so the gradients are smooth. Alpha, and what the game reads back, stay the\n"
+                "PS2's. (--native-colour)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();

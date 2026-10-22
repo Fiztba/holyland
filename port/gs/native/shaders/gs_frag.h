@@ -58,8 +58,46 @@ ivec2 target_scale() {
     return max(ivec2(int(pc.tscale & 0xFFFFu), int(pc.tscale >> 16)), ivec2(1));
 }
 
-// One texel at integer coordinates, wrapped as CLAMP says, at mip level `level`
-ivec4 texel(ivec2 c, int level) {
+// --native-colour high (GSN_M_HIGH): the colours' arithmetic in floats, without the GS's roundings (alpha
+// stays the GS's integers: the alpha test, DATE and the blend factors are as exact)
+bool high;
+
+// --native-colour high keeps the fractions the GS's shifts drop, but not the level: along a gradient the
+// GS's floor takes half a step on average, and the picture's level is the PS2's when that is taken too
+// (else a dark scene comes out about a step brighter). Whole numbers (to 1/128) are taken as whole.
+bvec3 whole(vec3 x) {
+    return lessThan(abs(x - round(x)), vec3(1.0 / 128.0));
+}
+
+// The GS's floor of a colour interpolated across a primitive: exact where it is a whole number (the same
+// at every corner), else less half a step
+vec3 gs_floor(vec3 x) {
+    return mix(x - 0.5, round(x), whole(x));
+}
+
+// What the GS's p * k >> 7 drops on average, for p along a gradient: half a step, less what k's factors
+// of two keep exact (k 128 drops nothing; 64 a quarter; 136, the brightness pass's, 15/32). For a k that
+// is itself along a gradient, the mean over k.
+float shift_loss(float k) {
+    if (abs(k - round(k)) >= 1.0 / 128.0) {
+        return 0.5 - 4.5 / 256.0;
+    }
+    int ki = int(round(k));
+    return ki == 0 ? 0.0 : 0.5 - float(1 << min(findLSB(ki), 7)) / 256.0;
+}
+
+// p * k >> 7 as the GS has it where both are whole numbers; else p * k / 128 less what the shift drops
+// on average (or, `up`, the shift rounded up: plus what it adds)
+vec3 gs_shift7(vec3 p, vec3 k, bool up) {
+    vec3 x = p * k / 128.0;
+    vec3 loss = vec3(shift_loss(k.r), shift_loss(k.g), shift_loss(k.b));
+    bvec3 exact = bvec3(uvec3(whole(p)) & uvec3(whole(k)));
+    return up ? mix(x + loss, ceil(x - 1.0 / 256.0), exact) : mix(x - loss, floor(x + 1.0 / 256.0), exact);
+}
+
+// One texel at integer coordinates, wrapped as CLAMP says, at mip level `level`. Whole numbers, but for a
+// texture that is a 16-bit target at --native-colour high: its colours with their fraction.
+vec4 texel_f(ivec2 c, int level) {
     ivec2 ts = target_scale();
     ivec2 logical = ivec2(floor(vec2(c) / vec2(ts)));
     ivec2 sub = c - logical * ts;
@@ -85,28 +123,34 @@ ivec4 texel(ivec2 c, int level) {
 
     uint src = field(pc.flags, GSN_F_SRC_SHIFT, 4u);
     if (src >= GSN_SRC_TARGET_CT32) {
-        ivec4 t = ivec4(round(texelFetch(u_target, (c + pc.src_offset) * ts + sub, 0) * 255.0));
+        vec4 f = texelFetch(u_target, (c + pc.src_offset) * ts + sub, 0) * 255.0;
+        ivec4 t = ivec4(round(f));
         if (src == GSN_SRC_TARGET_CT24) {
             t.a = texa_alpha(t.rgb, false, false);
         } else if (src == GSN_SRC_TARGET_CT16) {
             t.rgb &= 0xF8;
             t.a = texa_alpha(t.rgb, t.a >= 0x80, true);
+            return vec4(t);
         }
-        return t;
+        return high ? vec4(f.rgb, float(t.a)) : vec4(t);
     }
     uint raw = texelFetch(u_raw, c, level).r;
     if (src == GSN_SRC_CLUT) {
-        return unpack32(u_clut.entries[raw >> 2][raw & 3u]);
+        return vec4(unpack32(u_clut.entries[raw >> 2][raw & 3u]));
     } else if (src == GSN_SRC_CT32) {
-        return unpack32(raw);
+        return vec4(unpack32(raw));
     } else if (src == GSN_SRC_CT24) {
         ivec4 t = unpack32(raw);
         t.a = texa_alpha(t.rgb, false, false);
-        return t;
+        return vec4(t);
     }
     ivec4 t = ivec4((raw & 0x1Fu) << 3, ((raw >> 5) & 0x1Fu) << 3, ((raw >> 10) & 0x1Fu) << 3, 0);
     t.a = texa_alpha(t.rgb, (raw & 0x8000u) != 0u, true);
-    return t;
+    return vec4(t);
+}
+
+ivec4 texel(ivec2 c, int level) {
+    return ivec4(texel_f(c, level));
 }
 
 // v / 2^bits, rounded to nearest, ties to even: the mipmap levels' weighted sum
@@ -122,8 +166,9 @@ ivec4 round_shift(ivec4 v, int bits) {
 vec2 tc_gs;
 bool scaled;
 
-// The texture at texel coordinates `tc` (level 0's), one level, nearest or bilinear
-ivec4 sample_level(vec2 tc, int level, bool linear) {
+// The texture at texel coordinates `tc` (level 0's), one level, nearest or bilinear (whole numbers but
+// at --native-colour high)
+vec4 sample_level(vec2 tc, int level, bool linear) {
     ivec2 ts = target_scale();
     vec2 at = tc / float(1 << level) * vec2(ts);
     // the GS's texel coordinates have 4 bits of fraction; interpolated in floats, a coordinate that is
@@ -139,10 +184,19 @@ ivec4 sample_level(vec2 tc, int level, bool linear) {
         // the GS pixel's pixels left of its integer point: the frame's first column and row read the
         // other edge of the texture, and so did the title's pictures where their sprites meet.)
         ivec2 gs = ivec2(floor(tc_gs / float(1 << level) * 16.0 + 1.0 / 64.0)) >> 4;
-        return texel(gs * ts + ivec2(floor((tc - tc_gs) / float(1 << level) * vec2(ts) + 0.5 * vec2(ts))), level);
+        return texel_f(gs * ts + ivec2(floor((tc - tc_gs) / float(1 << level) * vec2(ts) + 0.5 * vec2(ts))), level);
     }
     if (!linear) {
-        return texel(p >> 4, level);
+        return texel_f(p >> 4, level);
+    }
+    if (high) {
+        // the weights with all their fraction, not the GS's 4 bits, and nothing rounded
+        vec2 q = at - 0.5 + 1.0 / 1024.0;
+        ivec2 i = ivec2(floor(q));
+        vec2 f = q - floor(q);
+        vec4 top = mix(texel_f(i, level), texel_f(i + ivec2(1, 0), level), f.x);
+        vec4 bottom = mix(texel_f(i + ivec2(0, 1), level), texel_f(i + ivec2(1, 1), level), f.x);
+        return mix(top, bottom, f.y);
     }
     p -= 8;
     ivec2 i = p >> 4;
@@ -153,10 +207,10 @@ ivec4 sample_level(vec2 tc, int level, bool linear) {
     ivec4 c11 = texel(i + ivec2(1, 1), level);
     // rounded to nearest, a half up (as paraLLEl-GS has it: a texel a pixel at the GS's half-texel
     // offset makes every pixel such a half, and ties to even left half of them 1 lower)
-    return (c00 * (16 - f.x) * (16 - f.y) + c10 * f.x * (16 - f.y) + c01 * (16 - f.x) * f.y + c11 * f.x * f.y + 128) >> 8;
+    return vec4((c00 * (16 - f.x) * (16 - f.y) + c10 * f.x * (16 - f.y) + c01 * (16 - f.x) * f.y + c11 * f.x * f.y + 128) >> 8);
 }
 
-ivec4 sample_texture() {
+vec4 sample_texture() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
     vec2 tc = (pc.flags & GSN_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
     // the GS pixel's integer point: the middle of its pixels of the target, (x + 0.5) scale (gs.vert)
@@ -185,8 +239,11 @@ ivec4 sample_texture() {
     }
     int l0 = int(floor(lod));
     int l1 = min(l0 + 1, mxl);
+    if (high) {
+        return mix(sample_level(tc, l0, linear), sample_level(tc, l1, linear), fract(lod));
+    }
     int w = int(floor(fract(lod) * 16.0));
-    return round_shift(sample_level(tc, l0, linear) * (16 - w) + sample_level(tc, l1, linear) * w, 4);
+    return vec4(round_shift(ivec4(sample_level(tc, l0, linear)) * (16 - w) + ivec4(sample_level(tc, l1, linear)) * w, 4));
 }
 
 bool alpha_test(int a) {
@@ -207,26 +264,34 @@ void main() {
 #ifdef GSN_ZCLAMP
     gl_FragDepth = roundEven(min(v_z, float(pc.zmax))) * pc.zscale;
 #endif
+    high = (pc.misc & GSN_M_HIGH) != 0u;
     // GS colours are integers; a colour that is the same at every corner comes through exactly
     ivec4 cf = ivec4(floor(v_color + 1.0 / 256.0));
     ivec4 c = cf;
+    // --native-colour high: the colour as well in floats, hc (c's alpha is still the one used)
+    vec3 hc = high ? gs_floor(v_color.rgb) : vec3(0.0);
 
     if ((pc.flags & GSN_F_TME) != 0u) {
-        ivec4 ct = sample_texture();
+        vec4 ctf = sample_texture();
+        ivec4 ct = ivec4(round(ctf));
         uint tfx = field(pc.flags, GSN_F_TFX_SHIFT, 2u);
         bool tcc = (pc.flags & GSN_F_TCC) != 0u;
         if (tfx == 0u) { // MODULATE
             c.rgb = min((cf.rgb * ct.rgb) >> 7, ivec3(255));
             c.a = tcc ? min((cf.a * ct.a) >> 7, 255) : cf.a;
+            hc = min(gs_shift7(ctf.rgb, hc, false), vec3(255.0));
         } else if (tfx == 1u) { // DECAL
             c.rgb = ct.rgb;
             c.a = tcc ? ct.a : cf.a;
+            hc = ctf.rgb;
         } else if (tfx == 2u) { // HIGHLIGHT
             c.rgb = min(((cf.rgb * ct.rgb) >> 7) + cf.a, ivec3(255));
             c.a = tcc ? min(ct.a + cf.a, 255) : cf.a;
+            hc = min(gs_shift7(ctf.rgb, hc, false) + float(cf.a), vec3(255.0));
         } else { // HIGHLIGHT2
             c.rgb = min(((cf.rgb * ct.rgb) >> 7) + cf.a, ivec3(255));
             c.a = tcc ? ct.a : cf.a;
+            hc = min(gs_shift7(ctf.rgb, hc, false) + float(cf.a), vec3(255.0));
         }
     }
     if ((pc.flags & GSN_F_FGE) != 0u) {
@@ -235,6 +300,7 @@ void main() {
         int f = clamp(int(roundEven(v_fog)), 0, 255);
         ivec3 fog = ivec3(unpack32(pc.fogcol).rgb);
         c.rgb = ivec3(floor(vec3(fog) + vec3((c.rgb - fog) * f) / 256.0 + 0.5));
+        hc = vec3(fog) + (hc - vec3(fog)) * clamp(v_fog, 0.0, 255.0) / 256.0;
     }
 
     uint scanmsk = field(pc.misc, GSN_M_SCANMSK_SHIFT, 2u);
@@ -284,6 +350,23 @@ void main() {
         uint ou = uint(o.r) | (uint(o.g) << 8) | (uint(o.b) << 16) | (uint(o.a & 0xFF) << 24);
         uint du = uint(d.r) | (uint(d.g) << 8) | (uint(d.b) << 16) | (uint(d.a) << 24);
         o_color = vec4(unpack32((ou & ~m) | (du & m))) / 255.0;
+        if (high && (pc.misc & GSN_M_COLCLAMP) != 0u && m == 0u) {
+            // the same blend in floats, from the destination's colours with their fraction (with FBMSK
+            // or without COLCLAMP, which wraps, the GS's integers above)
+            vec3 dh = texelFetch(u_dest, ivec2(gl_FragCoord.xy) - pc.dst_offset, 0).rgb * 255.0;
+            vec3 oh = hc;
+            if ((pc.misc & GSN_M_PABE) == 0u || c.a >= 0x80) {
+                uint sa = field(pc.alpha, 0u, 2u), sb = field(pc.alpha, 2u, 2u);
+                uint sc = field(pc.alpha, 4u, 2u), sd = field(pc.alpha, 6u, 2u);
+                vec3 a = sa == 0u ? hc : sa == 1u ? dh : vec3(0.0);
+                vec3 b = sb == 0u ? hc : sb == 1u ? dh : vec3(0.0);
+                int ad = (pc.misc & GSN_M_DST24) != 0u ? 0x80 : d.a;
+                int k = sc == 0u ? c.a : sc == 1u ? ad : int(field(pc.alpha, 8u, 8u));
+                vec3 dd = sd == 0u ? hc : sd == 1u ? dh : vec3(0.0);
+                oh = gs_shift7(a - b, vec3(float(k)), false) + dd;
+            }
+            o_color.rgb = clamp(oh, 0.0, 255.0) / 255.0;
+        }
         return;
     }
 
@@ -298,7 +381,8 @@ void main() {
     if ((pc.flags & GSN_F_PREMUL) != 0u) {
         int k = field(pc.alpha, 4u, 2u) == 0u ? c.a : int(field(pc.alpha, 8u, 8u));
         c.rgb = min((c.rgb * k + ((pc.flags & GSN_F_PREMUL_CEIL) != 0u ? 127 : 0)) >> 7, ivec3(255));
+        hc = min(gs_shift7(hc, vec3(float(k)), (pc.flags & GSN_F_PREMUL_CEIL) != 0u), vec3(255.0));
     }
-    o_color.rgb = vec3(c.rgb) / 255.0;
+    o_color.rgb = high ? hc / 255.0 : vec3(c.rgb) / 255.0;
     o_color.a = (pc.flags & GSN_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
 }

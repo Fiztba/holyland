@@ -59,6 +59,10 @@ timings of the step 2 path, and how ico-pc built its renderer.
   Above 1x, the 2D (rectangles of one colour and Z) covers whole GS pixels and nearest reads take the
   GS's texel at the GS pixel's integer point (the sky's seams on map 000, the line down the screen's left
   edge); `--native-lod` (default `scale`) reads mipmaps a level finer by log2 of the scale.
+  `--native-colour high`: the 32-bit colour targets at 16 bits a channel and the colour's arithmetic
+  in floats (the GS's shifts taken as what they drop on average, so the level stays the PS2's), the
+  picture dithered to 8 bits at the scanout: smooth dark gradients (map 000's sky) without the 8-bit
+  bands, and the levels the brightness pass skips filled (PLAN.md's opt-in table).
   `--frame-rate 60`: a picture at every vblank in play, the camera interpolated (below, "Higher
   frame rates").
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes

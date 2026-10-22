@@ -31,6 +31,11 @@
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
                          full (level 0, the finest, at every distance)
+       --native-colour MODE
+                         how precisely the native GS keeps colours: exact (the default: the GS's 8
+                         bits a channel, rounded as the GS rounds) or high (16 bits a channel, the
+                         colours' arithmetic in floats, the picture dithered to 8 bits: smooth
+                         gradients in the dark instead of steps)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -145,7 +150,7 @@ static void usage(const char *program) {
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale 1-4] [--native-widescreen] [--native-msaa 1|2|4|8]\n"
-            "          [--native-lod scale|ps2|full]\n"
+            "          [--native-lod scale|ps2|full] [--native-colour exact|high]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60]\n",
             program);
     exit(2);
@@ -318,6 +323,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_lod_forced = 1;
+        } else if (strcmp(option, "--native-colour") == 0) {
+            if (strcmp(value, "exact") == 0) {
+                port_options.native_colour = 0;
+            } else if (strcmp(value, "high") == 0) {
+                port_options.native_colour = 1;
+            } else {
+                fprintf(stderr, "--native-colour wants exact or high, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_colour_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;

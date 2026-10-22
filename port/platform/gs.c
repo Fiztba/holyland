@@ -99,6 +99,7 @@ static void open_backend(void *unused) {
                 port_options.native_msaa = gsn_set_msaa(port_options.native_msaa);
             }
             gsn_set_lod(port_options.native_lod);
+            gsn_set_colour(port_options.native_colour);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -809,6 +810,15 @@ void port_gs_set_native_lod(int mode) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
         gsn_set_lod(mode);
+    }
+#endif
+}
+
+void port_gs_set_native_colour(int mode) {
+    port_options.native_colour = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_colour(mode);
     }
 #endif
 }

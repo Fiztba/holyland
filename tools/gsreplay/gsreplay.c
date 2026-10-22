@@ -46,6 +46,7 @@
      --scale X[,Y]      the native GS's render targets X times the PS2's across and Y down (Y = X if left
                         out): --native-scale, --native-widescreen. --frames and --draws write the larger pictures
      --lod MODE         the native GS's mipmap levels: scale (the default), ps2 or full (--native-lod)
+     --colour MODE      the native GS's colour precision: exact (the default) or high (--native-colour)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -1432,7 +1433,7 @@ int main(int argc, char **argv) {
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
     long vertices = -1;
     int renderer = RENDER_GS;
-    int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1;
+    int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1, colour = GSN_COLOUR_EXACT;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1472,6 +1473,9 @@ int main(int argc, char **argv) {
             i++;
         } else if (strcmp(a, "--lod") == 0) {
             lod = strcmp(v, "ps2") == 0 ? 0 : strcmp(v, "full") == 0 ? 2 : 1;
+            i++;
+        } else if (strcmp(a, "--colour") == 0) {
+            colour = strcmp(v, "high") == 0 ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
             i++;
         } else if (strcmp(a, "--scale") == 0) {
             const char *comma = strchr(v, ',');
@@ -1580,6 +1584,7 @@ int main(int argc, char **argv) {
         }
         if (run.render & RENDER_NATIVE) {
             gsn_set_lod(lod);
+            gsn_set_colour(colour);
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
