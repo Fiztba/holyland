@@ -163,6 +163,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--draw-distance-sky ps2\|push` | with `--draw-distance`, the sky keeps the PS2's fog (the default) or has it pushed out too |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
+| `--show-fps` | the frame-rate counter on for this run (F3, or the overlay's Interface page; off by default; see "The frame-rate counter (F3)") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
 
@@ -181,8 +182,8 @@ The Verdite layout (`--controls verdite`, or the overlay's Controls page) is tha
 W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks
 (`port/sdk/controls.c` lists it). In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
-loads it (exact, for debugging, same build only), F9, F10 and F12 are the debugging tools (see
-"Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
+loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F9, F10 and
+F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
 rebound.
 
 ### The settings overlay (F1)
@@ -199,10 +200,24 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
 | Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
-| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
-| Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
+| Debug | pictures shown (the window's presents of a new picture, by either thread), vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
+| Interface | pause while open, the frame-rate counter (F3), the overlay's size, and where `settings.json` is |
 
 Every way the PC differs from the PS2 is a switch that starts as the port has it.
+
+### The frame-rate counter (F3)
+
+F3 (rebindable on the Controls page: "Show / hide the frame rate"), the Interface page's
+"Frame-rate counter" or `--show-fps` shows the pictures the window presents a second in the picture's
+top right corner, with the overlay closed, on a dark square sized to the picture (about 28 pixels high
+at 1440); below it, when they differ, the game's own frames a second (`144 FPS` over `30 GAME` at
+`--frame-rate 144`: the game runs at 30, the pictures between are the PC's). Both are sampled twice a
+second (`port_video_pictures_per_second`, `port_video_frames_per_second` in `port/platform/video.c`):
+the pictures counted are the new ones the window presented, by the game's thread or the pictures
+between's own, so it reads true at 144 and 240. The presenters draw it themselves as plain squares
+(the Vulkan presenter clears them into the swapchain's image), not with ImGui, so turning it on
+leaves the pictures between on their own thread and their pacing as it was. It is kept in
+`settings.json`'s `overlay.show_fps`; the mouse indicator moves below it while it is shown.
 
 **settings.json** keeps the settings, in the user's data folder: `%APPDATA%\holyland` on Windows,
 `$XDG_CONFIG_HOME/holyland` (or `~/.config/holyland`) elsewhere; `KF4_DATA_DIR` names another folder.

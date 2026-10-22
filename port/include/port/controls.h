@@ -68,6 +68,7 @@ typedef enum {
     ACTION_GS_CAPTURE,    /* the debugging tools (port/include/port/debug.h): F9, F10, F12 */
     ACTION_STATE_DUMP,
     ACTION_AUDIO_TAIL,
+    ACTION_SHOW_FPS,      /* the frame-rate counter shown or hidden (port_options.show_fps): F3 */
     ACTION_COUNT
 } PortAction;
 

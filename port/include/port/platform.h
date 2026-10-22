@@ -122,6 +122,10 @@ typedef struct {
     int myus_necklace_forced; /* --myus-necklace: on for this run whatever settings.json says */
     int separate_run;        /* running on a key of its own, not the action button (port_controls_run_held()) */
     int separate_run_forced; /* --separate-run: on for this run whatever settings.json says */
+    /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
+       default, turned on by --show-fps or settings.json, F3 or the overlay's Interface page */
+    int show_fps;
+    int show_fps_forced;     /* --show-fps: on for this run whatever settings.json says */
     int invincible;          /* --invincible, or the Debug page: no HP lost (port_invincible()); never saved */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
@@ -460,6 +464,17 @@ int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint3
 void port_video_present(void);
 /* --stats: how the pictures reached the window */
 void port_video_print_stats(void);
+/* The new pictures presented to the window a second (by the game's thread or the pictures' own), and
+   the game's own frames a second, sampled twice a second; 0 with no window */
+double port_video_pictures_per_second(void);
+double port_video_frames_per_second(void);
+/* The frame-rate counter (port_options.show_fps), drawn by the presenters over the picture at x, y,
+   width x height in the window's pixels, as squares (fill: as port_controls_draw's PortFillRect);
+   port_video_counter_height: how far down from the picture's top margin it reaches (0: not shown) */
+int port_video_counter_shown(void);
+int port_video_counter_height(int height);
+void port_video_counter_draw(void (*fill)(void *context, int x, int y, int width, int height, unsigned int rgba),
+                             void *context, int x, int y, int width, int height);
 
 /* ---- The disc (port/platform/disc.c) --------------------------------------------------------
    The user's own disc, as an ISO 9660 image or as the folder it was extracted to, read by sector

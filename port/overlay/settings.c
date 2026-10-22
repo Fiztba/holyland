@@ -441,6 +441,9 @@ void port_settings_load(void) {
     if (!port_options.separate_run_forced) {
         port_options.separate_run = s->separate_run;
     }
+    if (!port_options.show_fps_forced) {
+        port_options.show_fps = s->show_fps;
+    }
     if (!port_options.frame_rate_forced) {
         port_options.frame_rate = s->frame_rate;
     }
