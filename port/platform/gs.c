@@ -1002,6 +1002,34 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
                     (unsigned long long)s->cutout_draws);
         }
+        {
+            int w;
+            double pictures = s->pictures ? (double)s->pictures : 1.0;
+
+            fprintf(stderr, "[stats] native GS: %llu pictures; a picture: %.1f render passes, %.1f resolves, "
+                            "%.1f MB loaded and %.1f MB stored by passes, %.1f MB resolved, %.1f MB copied for blending\n",
+                    (unsigned long long)s->pictures, (double)s->passes / pictures, (double)s->ms_resolves / pictures,
+                    (double)s->pass_load_bytes / pictures / 1048576.0, (double)s->pass_store_bytes / pictures / 1048576.0,
+                    (double)s->resolve_bytes / pictures / 1048576.0, (double)s->copy_bytes / pictures / 1048576.0);
+            if (s->blend_copies_in_pass) {
+                fprintf(stderr, "[stats] native GS: %llu copies for shader blending made in the render pass\n",
+                        (unsigned long long)s->blend_copies_in_pass);
+            }
+            fprintf(stderr, "[stats] native GS render passes ended by:");
+            for (w = 0; w < GSN_WHY_COUNT; w++) {
+                if (s->pass_ends[w]) {
+                    fprintf(stderr, " %s %llu;", gsn_why_name(w), (unsigned long long)s->pass_ends[w]);
+                }
+            }
+            fprintf(stderr, "\n[stats] native GS resolves for:");
+            for (w = 0; w < GSN_WHY_COUNT; w++) {
+                if (s->resolves_by[w]) {
+                    fprintf(stderr, " %s %llu;", gsn_why_name(w), (unsigned long long)s->resolves_by[w]);
+                }
+            }
+            fprintf(stderr, "\n");
+            gsn_print_gpu_times();
+        }
         fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
                 (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,
                 (unsigned long long)s->pool_mb, (unsigned long long)s->upload_copies);

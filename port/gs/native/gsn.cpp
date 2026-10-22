@@ -272,6 +272,7 @@ struct Gs {
     Program *program_present_sharpen = nullptr; // (and its sharpening: shaders/present_sharpen.frag)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
+    ImageHandle resolved[2]; // a multisampled target's copies for shader blending, resolved by the passes (resolved_copy)
     BufferHandle readback_buffer;
     VkDeviceSize readback_size = 0;
     std::vector<uint8_t> narrowed; // read_image's pixels of a 16-bit image, rounded to 8 bits
@@ -283,6 +284,15 @@ struct Gs {
     Target *pass_depth = nullptr;
     bool pass_ms = false; // drawing into the targets' multisampled images
     bool in_pass = false;
+    // the pass has a second colour attachment, the copy of the target that shader blending reads (blend_scratch)
+    bool pass_scratch = false;
+    bool pass_area = false; // begun for a part of the targets only (a run of shader blending's)
+    // shader blending's copies in the render pass ("Shader blending and the render pass"): its programs,
+    // and the images it copies the target into (one for each size, format and sample count drawn so far)
+    Program *program_in = nullptr, *program_zclamp_in = nullptr;
+    Program *program_in_ms = nullptr, *program_zclamp_in_ms = nullptr, *program_zclamp_sample_in_ms = nullptr;
+    Program *program_pass_copy = nullptr, *program_pass_resolve = nullptr;
+    std::vector<ImageHandle> scratch;
 
     // ---- the batch being gathered: triangles since the last register write
     std::vector<Vtx> verts;
@@ -386,30 +396,90 @@ int log_level; // KF4_GSN_LOG: 1 says when targets are made and dropped, 2 every
 
 void settle_upload(); // (the upload under way, written so far: below)
 
+// --stats: why the render pass under way ends (GSN_WHY_*): what the innermost Why in scope says
+int why_now = GSN_WHY_OTHER;
+struct Why {
+    int before;
+    explicit Why(int why) : before(why_now) { why_now = why; }
+    ~Why() { why_now = before; }
+};
+
+// KF4_GSN_GPU_TIME=1: timestamps between the GPU's pieces of work, each interval added to a kind
+// (gpu_mark: the time since the mark before is the kind's), printed by --stats (gsn_print_gpu_times)
+int gpu_time = -1;
+QueryPoolHandle gpu_last;
+uint64_t gpu_cmd_serial, gpu_last_serial;
+const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa load/depth", "copy", "scanout"};
+enum { GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_KINDS };
+uint64_t gpu_marks[GPU_KINDS];
+void gpu_mark(int kind);
+
 // ---- Vulkan helpers ----------------------------------------------------------------------------
+// Whether the last thing recorded is a full barrier (full_barrier): another one right after it would
+// order nothing more. Anything recorded goes through cmd(), which clears it: whatever records into
+// gs->cmd some other way must clear it too.
+bool barrier_fresh = false;
+
 CommandBuffer &cmd() {
     if (!gs->cmd) {
         gs->cmd = gs->device->request_command_buffer();
+        gpu_cmd_serial++;
+        gpu_mark(GPU_OTHER);
     }
+    barrier_fresh = false;
     return *gs->cmd;
+}
+
+// Everything recorded so far (its writes) before everything after it: one barrier between two pieces
+// of work, however many of the steps between ask for one (the end of a render pass, a copy's before
+// and after, the next render pass's beginning)
+void full_barrier() {
+    if (barrier_fresh) {
+        return;
+    }
+    cmd().barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                  VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    barrier_fresh = true;
+}
+
+void gpu_mark(int kind) {
+    if (gpu_time < 0) {
+        gpu_time = getenv("KF4_GSN_GPU_TIME") && atoi(getenv("KF4_GSN_GPU_TIME")) > 0;
+    }
+    if (!gpu_time || !gs->cmd) {
+        return;
+    }
+    QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
+        gs->device->register_time_interval("gsn", gpu_last, ts, std::string("gsn ") + gpu_kinds[kind]);
+        gpu_marks[kind]++;
+    }
+    gpu_last = ts;
+    gpu_last_serial = gpu_cmd_serial;
 }
 
 void end_pass() {
     if (gs->in_pass) {
+        gsn_stats.pass_ends[why_now]++;
         gs->cmd->end_render_pass();
+        gpu_mark(gs->pass_ms ? GPU_PASS_MS : GPU_PASS);
         gs->in_pass = false;
         gs->pass_color = nullptr;
         gs->pass_depth = nullptr;
         gs->pass_ms = false;
-        gs->cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                         VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        gs->pass_scratch = false;
+        gs->pass_area = false;
+        barrier_fresh = false;
+        full_barrier();
     }
 }
 
 // Everything recorded so far, sent; with wait, finished too
 void submit(bool wait) {
-    end_pass();
+    {
+        Why why(GSN_WHY_SUBMIT);
+        end_pass();
+    }
     if (!gs->cmd) {
         return;
     }
@@ -425,8 +495,7 @@ void submit(bool wait) {
 
 // A barrier between transfers and the draws or transfers after them
 void transfer_barrier() {
-    cmd().barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
-                  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    full_barrier();
 }
 
 ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_t levels, bool attachment) {
@@ -434,8 +503,9 @@ ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_
     info.levels = levels;
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (attachment) {
+        // (a colour target is read in its own render pass by shader blending: an input attachment)
         info.usage |= format == VK_FORMAT_D32_SFLOAT ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                                                     : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                                                     : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     }
     info.layout = ImageLayout::General;
     info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -521,7 +591,8 @@ ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
     ImageCreateInfo info = ImageCreateInfo::render_target(width, height, depth ? VK_FORMAT_D32_SFLOAT : colour_format());
     info.samples = VkSampleCountFlagBits(target_samples);
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                 (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+                 (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                        : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
     info.layout = ImageLayout::General;
     info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
     return gs->device->create_image(info, nullptr);
@@ -531,6 +602,7 @@ ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
 // or (depth) its Z
 void msaa_copy_pass(const Image &dst, const Image &src, Program *program, bool depth) {
     end_pass();
+    gpu_mark(GPU_OTHER);
     RenderPassInfo rp;
     RenderPassInfo::Subpass subpass;
     if (depth) {
@@ -557,6 +629,12 @@ void msaa_copy_pass(const Image &dst, const Image &src, Program *program, bool d
     c.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp);
     c.draw(3);
     c.end_render_pass();
+    gpu_mark(GPU_MS_COPY);
+    {
+        uint64_t bytes = uint64_t(dst.get_width()) * dst.get_height() * (wide(dst) ? 8 : 4);
+        gsn_stats.pass_store_bytes += bytes * dst.get_create_info().samples;
+        gsn_stats.pass_load_bytes += bytes * src.get_create_info().samples;
+    }
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -565,6 +643,7 @@ void msaa_copy_pass(const Image &dst, const Image &src, Program *program, bool d
 // A rectangle of a multisampled colour image resolved into a single-sampled one, at the same place
 void msaa_resolve(const Image &dst, const Image &src, VkOffset3D at, VkExtent3D size) {
     end_pass();
+    gpu_mark(GPU_OTHER);
     transfer_barrier();
     VkImageResolve region = {};
     region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -575,8 +654,11 @@ void msaa_resolve(const Image &dst, const Image &src, VkOffset3D at, VkExtent3D 
     gs->device->get_device_table().vkCmdResolveImage(cmd().get_command_buffer(), src.get_image(),
                                                      src.get_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL), dst.get_image(),
                                                      dst.get_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL), 1, &region);
+    gpu_mark(GPU_RESOLVE);
     transfer_barrier();
     gsn_stats.ms_resolves++;
+    gsn_stats.resolves_by[why_now]++;
+    gsn_stats.resolve_bytes += uint64_t(size.width) * size.height * (wide(dst) ? 8 : 4) * (1 + src.get_create_info().samples);
 }
 
 // The target's image made current: what was drawn into the multisampled image, resolved into it.
@@ -588,6 +670,7 @@ void msaa_settle(Target &t) {
     if (t.depth) {
         msaa_copy_pass(*t.image, *t.ms, gs->program_ms_depth, true);
         gsn_stats.ms_resolves++;
+        gsn_stats.resolves_by[why_now]++;
     } else {
         msaa_resolve(*t.image, *t.ms, {0, 0, 0}, {t.image->get_width(), t.image->get_height(), 1});
     }
@@ -798,6 +881,7 @@ void write_back(Target &t) {
     if (!t.dirty) {
         return;
     }
+    Why why(GSN_WHY_WRITEBACK);
     msaa_settle(t);
     gsn_stats.writebacks++;
     GSN_LOG(1, "write back target bp %#x bw %u psm %#x %ux%u\n", t.bp, t.bw, t.psm, t.width, t.height);
@@ -878,6 +962,7 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     if (w == 0 || h == 0) {
         return;
     }
+    Why why(GSN_WHY_UPLOAD);
     msaa_settle(t); // (the rest of the image stays)
     end_pass();
     transfer_barrier();
@@ -1056,6 +1141,7 @@ void take_pages(Target &t, bool only_stale) {
         }
     }
     if (!copies.empty()) {
+        Why why(GSN_WHY_COPY);
         // --native-msaa: the pages move between the targets' images, so each is made current first
         // (Z resolved: its first sample), and t's multisampled image is behind it after
         msaa_settle(t);
@@ -1281,7 +1367,10 @@ void decode_texture(Texture &tex) {
         }
         decoded_order.pop_front();
     }
-    end_pass();
+    {
+        Why why(GSN_WHY_DECODE);
+        end_pass();
+    }
     transfer_barrier();
     memset(tex.texels, 0, sizeof(tex.texels));
     for (uint32_t l = 0; l < tex.levels; l++) {
@@ -1570,12 +1659,133 @@ bool fixed_blend(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fix, F
     return false; // (A - B) C + D with D one of A and B: a factor of 1 + C
 }
 
-// (ms: into the targets' multisampled images, --native-msaa)
-void begin_pass(Target *color, Target *depth, bool ms = false) {
-    if (gs->in_pass && gs->pass_color == color && gs->pass_depth == depth && gs->pass_ms == ms) {
+// ---- Shader blending and the render pass --------------------------------------------------------
+// A draw that blends in the shader reads the target's pixels from before it. They used to come from a
+// copy of the target made outside the render pass (a transfer, or with --native-msaa a resolve), so
+// every such draw ended the pass and began it again; a batch whose primitives overlap is drawn in runs,
+// each with its own copy: the shadows' silhouettes (DATE) are some 240 runs a picture on map 000, and
+// the passes' ends and beginnings, the copies and the barriers between were most of the GPU's time at
+// 240 pictures a second (STEP3.md, "Render passes"). Now:
+// - A single-sampled target's copy is kept in the render pass, as its second colour attachment (the
+//   scratch: an image as large as the target, of its format, whose contents do not outlive the pass).
+//   Before each run a draw over the run's rectangle copies the target's pixels into it
+//   (pass_copy.frag, the target read as an input attachment), and the run reads the scratch as an
+//   input attachment where it read the copy (the gs_*_in.frag shaders). Barriers inside the pass (the
+//   subpass's dependency on itself) order the copy after the draws before it and the run after the
+//   copy. The pixels are copied exactly, so the run sees what it saw before.
+// - A multisampled target's copy is its resolve, and that cannot be made in the shader exactly as
+//   vkCmdResolveImage makes it (NVIDIA's rounding of a mean of two samples depends on more than the two
+//   values: the same pair resolves to either of its neighbours in different places). So the copy is
+//   still a resolve, but the render pass makes it: the pass that draws a run resolves the target into
+//   the copy the next run reads, over both runs' rectangles (its render area), into one of two copies
+//   in turn (the run reads the one the pass before resolved). One pass and one barrier a run, instead
+//   of a pass, a resolve and four barriers. (The two resolves gave the same pixels at 2, 4 and 8
+//   samples of 8 bits; of 16 bits, --native-colour high, one pixel in a picture came out 1 apart, so
+//   those are still resolved outside the pass.) (KF4_GSN_MSAA_BLEND=fast copies them in the pass as for a
+//   single-sampled target instead, rounding the mean itself: msaa_blend_in_pass.)
+// A draw whose texture is its own target reads anywhere in it, not only its own pixels: that one still
+// copies the whole target outside the pass. KF4_GSN_BLEND_COPY=1 makes every copy outside the pass, as
+// before (for comparisons).
+bool blend_copy_forced() {
+    static int forced = -1;
+    if (forced < 0) {
+        const char *v = getenv("KF4_GSN_BLEND_COPY");
+        forced = v && atoi(v) > 0;
+    }
+    return forced != 0;
+}
+
+// KF4_GSN_MSAA_BLEND=fast: a multisampled target's copies made in the render pass too, its samples'
+// mean rounded here (pass_resolve.frag), which is not always the resolve's: a few pixels at edges come
+// out 1 or 2 apart from the default's (about a hundred a picture on map 000). A third less GPU time a
+// picture again at --native-scale 4 with MSAA 2 (STEP3.md, "Render passes").
+bool msaa_blend_in_pass() {
+    static int fast = -1;
+    if (fast < 0) {
+        const char *v = getenv("KF4_GSN_MSAA_BLEND");
+        fast = v && strcmp(v, "fast") == 0;
+    }
+    return fast != 0 && !blend_copy_forced();
+}
+
+const Image &blend_scratch(const Image &like) {
+    for (auto &im : gs->scratch) {
+        if (im->get_width() == like.get_width() && im->get_height() == like.get_height() &&
+            im->get_format() == like.get_format() && im->get_create_info().samples == like.get_create_info().samples) {
+            return *im;
+        }
+    }
+    ImageCreateInfo info = ImageCreateInfo::render_target(like.get_width(), like.get_height(), like.get_format());
+    info.samples = like.get_create_info().samples;
+    info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+    info.layout = ImageLayout::General;
+    info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+    gs->scratch.push_back(gs->device->create_image(info, nullptr));
+    return *gs->scratch.back();
+}
+
+// The render pass's subpass with the scratch: colour attachments 0 (the target) and 1 (the scratch),
+// both input attachments too. A multisampled pass lists its inputs the other way round, the scratch
+// first: Granite's cache of render passes does not tell passes apart by their sample counts (msaa_subpass)
+void scratch_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass, bool ms) {
+    subpass = {};
+    subpass.num_color_attachments = 2;
+    subpass.color_attachments[0] = 0;
+    subpass.color_attachments[1] = 1;
+    subpass.num_input_attachments = 2;
+    subpass.input_attachments[0] = ms ? 1 : 0;
+    subpass.input_attachments[1] = ms ? 0 : 1;
+    subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
+    rp.subpasses = &subpass;
+    rp.num_subpasses = 1;
+}
+
+// A barrier inside the render pass: the colour attachments' writes so far, before input attachment
+// reads after it (and those reads' stage after the writes: the scratch is not written while a run reads it)
+void in_pass_barrier() {
+    VkMemoryBarrier2 b = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    b.dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+    VkDependencyInfo dep = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &b;
+    gs->device->get_device_table().vkCmdPipelineBarrier2(cmd().get_command_buffer(), &dep);
+}
+
+// The render pass into a colour target and its Z buffer (or none), made current unless it is already.
+// ms: into the targets' multisampled images (--native-msaa). scratch: with the copy shader blending
+// reads (above); a pass with it serves the draws without it too. area: the pass covers that part of the
+// targets only, and resolve_to (with area) has the multisampled colour resolved into it at the pass's
+// end (above); such a pass serves only the draws begun with it.
+void begin_pass(Target *color, Target *depth, bool ms = false, bool scratch = false, const VkRect2D *area = nullptr,
+                const Image *resolve_to = nullptr) {
+    if (gs->in_pass && gs->pass_color == color && gs->pass_depth == depth && gs->pass_ms == ms &&
+        (gs->pass_scratch || !scratch) && !area && !gs->pass_area) {
         return;
     }
-    end_pass();
+    {
+        Why why(gs->in_pass && gs->pass_color == color && gs->pass_depth == depth
+                    ? (gs->pass_ms != ms ? GSN_WHY_MSAA : GSN_WHY_BLEND)
+                    : GSN_WHY_TARGET);
+        end_pass();
+    }
+    gpu_mark(GPU_OTHER);
+    {
+        const Image &ci = ms ? *color->ms : *color->image;
+        uint64_t bytes = uint64_t(ci.get_width()) * ci.get_height() * (wide(ci) ? 8 : 4) * ci.get_create_info().samples;
+        if (depth) {
+            const Image &di = ms ? *depth->ms : *depth->image;
+            bytes += uint64_t(di.get_width()) * di.get_height() * 4 * di.get_create_info().samples;
+        }
+        if (area) {
+            bytes = bytes / (uint64_t(ci.get_width()) * ci.get_height()) * area->extent.width * area->extent.height;
+        }
+        gsn_stats.pass_load_bytes += bytes;
+        gsn_stats.pass_store_bytes += bytes;
+    }
     RenderPassInfo rp;
     rp.num_color_attachments = 1;
     rp.color_attachments[0] = ms ? &color->ms->get_view() : &color->image->get_view();
@@ -1586,22 +1796,127 @@ void begin_pass(Target *color, Target *depth, bool ms = false) {
         rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
     }
     RenderPassInfo::Subpass subpass;
-    if (ms) {
+    if (resolve_to) {
+        // (the copy is resolved over the render area; what it held there before is not wanted)
+        rp.num_color_attachments = 2;
+        rp.color_attachments[1] = &resolve_to->get_view();
+        rp.store_attachments = 3;
+        subpass = {};
+        subpass.num_color_attachments = 1;
+        subpass.color_attachments[0] = 0;
+        subpass.num_resolve_attachments = 1;
+        subpass.resolve_attachments[0] = 1;
+        subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
+        rp.subpasses = &subpass;
+        rp.num_subpasses = 1;
+    } else if (scratch) {
+        // (the scratch's contents are not wanted before the pass nor after it)
+        rp.num_color_attachments = 2;
+        rp.color_attachments[1] = &blend_scratch(ms ? *color->ms : *color->image).get_view();
+        scratch_subpass(rp, subpass, ms);
+    } else if (ms) {
         msaa_subpass(rp, subpass);
     }
-    cmd().barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
-                  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    if (area) {
+        rp.render_area = *area;
+    }
+    full_barrier();
     cmd().begin_render_pass(rp);
     gs->in_pass = true;
     gs->pass_color = color;
     gs->pass_depth = depth;
     gs->pass_ms = ms;
+    gs->pass_scratch = scratch;
+    gs->pass_area = area != nullptr;
     gsn_stats.passes++;
+}
+
+// The target's pixels in a rectangle (box: x0 y0 x1 y1 in GS pixels) copied into the scratch of the
+// render pass under way (begun with it), for the next run of a draw that blends in the shader
+void blend_copy_in_pass(Target &t, bool ms, const int32_t *box) {
+    const Image &image = ms ? *t.ms : *t.image;
+    int32_t sx = int32_t(t.sx), sy = int32_t(t.sy);
+    int32_t x0 = std::max(box[0], 0) * sx, y0 = std::max(box[1], 0) * sy;
+    int32_t x1 = std::min(box[2] * sx, int32_t(image.get_width())), y1 = std::min(box[3] * sy, int32_t(image.get_height()));
+    if (x1 <= x0 || y1 <= y0) {
+        return; // (nothing of the run on the target)
+    }
+    CommandBuffer &c = cmd();
+    in_pass_barrier();
+    c.set_opaque_state();
+    c.set_program(ms ? gs->program_pass_resolve : gs->program_pass_copy);
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_test(false, false);
+    c.set_blend_enable(false);
+    c.set_color_write_mask(0xF0); // (the scratch only)
+    c.set_viewport({0.0f, 0.0f, float(image.get_width()), float(image.get_height()), 0.0f, 1.0f});
+    c.set_scissor({{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}});
+    c.set_input_attachments(0, 4);
+    if (ms) {
+        struct {
+            int32_t samples;
+            float scale;
+        } push = {int32_t(image.get_create_info().samples), wide(image) ? 65535.0f : 255.0f};
+        c.push_constants(&push, 0, sizeof(push));
+    }
+    c.draw(3);
+    in_pass_barrier();
+    gsn_stats.blend_copies_in_pass++;
+}
+
+// A run's rectangle: the GS pixels its primitives can cover, a pixel more each way (x0 y0 x1 y1)
+void run_box(uint32_t first, uint32_t count, int32_t *box) {
+    box[0] = box[1] = INT32_MAX;
+    box[2] = box[3] = INT32_MIN;
+    for (uint32_t i = first; i < first + count; i++) {
+        const Vtx &v = gs->verts[i];
+        box[0] = std::min(box[0], int32_t(floorf(v.x)) - 1);
+        box[1] = std::min(box[1], int32_t(floorf(v.y)) - 1);
+        box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
+        box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
+    }
+}
+
+// The same in the target's own pixels, on its image (an empty rectangle when it is off the image)
+VkRect2D box_area(const Target &t, const Image &image, const int32_t *box) {
+    int32_t x0 = std::max(box[0], 0) * int32_t(t.sx), y0 = std::max(box[1], 0) * int32_t(t.sy);
+    int32_t x1 = std::min(box[2] * int32_t(t.sx), int32_t(image.get_width()));
+    int32_t y1 = std::min(box[3] * int32_t(t.sy), int32_t(image.get_height()));
+    if (x1 <= x0 || y1 <= y0) {
+        return {{0, 0}, {0, 0}};
+    }
+    return {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+}
+
+VkRect2D rect_union(const VkRect2D &a, const VkRect2D &b) {
+    if (!a.extent.width) {
+        return b;
+    }
+    if (!b.extent.width) {
+        return a;
+    }
+    int32_t x0 = std::min(a.offset.x, b.offset.x), y0 = std::min(a.offset.y, b.offset.y);
+    int32_t x1 = std::max(a.offset.x + int32_t(a.extent.width), b.offset.x + int32_t(b.extent.width));
+    int32_t y1 = std::max(a.offset.y + int32_t(a.extent.height), b.offset.y + int32_t(b.extent.height));
+    return {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+}
+
+// The two copies a multisampled target's runs read in turn (resolved by the render passes), as large as
+// its image
+const Image &resolved_copy(int which, const Image &like) {
+    ImageHandle &im = gs->resolved[which];
+    if (!im || im->get_width() != like.get_width() || im->get_height() != like.get_height() ||
+        im->get_format() != like.get_format()) {
+        im = make_image(like.get_width(), like.get_height(), like.get_format(), 1, true);
+    }
+    return *im;
 }
 
 // A copy of the target, for a draw that reads what it draws over
 // (box: only the target's pixels a draw can cover, x0 y0 x1 y1 in GS pixels; NULL: all of it)
 const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
+    Why why(GSN_WHY_BLEND);
     uint32_t tw = t.width * t.sx, th = t.height * t.sy;
     if (!gs->snapshot || gs->snapshot->get_format() != t.image->get_format()) {
         gs->snapshot.reset();
@@ -1629,11 +1944,14 @@ const Image &snapshot_of(Target &t, const int32_t *box = nullptr) {
         return *gs->snapshot;
     }
     end_pass();
+    gpu_mark(GPU_OTHER);
     transfer_barrier();
     cmd().copy_image(*gs->snapshot, *t.image, at, at, size, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+    gpu_mark(GPU_COPY);
     transfer_barrier();
     gsn_stats.target_copies++;
+    gsn_stats.copy_bytes += uint64_t(size.width) * size.height * (wide(*t.image) ? 16 : 8);
     return *gs->snapshot;
 }
 
@@ -1918,6 +2236,7 @@ void flush_batch() {
             } else if (source == color) {
                 reads_own_target = true;
             } else {
+                Why why(GSN_WHY_TEXTURE);
                 msaa_settle(*source);
                 target_view = &source->image->get_view();
             }
@@ -2182,6 +2501,7 @@ void flush_batch() {
             cutout = false;
         }
     } else {
+        Why why(GSN_WHY_MSAA);
         msaa_settle(*color);
         if (scale_x > 1 || scale_y > 1) {
             flat_2d(gs->verts);
@@ -2205,31 +2525,76 @@ void flush_batch() {
     }
     runs.push_back(uint32_t(gs->verts.size()));
 
+    // How each run gets the target's pixels from before it ("Shader blending and the render pass"): a
+    // copy outside the render pass (a draw reading its own target; everything with KF4_GSN_BLEND_COPY),
+    // a copy in the pass (a single-sampled target), or the multisampled target resolved by the passes
+    enum { COPY_NONE, COPY_OUTSIDE, COPY_IN_PASS, COPY_BY_PASS } how = COPY_NONE;
+    if (reads_own_target) {
+        how = COPY_OUTSIDE;
+    } else if (shader_blend) {
+        how = blend_copy_forced() ? COPY_OUTSIDE : !ms || msaa_blend_in_pass() ? COPY_IN_PASS : COPY_BY_PASS;
+        if (how == COPY_BY_PASS && wide(*color->image)) {
+            how = COPY_OUTSIDE; // (--native-colour high: a pass's resolve of 16-bit samples is not always vkCmdResolveImage's)
+        }
+    }
+    // (COPY_BY_PASS: each run's rectangle on the multisampled image, and the first run's copy resolved by
+    // a pass of its own that draws nothing)
+    std::vector<VkRect2D> areas;
+    if (how == COPY_BY_PASS) {
+        for (size_t r = 0; r + 1 < runs.size(); r++) {
+            int32_t box[4];
+            run_box(runs[r], runs[r + 1] - runs[r], box);
+            areas.push_back(box_area(*color, *color->ms, box));
+        }
+        if (areas[0].extent.width) {
+            Why why(GSN_WHY_BLEND);
+            begin_pass(color, nullptr, true, false, &areas[0], &resolved_copy(0, *color->ms));
+            gsn_stats.ms_resolves++;
+            gsn_stats.resolves_by[GSN_WHY_BLEND]++;
+        }
+    }
     for (size_t r = 0; r + 1 < runs.size(); r++) {
         uint32_t first = runs[r], count = runs[r + 1] - runs[r];
         const Image *dest_copy = nullptr;
-        if (shader_blend || reads_own_target) {
+        // (COPY_BY_PASS: the pass's part of the targets, and the copy it resolves for the next run)
+        VkRect2D area = {};
+        const Image *resolve_next = nullptr;
+        if (how == COPY_OUTSIDE) {
             // a draw that reads its own target reads anywhere in it; one that blends, only its own pixels
-            int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
-            for (uint32_t i = first; i < first + count; i++) {
-                const Vtx &v = gs->verts[i];
-                box[0] = std::min(box[0], int32_t(floorf(v.x)) - 1);
-                box[1] = std::min(box[1], int32_t(floorf(v.y)) - 1);
-                box[2] = std::max(box[2], int32_t(ceilf(v.x)) + 2);
-                box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
-            }
+            int32_t box[4];
+            run_box(first, count, box);
             dest_copy = &snapshot_of(*color, reads_own_target ? nullptr : box);
             if (reads_own_target) {
                 target_view = &dest_copy->get_view();
             }
+        } else if (how == COPY_IN_PASS) {
+            int32_t box[4];
+            run_box(first, count, box);
+            begin_pass(color, depth, ms, true);
+            blend_copy_in_pass(*color, ms, box);
+        } else if (how == COPY_BY_PASS) {
+            dest_copy = &resolved_copy(int(r & 1), *color->ms);
+            if (r + 2 < runs.size() && areas[r + 1].extent.width) {
+                area = rect_union(areas[r], areas[r + 1]);
+                resolve_next = &resolved_copy(int((r + 1) & 1), *color->ms);
+                gsn_stats.ms_resolves++;
+                gsn_stats.resolves_by[GSN_WHY_BLEND]++;
+            }
         }
 
-        begin_pass(color, depth, ms);
+        begin_pass(color, depth, ms, false, resolve_next ? &area : nullptr, resolve_next);
         CommandBuffer &c = cmd();
         c.set_opaque_state();
         // (the cut-outs at every sample: draws with Z into the multisampled images)
         bool per_sample = cutout && ms && zclamp;
-        c.set_program(per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program);
+        if (how == COPY_IN_PASS) {
+            c.set_program(per_sample ? gs->program_zclamp_sample_in_ms
+                          : ms        ? (zclamp ? gs->program_zclamp_in_ms : gs->program_in_ms)
+                                      : (zclamp ? gs->program_zclamp_in : gs->program_in));
+            c.set_input_attachments(0, 4);
+        } else {
+            c.set_program(per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program);
+        }
         if (per_sample && r == 0) {
             gsn_stats.cutout_draws++;
         }
@@ -2237,7 +2602,15 @@ void flush_batch() {
         c.set_cull_mode(VK_CULL_MODE_NONE);
         VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
         c.set_viewport(vp);
-        c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
+        if (resolve_next) {
+            // (within the pass's part of the targets)
+            int32_t ox0 = std::max(area.offset.x, int32_t(sx0 * scale_x)), oy0 = std::max(area.offset.y, int32_t(sy0 * scale_y));
+            int32_t ox1 = std::min(area.offset.x + int32_t(area.extent.width), int32_t(x1 * scale_x));
+            int32_t oy1 = std::min(area.offset.y + int32_t(area.extent.height), int32_t(y1 * scale_y));
+            c.set_scissor({{ox0, oy0}, {uint32_t(std::max(ox1 - ox0, 0)), uint32_t(std::max(oy1 - oy0, 0))}});
+        } else {
+            c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
+        }
         c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
         c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
         c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
@@ -2910,6 +3283,7 @@ void begin_transfer(uint32_t dir) {
             src = find_target(sbp, sbw, spsm);
             dst = find_target(d.bp, d.bw, d.psm);
             if (src && dst) {
+                Why why(GSN_WHY_COPY);
                 msaa_settle(*src);
                 msaa_settle(*dst);
                 end_pass();
@@ -3349,6 +3723,32 @@ void make_program() {
         gs->program_zclamp_sample = gs->device->request_program(vs, fs_sample);
     }
 
+    // shader blending in the render pass: the destination from an input attachment (binding 5 in a
+    // single-sampled target's pass, 4 in a multisampled one's: scratch_subpass) in place of binding 3
+    for (int ms = 0; ms < 2; ms++) {
+        ResourceLayout in = frag;
+        in.sets[0].sampled_image_mask &= ~(1u << 3);
+        in.sets[0].fp_mask &= ~(1u << 3);
+        uint32_t b = ms ? 4 : 5;
+        in.sets[0].input_attachment_mask = 1u << b;
+        in.sets[0].fp_mask |= 1u << b;
+        in.sets[0].meta[b].array_size = 1;
+        if (!ms) {
+            gs->program_in = gs->device->request_program(vs, gs->device->request_shader(gsn_spv_gs_in_frag, sizeof(gsn_spv_gs_in_frag), &in));
+            gs->program_zclamp_in = gs->device->request_program(
+                vs, gs->device->request_shader(gsn_spv_gs_zclamp_in_frag, sizeof(gsn_spv_gs_zclamp_in_frag), &in));
+        } else {
+            gs->program_in_ms = gs->device->request_program(
+                vs, gs->device->request_shader(gsn_spv_gs_in_ms_frag, sizeof(gsn_spv_gs_in_ms_frag), &in));
+            gs->program_zclamp_in_ms = gs->device->request_program(
+                vs, gs->device->request_shader(gsn_spv_gs_zclamp_in_ms_frag, sizeof(gsn_spv_gs_zclamp_in_ms_frag), &in));
+            if (sample_shading) {
+                gs->program_zclamp_sample_in_ms = gs->device->request_program(
+                    vs, gs->device->request_shader(gsn_spv_gs_zclamp_sample_in_ms_frag, sizeof(gsn_spv_gs_zclamp_sample_in_ms_frag), &in));
+            }
+        }
+    }
+
     // --native-msaa's copying passes: a texture in, a colour or a depth out
     ResourceLayout copy_vert = {};
     ResourceLayout copy_frag = {};
@@ -3364,6 +3764,24 @@ void make_program() {
         copy_vs, gs->device->request_shader(gsn_spv_msaa_load_depth_frag, sizeof(gsn_spv_msaa_load_depth_frag), &copy_frag));
     gs->program_ms_depth = gs->device->request_program(
         copy_vs, gs->device->request_shader(gsn_spv_msaa_depth_frag, sizeof(gsn_spv_msaa_depth_frag), &copy_frag));
+
+    // shader blending in the render pass: the target into the scratch (an input attachment in, colour
+    // attachment 1 out)
+    ResourceLayout pass_copy = {};
+    pass_copy.output_mask = 2;
+    pass_copy.sets[0].input_attachment_mask = 1u << 4;
+    pass_copy.sets[0].fp_mask = 1u << 4;
+    pass_copy.sets[0].meta[4].array_size = 1;
+    gs->program_pass_copy = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_pass_copy_frag, sizeof(gsn_spv_pass_copy_frag), &pass_copy));
+    ResourceLayout pass_resolve = {};
+    pass_resolve.output_mask = 2;
+    pass_resolve.push_constant_size = 2 * sizeof(int32_t);
+    pass_resolve.sets[0].input_attachment_mask = 1u << 5;
+    pass_resolve.sets[0].fp_mask = 1u << 5;
+    pass_resolve.sets[0].meta[5].array_size = 1;
+    gs->program_pass_resolve = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_pass_resolve_frag, sizeof(gsn_spv_pass_resolve_frag), &pass_resolve));
 
     // the scanout's deinterlace: four images in, the picture out
     ResourceLayout deinterlace = {};
@@ -4204,6 +4622,38 @@ extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
     gs->readback_at += n;
 }
 
+extern "C" const char *gsn_why_name(int why) {
+    static const char *const names[GSN_WHY_COUNT] = {"other", "attachments", "MSAA on/off", "shader blend",
+                                                      "texture from a target", "texture decode", "upload",
+                                                      "target copy", "write-back", "scanout", "submit"};
+    return why >= 0 && why < GSN_WHY_COUNT ? names[why] : "?";
+}
+
+extern "C" void gsn_print_gpu_times(void) {
+    if (gpu_time <= 0 || !gs || !gs->device) {
+        return;
+    }
+    gs->device->wait_idle();
+    double total = 0;
+    std::vector<std::pair<std::string, double>> kinds;
+    gs->device->timestamp_log([&](const std::string &tag, const TimestampIntervalReport &r) {
+        for (int k = 0; k < GPU_KINDS; k++) {
+            if (tag == std::string("gsn ") + gpu_kinds[k]) {
+                double ms = r.time_per_accumulation * double(gpu_marks[k]) * 1000.0;
+                kinds.push_back({gpu_kinds[k], ms});
+                total += ms;
+            }
+        }
+    });
+    double pictures = double(std::max<uint64_t>(gsn_stats.pictures, 1));
+    fprintf(stderr, "[stats] native GS GPU time: %.1f ms in all, %.3f ms a picture (%llu pictures):", total,
+            total / pictures, (unsigned long long)gsn_stats.pictures);
+    for (auto &k : kinds) {
+        fprintf(stderr, " %s %.3f", k.first.c_str(), k.second / pictures);
+    }
+    fprintf(stderr, "\n");
+}
+
 namespace {
 // gsn_set_presenter's (a picture's pixels, or a new image for gsn_scanout_take), and the pixels it
 // is given
@@ -4234,6 +4684,10 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         frame = &presented;
     }
     flush_batch();
+    gsn_stats.pictures++;
+    Why why_scanout(GSN_WHY_SCANOUT);
+    end_pass();
+    gpu_mark(GPU_OTHER);
     // a register every 16 bytes: PMODE, SMODE1, SMODE2, ..., DISPFB1, DISPLAY1, DISPFB2, DISPLAY2
     auto preg = [&](int n) { return privileged[n * 2]; };
     uint64_t pmode = preg(0);
@@ -4340,6 +4794,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     if (!history_kept && gs->history_filled && !extra) {
         forget_history();
     }
+    gpu_mark(GPU_SCANOUT);
     submit(false);
     gs->device->next_frame_context();
     if (ok & GSN_WANT_IMAGE) {
@@ -4375,6 +4830,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         }
         end_pass();
         gs->targets.clear();
+        gs->scratch.clear(); // (shader blending's images, as large as the targets were)
+        gs->resolved[0].reset();
+        gs->resolved[1].reset();
         target_sx = wanted & 0xFF;
         target_sy = wanted >> 8;
         target_samples = wanted_samples;

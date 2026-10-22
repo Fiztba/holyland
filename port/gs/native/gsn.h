@@ -186,7 +186,19 @@ typedef struct {
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
     uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
+    /* Why render passes ended, and why multisampled images were resolved (GSN_WHY_*); the bytes the
+       passes loaded and stored (their attachments, whole), resolves and copies moved; pictures made */
+    uint64_t pass_ends[16], resolves_by[16];
+    uint64_t pass_load_bytes, pass_store_bytes, resolve_bytes, copy_bytes, pictures;
+    uint64_t blend_copies_in_pass; /* shader blending's copies of the target made in the render pass */
 } GsnStats;
+enum {
+    GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,
+    GSN_WHY_COPY, GSN_WHY_WRITEBACK, GSN_WHY_SCANOUT, GSN_WHY_SUBMIT, GSN_WHY_COUNT
+};
+const char *gsn_why_name(int why);
+/* KF4_GSN_GPU_TIME=1: the GPU's time by kind of work (timestamps around each), printed by --stats */
+void gsn_print_gpu_times(void);
 extern GsnStats gsn_stats;
 
 #ifdef __cplusplus
