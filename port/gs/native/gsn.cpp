@@ -268,6 +268,8 @@ struct Gs {
     Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
     Program *program_deinterlace = nullptr; // (the scanout's: shaders/deinterlace.frag)
     Program *program_narrow = nullptr;      // (--native-colour high's scanout: shaders/narrow.frag)
+    Program *program_present_scale = nullptr;   // (the presenter's scaling: shaders/present_scale.frag)
+    Program *program_present_sharpen = nullptr; // (and its sharpening: shaders/present_sharpen.frag)
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     BufferHandle readback_buffer;
@@ -3380,6 +3382,16 @@ void make_program() {
     narrowing.push_constant_size = 8 * sizeof(int32_t);
     gs->program_narrow = gs->device->request_program(
         copy_vs, gs->device->request_shader(gsn_spv_narrow_frag, sizeof(gsn_spv_narrow_frag), &narrowing));
+
+    // the presenter's scaling to the window, and its sharpening (present_scale)
+    ResourceLayout scaling = copy_colour;
+    scaling.push_constant_size = 5 * sizeof(int32_t);
+    gs->program_present_scale = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_present_scale_frag, sizeof(gsn_spv_present_scale_frag), &scaling));
+    ResourceLayout sharpening = copy_colour;
+    sharpening.push_constant_size = 3 * sizeof(int32_t);
+    gs->program_present_sharpen = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_present_sharpen_frag, sizeof(gsn_spv_present_sharpen_frag), &sharpening));
 }
 
 void reset_gs() {
@@ -3406,6 +3418,9 @@ const int SCANOUT_SLOTS = 16;
 struct ScanoutSlot {
     ImageHandle image;
     uint32_t width = 0, height = 0;
+    ImageHandle scaled;              // the picture at the window's size (present_scale), or none
+    uint32_t scaled_width = 0, scaled_height = 0;
+    ImageHandle scaled_work;         // (the scaling's, before the sharpening)
     uint64_t serial = 0; // 0: none published in it (or it is being written)
     uint64_t tag = 0;    // the picture's (gsn_picture)
 };
@@ -3619,6 +3634,106 @@ void deinterlace_pass(const Image &dst, int parity, uint32_t sy, uint32_t lines)
               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
 }
 
+// ---- The presenter's scaling ---------------------------------------------------------------------
+// The picture scaled to the size the window shows it at (gsn_set_present_scale: the presenter's, or
+// --dump-present's), on the GPU after its scanout, with shaders/present_scale.frag (a Catmull-Rom
+// cubic, stretched by the ratio when the picture is made smaller, on linear light) and, with a strength,
+// shaders/present_sharpen.frag after it; the presenter then copies it into the window a pixel a pixel.
+// None when the presenter scales by itself (sharp or smooth, and no sharpening).
+std::atomic<uint32_t> present_size{0};    // width << 16 | height, 0: none
+std::atomic<uint32_t> present_sharpen{0}; // strength in thousandths
+bool scanout_wants_scaled;                // (vsync_now: GSN_WANT_SCALED)
+uint64_t present_scale_passes;
+
+void draw_pass(const Image &dst, Program *program, const ImageView &src, const void *push, size_t push_size) {
+    end_pass();
+    RenderPassInfo rp;
+    rp.num_color_attachments = 1;
+    rp.color_attachments[0] = &dst.get_view();
+    rp.store_attachments = 1;
+    CommandBuffer &c = cmd();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    c.begin_render_pass(rp);
+    c.set_opaque_state();
+    c.set_program(program);
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_test(false, false);
+    c.set_texture(0, 0, src, StockSampler::NearestClamp);
+    c.push_constants(push, 0, push_size);
+    c.draw(3);
+    c.end_render_pass();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+}
+
+void present_scale(ScanoutSlot &sl, const Image &picture) {
+    uint32_t size = present_size.load(std::memory_order_relaxed);
+    uint32_t w = size >> 16, h = size & 0xFFFF;
+    float sharpen = float(present_sharpen.load(std::memory_order_relaxed)) / 1000.0f;
+    if (w == 0 || h == 0 || w > 8192 || h > 8192) {
+        sl.scaled.reset();
+        sl.scaled_width = sl.scaled_height = 0;
+        return;
+    }
+    if (!sl.scaled || sl.scaled_width != w || sl.scaled_height != h) {
+        sl.scaled = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
+        sl.scaled_work.reset();
+        sl.scaled_width = w;
+        sl.scaled_height = h;
+    }
+    if (sharpen > 0 && !sl.scaled_work) {
+        sl.scaled_work = make_image(w, h, VK_FORMAT_R8G8B8A8_UNORM, 1, true);
+    }
+    uint32_t pw = picture.get_width(), ph = picture.get_height();
+    struct {
+        int32_t src[2];
+        float ratio[2];
+        int32_t linear;
+    } scale = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
+    const Image &first = sharpen > 0 ? *sl.scaled_work : *sl.scaled;
+    draw_pass(first, gs->program_present_scale, picture.get_view(), &scale, sizeof(scale));
+    if (sharpen > 0) {
+        struct {
+            int32_t size[2];
+            float strength;
+        } sharp = {{int32_t(w), int32_t(h)}, sharpen};
+        draw_pass(*sl.scaled, gs->program_present_sharpen, sl.scaled_work->get_view(), &sharp, sizeof(sharp));
+    }
+    present_scale_passes++;
+    {
+        // KF4_PRESENT_BENCH=N: the GPU's time for the scaling (and sharpening), N times over, once
+        static int bench = -1;
+        if (bench < 0) {
+            bench = getenv("KF4_PRESENT_BENCH") ? atoi(getenv("KF4_PRESENT_BENCH")) : 0;
+        }
+        if (bench > 0 && present_scale_passes == 1) {
+            submit(true);
+            auto t0 = std::chrono::steady_clock::now();
+            for (int i = 0; i < bench; i++) {
+                draw_pass(first, gs->program_present_scale, picture.get_view(), &scale, sizeof(scale));
+            }
+            submit(true);
+            auto t1 = std::chrono::steady_clock::now();
+            if (sharpen > 0) {
+                struct {
+                    int32_t size[2];
+                    float strength;
+                } sharp = {{int32_t(w), int32_t(h)}, sharpen};
+                for (int i = 0; i < bench; i++) {
+                    draw_pass(*sl.scaled, gs->program_present_sharpen, sl.scaled_work->get_view(), &sharp, sizeof(sharp));
+                }
+            }
+            submit(true);
+            auto t2 = std::chrono::steady_clock::now();
+            fprintf(stderr, "[gsn] present scaling %ux%u -> %ux%u: %.3f ms a picture, sharpening %.3f ms\n", pw, ph, w, h,
+                    std::chrono::duration<double, std::milli>(t1 - t0).count() / bench,
+                    std::chrono::duration<double, std::milli>(t2 - t1).count() / bench);
+        }
+    }
+}
+
 // The displayed buffer into scanout_image as `mode` says (parity: the lines of this vblank's field; in
 // field mode the buffer is the field's picture, and parity the lines of the woven picture it goes
 // into); with frame, read back into it too. Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has
@@ -3691,8 +3806,16 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
         break;
     }
     int ok = GSN_WANT_IMAGE;
+    present_scale(so.slots[slot], dst);
+    const Image *readout = &dst;
+    if (scanout_wants_scaled && so.slots[slot].scaled) {
+        // (--dump-present: the picture as the window shows it)
+        readout = so.slots[slot].scaled.get();
+        iw = so.slots[slot].scaled_width;
+        ih = so.slots[slot].scaled_height;
+    }
     if (frame && size_t(iw) * ih <= PORT_GS_FRAME_PIXELS) {
-        const uint8_t *pixels = read_image(dst, 0, 0, iw, ih);
+        const uint8_t *pixels = read_image(*readout, 0, 0, iw, ih);
         for (size_t i = 0; i < size_t(iw) * ih; i++) {
             uint32_t v;
             memcpy(&v, pixels + i * 4, 4);
@@ -4100,7 +4223,11 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         uploads_now.clear();
         recording = -1;
     }
-    if ((want_pixels & GSN_PRESENT) && !(want_pixels & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) {
+    // SDL_Renderer's picture at the window's size: the scaled image read back (GSN_WANT_SCALED with
+    // GSN_PRESENT and GSN_WANT_IMAGE), for the presenter's pixels
+    bool scaled_pixels = (want_pixels & GSN_PRESENT) && (want_pixels & GSN_WANT_SCALED) &&
+                         (want_pixels & GSN_WANT_IMAGE) && !(want_pixels & GSN_WANT_PIXELS);
+    if (((want_pixels & GSN_PRESENT) && !(want_pixels & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) || scaled_pixels) {
         if (!presented.rgba) {
             presented.rgba = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS));
         }
@@ -4114,6 +4241,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     int circuit = (pmode & 2) ? 2 : (pmode & 1) ? 1 : 0;
     // the PC's switches (gsn_vsync)
     bool progressive = want_pixels & VSYNC_PROGRESSIVE, deinterlace = want_pixels & VSYNC_DEINTERLACE;
+    scanout_wants_scaled = (want_pixels & GSN_WANT_SCALED) != 0;
     want_pixels &= GSN_WANT_PIXELS | GSN_WANT_IMAGE | GSN_PRESENT;
     // a frame-mode picture read a field at a time: 4 vblanks after a tall SCANMSK primitive (scanmsk_seen)
     bool field_scan = gs->field_scan_vblanks > 0;
@@ -4159,7 +4287,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                 history_kept = true;
             }
             if (want_pixels & GSN_WANT_IMAGE) {
-                ok = scanout_to_image(shown, mode, parity, (want_pixels & GSN_WANT_PIXELS) ? frame : nullptr);
+                ok = scanout_to_image(shown, mode, parity, (want_pixels & GSN_WANT_PIXELS) || scaled_pixels ? frame : nullptr);
             } else if (mode == SCAN_WEAVE) {
                 // each field its own picture, woven with the one before: kept every field, wanted or not
                 int f = field & 1;
@@ -4219,7 +4347,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     }
     if (extra) {
         if (ok && (want_pixels & GSN_PRESENT)) {
-            if ((ok & GSN_WANT_IMAGE) && presenter_image) {
+            if (scaled_pixels && (ok & GSN_WANT_PIXELS) && presenter) {
+                presenter(frame, tag);
+            } else if ((ok & GSN_WANT_IMAGE) && presenter_image && !scaled_pixels) {
                 presenter_image(tag);
             } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
                 presenter(frame, tag);
@@ -4256,7 +4386,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     if (ok && (want_pixels & GSN_PRESENT)) {
         // the window's picture, handed over now that it is there (an image: once its commands are on
         // the queue, scanout_published above)
-        if ((ok & GSN_WANT_IMAGE) && presenter_image) {
+        if (scaled_pixels && (ok & GSN_WANT_PIXELS) && presenter) {
+            presenter(frame, tag);
+        } else if ((ok & GSN_WANT_IMAGE) && presenter_image && !scaled_pixels) {
             presenter_image(tag);
         } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
             presenter(frame, tag);
@@ -4638,8 +4770,20 @@ extern "C" int gsn_scanout_take_tag(GsnScanout *out, uint64_t tag) {
     out->height = sl.height;
     out->serial = sl.serial;
     out->tag = sl.tag;
+    out->scaled = sl.scaled ? uint64_t(sl.scaled->get_image()) : 0;
+    out->scaled_width = sl.scaled_width;
+    out->scaled_height = sl.scaled_height;
     so.taken = pick;
     return 1;
+}
+
+extern "C" void gsn_set_present_scale(int width, int height, float sharpen) {
+    present_size.store(width > 0 && height > 0 ? uint32_t(width) << 16 | uint32_t(height) : 0);
+    present_sharpen.store(uint32_t(sharpen > 0 ? sharpen * 1000.0f + 0.5f : 0.0f));
+}
+
+extern "C" uint64_t gsn_present_scale_passes(void) {
+    return present_scale_passes;
 }
 
 extern "C" int gsn_scanout_take(GsnScanout *out) {

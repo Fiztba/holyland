@@ -59,6 +59,15 @@
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
+       --present-scaling sharp|smooth|best
+                         how the picture is fitted to the window: nearest, bilinear, or best (the
+                         default: the native GS scales it with a cubic, area-weighted when made
+                         smaller, on linear light; present_scale.frag)
+       --present-sharpen X
+                         contrast-adaptive sharpening after the scaling, 0 (off) to 1
+       --dump-present WxH
+                         --dump-frames writes the picture as a WxH window shows it with the best
+                         scaling (and --present-sharpen)
        --frame-rate 30|60|120|144|240|N|monitor
                          the opt-in higher frame rates: pictures between the game's 30 a second
                          in play, each drawn from the game's frame with the camera, the moving
@@ -199,6 +208,8 @@ static void parse_options(int argc, char **argv) {
     port_options.whole_frame = 1;
     port_options.native_scale = 0; /* auto: port_gs_native_scale() */
     port_options.frame_rate = 30;
+    port_options.present_scaling = -1;
+    port_options.present_sharpen = -1;
     port_options.native_msaa = 1;
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
@@ -326,6 +337,28 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_scale_forced = 1;
+        } else if (strcmp(option, "--present-scaling") == 0) {
+            port_options.present_scaling = strcmp(value, "sharp") == 0    ? PORT_SCALING_SHARP
+                                           : strcmp(value, "smooth") == 0 ? PORT_SCALING_SMOOTH
+                                           : strcmp(value, "best") == 0   ? PORT_SCALING_BEST
+                                                                          : -2;
+            if (port_options.present_scaling == -2) {
+                fprintf(stderr, "--present-scaling wants sharp, smooth or best, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--present-sharpen") == 0) {
+            port_options.present_sharpen = (float)atof(value);
+            if (port_options.present_sharpen < 0 || port_options.present_sharpen > 1) {
+                fprintf(stderr, "--present-sharpen wants 0 to 1, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--dump-present") == 0) {
+            if (sscanf(value, "%dx%d", &port_options.dump_present_width, &port_options.dump_present_height) != 2 ||
+                port_options.dump_present_width < 16 || port_options.dump_present_height < 16 ||
+                port_options.dump_present_width > 8192 || port_options.dump_present_height > 8192) {
+                fprintf(stderr, "--dump-present wants WIDTHxHEIGHT, not %s\n", value);
+                exit(2);
+            }
         } else if (strcmp(option, "--frame-rate") == 0) {
             port_options.frame_rate = strcmp(value, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : atoi(value);
             if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR &&

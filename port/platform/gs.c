@@ -20,6 +20,7 @@
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/present_vk.h"
 #include "port/savestate.h"
 #include "port/settings.h"
 
@@ -683,6 +684,23 @@ static int compare_buffers(VsyncRequest *request, int dump, PortGsFrame *heat) {
     return 0;
 }
 
+/* With SDL_Renderer and the native GS alone, the best scaling (or the sharpening): the native GS's
+   picture at the window's size, read back (GSN_WANT_SCALED), for SDL_Renderer to draw a pixel a pixel */
+static int sdl_scaled(void) {
+    if (port_video_takes_images() || !have_native || have_gs || port_options.headless ||
+        (port_video_scaling() != PORT_SCALING_BEST && port_video_sharpen() <= 0)) {
+        return 0;
+    }
+    return GSN_WANT_IMAGE | GSN_WANT_SCALED;
+}
+
+/* The size the window shows the picture at, for the native GS's scaling (video.c's SDL_Renderer) */
+void port_gs_present_scale(int width, int height, float sharpen) {
+    if (have_native) {
+        gsn_set_present_scale(width, height, sharpen);
+    }
+}
+
 /* A picture of a renderer's (or each's, with both) for the window and --dump-frames: 1 if one is shown.
    With the Vulkan presenter the native GS's picture stays on the GPU (GSN_WANT_IMAGE), and is read back
    only for a dump. */
@@ -693,6 +711,9 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
     int want_native = shown && port_video_takes_images() ? GSN_WANT_IMAGE | (dump ? GSN_WANT_PIXELS : 0)
                       : want                             ? GSN_WANT_PIXELS
                                                          : 0;
+    if (dump && port_options.dump_present_width > 0) {
+        want_native |= GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_WANT_SCALED; /* (--dump-present) */
+    }
     int got_gs = 0, got_native = 0, got_heat = 0;
     PortGsFrame *show;
 
@@ -704,7 +725,8 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
             /* the native GS's thread hands the window the picture (or with the Vulkan presenter word of
                the new image) when it has it, and this thread goes on */
             return gsn_picture(request->privileged, request->field,
-                               GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0), NULL, tag) != 0;
+                               GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL,
+                               tag) != 0;
         }
         got_native = gsn_picture(request->privileged, request->field, want_native, &native_frame, tag);
     }
@@ -786,7 +808,9 @@ static void present_extra(VsyncRequest *request, double phase, int shown, int du
 
     if (dump) {
         int got = gsn_picture(request->privileged, request->field,
-                              GSN_EXTRA | GSN_WANT_PIXELS | (images ? GSN_WANT_IMAGE : 0), &native_frame, tag);
+                              GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
+                                  (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0),
+                              &native_frame, tag);
         char name[64];
 
         if (got & GSN_WANT_PIXELS) {
@@ -802,8 +826,8 @@ static void present_extra(VsyncRequest *request, double phase, int shown, int du
             }
         }
     } else if (shown) {
-        gsn_picture(request->privileged, request->field, GSN_EXTRA | GSN_PRESENT | (images ? GSN_WANT_IMAGE : 0), NULL,
-                    tag);
+        gsn_picture(request->privileged, request->field,
+                    GSN_EXTRA | GSN_PRESENT | (images ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL, tag);
     }
 }
 
@@ -1038,6 +1062,16 @@ void port_gs_run_vsync(void) {
         frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
+#ifdef KF4_HAVE_SDL
+    if (port_options.dump_present_width > 0 && have_native) {
+        /* --dump-present WxH: the pictures scaled as a window of that size shows them (the best scaling;
+           the others are the presenter's blit) */
+        int x, y, w, h;
+
+        port_video_fit(port_options.dump_present_width, port_options.dump_present_height, &x, &y, &w, &h);
+        gsn_set_present_scale(w, h, port_video_sharpen());
+    }
+#endif
     if (port_frame_interp()) {
         /* the game's frame drawn again into the buffer shown, for the pictures between: at this vblank's
            start when the vblank's own picture is one (the second vblank of a game frame), and after it

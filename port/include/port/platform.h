@@ -102,6 +102,12 @@ typedef struct {
        live from the overlay. */
 #define PORT_FRAME_RATE_MONITOR 1000
     int frame_rate;
+    /* --present-scaling, --present-sharpen: how the picture is scaled to the window (port_video_scaling,
+       port/platform/video.c), this run's whatever settings.json says (-1: the settings'); --dump-present
+       WxH: dumps write the picture as a window of that size shows it */
+    int present_scaling;
+    float present_sharpen;
+    int dump_present_width, dump_present_height;
     int frame_rate_forced;   /* --frame-rate: this run's, whatever settings.json says */
     /* --draw-distance (port_draw_distance(), port/include/port/host.h): how much further the game
        draws, PORT_DRAW_DISTANCE_ (1x, the PS2's, by default); and whether the sky's fog goes out with
@@ -422,6 +428,14 @@ void port_video_vblank(uint64_t vblank, double wall);
    the kernel's calls between vblanks: shows one that is due. */
 void port_video_wait(double until);
 void port_video_poll(void);
+/* How the picture is scaled to the window: PORT_SCALING_ (the settings', or --present-scaling), and the
+   sharpening's strength (0 to 1) */
+enum { PORT_SCALING_SHARP = 0, PORT_SCALING_SMOOTH = 1, PORT_SCALING_BEST = 2 };
+int port_video_scaling(void);
+/* (port/platform/gs.c) the size the window shows the picture at, which the native GS scales it to with
+   the best scaling (0 x 0: none) */
+void port_gs_present_scale(int width, int height, float sharpen);
+float port_video_sharpen(void);
 /* the refresh rate of the window's screen (Hz), 0 when not known (no window) */
 int port_video_refresh_rate(void);
 /* 1 in a --headless run with KF4_PRESENT_SIM (a test of the window's pacing, with nothing drawn) */

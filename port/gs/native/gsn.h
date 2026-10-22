@@ -45,6 +45,15 @@ int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFram
    60): the buffer shown read again, whole (none when the display reads it a field at a time), with
    nothing of the vblank's own done (the deinterlace's history, a new scale). */
 #define GSN_EXTRA 16
+/* With GSN_WANT_IMAGE and GSN_WANT_PIXELS: the pixels are the picture as the window shows it (the
+   scaled image, gsn_set_present_scale) when there is one */
+#define GSN_WANT_SCALED 32
+/* The presenter's scaling: each picture made into an image width x height (the size the window shows
+   it at) on the GPU, with a Catmull-Rom cubic (stretched by the ratio when it is made smaller, on linear
+   light) and a contrast-adaptive sharpening of that strength (0: none); 0 x 0: none. From the next
+   picture. gsn_present_scale_passes counts the pictures scaled. */
+void gsn_set_present_scale(int width, int height, float sharpen);
+uint64_t gsn_present_scale_passes(void);
 int gsn_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 /* The vblanks sent to the native GS's thread that it has not done yet */
 int gsn_backlog(void);
@@ -158,6 +167,8 @@ typedef struct {
     uint32_t width, height;
     uint64_t serial;
     uint64_t tag;
+    uint64_t scaled; /* the picture at the window's size (VkImage, GENERAL), 0: none */
+    uint32_t scaled_width, scaled_height;
 } GsnScanout;
 int gsn_scanout_take(GsnScanout *out);
 int gsn_scanout_take_tag(GsnScanout *out, uint64_t tag);

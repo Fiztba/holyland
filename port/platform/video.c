@@ -185,6 +185,22 @@ static double picture_time(uint64_t tag) {
 
 static int refresh_rate; /* the window's screen's (port_video_refresh_rate) */
 
+int port_video_scaling(void) {
+#ifdef KF4_HAVE_SDL
+    return port_options.present_scaling >= 0 ? port_options.present_scaling : port_settings.scaling;
+#else
+    return port_options.present_scaling >= 0 ? port_options.present_scaling : PORT_SCALING_BEST;
+#endif
+}
+
+float port_video_sharpen(void) {
+#ifdef KF4_HAVE_SDL
+    return port_options.present_sharpen >= 0 ? port_options.present_sharpen : port_settings.sharpen;
+#else
+    return port_options.present_sharpen >= 0 ? port_options.present_sharpen : 0;
+#endif
+}
+
 /* KF4_PRESENT_SIM=HZ, a test of the pacing without a window (--headless): pictures are handed over and
    presented at their times as for the Vulkan presenter, with nothing drawn; the screen's refresh rate
    is HZ (0: none); --stats counts them and KF4_PRESENT_LOG=FILE writes each present's wall time and
@@ -489,17 +505,26 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
     if (fresh) {
         SDL_UpdateTexture(texture, NULL, shown, (int)(width * 4));
     }
-    if (texture_smooth != port_settings.smooth) {
-        texture_smooth = port_settings.smooth;
-        SDL_SetTextureScaleMode(texture, texture_smooth ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
-    }
     {
-        int out_w, out_h;
+        int out_w, out_h, smooth;
         SDL_Rect dst;
         SDL_BlendMode blend;
 
         SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
         port_video_fit(out_w, out_h, &dst.x, &dst.y, &dst.w, &dst.h);
+        /* the native GS's picture scaled to the window already (the best scaling): a pixel a pixel;
+           else SDL's bilinear (smooth, best) or nearest (sharp). The GS scales its next pictures to the
+           picture's place now. */
+        smooth = port_video_scaling() != PORT_SCALING_SHARP && !(texture_width == (uint32_t)dst.w && texture_height == (uint32_t)dst.h);
+        if (texture_smooth != smooth) {
+            texture_smooth = smooth;
+            SDL_SetTextureScaleMode(texture, texture_smooth ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+        }
+        if (port_video_scaling() == PORT_SCALING_BEST || port_video_sharpen() > 0) {
+            port_gs_present_scale(dst.w, dst.h, port_video_sharpen());
+        } else {
+            port_gs_present_scale(0, 0, 0);
+        }
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, &dst);

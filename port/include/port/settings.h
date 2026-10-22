@@ -23,6 +23,8 @@ typedef struct {
     int aspect;            /* ASPECT_ */
     int vsync;             /* wait for the screen's refresh to show each picture */
     int smooth;            /* scale the picture with bilinear filtering (else nearest) */
+    int scaling;           /* PORT_SCALING_: sharp (nearest), smooth (bilinear) or best (port_video_scaling) */
+    float sharpen;         /* the sharpening after the scaling, 0 (none) to 1 */
     int deinterlace;       /* the five ways the PC picture differs from the GS's (port_options) */
     int progressive;
     int anti_blur;

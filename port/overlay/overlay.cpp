@@ -323,12 +323,33 @@ void display_page() {
     tooltip("Off: the sky keeps the PS2's fog (the sky is a dome around you, not further away).\nOn: its fog "
             "goes out as well, which lightens it: the dark sky of the Village\nRuins shows its clouds. "
             "(--draw-distance-sky push)");
-    bool smooth = s.smooth != 0;
-    if (ImGui::Checkbox("Smooth scaling", &smooth)) {
-        s.smooth = smooth;
-        changed();
+    {
+        static const char *const scalings[] = {"Sharp pixels", "Smooth (bilinear)", "Best"};
+        int scaling = s.scaling;
+        if (ImGui::Combo("Scaling to the window", &scaling, scalings, 3)) {
+            s.scaling = scaling;
+            s.smooth = scaling != PORT_SCALING_SHARP;
+            changed();
+        }
+        tooltip("How the picture is fitted to the window.\nSharp pixels: each pixel repeated, blocky.\n"
+                "Smooth: bilinear filtering, as before. Made much smaller (a large native scale in a smaller\n"
+                "window) it reads only 2 x 2 pixels for each, so fine detail flickers and edges step.\n"
+                "Best (the default): the native GS scales the picture itself, with a cubic filter that\n"
+                "averages every pixel the window's pixel covers when made smaller, and keeps edges sharp\n"
+                "when made larger, on linear light. About 0.2 to 0.4 ms of the GPU a picture.\n"
+                "(--present-scaling sharp|smooth|best)");
+        if (port_options.present_scaling >= 0 && port_options.present_scaling != s.scaling) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(for this run: command line)");
+        }
+        float sharpen = s.sharpen;
+        if (ImGui::SliderFloat("Sharpen", &sharpen, 0.0f, 1.0f, sharpen > 0 ? "%.2f" : "off")) {
+            s.sharpen = sharpen < 0.02f ? 0.0f : sharpen;
+            changed();
+        }
+        tooltip("Contrast-adaptive sharpening after the scaling: fine detail crisper, hard edges left\n"
+                "alone. 0: off (the default). It uses the best scaling. (--present-sharpen 0 to 1)");
     }
-    tooltip("On: the picture is scaled to the window with bilinear filtering.\nOff: sharp, blocky pixels.");
     bool vsync = s.vsync != 0;
     if (ImGui::Checkbox("VSync", &vsync)) {
         s.vsync = vsync;

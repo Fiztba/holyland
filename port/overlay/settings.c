@@ -56,6 +56,8 @@
 PortSettings port_settings = {
     .window_height = 896,
     .smooth = 1,
+    .scaling = PORT_SCALING_BEST,
+    .sharpen = 0,
     .deinterlace = 1,
     .progressive = 1,
     .anti_blur = 1,
@@ -286,6 +288,21 @@ void port_settings_load(void) {
     }
     s->vsync = read_bool(display, "vsync", s->vsync);
     s->smooth = read_bool(display, "smooth", s->smooth);
+    {
+        /* "scaling": "sharp", "smooth" or "best"; files from before it had "smooth" alone: true is now
+           the best scaling (the presenter's own filter), false sharp pixels as before */
+        const char *scaling = read_string(display, "scaling");
+
+        if (scaling != NULL) {
+            s->scaling = strcmp(scaling, "sharp") == 0    ? PORT_SCALING_SHARP
+                         : strcmp(scaling, "smooth") == 0 ? PORT_SCALING_SMOOTH
+                                                          : PORT_SCALING_BEST;
+        } else {
+            s->scaling = s->smooth ? PORT_SCALING_BEST : PORT_SCALING_SHARP;
+        }
+        s->smooth = s->scaling != PORT_SCALING_SHARP;
+        s->sharpen = (float)read_number(display, "sharpen", s->sharpen, 0, 1);
+    }
     s->deinterlace = read_bool(display, "deinterlace", s->deinterlace);
     s->progressive = read_bool(display, "progressive", s->progressive);
     s->anti_blur = read_bool(display, "anti_blur", s->anti_blur);
@@ -566,6 +583,10 @@ void port_settings_save(void) {
     put(display, "aspect", cJSON_CreateString(s->aspect == ASPECT_STRETCH ? "stretch" : "4:3"));
     put(display, "vsync", cJSON_CreateBool(s->vsync));
     put(display, "smooth", cJSON_CreateBool(s->smooth));
+    put(display, "scaling", cJSON_CreateString(s->scaling == PORT_SCALING_SHARP    ? "sharp"
+                                               : s->scaling == PORT_SCALING_SMOOTH ? "smooth"
+                                                                                   : "best"));
+    put(display, "sharpen", cJSON_CreateNumber(s->sharpen));
     put(display, "deinterlace", cJSON_CreateBool(s->deinterlace));
     put(display, "progressive", cJSON_CreateBool(s->progressive));
     put(display, "anti_blur", cJSON_CreateBool(s->anti_blur));
