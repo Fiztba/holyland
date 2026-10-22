@@ -11,7 +11,8 @@
 // (ties to even) and kept within what the Z buffer's format holds. It is used for every draw with a Z
 // buffer: a fraction left in would put a second draw over the same plane (ZTST GEQUAL) a hair behind
 // the first where the GS has them equal. gs.frag is for the draws without one. gs_zclamp_sample.frag
-// is gs_zclamp.frag shaded at every sample (GSN_SAMPLE, below).
+// is gs_zclamp.frag shaded at every sample (GSN_SAMPLE, below). The gs_*_in*.frag ones read the
+// destination from the render pass (GSN_DEST_INPUT, at u_dest below).
 #include "gs_common.h"
 
 // gs_zclamp_sample.frag (GSN_SAMPLE, --native-cutout-aa ssaa) is shaded once a sample, not once a
@@ -33,7 +34,27 @@ layout(set = 0, binding = 1) uniform sampler2D u_target;
 layout(set = 0, binding = 2, std140) uniform Clut {
     uvec4 entries[64];
 } u_clut;
+// The destination, for the draws that blend here: a copy of the target taken before the draw (binding
+// 3), or (GSN_DEST_INPUT, the gs_*_in*.frag shaders) the copy kept in the render pass, an input
+// attachment: the pass's second colour attachment, which holds the target's pixels (a multisampled
+// target's resolved, in every sample) where the draw covers them (port/gs/native/gsn.cpp, "Shader
+// blending in the render pass")
+#if defined(GSN_DEST_INPUT) && GSN_DEST_INPUT == 2
+layout(input_attachment_index = 0, set = 0, binding = 4) uniform subpassInputMS u_dest_in;
+vec4 dest_pixel() {
+    return subpassLoad(u_dest_in, 0);
+}
+#elif defined(GSN_DEST_INPUT)
+layout(input_attachment_index = 1, set = 0, binding = 5) uniform subpassInput u_dest_in;
+vec4 dest_pixel() {
+    return subpassLoad(u_dest_in);
+}
+#else
 layout(set = 0, binding = 3) uniform sampler2D u_dest;
+vec4 dest_pixel() {
+    return texelFetch(u_dest, ivec2(gl_FragCoord.xy) - pc.dst_offset, 0);
+}
+#endif
 
 layout(location = 0) out vec4 o_color;
 
@@ -358,7 +379,7 @@ void main() {
     }
 
     if ((pc.flags & GSN_F_SHADER_BLEND) != 0u) {
-        ivec4 d = ivec4(round(texelFetch(u_dest, ivec2(gl_FragCoord.xy) - pc.dst_offset, 0) * 255.0));
+        ivec4 d = ivec4(round(dest_pixel() * 255.0));
         if ((pc.misc & GSN_M_DST16) != 0u) {
             d.rgb &= 0xF8;
             d.a = d.a >= 0x80 ? 0x80 : 0;
@@ -396,7 +417,7 @@ void main() {
         if (high && (pc.misc & GSN_M_COLCLAMP) != 0u && m == 0u) {
             // the same blend in floats, from the destination's colours with their fraction (with FBMSK
             // or without COLCLAMP, which wraps, the GS's integers above)
-            vec3 dh = texelFetch(u_dest, ivec2(gl_FragCoord.xy) - pc.dst_offset, 0).rgb * 255.0;
+            vec3 dh = dest_pixel().rgb * 255.0;
             vec3 oh = hc;
             if ((pc.misc & GSN_M_PABE) == 0u || c.a >= 0x80) {
                 uint sa = field(pc.alpha, 0u, 2u), sb = field(pc.alpha, 2u, 2u);

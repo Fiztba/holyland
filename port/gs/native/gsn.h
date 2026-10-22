@@ -257,7 +257,19 @@ typedef struct {
        of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */
     uint64_t interp_records, interp_replays, interp_misses, ns_interp_record, ns_interp_replay;
     uint64_t interp_rerecord[4]; /* why drawn from the packets again: the GS changed, the recording could not be */
+    /* Why render passes ended, and why multisampled images were resolved (GSN_WHY_*); the bytes the
+       passes loaded and stored (their attachments, whole), resolves and copies moved; pictures made */
+    uint64_t pass_ends[16], resolves_by[16];
+    uint64_t pass_load_bytes, pass_store_bytes, resolve_bytes, copy_bytes, pictures;
+    uint64_t blend_copies_in_pass; /* shader blending's copies of the target made in the render pass */
 } GsnStats;
+enum {
+    GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,
+    GSN_WHY_COPY, GSN_WHY_WRITEBACK, GSN_WHY_SCANOUT, GSN_WHY_SUBMIT, GSN_WHY_COUNT
+};
+const char *gsn_why_name(int why);
+/* KF4_GSN_GPU_TIME=1: the GPU's time by kind of work (timestamps around each), printed by --stats */
+void gsn_print_gpu_times(void);
 extern GsnStats gsn_stats;
 
 #ifdef __cplusplus

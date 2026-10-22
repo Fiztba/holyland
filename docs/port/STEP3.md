@@ -678,6 +678,82 @@ Before the uploads were asked for again it was 3.5 ms. What would go further: dr
 on the GPU from its recorded commands with the vertices changed, instead of the native GS working
 through the packets again.
 
+### Render passes (October 2026)
+
+At 240 pictures a second with `--native-scale 4 --native-msaa 2 --widescreen` (3840 x 1792, the owner's
+settings) the GPU was the limit: a 40-second windowed run on map 000 showed 240 render passes and as
+many MSAA resolves a picture, and a picture took 4.4 to 4.9 ms of GPU time where 240 leaves 4.17.
+
+**Measured.** `--stats` now says why each render pass ended and what each resolve was for, and with
+`KF4_GSN_GPU_TIME=1` the GPU's time a picture by kind of work (timestamps between the pieces: the
+render passes, the resolves, the copies, the scanout, and "other", the time between them that is the
+barriers). The owner's far quick save (map 000, the shadows of the gate's statues in view), 600 vblanks
+with `--fast` and every picture between drawn (`KF4_INTERP_DRAW_ALL`), 2,254 pictures:
+- 204 render passes a picture, 198 resolves; 97% of the passes ended for shader blending's copy of the
+  target, and so did 99% of the resolves. Those are the shadows' silhouettes (VU1 program 0x5A0: DATE,
+  FBA, (Cs - Cd) FIX + Cd with FIX 0x20, about 1,200 triangles a batch that overlap one another): drawn
+  in runs of triangles that do not overlap, about 240 a batch, each reading a copy of the target from
+  before it; with MSAA the copy is a resolve. Every run was a pass's end, a resolve of its rectangle,
+  the next pass's beginning, and four full barriers.
+- 4.43 ms of GPU time a picture: 2.39 the passes' draws, 0.89 the resolves, 1.07 between them (the
+  barriers: each waits for the GPU to empty). The passes' load and store operations would move 20 GB a
+  picture if they read and wrote the attachments whole, but on this GPU they cost nothing that shows:
+  a render area the size of the run changed nothing. The cost was the waiting, not the bytes.
+
+**What changed** (`port/gs/native/gsn.cpp`, "Shader blending and the render pass"):
+- **Barriers merged.** A full barrier right after another (a pass's end, a copy's before and after,
+  the next pass's beginning) is left out (`full_barrier`; anything recorded goes through `cmd()`, which
+  says something was). 4.43 to 3.52 ms.
+- **A single-sampled target's copy in the pass.** The pass gets a second colour attachment (an image
+  the target's size whose contents do not outlive the pass); before each run a draw over the run's
+  rectangle copies the target into it (`pass_copy.frag`, the target read as an input attachment), and
+  the run reads it as an input attachment (`gs_in.frag`, `gs_zclamp_in.frag`). Barriers inside the
+  pass (its subpass's dependency on itself) order them. The copy is exact (8 and 16-bit UNORM through
+  floats), so nothing changes: one pass where there were 240 (without MSAA: 4.3 to 2.1 ms a picture).
+- **A multisampled target's copy resolved by the passes.** The copy must be what `vkCmdResolveImage`
+  gives, and a shader cannot make that: NVIDIA's mean of two 8-bit samples rounds a half up or down by
+  more than the two values (tried exhaustively on every pair: one rule fits a test image, the opposite
+  one the game's pixels, the same pair coming out either way in different places). So each run's pass
+  is begun with a render area of its rectangle and the next run's, and a resolve attachment: at its end
+  the pass resolves the target into the copy the next run reads (two copies in turn; the first run's by
+  a pass that draws nothing). One pass and one barrier a run, and no transfer. The pass's resolve gave
+  the same pixels as `vkCmdResolveImage` at 2, 4 and 8 samples of 8 bits (below); of 16 bits
+  (`--native-colour high`) one pixel came out 1 apart, so those are resolved outside the pass as before.
+  3.52 to 3.18 ms.
+- `KF4_GSN_MSAA_BLEND=fast` copies a multisampled target in the pass too, its samples' mean rounded
+  half up (`pass_resolve.frag`, `gs_*_in_ms.frag`): 12 passes and 1 resolve a picture, 2.23 ms, but not
+  the same pictures (about a hundred pixels at edges a picture, 1 or 2 apart). Not a switch yet: a
+  choice for the owner. `KF4_GSN_BLEND_COPY=1` makes every copy outside the pass, as before.
+- A draw whose texture is its own target reads anywhere in it and still copies the whole target first.
+
+**The numbers** (RTX 5080, Ryzen 9 9900X3D; the owner's settings; before is main 1805c8f):
+
+| | before | after | `fast` |
+|---|---|---|---|
+| render passes a picture (far, 600 vblanks) | 204 | 212 | 12 |
+| resolves a picture | 198 | 198 (by the passes) | 1 |
+| GPU ms a picture, far | 4.43 | 3.18 | 2.23 |
+| GPU ms a picture, sky (no shadows) | 1.27 | 1.21 | 1.21 |
+| 2,000 vblanks `--fast`, every picture drawn (7,854), far | 39.5 s | 28.8 s | 27.7 s |
+| `KF4_PRESENT_SIM=240`, far: pictures left out as the renderer was behind | 1,152 | 0 | 9 |
+| window 2560 x 1440, far: pictures shown in 2,000 vblanks (of 7,801) | 4,061 | 7,797 | |
+| window, far: between new pictures | 8.19 ms | 4.27 ms (sd 1.15) | |
+
+The window ran 2,000 vblanks in real time (33.8 s) in every case; on the sky quick save both builds
+kept up (7,801 and 7,796 pictures shown).
+
+**Checked.** The dumps at the owner's settings, 5 vblanks of 4 pictures on the far and the sky quick
+saves, byte for byte the build before's; so at MSAA 4 and 8, without MSAA, at 1x, and with
+`--native-colour high` with and without MSAA (2 vblanks each); the 64 map tour captures replayed at
+`--msaa 2 --scale 6,4`, every picture byte for byte; the map tour comparison (414,901, worst 106,
+scanouts identical); gsn_draw_test (seeds 1 to 3, 0 failures; seeds 1 and 2 with every case's
+numbers the build before's), gsn_vram_test, vu1_test, boot_test, frame_test (paraLLEl-GS, and the
+native GS, whose pictures are the build before's).
+
+**What is left.** With MSAA a shadow batch is still a pass for each of its ~240 runs (0.6 ms of
+barriers a picture on map 000); `fast` removes them at the cost of exactness. Uploads into targets
+and texture decodes end a pass about four times a picture.
+
 ### What moves by itself
 
 The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned

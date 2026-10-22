@@ -84,7 +84,19 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   rounded lerp; MTBA works out mipmap addresses at TEX0's write.
 - **Blending:** Vulkan's fixed function where the equation maps onto it exactly, the shader (from a
   copy of the target) elsewhere: sprites, draws reading their own target, DATE, 16-bit targets,
-  As above 0x80. Overlapping primitives in such a batch are drawn in runs that don't overlap.
+  As above 0x80. Overlapping primitives in such a batch are drawn in runs that don't overlap, each
+  with its own copy: kept in the render pass (an input attachment), or with MSAA resolved by the run's
+  pass into the copy the next run reads (STEP3.md, "Render passes"). A copy outside the pass costs a
+  pass's end and beginning: the shadows' silhouettes are ~240 runs a picture.
+- **NVIDIA's MSAA resolve is not a function of the samples.** Its mean of two 8-bit samples rounds a
+  half up or down depending on more than the two values, so no shader reproduces `vkCmdResolveImage`;
+  a render pass's resolve attachment does (8-bit; not 16-bit). Exactness at MSAA means resolving.
+- **Barriers are merged** (`full_barrier`): a full barrier right after another is left out, which
+  `cmd()` tracks. Anything that records into the native GS's command buffer must go through `cmd()`,
+  or a barrier it needs can be left out.
+- **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
+  of work, and `--stats` says why render passes ended and what resolves were for. Another program on
+  the GPU (a second run of the game) shows up in those times: run alone.
 - **A larger `--native-scale` is not just more pixels.** A GS pixel is drawn when its integer point
   is inside; a target pixel at scale N samples the middle of its own area, half of which is left of
   that point for the GS pixel's first pixels. So 2D (sprites from 0, or ending at 127.5) loses or gains
