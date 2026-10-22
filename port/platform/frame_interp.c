@@ -1585,6 +1585,17 @@ static double vb_alpha_between(const Walk *w, const Item *b) {
     return vb + (va - vb) * (1.0 - w->t);
 }
 
+/* Where a UV between two frames is counted from: this frame's, or, after a scroll back past the
+   texture's wrap (a negative wrap: the frame before's coordinates less the texture's size), this frame's
+   plus that size, the same texels a texture that repeats. UV is unsigned in the GS (14 bits, 1/16 texel):
+   counted from this frame's, a sprite's first corner at 0 was between -0.25 and 0 in the pictures between
+   and went in as 1023.9, the texture squeezed a thousand times over: map 000's sky (its 128 x 128 cloud
+   targets drawn by scrolling sprites, MapScroll_UpdateDraw) a picture of grey streaks for a frame's
+   pictures between each time a cloud layer's scroll came round (every 512 frames, about 17 s). */
+static float uv_base(float v, float wrap) {
+    return wrap < 0 ? v - wrap : v;
+}
+
 /* REPLAY: a paired 2D vertex where it is at the picture's time (t of the way from the frame before's) */
 static void move_flat_vertex(Walk *w, GifWalk *p, uint8_t *q) {
     const Item *b = &w->flat->items[w->item];
@@ -1647,7 +1658,9 @@ static void move_flat_vertex(Walk *w, GifWalk *p, uint8_t *q) {
         memcpy(p->st, st, 8);
     } else if (vb->coords == 2 && p->uv != NULL) {
         uint32_t uv[2];
-        double s = vb->s + (va->s + b->wrap_s - vb->s) * u, t = vb->t + (va->t + b->wrap_t - vb->t) * u;
+        /* (a picture between counted from past the wrap: uv_base) */
+        double bs = u > 0 ? uv_base(vb->s, b->wrap_s) : vb->s, bt = u > 0 ? uv_base(vb->t, b->wrap_t) : vb->t;
+        double s = bs + (va->s + b->wrap_s - vb->s) * u, t = bt + (va->t + b->wrap_t - vb->t) * u;
 
         memcpy(uv, p->uv, 8);
         uv[0] = (uv[0] & ~0x3FFFu) | ((uint32_t)floor(s * 16.0 + 0.5) & 0x3FFF);
@@ -1888,10 +1901,12 @@ static void gpu_flat_vertex(Walk *w, GifWalk *p) {
     if ((vb->coords == 1 && p->st != NULL) || (vb->coords == 2 && p->uv != NULL)) {
         /* (move_flat_vertex: vb + (va + wrap - vb) u, the sum and difference in floats) */
         float ds = va->s + b->wrap_s - vb->s, dt = va->t + b->wrap_t - vb->t;
+        /* (UV counted from past a wrap back: uv_base; every picture here is between, t below 1) */
+        float bs = vb->coords == 2 ? uv_base(vb->s, b->wrap_s) : vb->s, bt = vb->coords == 2 ? uv_base(vb->t, b->wrap_t) : vb->t;
 
         e->w[0] |= vb->coords == 1 ? GSN_IM_ST : GSN_IM_UV;
-        memcpy(&e->w[5], &vb->s, 4);
-        memcpy(&e->w[6], &vb->t, 4);
+        memcpy(&e->w[5], &bs, 4);
+        memcpy(&e->w[6], &bt, 4);
         memcpy(&e->w[7], &ds, 4);
         memcpy(&e->w[8], &dt, 4);
     }

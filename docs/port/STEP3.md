@@ -607,6 +607,13 @@ places (XY), colours (RGBAQ: fades) and texture coordinates (ST or UV) t of the 
 are changed in place. The HUD's gauge (the magic gauge after a cast, map 000) grows 3 pixels a picture
 at 240 where it grows 12 a frame; the fade after a teleport steps with every second picture (the GS's
 alpha is 8 bits: 4 a frame, half a step a picture).
+UV is unsigned (14 bits, 1/16 texel), so after a scroll back past the wrap the pictures between are
+counted from this frame's coordinates plus the texture's size (`uv_base`), the same texels a texture
+that repeats. (Counted from this frame's, a sprite's corner at 0 was between -0.25 and 0 in the
+pictures between and went in as 1023.9: map 000's 128 x 128 cloud target, and the lava's, were grey or
+orange streaks for a frame's pictures between each time a layer's scroll came round, every 1,024
+vblanks on the sky quick save (vblanks 1086, 2110, 3134, 4158), at 60 and above, the GPU's way and the
+CPU's, since the 2D was paired.)
 
 **The uploads.** A frame on map 000 uploads about 8 MB of textures (streamed through shared VRAM: the
 same pages hold one texture after another), which every picture between sent again, through the
