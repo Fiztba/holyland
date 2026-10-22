@@ -320,11 +320,11 @@ void port_gs_finish(void);
 int port_gs_vsync_pending(void);
 void port_gs_run_vsync(void);
 
-/* --frame-rate 60 (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to
-   the GS is kept (port_interp_keep) until the vblank; port_interp_vsync, before the vblank's
-   scanout, keeps them on when they drew the game's world into the buffer not shown, and at the vblank
-   after sends them again through send, changed, into the buffer shown (1 when it did); then
-   port_interp_reset starts the next vblank's (whole: every path is between packets).
+/* --frame-rate (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to the
+   GS is kept (port_interp_keep) until the vblank; port_interp_vsync, before the vblank's scanout, keeps
+   them on as the pending frame when they drew the game's world into the buffer not shown (for this
+   vblank and the next); port_interp_reset starts the next vblank's (whole: every path is between
+   packets).
    port_interp_forget drops what was kept and the last frame's camera (a state was loaded). */
 void port_interp_keep(int path, const void *data, size_t bytes);
 void port_interp_vsync(const uint64_t *privileged);

@@ -1,5 +1,5 @@
-/* --frame-rate 60: a picture at every vblank in play, where the game draws one every second vblank
-   (port_frame_interp(), port/include/port/host.h).
+/* --frame-rate 60 to 240: pictures between the game's frames in play, where it draws one every second
+   vblank (port_frame_interp(), port/include/port/host.h; docs/port/STEP3.md, "Higher frame rates").
 
    What the game does. In play, GameLoop_Run's loop runs once every two vblanks (30 frames a second):
    Display_SwapBuffers waits for the odd field's vblank (sceGsSyncV until it returns 1), shows the
@@ -14,11 +14,13 @@
 
    What is done here. The GIF packets that reach the GS between two vblanks are kept (the clear and
    the whole chain). When, at vblank 2k, they drew the game's world into the buffer not shown, they are
-   kept on, and at vblank 2k + 1, when nothing else has been sent since and the same buffer is shown,
-   they are sent to the GS again, drawn into the buffer shown, with every vertex of the 3D world moved
-   to a camera half way between the frame shown and the one drawn: that is the picture of vblank
-   2k + 1. The frame drawn is shown at 2k + 2 as before, so nothing is shown later than on the PS2
-   (no more input lag): the picture between shows the camera's move half a game frame early.
+   kept on as the pending frame, through vblank 2k + 1 while nothing else has been sent and the same
+   buffer is shown, and each picture between (port_interp_picture: at 60, the one of vblank 2k + 1; above
+   60, those port_interp_schedule times) sends them to the GS again, drawn into the buffer shown, with
+   everything moved to the picture's time t, from 0 (the frame shown) to 1 (the frame drawn): the 3D
+   world to the camera t of the way, the paired model parts and 2D items t of the way between their two
+   places. The frame drawn is shown at 2k + 2 as before, so nothing is shown later than on the PS2 (no
+   more input lag): the pictures between show the camera's move early.
    - Where the world is, and its cameras, the game says in the chain (game/frame_interp.c): a mark
      after each GameLoop_SetCameraMatrices of GameLoop_DrawFrame, with world_view_matrix and
      view_screen_matrix, and one after the world. Within the world (projection 0, modes 0 and 1: the
@@ -27,26 +29,30 @@
      depth (1/Q, or the Z) back to the camera's space, by the change of camera, and projected again,
      with S, T and Q for the new depth. A vertex the new camera puts behind it, or past the guard band,
      drops its triangles (ADC), as the VU1 programs do. Models drawn at a fixed place before the eye
-     (mode 2), the arm, the HUD, the screen passes and the 2D stay as they are.
-   - The camera half way: the rotation by quaternion slerp, the position half way along the line. A
+     (mode 2) and the arm move only as they move ("What moves by itself"); the reflection's view
+     (projection 1, mode 1) by the camera too, by its own projection; the 2D by its pairs ("The 2D").
+   - The camera t of the way: the rotation by quaternion slerp, the position along the line. A
      cut (a turn of more than INTERP_MAX_TURN, a move of more than INTERP_MAX_MOVE) is not
      interpolated: the vblank shows the frame before, as on the PS2.
    - Nothing of the replay is left behind. What it draws into the frame goes into the shown buffer,
      which the next frame's clear wipes (FRAME, and TEX0 and BITBLTBUF where they read the frame, point
      there instead). Everything else it draws (the scrolling textures' 128x128 targets, the
-     reflection's 256x256 view) is drawn again from the same packets, so into the same pixels, and the
-     uploads are sent again in their order, so every draw finds the textures it found the first time
-     and VRAM ends as it was. Local-to-local transfers into anything but the frame (the copy of the
-     frame the screen wobble and the map change read) and local-to-host ones are not started; FINISH,
-     SIGNAL and LABEL are not sent. The registers the replay changed (FRAME, TEX0, BITBLTBUF) are
-     written back with what the game last wrote (TEX0 without a CLUT load). So the game's own frames
-     are the same pixels with the switch on or off (checked: --dump-frames of the even vblanks).
-     (Dropping the draws into the other targets instead does not work: on map 000 the sky samples a
-     128x128 target at FBP 0x1D4 that the frame draws, then draws over with another at 0x1D2.)
-   - Not interpolated: what moves by itself (enemies, effects, animations: they move at 30 Hz, the
-     camera at 60), the reflection and the copies of the frame (the picture between uses the frame's
-     own), the previous frame blended in (in the picture between, the buffer it reads is the one being
-     drawn, so nothing is blended in), 2D the world draws as sprites.
+     reflection's 256x256 view) is drawn again from the same packets, and the uploads go again in their
+     order (asked for again from the native GS, which recorded them: PORT_GS_REG_REPLAY_UPLOAD), so
+     every draw finds the textures it found the first time. A buffer a picture between drew differently
+     that the frame reads before it draws it is drawn again exact after the pictures
+     (port_interp_end_vblank). Local-to-local transfers into anything but the frame are not started,
+     but for copies of the frame the frame reads after them (the haze, the wobble: made again from the
+     picture's frame); local-to-host ones neither; FINISH, SIGNAL and LABEL are not sent. The registers
+     the replay changed (FRAME, TEX0, BITBLTBUF) are written back with what the game last wrote (TEX0
+     without a CLUT load). So the game's own frames are the same pixels with the switch on or off, at
+     every rate (checked: --dump-frames of the even vblanks). (Dropping the draws into the other
+     targets instead does not work: on map 000 the sky samples a 128x128 target at FBP 0x1D4 that the
+     frame draws, then draws over with another at 0x1D2.)
+   - The previous frame blended in (Game_BlendPreviousFrame) reads, in a picture between, the native
+     GS's copy of the frame shown, by a^t (replay_pending, move_flat_vertex).
+   - Not interpolated: pictures the CPU makes anew (the HUD orb's swirl, flipbook animations: a new
+     texture, not a move), models that come or go, a cut.
    With the switch off nothing here runs: the game sends no marks, and nothing is kept.
 
    Only the DMA controller's thread runs here (port/platform/gs.c). */

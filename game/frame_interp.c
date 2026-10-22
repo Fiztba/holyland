@@ -1,8 +1,9 @@
-/* frame_interp.c: PC-only. The game's side of --frame-rate 60 (port_frame_interp(), port/include/port/host.h).
+/* frame_interp.c: PC-only. The game's side of --frame-rate 60 to 240 (port_frame_interp(),
+   port/include/port/host.h).
 
    The game draws its world at 30 Hz: a picture every second vblank. With the switch on, the GS front
-   end (port/platform/frame_interp.c) draws one more picture on the vblank in between, from the frame
-   the game has just drawn, its 3D moved to a camera half way between that frame's and the one before.
+   end (port/platform/frame_interp.c) draws more pictures between, from the frame the game has just
+   drawn, its 3D moved to a camera between that frame's and the one before.
    For that it has to know, in the packet chain, where the 3D world is and which camera drew it. The
    patched GameLoop_DrawFrame says so: FrameInterp_BeginFrame at its start, then each
    GameLoop_SetCameraMatrices it makes queues its camera (world to view, and view to screen) with

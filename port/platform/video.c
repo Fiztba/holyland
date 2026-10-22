@@ -1,8 +1,9 @@
 /* The window, and --dump-frames' pictures (port/include/port/platform.h).
 
-   The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread and left here;
-   at each vblank the game's thread shows the next one (of up to two; it waits a little for one that
-   is due) in an SDL window, scaled to fit it at the TV's 4:3 (or stretched, by the settings), with
+   The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread (or, the native
+   GS's, kept on the GPU) and queued here with its time; the window shows each when it is due (at each
+   vblank the game's thread, waiting a little for the vblank's own; with --frame-rate above 60 the
+   pictures between too, "The pictures between") in an SDL window, scaled to fit it at the TV's 4:3 (or stretched, by the settings), with
    the settings overlay (F1) over it. That is
    SDL_Renderer's work, or with --presenter vulkan a swapchain's on the native GS's own device
    (port/platform/present_vk.cpp), which takes the native GS's picture as the image it is on the GPU

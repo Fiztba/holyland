@@ -21,7 +21,7 @@ draws instead when the native GS cannot start.
 | `port/platform/present_vk.cpp` | the Vulkan presenter: a swapchain on the native GS's device, the overlay through ImGui's Vulkan backend |
 | `port/platform/video.c` | the window, SDL_Renderer, frame pacing and dumps |
 | `port/platform/vu1.c`, `vu1_hle*.c` | the VU1 interpreter and the four programs in C (bit for bit the interpreter's) |
-| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60`: a frame's packets drawn again between two frames, camera and moving parts half way |
+| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times |
 | `tools/gsreplay/` | `kf4-gsreplay`: a GS capture (F9) drawn again by either renderer, compared draw by draw and picture by picture |
 
 ## The rules
@@ -101,8 +101,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   against the interpreter (tests/vu1_test.c and `--vu1 check` are the oracle).
 - **paraLLEl-GS's licence before release builds**: the native GS and paraLLEl-GS are one library
   (`kf4_gs`) on paraLLEl-GS's copy of Granite; a release without paraLLEl-GS needs them split.
-- **60 pictures a second:** the HUD, animated textures and what the CPU builds anew each frame stay
-  at 30; two look-alike models crossing can swap for one picture.
+- **Higher frame rates:** flipbook animations and pictures the CPU makes anew (the HUD orb) change
+  once a frame; two look-alike models crossing can swap for a few pictures; the renderer's cost is one
+  frame's draw a picture (1.1 to 1.5 ms here), so 240 skips a few pictures in the heaviest places: a
+  draw of the frame again on the GPU from recorded commands would be the next step (STEP3.md).
 - **MSAA:** the alpha test's cut-outs (foliage, fences) and draws without Z are not smoothed.
 - STEP3.md, "Progress" and "What could come next", has the rest (write-backs left, uploads on the
   GPU, exact blending by fragment shader interlock).

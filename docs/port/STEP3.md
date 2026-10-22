@@ -59,7 +59,8 @@ timings of the step 2 path, and how ico-pc built its renderer.
   Above 1x, the 2D (rectangles of one colour and Z) covers whole GS pixels and nearest reads take the
   GS's texel at the GS pixel's integer point (the sky's seams on map 000, the line down the screen's left
   edge); `--native-lod` (default `scale`) reads mipmaps a level finer by log2 of the scale.
-  `--frame-rate 60`: a picture at every vblank in play, the camera interpolated (below, "Higher
+  `--frame-rate 60|120|144|240|monitor`: pictures between the game's frames in play, the camera, the
+  models, the HUD, fades, scrolling textures and the reflection where they are at each (below, "Higher
   frame rates").
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
   packets through) has a high-level C version that gives the interpreter's results bit for bit
@@ -416,7 +417,7 @@ vertex is clipped). The arithmetic is shared through `port/platform/vu1_hle_ops.
 without the fast path) and 160,207 in the game run above (659,392 compared with 0x000's). With both,
 that run's VU1 time is 0.76 s (from 3.3 s), its wall time 5.2 s.
 
-### Higher frame rates (`--frame-rate 60`)
+### Higher frame rates (`--frame-rate 60` to 240)
 
 Stage 5's "higher frame rates, with interpolation while the game itself keeps its 30 Hz". A first
 version is in: `--frame-rate 60` (the overlay's Display page, `settings.json` `display.frame_rate`),
@@ -536,27 +537,141 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
   oldest out, so the window does not stay a vblank behind. With the Vulkan presenter nearly all are
   there in time, with no wait.
 
-**What is left.**
-- **Things that move by themselves**, first version (below, "What moves by itself"): the enemies, the
-  arm and held item, the effects and moving objects are drawn half way when their batch pairs with
-  the frame before. Still at 30 Hz: what the CPU draws anew each frame (its batches do not pair),
-  animated textures (a texture's frame is not interpolated), the HUD and messages.
-- **The screen effects that copy the frame** (the wobble of status bit 39 and the MP drain's tint, both
-  through `GsDraw_CopyFrame(0x2BC0)`) draw the copy the frame made, so in those states the picture
-  between is the frame drawn, not interpolated. Allowing the copy into 0x2BC0 would leave the picture
-  between there, where `MapChange_CaptureFrame` leaves a frame for `MapChange_FadeOutCapture` to fade
-  out over the frames after.
-- **`Game_BlendPreviousFrame`** (on with `map_draw_state.bit40`, and while aiming) blends nothing in the
-  picture between: its "previous frame" is the buffer being drawn.
-- **2D drawn in the world as sprites** (none seen; the triangles are moved) would stay where the frame
-  put them. Sprites are not moved, as the full-screen clears and passes are sprites too.
-- **paraLLEl-GS** (`--renderer gs`) gets the same packets and shows the same pictures. (With
-  `--no-whole-frame` the game's `Game_ShiftScreenByViewTurn` draws the frame before over the even
-  lines, and both renderers read each vblank's picture a field at a time and deinterlace it, mixing
-  in the field before: "The scanout".)
-- **More than 60.** 120 or 144 Hz needs pictures at times between vblanks, from the wall clock, more
-  than one replay a frame (each a fraction of the way), and a presenter that shows them at the
-  screen's rate.
+**What is left** (of the first version; the next part, "Above 60, and the rest of the picture", took
+most of it):
+- Two things that share a batch and cross: both are drawn at the wrong one's place between.
+- **paraLLEl-GS** (`--renderer gs`) gets the same packets and shows the same pictures at 60; the pictures
+  above 60 are the native GS's. (With `--no-whole-frame` the game's `Game_ShiftScreenByViewTurn` draws
+  the frame before over the even lines, and both renderers read each vblank's picture a field at a time
+  and deinterlace it, mixing in the field before: "The scanout"; that stays at 60.)
+
+### Above 60, and the rest of the picture (October 2026)
+
+`--frame-rate 30|60|120|144|240|N|monitor` (the overlay's Display page; `settings.json`
+`display.frame_rate`, a number or `"monitor"`, the refresh rate of the window's screen).
+
+**When the pictures are.** The game's frames come every second vblank at 59.94 vblanks a second. At F
+pictures a second there are F / 59.94 a vblank (`port_interp_schedule`): a whole number n of them (to
+1%: 60, 120, 240, 360) are the vblank's own and n - 1 evenly after it; otherwise (144, 165) one every
+1 / (F / 59.94) of a vblank counted from vblank 0, wherever it falls (the vblank's own picture is then
+drawn only for a dump). A picture at phase f of the vblank shows t = (age + f) / 2 of the way from the
+frame shown to the one drawn, age 0 at the vblank that kept the frame, 1 at the next.
+
+**Drawing them.** The kept frame is pending from the vblank that kept it (age 0) through the next
+(age 1), while nothing else is sent and the same buffer is shown. At age 0 its pictures between are
+drawn after the vblank's own scanout (the frame shown, as the game drew it); at age 1 the one at phase 0
+before the scanout, as at 60, and the rest after. Each is the replay of the first version at t
+(`port_interp_picture`), then a scanout without the vblank (`gsn_picture` with `GSN_EXTRA`: no field
+countdown, no deinterlace history, no new scale; a picture that would be read a field at a time is not
+made) into the next of 16 images (the scanout image became a ring, so the newest does not write over
+those waiting; the slot the presenter holds is passed over). Pictures are tagged with their vblank and
+phase (`PORT_PICTURE_TAG`), and `--dump-frames V` writes those of vblank V as `frame_V_PPP.png`.
+
+**The window.** `port/platform/video.c` keeps a queue of tagged pictures and shows each at its time:
+the vblank's wall time (`port_video_vblank`, from the kernel's pacing) and its phase of a vblank after.
+A present shows the newest due and leaves out those before it. With the Vulkan presenter a thread of
+its own shows them, a quarter of a vblank after their time (so each is there: the native GS makes them
+one after another from the vblank on), without the overlay (`port_vk_present`'s `overlay`); while the
+overlay or the mouse indicator is drawn, and always with SDL_Renderer (whose context is the game
+thread's), the game's thread shows them while it waits for the next vblank (`port_video_wait`) and from
+its kernel calls (`port_video_poll`). That was not enough at 240: the game's own work after a vblank
+runs several milliseconds without a kernel call, and the pictures due then were late or left out. A
+picture between is left out rather than the game held up when the DMA controller's thread is more than
+a vblank behind the game or the native GS's thread more than one (`--stats`: "left out as the renderer
+was behind"). `KF4_PRESENT_SIM=HZ` runs all of it headless with nothing drawn, and `KF4_PRESENT_LOG`
+writes each present's time and picture. Real time, walking on maps 000 and 009 (vblanks 1700-1890):
+- 120: 119.9 presents a second, 8.34 ms apart (sd 0.18 ms), 0.11 ms from their times (sd);
+- 144: 143.7 a second, 6.96 ms apart (sd 0.36), 21 pictures left out in the run;
+- 240, map 009: 239.8 a second, 4.17 ms apart (sd 0.17, at most 4.65);
+- 240, map 000 walking up to the gate (the heaviest place tried): 228 a second, 4.39 ms apart (sd
+  1.19), 50 pictures between left out in the run.
+With vsync (FIFO) the presenter's thread waits for the screen, not the game. Not measured with a window
+(the tests run headless): with vsync on a screen whose rate is not the one asked for, the pictures are
+shown at the screen's refreshes as they come.
+
+**The 2D.** Everything not a run of VU1's 3D programs is the CPU's own GIF packets: each GIF tag with
+vertices is an item, keyed by its primitive, texture and CLUT (TEX0 without CLD), the buffer drawn
+(the buffer drawn and the one shown by their part, as they swap; a texture only for a textured item)
+and its vertex count. A frame's items are paired with the frame before's in order, each with the first
+alike within the next 48 not yet taken, and taken when it is a likely pair: no vertex more than 128
+pixels from its place; texture coordinates the same, or all moved by one step within a quarter of the
+item's width of texture (a scroll, the shortest way round the texture's wrap), or changed only where
+the vertices moved (a gauge), or, not a sprite, each by a little of the item's width (the water's
+ripple strips); a glyph or picture changed in place is not. A picture between draws a paired item's
+places (XY), colours (RGBAQ: fades) and texture coordinates (ST or UV) t of the way; the PACKED qwords
+are changed in place. The HUD's gauge (the magic gauge after a cast, map 000) grows 3 pixels a picture
+at 240 where it grows 12 a frame; the fade after a teleport steps with every second picture (the GS's
+alpha is 8 bits: 4 a frame, half a step a picture).
+
+**The uploads.** A frame on map 000 uploads about 8 MB of textures (streamed through shared VRAM: the
+same pages hold one texture after another), which every picture between sent again, through the
+native GS's ring, kept whole, hashed and compared with VRAM: some 3.5 ms a picture. The native GS now
+records the uploads of the packets between two vblanks (their registers, and the pages they left, or
+their bytes), and a picture between asks for the k-th again (`PORT_GS_REG_REPLAY_UPLOAD` in place of
+TRXDIR, with the destination half of BITBLTBUF to check; its data left out of the packets, the IMAGE
+tag left with NLOOP 0). Records that are only an upload's data are not even copied. With paraLLEl-GS
+(`both`) the data is sent as before. `--stats`: "uploads asked for again", "not found" (0 in every run).
+
+**Other buffers.** A picture between draws the other targets again from its own packets, changed: the
+sky's and water's scrolling copies. A buffer the frame reads before it draws it (the sky's 0x1D2 on
+map 000) is drawn again exact after the second vblank's pictures (the frame once more, at t 1, its 3D
+into the frame dropped with ADC), so the next frame finds what the game left. (Without that the game's
+frames were the same too on the maps tried; it is there because that cannot be shown in general.)
+Copies of the frame into another buffer (`GsDraw_CopyFrame`: the haze, the wobble, a model showing the
+screen) that the frame reads after them and not before are made again in the pictures between, from
+their own frame; the map change's capture (read only by the frames after) stays as the game made it.
+
+**The reflection.** The water's view (projection 1, mode 1, into a 256x256 target before the world) has
+the world's camera and its own projection: its vertices are moved by the camera's move in view space,
+unprojected and projected by its own projection (`SECTION_REFLECT`), when its view is the world's.
+
+**The previous frame.** `Game_BlendPreviousFrame` (aiming, `map_draw_state.bit40`) blends the frame
+shown, by a (As 0x40 of 0x80), into the frame drawn. In a picture between the buffer it reads is the one
+being drawn: it blended nothing, and the pictures between were sharp between the game's blurred frames.
+The native GS now keeps a copy of the frame shown when the first picture between begins (mark 0xF2),
+and the records that read the frame shown read the copy (marks 0xF4, 0xF5); the picture at t blends it
+in by a^t, from the frame shown at t 0 to the game's own blend at t 1, with no jump at either end.
+Checked with the blend forced on by a local test patch (not kept): sharpness of the pictures between
+1.31 to 1.39 against the game's 1.39 (2.05 before). Blending each picture with the one before instead
+(the weight giving the game's lag) moved evenly between frames but jumped at each game frame (the game
+blends with the frame before, not the last picture between), so it was not kept.
+
+**Model parts.** Pairing is worked out once a frame (`objects_pair`), not in every picture. Runs no run
+of the frame before pairs with by batch are paired in order with one drawn alike (primitive, texture,
+vertex count, section, its middle within 400 units); on the maps tried 96 to 97% pair by batch and
+almost none by order (the rest have no placed vertex or came into view). A spell's sparks move 3 to 4
+pixels a picture at 240.
+
+**What cannot be interpolated.** Pictures the game makes anew each frame change once a frame, at the
+first picture after it: the HUD orb's swirl (uploaded as a new texture each frame), the fire of map 009
+and the other flipbook animations (a new picture of the texture, not a move), text that changes. A model
+that comes or goes is drawn where the frame has it. Things the pairing cannot tell apart (two
+look-alike models crossing, two identical items swapping order) can be drawn at the wrong one's place.
+A cut is not interpolated. The menus, the title and the movies draw no world and stay at their rate.
+
+**Checked.** At 120, 144 and 240, the game's own frames (the even vblanks, 50 a run, walking and
+turning) byte for byte those at 30 on maps 000, 008, 009 and 016; at 30, the same pictures as the build
+before; at 60, the game's frames the same and the pictures between within 2 of the build before (the
+2D now paired). boot_test, frame_test (paraLLEl-GS and native), gsn_draw_test (300 cases and rounds),
+vu1_test. Turning on map 000 at 240: 0.7 pixel a picture, evenly (8 to a frame of 5.6).
+
+**Speed.** Each picture between draws the frame again on the native GS's thread (its CPU work about a
+game frame's) and walks its packets on the DMA controller's (about 0.9 ms). 2,000 vblanks walking,
+headless with `--fast` and every picture between drawn (`KF4_INTERP_DRAW_ALL`), Ryzen 9 9900X3D and
+RTX 5080:
+
+| rate | map 000 | map 009 |
+|---|---|---|
+| 30 | 3.0 s | 2.8 s |
+| 60 | 4.2 s | 3.8 s |
+| 120 | 5.9 s | 5.0 s |
+| 144 | 7.8 s | 6.2 s |
+| 240 | 9.7 s | 7.6 s |
+
+That is 1.5 ms a picture between on map 000 and 1.1 ms on map 009 (4,322 pictures between at 240).
+Before the uploads were asked for again it was 3.5 ms. What would go further: drawing the frame again
+on the GPU from its recorded commands with the vertices changed, instead of the native GS working
+through the packets again.
 
 ### What moves by itself
 
