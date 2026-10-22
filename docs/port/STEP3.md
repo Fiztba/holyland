@@ -56,6 +56,9 @@ timings of the step 2 path, and how ico-pc built its renderer.
   scanout), the 2D drawn with Z snapped to whole pixels so the menus and movies are unchanged; the
   alpha test's cut-outs and draws without Z stay as they are. Combines with the two above; 2% (4x)
   to 5% (8x) of a run's time at 1x, 6% to 12% at `--native-scale 4`. PLAN.md's opt-in table.
+  Above 1x, the 2D (rectangles of one colour and Z) covers whole GS pixels and nearest reads take the
+  GS's texel at the GS pixel's integer point (the sky's seams on map 000, the line down the screen's left
+  edge); `--native-lod` (default `scale`) reads mipmaps a level finer by log2 of the scale.
   `--frame-rate 60`: a picture at every vblank in play, the camera interpolated (below, "Higher
   frame rates").
 - **Stage 3, done as C.** Every VU1 program the game runs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes

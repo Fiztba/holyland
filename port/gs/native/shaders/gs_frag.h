@@ -117,12 +117,30 @@ ivec4 round_shift(ivec4 v, int bits) {
     return q + ivec4(greaterThan(r, ivec4(half_))) + ivec4(equal(r, ivec4(half_))) * (q & 1);
 }
 
+// At a larger --native-scale: the texture coordinates at the GS pixel's integer point (sample_texture),
+// where the PS2 reads its texel, and whether the target is larger than the PS2's
+vec2 tc_gs;
+bool scaled;
+
 // The texture at texel coordinates `tc` (level 0's), one level, nearest or bilinear
 ivec4 sample_level(vec2 tc, int level, bool linear) {
-    vec2 at = tc / float(1 << level) * vec2(target_scale());
+    ivec2 ts = target_scale();
+    vec2 at = tc / float(1 << level) * vec2(ts);
     // the GS's texel coordinates have 4 bits of fraction; interpolated in floats, a coordinate that is
     // exactly on one comes out a hair under it, which the bias puts back
     ivec2 p = ivec2(floor(at * 16.0 + 1.0 / 64.0));
+    if (!linear && scaled) {
+        // Read nearest at a larger scale, the texel is the one the PS2 reads at the GS pixel's integer
+        // point, and of a texture that is a target at that scale too, of its pixels the one this pixel
+        // is over, from where the GS pixel's middle is. So a picture copied a GS pixel to a GS pixel
+        // reads its pixels exactly whether its coordinates are on the texels' middles (x + 0.5) or on
+        // their edges (x, as the frame's passes have them), and a sprite's first column reads its first
+        // texel. (From this pixel's own coordinates, a coordinate on an edge took the texel before for
+        // the GS pixel's pixels left of its integer point: the frame's first column and row read the
+        // other edge of the texture, and so did the title's pictures where their sprites meet.)
+        ivec2 gs = ivec2(floor(tc_gs / float(1 << level) * 16.0 + 1.0 / 64.0)) >> 4;
+        return texel(gs * ts + ivec2(floor((tc - tc_gs) / float(1 << level) * vec2(ts) + 0.5 * vec2(ts))), level);
+    }
     if (!linear) {
         return texel(p >> 4, level);
     }
@@ -141,6 +159,11 @@ ivec4 sample_level(vec2 tc, int level, bool linear) {
 ivec4 sample_texture() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
     vec2 tc = (pc.flags & GSN_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
+    // the GS pixel's integer point: the middle of its pixels of the target, (x + 0.5) scale (gs.vert)
+    vec2 scale = vec2(float(max(field(pc.misc, GSN_M_SCALE_X_SHIFT, 3u), 1u)), float(max(field(pc.misc, GSN_M_SCALE_SHIFT, 3u), 1u)));
+    vec2 to_gs = (floor(floor(gl_FragCoord.xy) / scale) + 0.5) * scale - (floor(gl_FragCoord.xy) + 0.5);
+    tc_gs = tc + dFdxFine(tc) * to_gs.x + dFdyFine(tc) * to_gs.y;
+    scaled = scale != vec2(1.0);
     uint mmag = field(pc.tex1, 0u, 1u);
     uint mmin = field(pc.tex1, 1u, 3u);
     int mxl = int(field(pc.tex1, 4u, 3u));
@@ -155,7 +178,8 @@ ivec4 sample_texture() {
         return sample_level(tc, 0, mmin == 1u);
     }
     bool linear = mmin == 4u || mmin == 5u;
-    lod = min(lod, float(mxl));
+    // (--native-lod moves which level, never the choice between MMAG and MMIN above)
+    lod = clamp(lod + pc.lod_bias, 0.0, float(mxl));
     if (mmin == 2u || mmin == 4u) {
         return sample_level(tc, min(int(floor(lod + 0.5)), mxl), linear);
     }
