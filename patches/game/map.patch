@@ -1112,7 +1112,7 @@ index 75d13e205ec0fe6ed66f482f61f10d55071b0946..f741e489255ed0b0e0b46329efcae5f2
  void Map_BuildModels(int);
  void Map_OffsetRecords(int, f32 *);
 diff --git a/src/game/map/map_scroll.c b/src/game/map/map_scroll.c
-index eb723d385b7af778ae5ea3ccbe0c9da67d9c59fa..3e28e36d32e42c2e4aa21b308502166df89a8017 100644
+index eb723d385b7af778ae5ea3ccbe0c9da67d9c59fa..aea0d1135e035716616b0a3449608778b5de42d6 100644
 --- a/src/game/map/map_scroll.c
 +++ b/src/game/map/map_scroll.c
 @@ -155,22 +155,29 @@ void MapScroll_UpdateCopy(int map, int mode) {
@@ -1163,6 +1163,17 @@ index eb723d385b7af778ae5ea3ccbe0c9da67d9c59fa..3e28e36d32e42c2e4aa21b308502166d
                  quad.unk08 = 0x60;
                  quad.prim = 0x156;
                  half = texture->target_width >> 1;
+@@ -254,7 +261,9 @@ void MapScroll_UpdateDraw(int map, int mode) {
+                 quad.first_z = 0xFFFFFFFF;
+                 quad.first_u = 0;
+                 quad.first_v = 0;
+-                quad.second_y = quad.second_x = (half << 4) + 0x7FF8;
++                // PC: with port_seamless_scroll(), the sprite ends on the target's edge, not half a pixel
++                // before it (GsDraw_DrawScrollingTexture)
++                quad.second_y = quad.second_x = (half << 4) + (port_seamless_scroll() ? 0x8000 : 0x7FF8);
+                 quad.second_z = 0xFFFFFFFF;
+                 quad.second_u = width * texture->scale_x;
+                 quad.second_v = height * texture->scale_y;
 diff --git a/src/game/map/map_setup.c b/src/game/map/map_setup.c
 index f30749e5611f3477eaa009b0150758456ac9236f..ba12ca6a390dac3ddfa187b3d46c8f6e0d162e54 100644
 --- a/src/game/map/map_setup.c

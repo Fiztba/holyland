@@ -87,7 +87,9 @@ typedef struct {
     int whole_frame;         /* the game draws whole pictures, not fields for an interlaced TV
                                 (port_whole_frame(): Game_ShiftScreenByViewTurn is left out, movies
                                 are shown in frame mode) */
-    int flicker_filter;      /* the game's flicker filter is drawn (port_flicker_filter(): each row half
+    int seamless_scroll;     /* the scrolling textures' sprites end on their targets' edges, so the
+                                textures repeat without a seam (port_seamless_scroll(); on by default) */
+    int flicker_filter;    /* the game's flicker filter is drawn (port_flicker_filter(): each row half
                                 the row above, for an interlaced TV); off by default, on with
                                 --flicker-filter or --ps2-scanout */
     int flicker_filter_forced;

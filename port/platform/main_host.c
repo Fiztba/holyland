@@ -55,6 +55,9 @@
                          and counted by --stats)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width, --no-whole-frame
                          turn off one of the ways the PC picture differs from the GS's raw output
+       --no-seamless-scroll
+                         the scrolling textures (the sky's clouds, the lava, the water) as on the PS2,
+                         with a seam where they repeat (port_seamless_scroll())
        --ps2-scanout     turn them all off (and --flicker-filter on)
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
@@ -207,6 +210,7 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.whole_frame = 1;
+    port_options.seamless_scroll = 1;
     port_options.native_scale = 0; /* auto: port_gs_native_scale() */
     port_options.frame_rate = 30;
     port_options.present_scaling = -1;
@@ -241,6 +245,7 @@ static void parse_options(int argc, char **argv) {
         if (strcmp(option, "--ps2-scanout") == 0) {
             port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 0;
             port_options.whole_frame = 0;
+            port_options.seamless_scroll = 0;
             port_options.flicker_filter = port_options.flicker_filter_forced = 1;
             continue;
         }
@@ -266,6 +271,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--no-whole-frame") == 0) {
             port_options.whole_frame = 0;
+            continue;
+        }
+        if (strcmp(option, "--no-seamless-scroll") == 0) {
+            port_options.seamless_scroll = 0;
             continue;
         }
         if (strcmp(option, "--widescreen") == 0 || strcmp(option, "--widescreen-hud-centred") == 0) {

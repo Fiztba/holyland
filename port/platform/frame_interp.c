@@ -1145,6 +1145,39 @@ static void keep_vertex(Walk *w, const GifWalk *p, const uint8_t *q, int xyzf) {
    its model whatever its distance, so the strips stay together. (A model that does not move taken
    for one that goes with the camera, far away while the player creeps, is drawn half way between its
    two places, which are the same: no harm.) */
+
+/* A run in the world went with the camera: its vertices (n of them, the sum of their moves, the most
+   any moved) all moved by the camera's move, within a tenth of it, or by its move along the ground (x
+   and z), within a tenth of that. The dome goes with the player along the ground, while the eye also
+   rises and falls with the step: from a stand, the first frames' steps (1.5 to 2.5 units) had the eye
+   0.8 up or down that the dome did not follow, a third of the step, so only the far strips (whose
+   places are less sure: the noise) passed as going with the camera and the near ones stayed in the
+   world: thin bright and dark lines along their edges in the pictures between, for a frame, each time
+   the player set off or stopped. */
+static int goes_with_camera(const double eye_move[3], const double sum[3], uint32_t n, double most, double dist2) {
+    /* (a vertex's place, from its screen place and Q, is off by up to about a 10,000th of its
+       distance: the dome's far strips, 20,000 away, by 1 to 2) */
+    double noise = sqrt(dist2) * 0.0001;
+    int ground;
+
+    for (ground = 0; ground < 2; ground++) {
+        double off = 0, step = 0;
+        int i;
+
+        for (i = 0; i < 3; i++) {
+            double e = ground && i == 1 ? 0 : eye_move[i];
+
+            step += e * e;
+            off += (sum[i] / n - e) * (sum[i] / n - e);
+        }
+        step = sqrt(step);
+        if (step > 1.0 && sqrt(off) <= step * 0.1 + noise && most <= step * 1.1 + 2 * noise) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void run_motion(Walk *w) {
     const Objects *o = w->objects;
     const Run *cur, *prev = w->run_prev;
@@ -1209,19 +1242,7 @@ static void run_motion(Walk *w) {
     w->run_most = most;
     w->run_moving = most > sqrt(dist2) * 0.002;
     if (!w->run_moving && cur->section == SECTION_WORLD && n > 0) {
-        /* with the camera: every vertex moved by the camera's move, within a tenth of it */
-        double step = sqrt(w->eye_move[0] * w->eye_move[0] + w->eye_move[1] * w->eye_move[1] +
-                           w->eye_move[2] * w->eye_move[2]),
-               off = 0;
-
-        for (i = 0; i < 3; i++) {
-            off += (sum[i] / n - w->eye_move[i]) * (sum[i] / n - w->eye_move[i]);
-        }
-        /* (a vertex's place, from its screen place and Q, is off by up to about a 10,000th of its
-           distance: the dome's far strips, 20,000 away, by 1 to 2) */
-        double noise = sqrt(dist2) * 0.0001;
-
-        w->run_moving = step > 1.0 && sqrt(off) <= step * 0.1 + noise && most <= step * 1.1 + 2 * noise;
+        w->run_moving = goes_with_camera(w->eye_move, sum, n, most, dist2);
     }
 }
 
@@ -1750,17 +1771,7 @@ static int gpu_run_static(Walk *w) {
     if (most > sqrt(dist2) * 0.002) {
         return 1;
     }
-    if (cur->section == SECTION_WORLD && n > 0) {
-        double step = sqrt(w->eye_move[0] * w->eye_move[0] + w->eye_move[1] * w->eye_move[1] +
-                           w->eye_move[2] * w->eye_move[2]),
-               off = 0, noise = sqrt(dist2) * 0.0001;
-
-        for (i = 0; i < 3; i++) {
-            off += (sum[i] / n - w->eye_move[i]) * (sum[i] / n - w->eye_move[i]);
-        }
-        return step > 1.0 && sqrt(off) <= step * 0.1 + noise && most <= step * 1.1 + 2 * noise;
-    }
-    return 0;
+    return cur->section == SECTION_WORLD && n > 0 && goes_with_camera(w->eye_move, sum, n, most, dist2);
 }
 
 /* run_motion's place between at the picture's time: it must not come much nearer the eye than both ends */

@@ -25,11 +25,12 @@ typedef struct {
     int smooth;            /* scale the picture with bilinear filtering (else nearest) */
     int scaling;           /* PORT_SCALING_: sharp (nearest), smooth (bilinear) or best (port_video_scaling) */
     float sharpen;         /* the sharpening after the scaling, 0 (none) to 1 */
-    int deinterlace;       /* the five ways the PC picture differs from the GS's (port_options) */
+    int deinterlace;       /* the ways the PC picture differs from the GS's (port_options) */
     int progressive;
     int anti_blur;
     int adapt_width;
     int whole_frame;
+    int seamless_scroll;   /* the scrolling textures without a seam (port_options.seamless_scroll; on) */
     int flicker_filter;    /* the game's flicker filter, as on the PS2 (port_options.flicker_filter; off) */
     int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
     int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */

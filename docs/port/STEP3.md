@@ -835,7 +835,12 @@ itself"):
   sky's dome on map 000), is drawn half way between its two places, from the camera half way. (By the
   500th alone, the dome's nearer strips moved with it and the farther ones stayed in the world: thin
   dark lines along their shared edges in the pictures between when walking forward, bright ones walking
-  back.) A run that did not
+  back.) Going with the camera is its whole move or its move along the ground: the dome follows the
+  player on the ground while the eye rises and falls with the step, and in the first frames from a
+  stand (steps of 1.5 to 2.5 units, the eye 0.8 up or down) only the far strips, whose places are less
+  sure, passed the whole move's test: a frame of thin bright and dark lines along the strips' edges each
+  time the player set off or stopped (map 000's sky quick save walking at 144 and 240, vblanks 706, 1104
+  and 1280; the GPU's way and the CPU's). A run that did not
   move, or has no pair, moves with the camera as before (in the world), or stays as it is (the arm,
   before the eye).
 - **The arm** is marked by the game (`FrameInterp_BeginArm` before `Player_DrawArm`): it is in the
