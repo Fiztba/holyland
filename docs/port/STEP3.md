@@ -835,12 +835,19 @@ itself"):
   sky's dome on map 000), is drawn half way between its two places, from the camera half way. (By the
   500th alone, the dome's nearer strips moved with it and the farther ones stayed in the world: thin
   dark lines along their shared edges in the pictures between when walking forward, bright ones walking
-  back.) Going with the camera is its whole move or its move along the ground: the dome follows the
-  player on the ground while the eye rises and falls with the step, and in the first frames from a
-  stand (steps of 1.5 to 2.5 units, the eye 0.8 up or down) only the far strips, whose places are less
-  sure, passed the whole move's test: a frame of thin bright and dark lines along the strips' edges each
-  time the player set off or stopped (map 000's sky quick save walking at 144 and 240, vblanks 706, 1104
-  and 1280; the GPU's way and the CPU's). A run that did not
+  back.) Going with the camera is its whole move or its move along the ground.
+- **The sky moves as one.** Decided strip by strip, the dome still came apart: the eye rises and falls
+  with the step while the dome goes along the ground, and the far strips' places are less sure, so
+  some strips passed the test and others did not, above all walking and turning at once (a frame of
+  thin bright and dark lines along the strips' edges, a wedge or a polyline across the sky, at 144 and
+  240, the GPU's way and the CPU's). The game now marks the map records that follow the player (flags
+  bit 31, `FrameInterp_MarkSky` in `Map_DrawRecords` and `Map_DrawLateRecords`;
+  `PORT_FRAME_INTERP_SKY`), and every run of the sky is drawn at its place less the sky's move times
+  1 - t: one move for all of it, the median of its paired runs' mean moves (`objects_sky_move`), paired
+  or not. Checked on map 000's sky quick saves (quick_sky2, quick_sky, quick0) at 240, scale 3, MSAA 2:
+  walking forward and back, turning while walking, strafing, running, looking up and down, and turns up
+  to 0.6 radians a frame while walking and running (a test hook, not kept): no lines, where the build
+  before had them in dozens of pictures; the game's own frames the same as at 30. A run that did not
   move, or has no pair, moves with the camera as before (in the world), or stays as it is (the arm,
   before the eye).
 - **The arm** is marked by the game (`FrameInterp_BeginArm` before `Player_DrawArm`): it is in the

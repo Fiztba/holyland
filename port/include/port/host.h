@@ -173,6 +173,8 @@ int port_frame_interp(void);
 #define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */
 #define PORT_FRAME_INTERP_END 0xFFFF /* the header after the world: what follows stays as it is */
 #define PORT_FRAME_INTERP_ARM 0xFFFE /* the header before the arm: models in the world, moved as they move */
+#define PORT_FRAME_INTERP_SKY 19    /* 1: the world's runs from here are the sky (map records that follow the
+                                       player: flags bit 31), all moved by one move; 0: no longer */
 
 /* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
    default) unless --draw-distance or the overlay's Display page says 1.5, 2, 4 or max
