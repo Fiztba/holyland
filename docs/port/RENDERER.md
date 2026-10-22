@@ -21,7 +21,7 @@ draws instead when the native GS cannot start.
 | `port/platform/present_vk.cpp` | the Vulkan presenter: a swapchain on the native GS's device, the overlay through ImGui's Vulkan backend; the picture is scaled to the window by the native GS (`present_scale`, `shaders/present_scale.frag`, `present_sharpen.frag`) and copied a pixel a pixel, or blitted (sharp, smooth) |
 | `port/platform/video.c` | the window, SDL_Renderer, frame pacing and dumps |
 | `port/platform/vu1.c`, `vu1_hle*.c` | the VU1 interpreter and the four programs in C (bit for bit the interpreter's) |
-| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times |
+| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times. With the native GS alone the pictures are drawn on the GPU: the frame walked once, its draws recorded once, each picture the recorded calls again with its vertices moved by compute (`shaders/gs_replay*.comp`; STEP3.md, "On the GPU") |
 | `tools/gsreplay/` | `kf4-gsreplay`: a GS capture (F9) drawn again by either renderer, compared draw by draw and picture by picture |
 
 ## The rules
@@ -117,9 +117,11 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 - **paraLLEl-GS's licence before release builds**: the native GS and paraLLEl-GS are one library
   (`kf4_gs`) on paraLLEl-GS's copy of Granite; a release without paraLLEl-GS needs them split.
 - **Higher frame rates:** flipbook animations and pictures the CPU makes anew (the HUD orb) change
-  once a frame; two look-alike models crossing can swap for a few pictures; the renderer's cost is one
-  frame's draw a picture (1.1 to 1.5 ms here), so 240 skips a few pictures in the heaviest places: a
-  draw of the frame again on the GPU from recorded commands would be the next step (STEP3.md).
+  once a frame; two look-alike models crossing can swap for a few pictures. The pictures between are
+  drawn from recorded commands now (STEP3.md, "On the GPU"); what is left of their cost is the GPU's
+  (the shadows' runs of shader blending) and the recorded calls made again through Granite (0.2 to 0.8
+  ms a picture): re-submitting command buffers would take Granite's per-frame descriptors and staging
+  out of them.
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.

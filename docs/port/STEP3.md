@@ -754,6 +754,61 @@ native GS, whose pictures are the build before's).
 barriers a picture on map 000); `fast` removes them at the cost of exactness. Uploads into targets
 and texture decodes end a pass about four times a picture.
 
+### On the GPU (October 2026)
+
+Each picture between cost a game frame's CPU work: the DMA controller's thread walked the frame's
+packets and moved every vertex (1.5 ms a picture on map 000), and the native GS worked through them
+again (state, uploads asked for again, Vulkan calls: 1.7 to 3.4 ms). With the native GS alone the
+pictures are now drawn on the GPU (`port/platform/frame_interp.c` and `port/gs/native/gsn.cpp`, both
+"On the GPU"; `gsn.h`'s `gsn_interp_frame` and `gsn_interp_picture`):
+- **Once a frame**, at its first picture between, `frame_interp.c` walks the packets as before but
+  leaves the vertices where the game put them, and notes for each vertex kick (every XYZ2, XYZF2, XYZ3,
+  XYZF3, in the GS's order) what a picture does to it: a `GsnInterpMove` (with the camera: its place in
+  the frame's view, depth and Z; with its model: the place at t 0 and the move; a 2D item: its two
+  places, colours and texture coordinates; the previous frame's alpha). The static half of
+  `run_motion` is worked out per run; the half that depends on t (the place between must not come near
+  the eye) is a bit per run per picture.
+- **The first picture** draws those packets as any picture between, but the GS records each kick as it
+  queued it (its registers, and in whose stretch RGBAQ, ST and UV were written: frame_interp.c changes
+  the qwords of the kick they come before), each triangle's corners as the kicks they are made of, and
+  every call into the command buffer (the `Cmd` layer over Granite's: a pass, a barrier, a copy, a draw).
+  Its draws take their vertices from a buffer two compute passes fill: `gs_replay.comp` moves each kick
+  to the picture's time as `move_vertex` and `move_flat_vertex` do (and drops it: its triangle and the
+  next two of its path go), `gs_replay_corners.comp` makes the corners as the GS does (`make_vtx`,
+  sprites, `snap_sprite_uv`, `flat_2d`). The draws are the GS's own, with its own pipelines: a new vertex
+  shader paired with gs.frag cost two seconds a pipeline to compile.
+- **The other pictures** make the recorded calls again (`replay_ops`), with only the picture's buffer
+  new (its cameras, t, the runs' bits). The targets' images are named by what the target is, so a target
+  made anew each picture (map 000's 128 x 128 sky target after its upload) is the one there then;
+  updates of targets from VRAM are copied from a buffer made once. Before that, the GS must be as it was
+  before the recording (its targets and what of theirs is newer, the render pass, its registers, VRAM
+  and the CLUT as the recording left them); else the picture is drawn from the packets again and
+  recorded anew (`--stats`: "drawn from the packets again").
+- **Decided for every time**: what flush_batch decides from the vertices holds for a batch whose
+  vertices move at any t: its triangles are left out at the scissor only when outside at t 0 and t 1
+  (by a margin), its blending's copies cover both ends and a margin, its rows, alphas and texture rows
+  are those of either end, and its Z is never taken to stay at the format's largest.
+- **Precision**: the moves are floats, made from where the vertex is (X plus the move's effect, Z less
+  (Z - cz) dm.z / w'), so no move is no change and the error is the move's.
+- **Not on the GPU** (the CPU's walk as before): with paraLLEl-GS (`--renderer both`),
+  `KF4_INTERP_STILL`, the frame drawn again exact for the buffers it changed, and `KF4_INTERP_CPU=1`.
+
+**Checked** (map 000 from a quick save, turning and walking; map 000's sky; map 009 walking; 4x,
+native widescreen, MSAA 2): the game's own frames byte for byte those at 30 at 60, 144 and 240, the
+GPU's way and the CPU's. The pictures between against the CPU's way: 0.06% of pixels differ on map
+000 (mean 0.0003 a channel, most of them by 1; at most 117 in a few pixels of the torch's fire, its
+Z by one), 0.11% on the sky (at most 4), 0.14% on map 009 (a moire of differences of 1 in a large
+texture, the floats' texture coordinates; at most 149 at the fire). gsn_draw_test, gsn_vram_test,
+vu1_test, boot_test, frame_test (gs and native).
+
+**Speed** (RTX 5080, 4x, native widescreen, MSAA 2, 240; with the render passes of the same month):
+the DMA controller's thread 1.5 ms a picture before, now a walk a frame (about 1 ms) and a few
+microseconds a picture; the native GS's thread a recording a frame (5 to 9 ms, the frame's draw and its
+recording) and 0.2 to 0.8 ms a picture made again. Walking on map 009, 2,400 vblanks at 240: 3,428
+pictures left out before (KF4_PRESENT_SIM=240; 2,535 in a window with the render passes alone), 402 now
+(186 in a window); map 000 standing, none.
+Headless with `--fast` the GPU is what is left: 2,000 vblanks of map 009 in 34.8 s (40.5 s before).
+
 ### What moves by itself
 
 The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned

@@ -189,7 +189,7 @@ void main() {
     if (o < pic.counts.x && (M(o, 0u) & 3u) == IM_3D && (M(o, 0u) & IM_SCALE_ST) != 0u) {
         Moved mo = o == k ? m : moved(o);
         if (mo.proc && !mo.drop) {
-            q = mo.qn;
+            q = uintBitsToFloat(K(o, 5u)) * mo.f; // (1 / w: its Q by the depth's change, exact when it does not move)
         }
     }
     // UV: a paired 2D item's t of the way from the frame before's
