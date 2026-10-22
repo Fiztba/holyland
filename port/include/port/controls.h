@@ -13,6 +13,13 @@
    captured, the player is not in control, or a pad script is playing (so runs stay deterministic). */
 int port_mouse_look(int gameplay, float *yaw, float *pitch);
 
+/* Called by the game (Player_Update) with the pad's held buttons and the action button's bit (the
+   game's button for running and for using what is in front). When the layout binds Run, running is
+   that key's: the action bit of `held` becomes whether Run is held, so the action button only uses
+   things (pressed is the game's own). Otherwise, or while a pad script plays or one is recorded,
+   `held` is returned as it is: the action button runs, as on the PS2. */
+unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit);
+
 /* ---- Layouts --------------------------------------------------------------------------------- */
 #define CONTROLS_PS2 0
 #define CONTROLS_VERDITE 1
@@ -51,6 +58,7 @@ typedef enum {
     ACTION_RIGHT_STICK_DOWN,
     ACTION_RIGHT_STICK_LEFT,
     ACTION_RIGHT_STICK_RIGHT,
+    ACTION_RUN,           /* running apart from the action button (port_controls_run_held) */
     ACTION_CAPTURE_MOUSE, /* Verdite: capture or release the mouse */
     ACTION_QUICK_SAVE,    /* save states (port/include/port/savestate.h), the quick slot: F5, F7 */
     ACTION_QUICK_LOAD,

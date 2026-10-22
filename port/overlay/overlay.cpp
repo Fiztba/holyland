@@ -467,6 +467,8 @@ void controls_page() {
     ImGui::Spacing();
     ImGui::TextWrapped("Click a slot and press a key, mouse button or controller button. Delete or a right click "
                        "clears it; F1 or five seconds cancel. A controller's sticks are the pad's sticks.");
+    ImGui::TextWrapped("Run: while it has a key or button, the game's action button only uses things; clear it "
+                       "and the action button runs too, as on the PS2.");
     if (listening) {
         ImGui::TextColored(colour_note, "Waiting for %s, slot %d...", port_controls_action_label(listen_action),
                            listen_slot + 1);

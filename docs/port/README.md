@@ -171,8 +171,9 @@ the default):
 | Enter, Backspace | start, select |
 
 The Verdite layout (`--controls verdite`, or the overlay's Controls page) is that of the KF2/KF3 ports:
-W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks
-(`port/sdk/controls.c` lists it). In both, F1 opens the settings overlay, F2 takes a quick save and F4
+W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks,
+Left Shift runs (`port/sdk/controls.c` lists it). While Run has a key, the game's action button (cross)
+only uses things; clear Run's keys to have it run as well, as on the PS2. In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
 loads it (exact, for debugging, same build only), F9, F10 and F12 are the debugging tools (see
 "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
