@@ -467,8 +467,6 @@ void controls_page() {
     ImGui::Spacing();
     ImGui::TextWrapped("Click a slot and press a key, mouse button or controller button. Delete or a right click "
                        "clears it; F1 or five seconds cancel. A controller's sticks are the pad's sticks.");
-    ImGui::TextWrapped("Run: while it has a key or button, the game's action button only uses things; clear it "
-                       "and the action button runs too, as on the PS2.");
     if (listening) {
         ImGui::TextColored(colour_note, "Waiting for %s, slot %d...", port_controls_action_label(listen_action),
                            listen_slot + 1);
@@ -907,6 +905,18 @@ void mods_page() {
     tooltip("Objects that glow while Myu's Necklace is worn always glow, so the amulet slot\nis free for another "
             "amulet. Applies at once. (--myus-necklace)");
     if (port_options.myus_necklace != s.myus_necklace) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(on for this run: command line)");
+    }
+    bool separate_run = port_options.separate_run != 0;
+    if (ImGui::Checkbox("Separate run key", &separate_run)) {
+        s.separate_run = port_options.separate_run = separate_run;
+        changed();
+    }
+    tooltip("Run while Left Shift (or a controller's left stick press) is held, instead of while the\naction "
+            "button is: the action button then only talks, picks up and opens. Rebind it on the\nControls "
+            "page (Run). Applies at once. (--separate-run)");
+    if (port_options.separate_run != s.separate_run) {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(on for this run: command line)");
     }

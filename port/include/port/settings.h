@@ -43,6 +43,7 @@ typedef struct {
     char layout[16];       /* "ps2" or "verdite" */
     /* Mods */
     int myus_necklace;     /* the effect of Myu's Necklace, always (port_options.myus_necklace) */
+    int separate_run;      /* a run key apart from the action button (port_options.separate_run) */
     /* The overlay */
     int pause_when_open;
     int show_fps;

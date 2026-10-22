@@ -156,6 +156,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--widescreen-hud-centred` | the same, with the HUD in the 4:3 middle instead of the 16:9 picture's corner |
 | `--frame-rate 30\|60` | 60 is the opt-in higher frame rate (also on the overlay's Display page; 30, the PS2's, by default): in play, a picture at every vblank, the one between the game's two drawn with the camera half way (see "60 pictures a second") |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
+| `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
 
@@ -171,9 +172,8 @@ the default):
 | Enter, Backspace | start, select |
 
 The Verdite layout (`--controls verdite`, or the overlay's Controls page) is that of the KF2/KF3 ports:
-W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks,
-Left Shift runs (`port/sdk/controls.c` lists it). While Run has a key, the game's action button (cross)
-only uses things; clear Run's keys to have it run as well, as on the PS2. In both, F1 opens the settings overlay, F2 takes a quick save and F4
+W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks
+(`port/sdk/controls.c` lists it). In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
 loads it (exact, for debugging, same build only), F9, F10 and F12 are the debugging tools (see
 "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
@@ -212,8 +212,8 @@ new ones are used (the file is written again as version 2, with a line on stderr
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
 `--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off,
-`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` keeps that mod
-on, and `--controls` picks the layout.
+`--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--myus-necklace` and `--separate-run` keep
+those mods on, and `--controls` picks the layout.
 
 **Tests see none of it.** A headless run or one that plays a pad script (`--input`) reads no
 settings.json and has no overlay, so `boot_test.py` and `frame_test.py` run the same whatever the
@@ -265,6 +265,13 @@ it does without it.
   `MapObject_DrawAll` decides each frame whether the necklace is worn, from the amulet slot; with the
   mod on it counts as worn whatever the slot holds, so the objects it makes glow always glow (their
   pulse starts when the mod is turned on), and the slot is free for another amulet.
+- **Separate run key** (`--separate-run`, `port_controls_run_held()`). The game runs while its
+  action button (cross by default) is held with a move, and uses what is in front when it is
+  pressed. With the mod on, `Player_Update` has the action button's held bit be the Run control's
+  (Left Shift and a controller's left stick press in both layouts, rebindable on the Controls page,
+  shown there only with the mod on), so the action button only uses things. Pressed buttons are
+  untouched, and everything that stops running (weight, item use, death) still does. A pad script
+  (`--input`, `--record-input`) keeps the pad as it is.
 
 ## Widescreen
 

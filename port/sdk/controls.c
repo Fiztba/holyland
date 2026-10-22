@@ -14,11 +14,13 @@
        Q             triangle                 Tab          circle
        Enter         start                    Right Shift  select
        Escape        capture / release the mouse
-       Left Shift    run (held), and the controller's left stick press: the action button (cross,
-                     F) then only uses things; unbind Run to have it run too, as on the PS2
    Mouse, captured, while the player is in control: moving turns and looks; left square, right
    triangle, middle cross (the mouse bindings of the table). Otherwise (menus, pause, dialogue): left
    cross, right circle, middle cross (the menu mouse), the wheel up / down.
+
+   In both, with the separate run mod on (--separate-run, the Mods page), Left Shift and the
+   controller's left stick press run while held, and the action button (cross; F in Verdite) only
+   uses things. Off, Run is not used and the action button runs, as on the PS2.
 
    In both, a controller's buttons are as the PS2 pad's (A cross, B circle, X square, Y triangle, the
    shoulders and triggers L1 R1 L2 R2), F2 / F4 take and load a quick save (port/platform/quicksave.c), and
@@ -127,6 +129,9 @@ int port_controls_action_used(int layout, int action) {
     if (action == ACTION_CAPTURE_MOUSE) {
         return layout == CONTROLS_VERDITE;
     }
+    if (action == ACTION_RUN) {
+        return port_options.separate_run;
+    }
     return action >= 0 && action < ACTION_COUNT;
 }
 
@@ -161,6 +166,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_R3] = {0, 0, PAD(RIGHTSTICK)},
         [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
         [ACTION_SELECT] = {KEY(BACKSPACE), 0, PAD(BACK)},
+        [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFTSTICK)},
         [ACTION_LEFT_STICK_UP] = {KEY(W)},
         [ACTION_LEFT_STICK_DOWN] = {KEY(S)},
         [ACTION_LEFT_STICK_LEFT] = {KEY(A)},
@@ -373,11 +379,11 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     return 1;
 }
 
-/* Running is Run's when the layout binds it, and no pad script plays or is recorded */
+/* Running is Run's with the mod on and Run bound, and no pad script playing or recorded */
 unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit) {
     int slot;
 
-    if (port_options.input != NULL || port_options.record_input != NULL) {
+    if (!port_options.separate_run || port_options.input != NULL || port_options.record_input != NULL) {
         return held;
     }
     for (slot = 0; slot < BINDING_SLOTS; slot++) {
