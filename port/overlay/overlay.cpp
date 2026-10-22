@@ -392,6 +392,11 @@ void display_page() {
          "instead of as two fields (from the next movie), and the menus, drawn a field at a time, as one\n"
          "moment each picture. Off: as on the PS2. (--no-whole-frame)",
          &s.whole_frame, &port_options.whole_frame},
+        {"Scrolling textures without a seam",
+         "On: the sky's clouds, the lava and the water repeat evenly. Off: as on the PS2, the game draws\n"
+         "each with its last row and column half a texel short, which shows as a line where the clouds\n"
+         "or the lava warp, clearer at a higher native resolution. (--no-seamless-scroll)",
+         &s.seamless_scroll, &port_options.seamless_scroll},
         {"No flicker filter (no up-and-down blur)",
          "On (the default): the rows as the game drew them. Off: as on the PS2, every frame the game\n"
          "blends each row of the picture half with the row above, so that thin lines do not flicker\n"

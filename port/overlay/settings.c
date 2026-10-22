@@ -4,7 +4,7 @@
        "version":  3,
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "whole_frame": true, "flicker_filter": false,
+                    "whole_frame": true, "seamless_scroll": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
@@ -63,6 +63,7 @@ PortSettings port_settings = {
     .anti_blur = 1,
     .adapt_width = 1,
     .whole_frame = 1,
+    .seamless_scroll = 1,
     .frame_rate = 30,
     .volume = 100,
     .layout = "ps2",
@@ -308,6 +309,7 @@ void port_settings_load(void) {
     s->anti_blur = read_bool(display, "anti_blur", s->anti_blur);
     s->adapt_width = read_bool(display, "adapt_width", s->adapt_width);
     s->whole_frame = read_bool(display, "whole_frame", s->whole_frame);
+    s->seamless_scroll = read_bool(display, "seamless_scroll", s->seamless_scroll);
     s->flicker_filter = read_bool(display, "flicker_filter", s->flicker_filter);
     s->widescreen = read_bool(display, "widescreen", s->widescreen);
     {
@@ -427,6 +429,9 @@ void port_settings_load(void) {
     }
     if (port_options.whole_frame) {
         port_options.whole_frame = s->whole_frame;
+    }
+    if (port_options.seamless_scroll) {
+        port_options.seamless_scroll = s->seamless_scroll;
     }
     if (!port_options.flicker_filter_forced) {
         port_options.flicker_filter = s->flicker_filter;
@@ -592,6 +597,7 @@ void port_settings_save(void) {
     put(display, "anti_blur", cJSON_CreateBool(s->anti_blur));
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "whole_frame", cJSON_CreateBool(s->whole_frame));
+    put(display, "seamless_scroll", cJSON_CreateBool(s->seamless_scroll));
     put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));

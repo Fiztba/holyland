@@ -134,7 +134,8 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
 | `--no-adapt-width` | scan out at the TV's width, not the game's |
 | `--no-whole-frame` | let the game draw its picture between over every other line while the view turns (`Game_ShiftScreenByViewTurn`, for the other field of an interlaced TV): the picture is then read a field at a time and deinterlaced; and show the movies as two fields, woven with a comb wherever the picture changes; and weave each picture of the menus (drawn a field a vblank) with the one before; as on the PS2 (docs/port/PLAN.md) |
-| `--ps2-scanout` | all five of the above, and `--flicker-filter`: the GS's raw output, for comparing with the PS2 or PCSX2 |
+| `--no-seamless-scroll` | draw the scrolling textures (the sky's clouds on map 000, the lava, the water) as the PS2 does, with a sprite that stops half a pixel short of its 128x128 target: the texture then does not repeat evenly, a line where the clouds or the lava warp, clearer at a larger `--native-scale` (`port_seamless_scroll()`, PLAN.md) |
+| `--ps2-scanout` | all six of the above, and `--flicker-filter`: the GS's raw output, for comparing with the PS2 or PCSX2 |
 | `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
 | `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
 | `--frames N` | stop after N vblanks |
@@ -194,7 +195,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, pictures a second in play (30 to 240, or the screen's rate), live, the draw distance and the sky's fog, live, the scaling to the window (sharp, smooth or best) and sharpening, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames), live, for comparing with the GS's raw output |
+| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, pictures a second in play (30 to 240, or the screen's rate), live, the draw distance and the sky's fog, live, the scaling to the window (sharp, smooth or best) and sharpening, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames, seamless scrolling textures), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
@@ -221,7 +222,7 @@ old defaults written out, and the new ones are used (the file is written again a
 scales, and native widescreen on, are kept.
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
-`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off
+`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame`, `--no-seamless-scroll` and `--ps2-scanout` keep their switches off
 (and `--flicker-filter` and `--ps2-scanout` the flicker filter on),
 `--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--draw-distance` and `--draw-distance-sky` set those, `--myus-necklace` and `--separate-run` keep
 those mods on, and `--controls` picks the layout.

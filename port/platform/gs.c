@@ -299,6 +299,10 @@ int port_whole_frame(void) {
     return port_options.whole_frame;
 }
 
+int port_seamless_scroll(void) {
+    return port_options.seamless_scroll;
+}
+
 int port_flicker_filter(void) {
     return port_options.flicker_filter;
 }

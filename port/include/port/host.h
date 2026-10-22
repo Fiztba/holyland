@@ -145,6 +145,17 @@ int port_whole_frame(void);
    --native-scale (one GS row is N rows of the picture) a double image. Off, the game writes the
    pass's registers but draws none of its strips. */
 int port_flicker_filter(void);
+
+/* port_seamless_scroll(): 1 while the scrolling textures repeat without a seam (port_options.
+   seamless_scroll; on by default, off with --no-seamless-scroll, --ps2-scanout or the overlay's Display
+   page). The game draws each scrolling texture (map 000's clouds, the lava, the water) into a small
+   render target with a sprite from its left edge to half a pixel before its right one, carrying the
+   texture's whole width: 128 texels over 127.5 pixels, so the target's last row and column step by half
+   a texel and the picture does not repeat evenly. The sky and the lava magnify that row: a thin band
+   where the clouds and the lava warp, along a line across the screen, the clearer the larger
+   --native-scale. On, the sprite ends on the target's edge (MapScroll_UpdateDraw,
+   GsDraw_DrawScrollingTexture): the same pixels covered, its texels a whole one apart. */
+int port_seamless_scroll(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 

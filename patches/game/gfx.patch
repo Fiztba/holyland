@@ -111,7 +111,7 @@ index 4ead55f255a6669ffe51f159be117c1d77377464..fc4168c1ebd6be8921d7b722a1da30c8
  typedef struct {
      u64 first;
 diff --git a/src/game/gfx/gs_draw.c b/src/game/gfx/gs_draw.c
-index 9632089b07a8631adfbaad8c3b7755ccc0d01f47..3709bacd447fef6c0e297ef5d02c945ad8e084bf 100644
+index 9632089b07a8631adfbaad8c3b7755ccc0d01f47..8da8ce93b63513c623713215f4f37f9b29299cba 100644
 --- a/src/game/gfx/gs_draw.c
 +++ b/src/game/gfx/gs_draw.c
 @@ -3,6 +3,7 @@
@@ -221,7 +221,20 @@ index 9632089b07a8631adfbaad8c3b7755ccc0d01f47..3709bacd447fef6c0e297ef5d02c945a
      sprite.tex1 = 0x60;
      sprite.prim = 0x156;
      sprite.rgba[0] = texture->rgba[0];
-@@ -480,12 +479,12 @@ void GsDraw_CopyFrameToTexture(int fbp, int psm, int width, int height) {
+@@ -452,8 +451,10 @@ void GsDraw_DrawScrollingTexture(void *texture_arg, void *offset_arg) {
+     sprite.vertex[0].z = 0xFFFFFFFF;
+     sprite.vertex[0].tex_s = 0;
+     sprite.vertex[0].tex_t = 0;
+-    sprite.vertex[1].x = (half << 4) + 0x7FF8;
+-    sprite.vertex[1].y = (half << 4) + 0x7FF8;
++    // PC: with port_seamless_scroll(), the sprite ends on the target's edge (half), not half a pixel
++    // before it, so its texels step by whole ones and the texture repeats without a seam
++    sprite.vertex[1].x = (half << 4) + (port_seamless_scroll() ? 0x8000 : 0x7FF8);
++    sprite.vertex[1].y = (half << 4) + (port_seamless_scroll() ? 0x8000 : 0x7FF8);
+     sprite.vertex[1].z = 0xFFFFFFFF;
+     sprite.vertex[1].tex_s = (f32)width * texture->repeat_x;
+     sprite.vertex[1].tex_t = (f32)height * texture->repeat_y;
+@@ -480,12 +481,12 @@ void GsDraw_CopyFrameToTexture(int fbp, int psm, int width, int height) {
                    ((u64)(width - 1) << 16) | ((u64)(height - 1) << 48),
                    ((0x800 - (width >> 1)) << 4) | ((u64)((0x800 - (height >> 1)) << 4) << 32));
      Packet_BeginGsRegisters();
