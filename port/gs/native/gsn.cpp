@@ -1640,18 +1640,30 @@ void flush_batch() {
         always_passes = std::min(zmin, depth_max(zpsm)) == depth_max(zpsm);
     }
     bool need_depth = !(always_passes && !any_zwrite);
-    Target *color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
+    // The rows the targets need: to the scissor's bottom; for a draw with Z, only to the last row its
+    // vertices reach when that is higher. The menus' scissor runs a row past their 224-line field
+    // buffers (0-224, inclusive), and targets made 225 rows tall from it reached each other (the second
+    // field buffer's last row is in the Z buffer's first page): as the two attachments are made as big
+    // as each other, they could not be targets together, and the field's clear and backdrop were drawn
+    // without Z, which the brightness sprite of the field before had left at its largest: the
+    // backdrop failed the Z test, and every other line of the Equipment and Journal screens was black.
+    // Those draws reach row 223 (a sprite to 223.5 covers row 223 last), as on the GS.
+    uint32_t need_h = sy1 + 1;
+    if (need_depth) {
+        need_h = std::min(need_h, uint32_t(std::max(0.0f, floorf(vy1))) + 1);
+    }
+    Target *color = get_target(fbp, fbw, fpsm, fbw * 64, need_h);
     Target *depth = nullptr;
-    if (need_depth && color->height > sy1 + 1) {
+    if (need_depth && color->height > need_h) {
         // a colour target taller than the draw needs (one drawn over both frame buffers once, say) that
         // runs into the Z buffer: back to VRAM, and made again as tall as the draw needs
         uint32_t clo, ccount, zlo, zcount;
         target_pages(*color, &clo, &ccount);
-        buffer_pages(zbp, fbw, zpsm, fbw * 64, sy1 + 1, &zlo, &zcount);
+        buffer_pages(zbp, fbw, zpsm, fbw * 64, need_h, &zlo, &zcount);
         if (pages_overlap(clo, ccount, zlo, zcount)) {
             write_back(*color);
             drop_target(color);
-            color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
+            color = get_target(fbp, fbw, fpsm, fbw * 64, need_h);
         }
     }
     if (need_depth) {
@@ -1679,7 +1691,7 @@ void flush_batch() {
             if (!told++) {
                 fprintf(stderr, "[gsn] FRAME %#x and ZBUF %#x overlap: drawn without Z\n", fbp, zbp);
             }
-            color = get_target(fbp, fbw, fpsm, fbw * 64, sy1 + 1);
+            color = get_target(fbp, fbw, fpsm, fbw * 64, need_h);
             depth = nullptr;
         }
     }

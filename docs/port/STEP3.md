@@ -311,8 +311,10 @@ menus and movies, 1 (frame mode) in play.
   With it drawn, both renderers show the same deinterlaced picture.
 - The movies, in field mode, draw each field from the decoded picture's every other line, so the
   weave mixes two pictures whenever the picture changes; with whole frames on the movie player shows
-  its pictures whole in frame mode instead (PLAN.md). The title, menus and logos are still pictures:
-  their weave is whole.
+  its pictures whole in frame mode instead (PLAN.md). The menus draw a new field every vblank (field
+  mode, a half-line draw offset): woven, two moments; with whole frames on, each field's packets are
+  drawn again into the other buffer for the other field and scanned out as that field first, so the
+  weave is one moment (`port/platform/field_frames.c`, PLAN.md).
 - The history (the countdown and the fields) is in a GS capture (`KF4GS_GS_HISTORY`, which
   paraLLEl-GS's save states and captures carry too), so a replay starts from the game's. The native
   GS's save states do not keep it: the first picture after a load in that state takes its field's

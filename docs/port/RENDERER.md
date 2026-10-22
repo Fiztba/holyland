@@ -68,6 +68,11 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 
 ## Things that were hard to find
 
+- **A target is as tall as its draws reach, not its scissor, for draws with Z.** The menus' scissor
+  runs a row past their 224-line field buffers; a colour target made 225 rows tall ran into the Z
+  buffer's first page, the two could not be targets together (they are made as big as each other),
+  and the next field's clear and backdrop were drawn without Z: every other line of the Equipment and
+  Journal screens black (October 2026).
 - **Z is a whole number per pixel.** The GS rounds the interpolated Z; keeping the fraction hid the
   lava's glow behind the lava it is drawn on (with a GEQUAL test).
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's

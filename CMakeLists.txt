@@ -87,6 +87,7 @@ add_library(kf4_port STATIC
     port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c
     port/platform/gs.c
     port/platform/frame_interp.c
+    port/platform/field_frames.c
     port/platform/video.c
     port/platform/disc.c
     port/platform/ipu.c
