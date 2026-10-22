@@ -2445,9 +2445,25 @@ struct PageImage {
     std::vector<uint8_t> bytes; // 8 KB a page, in pages' order
     bool rgb_only;              // a 24-bit upload: the pages' words' low three bytes only
 };
-std::unordered_map<uint64_t, PageImage> page_images;
+std::unordered_map<uint64_t, std::shared_ptr<PageImage>> page_images;
 std::deque<uint64_t> page_image_order;
 size_t page_image_bytes;
+
+// --frame-rate's pictures between (port/platform/frame_interp.c) draw the game's frame again from its
+// packets, uploads and all: some 8 MB a frame, which went through the ring, were kept whole, hashed
+// and compared with VRAM again for each picture. So the uploads of the packets between two vblanks are
+// recorded as they come (their registers, and the pages they left, or their bytes), and a picture
+// between, drawn from those packets, asks for the k-th of them again instead (PORT_GS_REG_REPLAY_UPLOAD
+// in place of TRXDIR, and no data). Between the port's marks of a picture between nothing is recorded.
+struct RecordedUpload {
+    uint64_t bitbltbuf, trxpos, trxreg;
+    std::shared_ptr<PageImage> image; // the pages it filled (complete_upload): written again from them
+    std::vector<uint8_t> bytes;       // else its bytes, sent again
+};
+std::vector<RecordedUpload> uploads_now;   // since the last vblank
+std::vector<RecordedUpload> uploads_frame; // the last vblank's that had any: what a picture between asks for
+int recording = -1;                        // the upload under way in uploads_now (-1: none)
+bool replaying;                            // between the marks of a picture between
 
 // The pages an upload fills entirely, in order; empty if it does not fill whole pages (a format that
 // owns only part of each word, or a rectangle not on page bounds). With rgb_only, a 24-bit upload
@@ -2527,6 +2543,8 @@ void upload_done() {
     pending_upload.data.clear();
 }
 
+void write_page_image(const PageImage &image);
+
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
 void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
@@ -2534,11 +2552,54 @@ void complete_upload(const uint8_t *data, size_t size) {
     std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
     uint64_t key = upload_hash(p, data, size);
     auto found = pages.empty() ? page_images.end() : page_images.find(key);
-    if (found != page_images.end() && found->second.pages == pages && found->second.rgb_only == rgb_only) {
+    RecordedUpload *rec = recording >= 0 ? &uploads_now[size_t(recording)] : nullptr;
+    if (found != page_images.end() && found->second->pages == pages && found->second->rgb_only == rgb_only) {
+        if (rec) {
+            rec->image = found->second;
+        }
+        write_page_image(*found->second);
+        upload_done();
+        return;
+    }
+    swizzle_upload(data, size);
+    if (!pages.empty()) {
+        auto image = std::make_shared<PageImage>();
+        image->pages = pages;
+        image->rgb_only = rgb_only;
+        image->bytes.resize(pages.size() * 8192);
+        for (size_t i = 0; i < pages.size(); i++) {
+            memcpy(image->bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
+        }
+        page_image_bytes += image->bytes.size();
+        if (rec) {
+            rec->image = image;
+        }
+        page_images[key] = std::move(image);
+        page_image_order.push_back(key);
+        // the oldest let go beyond 64 MB of them (one a picture between still asks for is kept by it)
+        while (page_image_bytes > (64u << 20) && !page_image_order.empty()) {
+            auto old = page_images.find(page_image_order.front());
+            if (old != page_images.end()) {
+                page_image_bytes -= old->second->bytes.size();
+                page_images.erase(old);
+            }
+            page_image_order.pop_front();
+        }
+    } else if (rec) {
+        rec->bytes.assign(data, data + size);
+    }
+    upload_done();
+}
+
+// An upload found again: its pages copied into VRAM (those that differ)
+void write_page_image(const PageImage &image) {
+    {
+        const std::vector<uint32_t> &pages = image.pages;
+        bool rgb_only = image.rgb_only;
         bool changed = false;
         for (size_t i = 0; i < pages.size(); i++) {
             uint8_t *dst = gs->vram.data() + size_t(pages[i]) * 8192;
-            const uint8_t *src = found->second.bytes.data() + i * 8192;
+            const uint8_t *src = image.bytes.data() + i * 8192;
             if (rgb_only) {
                 // (the words' top bytes are not the upload's: they stay)
                 bool page_changed = false;
@@ -2562,32 +2623,7 @@ void complete_upload(const uint8_t *data, size_t size) {
         }
         gsn_stats.uploads_skipped += !changed;
         gsn_stats.uploads_copied += changed;
-        upload_done();
-        return;
     }
-    swizzle_upload(data, size);
-    if (!pages.empty()) {
-        PageImage image;
-        image.pages = pages;
-        image.rgb_only = rgb_only;
-        image.bytes.resize(pages.size() * 8192);
-        for (size_t i = 0; i < pages.size(); i++) {
-            memcpy(image.bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
-        }
-        page_image_bytes += image.bytes.size();
-        page_images[key] = std::move(image);
-        page_image_order.push_back(key);
-        // the oldest let go beyond 64 MB of them
-        while (page_image_bytes > (64u << 20) && !page_image_order.empty()) {
-            auto old = page_images.find(page_image_order.front());
-            if (old != page_images.end()) {
-                page_image_bytes -= old->second.bytes.size();
-                page_images.erase(old);
-            }
-            page_image_order.pop_front();
-        }
-    }
-    upload_done();
 }
 
 // Something needs VRAM before the upload under way is whole: what has come goes in now
@@ -2597,6 +2633,9 @@ void settle_upload() {
         return;
     }
     p.incremental = true;
+    if (recording >= 0) {
+        uploads_now[size_t(recording)].bytes.insert(uploads_now[size_t(recording)].bytes.end(), p.data.begin(), p.data.end());
+    }
     // A target in another shape that prepare_write kept, as the upload writes whole pages of it: those
     // pages are VRAM's from now on (half written), and must not go back over it before sync_targets
     // takes them from it
@@ -2623,6 +2662,10 @@ void settle_upload() {
 void forget_uploads() {
     pending_upload.active = false;
     pending_upload.data.clear();
+    uploads_now.clear();
+    uploads_frame.clear();
+    recording = -1;
+    replaying = false;
     page_images.clear();
     page_image_order.clear();
     page_image_bytes = 0;
@@ -2637,6 +2680,11 @@ void begin_transfer(uint32_t dir) {
         prepare_write(r);
         gsn_upload_begin(&gs->upload, bitbltbuf, trxpos, trxreg);
         gsn_stats.uploads++;
+        recording = -1;
+        if (!replaying) {
+            uploads_now.push_back({bitbltbuf, trxpos, trxreg, nullptr, {}});
+            recording = int(uploads_now.size() - 1);
+        }
         PendingUpload &u = pending_upload;
         u.active = gs->upload.active != 0;
         u.incremental = false;
@@ -2719,6 +2767,9 @@ void image_data(const uint8_t *data, size_t bytes) {
     gsn_stats.upload_bytes += bytes;
     PendingUpload &p = pending_upload;
     if (p.incremental) {
+        if (recording >= 0) {
+            uploads_now[size_t(recording)].bytes.insert(uploads_now[size_t(recording)].bytes.end(), data, data + bytes);
+        }
         swizzle_upload(data, bytes);
         if (!gs->upload.active) {
             upload_done();
@@ -2733,6 +2784,31 @@ void image_data(const uint8_t *data, size_t bytes) {
     if (p.data.size() >= p.expect) {
         complete_upload(p.data.data(), p.data.size());
     }
+}
+
+// A picture between asks for the k-th upload of the frame again (PORT_GS_REG_REPLAY_UPLOAD: k, and the
+// destination's half of BITBLTBUF to check it), with this upload's registers as the frame had them
+void replay_upload(uint64_t value) {
+    uint32_t k = uint32_t(value);
+    if (k >= uploads_frame.size() || uint32_t(uploads_frame[k].bitbltbuf >> 32) != uint32_t(value >> 32) ||
+        (uploads_frame[k].bitbltbuf >> 32) != (gs->reg[R_BITBLTBUF] >> 32) || uploads_frame[k].trxpos != gs->reg[R_TRXPOS] ||
+        uploads_frame[k].trxreg != gs->reg[R_TRXREG]) {
+        gsn_stats.replay_misses++;
+        return;
+    }
+    // (kept alive here: image_data does not record, between the marks)
+    std::shared_ptr<PageImage> image = uploads_frame[k].image;
+    flush_batch();
+    gs->reg[R_TRXDIR] = 0;
+    begin_transfer(0);
+    if (image) {
+        Timer timer(gsn_stats.ns_upload);
+        write_page_image(*image);
+        upload_done();
+    } else if (!uploads_frame[k].bytes.empty()) {
+        image_data(uploads_frame[k].bytes.data(), uploads_frame[k].bytes.size());
+    }
+    gsn_stats.replay_uploads++;
 }
 
 // ---- Register writes ----------------------------------------------------------------------------
@@ -2818,7 +2894,17 @@ void gs_write(uint32_t address, uint64_t value) {
     }
     case R_TEXFLUSH:
     case 0x0F: // NOP
-    case 0x7D: // the port's frame-rate mark (frame_interp.c)
+    case 0x7D: // the port's frame-rate mark (frame_interp.c): a picture between begins or ends
+        if (bits(value, 32, 8) == 0xF0) {
+            replaying = true;
+            recording = -1;
+        } else if (bits(value, 32, 8) == 0xF1) {
+            replaying = false;
+        }
+        return;
+    case 0x7C: // the port's upload asked for again (frame_interp.c)
+        replay_upload(value);
+        return;
     case 0x7E: // the port's widescreen mark (gs.c)
         return;
     case R_SIGNAL:
@@ -3093,13 +3179,24 @@ void reset_gs() {
 // copied on the GPU into an image of its own, which the presenter draws from: no read-back. In field
 // mode the image is the woven picture, each field's lines copied into its own rows (line l of the
 // picture is field (l & 1)'s line l / 2), so the field before stays in the other rows.
+// The images are a ring of slots: with --frame-rate above 60 a vblank has several pictures (gsn_picture),
+// which the presenter shows at their own times, so the newest must not write over those still waiting.
+// The slot the presenter holds (gsn_scanout_take) is passed over.
+const int SCANOUT_SLOTS = 16;
+struct ScanoutSlot {
+    ImageHandle image;
+    uint32_t width = 0, height = 0;
+    uint64_t serial = 0; // 0: none published in it (or it is being written)
+    uint64_t tag = 0;    // the picture's (gsn_picture)
+};
 struct ScanoutImage {
     std::mutex lock; // (the presenter takes the image on the game's thread)
-    ImageHandle image;
+    ScanoutSlot slots[SCANOUT_SLOTS];
     std::vector<ImageHandle> retired; // images replaced while the presenter had one: dropped once it lets go
-    uint32_t width = 0, height = 0;
+    int newest = -1;  // the slot published last
+    int writing = -1; // the slot being written (the GS's thread)
+    int taken = -1;   // the slot the presenter holds
     uint64_t serial = 0;
-    bool taken = false;
 };
 ScanoutImage scanout_image;
 bool present_wanted; // gsn_enable_present
@@ -3283,52 +3380,71 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     uint32_t lines = mode == SCAN_WEAVE ? s.h * 2 : mode == SCAN_FIELD ? s.h / 2 : s.h;
     uint32_t iw = s.w * s.sx, ih = lines * s.sy;
     bool fresh = false;
+    int slot = 0;
+    ImageHandle before; // (the weave: the picture published last, whose other field's lines are kept)
     // (images are made and let go outside the lock: Granite's device lock, which the presenter holds
     // while it releases the image (gsn_queue_lock, then gsn_scanout_release), comes before it)
     {
         std::lock_guard<std::mutex> hold(so.lock);
-        fresh = !so.image || so.width != iw || so.height != ih;
+        slot = (so.newest + 1) % SCANOUT_SLOTS;
+        if (slot == so.taken) {
+            slot = (slot + 1) % SCANOUT_SLOTS;
+        }
+        so.writing = slot;
+        so.slots[slot].serial = 0; // (not to be taken while it is written)
+        fresh = !so.slots[slot].image || so.slots[slot].width != iw || so.slots[slot].height != ih;
+        if (so.newest >= 0 && so.slots[so.newest].image && so.slots[so.newest].width == iw &&
+            so.slots[so.newest].height == ih) {
+            before = so.slots[so.newest].image;
+        }
     }
     ImageHandle made = fresh ? make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, true) : ImageHandle();
     std::vector<ImageHandle> let_go;
     {
         std::lock_guard<std::mutex> hold(so.lock);
-        if (!so.taken) {
+        if (so.taken < 0) {
             let_go.swap(so.retired);
         }
         if (fresh) {
-            if (so.taken && so.image) {
-                so.retired.push_back(so.image);
-            } else if (so.image) {
-                let_go.push_back(so.image);
+            ScanoutSlot &sl = so.slots[slot];
+            if (sl.image) {
+                let_go.push_back(sl.image); // (never the slot taken: passed over above)
             }
-            so.image = made;
-            so.width = iw;
-            so.height = ih;
+            sl.image = made;
+            sl.width = iw;
+            sl.height = ih;
         }
     }
     let_go.clear();
+    const Image &dst = *so.slots[slot].image;
     switch (mode) {
     case SCAN_WHOLE:
-        copy_lines(*so.image, s, 0, 1, s.h, 0, 1);
+        copy_lines(dst, s, 0, 1, s.h, 0, 1);
         break;
     case SCAN_WEAVE:
-        // the field into its own lines; into both when the image is new (as the read-back path starts
-        // the other field as this one)
-        for (uint32_t p = fresh ? 0 : uint32_t(parity); p <= (fresh ? 1u : uint32_t(parity)); p++) {
-            copy_lines(*so.image, s, 0, 1, s.h, p, 2);
+        // the field into its own lines, the other field's from the picture before; into both when there
+        // is none (as the read-back path starts the other field as this one)
+        if (before && before.get() != &dst) {
+            const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            end_pass();
+            transfer_barrier();
+            cmd().copy_image(dst, *before, {0, 0, 0}, {0, 0, 0}, {iw, ih, 1}, colour, colour);
+            transfer_barrier();
+        }
+        for (uint32_t p = before ? uint32_t(parity) : 0; p <= (before ? uint32_t(parity) : 1u); p++) {
+            copy_lines(dst, s, 0, 1, s.h, p, 2);
         }
         break;
     case SCAN_FIELD:
-        copy_lines(*so.image, s, uint32_t(parity), 2, lines, 0, 1);
+        copy_lines(dst, s, uint32_t(parity), 2, lines, 0, 1);
         break;
     case SCAN_DEINTERLACE:
-        deinterlace_pass(*so.image, parity, s.sy, s.h);
+        deinterlace_pass(dst, parity, s.sy, s.h);
         break;
     }
     int ok = GSN_WANT_IMAGE;
     if (frame && size_t(iw) * ih <= PORT_GS_FRAME_PIXELS) {
-        const uint8_t *pixels = read_image(*so.image, 0, 0, iw, ih);
+        const uint8_t *pixels = read_image(dst, 0, 0, iw, ih);
         for (size_t i = 0; i < size_t(iw) * ih; i++) {
             uint32_t v;
             memcpy(&v, pixels + i * 4, 4);
@@ -3342,10 +3458,17 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     return ok;
 }
 
-// After the vblank's commands went to the queue: the presenter may show the new picture
-void scanout_published() {
-    std::lock_guard<std::mutex> hold(scanout_image.lock);
-    scanout_image.serial++;
+// After the picture's commands went to the queue: the presenter may show it
+void scanout_published(uint64_t tag) {
+    ScanoutImage &so = scanout_image;
+    std::lock_guard<std::mutex> hold(so.lock);
+    if (so.writing < 0) {
+        return;
+    }
+    so.slots[so.writing].serial = ++so.serial;
+    so.slots[so.writing].tag = tag;
+    so.newest = so.writing;
+    so.writing = -1;
 }
 
 // ---- The GS's own thread ------------------------------------------------------------------------
@@ -3385,16 +3508,17 @@ struct Ring {
 
 Ring *ring; // (none: no thread)
 
-int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 
 void ring_work(const RingRecord &r, const uint8_t *data) {
     if (r.type == RING_GIF) {
         Timer timer(gsn_stats.ns_gif);
         gif(r.arg, data, r.size);
     } else if (r.type == RING_VSYNC) {
-        uint64_t privileged[vsync_bytes / 8];
+        uint64_t privileged[vsync_bytes / 8], tag;
         memcpy(privileged, data, vsync_bytes);
-        vsync_now(privileged, r.arg, int(r.want_pixels), nullptr);
+        memcpy(&tag, data + vsync_bytes, 8);
+        vsync_now(privileged, r.arg, int(r.want_pixels), nullptr, tag);
     }
 }
 
@@ -3434,7 +3558,7 @@ void ring_thread() {
         RingRecord r;
         memcpy(&r, at, sizeof(r));
         ring_work(r, at + sizeof(r));
-        if (r.type == RING_VSYNC) {
+        if (r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA)) {
             q.vsyncs_done.fetch_add(1);
         }
         q.tail.store(tail + sizeof(r) + ((size_t(r.size) + 15) & ~size_t(15)));
@@ -3699,12 +3823,22 @@ extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
 namespace {
 // gsn_set_presenter's (a picture's pixels, or a new image for gsn_scanout_take), and the pixels it
 // is given
-void (*presenter)(const PortGsFrame *frame);
-void (*presenter_image)(void);
+void (*presenter)(const PortGsFrame *frame, uint64_t tag);
+void (*presenter_image)(uint64_t tag);
 PortGsFrame presented;
 
-int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+// A vblank's picture, or with GSN_EXTRA one more picture between two vblanks (gsn_picture): the same
+// scanout, without what belongs to the vblank (the field-at-a-time countdown, the deinterlace's history,
+// a new scale or MSAA, the pipeline cache); a picture that would be read a field at a time is not made.
+int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     Timer timer(gsn_stats.ns_vsync);
+    bool extra = (want_pixels & GSN_EXTRA) != 0;
+    if (!extra && !uploads_now.empty()) {
+        // the uploads of the packets since the last vblank: what the pictures between ask for again
+        uploads_frame.swap(uploads_now);
+        uploads_now.clear();
+        recording = -1;
+    }
     if ((want_pixels & GSN_PRESENT) && !(want_pixels & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) {
         if (!presented.rgba) {
             presented.rgba = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS));
@@ -3722,7 +3856,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     want_pixels &= GSN_WANT_PIXELS | GSN_WANT_IMAGE | GSN_PRESENT;
     // a frame-mode picture read a field at a time: 4 vblanks after a tall SCANMSK primitive (scanmsk_seen)
     bool field_scan = gs->field_scan_vblanks > 0;
-    if (gs->field_scan_vblanks) {
+    if (gs->field_scan_vblanks && !extra) {
         gs->field_scan_vblanks--;
     }
     GSN_LOG(3, "vsync field %d%s PMODE %llx SMODE2 %llx DISPFB1 %llx DISPLAY1 %llx DISPFB2 %llx DISPLAY2 %llx\n", field,
@@ -3753,6 +3887,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
             parity = int((bits(display, 12, 11) ^ uint32_t(field)) & 1); // (DY's parity moves the fields)
         }
         uint32_t sx = target_sx, sy = target_sy;
+        if (extra && mode != SCAN_WHOLE) {
+            w = 0; // (a picture between is whole, or none)
+        }
         if (w > 0 && h > 0 && w <= 1024 && h <= 1024 &&
             size_t(w) * h * sx * sy * (mode == SCAN_WEAVE ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
             Shown shown = shown_buffer(fbp, fbw, psm, dbx, dby, w, h);
@@ -3810,13 +3947,23 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
             }
         }
     }
-    if (!history_kept && gs->history_filled) {
+    if (!history_kept && gs->history_filled && !extra) {
         forget_history();
     }
     submit(false);
     gs->device->next_frame_context();
     if (ok & GSN_WANT_IMAGE) {
-        scanout_published();
+        scanout_published(tag);
+    }
+    if (extra) {
+        if (ok && (want_pixels & GSN_PRESENT)) {
+            if ((ok & GSN_WANT_IMAGE) && presenter_image) {
+                presenter_image(tag);
+            } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
+                presenter(frame, tag);
+            }
+        }
+        return ok;
     }
     // the pipeline cache, written when it has grown (looked at every ten seconds)
     if (!cache_path.empty() && ++cache_vsyncs % 600 == 0) {
@@ -3846,21 +3993,25 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         // the window's picture, handed over now that it is there (an image: once its commands are on
         // the queue, scanout_published above)
         if ((ok & GSN_WANT_IMAGE) && presenter_image) {
-            presenter_image();
+            presenter_image(tag);
         } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
-            presenter(frame);
+            presenter(frame, tag);
         }
     }
     return ok;
 }
 } // namespace
 
-extern "C" void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame), void (*image)(void)) {
+extern "C" void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag), void (*image)(uint64_t tag)) {
     presenter = pixels;
     presenter_image = image;
 }
 
 extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+    return gsn_picture(privileged, field, want_pixels, frame, 0);
+}
+
+extern "C" int gsn_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     // the PC's switches for the scanout, as they are at this vblank
     want_pixels |= (port_options.progressive ? VSYNC_PROGRESSIVE : 0) | (port_options.deinterlace ? VSYNC_DEINTERLACE : 0);
     // On the GS's thread, with the sender going on: a vblank whose picture nobody waits for (none, or
@@ -3868,7 +4019,13 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
     // goes on to show itself, waits for the thread to be idle and is made here.
     bool queued = !(want_pixels & GSN_WANT_PIXELS) && (!(want_pixels & GSN_WANT_IMAGE) || (want_pixels & GSN_PRESENT));
     if (ring && queued) {
-        ring_put(RING_VSYNC, field, privileged, vsync_bytes, uint32_t(want_pixels));
+        uint8_t data[vsync_bytes + 8];
+        memcpy(data, privileged, vsync_bytes);
+        memcpy(data + vsync_bytes, &tag, 8);
+        ring_put(RING_VSYNC, field, data, sizeof(data), uint32_t(want_pixels));
+        if (want_pixels & GSN_EXTRA) {
+            return want_pixels & (GSN_PRESENT | GSN_WANT_IMAGE);
+        }
         ring->vsyncs_sent++;
         if (want_pixels & GSN_PRESENT) {
             // A window's picture is at most two vblanks behind the game: the sender waits for the GS's
@@ -3879,7 +4036,11 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
         return want_pixels & (GSN_PRESENT | GSN_WANT_IMAGE);
     }
     ring_idle();
-    return vsync_now(privileged, field, want_pixels, frame);
+    return vsync_now(privileged, field, want_pixels, frame, tag);
+}
+
+extern "C" int gsn_backlog(void) {
+    return ring ? int(ring->vsyncs_sent - ring->vsyncs_done.load()) : 0;
 }
 
 extern "C" void gsn_set_scale(int x_scale, int y_scale) {
@@ -4173,20 +4334,43 @@ extern "C" void gsn_queue_unlock(void) {
     gs->device->external_queue_unlock();
 }
 
-extern "C" int gsn_scanout_take(GsnScanout *out) {
-    std::lock_guard<std::mutex> hold(scanout_image.lock);
-    if (!scanout_image.image || scanout_image.serial == 0) {
+extern "C" int gsn_scanout_take_tag(GsnScanout *out, uint64_t tag) {
+    ScanoutImage &so = scanout_image;
+    std::lock_guard<std::mutex> hold(so.lock);
+    int pick = so.newest;
+    for (int i = 0; i < SCANOUT_SLOTS; i++) {
+        const ScanoutSlot &sl = so.slots[i];
+        if (sl.serial != 0 && sl.tag == tag && (pick < 0 || so.slots[pick].tag != tag || sl.serial > so.slots[pick].serial)) {
+            pick = i;
+        }
+    }
+    if (pick < 0 || !so.slots[pick].image || so.slots[pick].serial == 0) {
         return 0;
     }
-    out->image = uint64_t(scanout_image.image->get_image());
-    out->width = scanout_image.width;
-    out->height = scanout_image.height;
-    out->serial = scanout_image.serial;
-    scanout_image.taken = true;
+    const ScanoutSlot &sl = so.slots[pick];
+    out->image = uint64_t(sl.image->get_image());
+    out->width = sl.width;
+    out->height = sl.height;
+    out->serial = sl.serial;
+    out->tag = sl.tag;
+    so.taken = pick;
     return 1;
+}
+
+extern "C" int gsn_scanout_take(GsnScanout *out) {
+    ScanoutImage &so = scanout_image;
+    uint64_t tag;
+    {
+        std::lock_guard<std::mutex> hold(so.lock);
+        if (so.newest < 0) {
+            return 0;
+        }
+        tag = so.slots[so.newest].tag;
+    }
+    return gsn_scanout_take_tag(out, tag);
 }
 
 extern "C" void gsn_scanout_release(void) {
     std::lock_guard<std::mutex> hold(scanout_image.lock);
-    scanout_image.taken = false;
+    scanout_image.taken = -1;
 }

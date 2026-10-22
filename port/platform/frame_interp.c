@@ -82,6 +82,51 @@ int port_frame_interp(void) {
     return port_options.frame_rate > 30;
 }
 
+/* ---- How many pictures, and when -------------------------------------------------------------
+   The game's frames come every second vblank, at 59.94 vblanks a second. At F pictures a second there
+   are F / 59.94 a vblank: when that is a whole number n (to 1%: 60, 120, 240, 360 Hz), the vblank's own
+   picture and n - 1 more between it and the next, evenly; otherwise (144, 165 Hz) a picture every
+   1 / (F / 59.94) of a vblank from vblank 0 on, wherever it falls. Each is the time the window shows it
+   at (port/platform/video.c), and what the picture shows is the game's world at that time. */
+int port_frame_rate_hz(void) {
+    int hz = port_options.frame_rate;
+
+    if (hz == PORT_FRAME_RATE_MONITOR) {
+        hz = port_video_refresh_rate();
+        hz = hz > 0 ? hz : 60;
+    }
+    return hz < 30 ? 30 : hz > 1000 ? 1000 : hz;
+}
+
+static double pictures_a_vblank(void) {
+    double p = port_frame_rate_hz() * 1001.0 / 60000.0;
+    double n = floor(p + 0.5);
+
+    return n >= 1 && fabs(p - n) <= 0.01 * n ? n : p;
+}
+
+int port_interp_schedule(uint64_t vblank, double *phases, int max) {
+    double p = pictures_a_vblank(), i;
+    int n = 0;
+
+    if (port_frame_rate_hz() <= 30 || p < 1.0 || max < 1) {
+        phases[0] = 0;
+        return 1;
+    }
+    if (p == floor(p)) {
+        for (n = 0; n < (int)p && n < max; n++) {
+            phases[n] = n / p;
+        }
+        return n;
+    }
+    for (i = ceil((double)vblank * p - 1e-6); i < (double)(vblank + 1) * p - 1e-6 && n < max; i++) {
+        double phase = i / p - (double)vblank;
+
+        phases[n++] = phase < 1e-6 ? 0 : phase;
+    }
+    return n;
+}
+
 /* ---- The GIF packets of the last vblank --------------------------------------------------------
    Each as a record: its path (bits 0-7), 1 << 8 when VU1's 3D programs sent it, its size, and for
    those the run that sent it (port_vif1_run_serial) and what that run's batch was (port_vif1_run_key). */
@@ -451,12 +496,269 @@ static const Run *objects_find(const Objects *o, const Run *cur) {
     return best;
 }
 
+/* ---- What the frame writes and reads ------------------------------------------------------------
+   In the order of the packets, the VRAM pages each register write says will be read (a texture: twice
+   its first level when it has mipmaps; a CLUT) or written (a draw's FRAME and ZBUF, to its scissor's
+   bottom; an upload or a local copy, to the rows it reaches): worked out generously, from the first
+   block. A 2D item drawn differently into a buffer the frame reads before it draws it needs the frame
+   drawn again exact after the pictures between (flat_pair). */
+enum { EV_UPLOAD, EV_READ, EV_WRITE };
+
+typedef struct {
+    uint32_t first, last; /* pages (8 KB) */
+    uint32_t kind;
+} Event;
+
+typedef struct {
+    Event *ev;
+    size_t nev, ev_room;
+} Uploads;
+
+static void uploads_reset(Uploads *u) {
+    u->nev = 0;
+}
+
+/* The pages a buffer covers: from block bp, bw * 64 pixels wide, rows rows of psm */
+static void pages_of(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t rows, uint32_t *first, uint32_t *last) {
+    uint32_t bits = psm == 0x02 || psm == 0x0A || psm == 0x32 || psm == 0x3A ? 16
+                    : psm == 0x13                                             ? 8
+                    : psm == 0x14                                             ? 4
+                                                                              : 32;
+    uint64_t bytes = (uint64_t)(bw ? bw : 1) * 64 * rows * bits / 8;
+
+    *first = bp / 32;
+    *last = (uint32_t)((bp * 256ull + (bytes ? bytes : 1) - 1) / 8192) + (bp % 32 ? 1 : 0);
+}
+
+static void uploads_event(Uploads *u, uint32_t kind, uint32_t first, uint32_t last) {
+    Event *e;
+
+    if (u == NULL) {
+        return;
+    }
+    if (u->nev == u->ev_room) {
+        u->ev_room = u->ev_room ? u->ev_room * 2 : 1024;
+        u->ev = realloc(u->ev, u->ev_room * sizeof(*u->ev));
+        if (u->ev == NULL) {
+            PORT_FATAL("out of memory");
+        }
+    }
+    e = &u->ev[u->nev++];
+    e->first = first;
+    e->last = last;
+    e->kind = kind;
+}
+
+/* ---- The 2D: what the CPU draws anew each frame ---------------------------------------------------
+   Everything that is not a run of VU1's 3D programs (the HUD, the screen passes and fades, the
+   scrolling textures' copies, effects the CPU makes) is sent by the game as GIF packets of its own.
+   Each GIF tag with vertices is an item; a frame's items are paired with the frame before's in their
+   order, by what they draw with (the primitive, the texture and CLUT, the buffer drawn into, the vertex
+   count: the buffer drawn and the one shown, which swap each frame, by their part). A pair is taken
+   when it is a likely one: no vertex more than 128 pixels from its place, and the texture coordinates
+   the same, or all moved by one small step (a scrolling texture: within a quarter of the item's own
+   width of texture, after the texture's wrap), or changed only where the vertices moved (a gauge that
+   grows). A glyph changing in place, or anything else, is drawn as the frame has it. A picture between
+   draws a paired item with its places, colours (fades) and texture coordinates where they are at that
+   time. Images the CPU makes anew (the orb's swirl, a flipbook's next picture) cannot be: the texture
+   itself changed. */
+typedef struct {
+    uint32_t prim;     /* PRIM (type and switches) */
+    uint64_t tex;      /* TEX0's texture and CLUT */
+    uint32_t fbp;      /* FRAME's buffer */
+    uint32_t first;    /* its first vertex in verts */
+    uint32_t count;
+    int32_t pair;      /* the item of the frame before (-1: none, or nothing to do) */
+    float wrap_s, wrap_t; /* added to the frame before's texture coordinates (a scroll past the wrap) */
+} Item;
+
+typedef struct {
+    int32_t x, y;      /* (1/16 pixel) */
+    uint8_t rgba[4];
+    float s, t;        /* ST, or UV (in texels) */
+    uint8_t has_rgba, coords; /* coords: 0 none, 1 ST, 2 UV */
+} FlatVertex;
+
+typedef struct {
+    Item *items;
+    size_t nitems, items_room;
+    FlatVertex *verts;
+    size_t nverts, verts_room;
+    uint32_t draw_fbp, shown_fbp; /* the frame's buffers */
+    int restore;                   /* a paired item draws into a buffer read before it is drawn in the frame */
+} Flat;
+
+static void flat_reset(Flat *f) {
+    f->nitems = 0;
+    f->nverts = 0;
+    f->restore = 0;
+}
+
+static Item *flat_add_item(Flat *f, uint32_t prim, uint64_t tex0, uint32_t fbp) {
+    Item *it;
+
+    if (f->nitems == f->items_room) {
+        f->items_room = f->items_room ? f->items_room * 2 : 1024;
+        f->items = realloc(f->items, f->items_room * sizeof(*f->items));
+        if (f->items == NULL) {
+            PORT_FATAL("out of memory");
+        }
+    }
+    it = &f->items[f->nitems++];
+    it->prim = prim;
+    /* TBP0, TBW, PSM, TW, TH, TCC, TFX; CBP, CPSM, CSM, CSA (not CLD) */
+    it->tex = (prim & 0x10) ? tex0 & ~((uint64_t)7 << 61) : 0;
+    it->fbp = fbp;
+    it->first = (uint32_t)f->nverts;
+    it->count = 0;
+    it->pair = -1;
+    it->wrap_s = it->wrap_t = 0;
+    return it;
+}
+
+static FlatVertex *flat_add_vertex(Flat *f) {
+    if (f->nverts == f->verts_room) {
+        f->verts_room = f->verts_room ? f->verts_room * 2 : 8192;
+        f->verts = realloc(f->verts, f->verts_room * sizeof(*f->verts));
+        if (f->verts == NULL) {
+            PORT_FATAL("out of memory");
+        }
+    }
+    f->items[f->nitems - 1].count++;
+    return &f->verts[f->nverts++];
+}
+
+/* What an item draws with, the swapping buffers by their part */
+static int items_alike(const Flat *fa, const Item *a, const Flat *fb, const Item *b) {
+    uint32_t pa = a->fbp == fa->draw_fbp ? 0x200 : a->fbp == fa->shown_fbp ? 0x201 : a->fbp;
+    uint32_t pb = b->fbp == fb->draw_fbp ? 0x200 : b->fbp == fb->shown_fbp ? 0x201 : b->fbp;
+    uint64_t ta = a->tex, tb = b->tex;
+    uint32_t ba = (uint32_t)(ta & 0x3FFF), bb = (uint32_t)(tb & 0x3FFF);
+
+    ba = ba == fa->draw_fbp * 32 ? 0x4000 : ba == fa->shown_fbp * 32 ? 0x4001 : ba;
+    bb = bb == fb->draw_fbp * 32 ? 0x4000 : bb == fb->shown_fbp * 32 ? 0x4001 : bb;
+    return a->prim == b->prim && a->count == b->count && pa == pb && ba == bb &&
+           (ta & ~(uint64_t)0x3FFF) == (tb & ~(uint64_t)0x3FFF);
+}
+
+/* An item of this frame (b) and one of the frame before (a) are a likely pair, and something of it
+   changed: 1, with the wrap to add to a's texture coordinates */
+static int items_pair(const Flat *fa, const Item *a, const Flat *fb, const Item *b, float *wrap_s, float *wrap_t) {
+    uint32_t k;
+    int changed = 0, uniform = 1, moved_only = 1;
+    float ds0 = 0, dt0 = 0, smin = 1e30f, smax = -1e30f, tmin = 1e30f, tmax = -1e30f;
+    /* the texture's size: 1.0 in ST, its texels in UV */
+    float tw = (float)(1u << ((b->tex >> 26) & 0xF)), th = (float)(1u << ((b->tex >> 30) & 0xF));
+
+    *wrap_s = *wrap_t = 0;
+    for (k = 0; k < b->count; k++) {
+        const FlatVertex *va = &fa->verts[a->first + k], *vb = &fb->verts[b->first + k];
+        int32_t dx = vb->x - va->x, dy = vb->y - va->y;
+
+        if (dx > 2048 || dx < -2048 || dy > 2048 || dy < -2048) {
+            return 0;
+        }
+        if (va->coords != vb->coords || va->has_rgba != vb->has_rgba) {
+            return 0;
+        }
+        changed |= dx != 0 || dy != 0 || (vb->has_rgba && memcmp(va->rgba, vb->rgba, 4) != 0);
+        if (vb->coords) {
+            float ds = vb->s - va->s, dt = vb->t - va->t;
+            float eps = vb->coords == 2 ? 0.07f : 1e-4f;
+
+            if (k == 0) {
+                ds0 = ds;
+                dt0 = dt;
+            } else if (fabsf(ds - ds0) > eps || fabsf(dt - dt0) > eps) {
+                uniform = 0;
+            }
+            if ((fabsf(ds) > eps || fabsf(dt) > eps) && dx == 0 && dy == 0) {
+                moved_only = 0;
+            }
+            smin = vb->s < smin ? vb->s : smin;
+            smax = vb->s > smax ? vb->s : smax;
+            tmin = vb->t < tmin ? vb->t : tmin;
+            tmax = vb->t > tmax ? vb->t : tmax;
+        }
+    }
+    if (b->count > 0 && fb->verts[b->first].coords) {
+        float eps = fb->verts[b->first].coords == 2 ? 0.07f : 1e-4f;
+        float size_s = fb->verts[b->first].coords == 2 ? tw : 1.0f, size_t_ = fb->verts[b->first].coords == 2 ? th : 1.0f;
+
+        if (uniform && (fabsf(ds0) > eps || fabsf(dt0) > eps)) {
+            /* all moved by one step: a scroll, the shortest way round the texture's wrap */
+            float s = ds0 - size_s * floorf(ds0 / size_s + 0.5f), t = dt0 - size_t_ * floorf(dt0 / size_t_ + 0.5f);
+
+            if (fabsf(s) > 0.25f * (smax - smin) + eps || fabsf(t) > 0.25f * (tmax - tmin) + eps) {
+                return 0; /* (a glyph, or a picture, changed) */
+            }
+            *wrap_s = ds0 - s;
+            *wrap_t = dt0 - t;
+            changed = 1;
+        } else if (!uniform) {
+            if (!moved_only) {
+                return 0;
+            }
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+/* Pairs this frame's items (f) with the frame before's (o): in order, each with the first alike among
+   the next few of the frame before not taken yet */
+static void flat_pair(Flat *f, const Flat *o, const Uploads *u) {
+    size_t i, at = 0;
+
+    for (i = 0; i < f->nitems; i++) {
+        Item *b = &f->items[i];
+        size_t k;
+
+        b->pair = -1;
+        if (o == NULL) {
+            continue;
+        }
+        for (k = at; k < o->nitems && k < at + 48; k++) {
+            if (items_alike(o, &o->items[k], f, b)) {
+                if (items_pair(o, &o->items[k], f, b, &b->wrap_s, &b->wrap_t)) {
+                    b->pair = (int32_t)k;
+                }
+                at = k + 1;
+                break;
+            }
+        }
+        if (b->pair >= 0 && b->fbp != f->draw_fbp && u != NULL) {
+            /* drawn into another buffer (a scrolling texture's): if the frame reads that buffer before it
+               draws into it, the pictures between leave it as the game's frame has it (port_interp_end_vblank) */
+            uint32_t first, last;
+            size_t e;
+
+            pages_of(b->fbp * 32, 1, 0, 1, &first, &last);
+            for (e = 0; e < u->nev; e++) {
+                const Event *ev = &u->ev[e];
+
+                if (ev->kind == EV_READ && ev->first <= first && ev->last >= first) {
+                    f->restore = 1;
+                    break;
+                }
+                if (ev->kind != EV_READ && ev->first == first) {
+                    break; /* (drawn, or uploaded, before it is read) */
+                }
+            }
+        }
+    }
+}
+
 typedef struct {
     uint32_t left, flg, nreg, reg, dwords;
     uint64_t regs;
     uint32_t prim;
     uint8_t *st;      /* PACKED: the ST qword before the next vertex, in this record */
+    uint8_t *rgbaq;   /* PACKED: the RGBAQ qword before the next vertex, in this record */
+    uint8_t *uv;      /* PACKED: the UV qword before the next vertex, in this record */
     int adc_left;     /* vertices still to drop after one the new camera cannot see */
+    int item_open;    /* this tag's 2D vertices are an item (the first has come) */
+    int dropping;     /* REPLAY: this IMAGE tag's data is an upload left out */
 } GifWalk;
 
 typedef struct {
@@ -472,6 +774,19 @@ typedef struct {
     /* the GS registers as the game wrote them */
     uint64_t frame[2], tex0[2], bitbltbuf, prmodecont, prmode;
     int frame_set[2], tex0_set[2], bitbltbuf_set;
+    uint64_t trxpos, trxreg, scissor[2], zbuf[2], tex1[2];
+    /* the pages read and written (SCAN), and the uploads */
+    Uploads *uploads;    /* SCAN: this frame's events */
+    uint32_t upload;     /* the next upload's number in the frame */
+    int ask_uploads;     /* REPLAY: the native GS has the frame's uploads: ask for them again */
+    int skip_image;      /* REPLAY: the next IMAGE data is an upload asked for again: left out */
+    uint64_t upload_bytes_left_out;
+    /* the 2D (Flat): SCAN keeps this frame's items; REPLAY moves the paired ones */
+    Flat *flat;          /* SCAN: this frame's; REPLAY: the pending frame's (NULL: none moved) */
+    const Flat *flat_prev; /* REPLAY: the frame's before it */
+    long item;           /* the item of the last 2D vertex, -1 before the first */
+    uint32_t item_vertex; /* the next vertex's number in it */
+    uint64_t items_moved;
     /* the runs: SCAN adds them to objects; both walks number them the same way */
     Objects *objects;    /* SCAN: this frame's (or NULL); REPLAY: the pending frame's */
     const Objects *prev; /* REPLAY: the frame's before it, or NULL */
@@ -489,6 +804,8 @@ typedef struct {
     double eye_move[3];  /* REPLAY: how far the camera moved from the frame before to this one */
     /* REPLAY */
     uint32_t shown_fbp; /* the buffer the replay draws into, in place of draw_fbp */
+    double t;           /* how far between the frame shown (0) and the one drawn (1) the picture is */
+    int exact;          /* the frame as it was, for the buffers other than the frame (port_interp_end_vblank) */
     Move move;          /* the frame's view to the camera between */
     Camera mid;         /* the camera between */
     uint64_t moved, dropped, objects_moved[5]; /* vertices moved, dropped (ADC), moved as their model moved (by section) */
@@ -678,12 +995,12 @@ static void run_motion(Walk *w) {
         n++;
         most = d2 > most ? d2 : most;
         {
-            /* the place half way, on the line between, must not come much nearer the eye than both
-               ends: the arm's swing turns a long way round the shoulder, by the eye, in one frame */
+            /* the place between (half way at 60), on the line between, must not come much nearer the eye
+               than both ends: the arm's swing turns a long way round the shoulder, by the eye, in one frame */
             double mid[3], za, zb, zm;
 
             for (i = 0; i < 3; i++) {
-                mid[i] = (a[i] + b[i]) * 0.5;
+                mid[i] = a[i] + (b[i] - a[i]) * w->t;
             }
             if (cur->section == SECTION_EYE) {
                 za = a[2];
@@ -759,7 +1076,7 @@ static int object_between(Walk *w, double m[3]) {
     b = o->pos[cur->first + k];
     if (w->prev->valid[prev->first + k] == VERTEX_SURE && o->valid[cur->first + k] == VERTEX_SURE) {
         for (i = 0; i < 3; i++) {
-            mid[i] = (a[i] + b[i]) * 0.5;
+            mid[i] = a[i] + (b[i] - a[i]) * w->t;
         }
     } else {
         double ra = distance(a, prev->middle), rb = distance(b, cur->middle);
@@ -767,11 +1084,11 @@ static int object_between(Walk *w, double m[3]) {
 
         if (w->prev->valid[prev->first + k] && fabs(ra - rb) <= most * 0.25 + 2.0) {
             for (i = 0; i < 3; i++) {
-                mid[i] = (a[i] + b[i]) * 0.5;
+                mid[i] = a[i] + (b[i] - a[i]) * w->t;
             }
         } else {
             for (i = 0; i < 3; i++) {
-                mid[i] = b[i] + (prev->middle[i] - cur->middle[i]) * 0.5;
+                mid[i] = b[i] + (prev->middle[i] - cur->middle[i]) * (1.0 - w->t);
             }
         }
     }
@@ -883,6 +1200,17 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
 
         w->tex0[n] = *value;
         w->tex0_set[n] = 1;
+        if (w->mode == SCAN && w->uploads != NULL) {
+            /* the texture (twice its first level: its mipmaps after it) and the CLUT are read */
+            uint32_t first, last;
+            uint64_t v = *value;
+
+            pages_of((uint32_t)(v & 0x3FFF), (uint32_t)((v >> 14) & 0x3F), (uint32_t)((v >> 20) & 0x3F),
+                     (((w->tex1[n] >> 2) & 7) ? 2u : 1u) << ((v >> 30) & 0xF), &first, &last);
+            uploads_event(w->uploads, EV_READ, first, last);
+            pages_of((uint32_t)((v >> 37) & 0x3FFF), 1, 0, 16, &first, &last);
+            uploads_event(w->uploads, EV_READ, first, last);
+        }
         if (w->mode == REPLAY && (*value & 0x3FFF) == w->draw_fbp * 32) {
             *value = (*value & ~(uint64_t)0x3FFF) | (w->shown_fbp * 32);
         }
@@ -890,6 +1218,33 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
     }
     case GS_PRMODECONT:
         w->prmodecont = *value;
+        break;
+    case 0x14: /* TEX1_1 */
+    case 0x15:
+        w->tex1[r - 0x14] = *value;
+        break;
+    case 0x40: /* SCISSOR_1 */
+    case 0x41:
+        w->scissor[r - 0x40] = *value;
+        break;
+    case 0x4E: /* ZBUF_1 */
+    case 0x4F:
+        w->zbuf[r - 0x4E] = *value;
+        if (w->mode == SCAN && w->uploads != NULL && !((*value >> 32) & 1)) {
+            /* (Z written: as wide as the FRAME of its context) */
+            uint32_t first, last, n = r - 0x4E;
+            uint32_t rows = w->scissor[n] ? (uint32_t)((w->scissor[n] >> 48) & 0x7FF) + 1 : 512;
+
+            pages_of((uint32_t)(*value & 0x1FF) * 32, (uint32_t)((w->frame[n] >> 16) & 0x3F),
+                     0x30 | (uint32_t)((*value >> 24) & 0xF), rows, &first, &last);
+            uploads_event(w->uploads, EV_WRITE, first, last);
+        }
+        break;
+    case 0x51: /* TRXPOS */
+        w->trxpos = *value;
+        break;
+    case 0x52: /* TRXREG */
+        w->trxreg = *value;
         break;
     case GS_PRMODE:
         w->prmode = *value;
@@ -900,6 +1255,14 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
 
         w->frame[n] = *value;
         w->frame_set[n] = 1;
+        if (w->mode == SCAN && w->uploads != NULL) {
+            /* drawn into, to the scissor's bottom (or 512 rows) */
+            uint32_t first, last, rows = w->scissor[n] ? (uint32_t)((w->scissor[n] >> 48) & 0x7FF) + 1 : 512;
+
+            pages_of((uint32_t)(*value & 0x1FF) * 32, (uint32_t)((*value >> 16) & 0x3F), (uint32_t)((*value >> 24) & 0x3F),
+                     rows, &first, &last);
+            uploads_event(w->uploads, EV_WRITE, first, last);
+        }
         if (w->mode == REPLAY) {
             if ((*value & 0x1FF) == w->draw_fbp) {
                 *value = (*value & ~(uint64_t)0x1FF) | w->shown_fbp;
@@ -919,18 +1282,36 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
             }
         }
         break;
-    case GS_TRXDIR:
-        if (w->mode == REPLAY) {
-            uint32_t dbp = (uint32_t)(w->bitbltbuf >> 32) & 0x3FFF;
-            uint32_t dir = (uint32_t)(*value & 3);
+    case GS_TRXDIR: {
+        uint32_t dbp = (uint32_t)(w->bitbltbuf >> 32) & 0x3FFF;
+        uint32_t dir = (uint32_t)(*value & 3);
 
+        if (w->mode == SCAN && w->uploads != NULL && (dir == 0 || dir == 2)) {
+            /* written: from the destination's first block, to the rows the transfer reaches */
+            uint32_t first, last;
+
+            pages_of(dbp, (uint32_t)(w->bitbltbuf >> 48) & 0x3F, (uint32_t)(w->bitbltbuf >> 56) & 0x3F,
+                     (uint32_t)((w->trxpos >> 48) & 0x7FF) + (uint32_t)((w->trxreg >> 32) & 0xFFF), &first, &last);
+            uploads_event(w->uploads, dir == 0 ? EV_UPLOAD : EV_WRITE, first, last);
+        }
+        if (w->mode == REPLAY) {
             /* (bitbltbuf is the game's: a transfer into the buffer drawn goes into the one shown) */
             if (dir == 1 || (dir == 2 && dbp != w->draw_fbp * 32)) {
                 *reg = PORT_GS_REG_FRAME_INTERP;
                 *value = (uint64_t)0xFF << 32;
+            } else if (dir == 0 && w->ask_uploads && dbp != w->draw_fbp * 32) {
+                /* the native GS asked for the frame's upload again (it kept its pages, or its bytes):
+                   the data left out (walk_record) */
+                *reg = PORT_GS_REG_REPLAY_UPLOAD;
+                *value = (uint64_t)w->upload | (uint64_t)(uint32_t)(w->bitbltbuf >> 32) << 32;
+                w->skip_image = 1;
             }
         }
+        if (dir == 0) {
+            w->upload++;
+        }
         break;
+    }
     case GS_SIGNAL:
     case GS_FINISH:
     case GS_LABEL:
@@ -945,13 +1326,101 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
     }
 }
 
-/* One record: in REPLAY, data is the copy to send, and is changed */
-static void walk_record(Walk *w, const Record *r, uint8_t *data) {
+/* SCAN: a 2D vertex kept for the pairs (its place, and its colour and texture coordinates when they are
+   in this tag's qwords, where a picture between can change them) */
+static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q) {
+    FlatVertex *v = flat_add_vertex(w->flat);
+    uint64_t lo;
+
+    memcpy(&lo, q, 8);
+    v->x = (int32_t)(lo & 0xFFFF);
+    v->y = (int32_t)((lo >> 32) & 0xFFFF);
+    v->has_rgba = p->rgbaq != NULL;
+    if (p->rgbaq != NULL) {
+        uint32_t c[4];
+
+        memcpy(c, p->rgbaq, 16);
+        v->rgba[0] = (uint8_t)c[0];
+        v->rgba[1] = (uint8_t)c[1];
+        v->rgba[2] = (uint8_t)c[2];
+        v->rgba[3] = (uint8_t)c[3];
+    }
+    v->coords = 0;
+    v->s = v->t = 0;
+    if ((p->prim & 0x10) && !(p->prim & 0x100) && p->st != NULL) {
+        float st[2];
+
+        memcpy(st, p->st, 8);
+        v->coords = 1;
+        v->s = st[0];
+        v->t = st[1];
+    } else if ((p->prim & 0x10) && (p->prim & 0x100) && p->uv != NULL) {
+        uint32_t uv[2];
+
+        memcpy(uv, p->uv, 8);
+        v->coords = 2;
+        v->s = (float)(uv[0] & 0x3FFF) / 16.0f;
+        v->t = (float)(uv[1] & 0x3FFF) / 16.0f;
+    }
+}
+
+/* REPLAY: a paired 2D vertex where it is at the picture's time (t of the way from the frame before's) */
+static void move_flat_vertex(Walk *w, GifWalk *p, uint8_t *q) {
+    const Item *b = &w->flat->items[w->item];
+    const Item *a;
+    const FlatVertex *va, *vb;
+    double u = 1.0 - w->t;
+    uint64_t lo;
+
+    if (b->pair < 0 || w->flat_prev == NULL || w->item_vertex >= b->count) {
+        return;
+    }
+    a = &w->flat_prev->items[b->pair];
+    va = &w->flat_prev->verts[a->first + w->item_vertex];
+    vb = &w->flat->verts[b->first + w->item_vertex];
+    memcpy(&lo, q, 8);
+    lo = (lo & ~(uint64_t)0xFFFF & ~((uint64_t)0xFFFF << 32)) |
+         (uint64_t)(uint32_t)(vb->x + (int32_t)floor((va->x - vb->x) * u + 0.5)) |
+         ((uint64_t)(uint32_t)(vb->y + (int32_t)floor((va->y - vb->y) * u + 0.5)) << 32);
+    memcpy(q, &lo, 8);
+    if (p->rgbaq != NULL && va->has_rgba && vb->has_rgba) {
+        uint32_t c[4];
+        int k;
+
+        memcpy(c, p->rgbaq, 16);
+        for (k = 0; k < 4; k++) {
+            c[k] = (uint32_t)(vb->rgba[k] + (int)floor((va->rgba[k] - vb->rgba[k]) * u + 0.5));
+        }
+        memcpy(p->rgbaq, c, 16);
+    }
+    if (vb->coords == 1 && p->st != NULL) {
+        float st[2];
+
+        st[0] = (float)(vb->s + (va->s + b->wrap_s - vb->s) * u);
+        st[1] = (float)(vb->t + (va->t + b->wrap_t - vb->t) * u);
+        memcpy(p->st, st, 8);
+    } else if (vb->coords == 2 && p->uv != NULL) {
+        uint32_t uv[2];
+        double s = vb->s + (va->s + b->wrap_s - vb->s) * u, t = vb->t + (va->t + b->wrap_t - vb->t) * u;
+
+        memcpy(uv, p->uv, 8);
+        uv[0] = (uv[0] & ~0x3FFFu) | ((uint32_t)floor(s * 16.0 + 0.5) & 0x3FFF);
+        uv[1] = (uv[1] & ~0x3FFFu) | ((uint32_t)floor(t * 16.0 + 0.5) & 0x3FFF);
+        memcpy(p->uv, uv, 8);
+    }
+    w->items_moved++;
+}
+
+/* One record: in REPLAY, data is the copy to send, and is changed (uploads left out are taken out of
+   it). Returns the bytes left. */
+static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
     int path = (int)(r->what & 0xFF), is_3d = (r->what & RECORD_3D) != 0;
     GifWalk *p = &w->paths[path];
-    size_t count = r->bytes / 16, i = 0;
+    size_t count = r->bytes / 16, i = 0, out = 0;
 
     p->st = NULL;
+    p->rgbaq = NULL;
+    p->uv = NULL;
     if (is_3d && (w->run < 0 || r->serial != w->serial)) {
         /* a new VU1 run */
         w->serial = r->serial;
@@ -974,10 +1443,12 @@ static void walk_record(Walk *w, const Record *r, uint8_t *data) {
     }
     while (i < count) {
         uint8_t *q = data + i * 16;
+        size_t n = 1; /* qwords looked at */
+        int keep = 1;
 
         if (p->left == 0) {
             uint64_t tag, regs;
-            uint32_t nloop, n;
+            uint32_t nloop;
 
             memcpy(&tag, q, 8);
             memcpy(&regs, q + 8, 8);
@@ -989,6 +1460,8 @@ static void walk_record(Walk *w, const Record *r, uint8_t *data) {
             }
             p->regs = regs;
             p->reg = 0;
+            p->item_open = 0;
+            p->dropping = 0;
             if ((tag >> 46) & 1) {
                 p->prim = (uint32_t)(tag >> 47) & 0x7FF; /* PRE */
             }
@@ -999,11 +1472,16 @@ static void walk_record(Walk *w, const Record *r, uint8_t *data) {
                 p->dwords = nloop * p->nreg;
             } else {
                 p->left = nloop;
+                if (w->mode == REPLAY && w->skip_image && nloop != 0) {
+                    /* an upload left out: its data, behind a tag with none (which keeps its EOP) */
+                    w->skip_image = 0;
+                    p->dropping = 1;
+                    tag &= ~(uint64_t)0x7FFF;
+                    memcpy(q, &tag, 8);
+                    w->upload_bytes_left_out += (uint64_t)nloop * 16;
+                }
             }
-            i++;
-            continue;
-        }
-        if (p->flg == 0) {
+        } else if (p->flg == 0) {
             uint32_t d = (uint32_t)(p->regs >> (p->reg * 4)) & 0xF;
             uint64_t v[2];
 
@@ -1012,8 +1490,14 @@ static void walk_record(Walk *w, const Record *r, uint8_t *data) {
             case 0x0:
                 p->prim = (uint32_t)(v[0] & 0x7FF);
                 break;
+            case 0x1:
+                p->rgbaq = q;
+                break;
             case 0x2:
                 p->st = q;
+                break;
+            case 0x3:
+                p->uv = q;
                 break;
             case 0x4:
             case 0x5:
@@ -1030,12 +1514,39 @@ static void walk_record(Walk *w, const Record *r, uint8_t *data) {
 
                             objects_add_vertex(w->objects, none, 0);
                         }
+                    } else if (w->mode == REPLAY && w->exact) {
+                        /* (drawing the frame again for the other buffers: its 3D into the frame is not
+                           drawn, every vertex with ADC) */
+                        if ((p->prim & 7) >= 3 && (p->prim & 7) <= 5 && draws_frame(w, p->prim)) {
+                            q[15] |= 0x80;
+                        }
                     } else if (w->mode == REPLAY && moves) {
                         move_vertex(w, p, q, d == 0x4, section);
                     }
                     w->run_vertex++;
+                } else if (w->flat != NULL && (p->prim & 7) != 7) {
+                    /* a 2D vertex: the first of its tag begins an item */
+                    if (!p->item_open) {
+                        int c = (w->prmodecont & 1) ? (int)((p->prim >> 9) & 1) : (int)((w->prmode >> 9) & 1);
+
+                        p->item_open = 1;
+                        w->item++;
+                        w->item_vertex = 0;
+                        if (w->mode == SCAN) {
+                            flat_add_item(w->flat, (w->prmodecont & 1) ? p->prim : (p->prim & 7) | (uint32_t)(w->prmode & 0x7F8),
+                                          w->tex0[c], (uint32_t)(w->frame[c] & 0x1FF));
+                        }
+                    }
+                    if (w->mode == SCAN) {
+                        keep_flat_vertex(w, p, q);
+                    } else if ((size_t)w->item < w->flat->nitems) {
+                        move_flat_vertex(w, p, q);
+                    }
+                    w->item_vertex++;
                 }
                 p->st = NULL;
+                p->rgbaq = NULL;
+                p->uv = NULL;
                 break;
             case 0x6:
             case 0x7: {
@@ -1056,7 +1567,6 @@ static void walk_record(Walk *w, const Record *r, uint8_t *data) {
             }
             p->reg = p->reg + 1 == p->nreg ? 0 : p->reg + 1;
             p->left--;
-            i++;
         } else if (p->flg == 1) {
             int half;
 
@@ -1074,35 +1584,54 @@ static void walk_record(Walk *w, const Record *r, uint8_t *data) {
                 p->reg = p->reg + 1 == p->nreg ? 0 : p->reg + 1;
             }
             p->left--;
-            i++;
         } else {
-            size_t n = count - i < p->left ? count - i : p->left;
-
+            n = count - i < p->left ? count - i : p->left;
             p->left -= (uint32_t)n;
-            i += n;
+            keep = !p->dropping;
         }
+        if (keep) {
+            if (out != i) {
+                memmove(data + out * 16, data + i * 16, n * 16);
+            }
+            out += n;
+        }
+        i += n;
     }
+    return out * 16;
 }
 
 /* ---- At a vblank ----------------------------------------------------------------------------
    The display registers of vblank n are those the vblank found, before the game swapped at it: the
    chain drawn after the game's swap at vblank 2k - 1 is kept by vblank 2k (where the frame it swapped
-   to is first shown), and drawn again for vblank 2k + 1, when nothing else has been sent since and the
-   same buffer is still shown. */
+   to is first shown) as the pending frame (age 0), and stays pending through vblank 2k + 1 (age 1)
+   when nothing else has been sent since and the same buffer is still shown. The pictures between are
+   drawn from it: at vblank 2k after the vblank's own picture (the frame before, as the game has it),
+   at 2k + 1 from its start; a picture at phase f of the vblank shows the time (age + f) / 2 of the way
+   from the frame shown to the one drawn. */
 typedef struct {
     uint8_t *data;
     size_t size;
+    int age;          /* vblanks since it was kept */
+    int cut;          /* the cameras are a cut apart: no pictures between */
     Walk scan;        /* what the walk found in it */
     uint32_t shown;   /* the buffer shown at the vblank that kept it */
     Camera before;    /* the camera of the frame shown then */
     int have_before;
     const Objects *objects, *objects_before; /* its runs, and the frame's before (NULL: none) */
+    Flat *flat;                    /* its 2D items, paired with the frame before's */
+    const Flat *flat_before;       /* (NULL: none) */
+    int dirty;                     /* a picture between changed a buffer the next frame reads first */
 } Pending;
 
 /* The runs of the last frame drawn and of the one before, and one to walk the next into */
 static Objects objects_pool[3];
 static Objects *objects_new = &objects_pool[0], *objects_last = &objects_pool[1], *objects_before = &objects_pool[2];
 static int objects_last_set, objects_before_set;
+/* the same for the 2D items; and the uploads of the frame walked last, and of the pending one */
+static Flat flat_pool[3];
+static Flat *flat_new = &flat_pool[0], *flat_last = &flat_pool[1], *flat_before = &flat_pool[2];
+static Uploads uploads_new_frame;
+static Uploads *uploads_new = &uploads_new_frame;
 
 static Pending pending; /* a frame drawn and not yet shown (size 0: none) */
 static size_t pending_room;
@@ -1110,7 +1639,9 @@ static Camera last_camera; /* the camera of the last frame drawn */
 static int last_camera_set;
 static uint8_t *copy;
 static size_t copy_room;
-static uint64_t stat_replays, stat_cuts, stat_moved, stat_dropped, stat_objects[5];
+static uint64_t stat_replays, stat_cuts, stat_moved, stat_dropped, stat_objects[5], stat_items, stat_left_out, stat_restores;
+static uint64_t stat_ticks; /* the replays' walks, on this thread */
+static uint64_t stat_sent;  /* the bytes they sent */
 
 void port_interp_forget(void) {
     last_camera_set = 0;
@@ -1131,16 +1662,25 @@ static int interp_still(void) {
     return still;
 }
 
-static void walk_all(Walk *w, uint8_t *data, size_t size, int mode, Objects *objects) {
+static void walk_all(Walk *w, uint8_t *data, size_t size, int mode, Objects *objects, Flat *flat, Uploads *uploads) {
     size_t at;
 
     memset(w, 0, sizeof(*w));
     w->mode = mode;
     w->prmodecont = 1;
     w->run = -1;
+    w->item = -1;
     w->objects = objects;
+    w->flat = flat;
+    w->uploads = uploads;
     if (objects != NULL) {
         objects_reset(objects);
+    }
+    if (flat != NULL) {
+        flat_reset(flat);
+    }
+    if (uploads != NULL) {
+        uploads_reset(uploads);
     }
     for (at = 0; at < size;) {
         Record r;
@@ -1154,11 +1694,13 @@ static void walk_all(Walk *w, uint8_t *data, size_t size, int mode, Objects *obj
     }
 }
 
-/* The pending frame again, into the buffer shown, seen from the camera between */
-static void replay_pending(const Camera *between, void (*send)(int path, const void *data, size_t bytes)) {
+/* The pending frame again, into the buffer shown, seen from the camera between (t of the way); with t 1
+   and exact, the game's frame as it was (port_interp_end_vblank) */
+static void replay_pending(const Camera *between, double t, int exact, void (*send)(int path, const void *data, size_t bytes)) {
     static Walk w; /* (large: kept off the stack) */
     const Walk *scan = &pending.scan;
-    uint64_t fix[2 * 8];
+    uint64_t fix[2 * 9];
+    uint64_t start = port_options.stats ? port_ticks() : 0;
     size_t at;
     int n = 0, i;
 
@@ -1166,13 +1708,26 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
     w.mode = REPLAY;
     w.prmodecont = 1;
     w.run = -1;
+    w.t = interp_still() ? 1.0 : t;
+    w.exact = exact;
     w.draw_fbp = scan->draw_fbp;
     w.shown_fbp = pending.shown;
     w.screen = scan->screen;
     w.camera = scan->camera;
-    w.mid = interp_still() ? scan->camera : *between;
-    w.objects = interp_still() ? NULL : (Objects *)pending.objects;
+    w.mid = interp_still() || exact ? scan->camera : *between;
+    w.objects = interp_still() || exact ? NULL : (Objects *)pending.objects;
     w.prev = pending.objects_before;
+    w.item = -1;
+    w.flat = interp_still() || exact || pending.flat_before == NULL ? NULL : pending.flat;
+    w.flat_prev = pending.flat_before;
+    w.ask_uploads = port_gs_replay_uploads();
+    {
+        /* the native GS's marks around the picture between (it records the game's uploads, not these) */
+        uint64_t mark_begin[4] = {1 | ((uint64_t)1 << 15) | ((uint64_t)1 << 60), 0xE, (uint64_t)0xF0 << 32,
+                                  PORT_GS_REG_FRAME_INTERP};
+
+        send(3, mark_begin, sizeof(mark_begin));
+    }
     for (i = 0; i < 3; i++) {
         w.eye_move[i] = scan->camera.eye[i] - pending.before.eye[i];
     }
@@ -1181,6 +1736,22 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
         Record r;
 
         memcpy(&r, pending.data + at, sizeof(r));
+        {
+            /* a record that is all an upload's data: sent as it is, or left out when the native GS has
+               the upload (no copy, no walk) */
+            GifWalk *pw = &w.paths[r.what & 0xFF];
+            size_t qwords = r.bytes / 16;
+
+            if (pw->flg == 2 && pw->left >= qwords && qwords > 0 && !(r.what & RECORD_3D)) {
+                pw->left -= (uint32_t)qwords;
+                if (!pw->dropping) {
+                    send((int)(r.what & 0xFF), pending.data + at + sizeof(r), r.bytes);
+                    stat_sent += r.bytes;
+                }
+                at += sizeof(r) + r.bytes;
+                continue;
+            }
+        }
         if (copy_room < r.bytes) {
             free(copy);
             copy_room = r.bytes * 2;
@@ -1190,8 +1761,14 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
             }
         }
         memcpy(copy, pending.data + at + sizeof(r), r.bytes);
-        walk_record(&w, &r, copy);
-        send((int)(r.what & 0xFF), copy, r.bytes);
+        {
+            size_t bytes = walk_record(&w, &r, copy);
+
+            if (bytes != 0) {
+                send((int)(r.what & 0xFF), copy, bytes);
+                stat_sent += bytes;
+            }
+        }
         at += sizeof(r) + r.bytes;
     }
     /* the registers the replay changed, back to what the game left in them (by PATH3: every path is
@@ -1213,65 +1790,72 @@ static void replay_pending(const Camera *between, void (*send)(int path, const v
         fix[2 * n] = scan->bitbltbuf;
         fix[2 * n + 1] = GS_BITBLTBUF;
     }
-    if (n > 0) {
-        fix[0] = (uint64_t)n | ((uint64_t)1 << 15) | ((uint64_t)1 << 60); /* NLOOP n, EOP, PACKED, NREG 1 */
-        fix[1] = 0xE;                                                       /* A+D */
-        send(3, fix, (size_t)(n + 1) * 16);
-    }
-    stat_replays++;
+    n++;
+    fix[2 * n] = (uint64_t)0xF1 << 32; /* the end of the picture between */
+    fix[2 * n + 1] = PORT_GS_REG_FRAME_INTERP;
+    fix[0] = (uint64_t)n | ((uint64_t)1 << 15) | ((uint64_t)1 << 60); /* NLOOP n, EOP, PACKED, NREG 1 */
+    fix[1] = 0xE;                                                       /* A+D */
+    send(3, fix, (size_t)(n + 1) * 16);
+    stat_replays += !exact;
+    stat_restores += exact;
+    stat_items += w.items_moved;
+    stat_left_out += w.upload_bytes_left_out;
     stat_moved += w.moved;
     stat_dropped += w.dropped;
     for (i = 0; i < 5; i++) {
         stat_objects[i] += w.objects_moved[i];
     }
+    if (port_options.stats) {
+        stat_ticks += port_ticks() - start;
+    }
 }
 
-int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes)) {
+void port_interp_vsync(const uint64_t *privileged) {
     static Walk w; /* (large: kept off the stack) */
     /* the buffer shown: DISPFB2's, or DISPFB1's when only read circuit 1 is on */
     uint64_t dispfb = (privileged[0] & 2) ? privileged[0x90 / 8] : privileged[0x70 / 8];
     uint32_t shown = (uint32_t)(dispfb & 0x1FF);
-    int done = 0;
 
     if (pending.size != 0) {
-        Camera between;
-
         /* the vblank after the one that kept it: nothing sent since, the same buffer shown */
-        if (kept_size == 0 && kept_whole && shown == pending.shown && pending.have_before) {
-            if (camera_between(&pending.before, &pending.scan.camera, 0.5, &between)) {
-                replay_pending(&between, send);
-                done = 1;
-            } else {
-                stat_cuts++;
-            }
+        if (pending.age == 0 && kept_size == 0 && kept_whole && shown == pending.shown) {
+            pending.age = 1;
+        } else {
+            pending.size = 0;
         }
-        pending.size = 0;
     }
     if (!kept_whole || kept_size == 0) {
-        return done;
+        return;
     }
-    walk_all(&w, kept, kept_size, SCAN, objects_new);
+    walk_all(&w, kept, kept_size, SCAN, objects_new, flat_new, uploads_new);
     if (!w.world_seen) {
-        return done;
+        return;
     }
     {
-        /* this frame's runs become the last frame's */
+        /* this frame's runs and items become the last frame's */
         Objects *free_one = objects_before;
+        Flat *free_flat = flat_before;
 
         objects_before = objects_last;
         objects_before_set = objects_last_set;
         objects_last = objects_new;
         objects_last_set = 1;
         objects_new = free_one;
+        flat_before = flat_last;
+        flat_last = flat_new;
+        flat_new = free_flat;
+        flat_last->draw_fbp = w.draw_fbp;
+        flat_last->shown_fbp = shown;
     }
     if (w.draw_fbp != 0xFFFFFFFFu && w.draw_fbp != shown && w.screen.sx != 0 && w.screen.sy != 0) {
-        /* kept for the next vblank: the buffers swap, so the packets' becomes the pending one's */
+        /* kept for the pictures between: the buffers swap, so the packets' becomes the pending one's */
         uint8_t *data = pending.data;
         size_t room = pending_room;
 
         pending.data = kept;
         pending_room = kept_room;
         pending.size = kept_size;
+        pending.age = 0;
         kept = data;
         kept_room = room;
         kept_size = 0;
@@ -1281,17 +1865,65 @@ int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const v
         pending.have_before = last_camera_set;
         pending.objects = objects_last;
         pending.objects_before = objects_before_set ? objects_before : NULL;
+        pending.flat = flat_last;
+        pending.flat_before = objects_before_set ? flat_before : NULL;
+        pending.dirty = 0;
+        flat_pair(flat_last, pending.flat_before, uploads_new);
+        {
+            Camera between;
+
+            pending.cut = pending.have_before && !camera_between(&pending.before, &w.camera, 0.5, &between);
+            stat_cuts += pending.cut;
+        }
     }
     last_camera = w.camera;
     last_camera_set = 1;
-    return done;
+}
+
+int port_interp_active(void) {
+    return pending.size != 0 && pending.have_before && !pending.cut;
+}
+
+int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes)) {
+    Camera between;
+    double t;
+
+    if (!port_interp_active()) {
+        return 0;
+    }
+    t = (pending.age + phase) * 0.5;
+    if (t <= 0 || t >= 1) {
+        return 0; /* the frame shown, as the game drew it */
+    }
+    if (!camera_between(&pending.before, &pending.scan.camera, t, &between)) {
+        return 0;
+    }
+    replay_pending(&between, t, 0, send);
+    pending.dirty |= pending.flat != NULL && pending.flat->restore && pending.flat_before != NULL;
+    return 1;
+}
+
+/* After the vblank's pictures between: a buffer other than the frame that a picture between drew
+   differently (a scrolling texture's) and that the game's next frame reads before it draws it, is
+   drawn again as the game's frame left it: the frame once more, exact, into the buffer shown, which
+   the next frame clears. (None of the maps seen so far needs it: they draw those buffers before they
+   read them.) */
+void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes)) {
+    if (pending.size != 0 && pending.age == 1 && pending.dirty) {
+        replay_pending(&pending.scan.camera, 1.0, 1, send);
+        pending.dirty = 0;
+    }
 }
 
 void port_interp_print_stats(void) {
     fprintf(stderr,
-            "[stats] frame rate 60: %llu pictures between drawn, %llu cuts not; %llu vertices moved (with their model: "
-            "%llu in the world, %llu of the arm, %llu before the eye), %llu dropped\n",
-            (unsigned long long)stat_replays, (unsigned long long)stat_cuts, (unsigned long long)stat_moved,
-            (unsigned long long)stat_objects[SECTION_WORLD], (unsigned long long)stat_objects[SECTION_ARM],
-            (unsigned long long)stat_objects[SECTION_EYE], (unsigned long long)stat_dropped);
+            "[stats] frame rate %d: %llu pictures between drawn (%.3f s walking the packets; %.1f MB of uploads left "
+            "out), %llu cuts not, %llu frames drawn again for buffers they changed; %llu vertices moved (with their "
+            "model: %llu in the world, %llu of the arm, %llu before the eye), %llu dropped; %llu 2D vertices moved\n",
+            port_frame_rate_hz(), (unsigned long long)stat_replays, (double)stat_ticks / port_ticks_per_second(),
+            (double)stat_left_out / 1048576.0, (unsigned long long)stat_cuts, (unsigned long long)stat_restores,
+            (unsigned long long)stat_moved, (unsigned long long)stat_objects[SECTION_WORLD],
+            (unsigned long long)stat_objects[SECTION_ARM], (unsigned long long)stat_objects[SECTION_EYE],
+            (unsigned long long)stat_dropped, (unsigned long long)stat_items);
+    fprintf(stderr, "[stats] frame rate: the pictures between sent %.1f MB of packets\n", (double)stat_sent / 1048576.0);
 }

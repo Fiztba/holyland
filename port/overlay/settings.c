@@ -287,7 +287,16 @@ void port_settings_load(void) {
             s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
         }
     }
-    s->frame_rate = read_number(display, "frame_rate", s->frame_rate, 30, 60) > 45 ? 60 : 30;
+    {
+        /* 30 (the PS2's), a number of pictures a second, or "monitor" (PORT_FRAME_RATE_MONITOR) */
+        const char *rate = read_string(display, "frame_rate");
+
+        if (rate != NULL) {
+            s->frame_rate = strcmp(rate, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : s->frame_rate;
+        } else {
+            s->frame_rate = (int)read_number(display, "frame_rate", s->frame_rate, 30, 500);
+        }
+    }
     {
         const char *renderer = read_string(display, "renderer");
 
@@ -491,7 +500,8 @@ void port_settings_save(void) {
     put(display, "whole_frame", cJSON_CreateBool(s->whole_frame));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
-    put(display, "frame_rate", cJSON_CreateNumber(s->frame_rate));
+    put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR ? cJSON_CreateString("monitor")
+                                                                        : cJSON_CreateNumber(s->frame_rate));
     put(display, "native_scale", cJSON_CreateNumber(s->native_scale));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));

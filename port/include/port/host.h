@@ -147,6 +147,7 @@ int port_whole_frame(void);
    world once more for the vblank in between, with the camera half way. */
 int port_frame_interp(void);
 #define PORT_GS_REG_FRAME_INTERP 0x7D
+#define PORT_GS_REG_REPLAY_UPLOAD 0x7C /* (port/platform/frame_interp.c to the native GS) */
 #define PORT_FRAME_INTERP_HEADER 0  /* last: projection | mode << 8 (GameLoop_SetCameraMatrices'), or _END */
 #define PORT_FRAME_INTERP_VIEW 1    /* 1-12: world_view_matrix's columns' x, y, z */
 #define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */

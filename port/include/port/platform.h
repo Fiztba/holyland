@@ -77,9 +77,11 @@ typedef struct {
     int widescreen;
     int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
     int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
-    /* The opt-in higher frame rate (port_frame_interp(), port/platform/frame_interp.c): 30 (the
-       PS2's: a picture every second vblank in play) by default, 60 with --frame-rate 60 or
-       settings.json, live from the overlay. */
+    /* The opt-in higher frame rates (port_frame_interp(), port/platform/frame_interp.c): 30 (the
+       PS2's: a picture every second vblank in play) by default; 60, 120, 144, 240 (pictures a second)
+       or PORT_FRAME_RATE_MONITOR (the window's screen's refresh) with --frame-rate or settings.json,
+       live from the overlay. */
+#define PORT_FRAME_RATE_MONITOR 1000
     int frame_rate;
     int frame_rate_forced;   /* --frame-rate: this run's, whatever settings.json says */
     /* The opt-in mods (port/include/port/host.h): off by default, turned on by their switch or
@@ -301,6 +303,9 @@ typedef struct {
 void port_gs_init(void);
 /* 1 when there is a renderer. */
 int port_gs_enabled(void);
+/* 1 when the native GS draws alone: --frame-rate's pictures between ask it for the frame's uploads
+   again instead of sending them (port/platform/frame_interp.c) */
+int port_gs_replay_uploads(void);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
 /* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */
@@ -322,7 +327,19 @@ void port_gs_run_vsync(void);
    port_interp_reset starts the next vblank's (whole: every path is between packets).
    port_interp_forget drops what was kept and the last frame's camera (a state was loaded). */
 void port_interp_keep(int path, const void *data, size_t bytes);
-int port_interp_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes));
+void port_interp_vsync(const uint64_t *privileged);
+/* A picture between at this point of the vblank (phase 0 to 1): the frame kept drawn again into the
+   buffer shown, everything moved to where it is at that time (1 when it was drawn; 0: the buffer shown
+   is right as it is, or nothing to draw). port_interp_end_vblank after the vblank's last. */
+int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes));
+void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes));
+/* 1 while a frame kept is being drawn between (the vblank's pictures come from it) */
+int port_interp_active(void);
+/* The pictures a second (port_options.frame_rate, the screen's for PORT_FRAME_RATE_MONITOR), and the
+   times in vblank (0 to 1) of the pictures shown in it: up to max, their count returned (the
+   vblank's own, at 0, among them when it is shown) */
+int port_frame_rate_hz(void);
+int port_interp_schedule(uint64_t vblank, double *phases, int max);
 void port_interp_reset(int whole);
 void port_interp_forget(void);
 void port_interp_print_stats(void);
@@ -342,10 +359,27 @@ uint64_t port_field_frames_replays(void);
 
 /* ---- The window (port/platform/video.c) -------------------------------------------------- */
 void port_video_init(void);
-/* (the controller's thread) the newest picture, for the window */
-void port_video_submit(const PortGsFrame *frame);
-/* (the controller's thread) the newest picture is the native GS's image on the GPU (gsn_scanout_take) */
-void port_video_submit_image(void);
+/* A picture's tag: the vblank it belongs to, and when in it (phase, 0 to 1: 0 is the vblank's own
+   picture; --frame-rate above 60 has more between two vblanks). The window shows each at its time. */
+#define PORT_PICTURE_TAG(vblank, phase) (((uint64_t)(vblank) << 16) | (uint64_t)((phase) * 65536.0) & 0xFFFF)
+#define PORT_PICTURE_VBLANK(tag) ((tag) >> 16)
+#define PORT_PICTURE_PHASE(tag) ((double)((tag) & 0xFFFF) / 65536.0)
+/* (the controller's or the GS's thread) a picture for the window, with its tag */
+void port_video_submit(const PortGsFrame *frame, uint64_t tag);
+/* (the controller's or the GS's thread) a picture that is the native GS's image on the GPU
+   (gsn_scanout_take_tag) */
+void port_video_submit_image(uint64_t tag);
+/* (the game thread) the wall time (port_wall_seconds) a vblank is shown at: its pictures' times */
+void port_video_vblank(uint64_t vblank, double wall);
+/* (the game thread) until the wall time `until` (or a little before it), shows the pictures between
+   vblanks (frame rates above 60) as their times come; the caller sleeps the rest. port_video_poll, from
+   the kernel's calls between vblanks: shows one that is due. */
+void port_video_wait(double until);
+void port_video_poll(void);
+/* the refresh rate of the window's screen (Hz), 0 when not known (no window) */
+int port_video_refresh_rate(void);
+/* 1 in a --headless run with KF4_PRESENT_SIM (a test of the window's pacing, with nothing drawn) */
+int port_video_simulated(void);
 /* 1 while the window is the Vulkan presenter's, which takes the native GS's picture as an image */
 int port_video_takes_images(void);
 /* the presenter running: PORT_PRESENTER_ (SDL when the Vulkan one was asked for and did not start) */
@@ -356,7 +390,7 @@ void port_video_dump(const PortGsFrame *frame, uint64_t vblank);
 void port_video_dump_named(const PortGsFrame *frame, const char *name);
 /* writes RGBA pixels (R in the low byte) as an RGB PNG: 1 when it was written */
 int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
-/* (the game thread, at vblank) shows the newest picture and keeps the window alive */
+/* (the game thread, at vblank) shows the newest picture due and keeps the window alive */
 void port_video_present(void);
 /* --stats: how the pictures reached the window */
 void port_video_print_stats(void);

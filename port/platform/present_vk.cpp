@@ -159,6 +159,7 @@ struct Presenter {
     uint32_t upload_width = 0, upload_height = 0;
     bool upload_new = false; // made, and not yet in its layout
     Source source = SOURCE_NONE;
+    uint64_t tag = 0; // the native GS's picture shown (PORT_PICTURE_TAG)
 
     // the window read back for KF4_OVERLAY_SHOT
     VkBuffer readback = VK_NULL_HANDLE;
@@ -658,7 +659,8 @@ extern "C" int port_vk_imgui_init(void) {
     return pr.imgui;
 }
 
-extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image) {
+extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag,
+                                int overlay) {
     if (!pr.up) {
         return;
     }
@@ -716,16 +718,22 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         }
     } else if (image) {
         pr.source = SOURCE_NATIVE;
+        pr.tag = tag;
     }
+    // the native GS's picture of that tag (with nothing new, the one shown last again)
     GsnScanout scanout = {};
-    bool have_scanout = pr.source == SOURCE_NATIVE && gsn_scanout_take(&scanout);
+    bool have_scanout = pr.source == SOURCE_NATIVE && gsn_scanout_take_tag(&scanout, pr.tag);
 
     // the overlay's draw lists, and the mouse indicator, over the picture's place
     int x, y, w, h;
     port_video_fit(int(pr.extent.width), int(pr.extent.height), &x, &y, &w, &h);
-    port_overlay_draw(x, y, w, h);
-    ImDrawData *draw = pr.imgui ? static_cast<ImDrawData *>(port_overlay_draw_data()) : nullptr;
-    bool shot = port_overlay_shot_due() && pr.can_read;
+    ImDrawData *draw = nullptr;
+    bool shot = false;
+    if (overlay) {
+        port_overlay_draw(x, y, w, h);
+        draw = pr.imgui ? static_cast<ImDrawData *>(port_overlay_draw_data()) : nullptr;
+        shot = port_overlay_shot_due() && pr.can_read;
+    }
     if (shot) {
         VkDeviceSize size = VkDeviceSize(pr.extent.width) * pr.extent.height * 4;
         if (pr.readback_size < size) {
