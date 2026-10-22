@@ -791,9 +791,14 @@ static void move_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf, int section) 
         /* clipped as the VU1 programs clip: past the guard band, or Z below 0 (beyond the far plane) */
         nx = s->sx * m[0] / m[2] + s->cx;
         ny = s->sy * m[1] / m[2] + s->cy;
-        /* Z moves by what the projection's Z moves by: models drawn with a Z of their own (the
-           flames, pulled in front) keep their offset */
-        nz = z + s->az / m[2] - s->az / depth;
+        /* Z is cz + k / w, k the projection's az for the world. Program 0x700's effects (the
+           flames and the lights' glows, drawn with a GEQUAL test and no Z write) have a k of their
+           own, about 16 times the world's (the glow on map 000 at w 4,700: Z 3,538 where the world
+           there has 206), which pulls them in front. So k is taken from the vertex itself, (z - cz) w:
+           moving such a vertex by the world's az alone moved its Z a 16th of the way, and the glows
+           came through the walls before them in the pictures between (the lights flickered as the
+           player walked toward them). For the world k is az, as before. */
+        nz = s->cz + (z - s->cz) * depth / m[2];
         if (!(fabs(nx - 2048.0) <= 2047.0 && fabs(ny - 2048.0) <= 2047.0 && nz >= 0)) {
             drop = 1;
         } else {
