@@ -207,6 +207,15 @@ struct Target {
     bool ms_newer, image_newer;
 };
 
+// --frame-rate's pictures between (frame_interp.c): between their marks, and the frame shown before them
+// (take_snapshot)
+bool replaying;
+struct Snapshot {
+    uint32_t bp = 0;
+    ImageHandle image;
+    bool reads = false; // the draws between marks 0xF4 and 0xF5 read it in place of that buffer
+} snapshot;
+
 struct Texture {
     uint32_t tbp, tbw, psm, tw, th, levels;
     uint32_t mip_tbp[7], mip_tbw[7];
@@ -1793,7 +1802,12 @@ void flush_batch() {
             uint32_t src = tpsm == GSN_PSMCT24 ? SRC_TARGET_CT24 : psm_is_16(tpsm) ? SRC_TARGET_CT16 : SRC_TARGET_CT32;
             push.flags |= src << F_SRC_SHIFT;
             reads_target = true;
-            if (source == color) {
+            if (replaying && snapshot.reads && snapshot.image && source->bp == snapshot.bp && source->image &&
+                source->image->get_width() == snapshot.image->get_width() &&
+                source->image->get_height() == snapshot.image->get_height()) {
+                // (a picture between reading the frame shown before it: the copy kept, take_snapshot)
+                target_view = &snapshot.image->get_view();
+            } else if (source == color) {
                 reads_own_target = true;
             } else {
                 msaa_settle(*source);
@@ -2463,7 +2477,7 @@ struct RecordedUpload {
 std::vector<RecordedUpload> uploads_now;   // since the last vblank
 std::vector<RecordedUpload> uploads_frame; // the last vblank's that had any: what a picture between asks for
 int recording = -1;                        // the upload under way in uploads_now (-1: none)
-bool replaying;                            // between the marks of a picture between
+// (replaying: between the marks of a picture between, declared with the Target)
 
 // The pages an upload fills entirely, in order; empty if it does not fill whole pages (a format that
 // owns only part of each word, or a rectangle not on page bounds). With rgb_only, a 24-bit upload
@@ -2666,6 +2680,7 @@ void forget_uploads() {
     uploads_frame.clear();
     recording = -1;
     replaying = false;
+    snapshot = Snapshot();
     page_images.clear();
     page_image_order.clear();
     page_image_bytes = 0;
@@ -2786,6 +2801,30 @@ void image_data(const uint8_t *data, size_t bytes) {
     }
 }
 
+// --frame-rate's pictures between: the frame shown before them, kept when they begin (frame_interp.c's
+// mark 0xF2), and read in their place where they read that buffer as a texture (the previous frame
+// blended in, Game_BlendPreviousFrame): the buffer itself is the one they are drawn into.
+void take_snapshot(uint32_t fbp) {
+    flush_batch();
+    snapshot.image.reset();
+    for (auto &t : gs->targets) {
+        if (t->depth || t->bp != fbp * 32 || !t->image) {
+            continue;
+        }
+        msaa_settle(*t);
+        end_pass();
+        uint32_t w = t->image->get_width(), h = t->image->get_height();
+        ImageHandle image = make_image(w, h, t->image->get_format(), 1, true);
+        transfer_barrier();
+        cmd().copy_image(*image, *t->image, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+        transfer_barrier();
+        snapshot.bp = t->bp;
+        snapshot.image = image;
+        break;
+    }
+}
+
 // A picture between asks for the k-th upload of the frame again (PORT_GS_REG_REPLAY_UPLOAD: k, and the
 // destination's half of BITBLTBUF to check it), with this upload's registers as the frame had them
 void replay_upload(uint64_t value) {
@@ -2900,6 +2939,11 @@ void gs_write(uint32_t address, uint64_t value) {
             recording = -1;
         } else if (bits(value, 32, 8) == 0xF1) {
             replaying = false;
+        } else if (bits(value, 32, 8) == 0xF2) {
+            take_snapshot(bits(value, 0, 9));
+        } else if (bits(value, 32, 8) == 0xF4 || bits(value, 32, 8) == 0xF5) {
+            flush_batch();
+            snapshot.reads = bits(value, 32, 8) == 0xF4;
         }
         return;
     case 0x7C: // the port's upload asked for again (frame_interp.c)

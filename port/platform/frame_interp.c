@@ -941,6 +941,8 @@ typedef struct {
     uint32_t shown_fbp; /* the buffer the replay draws into, in place of draw_fbp */
     double t;           /* how far between the frame shown (0) and the one drawn (1) the picture is */
     int exact;          /* the frame as it was, for the buffers other than the frame (port_interp_end_vblank) */
+    int prev_frame_kept; /* the native GS keeps the frame shown before the pictures between (take_snapshot) */
+    int record_reads_prev; /* REPLAY: this record reads the frame shown as a texture (the native GS: read the copy) */
     Move move;          /* the frame's view to the camera between */
     Camera mid;         /* the camera between */
     uint64_t moved, dropped, objects_moved[SECTIONS]; /* vertices moved, dropped (ADC), moved as their model moved (by section) */
@@ -1379,6 +1381,9 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
 
         w->tex0[n] = *value;
         w->tex0_set[n] = 1;
+        if (w->mode == REPLAY && w->prev_frame_kept && (*value & 0x3FFF) == w->shown_fbp * 32) {
+            w->record_reads_prev = 1;
+        }
         if (w->mode == SCAN && w->uploads != NULL) {
             /* the texture (twice its first level: its mipmaps after it) and the CLUT are read */
             uint32_t first, last;
@@ -1560,6 +1565,14 @@ static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q) {
     }
 }
 
+/* A paired 2D vertex's alpha at the picture's time */
+static double vb_alpha_between(const Walk *w, const Item *b) {
+    const Item *a = &w->flat_prev->items[b->pair];
+    double va = w->flat_prev->verts[a->first + w->item_vertex].rgba[3], vb = w->flat->verts[b->first + w->item_vertex].rgba[3];
+
+    return vb + (va - vb) * (1.0 - w->t);
+}
+
 /* REPLAY: a paired 2D vertex where it is at the picture's time (t of the way from the frame before's) */
 static void move_flat_vertex(Walk *w, GifWalk *p, uint8_t *q) {
     const Item *b = &w->flat->items[w->item];
@@ -1568,7 +1581,32 @@ static void move_flat_vertex(Walk *w, GifWalk *p, uint8_t *q) {
     double u = 1.0 - w->t;
     uint64_t lo;
 
-    if (b->pair < 0 || w->flat_prev == NULL || w->item_vertex >= b->count) {
+    if (w->item_vertex >= b->count) {
+        return;
+    }
+    if (w->prev_frame_kept && (b->prim & 0x10) && b->fbp == w->flat->draw_fbp &&
+        (uint32_t)(b->tex & 0x3FFF) == w->flat->shown_fbp * 32 && p->rgbaq != NULL) {
+        /* The frame shown before blended in (Game_BlendPreviousFrame: ALPHA 0x44, As of 0x80 from it):
+           P = a Prev + (1 - a) Drawn, which decays the frames before by a each frame. A picture between at
+           t blends in the frame shown before it (the native GS's copy of it, take_snapshot) by a^t: from
+           the frame shown at t 0 to the game's own blend at t 1, with no jump at either; the trail as long
+           in time as the game's. (Blending each picture with the one before instead, by the weight that
+           gives the same lag, moved evenly between the frames but jumped at each: the game's frame is
+           blended with the frame before, not with the last picture between.) */
+        uint32_t c[4];
+        double a, base = b->pair >= 0 && w->flat_prev != NULL
+                             ? vb_alpha_between(w, b)
+                             : (double)w->flat->verts[b->first + w->item_vertex].rgba[3];
+
+        memcpy(c, p->rgbaq, 16);
+        a = base / 128.0;
+        a = a <= 0 ? 0 : a >= 1 ? 1 : pow(a, w->t);
+        c[3] = (uint32_t)floor(a * 128.0 + 0.5);
+        memcpy(p->rgbaq, c, 16);
+        w->items_moved++;
+        return;
+    }
+    if (b->pair < 0 || w->flat_prev == NULL) {
         return;
     }
     a = &w->flat_prev->items[b->pair];
@@ -1826,6 +1864,8 @@ typedef struct {
     Flat *flat;                    /* its 2D items, paired with the frame before's */
     const Flat *flat_before;       /* (NULL: none) */
     int dirty;                     /* a picture between changed a buffer the next frame reads first */
+    int reads_prev;                /* the frame blends in the frame shown (Game_BlendPreviousFrame) */
+    int snapshot_sent;             /* and the native GS was asked to keep the frame shown */
 } Pending;
 
 /* The runs of the last frame drawn and of the one before, and one to walk the next into */
@@ -1936,6 +1976,18 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
                                   PORT_GS_REG_FRAME_INTERP};
 
         send(3, mark_begin, sizeof(mark_begin));
+        if (pending.reads_prev && w.ask_uploads && !exact) {
+            /* the frame shown, kept before the first picture between draws over it (the later ones read
+               the copy too) */
+            if (!pending.snapshot_sent) {
+                uint64_t mark_keep[4] = {1 | ((uint64_t)1 << 15) | ((uint64_t)1 << 60), 0xE,
+                                         ((uint64_t)0xF2 << 32) | pending.shown, PORT_GS_REG_FRAME_INTERP};
+
+                send(3, mark_keep, sizeof(mark_keep));
+                pending.snapshot_sent = 1;
+            }
+            w.prev_frame_kept = 1;
+        }
     }
     for (i = 0; i < 3; i++) {
         w.eye_move[i] = scan->camera.eye[i] - pending.before.eye[i];
@@ -1971,11 +2023,25 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
         }
         memcpy(copy, pending.data + at + sizeof(r), r.bytes);
         {
-            size_t bytes = walk_record(&w, &r, copy);
+            size_t bytes;
 
+            w.record_reads_prev = 0;
+            bytes = walk_record(&w, &r, copy);
             if (bytes != 0) {
+                /* a record that reads the frame shown before (Game_BlendPreviousFrame's packet is one of
+                   its own): between marks that have the native GS read its copy (take_snapshot) */
+                uint64_t mark[4] = {1 | ((uint64_t)1 << 15) | ((uint64_t)1 << 60), 0xE, (uint64_t)0xF4 << 32,
+                                    PORT_GS_REG_FRAME_INTERP};
+
+                if (w.record_reads_prev) {
+                    send(3, mark, sizeof(mark));
+                }
                 send((int)(r.what & 0xFF), copy, bytes);
                 stat_sent += bytes;
+                if (w.record_reads_prev) {
+                    mark[2] = (uint64_t)0xF5 << 32;
+                    send(3, mark, sizeof(mark));
+                }
             }
         }
         at += sizeof(r) + r.bytes;
@@ -2078,6 +2144,17 @@ void port_interp_vsync(const uint64_t *privileged) {
         pending.flat_before = objects_before_set ? flat_before : NULL;
         pending.dirty = 0;
         objects_pair(objects_last, pending.objects_before ? objects_before : NULL);
+        pending.reads_prev = 0;
+        pending.snapshot_sent = 0;
+        {
+            size_t i;
+
+            for (i = 0; i < flat_last->nitems; i++) {
+                const Item *it = &flat_last->items[i];
+
+                pending.reads_prev |= (it->prim & 0x10) && it->fbp == w.draw_fbp && (uint32_t)(it->tex & 0x3FFF) == shown * 32;
+            }
+        }
         flat_pair(flat_last, pending.flat_before, uploads_new);
         flat_copies(flat_last, uploads_new);
         if (w.have_reflect && read_first(uploads_new, w.reflect_fbp)) {
