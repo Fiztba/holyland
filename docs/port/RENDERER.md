@@ -56,7 +56,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
    for each, `kf4-gsreplay DIR/NNN/capture.kf4gs --compare-renderers --no-resync --draws
    999999-999999 --limit 0` and read the `end-other` and `scanouts:` lines. Keep the sum of
    differing pixels over the 64 maps from before your change; no map should get worse without a
-   reason you can name (October 2026: 362,601 pixels, worst difference 53, all scanouts identical).
+   reason you can name. Captures made with today's defaults (the game's flicker filter off): 414,901
+   pixels, worst difference 53 x 2 = 106, all scanouts identical. Captures with `--flicker-filter`
+   (or older ones, such as October 2026's): 362,601 pixels, worst 53. The filter blends every row
+   half over the row above, which halves any difference between the renderers.
 5. **Live:** a few maps (`--teleport 1900:N:0` after `tests/newgame.pad`) with `--renderer both
    --vu1 check --stats`, 2,500 vblanks: no crash, VU1 0 differ, the pictures' differences as before.
 6. **Speed**, if the change could cost: 2,000 vblanks `--fast --headless --dump-frames 1999` on map
