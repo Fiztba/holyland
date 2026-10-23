@@ -202,7 +202,7 @@ int port_native_draw(int kind);
 int port_native_draw_compare(void);
 #define PORT_GS_REG_NATIVE_DRAW 0x7B
 #define PORT_ND_MAP 0x1          /* map records (P1; in work: Map_DrawRecords, Map_DrawLateRecords) */
-#define PORT_ND_MODELS 0x2       /* posed models: map objects, gold (P2) */
+#define PORT_ND_OBJECTS 0x2      /* map objects (P2-1: Model_DrawPosedWithAlpha) */
 #define PORT_ND_SKINNED 0x4      /* skinned models: entities (P2) */
 #define PORT_ND_ARM 0x8          /* the arm and the held weapon (P2) */
 #define PORT_ND_SKY 0x10         /* the sky (P3) */
@@ -212,7 +212,9 @@ int port_native_draw_compare(void);
 #define PORT_ND_WATER 0x100      /* water (P6) */
 #define PORT_ND_PASSES 0x200     /* the screen passes (P7) */
 #define PORT_ND_ITEMS 0x400      /* the items lying in the maps (P0's proof: MapItem_DrawAll) */
-#define PORT_ND_ALL 0x7FF
+#define PORT_ND_PICKED 0x800     /* the item being picked up, after its depth clear (P2-1: MapItem_DrawPickup) */
+#define PORT_ND_MODELS (PORT_ND_OBJECTS | PORT_ND_PICKED) /* the posed models (--native-draw models) */
+#define PORT_ND_ALL 0xFFF
 #define PORT_ND_ACCEPTED PORT_ND_ITEMS /* --native-draw on: the kinds that have passed their checks
                                           (docs/port/NATIVE_DRAW_TASKS.md); the others by name */
 #define PORT_ND_COMPARE_NATIVE 1 /* the native draws drawn, the PS2 path's packets left out */

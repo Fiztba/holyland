@@ -487,6 +487,31 @@ for `MapObject_DrawAll` (`Model_DrawPosedWithAlpha`: context 2, `ALPHA_2` with t
 the sweep's views with those kinds, 0 pixels in compare and onoff on the maps with map objects, a fading
 object caught mid-fade, and a gold drop.
 
+*Done for objects and picked (nd2/p2-1); gold is not posed.* Kinds `objects` (0x2, was `models`) and
+`picked` (0x800); `models` is both. `game/native_draw/nd_objects.c` draws `Model_DrawPosedWithAlpha`
+(its GS registers per part: context 1 solid, or PRMODE context 2 with TEX1_2/TEX0_2 and `ALPHA_2` FIX = the
+fade; the trailer; the fixed block in onoff). The call site is the head of `Model_DrawPosedWithAlpha`
+(`model.patch`), the one function every map object with definition bit8 0 draws through, both straight from
+`MapObject_DrawAll` and from `DrawList_Draw` (the translucent and fading ones); a guard lets the compare
+mode's own call through. Model flag 0x800 is left to the PS2 path (the function allocates 5 quadwords it
+never writes). The picked item: `MapItem_DrawPicked` through `NativeDraw_PosedDepthByPart`, kind
+`RD_KIND_PICKED` (`item.patch`). `native_draw.c` exports its helpers for nd_*.c files (`NativeDraw_PartMeshes`
+...). **Gold is skinned** (`Gold_Draw` calls `Model_DrawSkinned`, program 0x280): it waits for P2-2, and its
+call site goes with P2-3. Not native: map objects with bit8 1 or 2 (`Model_DrawPosed` straight from
+`MapObject_DrawAll`; they go with the call sites when someone needs them).
+
+Results (1x unless said; 8 sweep views a map, made-up saves as P1-2): `--kinds objects,picked` 0 pixels on
+all 64 maps in compare 1x, compare 4x and onoff 1x, but 039, which differs with **0** native draws in both
+runs (its wave-UV timing; not this). 2,000-130,000 object draws queued a map. With every ported kind
+(`map,items,objects,picked`), the differences are exactly `map,items`' own: 027, 034, 039, 040, 042, 114
+(P1-2's wave UVs) and in onoff 028 (1 pixel), 037 (20,666, worst 2) and 109 (2), the same with objects
+off: **the merged tree's map kind is not 0 in onoff on 028, 037 and 109** (for the sweep again). Fading:
+only map 013's views have fading objects (pulsing glints, fade 0-32, through the draw list); 41 pictures
+720-920 0 pixels in compare and onoff, and hiding them shows where they are (up to 61 levels). The picked
+herb (`herb.pad` and CROSS at 1825-1885): 1840-1930 0 pixels in compare and onoff at 1x and 4x; at 240 the
+pictures between differ at the moving herb's edges (1,100-2,600 pixels, worst 82: P2-5's moving path),
+the game's frames 0. `--log` with `objects,picked` equals off's.
+
 **P2-2 Program 0x280 as a shader** (owns `port/gs/native/shaders/nd_280.vert`, its part of
 `gsn_native_draw.inc`, and the parser's 0x280 batches in `render.cpp`). Skinned models: float vertices,
 two matrices picked by ST.w, the colour scale and bias (0x64-0x65), and the second (sphere, "phong") pass
@@ -587,6 +612,50 @@ jumps, edges only against the PS2 path; `KF4_INTERP_STILL` exact.
 `Model_SetUvsFromScreen` and `Model_Save/RestoreGsWordsAndUvs`). Measure them with `KF4_ND_DUMP` as P0-3
 did for the map (it could not: those kinds were not native yet), and wire `rd_mesh_touch` only where the
 hash's cost shows.
+
+*Done (nd2/p2-1, after P2-1): `rd_mesh_touch` stays unwired; each object block is now hashed once a draw,
+not twice.* The numbers are in NATIVE_DRAW.md, "P2-6's measurements". In short:
+- **The mutators run at load, not in play.** A temporary probe (not committed) noted every `Model_Set*`,
+  `Model_FadeVertexColoursNear`, `Model_SetUvsFromScreen` and `Model_Save/RestoreGsWordsAndUvs` call in the
+  `KF4_ND_DUMP` of all 64 maps (P1-2's 8 views each, `map,items,objects,picked`). `SetPrimBits`,
+  `SetAlphaBlend`, `SetTexture`, `SetVertexColour` and `SetTextureBase` ran only in the 2 or 3 frames
+  after each view's load (4 to 21 frames of about 530 a run), and caused no re-parse in play. The
+  screen-UV entities (type 0x47) are skinned: not native until P2-2/P2-3.
+- **`Model_FadeVertexColoursNear` is the fading map objects' (trigger kind 31).** They are on 039 and 040
+  only, and fade only when signalled. A probe that signals them showed the hash re-parsing just the blocks
+  the growing radius reached (on 040, 2,044 re-parses over 208 fading frames, about 10 of the model's 45
+  blocks a frame).
+- **The writers are not all known.** On 015 and 101, object blocks changed at a view's load with no mutator
+  call (the load wrote them), and the hash caught it. A touch scheme would have missed it. The touch would
+  also save nothing on a block that is being mutated, since that block has to be parsed again anyway.
+- **The cost was the hash done twice.** With objects native, hashing was 329 us a frame on average over the
+  64 maps, and 747 us at worst (107). Objects added 111 us on average and 465 us at worst (116). Most of
+  that was waste: `NativeDraw_PosedWithAlpha` hashed each block in its check pass and then again for the
+  draw. It now keeps the meshes from the check (`nd_objects.c`). Objects' hashing went from 629 to
+  339 KB a frame on average (2,667 to 1,346 at worst), and from 111 to 39 us (465 to 222). The same draws
+  and the same re-parses were seen on all 64 maps. `native_draw.c`'s `posed_model` (map records and items)
+  hashes twice the same way. The same change there would save about 40% of the rest; not done here
+  (not mine).
+- **Vertex fades in compare and onoff.** A probe faded the colours of every object drawn through
+  `Model_DrawPosedWithAlpha` on 013, down to 0x10 and back. It ran in the update, as
+  `MapObject_UpdateAll` runs the real fades. Result: compare 1x, compare 4x and onoff 1x 0 pixels. Without
+  the fade, the pictures differ by 86,747 pixels (worst 67) at 220, 974 at 420 and 98 at 820, so the test
+  sees it. With a fixed gen instead of the hash, the native pictures go stale there (87,874 pixels,
+  worst 67).
+- **The PS2 path races its own mutators.** This matters for every comparison on a map whose blocks change.
+  The port's DMA thread (`dmac.c`) reads the chain's REF'd blocks after `Packet_SendChain` returns, while
+  the game goes on to the next frame's update (`func_00112BD0`'s wave UVs, `MapObject_UpdateAll`'s fades).
+  So the PS2 path can draw a block as it is one update later. The native draw takes the block at the draw
+  call and does not race. With the fade probe in the update, compare differed by 86,840 pixels (one fade
+  step, worst 24). With a `Packet_WaitForSend()` before the update's writes, it was 0.
+- **This is P1-2's wave-UV difference.** The same wait in a probe build, before `func_00112BD0` in the
+  game loop, takes compare 1x with all kinds to 0 pixels on 027, 034, 039, 040, 042 and 114. Without it
+  they differ by 2,478, 3, 141,243, 145,556, 4,374 and 1,234 pixels. Onoff on 039 with the wait: 1 pixel,
+  worst 1.
+- **Proposal (not done; it touches `core.patch` or the DMA):** a test-only switch with that wait, so the
+  sweeps can demand 0 pixels on the wave maps.
+- `--kinds objects,picked` with the single hash: compare 1x and onoff 1x 0 pixels on 63 of 64 maps. 039
+  differs as before (141,243 / 35,967 pixels: the race above).
 
 **P2-7 Review** (independent agent): P2's screenshot set side by side, compare and onoff, and the switch to
 accept each kind.

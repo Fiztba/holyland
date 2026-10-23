@@ -86,6 +86,7 @@ enum {
     RD_KIND_ARM,
     RD_KIND_EFFECT,
     RD_KIND_SHADOW,
+    RD_KIND_PICKED, /* the item being picked up (MapItem_DrawPickup) */
 };
 
 /* One draw: a model part (or a map record's part) with its meshes, and what VU1's fixed block holds

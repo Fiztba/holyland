@@ -15,10 +15,10 @@ index a633f2f657b9e59fbc7f7554e5a709ba122fed02..8ef6ea72763d65a2dcadd2a0125e8cf6
  
  static LinkedPoint *linked_point_heads[2]; /* 0x4470C8 two active lists */
 diff --git a/src/game/model/model.c b/src/game/model/model.c
-index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f0380e2fea73 100644
+index 33debb979a352ebd869af82a61d754e835621e47..77383b6985d06d411ccf581c84e7a7a3731888b4 100644
 --- a/src/game/model/model.c
 +++ b/src/game/model/model.c
-@@ -1,101 +1,61 @@
+@@ -1,118 +1,78 @@
  #include "model/model.h"
 +#include "entity/entity.h" /* linked_point_pool */
  #include "map/map.h"
@@ -160,8 +160,9 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
  void Vector_Copy(void *, void *);
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
-@@ -103,16 +63,15 @@ void Packet_EndGsRegisters(void);
+ void Packet_EndGsRegisters(void);
  void Model_DrawPosed(ModelInstance *);
++int NativeDraw_PosedWithAlpha(ModelInstance *); /* PC: --native-draw (game/native_draw/nd_objects.c) */
  void Model_UpdateBonePoints(ModelInstance *);
  Vector4 *Model_GetBonePoint(ModelInstance *, s32);
 -int ModelMatrix_BuildDrawMatrices(ModelInstance *, s32, s32, void *, void *); // match: an int return keeps $2 busy after the call
@@ -179,7 +180,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
      ModelPart *child;
  
      matrix = part;
-@@ -135,7 +94,7 @@ void Model_MultiplyChildMatrices(ModelPart *part) {
+@@ -135,7 +95,7 @@ void Model_MultiplyChildMatrices(ModelPart *part) {
  
  /* Sets a skinned model up from a model file (vertices can follow their part or its parent): its parts and
     bone points are carved out of *memory, and both cursors move past what was used. */
@@ -188,7 +189,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
      ModelFile *file;
      ModelFilePart *file_part;
      ModelPart *memory_base;
-@@ -150,7 +109,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+@@ -150,7 +110,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
      s32 j;
  
      model->model_flags |= 0x4000;
@@ -197,7 +198,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
      memory_base = (ModelPart *)*memory;
      model->file = (ModelFile *)cursor;
      file = (ModelFile *)cursor;
-@@ -162,15 +121,15 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+@@ -162,15 +122,15 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
      positions = (Vector4 *)&memory_base[part_count];
      model->parts = memory_base;
      model->bone_positions = positions;
@@ -216,7 +217,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (j = 0; j < file_part->data_count; j++) {
              length = data->length;
              data = (ModelPartData *)((char *)data + length * 16);
-@@ -187,7 +146,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+@@ -187,7 +147,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
      model->draw_parts = Model_DrawSkinned;
      *file_cursor += file->size;
      model->update_bone_points = Model_UpdateSkinnedBonePoints;
@@ -225,7 +226,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
      first = TRUE;
      model->unk160[0] = 0;
      model->unk160[1] = 0;
-@@ -199,7 +158,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
+@@ -199,7 +159,7 @@ void Model_SetUpSkinned(ModelInstance *model, int *file_cursor, int *memory) {
      model->alpha = 128.0f;
      /* the first block with a nonzero unk37 in the whole model gets unk61 = 2 */
      for (i = 0, part = model->parts; i < file->part_count; i++, part++) {
@@ -234,7 +235,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (j = 0; j < part->data_count; j++) {
              length = data->length;
              if (first && data->texture_word.clut_base != 0) {
-@@ -287,10 +246,10 @@ void Model_DrawSkinned(ModelInstance *model) {
+@@ -287,10 +247,10 @@ void Model_DrawSkinned(ModelInstance *model) {
      light_out = packet;
      light_out_b = packet + 0x10;
      for (i = 0; i < model->hit_count; i++) {
@@ -248,7 +249,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          light_out += 4;
      }
      packet += 0x20;
-@@ -342,12 +301,12 @@ void Model_DrawSkinned(ModelInstance *model) {
+@@ -342,12 +302,12 @@ void Model_DrawSkinned(ModelInstance *model) {
              *packet++ = 0x6C040028;
              COPY_MATRIX(packet, part_turns[MODEL_PART_PARENT_ANY(part)]);
          }
@@ -263,7 +264,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
              packet += 3;
              data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
          }
-@@ -424,10 +383,10 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
+@@ -424,10 +384,10 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
      light_out = packet;
      light_out_b = packet + 0x10;
      for (i = 0; i < model->hit_count; i++) {
@@ -277,7 +278,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          light_out += 4;
      }
      packet += 0x20;
-@@ -449,8 +408,8 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
+@@ -449,8 +409,8 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
              Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
              Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
          } else {
@@ -288,7 +289,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          }
          Packet_EndGsRegisters();
          part = model->parts;
-@@ -494,12 +453,12 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
+@@ -494,12 +454,12 @@ void Model_DrawSkinnedTwoPass(ModelInstance *model) {
                  *packet++ = 0x6C040028;
                  COPY_MATRIX(packet, part_turns[MODEL_PART_PARENT_ANY(part)]);
              }
@@ -303,7 +304,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  packet += 3;
                  data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
              }
-@@ -564,7 +523,7 @@ void Model_SetBlockGsWords(ModelInstance *model, s64 unk30, s64 unk40, s64 unk50
+@@ -564,7 +524,7 @@ void Model_SetBlockGsWords(ModelInstance *model, s64 unk30, s64 unk40, s64 unk50
      part = model->parts;
      for (i = 0; i < part_count; i++, part++) {
          count = part->data_count;
@@ -312,7 +313,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (j = 0; j < count; j++) {
              block = cursor;
              length = ((ModelPartData *)block)->length;
-@@ -626,7 +585,7 @@ void Model_SetUvsFromScreen(void *model_arg) {
+@@ -626,7 +586,7 @@ void Model_SetUvsFromScreen(void *model_arg) {
          count = (s32)(MODEL_PART_WORD(part) >> 53);
          last = -1;
          j = 0;
@@ -321,7 +322,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (; j < count; j++) {
              ModelWideData *block = (ModelWideData *)cursor;
              u16 length = block->length;
-@@ -673,7 +632,7 @@ s64 *Model_SaveGsWordsAndUvs(ModelInstance *model, s64 *save) {
+@@ -673,7 +633,7 @@ s64 *Model_SaveGsWordsAndUvs(ModelInstance *model, s64 *save) {
      for (i = 0; i < part_count; i++, part++) {
          int j = 0;
          int count = (int)(MODEL_PART_WORD(part) >> 53);
@@ -330,7 +331,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
  
          for (; j < count; j++) {
              s64 *block = cursor;
-@@ -712,7 +671,7 @@ void Model_RestoreGsWordsAndUvs(ModelInstance *model) {
+@@ -712,7 +672,7 @@ void Model_RestoreGsWordsAndUvs(ModelInstance *model) {
      for (; i < part_count; i++, part++) {
          int j = 0;
          int count = (int)(MODEL_PART_WORD(part) >> 53);
@@ -339,7 +340,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
  
          for (; j < count; j++) {
              char *block = cursor;
-@@ -768,8 +727,8 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+@@ -768,8 +728,8 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
      model->file = (ModelFile *)base;
      file = (PosedModelFile *)base;
      model->parts = (ModelPart *)memory_base;
@@ -350,7 +351,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
      model->part_count = model->file_part_count; // match: copied from the store above, not from the file
      part = (ModelPart *)memory_base;
      file_part = file->parts;
-@@ -777,7 +736,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+@@ -777,7 +737,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
          do {
              part->data_count = file_part->data_count;
              memory_base = *file_cursor + file_part->data_offset;
@@ -359,7 +360,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
              blended = is_blended(((ModelPartData *)memory_base)->gif_tag_high);
              data = (ModelPartData *)memory_base;
              opaque = FALSE;
-@@ -787,7 +746,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+@@ -787,7 +747,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
              MODEL_PART_FLAG_BITS(part)->bit41 = opaque;
              if (first) {
                  count = file_part->data_count;
@@ -368,7 +369,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  for (j = 0; j < count; j++) {
                      length = data->length;
                      if (((ModelPartDataBits30 *)&data->tex0)->clut_base != 0) {
-@@ -825,7 +784,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
+@@ -825,7 +785,7 @@ void Model_SetUpPosed(ModelInstance *model, char **file_cursor, char **memory) {
      model->draw_parts = Model_DrawPosed;
      *file_cursor += file->size;
      model->update_bone_points = Model_UpdateBonePoints;
@@ -377,7 +378,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
  }
  
  /* Draws a model (ModelInstance.draw_parts of the models Model_SetUpPosed sets up): queues a packet with
-@@ -884,10 +843,10 @@ void Model_DrawPosed(ModelInstance *model) {
+@@ -884,10 +844,10 @@ void Model_DrawPosed(ModelInstance *model) {
          light_out = packet;
          light_out_b = packet + 0x10;
          for (i = 0; i < model->hit_count; i++) {
@@ -391,7 +392,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
              light_out += 4;
          }
          packet += 0x20;
-@@ -910,18 +869,18 @@ void Model_DrawPosed(ModelInstance *model) {
+@@ -910,18 +870,18 @@ void Model_DrawPosed(ModelInstance *model) {
              if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT40) {
                  continue;
              }
@@ -413,7 +414,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  packet += 3;
                  data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
              }
-@@ -986,10 +945,10 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
+@@ -986,10 +946,10 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
          light_out = packet;
          light_out_b = packet + 0x10;
          for (i = 0; i < model->hit_count; i++) {
@@ -427,7 +428,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
              light_out += 4;
          }
          packet += 0x20;
-@@ -1021,11 +980,11 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
+@@ -1021,11 +981,11 @@ void Model_DrawPosedPrebuilt(ModelInstance *model) {
              *packet++ = 0x6C040004;
              COPY_MATRIX(packet, part);
              packet += 0x10;
@@ -441,7 +442,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  packet += 3;
                  data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
              }
-@@ -1089,10 +1048,10 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
+@@ -1089,10 +1049,10 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
          light_out = packet;
          light_out_b = packet + 0x10;
          for (i = 0; i < model->hit_count; i++) {
@@ -455,7 +456,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
              light_out += 4;
          }
          packet += 0x20;
-@@ -1124,7 +1083,7 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
+@@ -1124,7 +1084,7 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
                  Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
                  Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
              } else {
@@ -464,7 +465,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
              }
              Packet_EndGsRegisters();
-@@ -1134,11 +1093,11 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
+@@ -1134,11 +1094,11 @@ void Model_DrawPosedDepthByPart(ModelInstance *model) {
              *packet++ = 0x6C040004;
              Matrix_Multiply(packet, model->model_matrix, part);
              packet += 0x10;
@@ -478,7 +479,17 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  packet += 3;
                  data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
              }
-@@ -1202,10 +1161,10 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+@@ -1163,6 +1123,9 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+     s32 j;
+     u32 word;
+ 
++    if (port_native_draw(PORT_ND_OBJECTS) && NativeDraw_PosedWithAlpha(model)) { /* PC: --native-draw (game/native_draw/nd_objects.c) */
++        return;
++    }
+     if (model->parts != NULL && model->part_count != 0) {
+         ModelMatrix_BuildDrawMatrices(model, model->light_block, model->light_block + 0x40, matrix_a, matrix_b);
+         /* the packet below is 0x1C quadwords either way: with the flag set the last 5 are never written */
+@@ -1202,10 +1165,10 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
          light_out = packet;
          light_out_b = packet + 0x10;
          for (i = 0; i < model->hit_count; i++) {
@@ -492,7 +503,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
              light_out += 4;
          }
          Packet_AppendToChain(packet_start, Packet_Alloc(1)); /* the packet ends where the next one would start */
-@@ -1225,12 +1184,12 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+@@ -1225,12 +1188,12 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
                  if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT41) {
                      Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
                  } else {
@@ -507,7 +518,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  Packet_AddGsRegister(0x15, *(s64 *)&data->texture_word);
                  Packet_AddGsRegister(0x07, data->tex0);
                  Packet_AddGsRegister(GS_REG_ALPHA_2,
-@@ -1240,7 +1199,7 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+@@ -1240,7 +1203,7 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
                  if ((s16)model->fade_alpha >= 0x80) {
                      Packet_AddGsRegister(GS_REG_ZBUF_2, 0xA000118);
                  } else {
@@ -516,7 +527,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  }
              }
              Packet_EndGsRegisters();
-@@ -1250,11 +1209,11 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+@@ -1250,11 +1213,11 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
              *packet++ = 0x6C040004;
              Matrix_Multiply(packet, model->model_matrix, part);
              packet += 0x10;
@@ -530,7 +541,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
                  packet += 3;
                  data = (ModelPartData *)((char *)data + ((word & 0xFFFF) + 1) * 16);
              }
-@@ -1262,8 +1221,8 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
+@@ -1262,8 +1225,8 @@ void Model_DrawPosedWithAlpha(ModelInstance *model) {
          }
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(0x1A, 1);
@@ -541,7 +552,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          Packet_EndGsRegisters();
      }
  }
-@@ -1315,17 +1274,17 @@ void Model_SetPrimBits(ModelInstance *model, s64 clear_mask, s64 set_value) {
+@@ -1315,17 +1278,17 @@ void Model_SetPrimBits(ModelInstance *model, s64 clear_mask, s64 set_value) {
      int set_bits;
      int clear_bits;
  
@@ -562,7 +573,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (j = 0; j < count; j++) {
              base = record;
              length = *(u16 *)base;
-@@ -1355,7 +1314,7 @@ void Model_SetTexture(ModelInstance *model, u64 unk40, s64 unk30) {
+@@ -1355,7 +1318,7 @@ void Model_SetTexture(ModelInstance *model, u64 unk40, s64 unk30) {
      part_count = model->part_count;
      for (i = 0; i < part_count; i++, part++) {
          count = part->data_count;
@@ -571,7 +582,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (j = 0; j < count; j++) {
              block = data;
              length = block->length;
-@@ -1379,7 +1338,7 @@ void Model_SetAlphaBlend(ModelInstance *model, s64 value) {
+@@ -1379,7 +1342,7 @@ void Model_SetAlphaBlend(ModelInstance *model, s64 value) {
      for (; i < part_count; i++, part++) {
          s32 j = 0;
          s32 count = (s32)(MODEL_PART_WORD(part) >> 53);
@@ -580,7 +591,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
  
          for (; j < count; j++) {
              ModelPartData *block = (ModelPartData *)cursor;
-@@ -1402,7 +1361,7 @@ void Model_SetVu1Program(ModelInstance *model, s32 value) {
+@@ -1402,7 +1365,7 @@ void Model_SetVu1Program(ModelInstance *model, s32 value) {
  
      part = model->parts;
      for (i = 0; i < model->part_count; i++, part++) {
@@ -589,7 +600,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          last_qword = (u32 *)((char *)data + data->length * 16);
          last_qword[3] = value | 0x15000000;
      }
-@@ -1424,7 +1383,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
+@@ -1424,7 +1387,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
      for (; i < part_count; i++, part++) {
          s32 j = 0;
          s32 count = (s32)(MODEL_PART_WORD(part) >> 53);
@@ -598,7 +609,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
  
          for (; j < count; j++) {
              ModelPartData *block = (ModelPartData *)cursor;
-@@ -1457,7 +1416,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
+@@ -1457,7 +1420,7 @@ void Model_SetVertexColour(void *model_arg, int red, int green, int blue, int al
  
  /* Step the colour of every vertex within `radius` of `centre` towards `targets`, one component at
     a time by `steps`. Returns how many components have not arrived yet. */
@@ -607,7 +618,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
      ModelInstance *model = (ModelInstance *)model_arg;
      f32 *centre = centre_arg;
      // match: the order of these declarations decides the stack slots of the four loop cursors (gcse hashes
-@@ -1487,7 +1446,7 @@ int Model_FadeVertexColoursNear(int model_arg, void *centre_arg, int *steps, int
+@@ -1487,7 +1450,7 @@ int Model_FadeVertexColoursNear(int model_arg, void *centre_arg, int *steps, int
      for (; i < part_count; i++, part++) {
          j = 0;
          count = (s32)(MODEL_PART_WORD(part) >> 53);
@@ -616,7 +627,7 @@ index 33debb979a352ebd869af82a61d754e835621e47..446ca87489040e2d591b4e820022f038
          for (; j < count; j++) {
              block = (ModelPartData *)cursor;
              length = block->length;
-@@ -1549,7 +1508,7 @@ void Model_SetTextureBase(ModelInstance *model, int texture_base, int clut_base)
+@@ -1549,7 +1512,7 @@ void Model_SetTextureBase(ModelInstance *model, int texture_base, int clut_base)
      for (; i < part_count; i++, part++) {
          int j = 0;
          int count = (int)(MODEL_PART_WORD(part) >> 53);
