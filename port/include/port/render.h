@@ -144,6 +144,53 @@ typedef struct {
    the native draw does in the game's floats (RD_PROGRAM_RIPPLE) */
 #define RD_DRAW_ROUND_NEAREST 0x2u
 
+/* ---- Screen passes (P7: docs/port/NATIVE_DRAW.md 1.3) ------------------------------------------
+   A full-screen pass of GameLoop_DrawFrame's (the brightness, a tint, a fill or fade, the flicker filter,
+   the previous frame blended in, the view-turn shift, haze, the wobble grid) as data: what it is and its
+   parameters, instead of the GIF packets of sprites VU1's program 0x276 would pass on. Hosted, the native
+   GS draws it into its own targets with its own state and fragment shader (gsn_nd_pass.inc), exactly as
+   the packets would have been drawn; a pass is a draw of the side buffer of its own kind (RD_KIND_PASS,
+   program RD_PROGRAM_PASS), its identity the pass and the call site's count in the frame. */
+#define RD_KIND_PASS 10u
+#define RD_PROGRAM_PASS 0x20000u
+enum {
+    RD_PASS_SCALE = 1,  /* the frame times RGB / 128 (Game_ApplyBrightness, Game_TintScreen): arg 0-2 RGB */
+    RD_PASS_FILL,       /* a flat colour over the screen (GsDraw_FillScreen): arg 0-3 RGBA, 4-5 ALPHA's low and high words */
+    RD_PASS_FADE,       /* Game_DrawFade's fill and its Z registers: arg 0-3 RGBA */
+    RD_PASS_FLICKER,    /* the flicker filter (Game_BlendScreenOffsetDown, or arg 0 = 1 _UpDown); arg 1: its strips
+                           drawn (--flicker-filter), else only its registers */
+    RD_PASS_PREVIOUS,   /* the frame shown before blended in (Game_BlendPreviousFrame): arg 0 alpha, 1-4 the screen
+                           rectangle, 5-8 the texels' (full_screen_rect) */
+    RD_PASS_VIEW_SHIFT, /* Game_ShiftScreenByViewTurn's strips (--no-whole-frame): data 0-15 the first strip's
+                           GsSpritePacket, arg 0 the step from strip to strip (12.4) */
+    RD_PASS_HAZE,       /* Game_DrawHazeLayers: arg 0 the layers, 1-4 the sprite's colour; data 0-7 their depths */
+    RD_PASS_WOBBLE      /* Game_DrawWobblingScreen's cells: arg 0-3 RGBA; data: the 8 x 11 points' UV, U | V << 16 */
+};
+/* where a pass was called from (with its count in the frame, what pictures between pair it by) */
+enum {
+    RD_PASS_SITE_BRIGHTNESS = 1,
+    RD_PASS_SITE_TINT,          /* under water */
+    RD_PASS_SITE_FILL,          /* GameLoop_DrawFrame's GsDraw_FillScreen calls: the guardian's water, map_draw_state's
+                                   fill, the message box's dimming, the pause */
+    RD_PASS_SITE_FADE,
+    RD_PASS_SITE_FLICKER,
+    RD_PASS_SITE_PREVIOUS,      /* map_draw_state bit 40's */
+    RD_PASS_SITE_AIM,           /* aiming's */
+    RD_PASS_SITE_VIEW_SHIFT,
+    RD_PASS_SITE_HAZE,
+    RD_PASS_SITE_WOBBLE         /* under water, or the MP drain */
+};
+typedef struct {
+    uint32_t pass;      /* RD_PASS_* */
+    uint32_t site;      /* RD_PASS_SITE_* */
+    uint32_t frame_tbp; /* the TBP of the frame the pass reads as a texture (context1_buffer_half's) */
+    uint32_t arg[9];
+    uint32_t data[96];
+} RdPass;
+/* Copies the pass into this frame's side buffer; returns the handle to queue as PORT_GS_REG_NATIVE_DRAW's
+   value (RD_ND_DRAW), 0 if it cannot */
+uint64_t rd_pass(const RdPass *p);
+
 /* Copies d (and the meshes, which stay alive as long as the frame does) into this frame's side buffer;
    returns the handle to queue as PORT_GS_REG_NATIVE_DRAW's value (RD_ND_DRAW), 0 if it cannot */
 uint64_t rd_draw(const RdDraw *d, const RdMesh *meshes, uint32_t count);
@@ -162,6 +209,8 @@ void rd_consumer_frame(uint64_t value);
 #define RD_ND_ALT_BEGIN 0x02u  /* --native-draw-compare: the PS2 path's packets for the native draws before follow */
 #define RD_ND_ALT_END 0x03u    /* ... and end here */
 #define RD_ND_FRAME 0x04u      /* bits 0-23: a frame's serial (rd_begin_frame) */
+#define RD_ND_READS_SHOWN 0x05u /* the screen pass after it reads the frame shown before (RD_PASS_PREVIOUS): for
+                                   frame_interp.c, which keeps that frame for the pictures between; the GS ignores it */
 #define RD_ND_COMMAND(value) ((uint32_t)((uint64_t)(value) >> 56))
 
 /* ---- Captures (port/debug/gs_capture.c, tools/gsreplay) -------------------------------------------
@@ -196,6 +245,7 @@ typedef struct {
     uint64_t waits, waits_given_up; /* rd_begin_frame waiting for the consumer (200 us each) */
     uint64_t declined; /* models the adapter gave back to the PS2 path (game/native_draw/: a NativeDraw_* call
                           that returned 0, its caller drawing them the PS2 way) */
+    uint64_t passes;   /* of the draws, screen passes (rd_pass) */
 } RdStats;
 extern RdStats rd_stats;
 

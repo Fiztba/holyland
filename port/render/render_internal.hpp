@@ -68,3 +68,5 @@ bool rd_batch_5a0_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start
 // The draw a PORT_GS_REG_NATIVE_DRAW value names, its camera and meshes, if its frame's slot still
 // holds it (any thread)
 bool rd_fetch(uint64_t value, RdDraw &draw, RdCamera &camera, std::vector<std::shared_ptr<const RdMeshData>> &meshes);
+// A pass's words (rd_pass) out of the draw that carries them (RD_PROGRAM_PASS)
+void rd_pass_of(const RdDraw &d, RdPass &p);

@@ -1132,7 +1132,9 @@ void debug_page() {
                      {"Effects (in work)", PORT_ND_EFFECTS, "Fire, glows, magic (the draw list's effects, VU1 program 0x700): in work."},
                      {"Shadows (in work)", PORT_ND_SHADOWS, "The entities' shadows (Entity_DrawPoolModels, VU1 program 0x5A0): in work."},
                      {"Water (in work)", PORT_ND_WATER,
-                      "The reflection's rippled water on maps 008, 009 and 014 (Wobble_DrawRippledModel): in work."}};
+                      "The reflection's rippled water on maps 008, 009 and 014 (Wobble_DrawRippledModel): in work."},
+                     {"Screen passes (in work)", PORT_ND_PASSES,
+                      "The brightness, tints, fills and fades, the flicker filter, the frame before, haze, the wobble: in work."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
         for (const auto &k : kinds) {
             bool on = (kinds_on & k.bits) != 0;

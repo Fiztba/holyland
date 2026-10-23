@@ -1063,12 +1063,12 @@ void port_gs_print_stats(void) {
         }
         if (port_options.native_draw) {
             fprintf(stderr,
-                    "[stats] native draw: %llu draws queued, %llu drawn (%llu batches), %llu lost, %llu not drawn yet; "
+                    "[stats] native draw: %llu draws queued (%llu screen passes), %llu drawn (%llu batches), %llu lost, %llu not drawn yet; "
                     "%llu meshes parsed (%llu refused), %llu found again, %.1f MB hashed; %llu meshes put on the GPU; "
                     "%llu PS2-path writes left out; %llu models declined (drawn the PS2 way); the plan %.3f s, "
                     "%llu vertices (%llu found planned); pictures between: %llu model parts and %llu strips moved "
                     "between their frames\n",
-                    (unsigned long long)rd_stats.draws, (unsigned long long)s->nd_draws,
+                    (unsigned long long)rd_stats.draws, (unsigned long long)rd_stats.passes, (unsigned long long)s->nd_draws,
                     (unsigned long long)s->nd_batches, (unsigned long long)s->nd_lost,
                     (unsigned long long)s->nd_unsupported, (unsigned long long)rd_stats.meshes_parsed,
                     (unsigned long long)rd_stats.mesh_unsupported, (unsigned long long)rd_stats.mesh_hits,

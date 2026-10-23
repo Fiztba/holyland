@@ -1045,6 +1045,7 @@ typedef struct {
     int exact;          /* the frame as it was, for the buffers other than the frame (port_interp_end_vblank) */
     int prev_frame_kept; /* the native GS keeps the frame shown before the pictures between (take_snapshot) */
     int record_reads_prev; /* REPLAY: this record reads the frame shown as a texture (the native GS: read the copy) */
+    int native_reads_shown; /* SCAN: a native draw's screen pass reads the frame shown (RD_ND_READS_SHOWN) */
     Move move;          /* the frame's view to the camera between */
     Camera mid;         /* the camera between */
     uint64_t moved, dropped, objects_moved[SECTIONS]; /* vertices moved, dropped (ADC), moved as their model moved (by section) */
@@ -2275,6 +2276,8 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                                  port_options.native_draw_compare != PORT_ND_COMPARE_PS2;
                     } else if (command == RD_ND_ALT_END) {
                         w->alt = 0;
+                    } else if (command == RD_ND_READS_SHOWN) {
+                        w->native_reads_shown = 1; /* (native draw's screen pass, gsn_nd_pass.inc: no packet says so) */
                     }
                 }
 
@@ -2656,6 +2659,7 @@ void port_interp_vsync(const uint64_t *privileged) {
 
                 pending.reads_prev |= (it->prim & 0x10) && it->fbp == w.draw_fbp && (uint32_t)(it->tex & 0x3FFF) == shown * 32;
             }
+            pending.reads_prev |= w.native_reads_shown; /* (native draw) */
         }
         flat_pair(flat_last, pending.flat_before, uploads_new);
         flat_copies(flat_last, uploads_new);

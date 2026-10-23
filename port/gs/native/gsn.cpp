@@ -3070,7 +3070,7 @@ void flush_batch() {
         }
         moving = interp_batch();
     }
-    if (nd.active && interp.active) {
+    if (nd.active && interp.active && !nd.pass_active) {
         moving.moves = moving.moves_3d = true; // (native draw: moved with the camera by nd_000.vert)
     }
     gs->tick++;
@@ -4253,7 +4253,8 @@ void vertex_kick(uint32_t address, uint64_t value) {
         gs->batch_sprites = false;
     }
     // (a picture between drawn from the frame's packets: the kick recorded, its number kept with the queue's)
-    uint32_t kick_no = interp.active ? interp_kick(v, prim) : 0;
+    // (native draw: a screen pass's kicks are not the frame's, gsn_nd_pass.inc)
+    uint32_t kick_no = interp.active ? (nd.pass_kicking ? GSN_IM_NONE : interp_kick(v, prim)) : 0;
     uint32_t *qk = interp.qkick;
     uint32_t type = prim & 7;
     QVertex *q = gs->queue;
