@@ -245,13 +245,15 @@ picture; the answers of 2026-10-23 are at the top of "Where it stands"):
    is gone; the stencil question stays*) before or after perf's whole silhouettes (about 3x the GPU time at 240
    without them); how perf's one-colour silhouette test treats native corners at that merge (their RGB is the
    corner encoding); whether the stencil (first write wins) is still wanted after it.
-6. `passes`: the under-water pictures between at 4x, and the view shift at 240 with `--no-whole-frame`
-   (*2026-10-23: wrong, to be fixed; `passes` stays out of `on` until it is*).
+6. ~~`passes`: the under-water pictures between at 4x, and the view shift at 240 with `--no-whole-frame`~~
+   (*2026-10-23: wrong, to be fixed. Fixed, nd5/passes: 0 pixels at 240 with every switch; `passes` is in `on`
+   since the nd5 merge*).
 7. Whether the spell bursts' pictures between (whole translucent polygons, up to 19 levels) count as "edges"
    (*2026-10-23: undecided, the owner looks in play; `effects` is in `on`*).
 8. The draw_parts wrappers set with native draw off (gold, jointed objects, entities): accept them, or one
    hook in `DrawList_Draw` (gfx.patch).
-9. Whether PS2-path corners should join native ones in pictures between (for gsn.cpp's owner).
+9. ~~Whether PS2-path corners should join native ones in pictures between (for gsn.cpp's owner).~~ (*Not needed,
+   nd5/map240: the cost was the off-scissor triangles; with them culled, draws and passes equal off's.*)
 10. From before: ~~P3-2's modern sky (A1)~~ (*decided 2026-10-23: modern unless a solid reason; done, nd5/sky: `--sky modern` the default, the PS2's kept on 000 and 004, P3-2 below*), and
    the A-items' defaults (NATIVE_DRAW.md 5). And (2026-10-23) the miners' sway at 240: native's smooth movement
    is preferred (the default); P8: start it.
@@ -1614,7 +1616,8 @@ bit 43, haze at three depths, the brightness option at 0x40 and 0xFF, a fill wit
 
 At 240 (`--frame-rate 240`, every picture): the game's frames 0 in every case below; pictures between 0 for the
 brightness, a fill changing, bit 40 changing (compare and onoff), aiming (onoff), the fight (onoff), haze with the
-flicker filter, and the fills with `--realtime` (pictures drawn again from the recording). **Not 0:** under water,
+flicker filter, and the fills with `--realtime` (pictures drawn again from the recording). *(Since nd5/passes
+the cases below are 0 too: see "Where it stands".)* **Not 0:** under water,
 compare 1x 1,322 pixels in 24 pictures (worst 251: a few edge pixels where the wobble's texel rounds the other way;
 onoff 875 in 17); compare 4x about 1M pixels a picture, worst 25 (the 2D snap at 4x moves the cells' corners and
 their texels by the frame's slope, the PS2 path's by the picture's: `nd_pass.vert` adds the frame's); and the
