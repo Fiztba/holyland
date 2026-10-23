@@ -33,6 +33,11 @@
 
 void flush_batch();
 void gs_write(uint32_t address, uint64_t value);
+// (program 0x280's draws: gsn_nd_280.inc, included at the end; these are its hooks below)
+void nd280_flush(bool begin);
+bool nd280_batch();
+Program *nd280_program(Program *p);
+void nd280_draw(const RdDraw &d, const RdCamera &cam);
 
 // nd_000.vert's Draw (std430, a record a draw): matrices are VU layout, a qword a column; the vertex
 // matrix, the light directions and the point lights as VU1's set-up leaves them (nd_draw: its arithmetic)
@@ -143,9 +148,11 @@ struct NdFlush {
     NdFlush() {
         nd.active = nd.pending;
         nd.pending = false;
+        nd280_flush(true); // (0x280's: gsn_nd_280.inc)
     }
     ~NdFlush() {
         nd.active = false;
+        nd280_flush(false);
     }
 };
 
@@ -153,6 +160,9 @@ struct NdFlush {
 Program *nd_program(Program *p) {
     if (!nd.active || !p) {
         return p;
+    }
+    if (nd280_batch()) {
+        return nd280_program(p); // (with nd_280.vert: gsn_nd_280.inc)
     }
     auto it = nd.programs.find(p);
     if (it != nd.programs.end()) {
@@ -503,6 +513,11 @@ void nd_draw(uint64_t value) {
         gsn_stats.nd_lost++;
         return;
     }
+    if (d.program == 0x280) {
+        nd280_draw(d, cam); // (gsn_nd_280.inc)
+        nd.fetched.clear();
+        return;
+    }
     if (d.program != 0) {
         gsn_stats.nd_unsupported++;
         return;
@@ -670,3 +685,4 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
 }
 
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
+#include "gsn_nd_280.inc"    // (program 0x280's draws, and its oracle)

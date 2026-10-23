@@ -171,7 +171,148 @@ bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mes
     return true;
 }
 
-bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh) {
+// ---- Program 0x280's batches (RD_VF_FLOAT_SKIN: the skinned models) ------------------------------
+// One VU1 run of program 0x280 (port/platform/vu1_hle_280.c is its specification) at top: TOP+0 the
+// strip's GIF tag, TOP+1 the second pass's, TOP+2+4k vertex k (position, normal, ST, colour: floats;
+// the normal's w ORed into XYZF2's w, but the last vertex's; ST's w the matrix set), TOP+0xA0 the A+D
+// packet kicked before the strip, and the second (sphere-mapped) pass when TOP+0xA4.z's low 16 bits
+// are not 0: then the A+D packet at TOP+0xA3 and a strip of the same XYZF2s under the tag at TOP+1.
+const uint32_t N_MAX_280 = 36; // (vu1_hle_280.c: the HLE leaves more to the interpreter; none in the game)
+
+// a GIF tag of a strip of n vertices of ST, RGBAQ, XYZF2 with PRE; why not, or nullptr
+const char *strip_tag_280(const uint64_t tag[2], uint32_t n) {
+    uint32_t nreg = uint32_t(tag[0] >> 60), flg = uint32_t((tag[0] >> 58) & 3);
+    if (uint32_t(tag[0] & 0x7FFF) != n) {
+        return "a 0x280 batch whose second pass's tag has another NLOOP";
+    }
+    if (flg != 0 || nreg != 3 || (tag[1] & 0xFFF) != 0x412) {
+        return "a 0x280 batch whose GIF tag is not ST, RGBAQ, XYZF2";
+    }
+    if (!((tag[0] >> 46) & 1)) {
+        return "a 0x280 batch tag without PRE";
+    }
+    uint32_t type = uint32_t(tag[0] >> 47) & 7;
+    if (type != 3 && type != 4 && type != 5) {
+        return "a 0x280 batch of points, lines or sprites";
+    }
+    return nullptr;
+}
+
+// the A+D packet at address (a GIF tag, PACKED A+D, and its writes) into ad; why not, or nullptr
+const char *ad_packet_280(const VuModel &vu, uint32_t address, std::vector<uint64_t> &ad) {
+    if (!vu.written[address % VU_QWORDS]) {
+        return "a 0x280 batch's A+D packet is not the block's";
+    }
+    uint64_t tag[2];
+    memcpy(tag, vu.mem[address % VU_QWORDS], 16);
+    uint32_t n = uint32_t(tag[0] & 0x7FFF);
+    if (((tag[0] >> 58) & 3) != 0 || (tag[0] >> 60) != 1 || (tag[1] & 0xF) != 0xE || n > 16) {
+        return "a 0x280 batch's A+D packet is not A+D";
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t q = (address + 1 + i) % VU_QWORDS;
+        if (!vu.written[q]) {
+            return "a 0x280 batch's A+D writes are not all the block's";
+        }
+        uint64_t w[2];
+        memcpy(w, vu.mem[q], 16);
+        ad.push_back(w[1] & 0xFF);
+        ad.push_back(w[0]);
+    }
+    return nullptr;
+}
+
+// The batch at top (a VU1 run of program 0x280), into mesh: its vertices eight qwords each, the four VU1
+// memory has, then (k, its set for the point lights, what its XYZF2's w is ORed with, n) and three
+// qwords of 0. (The point lights take vertex 0's set from the tag's w: vu1_hle_280.c, light_set.)
+bool take_batch_280(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mesh) {
+    if (start != RD_PROGRAM_CONTINUE && start != 0x280) {
+        why_refused = "an MSCAL of another program in a 0x280 block";
+        return false;
+    }
+    if (!vu.written[top] || !vu.written[(top + 1) % VU_QWORDS]) {
+        why_refused = "a 0x280 batch's GIF tags are not the block's";
+        return false;
+    }
+    RdBatch b;
+    memcpy(b.tag, vu.mem[top], 16);
+    uint32_t n = uint32_t(b.tag[0] & 0x7FFF);
+    if (n < 3 || n > N_MAX_280) {
+        why_refused = "a 0x280 batch of fewer than 3 or more than 36 vertices";
+        return false;
+    }
+    if (const char *why = strip_tag_280(b.tag, n)) {
+        why_refused = why;
+        return false;
+    }
+    for (uint32_t q = top + 2; q < top + 2 + 4 * n; q++) {
+        if (!vu.written[q % VU_QWORDS]) {
+            why_refused = "a 0x280 batch's vertices are not all the block's";
+            return false;
+        }
+    }
+    if (const char *why = ad_packet_280(vu, top + 0xA0, b.ad)) {
+        why_refused = why;
+        return false;
+    }
+    // the second pass: its gate, then its A+D packet and tag (the same PRIM type: the same triangles)
+    if (!vu.written[(top + 0xA4) % VU_QWORDS]) {
+        why_refused = "a 0x280 batch's sphere-pass gate (TOP+0xA4) is not the block's";
+        return false;
+    }
+    b.sphere = uint16_t(vu.mem[(top + 0xA4) % VU_QWORDS][2]) != 0;
+    if (b.sphere) {
+        memcpy(b.tag2, vu.mem[(top + 1) % VU_QWORDS], 16);
+        if (const char *why = strip_tag_280(b.tag2, n)) {
+            why_refused = why;
+            return false;
+        }
+        if (((b.tag2[0] ^ b.tag[0]) >> 47 & 7) != 0) {
+            why_refused = "a 0x280 batch whose second pass is another kind of primitive";
+            return false;
+        }
+        if (const char *why = ad_packet_280(vu, top + 0xA3, b.ad2)) {
+            why_refused = why;
+            return false;
+        }
+    }
+    b.start = start;
+    b.first = uint32_t(mesh.vertices.size() / 32);
+    b.count = n;
+    b.alpha_lo = 0; // (the alpha is the draw's colour scale and bias's: not known here)
+    b.alpha_hi = 255;
+    uint16_t tag_w = uint16_t(b.tag[1] >> 32);
+    for (uint32_t k = 0; k < n; k++) {
+        for (uint32_t q = 0; q < 4; q++) {
+            const uint32_t *src = vu.mem[(top + 2 + 4 * k + q) % VU_QWORDS];
+            for (int f = 0; f < 4; f++) {
+                mesh.vertices.push_back(int32_t(src[f]));
+            }
+        }
+        uint16_t set = uint16_t(vu.mem[(top + 4 + 4 * k) % VU_QWORDS][3]);
+        uint16_t nw = uint16_t(vu.mem[(top + 3 + 4 * k) % VU_QWORDS][3]);
+        mesh.vertices.push_back(int32_t(k));
+        mesh.vertices.push_back(k == 0 ? tag_w != 0 : set != 0);
+        mesh.vertices.push_back(k == n - 1 ? 0 : nw);
+        mesh.vertices.push_back(int32_t(n));
+        mesh.vertices.insert(mesh.vertices.end(), 12, 0);
+    }
+    // the triangles, as take_batch's (the last vertex's normal w is not ORed in: its ADC never the data's)
+    uint32_t type = uint32_t(b.tag[0] >> 47) & 7;
+    for (uint32_t k = 2; k < n; k++) {
+        bool adc = k < n - 1 && (uint16_t(vu.mem[(top + 3 + 4 * k) % VU_QWORDS][3]) & 0x8000) != 0;
+        if (adc || (type == 3 && k % 3 != 2)) {
+            continue;
+        }
+        b.triangles.push_back(uint8_t(type == 5 ? 0 : k - 2));
+        b.triangles.push_back(uint8_t(k - 1));
+        b.triangles.push_back(uint8_t(k));
+    }
+    mesh.batches.push_back(std::move(b));
+    return true;
+}
+
+bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh, RdVertexFormat fmt = RD_VF_PACKED16) {
     static VuModel vu; // (the game's thread only)
     memset(vu.written, 0, sizeof(vu.written));
     uint32_t cl = 1, wl = 1, mode = 0, tops = BUFFER_A;
@@ -267,7 +408,8 @@ bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh) {
         case 0x14: // MSCAL
         case 0x15: // MSCALF
         case 0x17: // MSCNT
-            if (!take_batch(vu, tops, cmd == 0x17 ? RD_PROGRAM_CONTINUE : imm, mesh)) {
+            if (!(fmt == RD_VF_FLOAT_SKIN ? take_batch_280 : take_batch)(vu, tops, cmd == 0x17 ? RD_PROGRAM_CONTINUE : imm,
+                                                                           mesh)) {
                 return false;
             }
             // (VIF1 flips TOPS at each run; what the block writes next goes to the other buffer)
@@ -360,7 +502,7 @@ void dump_mesh(const RdMeshData &m) {
         }
         fprintf(f, "\nV");
         for (uint32_t k = 0; k < b.count; k++) {
-            const int32_t *v = &m.vertices[size_t(b.first + k) * 16];
+            const int32_t *v = &m.vertices[size_t(b.first + k) * rd_vertex_words(m.format)];
             fprintf(f, " %d %d %d %d %d", v[0], v[1], v[2], v[3], v[15]);
         }
         fprintf(f, "\nT");
@@ -426,12 +568,12 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
     mesh->gen = want;
     rd_stats.meshes_parsed++;
     auto p0 = dump.f ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
-    bool ok = fmt == RD_VF_PACKED16 && parse_block(bytes, qwords, *mesh);
+    bool ok = (fmt == RD_VF_PACKED16 || fmt == RD_VF_FLOAT_SKIN) && parse_block(bytes, qwords, *mesh, fmt);
     if (dump.f) { // (KF4_ND_DUMP)
         dump.parse_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - p0).count());
     }
-    if (fmt != RD_VF_PACKED16) {
-        why_refused = "only RD_VF_PACKED16 is parsed so far";
+    if (fmt != RD_VF_PACKED16 && fmt != RD_VF_FLOAT_SKIN) {
+        why_refused = "not a vertex format the parser knows";
     }
     CacheEntry &e = cache[key];
     if (e.mesh) {
@@ -480,6 +622,19 @@ extern "C" void rd_mesh_touch(uint32_t key) {
 
 extern "C" const char *rd_mesh_why(void) {
     return why_refused;
+}
+
+bool rd_batch_280_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh) {
+    static VuModel vu; // (kf4-gsreplay's thread only)
+    memcpy(vu.mem, mem, sizeof(vu.mem));
+    memset(vu.written, 1, sizeof(vu.written));
+    mesh.format = RD_VF_FLOAT_SKIN;
+    return take_batch_280(vu, top % VU_QWORDS, start, mesh);
+}
+
+bool rd_parse_block(const void *block, uint32_t qwords, RdVertexFormat fmt, RdMeshData &mesh) {
+    mesh.format = uint32_t(fmt);
+    return parse_block(static_cast<const uint8_t *>(block), qwords, mesh, fmt);
 }
 
 extern "C" uint32_t rd_mesh_program(RdMesh mesh) {
@@ -608,7 +763,8 @@ bool rd_fetch(uint64_t value, RdDraw &draw, RdCamera &camera, std::vector<std::s
 }
 
 // ---- Captures (render.h, gs_capture_format.h) -----------------------------------------------------
-static_assert(sizeof(Kf4GsNdDraw) == sizeof(RdDraw), "Kf4GsNdDraw is RdDraw's fields, in order");
+static_assert(sizeof(Kf4GsNdDraw) + sizeof(RdDraw::turn) == sizeof(RdDraw),
+              "Kf4GsNdDraw is RdDraw's fields, in order, but the turns (after the mesh ids, for 0x280 only)");
 static_assert(sizeof(Kf4GsNdCamera) == sizeof(RdCamera), "Kf4GsNdCamera is RdCamera's fields, in order");
 
 namespace {
@@ -725,6 +881,9 @@ void capture_frame(const Slot &s, RdCaptureEmit emit) {
         for (uint32_t m = 0; m < s.draws[i].mesh_count; m++) {
             append(body, uint32_t(s.meshes[s.first_mesh[i] + m]->id));
         }
+        if (s.draws[i].program == 0x280) {
+            append(body, s.draws[i].turn); // (gs_capture_format.h: only a 0x280 draw's)
+        }
     }
     emit(KF4GS_ND_DRAWS, &head, sizeof(head), body.data(), body.size());
     given = count;
@@ -795,10 +954,11 @@ extern "C" int rd_replay_record(uint32_t type, const void *data, size_t size) {
         mesh->block.assign(p + sizeof(head), p + sizeof(head) + size_t(head.qwords) * 16);
         rd_replay_stats.meshes++;
         // (parsed again: this build's parser decides, as it would in the game)
-        if (head.format != RD_VF_PACKED16 || !parse_block(mesh->block.data(), head.qwords, *mesh)) {
+        bool known = head.format == RD_VF_PACKED16 || head.format == RD_VF_FLOAT_SKIN;
+        if (!known || !parse_block(mesh->block.data(), head.qwords, *mesh, RdVertexFormat(head.format))) {
             rd_replay_stats.meshes_refused++;
             fprintf(stderr, "native draw: the capture's block %#x (%u qwords) is refused: %s\n", head.key, head.qwords,
-                    head.format != RD_VF_PACKED16 ? "not RD_VF_PACKED16" : why_refused);
+                    !known ? "not a vertex format the parser knows" : why_refused);
             replay_meshes.erase(head.id);
             return 1;
         }
@@ -874,6 +1034,13 @@ extern "C" int rd_replay_record(uint32_t type, const void *data, size_t size) {
             } else if (ok) {
                 s.meshes.push_back(it->second);
             }
+        }
+        if (d.program == 0x280) {
+            if (size - at < sizeof(d.turn)) {
+                return -1;
+            }
+            memcpy(d.turn, p + at, sizeof(d.turn));
+            at += sizeof(d.turn);
         }
         if (!ok) {
             s.meshes.resize(first_mesh); // (drawn as nothing: the frame's indices stay the capture's)
