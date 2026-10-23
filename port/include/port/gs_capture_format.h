@@ -9,7 +9,7 @@
    is no smaller (as save states, port/platform/savestate.c).
 
    The body: records, each a Kf4GsRecord and `size` bytes (a multiple of 4), in this order:
-   META, VRAM, GS_REGS, GS_PRIV, GS_HISTORY, VU1, VIF1 (the state at the start, right after the
+   META, VRAM, GS_REGS, GS_PRIV, GS_HISTORY, (SA_TABLE,) VU1, VIF1 (the state at the start, right after the
    scanout of the vblank in META's start_vblank), then the stream: GIF, VIFDATA, VU1_RUN, READ_FIFO
    and VSYNC records in the order they happened, and END. A reader skips record types it does not
    know.
@@ -54,6 +54,11 @@ enum {
     /* micro memory (16 KB), data memory (16 KB), then Kf4GsVu1Regs */
     KF4GS_VU1 = 6,
     KF4GS_VIF1 = 7, /* Kf4GsVif1Regs */
+    /* (--renderer modern, P8) the native GS's page-ownership table: which uploads own VRAM's blocks, with
+       their BITBLTBUF, TRXPOS, TRXREG and bytes, so that a replay's scene samples textures from their
+       source from the start (port/gs/native/gsn_standalone.inc, "The table in save states and captures",
+       has the layout). After the GS's records; only in a capture taken with the scene on. */
+    KF4GS_SA_TABLE = 8,
 
     KF4GS_GIF = 16,       /* uint32 path (1, 2, 3), then whole qwords, as handed to the GS */
     KF4GS_VIFDATA = 17,   /* uint32 words, as DMA channel 1 (or libgraph) fed VIF1 */

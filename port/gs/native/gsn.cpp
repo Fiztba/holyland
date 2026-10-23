@@ -7545,6 +7545,7 @@ extern "C" void gsn_capture(void (*emit)(uint32_t type, const void *data, size_t
         }
     }
     emit(KF4GS_GS_HISTORY, history.data(), history.size());
+    sa_capture(emit); // (standalone: the page-ownership table, when the scene is on)
 }
 
 extern "C" size_t gsn_state_size(void) {
@@ -7674,8 +7675,20 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         }
         return 1;
     }
+    case KF4GS_SA_TABLE:
+        return sa_table_load(static_cast<const uint8_t *>(data), size) ? 1 : 0; // (standalone)
     }
     return 0;
+}
+
+// (port/platform/gs.c) a save state's page-ownership table, after gsn_state (standalone: gsn_standalone.inc)
+extern "C" size_t gsn_table_state_size(void) {
+    ring_idle();
+    return sa_state_size();
+}
+extern "C" void gsn_table_state(PortStateIo *io, size_t size) {
+    ring_idle();
+    sa_state(io, size);
 }
 
 // ---- The presenter's side (port/platform/present_vk.cpp) ------------------------------------------
