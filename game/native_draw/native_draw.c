@@ -46,6 +46,10 @@ extern f32 view_screen_matrix[16];
    counts blocks that do not parse, not this.) */
 #define ND_MAX_MESHES 2048
 
+/* (nd_water.c: a wave record's meshes and offsets, the wave UVs on the GPU, P6-2) */
+const u32 *NativeDraw_WaveOffsets(const ModelInstance *model, const MapDrawRecord *record);
+int NativeDraw_WaveMeshes(const ModelInstance *model, int part_index, const ModelPart *part, RdMesh *meshes);
+
 /* At the start of GameLoop_DrawFrame (FrameInterp_BeginFrame): the side buffer's next frame */
 static void queue_mark(u32 command, u64 bits) {
     Packet_BeginGsRegisters();
@@ -199,15 +203,18 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
     ModelPart *part;
     RdDraw d;
     u32 camera;
+    const u32 *wave;
     int i;
 
     if (model->parts == NULL || model->part_count == 0) {
         return 1; /* (the PS2 path queues nothing either) */
     }
+    /* a wave record's meshes keep the vertices' own coordinates, its offsets go with the draws (nd_water.c) */
+    wave = kind == RD_KIND_MAP_RECORD ? NativeDraw_WaveOffsets(model, owner) : NULL;
     /* every part's blocks first: a model is drawn one way or the other, whole */
     part = model->parts;
     for (i = 0; i < model->part_count; i++, part++) {
-        if (!part_meshes(part, meshes)) {
+        if (!(wave ? NativeDraw_WaveMeshes(model, i, part, meshes) : part_meshes(part, meshes))) {
             return 0;
         }
     }
@@ -221,6 +228,10 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
     d.id[0] = (u32)EE_WORD(owner);
     d.program = 0x000;
     d.camera = camera;
+    if (wave) {
+        d.flags |= RD_DRAW_WAVE_UVS;
+        memcpy(d.parent, wave, sizeof(d.parent));
+    }
     memcpy(d.light_dir, matrix_a, sizeof(d.light_dir));
     memcpy(d.light_col, matrix_b, sizeof(d.light_col));
     memcpy(d.fog, model->fog_block, sizeof(d.fog));
@@ -263,7 +274,11 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
         if (form == FORM_DEPTH_BY_PART && part->scale[0] == 0.0f && part->scale[1] == 0.0f && part->scale[2] == 0.0f) {
             continue;
         }
-        part_meshes(part, meshes); /* (found again in the cache) */
+        if (wave) {
+            NativeDraw_WaveMeshes(model, i, part, meshes); /* (found again in the cache) */
+        } else {
+            part_meshes(part, meshes); /* (found again in the cache) */
+        }
         Matrix_Multiply(matrix, model->model_matrix, part);
         memcpy(d.model, matrix, sizeof(d.model));
         d.id[1] = (u32)i;

@@ -40,6 +40,11 @@ Program *nd280_program(Program *p);
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
 void nd_strip_draw(const RdDraw &d); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
 Program *nd_strip_program(Program *p);
+// (the reflection's rippled water: gsn_nd_water.inc, included at the end; these are its hooks below)
+void ndw_flush(bool begin);
+bool ndw_batch();
+Program *ndw_program(Program *p);
+void ndw_draw(const RdDraw &d, const RdCamera &cam);
 
 // A model part's move in the pictures between (P2-5; nd_between): its matrix in the frame before (P) and in
 // this frame (C), each split into a rotation R and the rest S (R S the linear part: a scale, or a shear), and
@@ -72,13 +77,15 @@ struct NdConst {
     float obj[4];        // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     int32_t info[4];     // the point lights, XYOFFSET's X and Y (12.4), ND_C_* flags
     NdBetween bt;        // (ND_C_MODEL) the part's own move from the frame before (nd_between)
+    uint32_t wave[16];   // (ND_C_WAVE) the 16 waves' offsets to S (low 16 bits) and T (high), RdDraw.parent's
 };
-static_assert(sizeof(NdConst) == 46 * 16, "NdConst is nd_000.vert's Draw");
+static_assert(sizeof(NdConst) == 50 * 16, "NdConst is nd_000.vert's Draw");
 enum : int32_t {
     ND_C_MOVING = 0x1, // a picture between: moved by the picture's camera (set 1's Picture), see nd_section
     ND_C_OBJ = 0x2,    // ... and with its model, t of the way from its place in the frame before (obj)
     ND_C_MODEL = 0x4,  // ... and with its model, by its matrices between the frame before's and this one's (bt)
     ND_C_EYE = 0x8,    // (with ND_C_MODEL) the matrices are the eye's (the arm): not moved by the camera
+    ND_C_WAVE = 0x10,  // the wave UVs on the GPU (RD_DRAW_WAVE_UVS, P6-2): S and T moved by their wave's offsets
 };
 // A corner (Vtx): its fog -1 less the vertex's number in the arena (below 0: a native corner, where the
 // PS2 path's fog is 0-255, so that a batch can hold both kinds: nd_draw_range); its RGB the kick's number
@@ -137,6 +144,8 @@ struct NdPlanned {
     uint64_t offset = 0;           // XYOFFSET
     uint32_t gouraud = 0;
     float vm[16] = {};             // the vertex matrix (compared bit for bit)
+    bool waved = false;            // the waves' offsets (the wave UVs on the GPU)
+    uint32_t wave[16] = {};
     std::vector<Vtx> corners;
 };
 // (two a batch: the world's camera and the reflection's, on the mirror maps)
@@ -189,10 +198,12 @@ struct NdFlush {
         nd.strip_active = nd.strip_pending;
         nd.pending = nd.strip_pending = false;
         nd280_flush(true); // (0x280's: gsn_nd_280.inc)
+        ndw_flush(true);   // (the water's: gsn_nd_water.inc)
     }
     ~NdFlush() {
         nd.active = nd.strip_active = false;
         nd280_flush(false);
+        ndw_flush(false);
     }
 };
 
@@ -203,6 +214,9 @@ Program *nd_program(Program *p) {
     }
     if (nd280_batch()) {
         return nd280_program(p); // (with nd_280.vert: gsn_nd_280.inc)
+    }
+    if (ndw_batch()) {
+        return ndw_program(p); // (with nd_water.vert: gsn_nd_water.inc)
     }
     auto it = nd.programs.find(p);
     if (it != nd.programs.end()) {
@@ -419,10 +433,19 @@ void nd_plan_vertex(const int32_t *q, const float *vm, int32_t xyz[3], float stq
     nd_plan_vertex(q, vm, xyz, stq, clip, nd_fast_matrix(vm));
 }
 
+// A vertex's S and T moved by its wave (the wave UVs on the GPU, P6-2): its ST's w the wave, its S and T the
+// vertex's own, each moved by the wave's 16-bit offset in 16 bits as Wobble_ApplyWaveUvs writes them, then
+// read back as VIF1's signed UNPACK does
+void nd_wave_st(int32_t *q, const uint32_t *wave) {
+    uint32_t w = wave[uint32_t(q[11]) & 15];
+    q[8] = int32_t(int16_t(uint16_t(uint32_t(q[8]) + (w & 0xFFFF))));
+    q[9] = int32_t(int16_t(uint16_t(uint32_t(q[9]) + (w >> 16))));
+}
+
 // nd_plan's work: the batch's corners (fog: the vertex's number in the batch; RGB without the
-// record)
+// record); wave: the waves' offsets, or null
 void nd_plan_batch(const RdMeshData &m, const RdBatch &b, const float *vm, uint64_t offset, uint32_t gouraud,
-                   std::vector<Vtx> &corners) {
+                   std::vector<Vtx> &corners, const uint32_t *wave = nullptr) {
     int32_t ox = int32_t(bits(offset, 0, 16)), oy = int32_t(bits(offset, 32, 16));
     Vtx v[N_ND_MAX];
     bool clip[N_ND_MAX];
@@ -430,6 +453,12 @@ void nd_plan_batch(const RdMeshData &m, const RdBatch &b, const float *vm, uint6
     bool vm_ok = nd_fast_matrix(vm);
     for (uint32_t k = 0; k < b.count; k++) {
         const int32_t *q = &m.vertices[(b.first + k) * 16];
+        int32_t waved[16];
+        if (wave) {
+            memcpy(waved, q, sizeof(waved));
+            nd_wave_st(waved, wave);
+            q = waved;
+        }
         int32_t xyz[3];
         float stq[3];
         nd_plan_vertex(q, vm, xyz, stq, clip[k], vm_ok);
@@ -472,7 +501,8 @@ void nd_plan_batch(const RdMeshData &m, const RdBatch &b, const float *vm, uint6
 // matrix (the camera standing still; the frame drawn again for a picture between) is taken as it was:
 // nd.planned keeps each batch's last plan, its corners' fog the vertex's number in the batch and their
 // RGB without the record.
-void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t prim, uint32_t base, uint32_t record) {
+void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t prim, uint32_t base, uint32_t record,
+             const uint32_t *wave = nullptr) {
     uint64_t offset = gs->reg[R_XYOFFSET_1 + ((prim >> 9) & 1)];
     uint32_t gouraud = ((prim >> 3) & 1) ? ND_CORNER_GOURAUD : 0;
     if (nd.planned.size() >= ND_PLANNED_MAX) {
@@ -480,7 +510,8 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
     }
     NdPlannedPair &pair = nd.planned[uint64_t(m.id) << 20 | uint64_t(&b - m.batches.data())];
     auto same = [&](const NdPlanned &e) {
-        return e.data == m.vertices.data() && e.offset == offset && e.gouraud == gouraud && memcmp(e.vm, vm, sizeof(e.vm)) == 0;
+        return e.data == m.vertices.data() && e.offset == offset && e.gouraud == gouraud && memcmp(e.vm, vm, sizeof(e.vm)) == 0 &&
+               e.waved == (wave != nullptr) && (!wave || memcmp(e.wave, wave, sizeof(e.wave)) == 0);
     };
     uint32_t which = same(pair.plan[0]) ? 0 : same(pair.plan[1]) ? 1 : 2;
     if (which == 2) {
@@ -493,7 +524,11 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
         e.offset = offset;
         e.gouraud = gouraud;
         memcpy(e.vm, vm, sizeof(e.vm));
-        nd_plan_batch(m, b, vm, offset, gouraud, e.corners);
+        e.waved = wave != nullptr;
+        if (wave) {
+            memcpy(e.wave, wave, sizeof(e.wave));
+        }
+        nd_plan_batch(m, b, vm, offset, gouraud, e.corners, wave);
     } else {
         gsn_stats.nd_plan_reused += b.count;
     }
@@ -742,6 +777,11 @@ void nd_draw(uint64_t value) {
         nd.fetched.clear();
         return;
     }
+    if (d.program == RD_PROGRAM_RIPPLE) {
+        ndw_draw(d, cam); // (gsn_nd_water.inc)
+        nd.fetched.clear();
+        return;
+    }
     if (d.program != 0) {
         gsn_stats.nd_unsupported++;
         return;
@@ -782,6 +822,14 @@ void nd_draw(uint64_t value) {
             }
         }
     }
+    // the wave UVs on the GPU: the waves' offsets (P6-2)
+    const uint32_t *wave = nullptr;
+    memset(k.wave, 0, sizeof(k.wave));
+    if (d.flags & RD_DRAW_WAVE_UVS) {
+        memcpy(k.wave, d.parent, sizeof(k.wave));
+        k.info[3] |= ND_C_WAVE;
+        wave = k.wave;
+    }
     memcpy(nd.draws.map + size_t(record) * sizeof(NdConst), &k, sizeof(k));
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
@@ -809,7 +857,7 @@ void nd_draw(uint64_t value) {
             size_t before = gs->verts.size();
             {
                 Timer plan(gsn_stats.ns_nd_plan);
-                nd_plan(*mesh, b, k.vertex, eprim, base, record);
+                nd_plan(*mesh, b, k.vertex, eprim, base, record, wave);
             }
             nd.pending = nd.pending || gs->verts.size() > before;
             nd.batch_arena = nd.arena.buffer.get();
@@ -921,3 +969,4 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
 #include "gsn_nd_280.inc"    // (program 0x280's draws, and its oracle)
 #include "gsn_nd_strip.inc"  // (a PATH2 strip's draws: the trail)
+#include "gsn_nd_water.inc"  // (the reflection's rippled water)
