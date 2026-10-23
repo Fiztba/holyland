@@ -54,6 +54,22 @@ void NativeDraw_BeginFrame(void) {
     }
 }
 
+/* GameLoop_SetCameraMatrices' last arguments (NativeDraw_MarkCamera) */
+static int camera_projection, camera_mode;
+
+/* After GameLoop_SetCameraMatrices(projection, mode) (from FrameInterp_MarkCamera, which it calls): what
+   the matrices it built are. Camera mode 1 is the mirror image, in both of GameLoop_DrawFrame's mirror
+   modes (map_draw_state.mode 1, the mirror drawn into the frame: map 041; mode 2, the reflection: maps
+   008, 009 and 014): world_screen_matrix has the reflection about mirror_height in it, world_view_matrix
+   does not. Projection 1 is the reflection's (sceVu0ViewScreenMatrix with ax 0.4, ay 0.571, drawn into
+   the 256x256 CT16S target at 0x2BC0). The draws themselves need nothing more (the GS state, the target
+   included, comes from the chain; no culling, so the flipped winding does not matter): the pictures
+   between do (P1-3). */
+void NativeDraw_MarkCamera(int projection, int mode) {
+    camera_projection = projection;
+    camera_mode = mode;
+}
+
 /* the camera the world is drawn by now (GameLoop_SetCameraMatrices' last) */
 static u32 current_camera(void) {
     RdCamera c;
@@ -62,6 +78,8 @@ static u32 current_camera(void) {
     memcpy(c.world_screen, world_screen_matrix, sizeof(c.world_screen));
     memcpy(c.view, world_view_matrix, sizeof(c.view));
     memcpy(c.screen, view_screen_matrix, sizeof(c.screen));
+    c.mode = (u32)camera_mode;
+    c.projection = (u32)camera_projection;
     return rd_camera(&c);
 }
 
