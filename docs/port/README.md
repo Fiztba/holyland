@@ -181,7 +181,13 @@ the default):
 
 The Verdite layout (`--controls verdite`, or the overlay's Controls page) is that of the KF2/KF3 ports:
 W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks
-(`port/sdk/controls.c` lists it). In both, F1 opens the settings overlay, F2 takes a quick save and F4
+(`port/sdk/controls.c` lists it). Outside play (menus, pause, talking, the King's Map) A / D press
+d-pad left / right and the Left / Right arrows press L1 / R1, so A / D move left and right in the menus as
+W / S move up and down (the equipment screen's items, a list's pages, the options' values) and the
+arrows do the shoulder buttons' jobs there (turning the weapon on the equipment screen, zooming the
+King's Map); "A / D move left / right in menus" on the Controls page (`controls.menu_side_keys`) turns
+it off. It follows the bindings (the keys of L1 / R1 and of d-pad left / right) and leaves the
+controller alone. In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
 loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F9, F10 and
 F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
@@ -198,7 +204,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 |---|---|
 | Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, pictures a second in play (30 to 240, or the screen's rate), live, the draw distance and the sky's fog, live, the scaling to the window (sharp, smooth or best) and sharpening, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames, seamless scrolling textures), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
-| Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
+| Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y, the mouse buttons in menus and A / D in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
 | Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
 | Debug | pictures shown (the window's presents of a new picture, by either thread), vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
