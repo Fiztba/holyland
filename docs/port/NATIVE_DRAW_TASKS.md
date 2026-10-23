@@ -447,6 +447,28 @@ gated by TOP+0xA4.z, blended `Cs + Cd*As`; VU1's arithmetic as `vu1_hle_280.c` d
 helpers. Extend the oracle (P0-2) to 0x280, both passes. Accepted: 0 lane differences on the tour's 0x280
 batches.
 
+*Done (nd2/p2-2).* `shaders/nd_280.vert`; the GS side in `gsn_nd_280.inc` (included at the end of
+`gsn_native_draw.inc`; hooks in `NdFlush`, `nd_program`, `nd_draw`); the parser's `take_batch_280`
+(`RD_VF_FLOAT_SKIN`: a vertex is eight qwords in the mesh, VU1's four and (k, the point lights' set, the
+w ORed into XYZF2, n)); `RdDraw.turn` (VU1 0x24, 0x28: the sphere pass's matrices; a capture carries them
+after a 0x280 draw's mesh ids, so `Kf4GsNdDraw` and old captures are unchanged). What 0x280 does beyond
+0x000 (all in `vu1_hle_280.c`): the RGB of `u` carries from vertex to vertex (only vertex 0's colour is
+read for it); the last vertex's normal w is not ORed into XYZF2; the run ends after the A+D kick, with no
+PRIM, strip or second pass, when VU1's count of clipped vertices (vertex 0 counted twice) reaches n; the
+point lights take vertex 0's set from the tag's w and the falloff from set A; the second pass is white
+with vertex 1's alpha. The oracle (`kf4-gsreplay --nd-oracle`, `tools/gsreplay/nd_oracle_280.c`) over the
+64 tour captures: 19,528 runs of 0x280 (2,913 MSCALs; 6,739 with a second pass, 4,666 with point lights,
+10,742 ending with every vertex clipped), 103,474 first-pass and 52,924 second-pass vertices drawn: 0
+lane differences, against the HLE and the interpreter; the kicks (which packets each run sends) and both
+sets' set-up the same in every run; and the parser on the game's own blocks (each VIF1 DMA transfer)
+equal to every run's batch (19,528 of 19,528). Left: 63 vertices never drawn differ (VU1's 1 / 0, the
+largest float, against the GPU's NaN), and a tag with an odd w (every vertex ADC when vertex 0 is
+clipped) is in the plan but never seen in the tour. A throwaway call site in `Model_DrawSkinned` (not
+committed) drew the arm's swing on map 000 with its second pass: 0 pixels in compare mode at 1x and 4x and
+in onoff mode (leaving the second pass out: up to 38,822 pixels). A batch of 0x280 corners is never one
+of 0x000's (their own records buffer and program): where the PS2 path's batch holds both, the GS splits it
+("Mixed batches"). Pictures between are not handled for 0x280 yet (P2-5).
+
 **P2-3 Entities** (owns `entity.patch` then; after P2-2). `Entity_DrawAll`'s opaque and translucent draws
 (the draw list's order kept: the draws go out in the game's order), the tint (hit flash, ailments), hidden
 parts and fades, and the Fire Lord's afterimages. Type 0x47 (the frame copied to 0x3540 and mapped by
