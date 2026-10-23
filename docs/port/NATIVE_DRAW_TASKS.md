@@ -91,6 +91,8 @@ section a draw is in, for the pictures between).
 
 - `--native-draw off|on|KINDS` (`port_options.native_draw`, `port_native_draw(kind)`): `on` is
   `PORT_ND_ACCEPTED`, the kinds that have passed their checks (items); others by name (`map` is in work).
+  Since P3-1 the sky (the map record with flag bit 31) is its own kind, `sky` (`game/native_draw/nd_sky.c`):
+  `map` is every other map record, so what `map` meant before is now `map,sky`.
   The overlay's Debug page, "Native draw (experimental)", has a checkbox per ported kind and the compare
   mode, live. Never saved. Needs the native GS: off with `--renderer gs`.
 - `--native-draw-compare native|ps2`: the adapter queues the PS2 path's packets too, after the native
@@ -479,6 +481,63 @@ so it can be switched, and check it on all 8 sky maps (000, 002, 004, 013, 021, 
 and 240 (walking, turning, strafing, looking up and down, from made-up saves). Compare
 `FrameInterp_MarkSky`'s sky with the native one (the 1-2 level speckle P1-3 measured). Accepted: the game's
 frames 0 pixels; pictures between only that speckle, explained.
+
+*Done (nd2/p3-1).* `game/native_draw/nd_sky.c`: `NativeDraw_MapRecord` is the call site of `Map_DrawRecords` and
+`Map_DrawLateRecords` now (behind `port_native_draw(PORT_ND_MAP | PORT_ND_SKY)`; `map.patch` changed in those two
+lines and the prototype only); it sends the sky record (flags < 0) by `sky` and the others by `map`, each drawn
+as before by `NativeDraw_Posed` (identity unchanged: `RD_KIND_MAP_RECORD` and the record, so pictures between
+pair it as before). `--sky ps2` is that; `--sky modern` would go in `sky_record`. The overlay has a "Sky"
+checkbox. No `--sky` option yet (it has one value until P3-2).
+
+Checked on the 8 sky maps, 1x headless, `--fast`, from made-up quick saves at places where the sky shows (found by
+a scan of 12 places x 2 headings x 2 pitches a map: the sky's pixels counted by hiding it with a local-only switch;
+places in the task's report). 8 still views a map: 4 headings at the place with most sky, 2 looking up (pitch
+0.6) at the place with most sky overhead, 1 looking down, 1 more; 8 moving views at 240 (walk, turn, strafe,
+look up with the right stick, look down, walk and turn), 4 vblanks each with their pictures between:
+
+| | sky | map,sky,items | map,items (sky on the PS2 path) |
+|---|---|---|---|
+| still, compare 1x | 0 on all 8 maps | 0 but 013 and 027 (below) | the same as map,sky,items |
+| still, compare 4x | 0 on all 8 maps | | |
+| still, onoff 1x | 0 on all 8 maps | the same as compare | |
+| 240 compare and onoff 1x, the game's frames (even vblanks) | 0 on all 8 maps | 0 | |
+| 240 compare 4x, the game's frames | 0 on all 8 maps | | |
+| 240, pictures between | speckle, 1-2 levels, but the rim band (below) | the same | |
+
+- **The speckle** is P1-3's: worst 2 everywhere, in the sky while moving; at 1x a median of 8 pixels a
+  differing picture, up to 3,765 (027, turning with the dome filling the view), at 4x up to 64,577 (the same). The PS2 path moves its sky in a picture between by one move for the whole dome,
+  the median of its strips' mean moves found from their vertices' screen places (`objects_sky_move`); native
+  moves the record by its own model's move (`ND_C_OBJ`, exact). The two moves differ by the error of the
+  median's estimate, a fraction of a unit at 4,000-24,000 away, which moves an edge pixel's sample by a texel.
+  With `KF4_INTERP_STILL=1` (the frame's camera) it drops to 90 pixels in 96 pictures, worst 1.
+- **The rim band (open, not the sky kind's: P1-3's moving path).** While the camera pitches (the right stick up
+  or down, view "look up") with the dome's lower edge on screen, native pictures between draw the bottom 3-10
+  rows of the sky (where it fades into the fog colour) near black with scattered texels of wild colour, worst
+  240, across the whole width (002: about 1,000-5,000 pixels a picture at 1x, 25,000-31,000 at 4x; 099 the
+  same; the game's frames 0). It is the same with `map,sky,items` (so it was there when `map` held the sky),
+  it is gone with `KF4_INTERP_STILL=1`, and it stays without `ND_C_OBJ` (a local test): the camera's move of
+  those rim triangles in `nd_000.vert` differs from `gs_replay.comp`'s. Turning, walking and strafing do not
+  show it. Needs the moving path's owner; until then `sky` should not go into `PORT_ND_ACCEPTED`.
+- **Not the sky's:** with `map` native, 013 (looking down at a ledge's floor near the camera, up to 22,512
+  pixels, worst 3) and 027 (wave-UV water, P1-2's noise, worst 3) differ in the game's frames, identically in
+  compare and onoff and with the sky on either path. 013's was not in P1-2's views (new; for P1's follow-ups).
+
+**What `--sky modern` would show (for the owner, before P3-2).** Simulated with a local-only switch: the sky
+drawn natively with Z not written (and on 002, 013 and 027, where it is the map's first record, Z ALWAYS: the
+same as a sky drawn first at the far plane), against the PS2's sky, `--draw-distance 1` and `max`, 64 views a map
+(14-16 places x 4 headings, or 8 places x 4 headings x 2 pitches):
+- 002: a hill's top behind the walls rises above where the dome cut it (about 300 pixels at -4683,-2696 heading
+  1.57; 170 at 2850,-315 heading -1.57).
+- 027: the far hill's ridge is taller (1,200 pixels, a strip along its top, at -12155,3128 heading 1.57).
+- 013: a sliver of a far tree trunk between the trees (50-70 pixels); 004: nothing from 14 places (the 27 corners
+  P0-3 counted lie behind the canyon walls from where one stands).
+- So the geometry behind the dome shows only as hilltops and trunks a little taller, at the draw distances tried.
+- Two more things a modern sky must keep: on 013 the frame is not cleared under the sky (where it is not drawn the
+  last frame's pixels stay: the dome must still cover everything it covers now), and on 004 the sky is drawn after
+  the trees, whose leaves' soft edges blend onto it (drawn first, they still would; left out, they blend onto the
+  clear colour).
+The pictures (side by side: PS2, modern, the difference in magenta) are outside the repository, with the task's
+report.
 
 **P3-2 `--sky modern`** (owns its shader path; the owner decides A1 first). Centred on the eye, depth at
 the far plane, drawn first. P0-3 found geometry behind the dome from the eye on 002, 004, 013 and 027: list

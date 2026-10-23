@@ -1121,7 +1121,8 @@ void debug_page() {
             const char *what;
         } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."},
                      {"Map records (in work)", PORT_ND_MAP,
-                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords): in work, not yet checked."}};
+                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords) but the sky: in work, not yet checked."},
+                     {"Sky", PORT_ND_SKY, "The sky's dome (the map record with flag bit 31), at the feet with its real Z (--sky ps2)."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
         for (const auto &k : kinds) {
             bool on = (kinds_on & k.bits) != 0;
