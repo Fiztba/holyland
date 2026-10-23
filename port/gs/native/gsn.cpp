@@ -188,6 +188,7 @@ enum : uint32_t {
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
     M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000, M_ZFINE = 0x40000,
+    M_SMOOTH_2D = 0x80000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -407,6 +408,7 @@ volatile uint32_t wanted_samples = 1;
 // --native-cutout-aa (gsn_set_cutout_aa): with MSAA, the cut-outs (flush_batch) shaded at every
 // sample; sample_shading, whether the GPU can (sampleRateShading)
 volatile int cutout_aa_mode = GSN_CUTOUT_AA_OFF;
+volatile int smooth_2d_mode = GSN_2D_PS2; // --native-2d (gsn_set_2d)
 bool sample_shading = false;
 // --native-layer-z (gsn_set_layer_z): Z as the GS has it (GSN_LAYER_Z_PS2), or kept fine and tested
 // with a tolerance for the layers (GSN_LAYER_Z_TOLERANT: flush_batch, "Z and layers")
@@ -1472,8 +1474,9 @@ void msaa_forget(Target &t) {
 // picture, and showed it as bright lines where their texture repeats; the frame's passes over the
 // whole picture left its first column and row: a line down the screen's left edge.) A triangle with a slant, or with its colour or Z not
 // the same at its corners, is left as it is: the 3D. Returns whether it moved any.
-bool flat_2d(std::vector<Vtx> &verts) {
+bool flat_2d(std::vector<Vtx> &verts, bool *all = nullptr) {
     bool moved = false;
+    size_t count = 0;
     for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
         Vtx *v = &verts[i];
         if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
@@ -1516,6 +1519,10 @@ bool flat_2d(std::vector<Vtx> &verts) {
             v[k].y = float(ny);
         }
         moved = true;
+        count++;
+    }
+    if (all) {
+        *all = moved && count == verts.size() / 3;
     }
     return moved;
 }
@@ -3690,6 +3697,7 @@ void flush_batch() {
     // (unless they read their own target, which is resolved for it); the rest to the image
     bool ms = target_samples > 1 && (depth || (color->ms_newer && !reads_own_target));
     bool perspective = perspective_batch(gs->verts);
+    bool all_flat = false; // (every triangle of the batch the 2D: flat_2d)
     if (ms) {
         msaa_ready(*color);
         if (depth) {
@@ -3701,15 +3709,18 @@ void flush_batch() {
             depth->ms_newer = true;
         }
         // (the 2D, rectangles of one colour and Z, is shaded once a pixel: --native-cutout-aa)
-        if (!perspective && flat_2d(gs->verts)) {
+        if (!perspective && flat_2d(gs->verts, &all_flat)) {
             cutout = false;
         }
     } else {
         Why why(GSN_WHY_MSAA);
         msaa_settle(*color);
         if ((scale_x > 1 || scale_y > 1) && !perspective) {
-            flat_2d(gs->verts);
+            flat_2d(gs->verts, &all_flat);
         }
+    }
+    if (all_flat && tme && !reads_target && smooth_2d_mode) {
+        push.misc |= M_SMOOTH_2D; // (--native-2d smooth: gs_frag.h, sample_level)
     }
 
     // (Z and layers: within a run its other triangles are drawn first, then its layer's, layers_at
@@ -6735,6 +6746,10 @@ extern "C" int gsn_set_aniso(int taps) {
     }
     aniso_log2 = l;
     return 1 << l;
+}
+
+extern "C" void gsn_set_2d(int mode) {
+    smooth_2d_mode = mode;
 }
 
 extern "C" void gsn_set_cutout_aa(int mode) {

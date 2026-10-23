@@ -56,4 +56,5 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_SCALE_X_SHIFT 11u // the target's pixels a GS pixel is across (--native-scale), 3 bits
 #define GSN_M_ANISO_SHIFT 14u   // --native-aniso: log2 of the most taps along a mipmapped texture's footprint, 3 bits (0: off)
 #define GSN_M_HIGH 0x20000u
+#define GSN_M_SMOOTH_2D 0x80000u // --native-2d smooth: the 2D's textures magnified bilinear at a larger scale
 #define GSN_M_ZFINE 0x40000u    // --native-layer-z tolerant: the pixel's Z keeps its fraction (and zbias is added)     // --native-colour high: colours in floats, the target 16-bit (alpha as the GS's)

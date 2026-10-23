@@ -103,6 +103,7 @@ static void open_backend(void *unused) {
             gsn_set_lod(port_options.native_lod);
             port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
             gsn_set_cutout_aa(port_options.native_cutout_aa);
+            gsn_set_2d(port_options.native_2d);
             gsn_set_colour(port_options.native_colour);
             gsn_set_layer_z(port_options.native_layer_z);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
@@ -922,6 +923,15 @@ void port_gs_set_native_lod(int mode) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
         gsn_set_lod(mode);
+    }
+#endif
+}
+
+void port_gs_set_native_2d(int mode) {
+    port_options.native_2d = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_2d(mode);
     }
 #endif
 }

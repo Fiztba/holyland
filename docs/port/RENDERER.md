@@ -99,6 +99,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   r of h x sy is the picture's line 2 r / sy + p, so its rows go to rows 2 r + p sy. Woven a line (sy rows)
   at a time, each band held a line drawn over twice the height, the other field's half a line off: the
   menus' text in stripes of three rows at 3x. `--no-whole-frame` (two moments) keeps the lines.
+- **The 2D at a larger scale** (`--native-2d smooth`, the default): magnified 2D textures read with a
+  cubic at the pixel's own place, moved half a GS pixel on (a filter centres a texel where nearest at the
+  GS pixel's integer point has its left edge: unmoved, the letters sat half a GS pixel right). Read
+  nearest at the integer point, each texel was a block and the letters differed from scale to scale.
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a

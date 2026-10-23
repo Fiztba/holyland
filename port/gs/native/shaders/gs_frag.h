@@ -204,6 +204,32 @@ vec4 sample_level(vec2 tc, int level, bool linear) {
     vec2 at = tc / float(1 << level) * vec2(ts);
     // the GS's texel coordinates have 4 bits of fraction; interpolated in floats, a coordinate that is
     // exactly on one comes out a hair under it, which the bias puts back
+    if (!linear && scaled && level == 0 && (pc.misc & GSN_M_SMOOTH_2D) != 0u &&
+        max(max(abs(tc_dx.x), abs(tc_dx.y)), max(abs(tc_dy.x), abs(tc_dy.y))) <= 1.0 + 1.0 / 64.0) {
+        // --native-2d smooth: the 2D's texture (a font, the HUD, a picture) magnified at a larger scale,
+        // read with a Catmull-Rom cubic (16 texels) at this pixel's own place: the same picture at every
+        // scale, the texels' steps smooth and their edges still sharp. Nearest, the GS's texel k covers
+        // the GS pixel whose integer point (the middle of its pixels of the target) is at k: half a GS
+        // pixel on from where a filter puts its middle, so the place is moved by that, the letters
+        // where the PS2 has them. The taps stay inside the texture (no wrap to its far side).
+        vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
+        vec2 scale = vec2(float(max(field(pc.misc, GSN_M_SCALE_X_SHIFT, 3u), 1u)), float(max(field(pc.misc, GSN_M_SCALE_SHIFT, 3u), 1u)));
+        vec2 q = clamp(tc + 0.5 * (tc_dx * scale.x + tc_dy * scale.y), vec2(0.5), size - 0.5) - 0.5;
+        vec2 i = floor(q);
+        vec2 f = q - i;
+        vec4 wx = vec4(f.x * (-0.5 + f.x * (1.0 - 0.5 * f.x)), 1.0 + f.x * f.x * (-2.5 + 1.5 * f.x),
+                       f.x * (0.5 + f.x * (2.0 - 1.5 * f.x)), f.x * f.x * (-0.5 + 0.5 * f.x));
+        vec4 wy = vec4(f.y * (-0.5 + f.y * (1.0 - 0.5 * f.y)), 1.0 + f.y * f.y * (-2.5 + 1.5 * f.y),
+                       f.y * (0.5 + f.y * (2.0 - 1.5 * f.y)), f.y * f.y * (-0.5 + 0.5 * f.y));
+        vec4 sum = vec4(0.0);
+        ivec2 last = ivec2(size) - 1;
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                sum += texel_f(clamp(ivec2(i) + ivec2(x - 1, y - 1), ivec2(0), last), 0) * (wx[x] * wy[y]);
+            }
+        }
+        return high ? clamp(sum, 0.0, 255.0) : clamp(floor(sum + 0.5), 0.0, 255.0);
+    }
     ivec2 p = ivec2(floor(at * 16.0 + 1.0 / 64.0));
     if (!linear && scaled) {
         // Read nearest at a larger scale, the texel is the one the PS2 reads at the GS pixel's integer

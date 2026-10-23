@@ -94,6 +94,12 @@ int gsn_set_msaa(int samples);
 #define GSN_CUTOUT_AA_OFF 0
 #define GSN_CUTOUT_AA_SSAA 1
 void gsn_set_cutout_aa(int mode);
+/* --native-2d: at a target scale above 1, the 2D (batches flat_2d takes whole) textured from VRAM and
+   read nearest is read bilinear at each pixel's own place where its texture is magnified (smooth), or
+   nearest at the GS pixel's integer point as at 1x (ps2). Nothing at 1x. */
+#define GSN_2D_PS2 0
+#define GSN_2D_SMOOTH 1
+void gsn_set_2d(int mode);
 /* --native-colour: how precisely colours are kept, from the next vblank. GSN_COLOUR_EXACT (the default)
    is the GS's: 8 bits a channel, every step of its arithmetic rounded as the GS rounds it, the PS2's
    picture. GSN_COLOUR_HIGH keeps the 32-bit targets at 16 bits a channel and the colour arithmetic in
