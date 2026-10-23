@@ -108,7 +108,11 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   that point for the GS pixel's first pixels. So 2D (sprites from 0, or ending at 127.5) loses or gains
   a column, and nearest reads with coordinates on texel edges take the texel before: `flat_2d` and
   `sample_level`'s scaled path put both back on the GS's integer points. `kf4-gsreplay --scale X[,Y]`
-  draws a capture at a scale (`--draws` then writes the targets at their own pixels).
+  draws a capture at a scale (`--draws` then writes the targets at their own pixels). `flat_2d` knows
+  the 2D by its triangles (one Z and colour, corners on their bounding box) and leaves out batches
+  textured in perspective (ST with a Q not 1: `perspective_batch`): a far billboard of program 0x700
+  (a brazier's glow) is such a triangle pair once its Z rounds the same at its corners, and its halves,
+  each moved out to whole GS pixels, overlapped along the diagonal: a bright line across the glow.
 - **Granite:** `update_image` with row length 0 means the image's width; there is no SPIRV-Cross,
   so resource layouts are written by hand; its render pass cache ignores the sample count (MSAA
   passes name their subpass).
