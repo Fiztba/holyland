@@ -57,15 +57,15 @@ const char *const sa_why_names[SA_WHY_COUNT] = {"other target", "targets", "shad
 enum {
     SA_TEX_TABLE,     // decoded from the uploads that own it
     SA_TEX_TARGET,    // a render target's (the GS's)
-    SA_TEX_DRAWN,     // a page of it drawn into or copied over since its upload (the GS's VRAM)
-    SA_TEX_UNOWNED,   // a block of it no upload owns (never uploaded since the start, or a save state's)
-    SA_TEX_MIXED,     // a block of it owned by more uploads than the table keeps
+    SA_TEX_DRAWN,     // a part of it drawn into or copied over since its upload (the GS's VRAM)
+    SA_TEX_UNOWNED,   // a part of it no upload wrote (never uploaded since the start, or a save state's)
     SA_TEX_EVICTED,   // an upload of it no longer kept
     SA_TEX_COUNT
 };
 const char *const sa_tex_names[SA_TEX_COUNT] = {"from the table", "a render target", "drawn or copied over",
-                                               "not uploaded", "too many owners", "upload let go"};
+                                               "not uploaded", "upload let go"};
 
+// (every field a count: --stats takes them per map as differences, sa_vblank)
 struct SaStats {
     uint64_t batches, draws, triangles, shader_blends, acquires, releases, frames_touched;
     uint64_t depth_clears, alpha_sets, shadow_batches; // (the scene's ops, and the shadows by the stencil)
@@ -76,6 +76,13 @@ struct SaStats {
     uint64_t declined[SA_WHY_COUNT];
     uint64_t textures[SA_TEX_COUNT];
     uint64_t decodes, decode_hits, uploads, upload_bytes, chunks_new, replayed_uploads;
+    // the CLUT (TEX0's CLD loads, sa_clut_load; a batch's colours, sa_clut_colours)
+    uint64_t clut_loads[SA_TEX_COUNT], clut_decodes, clut_table, clut_gs;
+    // KF4_SA_VERIFY=1: the table's texture and CLUT against the GS's VRAM and CLUT buffer, for every batch
+    uint64_t verify_same, verify_differ, verify_clut_same, verify_clut_differ;
+    uint64_t verify_not[SA_TEX_COUNT];
+    // texture packs (KF4_SA_PACK, KF4_SA_PACK_DUMP)
+    uint64_t packed_chunks, dumped_chunks;
 };
 SaStats sa_stats;
 
@@ -84,21 +91,97 @@ SaStats sa_stats;
 struct SaChunk {
     uint64_t bitbltbuf, trxpos, trxreg;
     std::vector<uint8_t> bytes;
+    std::shared_ptr<const std::vector<uint8_t>> pack; // (KF4_SA_PACK: the bytes a texture pack gives it instead)
     uint64_t seq;  // the table's count when it was last uploaded
     uint64_t used; // the frame it was last read or uploaded in
     uint64_t hash; // (upload_hash: what it is found again by)
+    uint64_t key;  // (sa_pack_key: what a texture pack knows it by)
+    const std::vector<uint8_t> &data() const {
+        return pack ? *pack : bytes;
+    }
 };
 const uint32_t SA_BLOCKS = GSN_VRAM_BYTES / 256;
-const uint32_t SA_OWNERS = 4;
-// A block: the uploads that wrote it since one wrote all of it (in order, oldest first; n 0: none; past
-// SA_OWNERS: SA_MANY), and the table's count at the last of them. A page drawn into or copied over after
-// that (page_drawn later than seq) is not theirs any more.
-const uint8_t SA_MANY = 0xFF;
-struct SaBlock {
-    uint64_t seq;
-    uint8_t n;
-    uint32_t id[SA_OWNERS];
+// Which nibbles of a block's 64 words: bit w * 8 + n is nibble n (bits 4n..4n+3) of word w. The formats
+// that own part of each word (PSMCT24 and Z24 the low 24 bits, PSMT8H the top byte, PSMT4HL and HH a
+// nibble of it), the 16-bit ones (a halfword), PSMT8 and PSMT4 own their pixels' nibbles only, so an
+// upload of a CLUT's 16 entries or of the font's 4HL sheet is the owner of those and no more.
+struct SaCover {
+    uint64_t q[8];
+    bool any() const {
+        return (q[0] | q[1] | q[2] | q[3] | q[4] | q[5] | q[6] | q[7]) != 0;
+    }
+    uint64_t folded() const { // (the nibbles of any word: which parts it has)
+        uint64_t f = q[0] | q[1] | q[2] | q[3] | q[4] | q[5] | q[6] | q[7];
+        f |= f >> 32;
+        f |= f >> 16;
+        f |= f >> 8;
+        return f & 0xFF;
+    }
 };
+inline SaCover sa_and(const SaCover &a, const SaCover &b) {
+    SaCover c;
+    for (int i = 0; i < 8; i++) {
+        c.q[i] = a.q[i] & b.q[i];
+    }
+    return c;
+}
+inline bool sa_same(const SaCover &a, const SaCover &b) {
+    return memcmp(a.q, b.q, sizeof(a.q)) == 0;
+}
+const uint8_t SA_LO = 0x3F, SA_HI = 0xC0; // (the nibbles of the low 24 bits, of the top byte)
+// The nibbles of each word a format's pixels own
+uint8_t sa_parts(uint32_t psm) {
+    switch (psm) {
+    case GSN_PSMCT24:
+    case GSN_PSMZ24:
+        return SA_LO;
+    case GSN_PSMT8H:
+        return SA_HI;
+    case GSN_PSMT4HL:
+        return 0x40;
+    case GSN_PSMT4HH:
+        return 0x80;
+    default:
+        return 0xFF;
+    }
+}
+// A block's uploads: each with the nibbles of it that are still its own (none shared: a later upload takes
+// its nibbles from those before), in the order they came. An owner of id 0 holds no upload's bytes.
+struct SaOwner {
+    uint32_t id;
+    uint64_t seq; // the table's count when it was written
+    SaCover cover;
+};
+struct SaBlock {
+    std::vector<SaOwner> owners;
+};
+
+// The table's state, kept apart from the rest of the scene's (struct Sa)
+struct SaTable {
+    std::vector<SaBlock> blocks;
+    // the count when a page was last drawn into or copied over, in its low 24 bits and in its top byte
+    uint64_t page_drawn_lo[512] = {}, page_drawn_hi[512] = {};
+    size_t owners_most = 0;
+    // the CLUT buffer as the table has it (sa_clut_load): TEX0's CLD loads mirrored, from the uploads
+    uint16_t clut[512] = {};
+    uint32_t clut_cbp[2] = {UINT32_MAX, UINT32_MAX};
+    uint64_t clut_gs[8] = {};     // (bit k: halfword k is not the table's: loaded from the GS's VRAM, or not yet)
+    uint64_t clut_packed[8] = {}; // (bit k: halfword k came from a texture pack's chunk)
+    std::unordered_map<uint64_t, std::array<uint32_t, 256>> clut_cache; // (loads by what they came from)
+    // texture packs: KF4_SA_PACK=DIR (chunks' bytes replaced by DIR/<key>.bin), KF4_SA_PACK_DUMP=DIR
+    std::string pack_dir, dump_dir;
+    std::unordered_map<uint64_t, std::shared_ptr<const std::vector<uint8_t>>> pack_cache;
+    std::unordered_map<uint64_t, bool> dumped;
+    int verify = 0; // (KF4_SA_VERIFY=1; 2 logs what differs, 3 also what is not the table's, 4 each TEX0 once)
+    std::unordered_map<uint64_t, bool> verified_seen;
+    // --stats per map (gsn_set_scene_map: the map the game is in, at the vblank)
+    std::atomic<int> map{-1};
+    int map_now = -1;
+    SaStats at_vblank = {};
+    std::vector<std::pair<int, SaStats>> per_map;
+    std::mutex per_map_lock; // (--stats reads them on the main thread while the GS's may still run)
+    bool env_read = false;
+} sat;
 
 struct Sa {
     bool on = false;
@@ -113,9 +196,8 @@ struct Sa {
                      (1u << RD_KIND_PICKED) | (1u << RD_KIND_WATER);
     int log = 0;                      // (KF4_SA_LOG=1: each batch, why one is declined and what ends a turn; 2: only the turns)
     float pixel[2] = {-1.0f, -1.0f};  // (KF4_SA_PIXEL=X,Y: the batches over that GS pixel)
+    std::vector<std::shared_ptr<const RdMeshData>> fetched; // (sa_draw_begin's)
     // the table
-    std::vector<SaBlock> blocks;
-    uint64_t page_drawn[512] = {};
     uint64_t seq = 0, frame = 0;
     std::unordered_map<uint32_t, SaChunk> chunks;
     std::unordered_map<uint64_t, uint32_t> chunk_by_hash;
@@ -209,8 +291,8 @@ void sat_sync();
 void sat_reset();
 void sat_print_stats();
 
-// The blocks of a rectangle of a buffer (bp, bw, psm), x0..x0+w by y0..y0+h, each with whether the
-// rectangle covers all of it
+// The blocks of a rectangle of a buffer (bp, bw, psm), x0..x0+w by y0..y0+h, each with the nibbles of it
+// the rectangle's pixels are
 uint32_t sa_block_w(uint32_t psm) {
     return psm == GSN_PSMT4 ? 32 : psm == GSN_PSMT8 || psm_is_16(psm) ? 16 : 8;
 }
@@ -223,21 +305,49 @@ template <class F> void sa_blocks_of(uint32_t bp, uint32_t bw, uint32_t psm, uin
         return;
     }
     uint32_t bx = sa_block_w(psm), by = sa_block_h(psm);
-    // (formats that own part of each word, and 24-bit ones, never cover a block)
-    bool whole = psm != GSN_PSMCT24 && psm != GSN_PSMZ24 && psm != GSN_PSMT8H && psm != GSN_PSMT4HL && psm != GSN_PSMT4HH;
+    uint8_t parts = sa_parts(psm);
+    SaCover whole;
+    for (uint64_t &q : whole.q) {
+        q = uint64_t(parts) * 0x0101010101010101ull;
+    }
     uint32_t xa = x0 / bx * bx, ya = y0 / by * by;
     for (uint32_t y = ya; y < y0 + h; y += by) {
         for (uint32_t x = xa; x < x0 + w; x += bx) {
             uint32_t block = (gsn_vram_offset(psm, bp, bw, x & 2047, y & 2047, nullptr) / 256) % SA_BLOCKS;
-            bool all = whole && x >= x0 && x + bx <= x0 + w && y >= y0 && y + by <= y0 + h;
-            f(block, all);
+            if (x >= x0 && x + bx <= x0 + w && y >= y0 && y + by <= y0 + h) {
+                f(block, whole);
+                continue;
+            }
+            // a block the rectangle has part of: its pixels' nibbles, one by one
+            SaCover c = {};
+            for (uint32_t py = std::max(y, y0); py < std::min(y + by, y0 + h); py++) {
+                for (uint32_t px = std::max(x, x0); px < std::min(x + bx, x0 + w); px++) {
+                    int nibble = -1;
+                    uint32_t at = gsn_vram_offset(psm, bp, bw, px & 2047, py & 2047, &nibble) % 256;
+                    uint32_t word = at / 4;
+                    uint8_t m = psm_is_16(psm)       ? ((at & 2) ? 0xF0 : 0x0F)
+                                : psm == GSN_PSMT8   ? uint8_t(3u << ((at & 3) * 2))
+                                : psm == GSN_PSMT4   ? uint8_t(1u << ((at & 3) * 2 + (nibble > 0 ? 1 : 0)))
+                                                     : parts;
+                    c.q[word / 8] |= uint64_t(m) << (word % 8 * 8);
+                }
+            }
+            f(block, c);
         }
     }
 }
 
+void sa_table_env();
+
 void sa_table_reset() {
-    sa.blocks.assign(SA_BLOCKS, SaBlock{0, 0, {0, 0, 0, 0}});
-    memset(sa.page_drawn, 0, sizeof(sa.page_drawn));
+    sa_table_env();
+    sat.blocks.assign(SA_BLOCKS, SaBlock{});
+    memset(sat.page_drawn_lo, 0, sizeof(sat.page_drawn_lo));
+    memset(sat.page_drawn_hi, 0, sizeof(sat.page_drawn_hi));
+    memset(sat.clut, 0, sizeof(sat.clut));
+    sat.clut_cbp[0] = sat.clut_cbp[1] = UINT32_MAX;
+    memset(sat.clut_gs, 0xFF, sizeof(sat.clut_gs));
+    memset(sat.clut_packed, 0, sizeof(sat.clut_packed));
     sa.uploads_now.clear();
     sa.uploads_frame.clear();
     sa.recording = -1;
@@ -255,7 +365,46 @@ void sa_copy_written(uint32_t lo, uint32_t count) {
     }
 }
 
-// (mark_dirty) Rows y0..y1-1 of a target drawn into: its pages are not their uploads' any more
+// The table's switches, read once (when modern is first turned on)
+void sa_table_env() {
+    if (sat.env_read) {
+        return;
+    }
+    sat.env_read = true;
+    const char *v = getenv("KF4_SA_VERIFY");
+    sat.verify = v ? atoi(v) : 0;
+    if ((v = getenv("KF4_SA_PACK")) && *v) {
+        sat.pack_dir = v;
+        fprintf(stderr, "[standalone] texture pack from %s\n", v);
+    }
+    if ((v = getenv("KF4_SA_PACK_DUMP")) && *v) {
+        sat.dump_dir = v;
+#ifdef _WIN32
+        _mkdir(v);
+#else
+        mkdir(v, 0755);
+#endif
+        fprintf(stderr, "[standalone] the uploads of the scene's textures written to %s\n", v);
+    }
+}
+
+// Pages lo..lo+count-1 drawn into or copied over, in the nibbles a format of psm has of each word
+void sa_pages_drawn(uint32_t lo, uint32_t count, uint32_t psm) {
+    uint8_t parts = sa_parts(psm);
+    sa.seq++;
+    for (uint32_t k = 0; k < count && k < vram_pages; k++) {
+        uint32_t page = (lo + k) % vram_pages;
+        if (parts & SA_LO) {
+            sat.page_drawn_lo[page] = sa.seq;
+        }
+        if (parts & SA_HI) {
+            sat.page_drawn_hi[page] = sa.seq;
+        }
+    }
+}
+
+// (mark_dirty) Rows y0..y1-1 of a target drawn into: its pages are not their uploads' any more (a 24-bit
+// target's only in the low 24 bits: PSMT8H and the 4-bit high formats in the top byte stay theirs)
 void sa_drawn(const Target &t, uint32_t y0, uint32_t y1) {
     if (!sa.on || y1 <= y0) {
         return;
@@ -264,10 +413,8 @@ void sa_drawn(const Target &t, uint32_t y0, uint32_t y1) {
     buffer_pages(t.bp, t.bw, t.psm, t.width, std::min(y1, t.height), &lo, &count);
     uint32_t first_row = y0 / page_height(t.psm);
     uint32_t across = std::max(std::max(t.bw, 1u) * 64 / page_width(t.psm), 1u);
-    sa.seq++;
-    for (uint32_t k = std::min(first_row * across, count); k < count; k++) {
-        sa.page_drawn[(lo + k) % vram_pages] = sa.seq;
-    }
+    uint32_t first = std::min(first_row * across, count);
+    sa_pages_drawn(lo + first, count - first, t.psm);
     sa_copy_written(lo, count);
     sat_drawn(t, y0, y1); // (T3: a named target's pages, or none's)
 }
@@ -284,10 +431,7 @@ void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
         sa_copy_written(lo, count); // (T2: the scene's copy of its frame there let go)
         return;                     // (T3: a copy of the table's uploads is the table's)
     }
-    sa.seq++;
-    for (uint32_t k = 0; k < count && k < vram_pages; k++) {
-        sa.page_drawn[(lo + k) % vram_pages] = sa.seq;
-    }
+    sa_pages_drawn(lo, count, bits(bitbltbuf, 56, 6));
     sa_copy_written(lo, count);
 }
 
@@ -297,37 +441,91 @@ SaChunk *sa_chunk(uint32_t id) {
     return it == sa.chunks.end() ? nullptr : &it->second;
 }
 
-// The upload's blocks are its own (all of a block it covers whole; added to the others of one it
-// covers in part)
+// The upload's nibbles are its own: taken from the uploads before it, which keep the rest
 void sa_own(uint32_t id, SaChunk &c) {
     sa.seq++;
     c.seq = sa.seq;
     uint64_t bitbltbuf = c.bitbltbuf;
     sa_blocks_of(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), bits(bitbltbuf, 56, 6), bits(c.trxpos, 32, 11),
-                 bits(c.trxpos, 48, 11), bits(c.trxreg, 0, 12), bits(c.trxreg, 32, 12), [&](uint32_t block, bool all) {
-                     SaBlock &b = sa.blocks[block];
-                     uint32_t page = block / 32;
-                     bool stale = sa.page_drawn[page] > b.seq; // (drawn over since: what it had is gone)
-                     if (all || stale || b.n == 0) {
-                         b.n = 1;
-                         b.id[0] = id;
-                     } else if (b.n != SA_MANY) {
-                         // (the same upload again goes last)
-                         uint32_t n = 0;
-                         for (uint32_t i = 0; i < b.n; i++) {
-                             if (b.id[i] != id) {
-                                 b.id[n++] = b.id[i];
-                             }
+                 bits(c.trxpos, 48, 11), bits(c.trxreg, 0, 12), bits(c.trxreg, 32, 12),
+                 [&](uint32_t block, const SaCover &cover) {
+                     std::vector<SaOwner> &owners = sat.blocks[block].owners;
+                     size_t n = 0;
+                     for (size_t i = 0; i < owners.size(); i++) {
+                         SaOwner &o = owners[i];
+                         bool left = false;
+                         for (int k = 0; k < 8; k++) {
+                             o.cover.q[k] &= ~cover.q[k];
+                             left |= o.cover.q[k] != 0;
                          }
-                         if (n < SA_OWNERS) {
-                             b.id[n++] = id;
-                             b.n = uint8_t(n);
-                         } else {
-                             b.n = SA_MANY;
+                         if (left) {
+                             owners[n++] = o;
                          }
                      }
-                     b.seq = sa.seq;
+                     owners.resize(n);
+                     owners.push_back({id, sa.seq, cover});
+                     sat.owners_most = std::max(sat.owners_most, owners.size());
                  });
+}
+
+// A texture pack's name for a chunk: its format, its rectangle's size and its bytes (not where it went)
+uint64_t sa_pack_key(uint64_t bitbltbuf, uint64_t trxreg, const uint8_t *data, size_t size) {
+    PendingUpload p;
+    p.bitbltbuf = bits(bitbltbuf, 56, 6);
+    p.trxpos = 0;
+    p.trxreg = trxreg & 0x00000FFF00000FFFull;
+    return upload_hash(p, data, size);
+}
+
+// (KF4_SA_PACK) The pack's bytes for a chunk, if the pack has them: DIR/<key>.bin, as long as the chunk
+std::shared_ptr<const std::vector<uint8_t>> sa_pack_bytes(uint64_t key, size_t size) {
+    if (sat.pack_dir.empty()) {
+        return nullptr;
+    }
+    auto found = sat.pack_cache.find(key);
+    if (found == sat.pack_cache.end()) {
+        std::shared_ptr<std::vector<uint8_t>> bytes;
+        char path[1200];
+        snprintf(path, sizeof(path), "%s/%016llx.bin", sat.pack_dir.c_str(), (unsigned long long)key);
+        if (FILE *f = fopen(path, "rb")) {
+            bytes = std::make_shared<std::vector<uint8_t>>();
+            uint8_t buf[65536];
+            size_t got;
+            while ((got = fread(buf, 1, sizeof(buf), f)) > 0) {
+                bytes->insert(bytes->end(), buf, buf + got);
+            }
+            fclose(f);
+            fprintf(stderr, "[standalone] texture pack: %s (%zu bytes)\n", path, bytes->size());
+        }
+        found = sat.pack_cache.emplace(key, bytes).first;
+    }
+    if (found->second && found->second->size() != size) {
+        return nullptr; // (not the chunk's size: not used)
+    }
+    return found->second;
+}
+
+// (KF4_SA_PACK_DUMP) A chunk a scene texture or CLUT came from, written once: DIR/<key>.bin (its bytes as
+// the upload sent them) and DIR/<key>.txt (its format and size; tools/texture_pack.py makes pictures of them)
+void sa_pack_dump(const SaChunk &c) {
+    if (sat.dump_dir.empty() || sat.dumped.count(c.key)) {
+        return;
+    }
+    sat.dumped[c.key] = true;
+    char path[1200];
+    snprintf(path, sizeof(path), "%s/%016llx.bin", sat.dump_dir.c_str(), (unsigned long long)c.key);
+    if (FILE *f = fopen(path, "wb")) {
+        fwrite(c.bytes.data(), 1, c.bytes.size(), f);
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%s/%016llx.txt", sat.dump_dir.c_str(), (unsigned long long)c.key);
+    if (FILE *f = fopen(path, "w")) {
+        fprintf(f, "psm=0x%02x w=%u h=%u bp=0x%x bw=%u x=%u y=%u map=%d\n", bits(c.bitbltbuf, 56, 6), bits(c.trxreg, 0, 12),
+                bits(c.trxreg, 32, 12), bits(c.bitbltbuf, 32, 14), bits(c.bitbltbuf, 48, 6), bits(c.trxpos, 32, 11),
+                bits(c.trxpos, 48, 11), sat.map_now);
+        fclose(f);
+    }
+    sa_stats.dumped_chunks++;
 }
 
 // (complete_upload, upload_done) An upload whole: its bytes kept (once: found again by their hash, an
@@ -370,6 +568,11 @@ void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uin
         c.bytes.assign(data, data + size);
         c.hash = hash;
         c.used = sa.frame;
+        if (!sat.pack_dir.empty() || !sat.dump_dir.empty()) {
+            c.key = sa_pack_key(bitbltbuf, trxreg, data, size);
+            c.pack = sa_pack_bytes(c.key, size);
+            sa_stats.packed_chunks += c.pack ? 1 : 0;
+        }
         sa.chunk_by_hash[hash] = id;
         sa.chunk_order.push_back(id);
         sa.chunk_bytes += size;
@@ -431,6 +634,32 @@ void sa_upload_begins(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool
     }
 }
 uint64_t sa_vblanks = 0;
+
+// --stats per map: what the counts grew by since the last vblank goes to the map the game was in (into
+// per_map; or, for --stats at the end, into a copy of it, the GS's thread perhaps still going)
+void sa_stats_per_map(std::vector<std::pair<int, SaStats>> &per_map, SaStats &last) {
+    const uint64_t *now = reinterpret_cast<const uint64_t *>(&sa_stats);
+    uint64_t *was = reinterpret_cast<uint64_t *>(&last);
+    int map = sat.map_now;
+    auto slot = std::find_if(per_map.begin(), per_map.end(), [map](const std::pair<int, SaStats> &m) { return m.first == map; });
+    if (slot == per_map.end()) {
+        per_map.push_back({map, SaStats{}});
+        slot = per_map.end() - 1;
+    }
+    uint64_t *into = reinterpret_cast<uint64_t *>(&slot->second);
+    for (size_t i = 0; i < sizeof(SaStats) / sizeof(uint64_t); i++) {
+        uint64_t n = now[i];
+        into[i] += n - was[i];
+        was[i] = n;
+    }
+}
+static_assert(sizeof(SaStats) % sizeof(uint64_t) == 0, "SaStats: counts only");
+
+// (gsn_set_scene_map, the game's thread) The map the game is in, taken at the next vblank
+void sa_set_map(int map) {
+    sat.map.store(map, std::memory_order_relaxed);
+}
+
 void sa_vblank(bool extra) {
     if (!sa.on) {
         return;
@@ -438,6 +667,11 @@ void sa_vblank(bool extra) {
     if (!extra) {
         sa.frame++;
         sa_vblanks++; // (the composite's: gsn_composite.inc)
+        {
+            std::lock_guard<std::mutex> hold(sat.per_map_lock);
+            sa_stats_per_map(sat.per_map, sat.at_vblank);
+            sat.map_now = sat.map.load(std::memory_order_relaxed);
+        }
         if (!sa.uploads_now.empty()) {
             sa.uploads_frame.swap(sa.uploads_now);
             sa.uploads_now.clear();
@@ -461,33 +695,46 @@ void sa_upload_replayed(uint32_t k) {
         buffer_pages(bits(r.bitbltbuf, 32, 14), bits(r.bitbltbuf, 48, 6), bits(r.bitbltbuf, 56, 6),
                      bits(r.trxpos, 32, 11) + bits(r.trxreg, 0, 12), bits(r.trxpos, 48, 11) + bits(r.trxreg, 32, 12), &lo,
                      &count);
-        sa.seq++;
-        for (uint32_t i = 0; i < count && i < vram_pages; i++) {
-            sa.page_drawn[(lo + i) % vram_pages] = sa.seq;
-        }
+        sa_pages_drawn(lo, count, GSN_PSMCT32);
     }
 }
 
-// The uploads a buffer's rectangle comes from, oldest first, or why not all of it does (SA_TEX_*)
-int sa_owners(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, std::vector<uint32_t> &ids) {
+// The uploads a buffer's rectangle comes from, or why not all of it does (SA_TEX_*): every nibble of it
+// an upload's, and that upload's page not drawn into or copied over since in that nibble
+int sa_owners(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
+              std::vector<uint32_t> &ids) {
+    if (!gsn_psm_valid(psm) || w == 0 || h == 0) {
+        return SA_TEX_UNOWNED; // (no format the GS has: what VRAM gives, the GS's)
+    }
     int why = SA_TEX_TABLE;
-    sa_blocks_of(bp, bw, psm, 0, 0, w, h, [&](uint32_t block, bool) {
+    sa_blocks_of(bp, bw, psm, x0, y0, w, h, [&](uint32_t block, const SaCover &need) {
         if (why != SA_TEX_TABLE) {
             return;
         }
-        const SaBlock &b = sa.blocks[block];
-        if (b.n == 0) {
-            why = SA_TEX_UNOWNED;
-        } else if (b.n == SA_MANY) {
-            why = SA_TEX_MIXED;
-        } else if (sa.page_drawn[block / 32] > b.seq) {
-            why = SA_TEX_DRAWN;
-        } else {
-            for (uint32_t i = 0; i < b.n; i++) {
-                if (std::find(ids.begin(), ids.end(), b.id[i]) == ids.end()) {
-                    ids.push_back(b.id[i]);
-                }
+        uint32_t page = block / 32;
+        SaCover covered = {};
+        for (const SaOwner &o : sat.blocks[block].owners) {
+            SaCover rel = sa_and(o.cover, need);
+            if (!rel.any()) {
+                continue;
             }
+            uint64_t parts = rel.folded();
+            if (!o.id || ((parts & SA_LO) && sat.page_drawn_lo[page] > o.seq) ||
+                ((parts & SA_HI) && sat.page_drawn_hi[page] > o.seq)) {
+                why = SA_TEX_DRAWN;
+                return;
+            }
+            if (std::find(ids.begin(), ids.end(), o.id) == ids.end()) {
+                ids.push_back(o.id);
+            }
+            for (int k = 0; k < 8; k++) {
+                covered.q[k] |= rel.q[k];
+            }
+        }
+        if (!sa_same(covered, need)) {
+            uint64_t parts = need.folded();
+            bool drawn = ((parts & SA_LO) && sat.page_drawn_lo[page]) || ((parts & SA_HI) && sat.page_drawn_hi[page]);
+            why = drawn ? SA_TEX_DRAWN : SA_TEX_UNOWNED;
         }
     });
     for (uint32_t id : ids) {
@@ -496,6 +743,190 @@ int sa_owners(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, st
         }
     }
     return why;
+}
+
+// The chunks of ids written into the scratch VRAM, oldest first (the order they were last uploaded in)
+void sa_scratch_write(std::vector<uint32_t> &ids) {
+    std::sort(ids.begin(), ids.end(), [](uint32_t a, uint32_t b) { return sa_chunk(a)->seq < sa_chunk(b)->seq; });
+    if (sa.scratch.empty()) {
+        sa.scratch.assign(GSN_VRAM_BYTES, 0);
+    }
+    for (uint32_t id : ids) {
+        const SaChunk &c = *sa_chunk(id);
+        const std::vector<uint8_t> &bytes = c.data();
+        GsnUpload u;
+        gsn_upload_begin(&u, c.bitbltbuf, c.trxpos, c.trxreg);
+        gsn_upload_data(&u, sa.scratch.data(), bytes.data(), bytes.size(), nullptr, nullptr);
+        sa_pack_dump(c);
+    }
+}
+
+// ---- The CLUT from the table -------------------------------------------------------------------------
+// The GS's CLUT buffer (gsn.cpp's clut_load) mirrored: each load TEX0's CLD asks for (CLD 0-5, the 8-bit
+// and 4-bit formats, CSM1 and CSM2, CSA) read from the uploads that own the CLUT's nibbles, written into
+// the scratch VRAM as a texture is; or from the GS's VRAM when not all of them are the uploads'
+// (those halfwords marked, clut_gs: a batch that reads one takes the GS's buffer whole).
+// The entries a load reads from a VRAM (clut_load's addressing), as the CLUT's format has them
+void sa_clut_read(const uint8_t *vram, uint64_t tex0, uint32_t *values) {
+    uint32_t psm = bits(tex0, 20, 6), cbp = bits(tex0, 37, 14), cpsm = bits(tex0, 51, 4), csm = bits(tex0, 55, 1);
+    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
+    uint32_t entries = eight ? 256 : 16;
+    uint64_t texclut = gs->reg[R_TEXCLUT];
+    for (uint32_t i = 0; i < entries; i++) {
+        uint32_t x, y;
+        if (csm == 0) {
+            uint32_t e = eight ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
+            x = eight ? e % 16 : e % 8;
+            y = eight ? e / 16 : e / 8;
+        } else {
+            x = bits(texclut, 6, 6) * 16 + i;
+            y = bits(texclut, 12, 10);
+        }
+        uint32_t bw = csm == 0 ? 1 : bits(texclut, 0, 6);
+        values[i] = gsn_vram_read(vram, cpsm == 0 ? GSN_PSMCT32 : cpsm == 2 ? GSN_PSMCT16 : GSN_PSMCT16S, cbp, bw, x, y);
+    }
+}
+
+// (gs_write, TEX0: after clut_load and the GS's flush) A CLUT load, mirrored
+void sa_clut_load(uint64_t tex0) {
+    if (!sa.on) {
+        return;
+    }
+    uint32_t psm = bits(tex0, 20, 6), cbp = bits(tex0, 37, 14), cpsm = bits(tex0, 51, 4), csm = bits(tex0, 55, 1);
+    uint32_t csa = bits(tex0, 56, 5), cld = bits(tex0, 61, 3);
+    if (!psm_is_palette(psm)) {
+        return;
+    }
+    switch (cld) {
+    case 1:
+        break;
+    case 2:
+    case 3:
+        sat.clut_cbp[cld - 2] = cbp;
+        break;
+    case 4:
+    case 5:
+        if (sat.clut_cbp[cld - 4] == cbp) {
+            return;
+        }
+        sat.clut_cbp[cld - 4] = cbp;
+        break;
+    default:
+        return;
+    }
+    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
+    uint32_t entries = eight ? 256 : 16;
+    uint32_t gpsm = cpsm == 0 ? GSN_PSMCT32 : cpsm == 2 ? GSN_PSMCT16 : GSN_PSMCT16S;
+    uint64_t texclut = gs->reg[R_TEXCLUT];
+    uint32_t bw = csm == 0 ? 1 : bits(texclut, 0, 6);
+    uint32_t x0 = csm == 0 ? 0 : bits(texclut, 6, 6) * 16, y0 = csm == 0 ? 0 : bits(texclut, 12, 10);
+    uint32_t w = csm == 0 ? (eight ? 16 : 8) : entries, h = csm == 0 ? (eight ? 16 : 2) : 1;
+    std::vector<uint32_t> ids;
+    int why = sa_owners(cbp, bw, gpsm, x0, y0, w, h, ids);
+    sa_stats.clut_loads[why]++;
+    uint32_t values[256];
+    bool packed = false;
+    if (why == SA_TEX_TABLE) {
+        std::sort(ids.begin(), ids.end());
+        uint64_t key = (tex0 & ((uint64_t(0x3FFF) << 37) | (uint64_t(0xF) << 51) | (uint64_t(1) << 55))) ^
+                       (uint64_t(eight) << 63) ^ (csm ? texclut * 0x9E3779B97F4A7C15ull : 0);
+        for (uint32_t id : ids) {
+            key = (key ^ id) * 0x100000001B3ull;
+            key ^= key >> 29;
+            SaChunk *c = sa_chunk(id);
+            c->used = sa.frame;
+            packed |= c->pack != nullptr;
+        }
+        auto found = sat.clut_cache.find(key);
+        if (found != sat.clut_cache.end()) {
+            memcpy(values, found->second.data(), sizeof(values));
+        } else {
+            if (sa.scratch.empty()) {
+                sa.scratch.assign(GSN_VRAM_BYTES, 0);
+            }
+            sa_blocks_of(cbp, bw, gpsm, x0, y0, w, h, [&](uint32_t block, const SaCover &) {
+                memset(sa.scratch.data() + size_t(block) * 256, 0, 256);
+            });
+            sa_scratch_write(ids);
+            sa_clut_read(sa.scratch.data(), tex0, values);
+            if (sat.clut_cache.size() > 4096) {
+                sat.clut_cache.clear();
+            }
+            std::array<uint32_t, 256> &slot = sat.clut_cache[key];
+            memcpy(slot.data(), values, sizeof(values));
+            sa_stats.clut_decodes++;
+        }
+    } else {
+        sa_clut_read(gs->vram.data(), tex0, values); // (as clut_load read it: its pages claimed back to VRAM)
+    }
+    // (halfword, value) pairs; a scene batch waiting keeps the colours it was made with (the GS flushed before its
+    // own load if its buffer changed; the mirror's colours can change alone where a texture pack's upload is in it)
+    uint32_t at[512], value[512], n = 0;
+    for (uint32_t i = 0; i < entries; i++) {
+        if (cpsm == 0) {
+            at[n] = eight ? i : (csa * 16 + i) & 0xFF;
+            value[n++] = values[i] & 0xFFFF;
+            at[n] = at[n - 1] + 256;
+            value[n++] = values[i] >> 16;
+        } else {
+            at[n] = eight ? i : (csa * 16 + i) & 0x1FF;
+            value[n++] = values[i] & 0xFFFF;
+        }
+    }
+    bool changed = false;
+    for (uint32_t k = 0; k < n && !changed; k++) {
+        uint64_t bit = uint64_t(1) << (at[k] % 64);
+        changed = sat.clut[at[k]] != value[k] || ((sat.clut_packed[at[k] / 64] & bit) != 0) != packed;
+    }
+    if (changed && !gs->verts.empty() && (sa.in_draw ? sa.draw_on : sa.pending)) {
+        flush_batch();
+    }
+    for (uint32_t k = 0; k < n; k++) {
+        uint64_t bit = uint64_t(1) << (at[k] % 64);
+        sat.clut[at[k]] = uint16_t(value[k]);
+        sat.clut_gs[at[k] / 64] = why == SA_TEX_TABLE ? sat.clut_gs[at[k] / 64] & ~bit : sat.clut_gs[at[k] / 64] | bit;
+        sat.clut_packed[at[k] / 64] = packed ? sat.clut_packed[at[k] / 64] | bit : sat.clut_packed[at[k] / 64] & ~bit;
+    }
+}
+
+// A batch's 256 colours (clut_colours' arithmetic) from the mirror; false (and the GS's buffer's colours)
+// when a halfword it reads is not the table's. *packed: one came from a texture pack.
+bool sa_clut_colours(uint64_t tex0, uint32_t *out, bool *packed) {
+    uint32_t psm = bits(tex0, 20, 6), cpsm = bits(tex0, 51, 4), csa = bits(tex0, 56, 5);
+    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
+    uint32_t count = eight ? 256 : 16;
+    bool gs_owned = false;
+    *packed = false;
+    auto read = [&](uint32_t at) {
+        uint64_t bit = uint64_t(1) << (at % 64);
+        gs_owned |= (sat.clut_gs[at / 64] & bit) != 0;
+        *packed |= (sat.clut_packed[at / 64] & bit) != 0;
+        return sat.clut[at];
+    };
+    uint64_t texa = gs->reg[R_TEXA];
+    for (uint32_t i = 0; i < count; i++) {
+        if (cpsm == 0) {
+            uint32_t at = eight ? i : ((csa & 15) * 16 + i) & 0xFF;
+            out[i] = uint32_t(read(at)) | (uint32_t(read(256 + at)) << 16);
+        } else {
+            uint32_t at = eight ? i : (csa * 16 + i) & 0x1FF;
+            uint32_t v = read(at);
+            uint32_t r = (v & 0x1F) << 3, g = ((v >> 5) & 0x1F) << 3, b = ((v >> 10) & 0x1F) << 3;
+            uint32_t a = (v & 0x8000) ? bits(texa, 32, 8)
+                         : (bits(texa, 15, 1) && (v & 0x7FFF) == 0) ? 0
+                                                                    : bits(texa, 0, 8);
+            out[i] = r | (g << 8) | (b << 16) | (a << 24);
+        }
+    }
+    for (uint32_t i = count; i < 256; i++) {
+        out[i] = 0;
+    }
+    if (gs_owned) {
+        clut_colours(tex0, out);
+        *packed = false;
+        return false;
+    }
+    return true;
 }
 
 // ---- Textures from their source ------------------------------------------------------------------
@@ -523,7 +954,7 @@ const Sa::Decoded *sa_table_texture(uint32_t tbw_psm_tw_th[4], uint32_t tbp, uin
     uint32_t tbw = tbw_psm_tw_th[0], psm = tbw_psm_tw_th[1], tw = tbw_psm_tw_th[2], th = tbw_psm_tw_th[3];
     std::vector<uint32_t> ids;
     for (uint32_t l = 0; l < levels; l++) {
-        *why = sa_owners(mip_tbp[l], mip_tbw[l], psm, std::max(1u, cols >> l), std::max(1u, rows >> l), ids);
+        *why = sa_owners(mip_tbp[l], mip_tbw[l], psm, 0, 0, std::max(1u, cols >> l), std::max(1u, rows >> l), ids);
         if (*why != SA_TEX_TABLE) {
             return nullptr;
         }
@@ -548,16 +979,11 @@ const Sa::Decoded *sa_table_texture(uint32_t tbw_psm_tw_th[4], uint32_t tbp, uin
     uint8_t *vram = sa.scratch.data();
     for (uint32_t l = 0; l < levels; l++) {
         uint32_t w = std::max(1u, (1u << tw) >> l), h = std::max(1u, (1u << th) >> l);
-        sa_blocks_of(mip_tbp[l], mip_tbw[l], psm, 0, 0, w, h, [&](uint32_t block, bool) {
+        sa_blocks_of(mip_tbp[l], mip_tbw[l], psm, 0, 0, w, h, [&](uint32_t block, const SaCover &) {
             memset(vram + size_t(block) * 256, 0, 256);
         });
     }
-    for (uint32_t id : ids) {
-        const SaChunk &c = *sa_chunk(id);
-        GsnUpload u;
-        gsn_upload_begin(&u, c.bitbltbuf, c.trxpos, c.trxreg);
-        gsn_upload_data(&u, vram, c.bytes.data(), c.bytes.size(), nullptr, nullptr);
-    }
+    sa_scratch_write(ids);
     VkFormat format = raw_format(psm);
     Sa::Decoded d;
     d.image = make_image(1u << tw, 1u << th, format, levels, false);
@@ -604,6 +1030,93 @@ const Sa::Decoded *sa_table_texture(uint32_t tbw_psm_tw_th[4], uint32_t tbp, uin
         sa.decoded_order.pop_front();
     }
     return &slot;
+}
+
+// (KF4_SA_VERIFY=1: flush_batch for the GS's batches, sa_texture for the scene's) A texture as the table
+// has it against the GS's VRAM (its pages claimed back), every row of every level, and the CLUT the table's
+// mirror gives against the GS's buffer; counted (sa_stats.verify_*), and with KF4_SA_VERIFY=2 each that
+// differs logged. A chunk from a texture pack is not compared.
+void sa_verify(uint64_t tex0, uint32_t levels, const uint32_t *mip_tbp, const uint32_t *mip_tbw, uint32_t cols,
+               uint32_t rows) {
+    if (!sa.on || !sat.verify) {
+        return;
+    }
+    uint32_t psm = bits(tex0, 20, 6);
+    std::vector<uint32_t> ids;
+    int why = SA_TEX_TABLE;
+    for (uint32_t l = 0; l < levels && why == SA_TEX_TABLE; l++) {
+        why = sa_owners(mip_tbp[l], mip_tbw[l], psm, 0, 0, std::max(1u, cols >> l), std::max(1u, rows >> l), ids);
+    }
+    bool packed = false;
+    for (uint32_t id : ids) {
+        packed |= why == SA_TEX_TABLE && sa_chunk(id)->pack != nullptr;
+    }
+    if (why != SA_TEX_TABLE) {
+        sa_stats.verify_not[why]++;
+        if (sat.verify > 2) {
+            fprintf(stderr, "[standalone] verify: map %d tex0 %016llx psm %02x tbp %x: %s\n", sat.map_now,
+                    (unsigned long long)tex0, psm, mip_tbp[0], sa_tex_names[why]);
+        }
+    } else if (!packed) {
+        for (uint32_t l = 0; l < levels; l++) {
+            uint32_t lo, count;
+            buffer_pages(mip_tbp[l], mip_tbw[l], psm, std::max(1u, cols >> l), std::max(1u, rows >> l), &lo, &count);
+            claim_pages(lo, count, nullptr, false);
+        }
+        if (sa.scratch.empty()) {
+            sa.scratch.assign(GSN_VRAM_BYTES, 0);
+        }
+        for (uint32_t l = 0; l < levels; l++) {
+            sa_blocks_of(mip_tbp[l], mip_tbw[l], psm, 0, 0, std::max(1u, cols >> l), std::max(1u, rows >> l),
+                         [&](uint32_t block, const SaCover &) { memset(sa.scratch.data() + size_t(block) * 256, 0, 256); });
+        }
+        sa_scratch_write(ids);
+        bool same = true;
+        std::vector<uint32_t> a, b;
+        for (uint32_t l = 0; l < levels && same; l++) {
+            uint32_t w = std::max(1u, cols >> l), h = std::max(1u, rows >> l);
+            a.resize(w);
+            b.resize(w);
+            for (uint32_t y = 0; y < h && same; y++) {
+                gsn_vram_read_row(sa.scratch.data(), psm, mip_tbp[l], mip_tbw[l], 0, y, w, a.data());
+                gsn_vram_read_row(gs->vram.data(), psm, mip_tbp[l], mip_tbw[l], 0, y, w, b.data());
+                if (a != b) {
+                    same = false;
+                    if (sat.verify > 1) {
+                        uint32_t x = 0;
+                        while (a[x] == b[x]) {
+                            x++;
+                        }
+                        fprintf(stderr, "[standalone] verify: map %d tex0 %016llx psm %02x tbp %x level %u: (%u, %u) table %x, VRAM %x (%zu uploads)\n",
+                                sat.map_now, (unsigned long long)tex0, psm, mip_tbp[l], l, x, y, a[x], b[x], ids.size());
+                    }
+                }
+            }
+        }
+        (same ? sa_stats.verify_same : sa_stats.verify_differ)++;
+    }
+    if (psm_is_palette(psm)) {
+        uint32_t mine[256], theirs[256];
+        bool clut_packed = false;
+        if (sa_clut_colours(tex0, mine, &clut_packed) && !clut_packed) {
+            clut_colours(tex0, theirs);
+            bool same = memcmp(mine, theirs, sizeof(mine)) == 0;
+            (same ? sa_stats.verify_clut_same : sa_stats.verify_clut_differ)++;
+            if (!same && sat.verify > 1) {
+                fprintf(stderr, "[standalone] verify: map %d tex0 %016llx: the CLUT differs\n", sat.map_now,
+                        (unsigned long long)tex0);
+            }
+        } else if (sat.verify > 2) {
+            fprintf(stderr, "[standalone] verify: map %d tex0 %016llx: the CLUT not the table's\n", sat.map_now,
+                    (unsigned long long)tex0);
+        }
+    }
+    if (sat.verify > 3 && sat.verified_seen.emplace(tex0 & ~(uint64_t(7) << 61), true).second) {
+        // (each TEX0 once, CLD aside: what was verified)
+        fprintf(stderr, "[standalone] verified: map %d tex0 %016llx psm %02x tbp %x cbp %x cpsm %u csm %u csa %u: %s\n",
+                sat.map_now, (unsigned long long)tex0, psm, bits(tex0, 0, 14), bits(tex0, 37, 14), bits(tex0, 51, 4),
+                bits(tex0, 55, 1), bits(tex0, 56, 5), sa_tex_names[why]);
+    }
 }
 
 // The batch's texture (flush_batch's, "the texture"): from the table where all of it is the uploads';
@@ -772,11 +1285,19 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
     if (dec) {
         sa_stats.textures[SA_TEX_TABLE]++;
     }
+    if (sat.verify && !st.reads_target) {
+        sa_verify(tex0, levels, mip_tbp, mip_tbw, cols, rows);
+    }
     if (!st.reads_target) {
         st.src = psm_is_palette(tpsm) ? SRC_CLUT : tpsm == GSN_PSMCT24 ? SRC_CT24 : psm_is_16(tpsm) ? SRC_CT16 : SRC_CT32;
-        // (the CLUT is the GS's buffer, as TEX0's CLD loaded it from VRAM: those blocks' uploads)
+        // (the CLUT from the table's mirror of the GS's buffer, where all it reads is the uploads')
         if (st.src == SRC_CLUT) {
-            clut_colours(tex0, st.clut);
+            bool packed = false;
+            if (sa_clut_colours(tex0, st.clut, &packed)) {
+                sa_stats.clut_table++;
+            } else {
+                sa_stats.clut_gs++;
+            }
             st.want_clut = true;
             st.tex_alpha_max = 0;
             for (uint32_t i = 0; i < 256; i++) {
@@ -2163,9 +2684,10 @@ void sa_draw_begin(uint64_t value) {
     }
     RdDraw d;
     RdCamera cam;
-    static std::vector<std::shared_ptr<const RdMeshData>> meshes;
-    bool scene = rd_fetch(value, d, cam, meshes) && sa_kind(d);
-    meshes.clear();
+    // (sa's, not a static here: one made on the GS's thread, after main's atexit(print_stats), was gone at
+    // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
+    bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
+    sa.fetched.clear();
     if (!gs->verts.empty() && scene != sa.pending) {
         flush_batch();
     }
@@ -2356,6 +2878,65 @@ void sa_forget() {
     sa_held_forget();
 }
 
+// --stats: the table's line, and a line a map of what is still the GS's
+void sa_print_table_stats() {
+    std::vector<std::pair<int, SaStats>> maps;
+    {
+        std::lock_guard<std::mutex> hold(sat.per_map_lock);
+        maps = sat.per_map;
+        SaStats last = sat.at_vblank;
+        sa_stats_per_map(maps, last); // (the counts since the last vblank)
+    }
+    const SaStats &s = sa_stats;
+    auto tex_counts = [](const uint64_t *n) {
+        for (int i = 0; i < SA_TEX_COUNT; i++) {
+            fprintf(stderr, "%s%llu %s", i ? ", " : "", (unsigned long long)n[i], sa_tex_names[i]);
+        }
+    };
+    fprintf(stderr, "[stats] standalone table: CLUT loads ");
+    tex_counts(s.clut_loads);
+    fprintf(stderr, " (%llu decoded); the scene's CLUTs: %llu the table's, %llu the GS's; a block's uploads at most %zu",
+            (unsigned long long)s.clut_decodes, (unsigned long long)s.clut_table, (unsigned long long)s.clut_gs,
+            sat.owners_most);
+    if (sat.verify) {
+        fprintf(stderr, "; verified: textures %llu same, %llu differ, CLUTs %llu same, %llu differ; not the table's: ",
+                (unsigned long long)s.verify_same, (unsigned long long)s.verify_differ,
+                (unsigned long long)s.verify_clut_same, (unsigned long long)s.verify_clut_differ);
+        tex_counts(s.verify_not);
+    }
+    if (!sat.pack_dir.empty() || !sat.dump_dir.empty()) {
+        fprintf(stderr, "; texture pack: %llu uploads replaced, %llu written", (unsigned long long)s.packed_chunks,
+                (unsigned long long)s.dumped_chunks);
+    }
+    fprintf(stderr, "\n");
+    // a map: the scene's textures and CLUTs not the table's, and its batches the GS drew (declined)
+    std::sort(maps.begin(), maps.end(), [](const std::pair<int, SaStats> &a, const std::pair<int, SaStats> &b) {
+        return a.first < b.first;
+    });
+    for (const auto &m : maps) {
+        const SaStats &t = m.second;
+        if (!t.batches && !t.textures[SA_TEX_TABLE] && !t.verify_same && !t.verify_differ) {
+            continue;
+        }
+        uint64_t declined = 0;
+        for (uint64_t d : t.declined) {
+            declined += d;
+        }
+        fprintf(stderr, "[stats] standalone map %03d: %llu batches, %llu declined; textures ", m.first,
+                (unsigned long long)t.batches, (unsigned long long)declined);
+        tex_counts(t.textures);
+        fprintf(stderr, "; CLUTs %llu the table's, %llu the GS's", (unsigned long long)t.clut_table,
+                (unsigned long long)t.clut_gs);
+        if (sat.verify) {
+            fprintf(stderr, "; verified %llu same, %llu differ, CLUTs %llu same, %llu differ; not the table's: ",
+                    (unsigned long long)t.verify_same, (unsigned long long)t.verify_differ,
+                    (unsigned long long)t.verify_clut_same, (unsigned long long)t.verify_clut_differ);
+            tex_counts(t.verify_not);
+        }
+        fprintf(stderr, "\n");
+    }
+}
+
 // --stats
 void sa_print_stats() {
     if (!sa.on && !sa_stats.batches && !sa_stats.acquires) {
@@ -2391,6 +2972,7 @@ void sa_print_stats() {
     }
     fprintf(stderr, "\n");
     sat_print_stats(); // (T3)
+    sa_print_table_stats();
 }
 
 #include "gsn_scene_targets.inc"

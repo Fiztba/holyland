@@ -60,7 +60,7 @@ struct Sat {
     uint32_t frame_sx = 1, frame_sy = 1; // (the scene's scale, T2's --scene-scale: a named target is at the GS's)
     bool writing = false; // (sat_give_back's mark_dirty: not the GS's drawing)
     bool fill = false;    // (the batch sa_draw_batch draws is a fill: sat_fill)
-} sat;
+} snt; // (the named targets: not the table's `sat`, gsn_standalone.inc)
 
 // Formats a named target can be: the GS's colour targets
 bool sat_format(uint32_t psm) {
@@ -70,11 +70,11 @@ bool sat_format(uint32_t psm) {
 // A buffer drawn into that is a named target: narrower than the frame (sa_draw_batch's rule for the frame:
 // 512 pixels or more across), in a colour format
 bool sat_narrow(uint32_t bw, uint32_t psm) {
-    return !sat.off && sat_format(psm) && bw > 0 && bw * 64 < 512;
+    return !snt.off && sat_format(psm) && bw > 0 && bw * 64 < 512;
 }
 
 SatTarget *sat_find(uint32_t bp, uint32_t bw, uint32_t psm) {
-    for (auto &n : sat.list) {
+    for (auto &n : snt.list) {
         if (n->bp == bp && n->bw == bw && psm_layout(n->psm) == psm_layout(psm)) {
             return n.get();
         }
@@ -88,9 +88,9 @@ SatTarget *sat_get(uint32_t bp, uint32_t bw, uint32_t psm) {
         n->psm = psm;
         return n;
     }
-    sat.list.push_back(std::make_unique<SatTarget>());
-    n = sat.list.back().get();
-    n->id = sat.next_id++;
+    snt.list.push_back(std::make_unique<SatTarget>());
+    n = snt.list.back().get();
+    n->id = snt.next_id++;
     n->bp = bp;
     n->bw = bw;
     n->psm = psm;
@@ -107,17 +107,17 @@ void sat_own_rows(SatTarget &n, uint32_t y0, uint32_t y1) {
     uint32_t lo, count;
     buffer_pages(n.bp, n.bw, n.psm, n.width, y1, &lo, &count);
     uint32_t across = std::max(n.bw * 64 / page_width(n.psm), 1u);
-    sa.seq++;
-    for (uint32_t k = std::min(y0 / page_height(n.psm) * across, count); k < count; k++) {
-        sa.page_drawn[(lo + k) % vram_pages] = sa.seq;
-        sat.page_named[(lo + k) % vram_pages] = n.id;
+    uint32_t first = std::min(y0 / page_height(n.psm) * across, count);
+    sa_pages_drawn(lo + first, count - first, n.psm); // (T4's table: in the nibbles its format has)
+    for (uint32_t k = first; k < count; k++) {
+        snt.page_named[(lo + k) % vram_pages] = n.id;
     }
 }
 
 // (sa_drawn: mark_dirty) A target of the GS's drawn into: its pages are a named target's (marked newer in
 // the GS) or no named target's
 void sat_drawn(const Target &t, uint32_t y0, uint32_t y1) {
-    if (sat.off) {
+    if (snt.off) {
         return;
     }
     SatTarget *n = !t.depth && sat_narrow(t.bw, t.psm) ? sat_get(t.bp, t.bw, t.psm) : nullptr;
@@ -125,9 +125,9 @@ void sat_drawn(const Target &t, uint32_t y0, uint32_t y1) {
     buffer_pages(t.bp, t.bw, t.psm, t.width, std::min(y1, t.height), &lo, &count);
     uint32_t across = std::max(std::max(t.bw, 1u) * 64 / page_width(t.psm), 1u);
     for (uint32_t k = std::min(y0 / page_height(t.psm) * across, count); k < count; k++) {
-        sat.page_named[(lo + k) % vram_pages] = n ? n->id : 0;
+        snt.page_named[(lo + k) % vram_pages] = n ? n->id : 0;
     }
-    if (n && !sat.writing) {
+    if (n && !snt.writing) {
         if (sa.log == 3) {
             fprintf(stderr, "[sa] the GS drew into named target %#x rows %u-%u\n", n->bp, y0, y1);
         }
@@ -201,7 +201,7 @@ bool sat_refresh(SatTarget &n) {
     if (!t || t->depth || !t->image || n.scene_newer) {
         return false;
     }
-    if (sat.bound == &n) {
+    if (snt.bound == &n) {
         sa_release();
     }
     bool depth = bool(n.depth);
@@ -256,7 +256,7 @@ void sat_give_back(SatTarget &n, const char *why, bool with_depth) {
     if (sa.log) {
         fprintf(stderr, "[sa] named target %#x given back to the GS%s: %s\n", n.bp, depth ? " (and its depth)" : "", why);
     }
-    if (sat.bound == &n) {
+    if (snt.bound == &n) {
         sa_release();
         colour = n.scene_newer;
         depth = with_depth && n.z_dirty && n.depth && n.zpsm;
@@ -318,7 +318,7 @@ void sat_give_back(SatTarget &n, const char *why, bool with_depth) {
         gsn_stats.copy_bytes += uint64_t(n.color->get_width()) * (zr1 - r0) * 4;
     }
     gpu_mark(GPU_COPY);
-    sat.writing = true;
+    snt.writing = true;
     if (t) {
         msaa_image_written(*t);
         mark_dirty(*t, y0, y1);
@@ -327,7 +327,7 @@ void sat_give_back(SatTarget &n, const char *why, bool with_depth) {
         msaa_image_written(*z);
         mark_dirty(*z, y0, y1);
     }
-    sat.writing = false;
+    snt.writing = false;
     sat_stats.give_backs++;
 }
 
@@ -341,7 +341,7 @@ bool sat_scene_frame(uint32_t fbw, uint32_t fpsm) {
 // read: the scene's depth for it is its own.
 bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h) {
     SatTarget *n = sat_get(fbp, fbw, fpsm);
-    if (sat.bound == n && sa.bound && need_h <= n->height && n->zbp == zbp && n->zpsm == zpsm) {
+    if (snt.bound == n && sa.bound && need_h <= n->height && n->zbp == zbp && n->zpsm == zpsm) {
         return true;
     }
     sa_release();
@@ -359,12 +359,12 @@ bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32
         h = std::max(h, t->height);
     }
     sat_images(*n, n->width, h, target_sx, target_sy, colour_format(), true);
-    sat.frame_color = sa.color;
-    sat.frame_depth = sa.depth;
-    sat.frame_copy = sa.copy;
-    sat.frame_samples = sa.samples;
-    sat.frame_sx = sa.sx;
-    sat.frame_sy = sa.sy;
+    snt.frame_color = sa.color;
+    snt.frame_depth = sa.depth;
+    snt.frame_copy = sa.copy;
+    snt.frame_samples = sa.samples;
+    snt.frame_sx = sa.sx;
+    snt.frame_sy = sa.sy;
     sa.color = n->color;
     sa.depth = n->depth;
     sa.copy = n->copy;
@@ -384,7 +384,7 @@ bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32
     sa.z_written = false;
     sa.stencil_gen = 0;
     sa.last_shadow = false;
-    sat.bound = n;
+    snt.bound = n;
     sat_stats.binds++;
     return true;
 }
@@ -392,15 +392,15 @@ bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32
 // (sa_release, at its top) A named target bound: let go (nothing copied: its picture is the scene's), the
 // frame's images back. False: none bound.
 bool sat_release() {
-    if (!sat.bound) {
+    if (!snt.bound) {
         return false;
     }
     {
         Why why(GSN_WHY_COPY);
         end_pass();
     }
-    SatTarget &n = *sat.bound;
-    sat.bound = nullptr;
+    SatTarget &n = *snt.bound;
+    snt.bound = nullptr;
     if (sa.rows1 > sa.rows0) {
         n.scene_newer = true;
         n.gs_newer = false;
@@ -414,15 +414,15 @@ bool sat_release() {
         sat_own_rows(n, sa.rows0, std::min(sa.rows1, n.height));
     }
     n.copy = sa.copy;
-    sa.color = sat.frame_color;
-    sa.depth = sat.frame_depth;
-    sa.copy = sat.frame_copy;
-    sa.samples = sat.frame_samples;
-    sa.sx = sat.frame_sx;
-    sa.sy = sat.frame_sy;
-    sat.frame_color.reset();
-    sat.frame_depth.reset();
-    sat.frame_copy.reset();
+    sa.color = snt.frame_color;
+    sa.depth = snt.frame_depth;
+    sa.copy = snt.frame_copy;
+    sa.samples = snt.frame_samples;
+    sa.sx = snt.frame_sx;
+    sa.sy = snt.frame_sy;
+    snt.frame_color.reset();
+    snt.frame_depth.reset();
+    snt.frame_copy.reset();
     sa.bound = false;
     sa.frame_target = sa.z_target = nullptr;
     return true;
@@ -432,7 +432,7 @@ bool sat_release() {
 template <class F> void sat_touched(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x1, uint32_t y1, F &&f) {
     uint32_t lo, count;
     buffer_pages(bp, bw, psm, x1, y1, &lo, &count);
-    for (auto &n : sat.list) {
+    for (auto &n : snt.list) {
         uint32_t nlo, ncount;
         buffer_pages(n->bp, n->bw, n->psm, n->width, std::max(n->height, 1u), &nlo, &ncount);
         if (pages_overlap(lo, count, nlo, ncount)) {
@@ -442,8 +442,8 @@ template <class F> void sat_touched(uint32_t bp, uint32_t bw, uint32_t psm, uint
 }
 
 bool sat_any_scene_newer() {
-    for (auto &n : sat.list) {
-        if (n->scene_newer || n->z_dirty || sat.bound == n.get()) {
+    for (auto &n : snt.list) {
+        if (n->scene_newer || n->z_dirty || snt.bound == n.get()) {
             return true;
         }
     }
@@ -453,7 +453,7 @@ bool sat_any_scene_newer() {
 // (sa_flush, a batch the GS draws) What it reads or draws into of a named target the scene drew is the GS's
 // first: its FRAME's pages, its texture's, and (when it uses Z) its Z buffer's
 void sat_gs_batch() {
-    if (sat.off || !sat_any_scene_newer()) {
+    if (snt.off || !sat_any_scene_newer()) {
         return;
     }
     uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
@@ -497,10 +497,10 @@ void sat_gs_batch() {
 // the GS's after it (an upload's pages are the table's, a copy's the GS's or the table's: sat_copied). True:
 // a named target is bound (let go if the transfer touches it; the frame's turn is not the scene's then).
 bool sat_transfer(uint32_t dir) {
-    if (sat.off || !sa.on || sat.list.empty()) {
+    if (snt.off || !sa.on || snt.list.empty()) {
         return false;
     }
-    bool was_bound = sat.bound != nullptr;
+    bool was_bound = snt.bound != nullptr;
     uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
     uint32_t w = bits(trxreg, 0, 12), h = bits(trxreg, 32, 12);
     auto touch = [&](SatTarget &n) {
@@ -519,7 +519,7 @@ bool sat_transfer(uint32_t dir) {
                     bits(trxpos, 16, 11) + h, touch);
     }
     if (dir > 2) {
-        for (auto &n : sat.list) {
+        for (auto &n : snt.list) {
             touch(*n);
         }
     }
@@ -529,11 +529,11 @@ bool sat_transfer(uint32_t dir) {
 // (sa_sync) The GS wants its targets (a picture, a read-back, a save state ...): each named target the scene
 // drew given back
 void sat_sync() {
-    if (sat.off) {
+    if (snt.off) {
         return;
     }
     sat_release();
-    for (auto &n : sat.list) {
+    for (auto &n : snt.list) {
         sat_give_back(*n, "the GS's targets wanted", false);
     }
 }
@@ -542,7 +542,7 @@ void sat_sync() {
 // sprite: black, no texture, no blending, Z neither tested nor written, over all of it): the scene's own,
 // its depth cleared with it. True: done (the batch is gone).
 bool sat_flush() {
-    if (sat.off || !gs->batch_sprites || gs->verts.empty() || nd.active) {
+    if (snt.off || !gs->batch_sprites || gs->verts.empty() || nd.active) {
         return false;
     }
     uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
@@ -576,12 +576,12 @@ bool sat_flush() {
     if (x0 > 0.0f || y0 > 0.0f || x1 < float(n->width) || y1 < float(n->height)) {
         return false;
     }
-    if (n->scene_newer || sat.bound == n) {
-        if (sat.bound == n) {
+    if (n->scene_newer || snt.bound == n) {
+        if (snt.bound == n) {
             sa_release();
         }
     }
-    if (sa.bound && !sat.bound) {
+    if (sa.bound && !snt.bound) {
         // (the frame's turn goes on: the clear touches none of it)
     }
     {
@@ -611,10 +611,10 @@ bool sat_flush() {
 // (sa_texture) A texture on a named target's pages, all drawn into by it since their uploads: read from its
 // image (as flush_batch reads a render target: SRC_TARGET_*, at the offset of its first page). False: not one.
 bool sat_texture(SaTexture &st, uint32_t tbp, uint32_t tbw, uint32_t tpsm, uint32_t cols, uint32_t rows, uint32_t levels) {
-    if (sat.off || levels > 1 || !sat_format(tpsm)) {
+    if (snt.off || levels > 1 || !sat_format(tpsm)) {
         return false;
     }
-    for (auto &np : sat.list) {
+    for (auto &np : snt.list) {
         SatTarget &n = *np;
         if (n.bw != tbw || tbp < n.bp || psm_layout(tpsm) != psm_layout(n.psm) || (tbp - n.bp) % 32 != 0) {
             continue;
@@ -626,14 +626,27 @@ bool sat_texture(SaTexture &st, uint32_t tbp, uint32_t tbw, uint32_t tpsm, uint3
         }
         // (every block the texture reads: the named target's page, drawn into after its upload)
         bool own = true;
-        sa_blocks_of(tbp, tbw, tpsm, 0, 0, cols, rows, [&](uint32_t block, bool) {
+        sa_blocks_of(tbp, tbw, tpsm, 0, 0, cols, rows, [&](uint32_t block, const SaCover &need) {
             uint32_t p = block / 32;
-            own = own && sat.page_named[p] == n.id && sa.page_drawn[p] > sa.blocks[block].seq;
+            // (T4's table: drawn since every upload of the nibbles it reads, in each part of the word they are)
+            uint64_t parts = need.folded(), drawn = UINT64_MAX, newest = 0;
+            if (parts & SA_LO) {
+                drawn = std::min(drawn, sat.page_drawn_lo[p]);
+            }
+            if (parts & SA_HI) {
+                drawn = std::min(drawn, sat.page_drawn_hi[p]);
+            }
+            for (const SaOwner &o : sat.blocks[block].owners) {
+                if (sa_and(o.cover, need).any()) {
+                    newest = std::max(newest, o.seq);
+                }
+            }
+            own = own && snt.page_named[p] == n.id && drawn != UINT64_MAX && drawn > newest;
         });
         if (!own) {
             continue;
         }
-        if (sat.bound == &n) {
+        if (snt.bound == &n) {
             st.reads_target = st.reads_own = true;
             return true;
         }
@@ -655,7 +668,7 @@ bool sat_texture(SaTexture &st, uint32_t tbp, uint32_t tbw, uint32_t tpsm, uint3
 // (sa_copied) A local copy whose source is all the table's uploads: made in the scratch VRAM, its destination
 // an upload of its own. False: not all of the source is (the GS's VRAM then, as before).
 bool sat_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
-    if (sat.off) {
+    if (snt.off) {
         return false;
     }
     uint32_t sbp = bits(bitbltbuf, 0, 14), sbw = bits(bitbltbuf, 16, 6), spsm = bits(bitbltbuf, 24, 6);
@@ -665,27 +678,12 @@ bool sat_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
         return false;
     }
     // the source's owners, oldest first
+    // (T4's table: every nibble of the source an upload's not drawn over since, sa_owners)
     std::vector<uint32_t> ids;
-    bool all = true;
     std::vector<uint32_t> blocks;
-    sa_blocks_of(sbp, sbw, spsm, sx, sy, w, h, [&](uint32_t block, bool) {
-        if (!all) {
-            return;
-        }
-        const SaBlock &b = sa.blocks[block];
-        if (b.n == 0 || b.n == SA_MANY || sa.page_drawn[block / 32] > b.seq) {
-            all = false;
-            return;
-        }
-        blocks.push_back(block);
-        for (uint32_t i = 0; i < b.n; i++) {
-            if (std::find(ids.begin(), ids.end(), b.id[i]) == ids.end()) {
-                ids.push_back(b.id[i]);
-            }
-        }
-    });
-    for (uint32_t id : ids) {
-        all = all && sa_chunk(id) != nullptr;
+    bool all = sa_owners(sbp, sbw, spsm, sx, sy, w, h, ids) == SA_TEX_TABLE;
+    if (all) {
+        sa_blocks_of(sbp, sbw, spsm, sx, sy, w, h, [&](uint32_t block, const SaCover &) { blocks.push_back(block); });
     }
     if (!all) {
         sat_stats.copies_not++;
@@ -726,7 +724,7 @@ bool sat_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
     buffer_pages(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), dpsm, bits(trxpos, 32, 11) + w, bits(trxpos, 48, 11) + h, &lo,
                  &count);
     for (uint32_t k = 0; k < count && k < vram_pages; k++) {
-        sat.page_named[(lo + k) % vram_pages] = 0;
+        snt.page_named[(lo + k) % vram_pages] = 0;
     }
     sat_stats.copies++;
     sat_stats.copy_bytes += bytes.size();
@@ -736,10 +734,10 @@ bool sat_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
 // (sa_switch on, sa_forget) Forgotten: VRAM is made anew
 void sat_reset() {
     sat_release();
-    sat.list.clear();
-    memset(sat.page_named, 0, sizeof(sat.page_named));
+    snt.list.clear();
+    memset(snt.page_named, 0, sizeof(snt.page_named));
     const char *off = getenv("KF4_SA_NO_NAMED");
-    sat.off = off && atoi(off) > 0;
+    snt.off = off && atoi(off) > 0;
 }
 
 void sat_print_stats() {
@@ -780,8 +778,8 @@ Program *sat_water_program(bool sample) {
 // two views (Map_CoverScreenWithMapTint): with this the mirror, the tint, the depth clear and the real view are
 // one turn of the scene's (and a fade over the world, GsDraw_FillScreen too, while the scene has the frame).
 bool sat_fill() {
-    sat.fill = false;
-    if (sat.off || !gs->batch_sprites || nd.active || gs->verts.empty() || !sa.bound || sat.bound) {
+    snt.fill = false;
+    if (snt.off || !gs->batch_sprites || nd.active || gs->verts.empty() || !sa.bound || snt.bound) {
         return false;
     }
     uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
@@ -790,16 +788,16 @@ bool sat_fill() {
         (bits(test, 16, 1) && bits(test, 17, 2) != 1)) {
         return false;
     }
-    sat.fill = bits(frame, 0, 9) * 32 == sa.fbp && bits(frame, 16, 6) == sa.fbw && bits(frame, 24, 6) == sa.fpsm &&
+    snt.fill = bits(frame, 0, 9) * 32 == sa.fbp && bits(frame, 16, 6) == sa.fbw && bits(frame, 24, 6) == sa.fpsm &&
                bits(zbuf, 0, 9) * 32 == sa.zbp && (bits(zbuf, 24, 4) | 0x30) == sa.zpsm;
-    sat_stats.fills += sat.fill;
-    return sat.fill;
+    sat_stats.fills += snt.fill;
+    return snt.fill;
 }
 
 // (sa_draw_batch) A fill (sat_fill) is blended in the shader, from a copy of the scene's colour, as flush_batch
 // blends a sprite: the GS's arithmetic, so a fade or a tint over the scene is what the GS would make of it
 bool sat_blend_exact() {
-    bool fill = sat.fill;
-    sat.fill = false;
+    bool fill = snt.fill;
+    snt.fill = false;
     return fill;
 }
