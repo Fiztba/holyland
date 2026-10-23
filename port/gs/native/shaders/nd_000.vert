@@ -341,6 +341,9 @@ void main() {
     }
     if ((d.info.w & ND_C_FAR) != 0) {
         z = 0u; // at the far plane (the modern sky, P3-2: the Z buffer's clear value, GEQUAL)
+#ifdef ND_STANDALONE
+        zf = 0.0; // (the scene's far plane too: its depth's clear value, P8 T5)
+#endif
     }
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
     float fog = float((w16 >> 4) & 0xFFu);

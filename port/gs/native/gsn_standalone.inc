@@ -2673,7 +2673,9 @@ bool sa_flush() {
 bool sa_kind(const RdDraw &d) {
     bool program = d.program == 0 || d.program == 0x280 || d.program == 0x700 || d.program == 0x5A0 ||
                    d.program == RD_PROGRAM_GS_STRIP || d.program == RD_PROGRAM_RIPPLE;
-    return program && d.kind < 32 && ((sa.kinds >> d.kind) & 1) && (d.flags & ~uint32_t(RD_DRAW_WAVE_UVS)) == 0;
+    // (T5: the modern sky at the far plane, program 0x000's records: sa_000.vert gives them depth 0)
+    uint32_t allowed = RD_DRAW_WAVE_UVS | (d.program == 0 ? uint32_t(RD_DRAW_FAR_Z) : 0u);
+    return program && d.kind < 32 && ((sa.kinds >> d.kind) & 1) && (d.flags & ~allowed) == 0;
 }
 
 // Before a draw is met: whether it goes to the scene; a batch holds the scene's corners or none
