@@ -3144,6 +3144,8 @@ void flush_batch() {
     // texture decoded from VRAM; cut_texels false where they are not known)
     bool cut_texels = false;
     uint32_t cut_lo = 255, cut_hi = 0;
+    // the least and most alpha its texels have (a CLUT or 32-bit texture decoded from VRAM; else 0-255)
+    uint32_t tex_lo = 0, tex_hi = 255;
     uint64_t cut_clear = 0, cut_all = 0;
     if (tme) {
         uint32_t tbp = bits(tex0, 0, 14), tbw = bits(tex0, 14, 6), tpsm = bits(tex0, 20, 6);
@@ -3267,6 +3269,17 @@ void flush_batch() {
                 tex_alpha_max = 0;
                 for (uint32_t i = 0; i < 256; i++) {
                     tex_alpha_max = std::max(tex_alpha_max, clut[i] >> 24);
+                }
+            }
+            if (src == SRC_CLUT || src == SRC_CT32) {
+                tex_lo = 255;
+                tex_hi = 0;
+                for (uint32_t i = 0; i < 256; i++) {
+                    if (tex->texels[i]) {
+                        uint32_t a = src == SRC_CLUT ? clut[i] >> 24 : i;
+                        tex_lo = std::min(tex_lo, a);
+                        tex_hi = std::max(tex_hi, a);
+                    }
                 }
             }
             if (cutout_aa_mode != GSN_CUTOUT_AA_OFF && target_samples > 1 && (src == SRC_CLUT || src == SRC_CT32)) {
@@ -3539,6 +3552,49 @@ void flush_batch() {
     if (fine_z && !any_zwrite_pass && (ztst == 2 || ztst == 3)) {
         for (int i = 0; i < npasses; i++) {
             passes[i].zbias = 0.5f * zstep;
+        }
+    }
+    // Ties (--native-layer-z tolerant). On the GS a draw over a surface of (nearly) the same Z wins where
+    // the two round to the same Z: a sign on the wall it hangs on, a step's edge on the floor, the game's
+    // data counts on it. With the fraction kept, such a draw comes out a hair behind and loses in
+    // places that move with the camera (a sign's edges flickering behind its wall). So a draw that
+    // writes Z and tests GEQUAL passes within half a Z of what is there, the slack the GS's rounding
+    // gives on average: its Z first (the nearer of its own and what is there, as on the GS), then its
+    // colour within half a Z, no Z written. Where two surfaces cross, the later one wins within half a
+    // Z of the line: the line moves by that, and stays straight (the GS's rounding made it a sawtooth).
+    // Only for draws whose colour comes out the same drawn twice over itself (not blended, or blended
+    // (Cs - Cd) As + Cd with As 0x80 everywhere): within half a Z a batch's later triangles are drawn
+    // over its earlier ones in front of them too. The layers (below) have their own passes.
+    uint32_t a_lo = as_min, a_hi = as_max; // the least and most As the batch can make
+    if (tme && bits(tex0, 34, 1)) {
+        uint32_t tfx = bits(tex0, 35, 2);
+        a_lo = tfx == 0 ? (as_min * tex_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + tex_lo) : tex_lo;
+        a_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
+    }
+    bool same_twice = !abe || (ba == 0 && bb == 1 && bd == 1 && (bc == 0 ? a_lo == 0x80 && a_hi == 0x80 : bc == 2 && fix == 0x80));
+    // the alpha test passes every pixel the batch can make: its Z pass needs no texture (gs_zonly.frag)
+    uint32_t aref = bits(test, 4, 8);
+    bool atest_always = !ate || atst == 1 ||
+                        (atst == 2 && a_hi < aref) || (atst == 3 && a_hi <= aref) || (atst == 5 && a_lo >= aref) ||
+                        (atst == 6 && a_lo > aref) || (atst == 4 && a_lo == aref && a_hi == aref) ||
+                        (atst == 7 && (a_hi < aref || a_lo > aref));
+    bool tie = fine_z && any_zwrite_pass && ztst == 2 && same_twice && !reads_own_target && !(push.flags & F_DATE);
+    if (tie) {
+        Pass z_first[4];
+        int n = 0;
+        for (int i = 0; i < npasses; i++) {
+            if (passes[i].zwrite) {
+                z_first[n++] = {atest_always ? 0u : passes[i].select, 0, true, 0.0f, 0.0f};
+            }
+        }
+        for (int i = 0; i < npasses; i++) {
+            if (passes[i].mask) {
+                z_first[n++] = {passes[i].select, passes[i].mask, false, 0.5f * zstep, 0.0f};
+            }
+        }
+        npasses = n;
+        for (int i = 0; i < n; i++) {
+            passes[i] = z_first[i];
         }
     }
     Pass layer_passes[4];
@@ -3820,7 +3876,7 @@ void flush_batch() {
                 p.flags |= rp[i].select << F_PASS_SHIFT;
                 p.zbias = rp[i].zbias;
                 p.zslope = rp[i].zslope;
-                bool zonly = l && !rp[i].mask && rp[i].select == 0 && !(push.flags & F_DATE) &&
+                bool zonly = fine_z && !rp[i].mask && rp[i].zwrite && rp[i].select == 0 && !(push.flags & F_DATE) &&
                              (per_sample ? gs->program_zonly_sample != nullptr : true);
                 if (zonly) {
                     c.set_program(per_sample ? gs->program_zonly_sample : gs->program_zonly);

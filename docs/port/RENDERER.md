@@ -81,7 +81,7 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   hatching, teeth and lace on the game's layered walls and the sawtooth where surfaces meet:
   `--native-layer-z tolerant` (the default) keeps the fraction, lets a layer's triangles (a corner's
   alpha below 0x80, blended (Cs - Cd) As + Cd, GEQUAL) pass within one Z, Z written after in a pass of
-  its own, and a draw without Z writes within half a Z (PLAN.md; `gsn.cpp`, "Z and layers"); `ps2` is
+  its own; other draws that write Z draw their Z first and their colour within half a Z (the GS's ties on average: signs on walls), and a draw without Z writes within half a Z (PLAN.md; `gsn.cpp`, "Z and layers"); `ps2` is
   the GS's. A test pass with no Z written must not see its own batch's triangles as a pass with Z
   would: drawn as one, a layer mesh folded over itself was blended twice (flat olive patches).
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
