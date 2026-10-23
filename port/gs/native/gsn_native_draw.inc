@@ -107,7 +107,9 @@ struct NdPlannedPair {
     NdPlanned plan[2];
     uint32_t older = 0;
 };
-const size_t ND_PLANNED_MAX = 1u << 16; // (batches kept at most: all forgotten when there are more)
+// (batches kept at most, all forgotten when there are more: a frame of 000 has about 850, a plan about
+// 2 KB)
+const size_t ND_PLANNED_MAX = 1u << 12;
 const float ND_MAX_MOVE = 400.0f; // (frame_interp.c's INTERP_MAX_MOVE: more is not a move but a jump)
 
 struct NdState {
