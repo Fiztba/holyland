@@ -2693,6 +2693,7 @@ void blend_copy_in_pass(Target &t, bool ms, const int32_t *box) {
 }
 
 void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box);
+bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box); // (native draw: gsn_native_draw.inc)
 
 // A run's rectangle: the GS pixels its primitives can cover, a pixel more each way (x0 y0 x1 y1)
 void run_box(uint32_t first, uint32_t count, int32_t *box) {
@@ -2706,7 +2707,10 @@ void run_box(uint32_t first, uint32_t count, int32_t *box) {
         box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
     }
     if (interp.active) {
-        interp_box_at_0(first, count, box); // (a picture between's moving vertices: where they are at t 0 too)
+        // (a picture between's moving vertices: where they are at t 0 too; native draw's, gsn_native_draw.inc)
+        if (!nd_box_at_0(first, count, box)) {
+            interp_box_at_0(first, count, box);
+        }
     }
 }
 

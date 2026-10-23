@@ -156,6 +156,14 @@ struct NdPlannedPair {
 const size_t ND_PLANNED_MAX = 1u << 12;
 const float ND_MAX_MOVE = 400.0f; // (frame_interp.c's INTERP_MAX_MOVE: more is not a move but a jump)
 
+// What nd_box_at_0 needs of a draw's record (a copy of NdConst's, on the CPU): how it moves, its
+// projection (sx, sy, cx, cy, as nd_000.vert's moved takes them), XYOFFSET (pixels) and its obj
+struct NdBoxInfo {
+    int32_t flags;
+    float sx, sy, cx, cy, ox, oy;
+    float obj[3];
+};
+
 struct NdState {
     bool active = false;   // the batch flush_batch is drawing has native corners (and in a picture between, only those)
     bool pending = false;  // gs->verts holds native corners
@@ -166,6 +174,7 @@ struct NdState {
     NdBuffer arena;        // the meshes' vertices
     std::unordered_map<RdMesh, uint32_t> placed; // a mesh's first vertex in the arena
     NdBuffer draws;        // the draws' records
+    std::vector<NdBoxInfo> boxes; // (nd_box_at_0) what a picture between's box needs of each record in draws
     // the buffers the pending corners name (batch_draws: 0x000's records, when pending_000; 0x280's are
     // nd280's)
     const Buffer *batch_arena = nullptr, *batch_draws = nullptr;
@@ -768,6 +777,7 @@ void nd_draw(uint64_t value) {
     // the draw's record (nd_const: VU1's set-up)
     if (nd_buffer_room(nd.draws, 1, nd.pending_000)) {
         nd_new_buffer(nd.draws, 4096, sizeof(NdConst), nd.pending_000);
+        nd.boxes.clear();
     }
     uint32_t record = nd.draws.used++;
     NdConst k;
@@ -801,6 +811,11 @@ void nd_draw(uint64_t value) {
         }
     }
     memcpy(nd.draws.map + size_t(record) * sizeof(NdConst), &k, sizeof(k));
+    if (interp.active) {
+        nd.boxes.resize(record + 1);
+        nd.boxes[record] = {k.info[3], k.screen[0], k.screen[5], k.screen[8], k.screen[9], float(k.info[1]) / 16.0f,
+                            float(k.info[2]) / 16.0f, {k.obj[0], k.obj[1], k.obj[2]}};
+    }
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
         for (const RdBatch &b : mesh->batches) {
@@ -894,6 +909,87 @@ void nd_mark(uint64_t value) {
     } else {
         nd.section = (v >> 8) == 2 ? ND_SECTION_OTHER : ND_SECTION_WORLD;
     }
+}
+
+// (run_box, in a picture between: a batch of native corners) The pixels a run of native corners can cover
+// at any time between the frame shown (t 0) and this one (t 1): what flush_batch copies for its shader
+// blending, and the render pass's part of the target (COPY_BY_PASS). The corners are where the frame has
+// them (t 1, box); nd_000.vert moves them, so add where they are at t 0, as interp_box_at_0 does for the
+// PS2 path's kicks: nd_000.vert's moved at the frame's t 0 camera (frame->move0, mid0) with the part's obj
+// back at the frame before's, and the same margin for the turn on the way. Left out, a run that moved out
+// of the frame's box blended with the copy where nothing had been copied (pitching on the sky maps: the
+// dome's lowest rows black and noisy, P3-1's rim band). The models' own moves (ND_C_MODEL), program
+// 0x280's corners and the strip's are not worked out here: such a run may cover the whole target. False
+// when the batch is not native corners (the PS2 path's: interp_box_at_0).
+bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
+    if (!nd.active) {
+        return false;
+    }
+    auto whole = [&]() {
+        box[0] = box[1] = -1;
+        box[2] = box[3] = 2048 + 2;
+    };
+    if (nd280_batch() || nd.strip_active) {
+        whole();
+        return true;
+    }
+    const float *r = interp.frame->move0, *mid = interp.frame->mid0;
+    float most = 0.0f;
+    bool moved = false;
+    for (uint32_t i = first; i < first + count && i < gs->verts.size(); i++) {
+        const Vtx &w = gs->verts[i];
+        if (!nd_corner(w)) {
+            continue;
+        }
+        uint32_t record = (w.rgba & 0xFFFFFFu) >> ND_CORNER_DRAW_SHIFT;
+        if (record >= nd.boxes.size()) {
+            whole();
+            return true;
+        }
+        const NdBoxInfo &b = nd.boxes[record];
+        if (!(b.flags & ND_C_MOVING)) {
+            continue;
+        }
+        if (b.flags & ND_C_MODEL) {
+            whole();
+            return true;
+        }
+        moved = true;
+        // (nd_000.vert's moved at t 0: the place in the frame's view from X, Y and 1 / q, then v + dm)
+        double depth = 1.0 / double(w.q);
+        if (!(w.q > 0.0f) || !std::isfinite(depth) || b.sx == 0.0f || b.sy == 0.0f) {
+            continue; // (as it is)
+        }
+        double v[3] = {(double(w.x) + b.ox - b.cx) * depth / b.sx, (double(w.y) + b.oy - b.cy) * depth / b.sy, depth};
+        double m[3];
+        for (int j = 0; j < 3; j++) {
+            m[j] = v[j] + r[j * 4] * v[0] + r[j * 4 + 1] * v[1] + r[j * 4 + 2] * v[2] + r[j * 4 + 3];
+            if (b.flags & ND_C_OBJ) {
+                m[j] -= mid[j * 4] * b.obj[0] + mid[j * 4 + 1] * b.obj[1] + mid[j * 4 + 2] * b.obj[2];
+            }
+        }
+        if (!(m[2] > 0.0)) {
+            continue; // (dropped)
+        }
+        double nx = b.sx * m[0] / m[2] + b.cx, ny = b.sy * m[1] / m[2] + b.cy;
+        if (!(fabs(nx - 2048.0) <= 2047.0 && fabs(ny - 2048.0) <= 2047.0)) {
+            continue; // (dropped)
+        }
+        float px = float(nx - b.ox), py = float(ny - b.oy);
+        box[0] = std::min(box[0], int32_t(floorf(px)) - 1);
+        box[1] = std::min(box[1], int32_t(floorf(py)) - 1);
+        box[2] = std::max(box[2], int32_t(ceilf(px)) + 2);
+        box[3] = std::max(box[3], int32_t(ceilf(py)) + 2);
+        most = std::max(most, std::max(fabsf(px - w.x), fabsf(py - w.y)));
+    }
+    if (moved) {
+        int32_t margin = 4 + int32_t(ceilf(most * 0.25f));
+        box[0] -= margin;
+        box[1] -= margin;
+        box[2] += margin;
+        box[3] += margin;
+    }
+    return true;
 }
 
 // A register write between RD_ND_ALT_BEGIN and _END while the native draws are drawn: left out, but a
