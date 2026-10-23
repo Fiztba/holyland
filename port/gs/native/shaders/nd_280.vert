@@ -24,7 +24,12 @@
 // ORed with, n). A corner's fog input is -1 less its vertex's first qword / 4 in the arena; its colour's RGB the
 // kick's number less its own, in vertices (bits 0-5), IIP (bit 6), the draw's record (bits 7-21), the
 // context whose XYOFFSET (bit 22) and the pass (bit 23).
-// Not here yet: pictures between (P2-5); with nothing moving the Picture (set 1) is not read.
+// Pictures between (P2-5; ND_C_MOVING): the place moved as nd_000.vert's moved does it (from VU1's X, Y and
+// Z by the picture's camera, as gs_replay.comp moves the PS2 path's vertices), the part's own move added
+// (ND_C_MODEL: by the vertex's set's matrices t of the way from the frame before's, nd_between.h; with
+// ND_C_EYE, the arm's, in the eye's space and without the camera's move); S, T and Q of the first pass by
+// the change of depth (the second's are a direction: as they are); a triangle not drawn when its kick or
+// one of the two before it is dropped. With nothing moving the Picture (set 1) is not read.
 #include "gs_common.h"
 
 layout(location = 2) in uvec4 a_corner;
@@ -35,7 +40,7 @@ layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 layout(location = 3) noperspective out float v_z;
 
-// (bound by nd_bind as for nd_000.vert; not read yet)
+// a picture between's (as nd_000.vert's; with nothing moving, a buffer of zeros)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
@@ -45,6 +50,7 @@ layout(set = 1, binding = 0, std430) readonly buffer Picture {
 layout(set = 2, binding = 0, std430) readonly buffer Mesh {
     ivec4 q[];
 } mesh;
+#include "nd_between.h"
 // the draws (gsn_nd_280.inc, Nd280Const): matrices a VU qword a column; [0] set A, [1] set B
 struct Draw {
     mat4 vertex[2];     // VU1 0x14-0x17, 0x1C-0x1F: view-screen by the part's matrix, by its parent's
@@ -58,7 +64,13 @@ struct Draw {
     vec4 point_col[4];  // VU1 0x4E-0x51
     ivec4 info;         // the point lights, ND_C_* flags
     ivec4 offset;       // XYOFFSET_1's X and Y, XYOFFSET_2's (12.4)
+    mat4 screen;        // view to screen (pictures between: sx, sy, cx, cy, cz)
+    Between bt[2];      // (ND_C_MODEL) set A's and set B's moves from the frame before
 };
+
+#define ND_C_MOVING 1
+#define ND_C_MODEL 4
+#define ND_C_EYE 8
 layout(set = 2, binding = 1, std430) readonly buffer Draws {
     Draw draws[];
 };
@@ -143,9 +155,93 @@ vec4 qf(uint slot, uint i) {
     return intBitsToFloat(mesh.q[slot * 4u + i]);
 }
 
+// ---- Pictures between (nd_000.vert's moved, for a vertex of set s) ----
+// n / (dh + dl), the float nearest it
+float div_nearest(float n, float dh, float dl) {
+    precise float r = n / dh;
+    for (int i = 0; i < 2; i++) {
+        precise float e = fma(-r, dh, n) - r * dl;
+        r = r + e / dh;
+    }
+    return r;
+}
+
+// (X - cx) / (q sx): a place in the view across, from the screen's
+float view_place(float n, float q, float s) {
+    precise float dh = q * s;
+    precise float dl = fma(q, s, -dh);
+    return div_nearest(n, dh, dl);
+}
+
+// A place as VU1 leaves it: FTOI4 of X, Y and Z, and q
+struct Place {
+    int x, y, z;
+    float q;
+};
+
+struct Moved {
+    int x, y;
+    uint z;
+    float f;
+    bool drop;
+};
+
+Moved moved(uint slot, int s, Place p) {
+    Moved r;
+    r.x = p.x & 0xFFFF;
+    r.y = p.y & 0xFFFF;
+    r.z = uint(p.z >> 4) & 0xFFFFFFu;
+    r.f = 1.0;
+    r.drop = false;
+    float depth = div_nearest(1.0, p.q, 0.0);
+    if (!(depth > 0.0) || isinf(depth)) {
+        return r; // (as it is)
+    }
+    vec3 v = vec3(view_place(float(r.x) / 16.0 - d.screen[2].x, p.q, d.screen[0].x),
+                  view_place(float(r.y) / 16.0 - d.screen[2].y, p.q, d.screen[1].y), depth);
+    vec3 dm = vec3(0.0);
+    if ((d.info.y & ND_C_EYE) == 0) {
+        dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
+                  dot(pic.move[2].xyz, v) + pic.move[2].w);
+    }
+    if ((d.info.y & ND_C_MODEL) != 0) {
+        vec3 e = between_move(d.bt[s], qf(slot, 0u), pic.zt.w);
+        dm = (d.info.y & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    float mz = v.z + dm.z;
+    if (!(mz > 0.0)) {
+        r.drop = true;
+        return r;
+    }
+    float den = mz * v.z;
+    float nx = float(r.x) / 16.0 + d.screen[0].x * (dm.x * v.z - v.x * dm.z) / den;
+    float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
+    float nz = float(r.z) - (float(r.z) - d.screen[2].z) * dm.z / mz;
+    if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
+        r.drop = true;
+        return r;
+    }
+    r.x = int(floor(nx * 16.0 + 0.5));
+    r.y = int(floor(ny * 16.0 + 0.5));
+    r.z = uint(min(floor(nz + 0.5), 16777215.0));
+    r.f = depth / mz;
+    return r;
+}
+
 // The vertex's set: its ST's w (the low 16 bits, as ILW loads them)
 int vertex_set(uint slot) {
     return (uint(mesh.q[slot * 4u + 2u].w) & 0xFFFFu) != 0u ? 1 : 0;
+}
+
+// The vertex's place as VU1 leaves it (its set's vertex matrix)
+Place vu_place(uint slot) {
+    vec4 c = vu_transform(d.vertex[vertex_set(slot)], qf(slot, 0u));
+    Place p;
+    p.q = vu_recip(c.w);
+    p.x = ftoi(vu_mul(c.x, p.q) * 16.0);
+    p.y = ftoi(vu_mul(c.y, p.q) * 16.0);
+    p.z = ftoi(vu_mul(c.z, p.q) * 16.0);
+    return p;
 }
 
 // u of the vertex in slot, k its number in the batch: vertex 0's colour by the scale and bias, then the
@@ -198,20 +294,39 @@ void main() {
     int s = vertex_set(slot);
 
     // the place: XYZF2 (the same in both passes)
-    vec4 c = vu_transform(d.vertex[s], qf(slot, 0u));
-    float q = vu_recip(c.w);
-    int xi = ftoi(vu_mul(c.x, q) * 16.0), yi = ftoi(vu_mul(c.y, q) * 16.0), zi = ftoi(vu_mul(c.z, q) * 16.0);
-    uint z = uint(zi >> 4) & 0xFFFFFFu;
+    Place pl = vu_place(slot);
+    float q = pl.q;
+    int xi = pl.x, yi = pl.y;
+    uint z = uint(pl.z >> 4) & 0xFFFFFFu;
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, q)), 255.0), 0.0);
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(X.z)) & 0xFFFFu;
     float fog = float((w16 >> 4) & 0xFFu);
+    // a picture between's (ND_C_MOVING): moved, S, T and Q by the change of depth; dropped with its kick or
+    // one of the two before it in the batch (gs_replay_corners.comp's window), the same for all three corners
+    float f = 1.0;
+    bool gone = false;
+    if ((d.info.y & ND_C_MOVING) != 0) {
+        Moved m = moved(slot, s, pl);
+        xi = m.x;
+        yi = m.y;
+        z = m.z;
+        f = m.f;
+        int kk = mesh.q[kick * 4u + 4u].x; // (the kick's number in the batch)
+        for (int i = 0; i < 3 && i <= kk && !gone; i++) {
+            uint k = kick - 2u * uint(i);
+            gone = k == slot ? m.drop : moved(k, vertex_set(k), vu_place(k)).drop;
+        }
+    }
     vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - offset.x), float(int(uint(yi) & 0xFFFFu) - offset.y)) / 16.0;
+    if (gone) {
+        xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
 
     vec3 stq;
     uvec4 rgba;
     if (!sphere) {
         vec4 st = qf(slot, 2u);
-        stq = vec3(vu_mul(st.x, q), vu_mul(st.y, q), vu_mul(st.z, q));
+        stq = vec3(vu_mul(st.x, q), vu_mul(st.y, q), vu_mul(st.z, q)) * f;
         rgba = lit_colour((corner & 0x40u) != 0u ? slot : kick);
     } else {
         // ((Ms * normal).xy + 1 * 1) * 0.5; Q 1; white, with vertex 1's alpha (its u's: lit.w is 1)

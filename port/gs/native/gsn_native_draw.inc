@@ -38,7 +38,23 @@ void nd280_flush(bool begin);
 bool nd280_batch();
 Program *nd280_program(Program *p);
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
-void nd_strip_draw(); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
+void nd_strip_draw(const RdDraw &d); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
+Program *nd_strip_program(Program *p);
+
+// A model part's move in the pictures between (P2-5; nd_between): its matrix in the frame before (P) and in
+// this frame (C), each split into a rotation R and the rest S (R S the linear part: a scale, or a shear), and
+// the translation T. At the picture's time t (u = 1 - t) the part is R_C Q(u) S(u) p + T(u), Q(u) the turn
+// from R_C to R_P (R_P = R_C Q(1)) by u of its angle, S(u) = S_C + (S_P - S_C) u, T(u) = T_C + (T_P - T_C) u:
+// the rotation by quaternion slerp, the rest along the line (NATIVE_DRAW.md 3.5). The shader adds
+// R_C (Q(u) S(u) - S_C) p + (T_P - T_C) u p.w to where the part is in this frame, which is exactly 0 at t 1.
+struct NdBetween {
+    float rot[12];  // R_C, a qword a column (w 0)
+    float s[12];    // S_C, a qword a column
+    float ds[12];   // S_P - S_C
+    float axis[4];  // Q(1) in R_C's frame: its axis, and its angle (0 to pi) in w
+    float dt[4];    // T_P - T_C
+};
+static_assert(sizeof(NdBetween) == 11 * 16, "NdBetween is the shaders' Between");
 
 // nd_000.vert's Draw (std430, a record a draw): matrices are VU layout, a qword a column; the vertex
 // matrix, the light directions and the point lights as VU1's set-up leaves them (nd_draw: its arithmetic)
@@ -55,11 +71,14 @@ struct NdConst {
     float point_col[16];
     float obj[4];        // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     int32_t info[4];     // the point lights, XYOFFSET's X and Y (12.4), ND_C_* flags
+    NdBetween bt;        // (ND_C_MODEL) the part's own move from the frame before (nd_between)
 };
-static_assert(sizeof(NdConst) == 35 * 16, "NdConst is nd_000.vert's Draw");
+static_assert(sizeof(NdConst) == 46 * 16, "NdConst is nd_000.vert's Draw");
 enum : int32_t {
     ND_C_MOVING = 0x1, // a picture between: moved by the picture's camera (set 1's Picture), see nd_section
     ND_C_OBJ = 0x2,    // ... and with its model, t of the way from its place in the frame before (obj)
+    ND_C_MODEL = 0x4,  // ... and with its model, by its matrices between the frame before's and this one's (bt)
+    ND_C_EYE = 0x8,    // (with ND_C_MODEL) the matrices are the eye's (the arm): not moved by the camera
 };
 // A corner (Vtx): its fog -1 less the vertex's number in the arena (below 0: a native corner, where the
 // PS2 path's fog is 0-255, so that a batch can hold both kinds: nd_draw_range); its RGB the kick's number
@@ -82,9 +101,11 @@ struct NdBuffer {
     uint32_t used = 0, room = 0; // vertices or records
 };
 
-// A draw's identity (RdDraw's kind and id: stable from frame to frame)
+// A draw's identity (RdDraw's kind and id: stable from frame to frame), the section it is drawn in, and
+// which draw of that identity and section in the frame it is (the held weapon 0x2E draws its parts twice;
+// a model drawn in the reflection and in the world is two): nd_key
 struct NdKey {
-    uint32_t k[4];
+    uint32_t k[6];
     bool operator==(const NdKey &o) const {
         return memcmp(k, o.k, sizeof(k)) == 0;
     }
@@ -98,7 +119,17 @@ struct NdKeyHash {
         return size_t(h ^ (h >> 29));
     }
 };
-enum { ND_SECTION_NONE, ND_SECTION_WORLD, ND_SECTION_REFLECT, ND_SECTION_OTHER };
+enum { ND_SECTION_NONE, ND_SECTION_WORLD, ND_SECTION_REFLECT, ND_SECTION_OTHER, ND_SECTION_ARM };
+
+// Where a draw's part was in a frame, for the pictures between of the frame after it: its matrix (VU1
+// 0x04), its parent's (0x08, program 0x280's set B) and the camera's world to view
+struct NdPlace {
+    float model[16], parent[16], view[16];
+};
+// A strip's points in a frame (the trail: gsn_nd_strip.inc), X | Y << 16 (12.4) and RGBA each
+struct NdStripPoints {
+    std::vector<uint32_t> xy, rgba;
+};
 
 // A batch's last plan (nd_plan), by its mesh and number: what it was planned from, and its corners
 struct NdPlanned {
@@ -122,6 +153,9 @@ struct NdState {
     bool active = false;   // the batch flush_batch is drawing has native corners (and in a picture between, only those)
     bool pending = false;  // gs->verts holds native corners
     bool skipping = false; // between RD_ND_ALT_BEGIN and _END, drawing the native draws
+    bool strip_pending = false, strip_active = false; // (a picture between's strip: gsn_nd_strip.inc's batch)
+    std::unordered_map<Program *, Program *> strip_programs; // (and the GS's programs with nd_strip.vert)
+    Shader *strip_vs = nullptr;
     NdBuffer arena;        // the meshes' vertices
     std::unordered_map<RdMesh, uint32_t> placed; // a mesh's first vertex in the arena
     NdBuffer draws;        // the draws' records
@@ -138,9 +172,13 @@ struct NdState {
     // in this frame and the one before: a part that moved between them (the sky, which follows the
     // player: map records with flags bit 31) is drawn t of the way between its two places, as
     // frame_interp.c's object_between draws the PS2 path's sky.
+    // The models' parts (objects, the picked item, entities, the arm: nd_model_move) are paired so too, by
+    // their whole matrices, and drawn between their two places; the trail between its two strips.
     int section = 0;       // ND_SECTION_*
     uint32_t serial = 0xFFFFFFFFu; // the frame whose draws `now` holds (RD_ND_FRAME's)
-    std::unordered_map<NdKey, std::array<float, 3>, NdKeyHash> now, before;
+    std::unordered_map<NdKey, NdPlace, NdKeyHash> now, before;
+    std::unordered_map<NdKey, uint32_t, NdKeyHash> seen; // (nd_key: the draws of an identity so far in the frame)
+    std::unordered_map<NdKey, NdStripPoints, NdKeyHash> strip_now, strip_before;
 } nd;
 volatile int nd_mode = GSN_NATIVE_DRAW_NATIVE; // (gsn_set_native_draw)
 
@@ -148,11 +186,12 @@ volatile int nd_mode = GSN_NATIVE_DRAW_NATIVE; // (gsn_set_native_draw)
 struct NdFlush {
     NdFlush() {
         nd.active = nd.pending;
-        nd.pending = false;
+        nd.strip_active = nd.strip_pending;
+        nd.pending = nd.strip_pending = false;
         nd280_flush(true); // (0x280's: gsn_nd_280.inc)
     }
     ~NdFlush() {
-        nd.active = false;
+        nd.active = nd.strip_active = false;
         nd280_flush(false);
     }
 };
@@ -187,8 +226,10 @@ Program *nd_program(Program *p) {
 
 // (flush_batch, a native batch's draw: the arena and the draws' records)
 void nd_bind(Cmd &c) {
-    c.set_storage_buffer(2, 0, *nd.batch_arena);
-    c.set_storage_buffer(2, 1, *nd.batch_draws);
+    if (nd.batch_arena && nd.batch_draws) {
+        c.set_storage_buffer(2, 0, *nd.batch_arena);
+        c.set_storage_buffer(2, 1, *nd.batch_draws);
+    }
     if (!interp.active) {
         // (a picture between's Picture is bound by its kicks' pass, recorded; else nothing moves)
         if (!nd.dummy) {
@@ -507,6 +548,183 @@ void nd_const(NdConst &k, const RdDraw &d, const RdCamera &cam) {
     k.info[0] = lights;
 }
 
+// ---- Pictures between: the models' own moves (P2-5) ----
+// (nd_key) a draw's identity, the section it is in and which of the draws of both in the frame
+NdKey nd_key(const RdDraw &d) {
+    NdKey key = {{d.kind, d.id[0], d.id[1], d.id[2], uint32_t(nd.section), 0}};
+    key.k[5] = nd.seen[key]++;
+    return key;
+}
+
+// (the frame's own draw) where the draw's part is, for the frame after's pictures between
+void nd_remember(const NdKey &key, const RdDraw &d, const RdCamera &cam) {
+    NdPlace &p = nd.now[key];
+    memcpy(p.model, d.model, 64);
+    memcpy(p.parent, d.parent, 64);
+    memcpy(p.view, cam.view, 64);
+}
+
+// The kinds that are moved by their own matrices (nd_model_flags); the map records and the items lying
+// about keep P1-3's move (the sky by its translation)
+bool nd_model_kind(uint32_t kind) {
+    return kind == RD_KIND_MAP_OBJECT || kind == RD_KIND_PICKED || kind == RD_KIND_ENTITY || kind == RD_KIND_ARM ||
+           kind == RD_KIND_GOLD;
+}
+
+// a b, matrices of VU layout (a qword a column), in doubles
+void nd_mul(double *out, const float *a, const float *b) {
+    for (int col = 0; col < 4; col++) {
+        for (int row = 0; row < 4; row++) {
+            double sum = 0.0;
+            for (int i = 0; i < 4; i++) {
+                sum += double(a[i * 4 + row]) * double(b[col * 4 + i]);
+            }
+            out[col * 4 + row] = sum;
+        }
+    }
+}
+
+// A matrix's linear part split into a rotation r and the rest s (r s; s is r's transpose times it),
+// r[row][col]: its first column's direction, the second's square to it, the third their cross (so a mirror
+// is s's)
+bool nd_split(const double *m, double r[3][3], double s[3][3]) {
+    double c[3][3]; // (columns)
+    for (int j = 0; j < 3; j++) {
+        for (int i = 0; i < 3; i++) {
+            c[j][i] = m[j * 4 + i];
+        }
+    }
+    double n0 = sqrt(c[0][0] * c[0][0] + c[0][1] * c[0][1] + c[0][2] * c[0][2]);
+    if (!(n0 > 1e-12) || !std::isfinite(n0)) {
+        return false;
+    }
+    double r0[3] = {c[0][0] / n0, c[0][1] / n0, c[0][2] / n0};
+    double d = r0[0] * c[1][0] + r0[1] * c[1][1] + r0[2] * c[1][2];
+    double u[3] = {c[1][0] - d * r0[0], c[1][1] - d * r0[1], c[1][2] - d * r0[2]};
+    double n1 = sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+    if (!(n1 > 1e-12 * n0) || !std::isfinite(n1)) {
+        return false;
+    }
+    double r1[3] = {u[0] / n1, u[1] / n1, u[2] / n1};
+    double r2[3] = {r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]};
+    const double *rc[3] = {r0, r1, r2};
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            r[i][j] = rc[j][i];
+            s[i][j] = rc[i][0] * c[j][0] + rc[i][1] * c[j][1] + rc[i][2] * c[j][2];
+            if (!std::isfinite(s[i][j])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// b: the move of a part from prev (the frame before) to cur (this frame), matrices of VU layout; with views,
+// of the part in the eye's space (view_cur cur, view_prev prev: the arm). False when it is not a move
+// between: a jump of ND_MAX_MOVE or more, a turn of nearly half way round, or a matrix with no rotation in it
+bool nd_between(NdBetween &b, const float *cur, const float *prev, const float *view_cur, const float *view_prev) {
+    double c[16], p[16];
+    if (view_cur) {
+        nd_mul(c, view_cur, cur);
+        nd_mul(p, view_prev, prev);
+    } else {
+        for (int i = 0; i < 16; i++) {
+            c[i] = cur[i];
+            p[i] = prev[i];
+        }
+    }
+    double dt[3] = {p[12] - c[12], p[13] - c[13], p[14] - c[14]};
+    double d2 = dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2];
+    if (!(d2 < double(ND_MAX_MOVE) * ND_MAX_MOVE)) {
+        return false;
+    }
+    double rc[3][3], sc[3][3], rp[3][3], sp[3][3];
+    if (!nd_split(c, rc, sc) || !nd_split(p, rp, sp)) {
+        return false;
+    }
+    // the turn q from rc to rp in rc's frame (rp = rc q): rc's transpose times rp, as a quaternion, the
+    // shorter way round
+    double q[3][3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            q[i][j] = rc[0][i] * rp[0][j] + rc[1][i] * rp[1][j] + rc[2][i] * rp[2][j];
+        }
+    }
+    double w, x, y, z, tr = q[0][0] + q[1][1] + q[2][2];
+    if (tr > 0.0) {
+        double t = sqrt(tr + 1.0) * 2.0;
+        w = t / 4.0, x = (q[2][1] - q[1][2]) / t, y = (q[0][2] - q[2][0]) / t, z = (q[1][0] - q[0][1]) / t;
+    } else if (q[0][0] > q[1][1] && q[0][0] > q[2][2]) {
+        double t = sqrt(1.0 + q[0][0] - q[1][1] - q[2][2]) * 2.0;
+        w = (q[2][1] - q[1][2]) / t, x = t / 4.0, y = (q[0][1] + q[1][0]) / t, z = (q[0][2] + q[2][0]) / t;
+    } else if (q[1][1] > q[2][2]) {
+        double t = sqrt(1.0 + q[1][1] - q[0][0] - q[2][2]) * 2.0;
+        w = (q[0][2] - q[2][0]) / t, x = (q[0][1] + q[1][0]) / t, y = t / 4.0, z = (q[1][2] + q[2][1]) / t;
+    } else {
+        double t = sqrt(1.0 + q[2][2] - q[0][0] - q[1][1]) * 2.0;
+        w = (q[1][0] - q[0][1]) / t, x = (q[0][2] + q[2][0]) / t, y = (q[1][2] + q[2][1]) / t, z = t / 4.0;
+    }
+    if (w < 0.0) {
+        w = -w, x = -x, y = -y, z = -z;
+    }
+    double vn = sqrt(x * x + y * y + z * z);
+    double angle = 2.0 * atan2(vn, w);
+    if (!std::isfinite(angle) || angle > 3.0) {
+        return false;
+    }
+    memset(&b, 0, sizeof(b));
+    for (int col = 0; col < 3; col++) {
+        for (int row = 0; row < 3; row++) {
+            b.rot[col * 4 + row] = float(rc[row][col]);
+            b.s[col * 4 + row] = float(sc[row][col]);
+            b.ds[col * 4 + row] = float(sp[row][col] - sc[row][col]);
+        }
+        b.dt[col] = float(dt[col]);
+    }
+    if (vn > 1e-12) {
+        b.axis[0] = float(x / vn);
+        b.axis[1] = float(y / vn);
+        b.axis[2] = float(z / vn);
+        b.axis[3] = float(angle);
+    } else {
+        b.axis[0] = 1.0f;
+    }
+    return true;
+}
+
+// In a picture between, how a draw of the models' kinds moves (ND_C_*): in the world with the camera and,
+// paired with its draw in the frame before, between its two places (a: its matrix's move; b: its parent's,
+// program 0x280's set B); in the reflection with the camera only (as the PS2 path's); the arm and the held
+// item between their two places in the eye's space, the camera's move left out (NATIVE_DRAW.md 3.5: "the
+// arm is interpolated in eye space"); elsewhere, or the arm not paired, as the frame has it
+int32_t nd_model_flags(const NdKey &key, const RdDraw &d, const RdCamera &cam, NdBetween *a, NdBetween *b) {
+    bool eye = nd.section == ND_SECTION_ARM && d.kind == RD_KIND_ARM;
+    if (!eye && nd.section != ND_SECTION_WORLD && nd.section != ND_SECTION_REFLECT) {
+        return 0;
+    }
+    int32_t flags = eye ? 0 : ND_C_MOVING;
+    auto it = nd.before.find(key);
+    if (nd.section == ND_SECTION_REFLECT || it == nd.before.end()) {
+        return flags;
+    }
+    const NdPlace &was = it->second;
+    if (memcmp(was.model, d.model, 64) == 0 && (!b || memcmp(was.parent, d.parent, 64) == 0) &&
+        (!eye || memcmp(was.view, cam.view, 64) == 0)) {
+        return flags; // (it did not move)
+    }
+    const float *vc = eye ? &cam.view[0][0] : nullptr, *vp = eye ? was.view : nullptr;
+    // (set B, the parent's: a part with none sends a slot of no matrix, never read: no move then)
+    if (b && !nd_between(*b, &d.parent[0][0], was.parent, vc, vp)) {
+        memset(b, 0, sizeof(*b));
+    }
+    if (!nd_between(*a, &d.model[0][0], was.model, vc, vp)) {
+        return flags;
+    }
+    gsn_stats.nd_moved_models++;
+    return ND_C_MOVING | ND_C_MODEL | (eye ? ND_C_EYE : 0);
+}
+
 void nd_draw(uint64_t value) {
     RdDraw d;
     RdCamera cam;
@@ -520,7 +738,7 @@ void nd_draw(uint64_t value) {
         return;
     }
     if (d.program == RD_PROGRAM_GS_STRIP) {
-        nd_strip_draw(); // (gsn_nd_strip.inc)
+        nd_strip_draw(d); // (gsn_nd_strip.inc)
         nd.fetched.clear();
         return;
     }
@@ -543,16 +761,20 @@ void nd_draw(uint64_t value) {
     k.info[2] = int32_t(bits(offset, 32, 16));
     // pictures between: the world and the reflection move with the picture's camera; a part of the world
     // that moved since the frame before (the sky) also with its model, as frame_interp.c's object_between
-    NdKey key = {{d.kind, d.id[0], d.id[1], d.id[2]}};
+    NdKey key = nd_key(d);
     memset(k.obj, 0, sizeof(k.obj));
+    memset(&k.bt, 0, sizeof(k.bt));
     k.info[3] = 0;
     if (!interp.active) {
-        nd.now[key] = {m[12], m[13], m[14]};
+        nd_remember(key, d, cam);
+    } else if (nd_model_kind(d.kind)) {
+        k.info[3] = nd_model_flags(key, d, cam, &k.bt, nullptr); // (the models': P2-5)
     } else if (nd.section == ND_SECTION_WORLD || nd.section == ND_SECTION_REFLECT) {
         k.info[3] = ND_C_MOVING;
         auto it = nd.before.find(key);
         if (nd.section == ND_SECTION_WORLD && it != nd.before.end()) {
-            float move[3] = {m[12] - it->second[0], m[13] - it->second[1], m[14] - it->second[2]};
+            const float *was = &it->second.model[12];
+            float move[3] = {m[12] - was[0], m[13] - was[1], m[14] - was[2]};
             float d2 = move[0] * move[0] + move[1] * move[1] + move[2] * move[2];
             if (d2 > 0.0f && d2 < ND_MAX_MOVE * ND_MAX_MOVE) {
                 memcpy(k.obj, move, sizeof(move));
@@ -618,11 +840,14 @@ void nd_register(uint64_t value) {
     case RD_ND_FRAME:
         rd_consumer_frame(value);
         nd.section = ND_SECTION_NONE;
+        nd.seen.clear();
         // (a frame's packets drawn again, for a picture between or exact, are the same frame)
         if (!interp.active && (uint32_t(value) & 0xFFFFFF) != nd.serial) {
             nd.serial = uint32_t(value) & 0xFFFFFF;
             nd.before.swap(nd.now);
             nd.now.clear();
+            nd.strip_before.swap(nd.strip_now);
+            nd.strip_now.clear();
         }
         break;
     }
@@ -630,13 +855,16 @@ void nd_register(uint64_t value) {
 
 // PORT_GS_REG_FRAME_INTERP (game/frame_interp.c's marks, as frame_interp.c's mark() reads them): where
 // the draws after it are. The world (projection 0, mode 0) and the reflection (mode 1) move with the
-// camera in a picture between; the arm, models before the eye and what follows the world stay.
+// camera in a picture between; the arm moves only as it moves (nd_model_flags); models before the eye and
+// what follows the world stay.
 void nd_mark(uint64_t value) {
     uint32_t index = uint32_t(value >> 32) & 0xFF, v = uint32_t(value);
     if (index != PORT_FRAME_INTERP_HEADER) {
         return;
     }
-    if (v == PORT_FRAME_INTERP_END || v == PORT_FRAME_INTERP_ARM) {
+    if (v == PORT_FRAME_INTERP_ARM) {
+        nd.section = ND_SECTION_ARM;
+    } else if (v == PORT_FRAME_INTERP_END) {
         nd.section = ND_SECTION_OTHER;
     } else if ((v & 0xFF) != 0) {
         nd.section = (v >> 8) == 1 ? ND_SECTION_REFLECT : ND_SECTION_OTHER;
@@ -683,7 +911,7 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
         while (to < end && nd_corner(v[to]) == native) {
             to += 3;
         }
-        c.set_program(native ? nd_program(base) : base);
+        c.set_program(native ? nd_program(base) : nd.strip_active ? nd_strip_program(base) : base);
         c.draw(to - first, first);
         first = to;
     }

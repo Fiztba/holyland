@@ -66,8 +66,8 @@ up to 8 other agents shared the PC, so nothing here is timed):
 **Left** (the details are in each task's notes):
 - **P0-5**, **P1-7** and **P2-7**: the reviews and the owner's gates (`map`, `sky`, `objects`, `picked`,
   `entities`, `arm` into `PORT_ND_ACCEPTED`).
-- **P2-5**: pictures between for models (objects, entities, the arm, the trail: none of them moves in a
-  picture between yet; the picked herb's edges at 240, P2-1).
+- ~~**P2-5**~~ (*done, nd2/p2-5, under its task*): pictures between for models (objects, the picked item,
+  entities, the arm, the trail).
 - From P2: gold (skinned: a call site at `Gold_Draw` through `NativeDraw_Skinned`, a `gold` kind and a gold
   drop to check); map objects with definition bit8 1 or 2; type 0x47 entities; the Fire Lord's afterimages
   not seen yet; a breaking object's fade not caught; `nd_arm.c` and `nd_entities.c` each hold a copy of
@@ -153,7 +153,9 @@ section a draw is in, for the pictures between).
    moves the PS2 path's vertices: from VU1's exact X, Y, Z and the place in view taken from them, by the
    picture's `(R - I)v + T`, rounded the same, with the same drop rule (ADC) for each corner. A part whose
    translation moved since the frame before by less than 400 (the sky follows the feet) gets `ND_C_OBJ`
-   and is moved t of the way with its model, as `frame_interp.c`'s `object_between` (P1-3).
+   and is moved t of the way with its model, as `frame_interp.c`'s `object_between` (P1-3). The models'
+   kinds (objects, picked, entities, arm, gold) are paired by identity and section and move by their own
+   matrices instead (`ND_C_MODEL`, P2-5, under its task).
 
 ### The switches
 
@@ -691,6 +693,86 @@ Left:
 Pair draws by identity (kind and id, as P1-3 does) and move the parts by their own matrices t of the way,
 then remove `objects_pair` for native draws. Accepted: at 240, the arm's swing and 016's bats with no
 jumps, edges only against the PS2 path; `KF4_INTERP_STILL` exact.
+
+*Done (nd2/p2-5).* What moves, and how (`gsn_native_draw.inc`, "Pictures between: the models' own moves";
+`shaders/nd_between.h`):
+- **Pairing.** A draw's key is its identity (kind, id), the section it is drawn in (world, reflection, arm)
+  and which draw of both it is in the frame (`nd_key`: the held weapon 0x2E draws its parts twice, a miner
+  is drawn in the reflection and in the world). The frame's own draw remembers each part's matrix, its
+  parent's (0x280's set B) and the camera's view (`nd_remember`); a picture between finds the frame
+  before's by the key.
+- **The move.** Both matrices are split into a rotation R and the rest S (R S: scale, or shear) and the
+  translation T (`nd_between`, in doubles). At the picture's time the part is R_C Q(u) S(u) p + T(u), u = 1 - t:
+  the rotation by quaternion slerp from the frame before's, S and T along the line (NATIVE_DRAW.md 3.5). The
+  shader adds R_C (Q(u) S(u) - S_C) p + (T_P - T_C) u p.w to where VU1 put the vertex, which is exactly 0 at
+  t 1. Not paired: a jump of 400 or more, a turn of more than 3 radians, a matrix with no rotation in it.
+  For 0x280 each matrix set has its own move (a part with no parent sends a slot of no matrix: set B then
+  does not move; before that fix, such parts went unpaired and jumped a frame at each frame).
+- **Where.** World (`objects`, `picked`, `entities`, `gold`): with the camera (P1-3's `moved`) and its own
+  move seen from the camera between. Reflection: with the camera only, as the PS2 path's. The arm and the
+  held item (the `PORT_FRAME_INTERP_ARM` section, now `ND_SECTION_ARM`; it was left where the frame had it):
+  in the eye's space (view times model at both frames), the camera's move left out (`ND_C_EYE`). Map
+  records and items keep P1-3's move (the sky by its translation); nothing changes for them.
+- **0x280** (`nd_280.vert`) had no pictures between at all (entities and the arm stood where the frame had
+  them while the world moved): it now has `nd_000.vert`'s moving path, its record the camera's projection
+  and both sets' moves, its S, T and Q (first pass) by the change of depth, the same drop window.
+- **The trail** (`gsn_nd_strip.inc`, `shaders/nd_strip.vert`): P2-4's native strip counted its vertex kicks
+  among the frame's in a picture between, where `frame_interp.c` never saw them: every later kick read the
+  wrong move and the recording broke ("65361 vertex kicks where the frame has 65357"). In a picture between
+  the strip's triangles are now made in the include and drawn by `nd_strip.vert`, each corner t of the way
+  from its partner in the frame before's strip: the points both share stay (they are screen points the
+  game keeps), the new pair grows out of the old head. The PS2 path pairs only a strip of as many points,
+  so its trail jumps a pair ahead at each frame while it grows; the native one does not.
+- **`objects_pair`** (`frame_interp.c`): runs between `RD_ND_ALT_BEGIN` and `_END` while the native GS draws
+  the native set (`--native-draw-compare native`, native renderer) are not paired, by batch or by order:
+  the GS leaves them out, and the native draws are paired by identity. So compare mode's pictures between
+  are onoff mode's (the arm's swing: the same 738,003 pixels in both).
+- `--stats`' native draw line ends with the model parts and strips moved between their frames.
+
+Results at 240 (1x unless said; every picture of the vblanks given: the game's own and the pictures between;
+headless, `--no-audio`, fresh data folders; pixels differing from the PS2 path in compare mode, or from off in
+onoff mode; the base is native/draw 893a881's build on the same runs):
+
+| | the game's frames | pictures between (>1) | base |
+|---|---|---|---|
+| the arm's swing, weapon 5 (P2-4's save, 330-372), compare | 0 | 738,003 (274,738), worst 246 | 10,042,057 (6,223,424), and the recording broken |
+| the same, onoff | 0 | 738,003 (274,738) | |
+| 016's bats standing (1900-1940), compare | 0 | 48,670 (26,510) | 108,217 (98,268) |
+| 016's bats turning (`lx` held from 1890), onoff | 0 | 26,712 (13,568) | |
+| 009's miners and their reflection (`m9w`, 300-340), compare | 0 | 266,176 (147,129) | 175,275 (152,394) |
+| the picked herb (`herb.pad`, CROSS at 1825, 1820-1880), `objects,picked`, compare | 0 | 176,114 (83,645) | 282,247 (225,700) |
+| a fight on 000 (`strong3.pad`, `strong0`, 1388-1398), every kind, onoff | 0 | 132,135 (26,527) | 2,898,010 (1,657,308) |
+| 000 walking (`newgame.pad`, `--teleport 1600:0:0`, `ly` from 1890, 1900-1930), every kind, compare | 0 | 123,585 (71,415) | 168,247 (134,013) |
+| the swing at 4x (356-359), compare | 0 | 1,856,164 (259,847) | |
+| 016 turning at 4x (1904-1906), onoff | 3 (the 2D snap) | 46,841 (25,144) | |
+
+- **No jumps.** The pixels changing from each picture to the next, in the arm's half of the screen, rise and
+  fall smoothly through the swing as the PS2 path's do; before the trail's fix both had a step at each frame
+  of the swing (the trail drawn at the next frame's length), now neither the arm nor the trail steps while
+  the trail grows. What still steps: the trail's tail dying at a frame (its points have no partner in the
+  next frame), as on the PS2 path. In the fight, before set B's fix, the arm stepped at every frame (7,000
+  against 2,500 a picture); now it does not.
+- **What differs is edges and texels.** The arm and the weapon: their edges, a few pixels where the hand
+  turns fastest (the PS2 path moves each vertex along the line between its two places; native turns the part).
+  The fight's near sleeve: native keeps it fixed to the eye while the player walks and turns, the PS2 path
+  moves it with the world and the camera, and its texture shifts by a texel. The bats, the herb, the
+  enemies on 000: speckle on edges and inside, worst 1-2 levels for most. The miners on 009 differ more
+  than the base in count (fewer by more than 1): the PS2 path leaves a model whose parts move less than a
+  500th of their distance where the frame has it (`run_motion`), native moves the miners' idle sway by its
+  sub-pixel amount, which shifts their texels (speckle inside the body, no edges moving). Not copied:
+  that threshold is there for the PS2 path's places from the screen, which native does not have.
+- **`KF4_INTERP_STILL`**: exact, the pictures between equal the next frame (the swing: 112 pictures, 0 pixels,
+  as off; 016 turning: 84 pixels in 28 pictures, worst 2, the same as off: the PS2 path's own). It runs the
+  CPU walk, where native draws are not moved, so a local test also drew it on the GPU with t 1 and the frame's
+  camera: the models' moves vanish there (the arm: 14 pixels more than off's 735 over 112 pictures, two ground
+  pixels at 1 level; 016: 77 as off).
+- **Checks**: the oracle on the tour's 000, 009 and 016 captures, 0 lane differences on drawn vertices (0x000
+  and 0x280, both passes); the off check: boot_test, frame_test gs and native, gsn_draw_test (0 of 300),
+  vu1_test (0 of 90), and the herb with `--native-draw off` against 893a881's build (the same `--log`, PATH1
+  hash 204e443a9fc49731, VU1 cycles 460424273, pictures at 1800, 1820 and 1840).
+- **Left**: the trail's tail dying at a frame; the PS2 path's threshold for still models (above), the
+  owner's call; the CPU walk (`KF4_INTERP_CPU`, `--renderer both`) still does not move native draws; type 0x47
+  entities, gold and effects get their moves when they are native (`nd_model_kind` lists gold already).
 
 **P2-6 The mutators** (owns the call sites of `Model_Set*`, `Model_FadeVertexColoursNear`,
 `Model_SetUvsFromScreen` and `Model_Save/RestoreGsWordsAndUvs`). Measure them with `KF4_ND_DUMP` as P0-3

@@ -1066,14 +1066,16 @@ void port_gs_print_stats(void) {
                     "[stats] native draw: %llu draws queued, %llu drawn (%llu batches), %llu lost, %llu not drawn yet; "
                     "%llu meshes parsed (%llu refused), %llu found again, %.1f MB hashed; %llu meshes put on the GPU; "
                     "%llu PS2-path writes left out; %llu models declined (drawn the PS2 way); the plan %.3f s, "
-                    "%llu vertices (%llu found planned)\n",
+                    "%llu vertices (%llu found planned); pictures between: %llu model parts and %llu strips moved "
+                    "between their frames\n",
                     (unsigned long long)rd_stats.draws, (unsigned long long)s->nd_draws,
                     (unsigned long long)s->nd_batches, (unsigned long long)s->nd_lost,
                     (unsigned long long)s->nd_unsupported, (unsigned long long)rd_stats.meshes_parsed,
                     (unsigned long long)rd_stats.mesh_unsupported, (unsigned long long)rd_stats.mesh_hits,
                     rd_stats.hash_bytes / 1048576.0, (unsigned long long)s->nd_mesh_uploads,
                     (unsigned long long)s->nd_skipped, (unsigned long long)rd_stats.declined, s->ns_nd_plan / 1e9,
-                    (unsigned long long)s->nd_plan_vertices, (unsigned long long)s->nd_plan_reused);
+                    (unsigned long long)s->nd_plan_vertices, (unsigned long long)s->nd_plan_reused,
+                    (unsigned long long)s->nd_moved_models, (unsigned long long)s->nd_moved_strips);
         }
         {
             int w;
