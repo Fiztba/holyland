@@ -174,11 +174,13 @@ const size_t ND_PLANNED_MAX = 1u << 12;
 const float ND_MAX_MOVE = 400.0f; // (frame_interp.c's INTERP_MAX_MOVE: more is not a move but a jump)
 
 // What nd_box_at_0 needs of a draw's record (a copy of NdConst's, on the CPU): how it moves, its
-// projection (sx, sy, cx, cy, as nd_000.vert's moved takes them), XYOFFSET (pixels) and its obj
+// projection (sx, sy, cx, cy, as nd_000.vert's moved takes them), XYOFFSET (pixels), its obj, and cz
+// (nd_z_at_0; 0x000's records only)
 struct NdBoxInfo {
     int32_t flags;
     float sx, sy, cx, cy, ox, oy;
     float obj[3];
+    float cz;
 };
 
 struct NdState {
@@ -902,7 +904,7 @@ void nd_draw(uint64_t value) {
     if (interp.active) {
         nd.boxes.resize(record + 1);
         nd.boxes[record] = {k.info[3], k.screen[0], k.screen[5], k.screen[8], k.screen[9], float(k.info[1]) / 16.0f,
-                            float(k.info[2]) / 16.0f, {k.obj[0], k.obj[1], k.obj[2]}};
+                            float(k.info[2]) / 16.0f, {k.obj[0], k.obj[1], k.obj[2]}, k.screen[10]};
     }
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
@@ -1011,6 +1013,38 @@ void nd_mark(uint64_t value) {
 // dome's lowest rows black and noisy, P3-1's rim band). The models' own moves (ND_C_MODEL), program
 // 0x280's corners and the strip's are not worked out here: such a run may cover the whole target. False
 // when the batch is not native corners (the PS2 path's: interp_box_at_0).
+// (nd_box_at_0, nd_z_at_0) Where a moving native corner of program 0x000 (record b) is at the frame's t 0:
+// nd_000.vert's moved at the frame's t 0 camera (frame->move0, mid0) with the part's obj back at the frame
+// before's. Its place in GS pixels less XYOFFSET (px, py) and its Z (pz: the corner's less (Z - cz) dm.z /
+// m.z); false when it is dropped there, or drawn where it is.
+bool nd_corner_at_0(const Vtx &w, const NdBoxInfo &b, float *px, float *py, double *pz) {
+    const float *r = interp.frame->move0, *mid = interp.frame->mid0;
+    // (the place in the frame's view from X, Y and 1 / q, then v + dm)
+    double depth = 1.0 / double(w.q);
+    if (!(w.q > 0.0f) || !std::isfinite(depth) || b.sx == 0.0f || b.sy == 0.0f) {
+        return false; // (as it is)
+    }
+    double v[3] = {(double(w.x) + b.ox - b.cx) * depth / b.sx, (double(w.y) + b.oy - b.cy) * depth / b.sy, depth};
+    double m[3];
+    for (int j = 0; j < 3; j++) {
+        m[j] = v[j] + r[j * 4] * v[0] + r[j * 4 + 1] * v[1] + r[j * 4 + 2] * v[2] + r[j * 4 + 3];
+        if (b.flags & ND_C_OBJ) {
+            m[j] -= mid[j * 4] * b.obj[0] + mid[j * 4 + 1] * b.obj[1] + mid[j * 4 + 2] * b.obj[2];
+        }
+    }
+    if (!(m[2] > 0.0)) {
+        return false; // (dropped)
+    }
+    double nx = b.sx * m[0] / m[2] + b.cx, ny = b.sy * m[1] / m[2] + b.cy;
+    if (!(fabs(nx - 2048.0) <= 2047.0 && fabs(ny - 2048.0) <= 2047.0)) {
+        return false; // (dropped)
+    }
+    *px = float(nx - b.ox);
+    *py = float(ny - b.oy);
+    *pz = double(w.z) - (double(w.z) - double(b.cz)) * (m[2] - v[2]) / m[2];
+    return true;
+}
+
 bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
     if (!nd.active || nd.pass_active) { // (a screen pass's corners are the CPU's: interp_box_at_0)
         return false;
@@ -1023,7 +1057,6 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
         whole(); // (the strip's, and the water's: their records are not nd.boxes')
         return true;
     }
-    const float *r = interp.frame->move0, *mid = interp.frame->mid0;
     float most = 0.0f;
     bool moved = false;
     for (uint32_t i = first; i < first + count && i < gs->verts.size(); i++) {
@@ -1046,27 +1079,11 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
             return true;
         }
         moved = true;
-        // (nd_000.vert's moved at t 0: the place in the frame's view from X, Y and 1 / q, then v + dm)
-        double depth = 1.0 / double(w.q);
-        if (!(w.q > 0.0f) || !std::isfinite(depth) || b.sx == 0.0f || b.sy == 0.0f) {
-            continue; // (as it is)
+        float px, py;
+        double pz;
+        if (!nd_corner_at_0(w, b, &px, &py, &pz)) {
+            continue;
         }
-        double v[3] = {(double(w.x) + b.ox - b.cx) * depth / b.sx, (double(w.y) + b.oy - b.cy) * depth / b.sy, depth};
-        double m[3];
-        for (int j = 0; j < 3; j++) {
-            m[j] = v[j] + r[j * 4] * v[0] + r[j * 4 + 1] * v[1] + r[j * 4 + 2] * v[2] + r[j * 4 + 3];
-            if (b.flags & ND_C_OBJ) {
-                m[j] -= mid[j * 4] * b.obj[0] + mid[j * 4 + 1] * b.obj[1] + mid[j * 4 + 2] * b.obj[2];
-            }
-        }
-        if (!(m[2] > 0.0)) {
-            continue; // (dropped)
-        }
-        double nx = b.sx * m[0] / m[2] + b.cx, ny = b.sy * m[1] / m[2] + b.cy;
-        if (!(fabs(nx - 2048.0) <= 2047.0 && fabs(ny - 2048.0) <= 2047.0)) {
-            continue; // (dropped)
-        }
-        float px = float(nx - b.ox), py = float(ny - b.oy);
         box[0] = std::min(box[0], int32_t(floorf(px)) - 1);
         box[1] = std::min(box[1], int32_t(floorf(py)) - 1);
         box[2] = std::max(box[2], int32_t(ceilf(px)) + 2);
@@ -1081,6 +1098,47 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
         box[3] += margin;
     }
     return true;
+}
+
+// (flush_batch's depth bounds of a two-phase tie, in a picture between) A native batch's Z at t 0 too, as
+// interp_z_at_0 the PS2 path's: lo and hi widened to take in where nd_000.vert moves its corners at the
+// frame's t 0, and a quarter of the furthest a Z went more each way (the camera's path is not a line
+// between its ends). 0: not a native batch (the PS2 path's: interp_z_at_0); 1: done; -1: not known here
+// (the models' own moves, 0x280's, 0x700's, the strip's, the water's, a screen pass's): no bounds.
+int nd_z_at_0(double *lo, double *hi) {
+    if (!nd.active) {
+        return 0;
+    }
+    if (nd.pass_active || nd.strip_active || ndw_batch()) {
+        return -1;
+    }
+    double zl = INFINITY, zh = -INFINITY;
+    for (const Vtx &w : gs->verts) {
+        uint32_t record = (w.rgba & 0xFFFFFFu) >> ND_CORNER_DRAW_SHIFT;
+        if (nd_corner_kind(w) != ND_KIND_000 || nd700_corner(w) || record >= nd.boxes.size()) {
+            return -1;
+        }
+        const NdBoxInfo &b = nd.boxes[record];
+        if (!(b.flags & ND_C_MOVING)) {
+            continue; // (where it is: its Z is the batch's own)
+        }
+        if (b.flags & ND_C_MODEL) {
+            return -1;
+        }
+        float px, py;
+        double pz;
+        if (nd_corner_at_0(w, b, &px, &py, &pz)) {
+            zl = std::min(zl, pz);
+            zh = std::max(zh, pz);
+        }
+    }
+    if (zl > zh) {
+        return 1;
+    }
+    double far = std::max({0.0, *lo - zl, zh - *hi});
+    *lo = std::min(*lo, zl) - far * 0.25;
+    *hi = std::max(*hi, zh) + far * 0.25;
+    return 1;
 }
 
 // A register write between RD_ND_ALT_BEGIN and _END while the native draws are drawn: left out, but a

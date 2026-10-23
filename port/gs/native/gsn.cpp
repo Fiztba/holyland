@@ -2982,6 +2982,7 @@ void blend_copy_in_pass(Target &t, bool ms, const int32_t *box) {
 
 void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box);
 bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box); // (native draw: gsn_native_draw.inc)
+int nd_z_at_0(double *lo, double *hi);                          // (native draw: gsn_native_draw.inc)
 
 // A run's rectangle: the GS pixels its primitives can cover, a pixel more each way (x0 y0 x1 y1)
 void run_box(uint32_t first, uint32_t count, int32_t *box) {
@@ -3860,9 +3861,9 @@ void flush_batch() {
     }
     // Triangles wholly outside the scissor draw nothing: left out, before the runs below are cut (a
     // reflection drawn into its 256 x 256 target from the whole scene had most of its triangles off it,
-    // each a run of its own). (A pixel's margin each way.) (Not a native draw's in a picture between:
-    // where they are then is the GPU's.)
-    if (!(nd.active && interp.active)) {
+    // each a run of its own). (A pixel's margin each way.) (A native draw's in a picture between: where
+    // they are then is the GPU's, at t 0 nd_box_at_0's; not a screen pass's.)
+    if (!(nd.pass_active && interp.active)) {
         float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
         size_t kept = 0, n = gs->verts.size();
         Vtx *v = gs->verts.data();
@@ -3877,7 +3878,9 @@ void flush_batch() {
                 // a picture between's moving vertices: left out only when outside at t 0 too, by a margin
                 int32_t box[4] = {int32_t(floorf(tx0)) - 1, int32_t(floorf(ty0)) - 1, int32_t(ceilf(tx1)) + 2,
                                   int32_t(ceilf(ty1)) + 2};
-                interp_box_at_0(uint32_t(i), 3, box);
+                if (!nd_box_at_0(uint32_t(i), 3, box)) { // (native draw's corners: gsn_native_draw.inc)
+                    interp_box_at_0(uint32_t(i), 3, box);
+                }
                 if (!(float(box[2]) < cx0 || float(box[0]) > cx1 || float(box[3]) < cy0 || float(box[1]) > cy1)) {
                     goto keep;
                 }
@@ -4110,9 +4113,9 @@ void flush_batch() {
     // KF4_GSN_DEPTH_BOUNDS=0: without it.
     bool two_phase_bounds = false;
     float bounds_lo = 0.0f, bounds_hi = 1.0f;
-    // (Not a native batch's in a picture between: nd_000.vert moves its corners on the GPU, and where their
-    // Zs are at t 0 is not worked out here, as interp_z_at_0 works out the PS2 path's.)
-    if (two_phase && depth_bounds_ok() && !(nd.active && interp.active && !nd.pass_active)) {
+    // (A native batch's in a picture between: nd_000.vert moves its corners on the GPU; nd_z_at_0 works out
+    // where their Zs are at t 0, or that it cannot: no bounds.)
+    if (two_phase && depth_bounds_ok()) {
         double lo = INFINITY, hi = -INFINITY;
         for (size_t t = 0; t + 2 < gs->verts.size(); t += 3) {
             double a, b;
@@ -4120,13 +4123,14 @@ void flush_batch() {
             lo = std::min(lo, a);
             hi = std::max(hi, b);
         }
-        if (interp.active && moving.moves_3d) {
+        int nd_z = interp.active && moving.moves_3d ? nd_z_at_0(&lo, &hi) : 0; // (native draw: gsn_native_draw.inc)
+        if (interp.active && moving.moves_3d && nd_z == 0) {
             interp_z_at_0(&lo, &hi);
         }
         double scale = depth_scale(zpsm);
         lo = (std::max(lo, 0.0) - 2.0 * zstep) * scale;
         hi = (std::min(hi, double(depth_max(zpsm))) + 2.5 * zstep) * scale;
-        if (lo > 0.0 || hi < 1.0) {
+        if ((lo > 0.0 || hi < 1.0) && nd_z >= 0) {
             two_phase_bounds = true;
             bounds_lo = float(std::max(lo * (1.0 - 1e-6), 0.0));
             bounds_hi = float(std::min(hi * (1.0 + 1e-6), 1.0));
