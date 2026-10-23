@@ -28,7 +28,10 @@
 // shadows are the scene's own ops (sa_scene_op). So everything the scene does not draw (the PS2 path's
 // draws left, the water, the passes, the 2D, the menus) is drawn by the GS over the scene's picture, in the
 // chain's order: the 2D and the passes after the world are composited over it as the PS2 drew them. As
-// more kinds move into the scene the turns get fewer, down to one a frame (the world, then the GS's 2D).
+// more kinds move into the scene the turns get fewer, down to one a frame (the world, then the GS's 2D). (T2:
+// the GS's clear taken as a clear of the scene's own; the GS's leftover 3D, the water, fills and the screen
+// passes drawn into the scene; the scene at a scale and samples of its own, --scene-scale, --scene-msaa, and the
+// picture shown made from both: gsn_composite.inc.)
 //
 // What the scene cannot draw yet goes back to the GS whole (sa_decline, counted by reason): a batch that
 // needs the GS's shader blending (DATE, a partial mask, PABE, ...), one into another target (the
@@ -37,6 +40,9 @@
 const Target SA_MARKER = {}; // (gs->pass_color while the scene's render pass is under way)
 
 volatile int sa_mode = 0; // (gsn_set_standalone)
+// --scene-scale and --scene-msaa (gsn_set_scene, T2): the scene's own scale (across | down << 8) and samples; 0 the
+// GS's (--native-scale, --native-msaa). Taken when the scene next takes a frame.
+volatile uint32_t sa_wanted_scale = 0, sa_wanted_samples = 0;
 
 enum {
     SA_WHY_FRAME,    // another target than a frame of 512 pixels or more across, 32 or 24-bit
@@ -63,6 +69,10 @@ const char *const sa_tex_names[SA_TEX_COUNT] = {"from the table", "a render targ
 struct SaStats {
     uint64_t batches, draws, triangles, shader_blends, acquires, releases, frames_touched;
     uint64_t depth_clears, alpha_sets, shadow_batches; // (the scene's ops, and the shadows by the stencil)
+    // (T2) frames taken from the GS's clear (no copy), the GS's batches drawn into the scene (its 3D, the screen
+    // passes, fills), its frame given to the GS and kept (a copy that reads it), pictures made by the composite
+    uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops;
+    uint64_t frame_copies, frame_copy_reads; // (the scene's copies of its frame elsewhere, and textures read from them)
     uint64_t declined[SA_WHY_COUNT];
     uint64_t textures[SA_TEX_COUNT];
     uint64_t decodes, decode_hits, uploads, upload_bytes, chunks_new, replayed_uploads;
@@ -149,6 +159,32 @@ struct Sa {
     Program *programs[3][2] = {};
     Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
+    // (T2) the scene's scale (its pixels a GS pixel is, across and down) and samples as its targets have them now,
+    // and the programs that take the GS's picture into a scene of another shape and give it back
+    // (shaders/sa_resample.frag: [depth][multisampled source])
+    uint32_t sx = 1, sy = 1;
+    bool drew = false; // (drawn into since it took the frame)
+    uint32_t scissor_rows = 0; // (the rows of the scissors it drew with since: the world's, 448)
+    Program *program_resample[2][2] = {};
+    ImageHandle own; // (a texture that is the frame the scene draws into: a copy of its colour, sa_draw_batch)
+    // (T2) A local copy of the scene's frame elsewhere (GsDraw_CopyFrame's to 0x2BC0, which the wobble under water
+    // and the MP drain read): the scene's picture as it was copied, at its scale, read for a texture there until
+    // those pages are drawn into, uploaded to or copied over (sa_frame_copied; sa_texture)
+    struct Copy {
+        bool valid = false, fresh = false;
+        uint32_t dbp, dbw, dpsm, dx, dy, sx, sy, w, h, scale_x, scale_y;
+        ImageHandle image;
+    } fcopy;
+    // what the batch drawn is (sa_flush): a screen pass's (nd_pass_draw, sa_pass), the GS's own 3D (the PS2 path's
+    // corners, sa_gs_batch)
+    bool in_pass = false, gs3d = false, gs_fill = false, gs_water = false;
+    // The GS's clear of a frame and its Z buffer (libgraph's at the swap: one colour, Z 0, the whole frame): while
+    // nothing else of the GS has touched them since, the scene takes that frame by clearing its own targets the
+    // same, with no copy (sa_acquire)
+    struct Clear {
+        bool valid;
+        uint32_t fbp, fbw, fpsm, zbp, zpsm, rgba, z, rows;
+    } clear = {};
 } sa;
 enum { SA_VS_000, SA_VS_280, SA_VS_700 }; // (sa.programs: sa_000.vert, sa_280.vert, sa_700.vert)
 
@@ -189,6 +225,18 @@ void sa_table_reset() {
     sa.recording = -1;
 }
 
+// (T2) Pages lo..lo+count-1 written: the scene's copy of its frame there let go
+void sa_copy_written(uint32_t lo, uint32_t count) {
+    if (!sa.fcopy.valid || sa.fcopy.fresh) { // (fresh: the copy of the frame itself, written as it is made)
+        return;
+    }
+    uint32_t clo, ccount;
+    buffer_pages(sa.fcopy.dbp, sa.fcopy.dbw, sa.fcopy.dpsm, sa.fcopy.dx + sa.fcopy.w, sa.fcopy.dy + sa.fcopy.h, &clo, &ccount);
+    if (pages_overlap(lo, count, clo, ccount)) {
+        sa.fcopy.valid = false;
+    }
+}
+
 // (mark_dirty) Rows y0..y1-1 of a target drawn into: its pages are not their uploads' any more
 void sa_drawn(const Target &t, uint32_t y0, uint32_t y1) {
     if (!sa.on || y1 <= y0) {
@@ -202,6 +250,7 @@ void sa_drawn(const Target &t, uint32_t y0, uint32_t y1) {
     for (uint32_t k = std::min(first_row * across, count); k < count; k++) {
         sa.page_drawn[(lo + k) % vram_pages] = sa.seq;
     }
+    sa_copy_written(lo, count);
 }
 
 // (begin_transfer) A local-to-local copy's destination: its pages are not their uploads' any more
@@ -216,6 +265,7 @@ void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
     for (uint32_t k = 0; k < count && k < vram_pages; k++) {
         sa.page_drawn[(lo + k) % vram_pages] = sa.seq;
     }
+    sa_copy_written(lo, count);
 }
 
 // The chunk a block list names, if still kept
@@ -265,6 +315,12 @@ void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uin
     }
     sa_stats.uploads++;
     sa_stats.upload_bytes += size;
+    {
+        uint32_t lo, count;
+        buffer_pages(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), bits(bitbltbuf, 56, 6),
+                     bits(trxpos, 32, 11) + bits(trxreg, 0, 12), bits(trxpos, 48, 11) + bits(trxreg, 32, 12), &lo, &count);
+        sa_copy_written(lo, count);
+    }
     PendingUpload p;
     p.bitbltbuf = bitbltbuf;
     p.trxpos = trxpos;
@@ -351,12 +407,14 @@ void sa_upload_begins(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool
         sa.recording = int(sa.uploads_now.size() - 1);
     }
 }
+uint64_t sa_vblanks = 0;
 void sa_vblank(bool extra) {
     if (!sa.on) {
         return;
     }
     if (!extra) {
         sa.frame++;
+        sa_vblanks++; // (the composite's: gsn_composite.inc)
         if (!sa.uploads_now.empty()) {
             sa.uploads_frame.swap(sa.uploads_now);
             sa.uploads_now.clear();
@@ -538,7 +596,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
                 (bits(tex1, 19, 2) << 8);
     int32_t k = int32_t(bits(tex1, 32, 12) << 20) >> 20;
     push.lod_k = float(k) / 16.0f;
-    uint32_t finer = std::min(target_sx, target_sy);
+    uint32_t finer = std::min(sa.sx, sa.sy); // (the scene's scale: T2)
     int mode = lod_mode;
     push.lod_bias = mode == GSN_LOD_FULL ? -64.0f : mode == GSN_LOD_SCALE ? -log2f(float(finer)) : 0.0f;
     push.misc |= uint32_t(aniso_log2) << M_ANISO_SHIFT;
@@ -584,6 +642,29 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
         rows = std::min(rows, (read_extent(false) + ph - 1) / ph * ph);
     }
 
+    // (T2) the scene's copy of its frame there (GsDraw_CopyFrame's), at the scene's scale
+    {
+        const Sa::Copy &k = sa.fcopy;
+        if (sa.log == 3 && tbp == k.dbp) {
+            fprintf(stderr, "[sa] texture at the frame's copy: valid %d tbw %u psm %u levels %u rows %u cols %u\n", k.valid, tbw, tpsm,
+                    levels, rows, cols);
+        }
+        if (k.valid && tbp == k.dbp && tbw == k.dbw && tpsm == k.dpsm && levels == 1 &&
+            k.image && k.image->get_width() == sa.color->get_width() && k.image->get_height() == sa.color->get_height()) {
+            st.src = tpsm == GSN_PSMCT24 ? SRC_TARGET_CT24 : SRC_TARGET_CT32;
+            st.reads_target = true;
+            st.src_offset[0] = int32_t(k.sx) - int32_t(k.dx);
+            st.src_offset[1] = int32_t(k.sy) - int32_t(k.dy);
+            st.tscale = k.scale_x | k.scale_y << 16;
+            st.target_view = &k.image->get_view();
+            sa_stats.frame_copy_reads++;
+            push.flags |= st.src << F_SRC_SHIFT;
+            push.src_offset[0] = st.src_offset[0];
+            push.src_offset[1] = st.src_offset[1];
+            push.tscale = st.tscale;
+            return;
+        }
+    }
     // from the table
     int why = SA_TEX_TARGET;
     uint32_t shape[4] = {tbw, tpsm, tw, th};
@@ -612,13 +693,16 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
             if (y0 >= t->height) {
                 continue;
             }
-            if (y0 + read_extent(false) > t->height) {
+            // (the frame the scene draws into is its own copy: a pass reading a row past it, the flicker filter's
+            // half-row offset, still reads the scene's picture, not VRAM's stale one: T2)
+            if (y0 + read_extent(false) > t->height && t.get() != color) {
                 break;
             }
             source = t.get();
             st.src_offset[0] = int32_t(x0);
             st.src_offset[1] = int32_t(y0);
-            st.tscale = t->sx | t->sy << 16;
+            // (the frame the scene draws into is read from a copy of the scene's colour, at its scale: T2)
+            st.tscale = t.get() == color ? sa.sx | sa.sy << 16 : t->sx | t->sy << 16;
             break;
         }
         if (source) {
@@ -626,7 +710,12 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
             st.src = tpsm == GSN_PSMCT24 ? SRC_TARGET_CT24 : psm_is_16(tpsm) ? SRC_TARGET_CT16 : SRC_TARGET_CT32;
             st.reads_target = true;
             if (source == color) {
-                st.reads_own = true;
+                st.reads_own = true; // (sa_draw_batch binds a copy of the scene's colour)
+                sa_stats.textures[why]++;
+                push.flags |= st.src << F_SRC_SHIFT;
+                push.src_offset[0] = st.src_offset[0];
+                push.src_offset[1] = st.src_offset[1];
+                push.tscale = st.tscale;
                 return;
             }
             Why why_(GSN_WHY_TEXTURE);
@@ -668,7 +757,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
                     st.tex_hi = std::max(st.tex_hi, a);
                 }
             }
-            if (cutout_aa_mode != GSN_CUTOUT_AA_OFF && target_samples > 1) {
+            if (cutout_aa_mode != GSN_CUTOUT_AA_OFF && sa.samples > 1) {
                 st.cut_texels = true;
                 st.cut_lo = st.tex_lo;
                 st.cut_hi = st.tex_hi;
@@ -751,6 +840,20 @@ void sa_programs() {
         sa.program_depth_ms = gs->device->request_program(
             copy_vs, gs->device->request_shader(gsn_spv_sa_depth_ms_frag, sizeof(gsn_spv_sa_depth_ms_frag), &depth));
     }
+    // (T2) the GS's picture and Z into a scene of another scale or samples, and back (sa_resample_pass)
+    ResourceLayout resample = copy;
+    resample.push_constant_size = 32;
+    ResourceLayout resample_colour = resample;
+    resample_colour.output_mask = 1;
+    sa.program_resample[0][0] = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_sa_resample_frag, sizeof(gsn_spv_sa_resample_frag), &resample_colour));
+    sa.program_resample[0][1] = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_sa_resample_ms_frag, sizeof(gsn_spv_sa_resample_ms_frag), &resample_colour));
+    sa.program_resample[1][0] = gs->device->request_program(
+        copy_vs, gs->device->request_shader(gsn_spv_sa_resample_depth_frag, sizeof(gsn_spv_sa_resample_depth_frag), &resample));
+    sa.program_resample[1][1] = gs->device->request_program(
+        copy_vs,
+        gs->device->request_shader(gsn_spv_sa_resample_depth_ms_frag, sizeof(gsn_spv_sa_resample_depth_ms_frag), &resample));
 }
 
 // (flush_batch's) The frame and Z buffer a batch draws into, made as big as each other
@@ -828,6 +931,46 @@ void sa_copy_pass(const Image &dst, const Image &src, Program *program, bool dep
     full_barrier();
 }
 
+// (T2) src into dst's rows y0..y1 where the two differ in scale or samples (shaders/sa_resample.frag): rx, ry the
+// source's pixels a destination pixel is; a depth taken under each pixel's middle (zscale: 0 as it is, else as
+// sa_depth.frag rounds it; clear: dst's stencil cleared), a colour the mean of its pixels and samples
+void sa_resample_pass(const Image &dst, const Image &src, bool depth, uint32_t y0, uint32_t y1, float rx, float ry, float zscale,
+                      float zmax, bool clear = false) {
+    struct {
+        float ratio[2];
+        int32_t last[2];
+        int32_t samples;
+        float zscale, zmax, pad;
+    } push = {{rx, ry},
+              {int32_t(src.get_width()) - 1, int32_t(src.get_height()) - 1},
+              int32_t(src.get_create_info().samples),
+              zscale,
+              zmax,
+              0.0f};
+    bool ms = src.get_create_info().samples != VK_SAMPLE_COUNT_1_BIT;
+    sa_copy_pass(dst, src, sa.program_resample[depth ? 1 : 0][ms ? 1 : 0], depth, y0, y1, &push, sizeof(push), clear);
+    sa_stats.resampled++;
+}
+
+// (T2) The scene's scale and samples for a frame target: --scene-scale and --scene-msaa, or the GS's (the most
+// samples the GPU has up to those wanted; more than one only with sample-rate shading, which the copies need)
+void sa_shape(const Target &color, uint32_t *sx, uint32_t *sy, uint32_t *samples) {
+    uint32_t w = sa_wanted_scale;
+    *sx = (w & 0xFF) ? std::min(w & 0xFF, uint32_t(GSN_MAX_SCALE_X)) : color.sx;
+    *sy = (w >> 8) ? std::min(w >> 8, 4u) : color.sy;
+    uint32_t want = sa_wanted_samples ? sa_wanted_samples : target_samples;
+    uint32_t n = 1;
+    while (n * 2 <= want && n < 8 && (msaa_samples_have & (n * 2))) {
+        n *= 2;
+    }
+    *samples = sample_shading || n == target_samples ? n : 1;
+}
+
+// (T2) Whether the scene has the GS frame target's shape (its scale and samples): its pictures are copied as they are
+bool sa_same_shape(const Target &color) {
+    return sa.sx == color.sx && sa.sy == color.sy && sa.samples == target_samples;
+}
+
 // The scene takes the frame's picture and Z buffer (all of them: what it draws over blends with them, and is
 // tested against them)
 bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h) {
@@ -842,47 +985,93 @@ bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
         return false;
     }
     sa_programs();
-    uint32_t w = color->image->get_width(), h = color->image->get_height();
-    uint32_t samples = target_samples;
+    // (T2) the scene's own scale and samples (--scene-scale, --scene-msaa), its targets made for them
+    uint32_t sx, sy, samples;
+    sa_shape(*color, &sx, &sy, &samples);
+    uint32_t w = color->width * sx, h = color->height * sy;
+    VkFormat format = color->image->get_format();
     if (!sa.color || sa.color->get_width() != w || sa.color->get_height() != h || sa.samples != samples ||
-        sa.color->get_format() != color->image->get_format()) {
-        sa.color = sa_image(w, h, color->image->get_format(), samples);
+        sa.color->get_format() != format) {
+        sa.color = sa_image(w, h, format, samples);
         sa.depth = sa_image(w, h, sa.depth_format, samples);
         sa.samples = samples;
     }
-    {
-        Why why(GSN_WHY_COPY);
-        if (samples > 1) {
-            msaa_ready(*color);
-            msaa_ready(*depth);
+    sa.sx = sx;
+    sa.sy = sy;
+    bool same = sa_same_shape(*color);
+    const Sa::Clear &k = sa.clear;
+    bool cleared = k.valid && k.fbp == fbp && k.fbw == fbw && k.fpsm == fpsm && k.zbp == zbp && k.zpsm == zpsm;
+    gpu_mark(GPU_OTHER);
+    if (cleared) {
+        // (T2) the frame and Z buffer hold only the GS's clear: the scene's cleared the same (no copy)
+        {
+            Why why(GSN_WHY_COPY);
+            end_pass();
+        }
+        transfer_barrier();
+        VkClearValue cv = {};
+        for (int c = 0; c < 4; c++) {
+            cv.color.float32[c] = float((k.rgba >> (c * 8)) & 0xFF) / 255.0f;
+        }
+        if (fpsm == GSN_PSMCT24) {
+            cv.color.float32[3] = 0.0f; // (as a 24-bit frame's target holds it: not read)
+        }
+        cmd().clear_image(*sa.color, cv);
+        VkClearValue dv = {};
+        dv.depthStencil.depth = float(double(std::min(k.z, depth_max(zpsm))) * depth_scale(zpsm));
+        dv.depthStencil.stencil = 0;
+        cmd().clear_image(*sa.depth, dv);
+        transfer_barrier();
+        gpu_mark(GPU_COPY);
+        sa.clear.valid = false;
+        sa_stats.cleared++;
+    } else if (same) {
+        {
+            Why why(GSN_WHY_COPY);
+            if (samples > 1) {
+                msaa_ready(*color);
+                msaa_ready(*depth);
+            } else {
+                msaa_settle(*color);
+                msaa_settle(*depth);
+            }
+            end_pass();
+        }
+        transfer_barrier();
+        const Image &cs = samples > 1 ? *color->ms : *color->image;
+        const Image &zs = samples > 1 ? *depth->ms : *depth->image;
+        cmd().copy_image(*sa.color, cs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+        if (sa.stencil) {
+            // (a depth with a stencil is not the GS's format: its depth written by a pass, sample for sample, and
+            // its stencil cleared)
+            transfer_barrier();
+            float zpush[2] = {-1.0f, 1.0e30f}; // (as it is)
+            sa_copy_pass(*sa.depth, zs, samples > 1 ? sa.program_depth_ms : sa.program_depth, true, 0, h, zpush, sizeof(zpush),
+                         true);
         } else {
+            cmd().copy_image(*sa.depth, zs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                             {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1});
+        }
+        transfer_barrier();
+        gpu_mark(GPU_COPY);
+        gsn_stats.copy_bytes += uint64_t(w) * h * (wide(cs) ? 12 : 8) * samples;
+    } else {
+        // (T2) another scale or samples: each GS pixel repeated into the scene's pixels and samples
+        {
+            Why why(GSN_WHY_COPY);
             msaa_settle(*color);
             msaa_settle(*depth);
+            end_pass();
         }
-        end_pass();
-    }
-    gpu_mark(GPU_OTHER);
-    transfer_barrier();
-    const Image &cs = samples > 1 ? *color->ms : *color->image;
-    const Image &zs = samples > 1 ? *depth->ms : *depth->image;
-    cmd().copy_image(*sa.color, cs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
-    if (sa.stencil) {
-        // (a depth with a stencil is not the GS's format: its depth written by a pass, sample for sample, and
-        // its stencil cleared)
-        transfer_barrier();
-        float zpush[2] = {-1.0f, 1.0e30f}; // (as it is)
-        sa_copy_pass(*sa.depth, zs, samples > 1 ? sa.program_depth_ms : sa.program_depth, true, 0, h, zpush, sizeof(zpush),
-                     true);
-    } else {
-        cmd().copy_image(*sa.depth, zs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
-                         {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1});
+        float rx = float(color->sx) / float(sx), ry = float(color->sy) / float(sy);
+        sa_resample_pass(*sa.color, *color->image, false, 0, h, rx, ry, 0.0f, 0.0f);
+        sa_resample_pass(*sa.depth, *depth->image, true, 0, h, rx, ry, 0.0f, 0.0f, true);
+        gpu_mark(GPU_COPY);
+        gsn_stats.copy_bytes += uint64_t(w) * h * 8 * samples;
     }
     sa.stencil_gen = 0;
     sa.last_shadow = false;
-    transfer_barrier();
-    gpu_mark(GPU_COPY);
-    gsn_stats.copy_bytes += uint64_t(w) * h * (wide(cs) ? 12 : 8) * samples;
     sa.bound = true;
     sa.fbp = fbp;
     sa.fbw = fbw;
@@ -894,54 +1083,82 @@ bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
     sa.rows0 = UINT32_MAX;
     sa.rows1 = 0;
     sa.z_written = false;
+    sa.drew = false;
+    sa.scissor_rows = 0;
     sa_stats.acquires++;
     return true;
 }
 
 // The scene gives the frame's picture and Z buffer back to the GS: its colour over the rows it drew into,
-// and its depth rounded to the GS's whole Z
-void sa_release() {
+// and its depth rounded to the GS's whole Z. keep (T2): the GS only reads them (a copy of the frame, a
+// read-back): they are given it, and the scene keeps the frame. (At another scale or samples than the GS's,
+// each GS pixel the mean of the scene's pixels and samples over it, and the scene's picture kept for the
+// composite: gsn_composite.inc, sa_hold.)
+void sa_hold(Target &color);
+void sa_give(bool keep) {
     if (!sa.bound) {
         return;
     }
-    sa.bound = false;
-    sa_stats.releases++;
+    if (keep) {
+        sa_stats.published++;
+    } else {
+        sa.bound = false;
+        sa_stats.releases++;
+    }
     {
         Why why(GSN_WHY_COPY);
         end_pass();
     }
-    if (sa.rows1 <= sa.rows0) {
+    if (sa.rows1 <= sa.rows0 && (keep || !sa.drew)) {
         return; // (nothing drawn: the GS's are as they were)
     }
-    sa_stats.frames_touched++;
+    bool copy = sa.rows1 > sa.rows0; // (else only the composite's hold: drawn and given already, keep)
+    sa_stats.frames_touched += copy;
     Target *color = find_target(sa.fbp, sa.fbw, sa.fpsm), *depth = find_target(sa.zbp, sa.fbw, sa.zpsm);
-    if (color != sa.frame_target || depth != sa.z_target || !color || !depth ||
-        color->image->get_width() != sa.color->get_width() || color->image->get_height() != sa.color->get_height()) {
+    auto fits = [&](const Target *c) {
+        return c->width * sa.sx == sa.color->get_width() && c->height * sa.sy == sa.color->get_height();
+    };
+    if (color != sa.frame_target || depth != sa.z_target || !color || !depth || !fits(color)) {
         // (the GS let a target go while the scene had it: a texture's pages claimed. Made again from VRAM; the
         // scene's picture is all of it)
-        if (!sa_targets(sa.fbp, sa.fbw, sa.fpsm, sa.zbp, sa.zpsm, sa.color->get_height() / std::max(target_sy, 1u), &color,
+        if (!sa_targets(sa.fbp, sa.fbw, sa.fpsm, sa.zbp, sa.zpsm, sa.color->get_height() / std::max(sa.sy, 1u), &color,
                         &depth) ||
-            color->image->get_width() != sa.color->get_width() || color->image->get_height() != sa.color->get_height()) {
+            !fits(color)) {
             static int told;
             if (!told++) {
                 fprintf(stderr, "[gsn] standalone: the frame target went while the scene had it; its picture is lost\n");
             }
+            sa.bound = false;
             return;
         }
+        sa.frame_target = color;
+        sa.z_target = depth;
     }
+    bool same = sa_same_shape(*color);
     uint32_t sy = color->sy;
-    uint32_t y0 = std::min(sa.rows0 * sy, sa.color->get_height()), y1 = std::min(sa.rows1 * sy, sa.color->get_height());
-    uint32_t w = sa.color->get_width();
+    uint32_t gh = color->image->get_height();
+    uint32_t y0 = std::min(sa.rows0 * sy, gh), y1 = std::min(sa.rows1 * sy, gh);
+    uint32_t w = color->image->get_width();
     // (--native-layer-z tolerant keeps Z's fraction in the GS's Z buffer too: copied as it is, within the format)
     float zpush[2] = {float(depth_scale(sa.zpsm)) * (layer_z_mode == GSN_LAYER_Z_TOLERANT ? -1.0f : 1.0f),
                       float(depth_max(sa.zpsm))};
+    float rx = float(sa.sx) / float(color->sx), ry = float(sa.sy) / float(color->sy);
     gpu_mark(GPU_OTHER);
-    if (sa.samples > 1) {
+    if (!copy) {
+    } else if (target_samples > 1) {
         msaa_ready(*color);
         msaa_ready(*depth);
-        sa_copy_pass(*color->ms, *sa.color, sa.program_copy_ms, false, y0, y1, nullptr, 0);
+        if (same) {
+            sa_copy_pass(*color->ms, *sa.color, sa.program_copy_ms, false, y0, y1, nullptr, 0);
+        } else {
+            sa_resample_pass(*color->ms, *sa.color, false, y0, y1, rx, ry, 0.0f, 0.0f);
+        }
         if (sa.z_written) {
-            sa_copy_pass(*depth->ms, *sa.depth, sa.program_depth_ms, true, y0, y1, zpush, sizeof(zpush));
+            if (same) {
+                sa_copy_pass(*depth->ms, *sa.depth, sa.program_depth_ms, true, y0, y1, zpush, sizeof(zpush));
+            } else {
+                sa_resample_pass(*depth->ms, *sa.depth, true, y0, y1, rx, ry, zpush[0], zpush[1]);
+            }
         }
         color->ms_newer = true;
         color->image_newer = false;
@@ -952,24 +1169,45 @@ void sa_release() {
     } else {
         msaa_settle(*color);
         msaa_settle(*depth);
-        transfer_barrier();
-        cmd().copy_image(*color->image, *sa.color, {0, int32_t(y0), 0}, {0, int32_t(y0), 0}, {w, y1 - y0, 1},
-                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
-        transfer_barrier();
+        if (same) {
+            transfer_barrier();
+            cmd().copy_image(*color->image, *sa.color, {0, int32_t(y0), 0}, {0, int32_t(y0), 0}, {w, y1 - y0, 1},
+                             {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+            transfer_barrier();
+        } else {
+            sa_resample_pass(*color->image, *sa.color, false, y0, y1, rx, ry, 0.0f, 0.0f);
+        }
         if (sa.z_written) {
-            sa_copy_pass(*depth->image, *sa.depth, sa.program_depth, true, y0, y1, zpush, sizeof(zpush));
+            if (same) {
+                sa_copy_pass(*depth->image, *sa.depth, sa.program_depth, true, y0, y1, zpush, sizeof(zpush));
+            } else {
+                sa_resample_pass(*depth->image, *sa.depth, true, y0, y1, rx, ry, zpush[0], zpush[1]);
+            }
         }
         msaa_image_written(*color);
         if (sa.z_written) {
             msaa_image_written(*depth);
         }
     }
-    gpu_mark(GPU_MS_COPY);
-    gsn_stats.copy_bytes += uint64_t(w) * (y1 - y0) * 8 * sa.samples;
-    mark_dirty(*color, sa.rows0, sa.rows1);
-    if (sa.z_written) {
-        mark_dirty(*depth, sa.rows0, sa.rows1);
+    if (copy) {
+        gpu_mark(GPU_MS_COPY);
+        gsn_stats.copy_bytes += uint64_t(w) * (y1 - y0) * 8 * target_samples;
+        mark_dirty(*color, sa.rows0, sa.rows1);
+        if (sa.z_written) {
+            mark_dirty(*depth, sa.rows0, sa.rows1);
+        }
     }
+    if (!same && !keep) {
+        sa_hold(*color); // (the composite's: gsn_composite.inc)
+    }
+    if (keep) {
+        sa.rows0 = UINT32_MAX; // (the GS has them all now; what is drawn after is given at the next)
+        sa.rows1 = 0;
+        sa.z_written = false;
+    }
+}
+void sa_release() {
+    sa_give(false);
 }
 
 // The scene's render pass, unless it is under way
@@ -1009,37 +1247,34 @@ bool zwrite_any(uint64_t zbuf, uint64_t test) {
     return !bits(zbuf, 32, 1) && bits(test, 16, 1);
 }
 
-// (sa_flush) Whether a batch of the GS's can touch what the scene has taken: its frame, its Z buffer (when it
-// tests or writes Z) or its texture on their pages. One that cannot (the scrolling textures' sprites into their
-// 128 x 128 targets, between the world's draws) is drawn by the GS while the scene keeps the frame
-bool sa_gs_touches_scene() {
-    if (find_target(sa.fbp, sa.fbw, sa.fpsm) != sa.frame_target || find_target(sa.zbp, sa.fbw, sa.zpsm) != sa.z_target) {
-        return true;
-    }
+// (sa_flush) Whether a batch of the GS's can touch a frame (fbp, fbw, fpsm, its first rows) and Z buffer (zbp, zpsm): its
+// frame, its Z buffer (when it tests or writes Z) or its texture on their pages
+bool sa_batch_touches(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t rows) {
+    uint32_t tlo[2], tcount[2];
+    buffer_pages(fbp, fbw, fpsm, std::max(fbw, 1u) * 64, rows, &tlo[0], &tcount[0]);
+    buffer_pages(zbp, fbw, zpsm, std::max(fbw, 1u) * 64, rows, &tlo[1], &tcount[1]);
     uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
     uint64_t frame = gs->reg[R_FRAME_1 + ctxt], zbuf = gs->reg[R_ZBUF_1 + ctxt], test = gs->reg[R_TEST_1 + ctxt];
     uint64_t scissor = gs->reg[R_SCISSOR_1 + ctxt], tex0 = gs->reg[R_TEX0_1 + ctxt];
-    uint32_t fbw = bits(frame, 16, 6), h = bits(scissor, 48, 11) + 1;
-    uint32_t tlo[2], tcount[2];
-    target_pages(*sa.frame_target, &tlo[0], &tcount[0]);
-    target_pages(*sa.z_target, &tlo[1], &tcount[1]);
-    auto touches = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t rows) {
+    uint32_t bw = bits(frame, 16, 6), h = bits(scissor, 48, 11) + 1;
+    auto touches = [&](uint32_t bp, uint32_t w_, uint32_t psm, uint32_t w, uint32_t r) {
         uint32_t lo, count;
-        buffer_pages(bp, bw, psm, w, rows, &lo, &count);
+        buffer_pages(bp, w_, psm, w, r, &lo, &count);
         return pages_overlap(lo, count, tlo[0], tcount[0]) || pages_overlap(lo, count, tlo[1], tcount[1]);
     };
-    if (touches(bits(frame, 0, 9) * 32, fbw, bits(frame, 24, 6), std::max(fbw, 1u) * 64, h)) {
+    if (touches(bits(frame, 0, 9) * 32, bw, bits(frame, 24, 6), std::max(bw, 1u) * 64, h)) {
         return true;
     }
     // (the Z buffer as flush_batch needs it: not for ZTST ALWAYS without a write, nor GEQUAL from the format's
     // largest Z, as the scrolling textures draw)
-    uint32_t zpsm = bits(zbuf, 24, 4) | 0x30, ztst = bits(test, 17, 2), zmin = UINT32_MAX;
+    uint32_t bzpsm = bits(zbuf, 24, 4) | 0x30, ztst = bits(test, 17, 2), zmin = UINT32_MAX;
     bool zwrite = !bits(zbuf, 32, 1) && (!bits(test, 0, 1) || bits(test, 1, 3) != 0 || bits(test, 12, 2) == 2);
     for (const Vtx &v : gs->verts) {
         zmin = std::min(zmin, v.z);
     }
-    bool need_z = bits(test, 16, 1) && ztst != 0 && (zwrite || !(ztst == 1 || (ztst == 2 && std::min(zmin, depth_max(zpsm)) == depth_max(zpsm))));
-    if (need_z && touches(bits(zbuf, 0, 9) * 32, fbw, bits(zbuf, 24, 4) | 0x30, std::max(fbw, 1u) * 64, h)) {
+    bool need_z = bits(test, 16, 1) && ztst != 0 &&
+                  (zwrite || !(ztst == 1 || (ztst == 2 && std::min(zmin, depth_max(bzpsm)) == depth_max(bzpsm))));
+    if (need_z && touches(bits(zbuf, 0, 9) * 32, bw, bzpsm, std::max(bw, 1u) * 64, h)) {
         return true;
     }
     if (((prim >> 4) & 1) && touches(bits(tex0, 0, 14), bits(tex0, 14, 6), bits(tex0, 20, 6), 1u << std::min(bits(tex0, 26, 4), 10u),
@@ -1047,6 +1282,100 @@ bool sa_gs_touches_scene() {
         return true;
     }
     return false;
+}
+
+// (sa_flush) Whether a batch of the GS's can touch what the scene has taken: its frame, its Z buffer (when it
+// tests or writes Z) or its texture on their pages. One that cannot (the scrolling textures' sprites into their
+// 128 x 128 targets, between the world's draws) is drawn by the GS while the scene keeps the frame
+bool sa_gs_touches_scene() {
+    if (find_target(sa.fbp, sa.fbw, sa.fpsm) != sa.frame_target || find_target(sa.zbp, sa.fbw, sa.zpsm) != sa.z_target) {
+        return true;
+    }
+    return sa_batch_touches(sa.fbp, sa.fbw, sa.fpsm, sa.zbp, sa.zpsm, std::max(sa.frame_target->height, sa.z_target->height));
+}
+
+// (T2) Whether the batch's sprites cover the whole of the frame's first `rows` rows (0, 0 to fbw 64 across), the
+// colour the same at every corner (rgba): a flat colour over the screen, or (textured) a picture over all of it
+bool sa_sprites_cover(uint32_t fbw, uint32_t rows, uint32_t *rgba) {
+    if (!gs->batch_sprites || gs->verts.empty()) {
+        return false;
+    }
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    double area = 0.0;
+    const std::vector<Vtx> &v = gs->verts;
+    *rgba = v[0].rgba;
+    for (size_t i = 0; i + 2 < v.size(); i += 3) {
+        for (int k = 0; k < 3; k++) {
+            if (v[i + k].rgba != *rgba) {
+                return false;
+            }
+            x0 = std::min(x0, v[i + k].x);
+            y0 = std::min(y0, v[i + k].y);
+            x1 = std::max(x1, v[i + k].x);
+            y1 = std::max(y1, v[i + k].y);
+        }
+        area += fabs(double(v[i + 1].x - v[i].x) * double(v[i + 2].y - v[i].y) -
+                     double(v[i + 2].x - v[i].x) * double(v[i + 1].y - v[i].y)) /
+                2.0;
+    }
+    // (a pixel is drawn where its integer point is inside, the top and left edges in: 0 to fbw 64 across, 0 to rows
+    // down; the sprites tile their box)
+    return x0 <= 0.0f && y0 <= 0.0f && ceilf(x1) >= float(fbw * 64) && ceilf(y1) >= float(rows) &&
+           area >= double(x1 - x0) * double(y1 - y0) * 0.999;
+}
+
+// (T2, sa_flush) Whether a batch of the GS's goes into the scene, the scene keeping the frame (or taking it from
+// the GS's clear): SA_GS_PASS a screen pass's (nd_pass_draw: the brightness, a tint, the flicker filter, the frame
+// before blended in, haze, the wobble, a fill, a fade) while the scene has the frame; SA_GS_FILL a flat colour over
+// the whole of the scissor (GsDraw_FillScreen from elsewhere: the screen's fade and flashes) while it has it;
+// SA_GS_3D the GS's own 3D, its Z tested GEQUAL or GREATER (the PS2 path's map records native draw does not take).
+// In a picture between their corners are moved on the GPU from the frame's kicks, as flush_batch draws them
+// (gs_replay_corners.comp: sa_draw_batch, interp.vertices); a screen pass's are the CPU's (nd_pass.vert).
+// SA_GS_WATER: the reflection's rippled water (RD_KIND_WATER, hosted: its own vertex program, nd_water.vert, reading
+// the reflection's target, T3), drawn into the scene with it while the scene has the frame.
+enum { SA_GS_NONE, SA_GS_3D, SA_GS_PASS, SA_GS_FILL, SA_GS_WATER };
+bool ndw_batch();
+int sa_gs_batch() {
+    bool water = nd.active && !nd.pass_active && ndw_batch() && nd.corners_active;
+    if (gs->verts.empty() || (nd.active && !nd.pass_active && !water)) {
+        return SA_GS_NONE; // (native corners of a kind the scene does not take)
+    }
+    uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
+    uint64_t frame = gs->reg[R_FRAME_1 + ctxt], zbuf = gs->reg[R_ZBUF_1 + ctxt], test = gs->reg[R_TEST_1 + ctxt];
+    uint64_t scissor = gs->reg[R_SCISSOR_1 + ctxt];
+    uint32_t fbp = bits(frame, 0, 9) * 32, fbw = bits(frame, 16, 6), fpsm = bits(frame, 24, 6);
+    uint32_t zbp = bits(zbuf, 0, 9) * 32, zpsm = bits(zbuf, 24, 4) | 0x30;
+    bool held = sa.bound && fbp == sa.fbp && fbw == sa.fbw && fpsm == sa.fpsm &&
+                find_target(fbp, fbw, fpsm) == sa.frame_target && find_target(sa.zbp, sa.fbw, sa.zpsm) == sa.z_target;
+    const Sa::Clear &k = sa.clear;
+    bool cleared = !sa.bound && k.valid && fbp == k.fbp && fbw == k.fbw && fpsm == k.fpsm;
+    if (!held && !cleared) {
+        return SA_GS_NONE;
+    }
+    bool zte = bits(test, 16, 1);
+    uint32_t ztst = zte ? bits(test, 17, 2) : 1;
+    bool uses_z = zte && (ztst != 1 || !bits(zbuf, 32, 1));
+    if (uses_z && (zbp != (held ? sa.zbp : k.zbp) || zpsm != (held ? sa.zpsm : k.zpsm))) {
+        return SA_GS_NONE;
+    }
+    if (sa.in_pass) {
+        return held ? SA_GS_PASS : SA_GS_NONE;
+    }
+    if (water) {
+        return held && zte && (ztst == 2 || ztst == 3) ? SA_GS_WATER : SA_GS_NONE;
+    }
+    if (interp.active && interp.vsrc.size() != gs->verts.size()) {
+        return SA_GS_NONE; // (never: every corner has its kick)
+    }
+    if (!gs->batch_sprites) {
+        return zte && (ztst == 2 || ztst == 3) ? SA_GS_3D : SA_GS_NONE;
+    }
+    uint32_t rgba;
+    if (held && !((prim >> 4) & 1) && bits(scissor, 0, 11) == 0 && bits(scissor, 32, 11) == 0 &&
+        sa_sprites_cover(fbw, std::min(bits(scissor, 48, 11) + 1, sa.frame_target->height), &rgba)) {
+        return SA_GS_FILL;
+    }
+    return SA_GS_NONE;
 }
 
 // (sa_draw_batch) Whether the batch is the shadows' (Entity_DrawPoolModels: program 0x5A0's records only)
@@ -1067,7 +1396,10 @@ bool sa_shadow_batch() {
 // nd_draw_range does it: program 0x000's (and 0x5A0's) with sa_000.vert, 0x700's with sa_700.vert (0x000's
 // records), 0x280's with sa_280.vert and its records, and the PS2 path's (the trail; the scene's ops) with the
 // GS's own vertex program (gs.vert: their Z as the GS has it, in the scene's units; nd_strip.vert in a picture
-// between). sample: a cut-out shaded at every sample.
+// between). sample: a cut-out shaded at every sample. (T2) The GS's own 3D with shaders/gs_zclamp.frag (its Z kept
+// fine, and the tie's slack); a screen pass in a picture between with nd_pass.vert, as nd_draw_range has it (the
+// batch's corners are one vertex buffer).
+void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end); // (gsn_nd_pass.inc)
 void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first) {
     const Vtx *v = gs->verts.data();
     const Buffer *bound = nullptr;
@@ -1079,10 +1411,22 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first) {
             to += 3;
         }
         if (kind == ND_KIND_PS2) {
-            c.set_program(nd.strip_active ? nd_strip_program(gs->program) : gs->program);
+            if (nd.pass_active) {
+                c.set_program(nd_pass_program(gs->program));
+                nd_pass_bind_tris(c, 0, to); // (the batch's corners are one vertex buffer: gl_VertexIndex from its first)
+            } else if (sa.gs3d) {
+                c.set_program(sample && gs->program_zclamp_sample ? gs->program_zclamp_sample : gs->program_zclamp);
+            } else {
+                c.set_program(nd.strip_active ? nd_strip_program(gs->program) : gs->program);
+            }
         } else {
             const Buffer *want = kind == ND_KIND_280 ? nd280_batch_draws() : nd.batch_draws;
-            c.set_program(sa.programs[kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000][sample ? 1 : 0]);
+            if (sa.gs_water) {
+                // (T2) the water's corners, hosted's nd_water.vert with gs_zclamp.frag (its Z kept fine, the slack)
+                c.set_program(ndw_program(sample && gs->program_zclamp_sample ? gs->program_zclamp_sample : gs->program_zclamp));
+            } else {
+                c.set_program(sa.programs[kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000][sample ? 1 : 0]);
+            }
             if (want && want != bound) {
                 c.set_storage_buffer(2, 1, *want);
                 bound = want;
@@ -1167,10 +1511,6 @@ bool sa_draw_batch(int *why) {
         *why = SA_WHY_FRAME;
         return false;
     }
-    if (target_samples > 1 && !sample_shading) {
-        *why = SA_WHY_SAMPLES;
-        return false;
-    }
     if (fpsm == GSN_PSMCT24) {
         fbmsk |= 0xFF000000u;
     }
@@ -1182,7 +1522,38 @@ bool sa_draw_batch(int *why) {
         *why = SA_WHY_TARGET;
         return false;
     }
+    if (sa.samples > 1 && !sample_shading) {
+        *why = SA_WHY_SAMPLES;
+        return false;
+    }
     Target *color = sa.frame_target;
+    // (T2) a batch of the PS2 path's corners only (the GS's own 3D, a screen pass, a fill, the scene's ops): its
+    // 2D's rectangles moved out to the edges of their GS pixels at a larger scale or with samples, as flush_batch
+    // has them (flat_2d), so a sprite over the whole frame covers its first column and row
+    bool ps2_only = !nd.active || (nd.pass_active && !nd.corners_active);
+    bool flat = ps2_only && (sa.sx > 1 || sa.sy > 1 || sa.samples > 1) && !perspective_batch(gs->verts);
+    // (a picture between: the GS's own batch's corners made at the picture's time on the GPU from its kicks, as
+    // flush_batch draws them: into interp.vertices from interp.corner on, flat_2d's moves there too)
+    bool gpu_corners = interp.active && !nd.active && (sa.gs3d || sa.gs_fill);
+    uint32_t corners_at = 0;
+    if (gpu_corners) {
+        corners_at = interp.corner;
+        if (interp.vsrc.size() != gs->verts.size() ||
+            size_t(corners_at) + interp.vsrc.size() > size_t(interp.frame->kicks) * 3 + 5) {
+            interp.broken = true; // (never)
+            gpu_corners = false;
+        } else {
+            for (size_t i = 0; i < interp.vsrc.size(); i++) {
+                uint32_t c4[4] = {interp.vsrc[i][0], interp.vsrc[i][1], interp.vsrc[i][2],
+                                  interp.vsrc[i][3] | (flat ? uint32_t(IC_FLAT_2D) : 0u)};
+                memcpy(interp.corner_map[1 + corners_at + i], c4, sizeof(c4)); // (after the count)
+            }
+            interp.corner += uint32_t(interp.vsrc.size());
+        }
+    }
+    if (flat && !gpu_corners) {
+        flat_2d(gs->verts);
+    }
     if (sa.log == 1) {
         uint32_t zl = UINT32_MAX, zh = 0;
         for (const Vtx &v : gs->verts) {
@@ -1228,8 +1599,24 @@ bool sa_draw_batch(int *why) {
     if (tme) {
         sa_texture(st, push, ctxt, tex0, tex1, clamp, fst, color);
         if (st.reads_own) {
-            *why = SA_WHY_OWN;
-            return false;
+            // (T2) the frame it draws into (a screen pass: the brightness, the flicker filter, haze): read from a
+            // copy of the scene's colour taken now (resolved), at the scene's scale
+            uint32_t W = sa.color->get_width(), H = sa.color->get_height();
+            if (!sa.own || sa.own->get_width() != W || sa.own->get_height() != H || sa.own->get_format() != sa.color->get_format()) {
+                sa.own = sa_image(W, H, sa.color->get_format(), 1);
+            }
+            Why why_(GSN_WHY_TEXTURE);
+            if (sa.samples > 1) {
+                msaa_resolve(*sa.own, *sa.color, {0, 0, 0}, {W, H, 1});
+            } else {
+                end_pass();
+                transfer_barrier();
+                cmd().copy_image(*sa.own, *sa.color, {0, 0, 0}, {0, 0, 0}, {W, H, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                 {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+                transfer_barrier();
+            }
+            gsn_stats.copy_bytes += uint64_t(W) * H * 4;
+            st.target_view = &sa.own->get_view();
         }
     }
 
@@ -1265,9 +1652,13 @@ bool sa_draw_batch(int *why) {
     // taken before each run of triangles that do not overlap (gs_frag.h's GSN_F_SHADER_BLEND)
     // (the shadows keep the GS's blending, in the shader: from one copy, as the stencil lets no triangle of the
     // run draw over another's pixel)
+    // (T2) the GS's own sprites and draws reading a target (its fills, the screen passes) blend as flush_batch has
+    // them, exactly, where Vulkan's blending would round where the GS truncates ((Cs - Cd) C + Cd): a level a draw,
+    // which the passes over the whole frame carry on
+    bool exact = fixed && (blend.premul != 0 || ba == bb);
     bool shader_blend = date || partial_mask || (shadow && abe) ||
                         (abe && ((push.misc & M_PABE) || !(push.misc & M_COLCLAMP) || (bc == 0 && (push.misc & M_FBA)) ||
-                                 as_over || !fixed));
+                                 as_over || !fixed || ((ps2_only || sa.gs_water) && (st.reads_target || gs->batch_sprites) && !exact)));
     if (shader_blend) {
         push.flags |= F_SHADER_BLEND | (date ? F_DATE : 0);
         if (!abe) {
@@ -1322,8 +1713,15 @@ bool sa_draw_batch(int *why) {
     if (second_pass) {
         slack = 0.0f;
     }
+    // (T2) the GS's own 3D (the PS2 path's corners: a map record native draw does not take) has VU1's whole Z, the
+    // scene's Z less its fraction: its colour passes within half a Z more (shaders/gs_zclamp.frag, its Z kept fine)
+    float ps2_bias = 0.0f;
+    if (sa.gs3d || sa.gs_water) {
+        push.misc |= M_ZFINE;
+        ps2_bias = 0.5f;
+    }
     // the rows, the scissor; triangles wholly outside it left out (not in a picture between: the GPU moves them)
-    uint32_t scale_x = color->sx, scale_y = color->sy;
+    uint32_t scale_x = sa.sx, scale_y = sa.sy; // (the scene's: T2)
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
@@ -1476,7 +1874,7 @@ bool sa_draw_batch(int *why) {
     bool sloped = slack == slack_layer && zwrite_any(zbuf, test) && !same_twice && !second_pass;
     std::vector<Vtx> corners(gs->verts.begin(), gs->verts.end());
     for (size_t t = 0; t + 2 < corners.size(); t += 3) {
-        if (nd_corner_kind(corners[t]) == ND_KIND_PS2) {
+        if (nd_corner_kind(corners[t]) == ND_KIND_PS2 || sa.gs_water) {
             continue; // (the PS2 path's: its alpha is its own, gs.vert takes no slack)
         }
         uint32_t extra = 0;
@@ -1570,8 +1968,12 @@ bool sa_draw_batch(int *why) {
             } else {
                 c.set_blend_enable(false);
             }
-            void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
-            memcpy(vdata, corners.data(), bytes);
+            if (gpu_corners) {
+                c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at) * sizeof(Vtx), sizeof(Vtx));
+            } else {
+                void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
+                memcpy(vdata, corners.data(), bytes);
+            }
             c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
             c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
             c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
@@ -1584,7 +1986,7 @@ bool sa_draw_batch(int *why) {
         for (int i = 0; i < ndraws; i++) {
             Push p = push;
             p.flags |= draws[i].select << F_PASS_SHIFT;
-            p.zbias = draws[i].zbias;
+            p.zbias = draws[i].zbias + (draws[i].zbias > 0.0f || (ties && !draws[i].zwrite) ? ps2_bias : 0.0f);
             p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
             c.set_color_write_mask(draws[i].mask);
             c.set_depth_test(true, draws[i].zwrite);
@@ -1605,6 +2007,8 @@ bool sa_draw_batch(int *why) {
     uint32_t d1 = interp.active ? y1 : uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
     sa.rows0 = std::min(sa.rows0, d0);
     sa.rows1 = std::max(sa.rows1, d1);
+    sa.drew = true;
+    sa.scissor_rows = std::max(sa.scissor_rows, y1);
     sa_stats.batches++;
     sa_stats.triangles += gs->verts.size() / 3;
     gsn_stats.primitives += gs->verts.size() / 3;
@@ -1615,10 +2019,12 @@ bool sa_draw_batch(int *why) {
 
 // (flush_batch, at its top, after NdFlush) A batch of the scene's corners is drawn into the scene; anything
 // else the GS draws, the scene's turn over first. True: drawn (or nothing to draw).
+void sa_note_gs_batch();
 bool sa_flush() {
     if (!sa.on) {
         return false;
     }
+    sa.fcopy.fresh = false; // (the copy of the frame made: what writes there from now on lets it go)
     // (the batch of a draw of the scene's: its corners, or the trail's, the PS2 path's made by the draw; not a
     // screen pass's)
     bool scene = !nd.pass_active && (sa.in_draw ? sa.draw_on : sa.pending);
@@ -1639,7 +2045,43 @@ bool sa_flush() {
             fprintf(stderr, "[sa] declined: %s\n", sa_why_names[why]);
         }
     }
+    // (T2) the GS's batches the scene draws itself: its 3D, the screen passes, fills over the screen
+    int gs_kind = scene || op != SA_OP_NONE ? SA_GS_NONE : sa_gs_batch();
+    if (gs_kind != SA_GS_NONE) {
+        sa.gs3d = gs_kind == SA_GS_3D;
+        sa.gs_fill = gs_kind == SA_GS_FILL;
+        sa.gs_water = gs_kind == SA_GS_WATER;
+        int why = SA_WHY_FRAME;
+        bool drawn = sa_draw_batch(&why);
+        sa.gs3d = sa.gs_fill = sa.gs_water = false;
+        if (drawn) {
+            (gs_kind == SA_GS_3D      ? sa_stats.gs_3d
+             : gs_kind == SA_GS_PASS  ? sa_stats.gs_passes
+             : gs_kind == SA_GS_WATER ? sa_stats.gs_water
+                                      : sa_stats.gs_fills)++;
+            if (sa.log == 3) {
+                uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
+                fprintf(stderr, "[sa] the GS's %s into the scene: prim %#x frame %#llx test %#llx alpha %#llx tex0 %#llx n %zu\n",
+                        gs_kind == SA_GS_3D ? "3D" : gs_kind == SA_GS_PASS ? "pass" : "fill", prim,
+                        (unsigned long long)gs->reg[R_FRAME_1 + ctxt], (unsigned long long)gs->reg[R_TEST_1 + ctxt],
+                        (unsigned long long)gs->reg[R_ALPHA_1 + ctxt], (unsigned long long)gs->reg[R_TEX0_1 + ctxt],
+                        gs->verts.size());
+            }
+            return true;
+        }
+        sa_stats.declined[why]++;
+        if (sa.log == 1) {
+            fprintf(stderr, "[sa] the GS's declined: %s\n", sa_why_names[why]);
+        }
+    }
+    sa_note_gs_batch(); // (the GS draws it: its clear, and what it draws over a frame the scene gave it: gsn_composite.inc)
     if (sa.bound && !sa_gs_touches_scene()) {
+        if (sa.log == 3) {
+            uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
+            fprintf(stderr, "[sa] the GS's elsewhere: prim %#x frame %#llx zbuf %#llx test %#llx tex0 %#llx n %zu\n", prim,
+                    (unsigned long long)gs->reg[R_FRAME_1 + ctxt], (unsigned long long)gs->reg[R_ZBUF_1 + ctxt],
+                    (unsigned long long)gs->reg[R_TEST_1 + ctxt], (unsigned long long)gs->reg[R_TEX0_1 + ctxt], gs->verts.size());
+        }
         return false; // (the GS's, elsewhere in VRAM: the scene keeps the frame)
     }
     if (sa.log && sa.bound) {
@@ -1691,40 +2133,105 @@ bool sa_waiting() {
     return sa.on && sa.pending && !gs->verts.empty();
 }
 
-// (begin_transfer) A transfer: the scene's turn ends when it can touch the frame or Z buffer the scene has taken
-// (written by an upload or a copy, read by a copy or a read-back). An upload of a texture elsewhere in VRAM, as
-// the models' and effects' are between the world's draws, leaves them alone: the scene's textures are the
-// table's, and the GS's draws read VRAM as before
+// (T2: nd_pass_draw, around a screen pass's drawing) Its batches are the pass's: drawn into the scene while it has the
+// frame (sa_gs_batch), each its own batch
+void sa_pass(bool begin) {
+    if (!sa.on) {
+        return;
+    }
+    flush_batch();
+    sa.in_pass = begin;
+}
+
+// (begin_transfer) A transfer: the scene's turn ends when it can write the frame or Z buffer the scene has taken (an
+// upload, or a copy, into them). One that only reads them (a copy of the frame elsewhere: GsDraw_CopyFrame's for the
+// wobble, the menus' backdrop; a read-back) is given them, and the scene keeps the frame (T2: sa_give). An upload
+// of a texture elsewhere in VRAM, as the models' and effects' are between the world's draws, leaves them alone: the
+// scene's textures are the table's, and the GS's draws read VRAM as before. (And one that writes the frame or Z
+// buffer the GS's clear is waiting in: the scene takes that frame by copying it, not clearing.)
 void sa_transfer(uint32_t dir) {
-    if (!sa.on || !sa.bound) {
+    if (!sa.on) {
         return;
     }
     uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
     uint32_t w = bits(trxreg, 0, 12), h = bits(trxreg, 32, 12);
-    bool held = find_target(sa.fbp, sa.fbw, sa.fpsm) == sa.frame_target && find_target(sa.zbp, sa.fbw, sa.zpsm) == sa.z_target;
-    auto touches = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y) {
-        uint32_t lo, count;
+    auto touches = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t fbp, uint32_t fbw,
+                       uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t rows) {
+        uint32_t lo, count, tlo, tcount;
         buffer_pages(bp, bw, psm, x + w, y + h, &lo, &count);
-        for (const Target *t : {sa.frame_target, sa.z_target}) {
-            uint32_t tlo, tcount;
-            target_pages(*t, &tlo, &tcount);
-            if (pages_overlap(lo, count, tlo, tcount)) {
-                return true;
-            }
+        buffer_pages(fbp, fbw, fpsm, std::max(fbw, 1u) * 64, rows, &tlo, &tcount);
+        if (pages_overlap(lo, count, tlo, tcount)) {
+            return true;
         }
-        return false;
+        buffer_pages(zbp, fbw, zpsm, std::max(fbw, 1u) * 64, rows, &tlo, &tcount);
+        return pages_overlap(lo, count, tlo, tcount);
     };
-    bool hit = !held || dir > 2;
-    if (!hit && (dir == 0 || dir == 2)) {
-        hit = touches(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), bits(bitbltbuf, 56, 6), bits(trxpos, 32, 11),
-                      bits(trxpos, 48, 11));
+    auto dst_touches = [&](uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t rows) {
+        return (dir == 0 || dir == 2) && touches(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), bits(bitbltbuf, 56, 6),
+                                                 bits(trxpos, 32, 11), bits(trxpos, 48, 11), fbp, fbw, fpsm, zbp, zpsm, rows);
+    };
+    auto src_touches = [&](uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t rows) {
+        return (dir == 1 || dir == 2) && touches(bits(bitbltbuf, 0, 14), bits(bitbltbuf, 16, 6), bits(bitbltbuf, 24, 6),
+                                                 bits(trxpos, 0, 11), bits(trxpos, 16, 11), fbp, fbw, fpsm, zbp, zpsm, rows);
+    };
+    sa.fcopy.fresh = false;
+    const Sa::Clear &k = sa.clear;
+    if (k.valid && (dir > 2 || dst_touches(k.fbp, k.fbw, k.fpsm, k.zbp, k.zpsm, k.rows))) {
+        sa.clear.valid = false;
+        if (sa.log) {
+            fprintf(stderr, "[sa] the GS's clear written over: a transfer, dir %u\n", dir);
+        }
     }
-    if (!hit && (dir == 1 || dir == 2)) {
-        hit = touches(bits(bitbltbuf, 0, 14), bits(bitbltbuf, 16, 6), bits(bitbltbuf, 24, 6), bits(trxpos, 0, 11),
-                      bits(trxpos, 16, 11));
+    if (!sa.bound) {
+        return;
     }
-    if (hit) {
+    bool held = find_target(sa.fbp, sa.fbw, sa.fpsm) == sa.frame_target && find_target(sa.zbp, sa.fbw, sa.zpsm) == sa.z_target;
+    uint32_t rows = std::max(sa.frame_target->height, sa.z_target->height);
+    if (!held || dir > 2 || dst_touches(sa.fbp, sa.fbw, sa.fpsm, sa.zbp, sa.zpsm, rows)) {
         sa_sync();
+    } else if (src_touches(sa.fbp, sa.fbw, sa.fpsm, sa.zbp, sa.zpsm, rows)) {
+        if (sa.log) {
+            fprintf(stderr, "[sa] the GS reads the frame (a copy, a read-back): given it, the scene keeps it: dir %u bitbltbuf %#llx "
+                            "trxpos %#llx trxreg %#llx\n",
+                    dir, (unsigned long long)bitbltbuf, (unsigned long long)trxpos, (unsigned long long)trxreg);
+        }
+        sa_give(true);
+        // (T2) a copy of the frame elsewhere: the scene's picture kept for what reads it there
+        uint32_t ssax = bits(trxpos, 0, 11), ssay = bits(trxpos, 16, 11);
+        if (dir == 2 && bits(bitbltbuf, 0, 14) == sa.fbp && bits(bitbltbuf, 16, 6) == sa.fbw && bits(bitbltbuf, 24, 6) == sa.fpsm &&
+            bits(bitbltbuf, 56, 6) == sa.fpsm && ssax + w <= sa.frame_target->width &&
+            ssay + h <= sa.frame_target->height) {
+            Sa::Copy &k2 = sa.fcopy;
+            uint32_t W = sa.color->get_width(), H = sa.color->get_height();
+            if (!k2.image || k2.image->get_width() != W || k2.image->get_height() != H || k2.image->get_format() != sa.color->get_format()) {
+                k2.image = sa_image(W, H, sa.color->get_format(), 1);
+            }
+            {
+                Why why_(GSN_WHY_COPY);
+                end_pass();
+            }
+            if (sa.samples > 1) {
+                msaa_resolve(*k2.image, *sa.color, {0, 0, 0}, {W, H, 1});
+            } else {
+                transfer_barrier();
+                cmd().copy_image(*k2.image, *sa.color, {0, 0, 0}, {0, 0, 0}, {W, H, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                 {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+                transfer_barrier();
+            }
+            k2.valid = k2.fresh = true;
+            k2.dbp = bits(bitbltbuf, 32, 14);
+            k2.dbw = bits(bitbltbuf, 48, 6);
+            k2.dpsm = bits(bitbltbuf, 56, 6);
+            k2.dx = bits(trxpos, 32, 11);
+            k2.dy = bits(trxpos, 48, 11);
+            k2.sx = ssax;
+            k2.sy = ssay;
+            k2.w = w;
+            k2.h = h;
+            k2.scale_x = sa.sx;
+            k2.scale_y = sa.sy;
+            sa_stats.frame_copies++;
+        }
     }
 }
 
@@ -1738,6 +2245,7 @@ void sa_sync() {
     }
 }
 
+void sa_held_forget(); // (gsn_composite.inc)
 // (gsn_set_standalone, at a vblank) on or off
 void sa_switch(bool on) {
     if (on == sa.on) {
@@ -1770,6 +2278,10 @@ void sa_switch(bool on) {
         }
         sa_table_reset();
     }
+    sa.clear.valid = false;
+    sa.fcopy.valid = false;
+    sa.in_pass = false;
+    sa_held_forget();
 }
 
 // (gsn_state's loading, gsn_restore) VRAM made anew: the scene's turn and the table forgotten
@@ -1782,7 +2294,10 @@ void sa_forget() {
     }
     sa.bound = false;
     sa.pending = false;
+    sa.clear.valid = false;
+    sa.fcopy.valid = false;
     sa_table_reset();
+    sa_held_forget();
 }
 
 // --stats
@@ -1803,6 +2318,15 @@ void sa_print_stats() {
     fprintf(stderr, "; %llu depth clears and %llu alpha sets drawn by the scene, %llu shadow batches by the stencil",
             (unsigned long long)s.depth_clears, (unsigned long long)s.alpha_sets, (unsigned long long)s.shadow_batches);
     fprintf(stderr, "; %.2f turns a picture", gsn_stats.pictures ? double(s.acquires) / double(gsn_stats.pictures) : 0.0);
+    fprintf(stderr,
+            " (T2: %llu taken from the GS's clear, %llu resampled copies; the GS's drawn by the scene: %llu 3D, %llu screen "
+            "passes, %llu fills, %llu water; %llu times given while kept; %llu copies of the frame kept, %llu textures read from them; "
+            "%llu pictures composited, %llu ops over the screen in them)",
+            (unsigned long long)s.cleared, (unsigned long long)s.resampled, (unsigned long long)s.gs_3d,
+            (unsigned long long)s.gs_passes, (unsigned long long)s.gs_fills, (unsigned long long)s.gs_water,
+            (unsigned long long)s.published,
+            (unsigned long long)s.frame_copies, (unsigned long long)s.frame_copy_reads, (unsigned long long)s.composites,
+            (unsigned long long)s.composite_ops);
     fprintf(stderr, "; %llu decoded, %llu found again; uploads %llu (%.1f MB, %llu new), %llu asked for again; declined: ",
             (unsigned long long)s.decodes, (unsigned long long)s.decode_hits, (unsigned long long)s.uploads,
             s.upload_bytes / 1048576.0, (unsigned long long)s.chunks_new, (unsigned long long)s.replayed_uploads);
