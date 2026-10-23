@@ -344,3 +344,23 @@ void NativeDraw_QueueMark(u32 command, u64 bits) {
 void NativeDraw_QueueFixedBlock(ModelInstance *model, const void *matrix_a, const void *matrix_b) {
     queue_fixed_block(model, matrix_a, matrix_b);
 }
+
+/* KF4_ND_DMA_WAIT=1, a test switch (F-013): the game loop waits for the chain it has just sent
+   (Packet_WaitForSend, which it would do at the end of the frame anyway) before the frame's update.
+   The port's DMA thread reads the chain's REF'd blocks after Packet_SendChain returns, while the game
+   goes on to the next update, which rewrites some of them in place (func_00112BD0's wave UVs, flag
+   0x100; MapObject_UpdateAll's fades). So the PS2 path can draw a block as the next update left it,
+   a frame late, and how much of the chain is read late changes run to run (P2-6). Native draws take
+   the block at the draw call. With the wait the PS2 path reads every block before the update too,
+   and the two can be compared pixel for pixel on maps with such blocks. Off (the default) the game
+   is unchanged; the comparisons set it in both runs (the environment reaches both). */
+int NativeDraw_TestDmaWait(void) {
+    static int wait = -1;
+
+    if (wait < 0) {
+        const char *v = getenv("KF4_ND_DMA_WAIT");
+
+        wait = v != NULL && v[0] != '\0' && v[0] != '0';
+    }
+    return wait;
+}
