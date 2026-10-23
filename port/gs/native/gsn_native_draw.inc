@@ -26,13 +26,14 @@
 void flush_batch();
 void gs_write(uint32_t address, uint64_t value);
 
-// nd_000.vert's Draw (std140): matrices are VU layout, a qword a column
+// nd_000.vert's Draw (std140): matrices are VU layout, a qword a column; the vertex matrix, the light
+// directions and the point lights as VU1's set-up leaves them (nd_draw: its arithmetic, bit for bit)
 struct NdConst {
-    float world_screen[16];
-    float model[16];
+    float vertex[16];    // VU1 0x14-0x17: world to screen by the part's matrix
+    float model[16];     // (pictures between: the part to the world, the world to view, view to screen)
     float view[16];
     float screen[16];
-    float light_dir[16];
+    float light_dir[16]; // vf05-vf07: the light directions by the part's rotation (a column each)
     float light_col[16];
     float fog[4];
     float point_pos[16]; // in the model's space, as VU1's set-up leaves them; w the falloff
@@ -126,12 +127,23 @@ const Buffer &nd_gpu_mesh(const RdMeshData &m) {
     return *g.buffer;
 }
 
-// 4x4 products in VU layout (a qword a column): out = a b
-void nd_mul(float *out, const float *a, const float *b) {
-    for (int c = 0; c < 4; c++) {
-        for (int r = 0; r < 4; r++) {
-            out[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
-        }
+// VU1's arithmetic (port/include/port/vu_float.h: the interpreter's, bit for bit), on floats
+float vu_mul(float a, float b) {
+    return vu_float_from_bits(vu_float_mul(vu_float_bits(a), vu_float_bits(b)));
+}
+float vu_add(float a, float b) {
+    return vu_float_from_bits(vu_float_add(vu_float_bits(a), vu_float_bits(b)));
+}
+float vu_sub(float a, float b) {
+    return vu_float_from_bits(vu_float_sub(vu_float_bits(a), vu_float_bits(b)));
+}
+// M v, as MULAx ACC; MADDAy; MADDAz; MADDw (each product rounded, then the sum): m a qword a column
+void vu_transform4(float *out, const float *m, const float *v) {
+    for (int r = 0; r < 4; r++) {
+        float acc = vu_mul(m[r], v[0]);
+        acc = vu_add(acc, vu_mul(m[4 + r], v[1]));
+        acc = vu_add(acc, vu_mul(m[8 + r], v[2]));
+        out[r] = vu_add(acc, vu_mul(m[12 + r], v[3]));
     }
 }
 
@@ -144,25 +156,26 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
     bool clip[N_ND_MAX];
     for (uint32_t k = 0; k < b.count; k++) {
         const int32_t *q = &m.vertices[(b.first + k) * 16];
+        // (vu1_hle.c's vertex: its operations, VU1's arithmetic; the same as nd_000.vert's)
         float p[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
         float c[4];
-        for (int r = 0; r < 4; r++) {
-            c[r] = vm[r] * p[0] + vm[4 + r] * p[1] + vm[8 + r] * p[2] + vm[12 + r] * p[3];
-        }
-        float qq = 1.0f / c[3];
-        float x = c[0] * qq, y = c[1] * qq, z = c[2] * qq;
+        vu_transform4(c, vm, p);
+        float qq = vu_float_from_bits(vu_float_div(0x3F800000u, vu_float_bits(c[3])));
+        float x = vu_mul(c[0], qq), y = vu_mul(c[1], qq), z = vu_mul(c[2], qq);
         // VU1's clip judgement: past the guard band (2047 about the 2048 middle) in X or Y, or Z below 0
-        clip[k] = !(fabsf(x - 2048.0f) <= 2047.0f && fabsf(y - 2048.0f) <= 2047.0f && !(z < 0.0f));
-        int32_t xi = clip[k] ? 0 : int32_t(x * 16.0f), yi = clip[k] ? 0 : int32_t(y * 16.0f);
-        int32_t zi = clip[k] ? 0 : int32_t(std::min(z * 16.0f, 2.0e9f));
+        float rx = vu_sub(x, 2048.0f), ry = vu_sub(y, 2048.0f);
+        clip[k] = !(fabsf(rx) <= 2047.0f && fabsf(ry) <= 2047.0f) || (vu_float_bits(z) > 0x80000000u &&
+                                                                       (vu_float_bits(z) & 0x7F800000u) != 0);
+        int32_t xi = vu_float_ftoi(vu_float_bits(x), 4), yi = vu_float_ftoi(vu_float_bits(y), 4);
+        int32_t zi = vu_float_ftoi(vu_float_bits(z), 4);
         v[k].x = float(int32_t(uint32_t(xi) & 0xFFFF) - ox) / 16.0f;
         v[k].y = float(int32_t(uint32_t(yi) & 0xFFFF) - oy) / 16.0f;
         v[k].z = uint32_t(zi >> 4) & 0xFFFFFF;
         int32_t a = q[15];
         v[k].rgba = 0x00808080u | uint32_t(a < 0 ? 0 : a > 255 ? 255 : a) << 24;
-        v[k].s = float(q[8]) / 4096.0f * qq;
-        v[k].t = float(q[9]) / 4096.0f * qq;
-        v[k].q = float(q[10]) / 4096.0f * qq;
+        v[k].s = vu_mul(float(q[8]) / 4096.0f, qq);
+        v[k].t = vu_mul(float(q[9]) / 4096.0f, qq);
+        v[k].q = vu_mul(float(q[10]) / 4096.0f, qq);
     }
     for (size_t i = 0; i + 2 < b.triangles.size(); i += 3) {
         uint32_t t[3] = {b.triangles[i], b.triangles[i + 1], b.triangles[i + 2]};
@@ -199,29 +212,33 @@ void nd_draw(uint64_t value) {
     flush_batch();
     gsn_stats.nd_draws++;
     NdConst &k = nd.consts;
-    memcpy(k.world_screen, cam.world_screen, 64);
+    // VU1's set-up (vu1_hle.c, setup), in its arithmetic: the vertex matrix (VU1 0x00 by 0x04), the light
+    // directions by the part's rotation (0x0C-0x0F by 0x04-0x06's columns), the point lights into the
+    // part's space: less its translation, then by its rotation with the off-diagonal signs turned (the
+    // set-up's own maths: the transpose only for a turn about one axis, as the game's models are)
+    const float *m = &d.model[0][0];
+    for (int col = 0; col < 4; col++) {
+        vu_transform4(&k.vertex[col * 4], &cam.world_screen[0][0], &m[col * 4]);
+        vu_transform4(&k.light_dir[col * 4], &d.light_dir[0][0], &m[col * 4]);
+    }
     memcpy(k.model, d.model, 64);
     memcpy(k.view, cam.view, 64);
     memcpy(k.screen, cam.screen, 64);
-    memcpy(k.light_dir, d.light_dir, 64);
     memcpy(k.light_col, d.light_col, 64);
     memcpy(k.fog, d.fog, 16);
-    // VU1's set-up: the point lights into the model's space. Less the model's translation, then by its
-    // rotation with the off-diagonal signs turned (the set-up's own maths: the transpose only for a
-    // turn about one axis, as the game's models are)
     int32_t lights = std::max(0, std::min(4, int32_t(int16_t(d.point_count))));
     for (int l = 0; l < 4; l++) {
-        const float *m = &d.model[0][0];
-        float p[3] = {d.point_pos[l][0] - m[12], d.point_pos[l][1] - m[13], d.point_pos[l][2] - m[14]};
+        float p[3] = {vu_sub(d.point_pos[l][0], m[12]), vu_sub(d.point_pos[l][1], m[13]), vu_sub(d.point_pos[l][2], m[14])};
         float r0[3] = {m[0], -m[1], -m[2]}, r1[3] = {-m[4], m[5], -m[6]}, r2[3] = {-m[8], -m[9], m[10]};
         for (int i = 0; i < 3; i++) {
-            k.point_pos[l * 4 + i] = r0[i] * p[0] + r1[i] * p[1] + r2[i] * p[2];
+            float acc = vu_mul(r0[i], p[0]);
+            acc = vu_add(acc, vu_mul(r1[i], p[1]));
+            k.point_pos[l * 4 + i] = vu_add(acc, vu_mul(r2[i], p[2]));
         }
         k.point_pos[l * 4 + 3] = d.point_pos[l][3];
         memcpy(&k.point_col[l * 4], d.point_col[l], 16);
     }
-    float vm[16];
-    nd_mul(vm, &cam.world_screen[0][0], &d.model[0][0]);
+    const float *vm = k.vertex;
     for (const auto &mesh : nd.fetched) {
         const Buffer &buffer = nd_gpu_mesh(*mesh);
         for (const RdBatch &b : mesh->batches) {

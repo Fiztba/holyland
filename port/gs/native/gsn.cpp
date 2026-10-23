@@ -50,6 +50,7 @@
 
 extern "C" {
 #include "port/gs_capture_format.h"
+#include "port/vu_float.h" // (native draw: gsn_native_draw.inc)
 #include "port/platform.h"
 #include "gsn.h"
 #include "gsn_vram.h"
