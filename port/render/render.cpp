@@ -13,6 +13,12 @@
 
 #include "render_internal.hpp"
 
+#include <unordered_set>
+
+extern "C" {
+#include "port/gs_capture_format.h"
+}
+
 RdStats rd_stats;
 
 namespace {
@@ -336,6 +342,7 @@ uint32_t frame_count = 0;
 // the consumer (the native GS): the last frame whose RD_ND_FRAME mark it has met (rd_consumer_frame)
 std::atomic<uint32_t> consumer_frame{0};
 std::atomic<bool> consumer{false};
+std::atomic<uint64_t> drawn{0}; // rd_draw's calls (rd_capture_poll looks for new ones)
 
 } // namespace
 
@@ -381,6 +388,8 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
         }
         return 0;
     }
+    mesh->block.assign(bytes, bytes + size_t(qwords) * 16);
+    mesh->format = uint32_t(fmt);
     mesh->id = next_id++;
     if (next_id == 0) {
         next_id = 1;
@@ -484,6 +493,7 @@ extern "C" uint64_t rd_draw(const RdDraw *d, const RdMesh *meshes, uint32_t coun
         s.meshes.push_back(by_id[meshes[i]]);
     }
     rd_stats.draws++;
+    drawn.fetch_add(1, std::memory_order_release);
     return (uint64_t(RD_ND_DRAW) << 56) | (uint64_t(serial) << 32) | index;
 }
 
@@ -499,4 +509,285 @@ bool rd_fetch(uint64_t value, RdDraw &draw, RdCamera &camera, std::vector<std::s
     camera = s.cameras[draw.camera];
     meshes.assign(s.meshes.begin() + s.first_mesh[index], s.meshes.begin() + s.first_mesh[index] + draw.mesh_count);
     return true;
+}
+
+// ---- Captures (render.h, gs_capture_format.h) -----------------------------------------------------
+static_assert(sizeof(Kf4GsNdDraw) == sizeof(RdDraw), "Kf4GsNdDraw is RdDraw's fields, in order");
+static_assert(sizeof(Kf4GsNdCamera) == sizeof(RdCamera), "Kf4GsNdCamera is RdCamera's fields, in order");
+
+namespace {
+
+// (field by field: the file's layout is its own, whatever RdDraw becomes)
+void draw_to_file(const RdDraw &d, Kf4GsNdDraw &f) {
+    memset(&f, 0, sizeof(f));
+    f.kind = d.kind;
+    memcpy(f.id, d.id, sizeof(f.id));
+    f.program = d.program;
+    f.flags = d.flags;
+    f.camera = d.camera;
+    f.mesh_count = d.mesh_count;
+    memcpy(f.model, d.model, sizeof(f.model));
+    memcpy(f.parent, d.parent, sizeof(f.parent));
+    memcpy(f.light_dir, d.light_dir, sizeof(f.light_dir));
+    memcpy(f.light_col, d.light_col, sizeof(f.light_col));
+    memcpy(f.fog, d.fog, sizeof(f.fog));
+    f.fogcol = d.fogcol;
+    f.point_count = d.point_count;
+    memcpy(f.point_pos, d.point_pos, sizeof(f.point_pos));
+    memcpy(f.point_col, d.point_col, sizeof(f.point_col));
+    memcpy(f.colour, d.colour, sizeof(f.colour));
+}
+
+void draw_from_file(const Kf4GsNdDraw &f, RdDraw &d) {
+    memset(&d, 0, sizeof(d));
+    d.kind = f.kind;
+    memcpy(d.id, f.id, sizeof(d.id));
+    d.program = f.program;
+    d.flags = f.flags;
+    d.camera = f.camera;
+    d.mesh_count = f.mesh_count;
+    memcpy(d.model, f.model, sizeof(d.model));
+    memcpy(d.parent, f.parent, sizeof(d.parent));
+    memcpy(d.light_dir, f.light_dir, sizeof(d.light_dir));
+    memcpy(d.light_col, f.light_col, sizeof(d.light_col));
+    memcpy(d.fog, f.fog, sizeof(d.fog));
+    d.fogcol = f.fogcol;
+    d.point_count = f.point_count;
+    memcpy(d.point_pos, f.point_pos, sizeof(d.point_pos));
+    memcpy(d.point_col, f.point_col, sizeof(d.point_col));
+    memcpy(d.colour, f.colour, sizeof(d.colour));
+}
+
+void camera_to_file(const RdCamera &c, Kf4GsNdCamera &f) {
+    memcpy(f.world_screen, c.world_screen, sizeof(f.world_screen));
+    memcpy(f.view, c.view, sizeof(f.view));
+    memcpy(f.screen, c.screen, sizeof(f.screen));
+    f.mode = c.mode;
+    f.projection = c.projection;
+}
+
+void camera_from_file(const Kf4GsNdCamera &f, RdCamera &c) {
+    memcpy(c.world_screen, f.world_screen, sizeof(c.world_screen));
+    memcpy(c.view, f.view, sizeof(c.view));
+    memcpy(c.screen, f.screen, sizeof(c.screen));
+    c.mode = f.mode;
+    c.projection = f.projection;
+}
+
+template <typename T> void append(std::vector<uint8_t> &body, const T &v) {
+    const uint8_t *p = reinterpret_cast<const uint8_t *>(&v);
+    body.insert(body.end(), p, p + sizeof(T));
+}
+
+// The capture's side (its thread: the DMA controller's)
+struct CaptureState {
+    bool fresh = true;   // rd_capture_begin: the next poll gives the frames the GS may not have met
+    uint64_t drawn_seen = 0;
+    uint32_t cursor = 0; // the oldest frame whose draws may still grow
+    std::unordered_map<uint32_t, uint32_t> given; // frame serial: its draws given so far
+    std::unordered_set<RdMesh> meshes_given;
+    std::vector<uint8_t> body;
+} capture;
+
+void capture_frame(const Slot &s, RdCaptureEmit emit) {
+    uint32_t &given = capture.given[s.serial];
+    uint32_t count = uint32_t(s.draws.size());
+
+    if (count <= given) {
+        return;
+    }
+    // the meshes first: a reader has them when the draws name them
+    for (uint32_t i = given; i < count; i++) {
+        for (uint32_t m = 0; m < s.draws[i].mesh_count; m++) {
+            const RdMeshData &mesh = *s.meshes[s.first_mesh[i] + m];
+            if (capture.meshes_given.insert(mesh.id).second) {
+                Kf4GsNdMesh head;
+                head.id = mesh.id;
+                head.key = mesh.key;
+                head.qwords = uint32_t(mesh.block.size() / 16);
+                head.format = mesh.format;
+                emit(KF4GS_ND_MESH, &head, sizeof(head), mesh.block.data(), mesh.block.size());
+            }
+        }
+    }
+    Kf4GsNdDraws head;
+    head.serial = s.serial;
+    head.first = given;
+    head.count = count - given;
+    head.cameras = uint32_t(s.cameras.size());
+    std::vector<uint8_t> &body = capture.body;
+    body.clear();
+    for (const RdCamera &c : s.cameras) {
+        Kf4GsNdCamera f;
+        camera_to_file(c, f);
+        append(body, f);
+    }
+    for (uint32_t i = given; i < count; i++) {
+        Kf4GsNdDraw f;
+        draw_to_file(s.draws[i], f);
+        append(body, f);
+        for (uint32_t m = 0; m < s.draws[i].mesh_count; m++) {
+            append(body, uint32_t(s.meshes[s.first_mesh[i] + m]->id));
+        }
+    }
+    emit(KF4GS_ND_DRAWS, &head, sizeof(head), body.data(), body.size());
+    given = count;
+}
+
+// The replay's side (kf4-gsreplay's thread): the capture's meshes by its ids
+std::unordered_map<uint32_t, std::shared_ptr<const RdMeshData>> replay_meshes;
+
+} // namespace
+
+RdReplayStats rd_replay_stats;
+
+extern "C" void rd_capture_begin(void) {
+    capture.fresh = true;
+    capture.given.clear();
+    capture.meshes_given.clear();
+}
+
+extern "C" void rd_capture_poll(RdCaptureEmit emit) {
+    uint64_t n = drawn.load(std::memory_order_acquire);
+    if (!capture.fresh && n == capture.drawn_seen) {
+        return;
+    }
+    std::lock_guard<std::mutex> g(slots_lock);
+    uint32_t now = serial;
+    if (capture.fresh) {
+        // what the chain on its way to the GS can still name: the frames from the native GS's last mark
+        // on (it is behind the DMA), or the last few when there is no native GS
+        uint32_t back = consumer.load() ? ((now - consumer_frame.load()) & 0xFFFFFF) : 3;
+        back = std::min(back, SLOTS - 2);
+        capture.cursor = (now - back) & 0xFFFFFF;
+        capture.fresh = false;
+    }
+    capture.drawn_seen = n;
+    for (uint32_t s = capture.cursor;; s = (s + 1) & 0xFFFFFF) {
+        const Slot &slot = slots[s % SLOTS];
+        if (slot.serial == s) {
+            capture_frame(slot, emit);
+        }
+        if (s == now) {
+            break;
+        }
+    }
+    capture.cursor = now; // (rd_draw adds to the newest frame only)
+}
+
+extern "C" void rd_replay_reset(void) {
+    replay_meshes.clear();
+    memset(&rd_replay_stats, 0, sizeof(rd_replay_stats));
+}
+
+extern "C" int rd_replay_record(uint32_t type, const void *data, size_t size) {
+    const uint8_t *p = static_cast<const uint8_t *>(data);
+    if (type == KF4GS_ND_MESH) {
+        Kf4GsNdMesh head;
+        if (size < sizeof(head)) {
+            return -1;
+        }
+        memcpy(&head, p, sizeof(head));
+        if (size - sizeof(head) < size_t(head.qwords) * 16) {
+            return -1;
+        }
+        auto mesh = std::make_shared<RdMeshData>();
+        mesh->id = head.id;
+        mesh->key = head.key;
+        mesh->gen = 0;
+        mesh->format = head.format;
+        mesh->block.assign(p + sizeof(head), p + sizeof(head) + size_t(head.qwords) * 16);
+        rd_replay_stats.meshes++;
+        // (parsed again: this build's parser decides, as it would in the game)
+        if (head.format != RD_VF_PACKED16 || !parse_block(mesh->block.data(), head.qwords, *mesh)) {
+            rd_replay_stats.meshes_refused++;
+            fprintf(stderr, "native draw: the capture's block %#x (%u qwords) is refused: %s\n", head.key, head.qwords,
+                    head.format != RD_VF_PACKED16 ? "not RD_VF_PACKED16" : why_refused);
+            replay_meshes.erase(head.id);
+            return 1;
+        }
+        replay_meshes[head.id] = mesh;
+        return 1;
+    }
+    if (type != KF4GS_ND_DRAWS) {
+        return 0;
+    }
+    Kf4GsNdDraws head;
+    if (size < sizeof(head)) {
+        return -1;
+    }
+    memcpy(&head, p, sizeof(head));
+    size_t at = sizeof(head);
+    if ((size - at) / sizeof(Kf4GsNdCamera) < head.cameras) {
+        return -1;
+    }
+    std::lock_guard<std::mutex> g(slots_lock);
+    Slot &s = slots[head.serial % SLOTS];
+    if (s.serial != head.serial || head.first == 0) {
+        s.serial = head.serial;
+        s.draws.clear();
+        s.first_mesh.clear();
+        s.meshes.clear();
+    }
+    s.cameras.clear();
+    for (uint32_t i = 0; i < head.cameras; i++, at += sizeof(Kf4GsNdCamera)) {
+        Kf4GsNdCamera f;
+        RdCamera c;
+        memcpy(&f, p + at, sizeof(f));
+        memset(&c, 0, sizeof(c));
+        camera_from_file(f, c);
+        s.cameras.push_back(c);
+    }
+    if (s.cameras.empty()) {
+        s.cameras.push_back(RdCamera{}); // (a draw left out still names one)
+    }
+    // the frame's draws from first on are these (one the capture did not give before them: left out)
+    if (s.draws.size() > head.first) {
+        s.meshes.resize(s.first_mesh[head.first]);
+        s.draws.resize(head.first);
+        s.first_mesh.resize(head.first);
+    }
+    RdDraw none; // (a draw left out: the native GS counts it as of a program it does not draw)
+    memset(&none, 0, sizeof(none));
+    none.program = 0xFFFFFFFFu;
+    while (s.draws.size() < head.first) {
+        s.draws.push_back(none);
+        s.first_mesh.push_back(uint32_t(s.meshes.size()));
+        rd_replay_stats.draws_dropped++;
+    }
+    for (uint32_t i = 0; i < head.count; i++) {
+        Kf4GsNdDraw f;
+        RdDraw d;
+        if (size - at < sizeof(f)) {
+            return -1;
+        }
+        memcpy(&f, p + at, sizeof(f));
+        at += sizeof(f);
+        draw_from_file(f, d);
+        if ((size - at) / 4 < d.mesh_count) {
+            return -1;
+        }
+        bool ok = d.camera < s.cameras.size();
+        size_t first_mesh = s.meshes.size();
+        for (uint32_t m = 0; m < d.mesh_count; m++, at += 4) {
+            uint32_t id;
+            memcpy(&id, p + at, 4);
+            auto it = replay_meshes.find(id);
+            if (it == replay_meshes.end()) {
+                ok = false;
+            } else if (ok) {
+                s.meshes.push_back(it->second);
+            }
+        }
+        if (!ok) {
+            s.meshes.resize(first_mesh); // (drawn as nothing: the frame's indices stay the capture's)
+            d = none;
+            rd_replay_stats.draws_dropped++;
+        } else {
+            rd_replay_stats.draws++;
+        }
+        s.first_mesh.push_back(uint32_t(first_mesh));
+        s.draws.push_back(d);
+    }
+    return 1;
 }

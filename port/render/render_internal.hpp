@@ -30,6 +30,8 @@ struct RdMeshData {
     uint32_t key, gen;
     std::vector<RdBatch> batches;
     std::vector<int32_t> vertices;
+    std::vector<uint8_t> block;      // the block's bytes as parsed (for GS captures: rd_capture_poll)
+    uint32_t format;                 // its RdVertexFormat
 };
 
 // The draw a PORT_GS_REG_NATIVE_DRAW value names, its camera and meshes, if its frame's slot still

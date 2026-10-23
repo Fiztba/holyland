@@ -11,7 +11,12 @@
    Cost. Unused, the hooks in port/platform/gs.c and vif1.c test a flag and nothing else. While it
    records, every GIF packet and VIF1 word is copied into memory; the file is compressed and written on
    the controller's thread when the capture ends (the game stops for that long, a fraction of a
-   second). Nothing it does changes what the game or the GS do. */
+   second). Nothing it does changes what the game or the GS do.
+
+   Native draw. The chain's writes to PORT_GS_REG_NATIVE_DRAW name draws in the renderer core's side
+   buffer (port/include/port/render.h): before each GIF or VIF1 record, what was added to it since is put
+   in records of its own (rd_capture_poll: KF4GS_ND_MESH, KF4GS_ND_DRAWS), so the file holds every draw
+   before the writes that name it. Without native draws there are none. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +26,7 @@
 #include "port/host.h"
 #include "port/lz4_block.h"
 #include "port/platform.h"
+#include "port/render.h"
 #include "port/savestate.h"
 
 #if __has_include("build_rev.h")
@@ -178,10 +184,12 @@ static void put(uint32_t type, const void *data, size_t size) {
 void port_gs_capture_gif(int path, const void *data, size_t bytes) {
     uint32_t p = (uint32_t)path;
 
+    rd_capture_poll(put2);
     put2(KF4GS_GIF, &p, 4, data, bytes);
 }
 
 void port_gs_capture_vif1(const uint32_t *words, size_t count) {
+    rd_capture_poll(put2);
     put(KF4GS_VIFDATA, words, count * 4);
 }
 
@@ -266,6 +274,7 @@ static void start(uint64_t vblank, int vblanks) {
         free(block);
     }
     put(KF4GS_VIF1, &vif, sizeof(vif));
+    rd_capture_begin();
     start_vblank = vblank;
     vsyncs_left = capture_vblanks = vblanks;
     port_gs_capture_recording = 1;
