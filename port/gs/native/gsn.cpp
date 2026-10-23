@@ -6301,9 +6301,6 @@ struct Ring {
 
 Ring *ring; // (none: no thread)
 
-// When the GS's thread last waited for the GPU at a vblank's end (steady_clock nanoseconds; gsn_gpu_behind)
-std::atomic<int64_t> gpu_waited_at{0};
-
 int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 
 void ring_work(const RingRecord &r, const uint8_t *data) {
@@ -6848,15 +6845,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     }
     gpu_mark(GPU_SCANOUT);
     submit(false);
-    {
-        // (the GPU behind: gsn_gpu_behind)
-        auto before = std::chrono::steady_clock::now();
-        gs->device->next_frame_context();
-        auto after = std::chrono::steady_clock::now();
-        if (after - before > std::chrono::microseconds(500)) {
-            gpu_waited_at.store(std::chrono::duration_cast<std::chrono::nanoseconds>(after.time_since_epoch()).count());
-        }
-    }
+    gs->device->next_frame_context();
     if (ok & GSN_WANT_IMAGE) {
         scanout_published(tag);
     }
@@ -6953,12 +6942,6 @@ extern "C" int gsn_picture(const uint64_t *privileged, int field, int want_pixel
     }
     ring_idle();
     return vsync_now(privileged, field, want_pixels, frame, tag);
-}
-
-extern "C" int gsn_gpu_behind(void) {
-    int64_t at = gpu_waited_at.load();
-    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    return at != 0 && now - at < 16683000; // (a vblank)
 }
 
 extern "C" int gsn_backlog(void) {

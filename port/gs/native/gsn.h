@@ -57,9 +57,6 @@ uint64_t gsn_present_scale_passes(void);
 int gsn_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 /* The vblanks sent to the native GS's thread that it has not done yet */
 int gsn_backlog(void);
-/* 1 while the GPU is behind: within the last vblank the native GS's thread waited for it (a frame's
-   commands not yet done when their frame context came round again) */
-int gsn_gpu_behind(void);
 void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag), void (*image)(uint64_t tag));
 /* The render targets' size, from the next vblank: x_scale times the PS2's across (1 to GSN_MAX_SCALE_X)
    and y_scale times down (1 to 4). --native-scale gives both the same; --native-widescreen a wider x. */
