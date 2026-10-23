@@ -132,6 +132,13 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   the HUD gone, black, or textures across the screen, in main since the pictures between went to the GPU.
   `submit` now writes the count so far, flushes, and runs the passes again after (`--stats`: "submits
   while recording").
+- **A write-back is put off** when an upload or a copy writes part of a target in another shape
+  (`gsn.cpp`, "Write-backs put off"): the target becomes a shadow of its pages, the bits written over them
+  are noted (the transfer done again into `shadow_mask` with every bit set), a page written over whole is let
+  go, and a page still owed goes back only when its VRAM is wanted (`claim_pages`, `load_target_rect`, another
+  write-back, a save state), what was written since put back over it. Anything new that reads the CPU's VRAM
+  must go through `claim_pages` (or call `shadow_resolve`) first. Map 060's shop: 251 write-backs to none
+  (`--stats`: "write-backs put off"); `KF4_GSN_SHADOWS=0` brings them back.
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a
