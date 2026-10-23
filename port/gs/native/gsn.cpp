@@ -52,6 +52,7 @@ extern "C" {
 #include "port/gs_capture_format.h"
 #include "port/vu_float.h" // (native draw: gsn_native_draw.inc)
 #include "port/platform.h"
+#include "port/host.h" // (native draw: the frame-rate marks, gsn_native_draw.inc)
 #include "gsn.h"
 #include "gsn_vram.h"
 }
@@ -4941,6 +4942,9 @@ void gs_write(uint32_t address, uint64_t value) {
     case R_TEXFLUSH:
     case 0x0F: // NOP
     case 0x7D: // the port's frame-rate mark (frame_interp.c): a picture between begins or ends
+        if (address == 0x7D) {
+            nd_mark(value); // (native draw: where the draws after it are, gsn_native_draw.inc)
+        }
         if (bits(value, 32, 8) == 0xF0) {
             replaying = true;
             recording = -1;
