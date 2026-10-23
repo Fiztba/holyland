@@ -1,6 +1,9 @@
 /* nd_objects.c: PC-only. Native draw (--native-draw objects; docs/port/NATIVE_DRAW.md, NATIVE_DRAW_TASKS.md
-   P2-1) of the map objects: Model_DrawPosedWithAlpha, the draw_parts of every map object whose
-   definition's bit8 is 0 (MapObject_SetUp ...), and of nothing else. It is called both straight from
+   P2-1) of the map objects, and (--native-draw gold) of the gold: at the end of the file, the skinned ones
+   (the gold, and the map objects whose definition's bit8 is 1), through nd_skinned.h.
+
+   Model_DrawPosedWithAlpha is the draw_parts of every map object whose
+   definition's bit8 is 0 (MapObject_InitMap), and of nothing else. It is called both straight from
    MapObject_DrawAll (solid objects) and from DrawList_Draw (translucent and fading ones, put in the draw
    list by MapObject_DrawAll), so the call site is the head of Model_DrawPosedWithAlpha itself (model.patch):
    one hook for both ways in.
@@ -27,7 +30,10 @@
 #include "entity/entity.h"
 #include "gfx/gs.h"
 #include "port/render.h"
+#include "nd_skinned.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 void Packet_BeginGsRegisters(void);
@@ -181,6 +187,51 @@ int NativeDraw_PosedWithAlpha(ModelInstance *model) {
         Model_DrawPosedWithAlpha(model);
         queuing_ps2_path = 0;
         NativeDraw_QueueMark(RD_ND_ALT_END, 0);
+    }
+    return 1;
+}
+
+/* ---- The skinned models of the maps: the gold, and the jointed map objects ------------------------
+   Both draw through Model_DrawSkinned (program 0x280), drawn here by the entities' adapter
+   (nd_skinned.h, nd_entities.c) with an identity of their own:
+   - the gold (kind gold, RD_KIND_GOLD; the map actor's body, item/gold.c): Gold_Draw calls
+     Model_DrawSkinned for a pile that is not fading; a fading one (15 vblanks after it is dropped or
+     picked up) goes to the draw list, whose DrawList_Draw runs its draw (Gold_PrepareFadedDraw: ALPHA_1
+     with the fade as FIX, the tests, the textures) and then its draw_parts (Gold_DrawSkinnedParts);
+   - the map objects whose definition bit8 is 1 (kind objects, RD_KIND_MAP_OBJECT; the model): bit8 is
+     the same bit as the definition word's 0x100, so these are exactly the jointed objects Map_BuildModels sets
+     up by Model_SetUpSkinned, and MapObject_InitMap leaves them its draw_parts (Model_DrawSkinned) with
+     MapObject_DrawModelWithAlpha as their draw (or MapObject_DrawModelNoDepthWrite for kind 5).
+     MapObject_DrawAll's jointed list calls the draw_parts straight away, or puts the object in the draw
+     list when it is translucent; map_object.c's MapObject_DrawSkinnedParts is that draw_parts.
+   The GS registers before the parts (ZBUF, ALPHA, TEST, the textures) stay the game's, queued by the
+   draw hooks as before. A model declined here is counted (--stats, "models declined"). */
+
+static int skinned_declined(ModelInstance *model, int kind) {
+    static int logged;
+
+    rd_stats.declined++;
+    if (logged < 32 && getenv("KF4_ND_LOG")) {
+        logged++;
+        fprintf(stderr, "[native draw] kind %d model %#x drawn the PS2 way: a block the core cannot draw, or no parts\n", kind,
+                (u32)EE_WORD(model));
+    }
+    return 0;
+}
+
+/* Model_DrawSkinned(model) for a pile of gold (kind gold), natively: 1 if drawn, 0 to draw it the PS2 way */
+int NativeDraw_Gold(ModelInstance *model) {
+    if (!NativeDraw_Skinned(model, RD_KIND_GOLD, model)) {
+        return skinned_declined(model, RD_KIND_GOLD);
+    }
+    return 1;
+}
+
+/* Model_DrawSkinned(model) for a map object of definition bit8 1 (kind objects), natively: 1 if drawn,
+   0 to draw it the PS2 way */
+int NativeDraw_SkinnedObject(ModelInstance *model) {
+    if (!NativeDraw_Skinned(model, RD_KIND_MAP_OBJECT, model)) {
+        return skinned_declined(model, RD_KIND_MAP_OBJECT);
     }
     return 1;
 }
