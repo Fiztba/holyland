@@ -6178,6 +6178,27 @@ int interp_cannot_replay() {
     }
     now.vram_writes = interp.start.vram_writes;
     now.clut_version = interp.start.clut_version;
+    // A target the recording made that is still there (the frame drawn by the game had none at that
+    // buffer, the picture's own is kept: the sky's scrolling copy on map 063, since targets made only by
+    // pictures between are dropped at the frame's end): its calls make it again, from VRAM, over the
+    // same image. Without it the frame's second picture was drawn from the packets again each frame.
+    auto key_of = [](const InterpTargetState &x) { return std::make_tuple(x.bp, x.bw, x.psm, x.depth); };
+    auto shape_same = [](const InterpTargetState &x, const InterpTargetState &y) {
+        return x.has_ms == y.has_ms && x.width == y.width && x.height == y.height && x.sx == y.sx && x.sy == y.sy;
+    };
+    now.targets.erase(std::remove_if(now.targets.begin(), now.targets.end(), [&](const InterpTargetState &x) {
+        for (const InterpTargetState &s : interp.start.targets) {
+            if (key_of(s) == key_of(x)) {
+                return false;
+            }
+        }
+        for (const InterpTargetState &e : interp.end.targets) {
+            if (key_of(e) == key_of(x) && shape_same(e, x)) {
+                return true;
+            }
+        }
+        return false;
+    }), now.targets.end());
     if (!interp_same(now, interp.start)) {
         return 1;
     }
