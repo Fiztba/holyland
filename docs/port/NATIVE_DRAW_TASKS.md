@@ -480,6 +480,39 @@ after P2-2). The depth clear first (`GsDraw_ClearDepth`), then the arm and the w
 `held_item_light_blocks`, weapon 0x2E's additive part 5, and the trail as a native strip (additive, Z
 ALWAYS). Kind `arm`. Accepted: 0 pixels while swinging, at 1x and 4x, every weapon class.
 
+*Done (nd2/p2-4).* The adapter is `game/native_draw/nd_arm.c`; the call sites are five conditions in
+`Player_DrawArm` (`player.patch`). `NativeDraw_Arm(model, which)` replaces `draw_parts` for the arm (0)
+and the held item (1), weapon 0x2E's two passes included (the site's bit40 flags, `ALPHA_1 0x48` and the
+textures stay the game's): a 0x280 draw per drawn part, carrying what `Model_DrawSkinned` would have put
+in VU1 (`held_item_light_blocks` reach it through the model's light block). Without compare mode VU1
+still gets `Model_DrawSkinned`'s fixed block and each part's matrices, only never the data blocks, so
+VU1's memory is left as the PS2 path leaves it. The trail is `NativeDraw_ArmTrail`: the game's PATH2 packet
+becomes a mesh of the new `RD_VF_GS_STRIP` (`render.cpp`, `parse_gs_strip`) and a draw of
+`RD_PROGRAM_GS_STRIP` (kind arm, id 2), which the native GS writes register by register as `gif()` would
+(`gsn_nd_strip.inc`). So the trail has an identity of its own for P2-5, but its points are still the
+screen points `WeaponTrail_Update` projected. The depth clear (`GsDraw_ClearDepth`) is a GS sprite with no
+VU1 in it, and it stays as it is.
+
+Results (made-up quick saves at map 000's start, `PlayerState.weapon` set, SQUARE at vblank 330):
+- 1x, compare and onoff mode, pictures every 2 vblanks 330-410: 0 pixels for 23 weapons covering every
+  class. That is weapons 0, 1, 3, 5, 8, 11, 14, 19, 27, 31, 33, 36, 40, 42, 45, 46 (0x2E), 49, 52, 54 and
+  55 (one-handed and two-handed swings), plus 57, 60 and 62 (the bows and the crossbow; these draw only with
+  arrows, `--cheats items`, every 4th vblank 300-496).
+- 4x, compare mode, every 4th vblank: 0 pixels for weapons 5, 31, 46, 49, 54 and the crossbow (60).
+- 4x, onoff mode: 0 pixels for weapons 5 and 46.
+- Control: with the native trail switched off, compare mode differed by 12,307 pixels on weapon 5 and
+  15,957 on weapon 46, so the trail really is drawn by the native path.
+- `--log` with `--native-draw arm` is the same as with `off`, in compare and onoff mode alike.
+- A capture of the swing replays with the native set equal to the PS2 set (0 pixels), and the oracle
+  finds 0 lane differences in it.
+
+Left:
+- Pictures between (P2-5): 0x280 draws stay where the frame has them, as the PS2 path's arm section does.
+- The trail's world points are needed before it can move (`WeaponTrail_Update` keeps only screen
+  points).
+- `NativeDraw_Arm` has a copy of `Model_DrawSkinned` without the data blocks. P2-3's skinned adapter
+  could share it.
+
 **P2-5 Pictures between for models** (owns the moving path for the kinds `objects`, `entities` and `arm`).
 Pair draws by identity (kind and id, as P1-3 does) and move the parts by their own matrices t of the way,
 then remove `objects_pair` for native draws. Accepted: at 240, the arm's swing and 016's bats with no
