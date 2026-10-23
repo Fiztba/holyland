@@ -522,6 +522,24 @@ parts and fades, and the Fire Lord's afterimages. Type 0x47 (the frame copied to
 screen UVs) stays the PS2 path's at first. Kind `entities`. Accepted: maps with enemies (016's bats, 009's
 skeleton) 0 pixels in compare and onoff, with a hit flash and a death fade caught.
 
+*Done (nd2/p2-3).* `game/native_draw/nd_entities.c`, `NativeDraw_Skinned`: `Model_DrawSkinned` natively
+(the same turn and part matrices into the same scratchpad, the same parts left out, a 0x280 draw per part
+with `model`, `parent`, `turn`, and the bias and scale at 0x64-0x65: the tint and the fade). Outside
+compare mode it queues what the PS2 path leaves in VU1's memory without the data (the first packet, and
+the last part's four matrices). Call sites (`entity.patch`): `Entity_DrawAll`'s opaque call, and the
+entity model's `draw_parts` (set in `Entity_TryActivate`) for the draw list's translucent entities and
+the Fire Lord's afterimages (copies of the model); type 0x47 goes the PS2 way. `--native-draw entities`
+(an alias of `skinned`) and an overlay checkbox. Checked, 1x, compare and onoff, 0 pixels: 016's bats; 009's
+miners and their reflection (a made-up save at the water); 008, 014 and 041's mirror views; maps 004,
+012, 020, 027, 035, 042, 103 and 112 at their starts; and a fight on map 000 (a made-up save with the
+player's hp and power raised, `strong3.pad`): three hit flashes (255, 64, 64) and the death fade (alpha 128
+to 6.4 over 36 vblanks), at 1x and 4x. No model declined. **At 4x** two views differ by a few pixels
+(009's water: 28, 016: 26; never at 1x): `flush_batch`'s `flat_2d` (the 2D snap at a larger scale) takes
+some tiny sphere-pass triangles (Q 1, white, one Z: not "perspective") for rectangles and moves the PS2
+path's corners; native corners are never moved (the shader works out its own places). With the snap off
+both views are 0. It is the snap misfiring on 3D, not native draw's: the owner's call (keep 3D out of
+`flat_2d`, or snap native corners too). Not caught: the Fire Lord's afterimages and type 0x47.
+
 **P2-4 The arm, the held weapon and the trail** (owns `held_weapon.c`'s call sites through its patch;
 after P2-2). The depth clear first (`GsDraw_ClearDepth`), then the arm and the weapon on 0x280 with
 `held_item_light_blocks`, weapon 0x2E's additive part 5, and the trail as a native strip (additive, Z

@@ -2782,7 +2782,7 @@ index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..f9c5d8b5f360b456601ca521ea49e611
  }
  
 diff --git a/src/game/entity/entity_pool.c b/src/game/entity/entity_pool.c
-index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18b28fc201 100644
+index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..031333caf2ec97f29b66effb46f373d005a3a833 100644
 --- a/src/game/entity/entity_pool.c
 +++ b/src/game/entity/entity_pool.c
 @@ -5,9 +5,9 @@
@@ -2816,7 +2816,16 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
  s64 *Model_SaveGsWordsAndUvs(ModelInstance *, s64 *);
  MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
  u32 *Map_GetSlotPacket(int, int);
-@@ -76,11 +77,11 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot);
+@@ -57,6 +58,8 @@ void GsDraw_CopyFrameToTexture(int, int, int, int);
+ void Model_SetBlockGsWords(void *, s64, s64, s64, s64);
+ void Model_SetUvsFromScreen(void *);
+ void Model_RestoreGsWordsAndUvs(void *);
++void Model_DrawSkinned(ModelInstance *);
++int NativeDraw_Skinned(ModelInstance *, int, const void *); /* PC: --native-draw (game/native_draw/) */
+ 
+ /* file-local functions, in order of definition */
+ static int Entity_TryActivate(Entity *entity);
+@@ -76,11 +79,12 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot);
  static void EntityPool_AbandonLoad(EntityPoolSlot *slot);
  static void EntityPool_FreeUnusedBlocks(void);
  static int Entity_FindFreeWorkArea(void);
@@ -2827,10 +2836,11 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
  static void Entity_PrepareScreenTexturedDraw(ModelInstance *model);
 -static void func_00124AF8(void);
 +static void func_00124AF8(ModelInstance *model);
++static void Entity_DrawSkinnedParts(ModelInstance *model); /* PC: --native-draw (game/native_draw/) */
  static void EntityPool_BuildBlockModel(int slot_index);
  static void Entity_AppendToWaiting(Entity *entity);
  static Entity *Entity_UnlinkWaiting(Entity *entity);
-@@ -95,7 +96,7 @@ static void EntityPool_StepLoads(void);
+@@ -95,7 +99,7 @@ static void EntityPool_StepLoads(void);
  /* Entity pool state. Lists A (waiting for a pool block), B (waiting for the block to load) and C (active) hold
     the entities; the pool blocks and work areas are below. */
  static EntityPoolSlot *loading_pool_slot;   /* 0x447098 the block being read or unpacked */
@@ -2839,7 +2849,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
  static u8 entity_work_areas_used[8];        /* 0x4470A0 bit per work area in use */
  static Entity *waiting_entities_head;       /* 0x4470A8 list A head */
  static Entity *waiting_entities_tail;       /* 0x4470AC list A tail */
-@@ -110,7 +111,7 @@ float sqrtf(float);
+@@ -110,7 +114,7 @@ float sqrtf(float);
  /* Clear the entity pool and empty every entity list. */
  void Entity_ResetAllLists(void) {
      EntityPoolSlot *block;
@@ -2848,7 +2858,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
      int blocks_left;
  
      memset(entity_pool_area, 0, entity_pool_area_size);
-@@ -127,8 +128,8 @@ void Entity_ResetAllLists(void) {
+@@ -127,8 +131,8 @@ void Entity_ResetAllLists(void) {
      waiting_entity_count = 0;
      loading_entity_count = 0;
      active_entity_count = 0;
@@ -2859,7 +2869,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
      block = entity_pool_slots;
      blocks_left = ENTITY_POOL_SLOT_COUNT - 1;
      do {
-@@ -366,13 +367,13 @@ static void EntityPool_StepLoads(void) {
+@@ -366,13 +370,13 @@ static void EntityPool_StepLoads(void) {
                  entity_type_file_header = *(EntityTypeFileHeader *)file_load_buffer;
                  chr_file_slot = -1;
                  if (entity_type_file_header.unk18 != 0 && entity_type_file_header.unk14 != 0) {
@@ -2877,7 +2887,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
                  } else {
                      slot->head.fields.kind = ENTITY_POOL_READY;
                  }
-@@ -426,8 +427,8 @@ static void EntityPool_StepLoads(void) {
+@@ -426,8 +430,8 @@ static void EntityPool_StepLoads(void) {
  
  /* Gives an entity whose pool block is ready its work area and model; FALSE if it has to wait. */
  static int Entity_TryActivate(Entity *entity) {
@@ -2888,7 +2898,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
      EntityPoolSlot *slot = &entity_pool_slots[entity->pool_slot_index];
      EntityPoolData *data = (EntityPoolData *)slot->base_address;
      ModelInstance *model;
-@@ -442,7 +443,7 @@ static int Entity_TryActivate(Entity *entity) {
+@@ -442,10 +446,11 @@ static int Entity_TryActivate(Entity *entity) {
      }
      entity->work_area_index = work_index;
      work_address = Entity_ClaimWorkArea(work_index);
@@ -2897,7 +2907,11 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
      Model_SetUpSkinned(ENTITY_MODEL(entity), &data_address, &work_address);
      model = ENTITY_MODEL(entity);
      model->draw = Entity_PrepareModelDraw;
-@@ -453,16 +454,16 @@ static int Entity_TryActivate(Entity *entity) {
++    model->draw_parts = Entity_DrawSkinnedParts; /* PC: --native-draw (game/native_draw/): Model_DrawSkinned unless native */
+     model->after_draw = NULL;
+     if (entity->spawn_info->type_id == 0x47) {
+         model->model_flags |= 0x200;
+@@ -453,16 +458,16 @@ static int Entity_TryActivate(Entity *entity) {
          model->draw = Entity_PrepareScreenTexturedDraw;
          model->after_draw = func_00124AF8;
          screen_textured_entity_type = entity->spawn_info->type_id;
@@ -2921,7 +2935,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
      entity->sound_bank = slot->sound_bank;
      EntityPool_AddUser(entity->pool_slot_index);
      ((void (*)(Entity *))Entity_ResetToSpawn)(entity); // match: declared without its argument elsewhere
-@@ -838,7 +839,7 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot) {
+@@ -838,7 +843,7 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot) {
      } else if (size > 0x80000) {
          goto hang;
      }
@@ -2930,7 +2944,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
      return;
  hang:
      goto hang;
-@@ -941,24 +942,24 @@ static int Entity_FindFreeWorkArea(void) {
+@@ -941,24 +946,24 @@ static int Entity_FindFreeWorkArea(void) {
  }
  
  /* Marks work area `index` in use, clears it, and returns its address. */
@@ -2962,7 +2976,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
  }
  
  /* Before an entity model is drawn (ModelInstance.draw): sets the GS Z buffer, test and alpha registers by the
-@@ -966,13 +967,13 @@ static void Entity_FreeWorkArea(int index) {
+@@ -966,13 +971,13 @@ static void Entity_FreeWorkArea(int index) {
  static void Entity_PrepareModelDraw(ModelInstance *model) {
      Packet_BeginGsRegisters();
      if (model->alpha >= 128.0f) {
@@ -2980,7 +2994,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
          Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
          Packet_AddGsRegister(GS_REG_TEST_2, 0x30001);
      }
-@@ -986,7 +987,7 @@ static void Entity_PrepareModelDraw(ModelInstance *model) {
+@@ -986,7 +991,7 @@ static void Entity_PrepareModelDraw(ModelInstance *model) {
     Nothing calls it. */
  void Entity_PrepareAdditiveDraw(ModelInstance *model) {
      Packet_BeginGsRegisters();
@@ -2989,7 +3003,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
      Packet_AddGsRegister(GS_REG_TEST_1, 0x50000);
      Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
      Packet_EndGsRegisters();
-@@ -998,7 +999,7 @@ void Entity_PrepareAdditiveDraw(ModelInstance *model) {
+@@ -998,7 +1003,7 @@ void Entity_PrepareAdditiveDraw(ModelInstance *model) {
     coordinates back; then sets the GS registers by the model's alpha. */
  static void Entity_PrepareScreenTexturedDraw(ModelInstance *model) {
      if (model->draw_flags & MODEL_FLAG_800) {
@@ -2998,7 +3012,7 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
          Model_SetUvsFromScreen(model);
          GsDraw_CopyFrameToTexture(0x3540, 0, 0x100, 0x100);
          GsDraw_ResetDrawTarget();
-@@ -1010,27 +1011,27 @@ static void Entity_PrepareScreenTexturedDraw(ModelInstance *model) {
+@@ -1010,27 +1015,36 @@ static void Entity_PrepareScreenTexturedDraw(ModelInstance *model) {
      Packet_BeginGsRegisters();
  
      if (128.0f <= model->alpha) {
@@ -3034,6 +3048,15 @@ index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18
 -static void func_00124AF8(void) {
 +/* Empty (DrawList_Draw passes it the model). */
 +static void func_00124AF8(ModelInstance *model) {
++}
++
++/* PC: --native-draw (game/native_draw/nd_entities.c): an entity model's draw_parts (DrawList_Draw's
++   translucent entities and the Fire Lord's afterimages, copies of its model): Model_DrawSkinned, or the
++   same drawn natively. Type 0x47 (the frame mapped by screen UVs) stays the PS2 path's. */
++static void Entity_DrawSkinnedParts(ModelInstance *model) {
++    if (!port_native_draw(PORT_ND_SKINNED) || model->draw == Entity_PrepareScreenTexturedDraw || !NativeDraw_Skinned(model, 5, model)) { /* 5: RD_KIND_ENTITY */
++        Model_DrawSkinned(model);
++    }
  }
  
  /* Clears a pool slot's model and work buffer, then builds the model from the slot's loaded data. */
@@ -3193,7 +3216,7 @@ index d96bdada0a9d06660caa93fd252c407bf4594e93..22da47a2b800816f86ac52a0ba24273f
  /* 0x3E74C0 the Fire Lord's model matrix (second row zero in retail) */
  ModelMatrix fire_lord_model_matrix = {
 diff --git a/src/game/entity/entity_world.c b/src/game/entity/entity_world.c
-index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc880f7dcf45 100644
+index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce51bf2569 100644
 --- a/src/game/entity/entity_world.c
 +++ b/src/game/entity/entity_world.c
 @@ -4,8 +4,11 @@
@@ -3229,7 +3252,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
  extern const f32 D_004467F8[];
  
  void Vector_Copy(void *, void *);
-@@ -40,8 +44,6 @@ float EntityMath_DistanceXZ(void *, void *);
+@@ -40,21 +44,20 @@ float EntityMath_DistanceXZ(void *, void *);
  float EntityMath_HeadingTo(float *, float *);
  void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
  float EntityMath_WrapAngle(float);
@@ -3238,7 +3261,12 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -53,8 +55,8 @@ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+ void DrawList_Add(ModelInstance *, s32, s32);
+ void ModelTexture_SendForModel(void *);
+ void Model_DrawSkinned(ModelInstance *);
++int NativeDraw_Skinned(ModelInstance *, int, const void *); /* PC: --native-draw (game/native_draw/) */
+ void FireLord_DrawAfterimages(Entity *, s32);
+ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
  void Model_MultiplyChildMatrices(ModelPart *);
  f32 EntityCollision_DistanceToPropFloor(void *, void *);
  
@@ -3249,7 +3277,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
  #define MAP_RECORD(entity) ((MapRecord *)(entity)->map_record)
  #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->spawn_flags)
  
-@@ -65,7 +67,7 @@ static int Entity_IsMapRecordActive(Entity *entity);
+@@ -65,7 +68,7 @@ static int Entity_IsMapRecordActive(Entity *entity);
  static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity);
  static inline void entity_draw_set_model_tint(Entity *entity, f32 red, f32 green, f32 blue);
  
@@ -3258,7 +3286,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
  
  /* The set-up function entity_type_handlers gives types 27 and 83 to 95, which have no AI: puts the motion at
     animation 0, clears the work area, sets flags 22-28 and installs the table's update (Entity_UpdateInert).
-@@ -117,7 +119,7 @@ void Entity_InitFromMapSpawns(int map) {
+@@ -117,7 +120,7 @@ void Entity_InitFromMapSpawns(int map) {
          entity->pool_slot_index = -1;
          entity->spawn_info = spawn_info;
          entity_by_spawn_id[map][SPAWN_FLAGS(spawn_info)->bytes[4]] = entity;
@@ -3267,7 +3295,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
              ENTITY_FLAG_BITS(entity)->bit7 = FALSE;
          } else {
              ENTITY_FLAG_BITS(entity)->bit7 = TRUE;
-@@ -199,7 +201,7 @@ void Entity_ResetToSpawn(Entity *entity) {
+@@ -199,7 +202,7 @@ void Entity_ResetToSpawn(Entity *entity) {
      ENTITY_FLAG_BITS(entity)->bit10 = FALSE;
      ENTITY_FLAG_BITS(entity)->bit17 = TRUE;
      ENTITY_FLAG_BITS(entity)->bit31 = FALSE;
@@ -3276,7 +3304,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
      entity->handler = NULL;
      entity->prev_handler = NULL;
      entity->stun_frames = 0;
-@@ -240,7 +242,7 @@ void Entity_ResetToSpawn(Entity *entity) {
+@@ -240,7 +243,7 @@ void Entity_ResetToSpawn(Entity *entity) {
      entity->knockback_damping = ABS(entity->knockback_damping);
      entity->model->radius = (entity->collision_radius < entity->collision_height) ? entity->collision_height : entity->collision_radius;
      Motion_Start(entity, 0, 0, 0, 1);
@@ -3285,7 +3313,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
      Entity_RebuildModelMatrices(entity);
  }
  
-@@ -372,10 +374,10 @@ void Entity_UpdateAll(void) {
+@@ -372,10 +375,10 @@ void Entity_UpdateAll(void) {
              Vector_Scale(SCRATCH_VECTOR, SCRATCH_VECTOR, entity->knockback_speed);
              Vector_Add(entity->model->position, entity->model->position, SCRATCH_VECTOR);
          }
@@ -3298,7 +3326,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
          if (entity->knockback_speed > 0.0f) {
              entity->knockback_speed -= entity->knockback_damping * 4.0f / 10.0f;
          }
-@@ -390,9 +392,9 @@ void Entity_UpdateAll(void) {
+@@ -390,9 +393,9 @@ void Entity_UpdateAll(void) {
              ENTITY_MODEL(entity)->fog_block = &map_draw_state.fog_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->draw_block_index];
          }
          if ((s8)SPAWN_FLAGS(spawn_info)->bytes[3] != -1 || entity->map_record == NULL) {
@@ -3310,7 +3338,18 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc88
          }
          Model_UpdateSkinnedBonePoints(ENTITY_MODEL(entity));
      }
-@@ -621,7 +623,7 @@ static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity) {
+@@ -484,7 +487,9 @@ void Entity_DrawAll(int list) {
+                     DrawList_Add(ENTITY_MODEL(entity), 0, list);
+                 } else {
+                     ModelTexture_SendForModel(ENTITY_MODEL(entity));
+-                    Model_DrawSkinned(ENTITY_MODEL(entity));
++                    if (!port_native_draw(PORT_ND_SKINNED) || !NativeDraw_Skinned(ENTITY_MODEL(entity), 5, ENTITY_MODEL(entity))) { /* PC: --native-draw (game/native_draw/; 5: RD_KIND_ENTITY) */
++                        Model_DrawSkinned(ENTITY_MODEL(entity));
++                    }
+                 }
+                 if (entity->spawn_info->type_id == 0xF) {
+                     FireLord_DrawAfterimages(entity, list);
+@@ -621,7 +626,7 @@ static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity) {
                  if (record->collision_mesh_index == 0xFFFF) {
                      continue;
                  }

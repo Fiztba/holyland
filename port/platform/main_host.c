@@ -62,8 +62,8 @@
                          the patched draw code hands them to the renderer core, and the native GS draws
                          them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
                          on: the kinds that have passed their checks (items so far); KINDS, by name: map,
-                         models, skinned, arm, sky, effects, shadows, reflection, water, passes, items
-                         (items and map, in work, are ported so far). off (the default) is the game as
+                         models, skinned (or entities), arm, sky, effects, shadows, reflection, water,
+                         passes, items (items, and map and entities in work, are ported so far). off (the default) is the game as
                          without it. The overlay's Debug page changes it live
        --native-draw-compare native|ps2
                          with --native-draw, the PS2 path's packets are queued too, and the native GS
@@ -486,7 +486,7 @@ static void parse_options(int argc, char **argv) {
             int bits = port_native_draw_parse(value);
 
             if (bits < 0) {
-                fprintf(stderr, "--native-draw wants off, on or a list of map, models, skinned, arm, sky, effects, "
+                fprintf(stderr, "--native-draw wants off, on or a list of map, models, skinned (entities), arm, sky, effects, "
                                 "shadows, reflection, water, passes, items; not %s\n", value);
                 exit(2);
             }
@@ -668,7 +668,7 @@ int port_native_draw_parse(const char *value) {
     static const struct {
         const char *name;
         int bits;
-    } kinds[] = {{"map", PORT_ND_MAP}, {"models", PORT_ND_MODELS}, {"skinned", PORT_ND_SKINNED}, {"arm", PORT_ND_ARM},
+    } kinds[] = {{"map", PORT_ND_MAP}, {"models", PORT_ND_MODELS}, {"skinned", PORT_ND_SKINNED}, {"entities", PORT_ND_SKINNED}, {"arm", PORT_ND_ARM},
                  {"sky", PORT_ND_SKY}, {"effects", PORT_ND_EFFECTS}, {"shadows", PORT_ND_SHADOWS},
                  {"reflection", PORT_ND_REFLECTION}, {"water", PORT_ND_WATER}, {"passes", PORT_ND_PASSES},
                  {"items", PORT_ND_ITEMS}};
