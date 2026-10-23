@@ -2,9 +2,95 @@
 
 Branch `native/draw` (long-lived; main stays safe). Read [NATIVE_DRAW.md](NATIVE_DRAW.md) first: the survey,
 the assumptions A1-A20 and the plan P0-P9. This page is the state of the work and the task list for the
-agents: P0-P7 so far (hosted mode), next P8. October 2026.
+agents: P0-P7 (hosted mode) and the first round of P8 (standalone). October 2026.
 
-## Where it stands (2026-10-23, after merging perf/gpu-vram)
+## Where it stands (2026-10-23, after the fifth workflow: nd5 merged)
+
+**Merged into native/draw** (merge commits, each task's work kept; `gsn_shaders.h` made again with
+tools/build_shaders.py; conflicts only in the switches' plumbing, settings.h/settings.c/overlay.cpp, where
+`native_draw` (dec) and `native_sky` (sky) both stay, and in this page):
+- **nd5/dec** (88648f5d): decisions 1 and 4 applied; `--native-draw on` = `PORT_ND_ACCEPTED`; the overlay's
+  Renderer switch "Native draw (experimental)", saved as `settings.json` `display.native_draw` (default off).
+- **nd5/passes** (f7164334): decision 6 fixed. Native passes in the pictures between rebuild the wobble's cells
+  and the view shift's strips as frame_interp.c's replay does (`nd_pass.vert`, `gsn_nd_pass.inc`): 0 pixels at
+  240 with every combination of `--no-whole-frame`, `--flicker-filter`, `--ps2-scanout`, 1x and 4x. The "tile
+  corruption" in the review's heat map was the PS2 path's too and was already gone with fix/underwater.
+- **nd5/map240** (0c2164d4): native batches in pictures between are culled to the scissor like the PS2 path's
+  and get the two-phase tie's depth bounds (`nd_z_at_0`). `map` at 240 now makes exactly off's draws and render
+  passes. Decision 9 closed (not needed).
+- **nd5/sky** (8df1df7a): `--sky modern|ps2`, default `modern` (decision 3): on 002, 013, 021, 027, 098, 099 the
+  dome is at the eye and at the far plane (`RD_DRAW_FAR_Z`), hiding nothing; 000 and 004 keep the PS2 dome (000's
+  translucent dome over dark shapes overhead is the solid reason; P3-2 below). The owner still judges it in motion.
+- **nd5/p8** (83ce9201, 48cefa1c): P8 begun, `--renderer modern`: [NATIVE_DRAW_P8.md](NATIVE_DRAW_P8.md).
+- **After the merges** (b880350d): `passes` joins `PORT_ND_ACCEPTED`, as decision 6 is fixed. `on` is now `map`,
+  `sky`, `items`, `objects`, `picked`, `entities`, `arm`, `gold`, `effects`, `shadows`, `water`, `passes`;
+  only `reflection` (no draws of its own) is out.
+
+**`--native-draw on`, the merged build, pixels differing** (headless, `--no-audio`, fresh data, 2 games at most;
+`native_draw_compare.py --kinds on`):
+
+| | compare 1x | compare 4x | onoff 1x | onoff 4x |
+|---|---|---|---|---|
+| 000 start (`newgame.pad`, `--teleport 1600:0:0`, 1900, 2000) | 0 | 54 (decision 1, accepted) | 0 | 54 |
+| 009 start (1900-2000/50) | 0 | 0 | 0 | 0 |
+| 016's bats (1900-2100/100) | 0 | 6 (decision 1) | 0 | 6 |
+| 099 start (`1600:99:0`, 1900, 2000) | 33,568 (the modern sky) | 538,314 (the modern sky) | 33,568 | 538,314 |
+| 099 start with `--sky ps2` | 0 | 0 | 0 | 0 |
+| 099 herb (`herb.pad`, 1800-1840/20, 1,631 screen passes) | 0 | 0 | 0 | 0 |
+| 008's water (`m8w`, 300, 400) | 0 | 0 | 0 | 0 |
+| the far save (`walkfar.pad`, 240-420/60) | 0 | 9 (decision 1) | 0 | 9 |
+| the fight (`strong3.pad`: flashes, shadows, death fade) | 0 | 0 | 0 | 0 |
+
+099's differences are all in the sky's box (y 0-118 at 1x): modern against the PS2 dome, by design (the clouds
+half a degree higher); with `--sky ps2` they are 0.
+
+**At 240, `on`** (game frames; pictures between): 000 walking (`walk.pad` 1900-1906) 0; 17,286 in 24, compare and
+onoff alike. 000 at the owner's settings (4x, MSAA 2, widescreen, 1912-1915) 8 (decision 1); 14,118 in 14, compare
+and onoff alike. The far save 0; 11,997 (outlines). 009's water 0; 764,999 (the ripple follows the camera). 009's
+fire 0; 248,873. The fight 0; 85. Spell 3 (`cast.pad` 336-350) 0; 41,081 (decision 5). The view shift
+(`--no-whole-frame`, herb 1800-1806) 0; 0, and at 4x with `--flicker-filter` 0; 0. **A real under-water save**
+(bugs1024 `quick_underwater`, 400-406, 1x and 4x compare, 4x onoff) 0; 0. So the screen passes are 0 in every
+case; the other numbers are the review's.
+
+**GPU time at the owner's settings** (4x, MSAA 2, widescreen, 240, `KF4_PRESENT_SIM=240`, `KF4_GSN_GPU_TIME=1`,
+1,400 vblanks from bugs1022 `quick_far`, the only kf4 running, two runs each, the same to 0.02 ms):
+
+| | GPU ms a picture | pictures | pictures between from the recording | replay |
+|---|---|---|---|---|
+| `--native-draw off` | 2.94 | 5,234-5,237 | 3,722-3,725 | 516 us |
+| `--native-draw on` | 3.58 | 5,237 | 3,725 | 905-910 us |
+| `--renderer modern --native-draw on` | 2.75-2.77 | **1,577** | 66 | 1,590 us |
+| `--renderer modern` (map, sky, items) | 2.58-2.66 | **1,574-1,589** | 63-78 | 1,310-1,360 us |
+
+`on` keeps up at 240 (0.64 ms over off: map's vertex shader about 0.1, the models and the rest the remainder).
+**Modern falls behind at 240**: "pictures between left out as the renderer was behind the game: all of about
+1,230 vblanks'", so about 1.1 pictures a vblank; its 16 render passes and 5.5 resolves a picture and 430 MB
+copied for blending (the scene's hand-overs) are P8's T2/T8. Two of the four modern timing runs exited with code
+127 after printing their full stats (a fault at teardown); eight more modern runs (400 and 1,400 vblanks, from
+PowerShell) exited 0: not reproduced, open for T8.
+
+**`--renderer modern` at the tie-break spots** (`--kinds on`, hosted against modern, vblank 400 of `title.pad`
+from the quick saves; sheets in the scratchpad's nd5_INTEGRATE/modern): bugs1022 `quick_teeth` 4x 2,090 pixels:
+**hosted's black notches along the lava's far edge are gone, a straight edge in modern**; at 3x MSAA 2 widescreen
+2,547, the same. `quick_tower` 4x 7,990 (the rock layer on the top); `quick_brick` 4x 14,072 (a seam and a patch);
+`quick_lacing` 3x 61,685 (6,509 by more than 1: blend rounding, no lace in either); bugs1024 `quick_bridge` 4x
+1,284; blink `door` 4x 432. herb 1x 40; 099 1x 54; 000 walking at 240 about 530 a picture (frames 2,124 in 4;
+between 13,346 in 24). These match P8's own numbers, with the other kinds now hosted over the scene.
+
+**The off check** passes on the merged tree: boot_test, frame_test gs and native, gsn_draw_test 0 of 300 (seeds
+1, 7, 1234), gsn_vram_test all agree, vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the
+same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
+
+**Left:**
+- The owner, in play: decision 2 (wave UVs in motion; default `ps2`), decision 5 (spell bursts), the modern sky
+  in motion on 002/013/021/027/098/099 (and whether 000/004 keep the PS2 dome or wait for a P8 stencil version).
+- P8's tasks T1-T8 (NATIVE_DRAW_P8.md), first of them T2 and T8: modern at 240 falls behind (above), and the exit
+  code 127.
+- passes: the shader's per-triangle table holds 256 triangles a run (the wobble has 140); the strips' pairing
+  assumes frame_interp.c's order-based pairing, as in every case run.
+- The overlay's switches (Native draw, Native sky) were checked by compiling only (headless runs only).
+
+### Before: after merging perf/gpu-vram (2026-10-23)
 
 **The owner's decisions of 2026-10-23 (morning), on the review of the third workflow** (scratchpad nd3_review;
 the owner's own numbering, which is not the list below):
