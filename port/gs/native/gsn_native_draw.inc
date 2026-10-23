@@ -40,6 +40,9 @@ const Buffer *nd280_batch_draws();
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
 void nd_strip_draw(const RdDraw &d); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
 Program *nd_strip_program(Program *p);
+void nd700_draw(const RdDraw &d, const RdCamera &cam); // (program 0x700's, the effects: gsn_nd_700.inc)
+bool nd700_corner(const Vtx &v);
+Program *nd700_program(Program *p);
 
 // A model part's move in the pictures between (P2-5; nd_between): its matrix in the frame before (P) and in
 // this frame (C), each split into a rotation R and the rest S (R S the linear part: a scale, or a shear), and
@@ -769,6 +772,11 @@ void nd_draw(uint64_t value) {
         nd.fetched.clear();
         return;
     }
+    if (d.program == 0x700) {
+        nd700_draw(d, cam); // (gsn_nd_700.inc)
+        nd.fetched.clear();
+        return;
+    }
     if (d.program != 0) {
         gsn_stats.nd_unsupported++;
         return;
@@ -929,7 +937,7 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
         box[0] = box[1] = -1;
         box[2] = box[3] = 2048 + 2;
     };
-    if (nd280_batch() || nd.strip_active) {
+    if (nd.strip_active) {
         whole();
         return true;
     }
@@ -938,11 +946,12 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
     bool moved = false;
     for (uint32_t i = first; i < first + count && i < gs->verts.size(); i++) {
         const Vtx &w = gs->verts[i];
-        if (!nd_corner(w)) {
+        int kind = nd_corner_kind(w);
+        if (kind == ND_KIND_PS2) {
             continue;
         }
         uint32_t record = (w.rgba & 0xFFFFFFu) >> ND_CORNER_DRAW_SHIFT;
-        if (record >= nd.boxes.size()) {
+        if (kind != ND_KIND_000 || record >= nd.boxes.size()) {
             whole();
             return true;
         }
@@ -1018,9 +1027,9 @@ void nd_kick() {
 // (flush_batch's draw call: n corners from first, of a pass of the run whose vertices start at gs->verts[run],
 // with the program base, the GS's.) A batch with native corners: each stretch of one kind in its own call,
 // in order: the PS2 path's with base, program 0x000's with nd_000.vert (nd_program) and its records,
-// program 0x280's with nd_280.vert (nd280_program) and its records. The batch was decided once over all
-// of them, as the PS2 path's would be (0x000's and 0x280's corners together: a posed model and an
-// entity, F-mixed)
+// program 0x700's with nd_700.vert (nd700_program; 0x000's records), program 0x280's with nd_280.vert
+// (nd280_program) and its records. The batch was decided once over all of them, as the PS2 path's would be
+// (0x000's and 0x280's corners together: a posed model and an entity, F-mixed)
 void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t run) {
     if (!nd.active) {
         c.draw(n, first);
@@ -1030,15 +1039,16 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
     const Buffer *draws = nullptr;
     for (uint32_t end = first + n; first < end;) {
         int kind = nd_corner_kind(v[first]);
+        bool effect = kind == ND_KIND_000 && nd700_corner(v[first]);
         uint32_t to = first + 3;
-        while (to < end && nd_corner_kind(v[to]) == kind) {
+        while (to < end && nd_corner_kind(v[to]) == kind && (kind != ND_KIND_000 || nd700_corner(v[to]) == effect)) {
             to += 3;
         }
         if (kind == ND_KIND_PS2) {
             c.set_program(nd.strip_active ? nd_strip_program(base) : base);
         } else {
             const Buffer *want = kind == ND_KIND_280 ? nd280_batch_draws() : nd.batch_draws;
-            c.set_program(kind == ND_KIND_280 ? nd280_program(base) : nd_program(base));
+            c.set_program(kind == ND_KIND_280 ? nd280_program(base) : effect ? nd700_program(base) : nd_program(base));
             if (want && want != draws) {
                 c.set_storage_buffer(2, 1, *want);
                 draws = want;
@@ -1053,3 +1063,4 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
 #include "gsn_nd_280.inc"    // (program 0x280's draws, and its oracle)
 #include "gsn_nd_strip.inc"  // (a PATH2 strip's draws: the trail)
+#include "gsn_nd_700.inc"    // (program 0x700's draws, the effects, and its oracle)

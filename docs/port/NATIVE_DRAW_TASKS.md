@@ -107,6 +107,9 @@ each described at the end of the task list.
 | `game/native_draw/nd_entities.c` | entities (`Model_DrawSkinned`: `Entity_DrawAll`, the draw list, the Fire Lord's afterimages) (P2-3) |
 | `game/native_draw/nd_arm.c` | the arm, the held weapon and the trail (`Player_DrawArm`) (P2-4) |
 | `game/native_draw/nd_sky.c` | the map records' call site, the sky (flags bit 31) sent by `sky` and the rest by `map` (P3-1) |
+| `port/gs/native/shaders/nd_700.vert`, `gsn_nd_700.inc` | VU1 program 0x700 (the effects) as a vertex shader on 0x000's records and arena, its CPU plan (the TEX0 swap, vertex n's kick rule) (P4-1) |
+| `tools/gsreplay/nd_oracle_700.c`, `gsn_nd700_oracle.h` | the oracle for 0x700: lanes, kicks, the A+D packet (TEX0 swap), set-up, the parser on the game's blocks (P4-1) |
+| `game/native_draw/nd_effects.c` | the effects (`Model_DrawPosed` with model flag 0x800: the draw list's sfx.dat models, every layer) (P4-2) |
 
 The hooks in `gsn.cpp` are kept to a few lines, each marked "native draw": the include, the register
 case `0x7B` and the ALT skip at the top of `gs_write`, `NdFlush` at the top of `flush_batch` and five
@@ -165,8 +168,8 @@ section a draw is in, for the pictures between).
 
 - `--native-draw off|on|KINDS` (`port_options.native_draw`, `port_native_draw(kind)`): `on` is
   `PORT_ND_ACCEPTED`, the kinds that have passed their checks (items); others by name. In work: `map`,
-  `sky` (P3-1), `objects` and `picked` (P2-1; `models` is both), `entities` (P2-3; an alias of `skinned`)
-  and `arm` (P2-4). Every ported kind at once: `map,sky,items,objects,picked,entities,arm`.
+  `sky` (P3-1), `objects` and `picked` (P2-1; `models` is both), `entities` (P2-3; an alias of `skinned`),
+  `arm` (P2-4) and `effects` (P4-2). Every ported kind at once: `map,sky,items,objects,picked,entities,arm,effects`.
   Since P3-1 the sky (the map record with flag bit 31) is its own kind, `sky` (`game/native_draw/nd_sky.c`):
   `map` is every other map record, so what `map` meant before is now `map,sky`.
   The overlay's Debug page, "Native draw (experimental)", has a checkbox per ported kind and the compare
@@ -979,12 +982,97 @@ the oracle's 0x700 part). One directional light, one model colour (0x64), the TE
 TBP to replace, 0x66 the new TEX0: the flipbook frame), Q `1/(16 w)`; `vu1_hle_700.c` is the specification.
 Accepted: 0 lane differences on the tour's 0x700 runs, against the HLE and the interpreter.
 
+*Done (nd3/p4).* `shaders/nd_700.vert` (nd_000.vert's sibling: no vertex colour but the model's, VU1 0x64,
+which the record carries in `point_col[0]`; no point lights), `gsn_nd_700.inc` (`nd700_draw`, hooked in
+`nd_draw` for `RdDraw.program` 0x700), the oracle's part in `tools/gsreplay/nd_oracle_700.c` and
+`gsn_nd700_oracle.h`. What 0x700 does beyond 0x000 (all in `vu1_hle_700.c`):
+- the texture animation is the CPU's: when the A+D packet's second write (TOP+0xA2) has the TBP0 that 0x65.w
+  names, 0x66's qword is written instead (`nd700_ad`);
+- the alpha is the draw's (lit.w 1 by the colour's w, MINI 255, FTOI0), so a batch's alpha range is one value;
+- the loop runs n + 1 times: a "vertex n" (the position qword at TOP+1+4n) is clip-tested too, and the strip
+  (PRIM and its triangles) is kicked only when fewer than n of the n + 1 are clipped (the A+D packet always
+  is). It decides only when one vertex of the strip is unclipped, and then the strip draws nothing anyway
+  (only whether PRIM is written changes). The parser keeps that qword when the block wrote it
+  (`RdBatch::past`); no block of the game's effects does, and an unknown vertex n is taken as clipped (the
+  one such run in the tour, on 037, had it clipped).
+- Its records and arena are 0x000's (`nd.draws`, `NdConst`), so a batch holds 0x000's, 0x700's and the PS2
+  path's corners together as the PS2 path's would; `nd_draw_range` draws each stretch with its own program
+  (`nd700_corner` looks the record up in `nd700.of`).
+- Pictures between: the position's w is 16 in the game's effects, so c.w is 16 times the depth (Q is
+  1/(16 w): STEP3.md's fire fix). `nd_700.vert`'s `moved` takes the depth as 1 / (q w) and divides the
+  model's own move (`between_move`) by w.
+`rd_mesh_runs_program` (render.h) says whether every MSCAL of a mesh is one program.
+
+The oracle over the 64 tour captures (`kf4-gsreplay --nd-oracle`, `--vu1 hle` and `--vu1 interp`, the same
+in both): 2,341 runs of 0x700 on 59 maps (2,137 MSCALs, 21,306 vertices; 1,128 with TEX0 replaced, 1,088
+without a strip), 9,114 vertices drawn and 48 not: 0 lane differences (X Y Z F w R G B A S T Q ADC and the
+plan's X Y Z S T Q A), the kicks the same in every run, the A+D packets (the swap) the same, the set-up
+(vertex matrix, light directions) the same in every MSCAL, and the parser on the game's blocks equal to
+all 2,341 runs' batches. 0x000's and 0x280's numbers are unchanged (86,404 and 19,528 batches, 0).
+
 **P4-2 Effects** (owns `effect.patch`, `game/native_draw/nd_effects.c`; after P4-1). `Effect_DrawAll` and
 the draw list's layers 0-3 (`Model_DrawPosed` with `model_flags 0x800`), the blend hooks as they are (the
 GS registers stay the game's), the billboards from `ModelMatrix_Build`, `ItemEffect_Draw`. Kind `effects`.
 Accepted: the braziers on 000 and 009, spells cast (a made-up save with magic), the on-top layer after the
 depth clear; 0 pixels in compare and onoff; pictures between for effects are P2-5's kind of work (sparks and
 flames by their own matrices, flipbooks stepping with the frame).
+
+*Done (nd3/p4).* `game/native_draw/nd_effects.c`, `NativeDraw_Effect`. The effects reach the GS through the
+draw list (`Effect_DrawAll` adds them, `DrawList_Draw` calls the blend hook, `model->draw`, then
+`draw_parts`, which is `Model_DrawPosed`), so the call site is the head of `Model_DrawPosed` for models with
+flag 0x800 (only `Effect_SetupModel` sets it): one condition in `model.patch` for every layer and pass;
+`effect.patch` is unchanged. The adapter queues `Model_DrawPosed`'s fixed block (with 0x64-0x66) outside
+compare mode, then a draw per part of program 0x700 (or 0x000, if a part's blocks run that), kind
+`RD_KIND_EFFECT`, identity the effect's model and the part (a freed effect's slot is reserved 4 frames, so the
+next frame never holds another effect in it); `RdDraw.colour` is 0x64 (the colour), 0x65.w (the record id) and
+0x66 (the flipbook's TEX0). A model that cannot go native is declined and counted. `--native-draw effects`
+and an overlay checkbox. (`native_draw.c`'s `posed_model` still fills `colour` for flag 0x800 the old way,
+0x65 and 0x66 wrong; no effect goes through it now.)
+
+Checked (headless, `--no-audio`, fresh data folders; up to 7 other agents on the PC, so nothing timed):
+- `--kinds effects`, 0 pixels at 1x and 4x, compare and onoff: 000's braziers and 009's fire
+  (`newgame.pad`, `--teleport 1600:N:0`, 1900, 1950, 2000); 14 spells cast from a made-up save at 000's start
+  (P2-4's `w5` with `PlayerState.equipped_magic`, 0x3D, set to 3, 6, 9, 12, 16, 21, 31, 36, 46, 51, 61, 66, 76,
+  81; `--cheats spells,magic`, TRIANGLE at 330, 450, 570; pictures every 20th vblank 330-650) at 1x compare,
+  spell 3 (a fire burst) also at 4x and onoff. Control: the native colour halved, 009's fire differed by
+  95,967 pixels.
+- Layers: 0 in all of these; 1 (view-locked, the on-top blend hooks) in spells 36, 51 and 66; 3 (after the
+  passes and the depth clear: effect definitions 0x280, 0x282 and 0x284, the player's weapon kinds) only as 6
+  draws with the bows and the crossbow (57-62, `--cheats items`), which leave no pixel (hidden, the pictures
+  are the same); 0 pixels there. Layer 2 was not met.
+- Every kind at once (`map,sky,items,objects,picked,entities,arm,effects`), compare and onoff, 1x and 4x: 000
+  and 009 starts, 009's water (`m9w`), the fight on 000 (`strong3.pad`), weapon 5's swing, the herb, spells 3
+  and 66: 0 at 1x everywhere; at 4x only the 2D snap (000 54, the swing 24, 009's water 3, spell 3 144,
+  spell 66 71, the same in both modes; spell 3 and 66 without `entities` 0, `entities` alone 144).
+- `--log` with `effects` equals `off`'s through a spell (801 lines); the oracle above; the off check
+  (boot_test, frame_test gs and native, gsn_draw_test 0 of 300, vu1_test 0 of 90, the herb with
+  `--native-draw off` against 66ffde6's build: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
+  460424273, pictures at 1800, 1820 and 1840).
+
+Pictures between at 240 (`--kinds effects`, compare; the game's frames all 0):
+
+| | pictures between | differing (>1), worst |
+|---|---|---|
+| 009's fire, standing (1900-1910) | 38 | 348,719 (178,636), 95 |
+| 009's fire, turning (`lx=20` from 1890) | 38 | 289,516 (145,757), 80 |
+| 000's braziers, turning | 38 | 0 |
+| spell 3, the burst and its flight (340-370) | 108 | 1,215,044 (433,565), 72 |
+
+- The fire: 1-2 level speckle over the flames (about 13,000 pixels a picture just after a frame, falling to
+  2,000 before the next: 0 at t 1), and a few dozen pixels above 16 on one edge of a log. Turning, the
+  pictures themselves move by about 270,000 pixels each; native and the PS2 path stay within the same speckle,
+  so the depth from the position's w is right (taken as 1/q the fire would stand still between frames).
+- The spell's burst (340-343): large faint additive polygons differ inside by 9-19 levels while the burst
+  spins and grows: native turns and scales each part (slerp, lerp), the PS2 path moves each vertex along the
+  line between its two screen places. It fades to speckle and edge pixels from 344 on. For the review: the
+  same kind of difference as P2-5's arm, but over areas, because the parts are big and translucent.
+- Flipbooks step with the frame (a picture between draws the frame's TEX0); billboards are moved as matrices
+  between the two frames', not rebuilt for the picture's camera (NATIVE_DRAW.md 3.5 wants them rebuilt).
+
+Left: `ItemEffect_Draw` (the item-use effect) is not native: its `draw_parts` is `Model_DrawPosedDepthByPart`,
+called from the draw list, so it needs a hook in `Model_DrawPosedDepthByPart` (model.patch) or `DrawList_Draw`
+(gfx.patch) and a scripted item use to check it. Billboards rebuilt per picture. Layer 2 and a visible layer 3
+effect not met.
 
 **P5-1 Shadows** (owns the call site in `entity.patch` after P2-3's, `nd_shadows.c`, program 0x5A0 as a
 shader). `Entity_DrawPoolModels`: the flattened pool model, context 2 with DATE and FBA, `(Cs-Cd)·FIX + Cd`,

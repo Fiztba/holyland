@@ -1128,7 +1128,8 @@ void debug_page() {
                      {"Arm (in work)", PORT_ND_ARM, "The arm, the held weapon and its trail (Player_DrawArm): in work."},
                      {"Map objects (in work)", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha): in work."},
                      {"Picked item (in work)", PORT_ND_PICKED, "The item being picked up, after its depth clear: in work."},
-                     {"Gold (in work)", PORT_ND_GOLD, "The gold lying in the maps (Gold_Draw, the draw list): in work."}};
+                     {"Gold (in work)", PORT_ND_GOLD, "The gold lying in the maps (Gold_Draw, the draw list): in work."},
+                     {"Effects (in work)", PORT_ND_EFFECTS, "Fire, glows, magic (the draw list's effects, VU1 program 0x700): in work."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
         for (const auto &k : kinds) {
             bool on = (kinds_on & k.bits) != 0;

@@ -325,7 +325,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/quicksave.c game/cheats.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/quicksave.c game/cheats.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)
@@ -388,7 +388,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # kf4-gsreplay draws a GS frame capture again (tools/gsreplay): the GIF stream, or the VIF1 stream
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
-    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c tools/gsreplay/nd_oracle.c tools/gsreplay/nd_oracle_280.c port/platform/vif1.c port/platform/vu1.c
+    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c tools/gsreplay/nd_oracle.c tools/gsreplay/nd_oracle_280.c tools/gsreplay/nd_oracle_700.c port/platform/vif1.c port/platform/vu1.c
         port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})

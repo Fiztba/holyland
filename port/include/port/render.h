@@ -61,6 +61,9 @@ const char *rd_mesh_why(void);
    first is an MSCNT: it goes on with the program and set-up of the mesh before it) */
 #define RD_PROGRAM_CONTINUE 0xFFFFFFFFu
 uint32_t rd_mesh_program(RdMesh mesh);
+/* 1 if every MSCAL in the mesh starts program (its MSCNTs go on with it): a draw of program 0x700 (the
+   effects) is drawn natively only when all its batches are that program's */
+int rd_mesh_runs_program(RdMesh mesh, uint32_t program);
 
 /* ---- Cameras ---------------------------------------------------------------------------------- */
 /* What the game's camera was when a draw was queued (GameLoop_SetCameraMatrices). Matrices are VU
@@ -96,7 +99,8 @@ typedef struct {
     uint32_t kind;            /* RD_KIND_* */
     uint32_t id[3];           /* the rest of its identity, stable from frame to frame: (instance key, part,
                                  slot or record): what pictures between pair draws by (3.5) */
-    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000 or 0x280 (skinned); or
+    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000, 0x280 (skinned) or 0x700
+                                 (the effects: meshes of RD_VF_PACKED16, colour[] carrying VU1 0x64-0x66); or
                                  RD_PROGRAM_GS_STRIP (meshes of RD_VF_GS_STRIP, written to the GS as they are) */
     uint32_t flags;           /* (none yet) */
     uint32_t camera;          /* rd_camera's index */
