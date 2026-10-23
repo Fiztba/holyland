@@ -104,10 +104,12 @@ void gsn_set_cutout_aa(int mode);
 #define GSN_COLOUR_HIGH 1
 void gsn_set_colour(int mode);
 /* --native-layer-z: how the 3D's Z is kept and tested, from the next draw. GSN_LAYER_Z_PS2 is the GS's:
-   a whole number per pixel, so a second texture drawn over a surface whose vertices are a hair behind
-   the first's fails the test in places (teeth and dark hatching), and surfaces meeting at a shallow
-   angle meet in a sawtooth. GSN_LAYER_Z_TOLERANT keeps Z's fraction and lets a draw pass half a Z
-   behind what is drawn (without writing its Z there): clean layers and straight seams. */
+   a whole number per pixel, so surfaces meeting at a shallow angle meet in a sawtooth, and the layers
+   the game blends over its surfaces (a wall's second texture, the darkness strips in the arches: a
+   mesh of their own, a vertex alpha below 0x80, GEQUAL) fail the test where the two meshes' Z round
+   apart: dark hatching, teeth, a lace of light lines at --native-scale. GSN_LAYER_Z_TOLERANT keeps Z's
+   fraction (straight seams) and lets a layer's colour pass within one Z of what is there, its Z
+   written where the GS's test passes (flush_batch, "Z and layers"). */
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1
 void gsn_set_layer_z(int mode);
@@ -261,6 +263,7 @@ typedef struct {
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
     uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
+    uint64_t layer_draws;           /* --native-layer-z tolerant: batches with layers (flush_batch, "Z and layers") */
     /* --frame-rate's pictures between on the GPU (gsn_interp_picture): drawn from the packets (the first
        of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */
     uint64_t interp_records, interp_replays, interp_misses, ns_interp_record, ns_interp_replay;

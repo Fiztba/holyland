@@ -50,9 +50,9 @@
                          gradients in the dark instead of steps)
        --native-layer-z MODE
                          how the native GS keeps and tests the 3D's Z: tolerant (the default: Z's
-                         fraction kept, and a draw passes half a Z behind what is there: no hatching
-                         or teeth where the game draws a texture over a surface, straight seams where
-                         surfaces meet) or ps2 (the GS's whole numbers)
+                         fraction kept, straight seams where surfaces meet, and the layers the game
+                         blends over its surfaces Z tested within one Z: no hatching, teeth or lace)
+                         or ps2 (the GS's whole numbers)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate

@@ -266,6 +266,9 @@ struct Gs {
     Program *program = nullptr;
     Program *program_zclamp = nullptr; // (shaders/gs_zclamp.frag: Z kept within the format per pixel)
     Program *program_zclamp_sample = nullptr; // (shaders/gs_zclamp_sample.frag: the same at every sample)
+    // (shaders/gs_zonly.frag, gs_zonly_sample.frag: --native-layer-z tolerant's Z passes, the Z alone)
+    Program *program_zonly = nullptr;
+    Program *program_zonly_sample = nullptr;
     Program *program_ms_load = nullptr, *program_ms_load_depth = nullptr, *program_ms_depth = nullptr; // (msaa_*)
     Program *program_deinterlace = nullptr; // (the scanout's: shaders/deinterlace.frag)
     Program *program_narrow = nullptr;      // (--native-colour high's scanout: shaders/narrow.frag)
@@ -404,7 +407,7 @@ volatile uint32_t wanted_samples = 1;
 volatile int cutout_aa_mode = GSN_CUTOUT_AA_OFF;
 bool sample_shading = false;
 // --native-layer-z (gsn_set_layer_z): Z as the GS has it (GSN_LAYER_Z_PS2), or kept fine and tested
-// with a tolerance (GSN_LAYER_Z_TOLERANT: "--native-layer-z tolerant" in flush_batch)
+// with a tolerance for the layers (GSN_LAYER_Z_TOLERANT: flush_batch, "Z and layers")
 volatile int layer_z_mode = GSN_LAYER_Z_PS2;
 
 // --native-colour (gsn_set_colour): the 32-bit colour targets at 8 bits a channel, as the GS has them
@@ -869,12 +872,12 @@ public:
         }
         raw().push_constants(data, offset, range);
     }
-    void draw(uint32_t count) {
+    void draw(uint32_t count, uint32_t first = 0) {
         if (on()) {
-            rec().add(OP_DRAW, ArgDraw{count, 1, 0, 0});
+            rec().add(OP_DRAW, ArgDraw{count, 1, first, 0});
             rec().draws++;
         }
-        raw().draw(count);
+        raw().draw(count, 1, first, 0);
     }
     void copy_image(const Image &dst, const Image &src, const VkOffset3D &dst_offset, const VkOffset3D &src_offset,
                     const VkExtent3D &extent, const VkImageSubresourceLayers &dst_sub, const VkImageSubresourceLayers &src_sub) {
@@ -3421,28 +3424,10 @@ void flush_batch() {
     if (zclamp) {
         push.misc |= M_ZCLAMP;
     }
-    // --native-layer-z tolerant. The game draws much of a map twice: a surface, then a second texture
-    // over it, blended by its vertices' alpha (ZTST GEQUAL, Z written). The second mesh's vertices are not
-    // quite the first's (a quarter of a pixel and two Z apart), and Z is rounded to a whole number per
-    // pixel, so on the GS the second fails the Z test in a pattern: where it is less than about half a Z
-    // behind, mostly passing; further behind, mostly failing; in between, a comb of teeth along its edges
-    // and scattered pixels, fine dark hatching at a larger --native-scale. Where two surfaces meet at a
-    // shallow angle, the rounding makes the line a sawtooth (where both round to the same Z the later
-    // one wins). Here a pixel's Z keeps its fraction, and a draw testing GEQUAL or GREATER passes up to
-    // half a Z behind what is there, the slack the GS's rounding gives on average: its Z is written first,
-    // as the GS would (the depth pass below: the nearer of its own and what was there), then its colour
-    // drawn with the tolerance and no Z written. So a layer shows where the GS mostly showed it and not
-    // where it mostly did not, with a straight edge between, and surfaces meet in straight lines. (A
-    // whole Z let a layer's mesh show past where the GS had hidden it, its own edges in view, on the
-    // tower on map 000; two let a far wall 2 to 4 Z behind a nearer one at Z 0x84 show through, and the
-    // flames in a brazier, 1 to 6 Z behind its front at Z 0x128.)
-    bool tolerant = zclamp && layer_z_mode == GSN_LAYER_Z_TOLERANT;
-    float layer_tolerance = 0.0f;
-    if (tolerant) {
+    // --native-layer-z tolerant: a pixel's Z keeps its fraction ("Z and layers", below the passes)
+    bool fine_z = zclamp && layer_z_mode == GSN_LAYER_Z_TOLERANT;
+    if (fine_z) {
         push.misc |= M_ZFINE;
-        // (in a 16-bit Z's steps: 24 and 32-bit formats' are 256 and 65536 times finer)
-        layer_tolerance = 0.5f * (zpsm == 0x30 ? 65536.0f : zpsm == 0x31 ? 256.0f : 1.0f);
-        tolerant = ztst == 2 || ztst == 3;
     }
     uint32_t write_mask = 0;
     for (int i = 0; i < 4; i++) {
@@ -3459,14 +3444,15 @@ void flush_batch() {
         uint32_t select; // 0 all, 1 passing, 2 failing
         uint32_t mask;
         bool zwrite;
-    } passes[2];
+        float zbias; // --native-layer-z tolerant: the Z test's tolerance (Z and layers, below)
+    } passes[4];
     int npasses = 0;
     bool zwrite = depth && !zmsk;
     if (!ate || atst == 1) {
-        passes[npasses++] = {0, write_mask, zwrite};
+        passes[npasses++] = {0, write_mask, zwrite, 0.0f};
     } else {
         if (atst != 0) {
-            passes[npasses++] = {1, write_mask, zwrite};
+            passes[npasses++] = {1, write_mask, zwrite, 0.0f};
         }
         uint32_t fail_mask = 0;
         bool fail_z = false;
@@ -3485,9 +3471,67 @@ void flush_batch() {
             break;
         }
         if (fail_mask || fail_z) {
-            passes[npasses++] = {atst == 0 ? 0u : 2u, fail_mask, fail_z};
+            passes[npasses++] = {atst == 0 ? 0u : 2u, fail_mask, fail_z, 0.0f};
         }
     }
+
+    // Z and layers (--native-layer-z tolerant). The GS keeps Z as a whole number per pixel, and two
+    // things the game draws come out of the rounding badly at a larger --native-scale:
+    // - Where two surfaces meet at a shallow angle (a rock wall against a brick wall, the cave walls
+    //   against the lava on map 000), where both round to the same Z the later one wins: a sawtooth of
+    //   long teeth along the line. Here every pixel's Z keeps its fraction (M_ZFINE, gs_frag.h): they
+    //   meet in a straight line.
+    // - The game blends layers over its surfaces as meshes of their own (a wall's second texture; the
+    //   darkness strips inside the arches of map 000's caves, the wall's texture again in dark vertex
+    //   colours fading out by their alpha), Z tested GEQUAL. Their Z is the surface's to within a
+    //   fraction, but the two meshes are cut into triangles differently (their vertices up to a
+    //   quarter of a pixel and two Z apart), so the layer fails the test in a pattern: a comb of teeth
+    //   and scattered pixels, at --native-scale fine hatching on the tower's stone, a swirl on its top
+    //   and a lace of light lines in the arches, coming and going as the camera moves. A layer's
+    //   colour passes within one Z of what is there (its depth that much nearer, no Z written), then
+    //   its Z is written where the test passes as the GS's (with the fraction), so the Z buffer is
+    //   what it would be: a layer over a layer finds the surface's Z. (Half a Z, the GS's slack on
+    //   average, left the far tower's top with a notch of the tower showing through its rock, 9.5% of
+    //   the rock's pixels at 4x, where one Z leaves 3.6%; both clear the arches' lace.)
+    // A layer: a triangle with a corner's alpha below 0x80 (where the layer fades out; the opaque
+    // surfaces drawn the same way have 0x80 at every corner), blended over what is there by its alpha
+    // ((Cs - Cd) As + Cd), Z tested GEQUAL, in a draw that writes Z. Triangles, not batches: a batch
+    // can run several meshes together, and an opaque one drawn as a layer lets a thin pole's far side
+    // through its near side at its edges. Not the glows and flames, added ((Cs - 0) As + Cd): quads of
+    // their own through the things they light. A draw that writes no Z (fire, glows, particles) passes
+    // within half a Z, the slack the GS's rounding gave two draws over the same plane (the lava's glow
+    // over the lava), in its one pass. The batch is drawn in runs (below) so that a layer's triangles
+    // see the triangles before them as on the GS though their colour writes no Z: drawn in one pass,
+    // a layer's later triangles over its own earlier ones in front of them were drawn twice over each
+    // other where the GS draws them once (flat olive blotches over the walls inside the tower on map
+    // 000).
+    bool any_zwrite_pass = false;
+    for (int i = 0; i < npasses; i++) {
+        any_zwrite_pass |= passes[i].zwrite;
+    }
+    float zstep = zpsm == 0x30 ? 65536.0f : zpsm == 0x31 ? 256.0f : 1.0f; // (a 16-bit Z's step)
+    if (fine_z && !any_zwrite_pass && (ztst == 2 || ztst == 3)) {
+        for (int i = 0; i < npasses; i++) {
+            passes[i].zbias = 0.5f * zstep;
+        }
+    }
+    Pass layer_passes[4];
+    int nlayer_passes = 0;
+    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
+        !reads_own_target) {
+        for (int i = 0; i < npasses; i++) {
+            if (passes[i].mask) {
+                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep};
+            }
+            if (passes[i].zwrite) {
+                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f};
+            }
+        }
+    }
+    auto is_layer = [&](uint32_t t) {
+        const Vtx *v = &gs->verts[t * 3];
+        return std::min({v[0].rgba >> 24, v[1].rgba >> 24, v[2].rgba >> 24}) < 0x80;
+    };
 
     // A draw that reads the target it draws into (shader blending, DATE) reads a copy taken before it,
     // and one drawn in two passes (the alpha test's) draws every passing pixel before any failing one.
@@ -3520,18 +3564,65 @@ void flush_batch() {
         }
     }
 
+    // (Z and layers: within a run its other triangles are drawn first, then its layer's, layers_at
+    // where they begin. So a run is cut where a triangle overlaps a layer's before it in the run. A
+    // layer's over other triangles before it, as the layers over their surface in one batch, keeps its
+    // order, as do the others among themselves, with their Z.)
     std::vector<uint32_t> runs(1, 0);
-    if ((shader_blend || npasses > 1) && !reads_own_target) {
+    std::vector<uint32_t> layers_at;
+    if (!reads_own_target && (shader_blend || npasses > 1 || nlayer_passes)) {
+        bool all = shader_blend || npasses > 1;
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
+        std::vector<uint8_t> layer(triangles);
+        for (uint32_t t = 0; t < triangles; t++) {
+            layer[t] = nlayer_passes && is_layer(t);
+        }
+        bool run_has_layer = layer.size() && layer[0];
         for (uint32_t t = 1; t < triangles; t++) {
             // (a long run is cut anyway: the test is against each triangle of the run)
-            bool cut = t - start >= 256;
+            bool cut = (all || run_has_layer) && t - start >= 256;
             for (uint32_t u = start; u < t && !cut; u++) {
-                cut = triangles_overlap(&gs->verts[t * 3], &gs->verts[u * 3]);
+                if (all || layer[u]) {
+                    cut = triangles_overlap(&gs->verts[t * 3], &gs->verts[u * 3]);
+                }
             }
             if (cut) {
                 runs.push_back(t * 3);
                 start = t;
+                run_has_layer = false;
+            }
+            run_has_layer |= layer[t] != 0;
+        }
+        if (nlayer_passes) {
+            std::vector<Vtx> verts;
+            std::vector<std::array<uint32_t, 4>> vsrc;
+            verts.reserve(gs->verts.size());
+            vsrc.reserve(interp.vsrc.size());
+            uint32_t layer_tris = 0;
+            runs.push_back(triangles * 3);
+            for (size_t r = 0; r + 1 < runs.size(); r++) {
+                for (int l = 0; l < 2; l++) {
+                    if (l) {
+                        layers_at.push_back(uint32_t(verts.size()));
+                    }
+                    for (uint32_t t = runs[r] / 3; t < runs[r + 1] / 3; t++) {
+                        if (layer[t] == l) {
+                            verts.insert(verts.end(), gs->verts.begin() + t * 3, gs->verts.begin() + t * 3 + 3);
+                            if (interp.active) {
+                                vsrc.insert(vsrc.end(), interp.vsrc.begin() + t * 3, interp.vsrc.begin() + t * 3 + 3);
+                            }
+                            layer_tris += l;
+                        }
+                    }
+                }
+            }
+            runs.pop_back();
+            gs->verts.swap(verts);
+            if (interp.active) {
+                interp.vsrc.swap(vsrc);
+            }
+            if (layer_tris) {
+                gsn_stats.layer_draws++;
             }
         }
     }
@@ -3616,13 +3707,16 @@ void flush_batch() {
         c.set_opaque_state();
         // (the cut-outs at every sample: draws with Z into the multisampled images)
         bool per_sample = cutout && ms && zclamp;
+        Program *program;
         if (how == COPY_IN_PASS) {
-            c.set_program(per_sample ? gs->program_zclamp_sample_in_ms
-                          : ms        ? (zclamp ? gs->program_zclamp_in_ms : gs->program_in_ms)
-                                      : (zclamp ? gs->program_zclamp_in : gs->program_in));
+            program = per_sample ? gs->program_zclamp_sample_in_ms
+                      : ms        ? (zclamp ? gs->program_zclamp_in_ms : gs->program_in_ms)
+                                  : (zclamp ? gs->program_zclamp_in : gs->program_in);
+            c.set_program(program);
             c.set_input_attachments(0, 4);
         } else {
-            c.set_program(per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program);
+            program = per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program;
+            c.set_program(program);
         }
         if (per_sample && r == 0) {
             gsn_stats.cutout_draws++;
@@ -3686,42 +3780,33 @@ void flush_batch() {
         c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
 
-        if (tolerant) {
-            // (--native-layer-z tolerant: the Z first, then the colour within the tolerance; above)
-            for (int i = 0; i < npasses; i++) {
-                if (passes[i].zwrite) {
-                    Push p = push;
-                    p.flags |= passes[i].select << F_PASS_SHIFT;
-                    c.set_color_write_mask(0);
-                    c.set_depth_test(true, true);
-                    c.push_constants(&p, 0, sizeof(p));
-                    c.draw(count);
-                    gsn_stats.draws++;
-                }
-            }
-            for (int i = 0; i < npasses; i++) {
-                if (passes[i].mask) {
-                    Push p = push;
-                    p.flags |= passes[i].select << F_PASS_SHIFT;
-                    p.zbias = layer_tolerance;
-                    c.set_color_write_mask(passes[i].mask);
-                    c.set_depth_test(true, false);
-                    c.push_constants(&p, 0, sizeof(p));
-                    c.draw(count);
-                    gsn_stats.draws++;
-                }
-            }
-        } else {
-            for (int i = 0; i < npasses; i++) {
+        // (Z and layers: the run's other triangles with the passes, then its layer's with theirs: the
+        // colour within the tolerance, no Z written, then the Z where the test passes, from
+        // gs_zonly.frag when the pass is every pixel's and not DATE's: the Z without the texture)
+        uint32_t others = layers_at.empty() ? count : layers_at[r] - first;
+        for (int l = 0; l < 2; l++) {
+            const Pass *rp = l ? layer_passes : passes;
+            int nrp = l ? nlayer_passes : npasses;
+            uint32_t from = l ? others : 0, n = l ? count - others : others;
+            for (int i = 0; i < nrp && n; i++) {
                 Push p = push;
-                p.flags |= passes[i].select << F_PASS_SHIFT;
-                c.set_color_write_mask(passes[i].mask);
+                p.flags |= rp[i].select << F_PASS_SHIFT;
+                p.zbias = rp[i].zbias;
+                bool zonly = l && !rp[i].mask && rp[i].select == 0 && !(push.flags & F_DATE) &&
+                             (per_sample ? gs->program_zonly_sample != nullptr : true);
+                if (zonly) {
+                    c.set_program(per_sample ? gs->program_zonly_sample : gs->program_zonly);
+                }
+                c.set_color_write_mask(rp[i].mask);
                 if (depth) {
-                    c.set_depth_test(true, passes[i].zwrite);
+                    c.set_depth_test(true, rp[i].zwrite);
                 }
                 c.push_constants(&p, 0, sizeof(p));
-                c.draw(count);
+                c.draw(n, from);
                 gsn_stats.draws++;
+                if (zonly) {
+                    c.set_program(program);
+                }
             }
         }
     }
@@ -4860,6 +4945,14 @@ void make_program() {
     if (sample_shading) {
         Shader *fs_sample = gs->device->request_shader(gsn_spv_gs_zclamp_sample_frag, sizeof(gsn_spv_gs_zclamp_sample_frag), &frag);
         gs->program_zclamp_sample = gs->device->request_program(vs, fs_sample);
+    }
+    ResourceLayout zonly = {};
+    zonly.push_constant_size = sizeof(Push);
+    gs->program_zonly = gs->device->request_program(
+        vs, gs->device->request_shader(gsn_spv_gs_zonly_frag, sizeof(gsn_spv_gs_zonly_frag), &zonly));
+    if (sample_shading) {
+        gs->program_zonly_sample = gs->device->request_program(
+            vs, gs->device->request_shader(gsn_spv_gs_zonly_sample_frag, sizeof(gsn_spv_gs_zonly_sample_frag), &zonly));
     }
     // --frame-rate's pictures between on the GPU: the picture's buffer, the frame's kicks, their moves, the
     // kicks moved, the corners, the vertices made of them (set 1)

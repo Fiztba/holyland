@@ -78,9 +78,12 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   Journal screens black (October 2026).
 - **Z is a whole number per pixel.** The GS rounds the interpolated Z; keeping the fraction hid the
   lava's glow behind the lava it is drawn on (with a GEQUAL test). The rounding is also what makes the
-  hatching on the game's layered walls and the sawtooth where surfaces meet: `--native-layer-z
-  tolerant` (the default) keeps the fraction and passes a draw half a Z behind what is there, Z drawn
-  in a pass of its own first (PLAN.md); `ps2` is the GS's.
+  hatching, teeth and lace on the game's layered walls and the sawtooth where surfaces meet:
+  `--native-layer-z tolerant` (the default) keeps the fraction, lets a layer's triangles (a corner's
+  alpha below 0x80, blended (Cs - Cd) As + Cd, GEQUAL) pass within one Z, Z written after in a pass of
+  its own, and a draw without Z writes within half a Z (PLAN.md; `gsn.cpp`, "Z and layers"); `ps2` is
+  the GS's. A test pass with no Z written must not see its own batch's triangles as a pass with Z
+  would: drawn as one, a layer mesh folded over itself was blended twice (flat olive patches).
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a

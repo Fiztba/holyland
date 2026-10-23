@@ -1429,7 +1429,7 @@ static void usage(void) {
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
             "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
-            "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa]\n"
+            "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa] [--layer-z ps2|tolerant]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1485,6 +1485,7 @@ int main(int argc, char **argv) {
             i++;
         } else if (strcmp(a, "--cutout-aa") == 0) {
             cutout_aa = strcmp(v, "ssaa") == 0 ? GSN_CUTOUT_AA_SSAA : GSN_CUTOUT_AA_OFF;
+            i++;
         } else if (strcmp(a, "--layer-z") == 0) {
             layer_z = strcmp(v, "tolerant") == 0 ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
             i++;
