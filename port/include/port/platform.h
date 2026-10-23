@@ -34,6 +34,10 @@ typedef struct {
     int renderer_shown;
     int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
     int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
+    /* --renderer modern (P8, docs/port/NATIVE_DRAW_P8.md): the native GS, with the scene's native draws (map
+       records and items: --native-draw map,sky,items unless it says otherwise) drawn into the scene's own
+       targets (gsn_set_standalone); never saved */
+    int renderer_modern;
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
        the default, a swapchain on the native GS's own device (port/platform/present_vk.cpp), with the
        native GS's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the

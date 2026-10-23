@@ -52,6 +52,10 @@ bool ndw_pending();
 Program *ndw_program(Program *p);
 void ndw_draw(const RdDraw &d, const RdCamera &cam);
 void nd_pass_draw(const RdDraw &d); // (a screen pass: gsn_nd_pass.inc)
+// (standalone, P8: whether a draw goes to the scene's targets: gsn_standalone.inc)
+void sa_draw_begin(uint64_t value);
+void sa_draw_end();
+bool sa_waiting();
 Program *nd_pass_program(Program *p);
 
 // A model part's move in the pictures between (P2-5; nd_between): its matrix in the frame before (P) and in
@@ -978,7 +982,9 @@ void nd_register(uint64_t value) {
     switch (RD_ND_COMMAND(value)) {
     case RD_ND_DRAW:
         if (nd_mode == GSN_NATIVE_DRAW_NATIVE) {
+            sa_draw_begin(value); // (standalone: a batch holds the scene's corners or none)
             nd_draw(value);
+            sa_draw_end();
         }
         break;
     case RD_ND_ALT_BEGIN:
@@ -1182,8 +1188,8 @@ void nd_skip(uint32_t address) {
 // seam a level apart in onoff mode). In a picture between, the native corners are drawn first: the PS2
 // path's are then the GPU's (gs_replay_corners.comp), from a vertex buffer of their own.
 void nd_kick() {
-    if ((nd.pending || (nd.pass_pending && !nd.pass_kicking)) && interp.active) {
-        flush_batch();
+    if (((nd.pending || (nd.pass_pending && !nd.pass_kicking)) && interp.active) || sa_waiting()) {
+        flush_batch(); // (standalone: the scene's corners never join the PS2 path's)
     }
 }
 

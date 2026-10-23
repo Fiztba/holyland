@@ -47,6 +47,10 @@ pictures, game frames and pictures between, off and on): byte for byte the merge
 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1
 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte).
 
+**P8 has begun** (branch `nd5/p8`): `--renderer modern`, the scene's map records and items drawn into the
+scene's own targets with unrounded depth and textures from the page-ownership table, the GS drawing the rest
+over it. What is built, its numbers and the remaining P8 tasks: [NATIVE_DRAW_P8.md](NATIVE_DRAW_P8.md).
+
 **perf/gpu-vram merged** (9e9c2a12; the branch the owner plays: fix/underwater, fix/wall-blink, perf/hotspot's
 ties drawn whole, replays over targets the recording made, silhouettes drawn whole, 16-bit reflection blends in
 the pass, depth bounds on two-phase ties, and the write-backs put off). It is now the PS2-path reference: with

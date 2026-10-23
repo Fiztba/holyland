@@ -1654,8 +1654,26 @@ void clear_dirty(Target &t) {
     t.stale = false;
 }
 
+// (standalone, P8: gsn_standalone.inc, included at the end of this namespace)
+void sa_drawn(const Target &t, uint32_t y0, uint32_t y1);
+bool sa_flush();
+void sa_draw_begin(uint64_t value);
+void sa_draw_end();
+bool sa_waiting();
+void sa_sync();
+void sa_forget();
+void sa_switch(bool on);
+void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+void sa_upload_begins(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool recorded);
+void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size);
+void sa_uploaded_from_vram(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+void sa_upload_replayed(uint32_t k);
+void sa_vblank(bool extra);
+extern volatile int sa_mode;
+
 // Rows y0..y1-1 of the target drawn into (all of it, for one that is not regular)
 void mark_dirty(Target &t, uint32_t y0, uint32_t y1) {
+    sa_drawn(t, y0, y1); // (standalone: its pages not their uploads' any more)
     t.dirty = true;
     if (!regular(t)) {
         std::fill(t.dirty_pages.begin(), t.dirty_pages.end(), 1);
@@ -3391,6 +3409,9 @@ void flush_batch() {
     if (nd.active && interp.active && !nd.pass_active) {
         moving.moves = moving.moves_3d = true; // (native draw: moved with the camera by nd_000.vert)
     }
+    if (sa_flush()) {
+        return; // (standalone: the scene's batch, drawn into the scene's targets: gsn_standalone.inc)
+    }
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
     // largest alpha, the rows they reach
@@ -5006,6 +5027,9 @@ void swizzle_upload(const uint8_t *data, size_t bytes) {
 }
 
 void upload_done() {
+    if (pending_upload.active && pending_upload.incremental) {
+        sa_uploaded_from_vram(pending_upload.bitbltbuf, pending_upload.trxpos, pending_upload.trxreg); // (standalone)
+    }
     {
         Timer sync(gsn_stats.ns_sync);
         sync_targets(destination_rect());
@@ -5021,6 +5045,7 @@ void write_page_image(const PageImage &image);
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
 void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
+    sa_uploaded(p.bitbltbuf, p.trxpos, p.trxreg, data, size); // (standalone: the page-ownership table)
     bool rgb_only = false;
     std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
     uint64_t key = upload_hash(p, data, size);
@@ -5149,6 +5174,7 @@ void forget_uploads() {
 }
 
 void begin_transfer(uint32_t dir) {
+    sa_sync(); // (standalone: the scene's turn ends)
     settle_upload();
     uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
     gs->transfer_dir = dir;
@@ -5163,6 +5189,7 @@ void begin_transfer(uint32_t dir) {
             uploads_now.push_back({bitbltbuf, trxpos, trxreg, nullptr, {}});
             recording = int(uploads_now.size() - 1);
         }
+        sa_upload_begins(bitbltbuf, trxpos, trxreg, !replaying); // (standalone)
         PendingUpload &u = pending_upload;
         u.active = gs->upload.active != 0;
         u.incremental = false;
@@ -5222,6 +5249,7 @@ void begin_transfer(uint32_t dir) {
                 return;
             }
         }
+        sa_copied(bitbltbuf, trxpos, trxreg); // (standalone: not its uploads' any more)
         uint32_t lo, count;
         buffer_pages(sbp, sbw, spsm, sx + w, sy + h, &lo, &count);
         claim_pages(lo, count, nullptr, false);
@@ -5271,6 +5299,7 @@ void image_data(const uint8_t *data, size_t bytes) {
 // blended in, Game_BlendPreviousFrame): the buffer itself is the one they are drawn into.
 void take_snapshot(uint32_t fbp) {
     flush_batch();
+    sa_sync();
     snapshot.image.reset();
     for (auto &t : gs->targets) {
         if (t->depth || t->bp != fbp * 32 || !t->image) {
@@ -5308,6 +5337,7 @@ void replay_upload(uint64_t value) {
     if (image) {
         Timer timer(gsn_stats.ns_upload);
         write_page_image(*image);
+        sa_upload_replayed(k); // (standalone)
         upload_done();
     } else if (!uploads_frame[k].bytes.empty()) {
         image_data(uploads_frame[k].bytes.data(), uploads_frame[k].bytes.size());
@@ -6880,6 +6910,8 @@ void save_pipeline_cache() {
     }
 }
 
+#include "gsn_standalone.inc" // (P8: the scene drawn into its own targets)
+
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
@@ -7102,6 +7134,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         frame = &presented;
     }
     flush_batch();
+    sa_sync(); // (standalone: the picture is the GS's)
+    sa_switch(sa_mode != 0);
+    sa_vblank(extra);
     gsn_stats.pictures++;
     Why why_scanout(GSN_WHY_SCANOUT);
     end_pass();
@@ -7369,6 +7404,14 @@ extern "C" void gsn_set_native_draw(int mode) {
     nd_mode = mode == GSN_NATIVE_DRAW_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE;
 }
 
+extern "C" void gsn_set_standalone(int on) {
+    sa_mode = on; // (taken at the next vblank: gsn_standalone.inc)
+}
+
+extern "C" void gsn_print_standalone_stats(void) {
+    sa_print_stats();
+}
+
 extern "C" void gsn_set_colour(int mode) {
     wanted_colour = mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
 }
@@ -7395,6 +7438,7 @@ extern "C" int gsn_display_rect(const uint64_t *privileged, GsnRect *rect) {
 extern "C" void gsn_read_rect(const GsnRect *r, uint32_t *rgba) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone: the scene's turn ends)
     read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba);
     submit(false);
 }
@@ -7402,6 +7446,7 @@ extern "C" void gsn_read_rect(const GsnRect *r, uint32_t *rgba) {
 extern "C" void gsn_read_rect_scaled(const GsnRect *r, uint32_t *rgba, uint32_t *scale) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone)
     read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba, true, scale);
     submit(false);
 }
@@ -7418,6 +7463,7 @@ extern "C" void gsn_decode_rect(const uint8_t *vram, const GsnRect *r, uint32_t 
 extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone)
     Target *t = find_target(r->bp, r->bw, r->psm);
     if (t && t->sx == 1 && t->sy == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
         msaa_settle(*t);
@@ -7445,6 +7491,7 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
 extern "C" const void *gsn_vram(void) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone: captures, save states)
     shadows_resolve_all();
     for (auto &t : gs->targets) {
         write_back(*t);
@@ -7511,6 +7558,7 @@ extern "C" void gsn_state(PortStateIo *io) {
         port_state_bytes(io, const_cast<void *>(gsn_vram()), GSN_VRAM_BYTES);
     } else {
         flush_batch();
+        sa_forget();
         end_pass();
         gs->targets.clear();
         shadows.clear();
@@ -7548,6 +7596,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
             return 0;
         }
         flush_batch();
+        sa_forget();
         end_pass();
         gs->targets.clear();
         shadows.clear();
