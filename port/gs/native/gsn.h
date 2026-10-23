@@ -290,6 +290,9 @@ typedef struct {
     /* native draw (gsn_native_draw.inc): draws and batches drawn, draws whose frame was gone or whose
        program is not drawn yet, meshes put on the GPU, register writes left out (--native-draw-compare) */
     uint64_t nd_draws, nd_batches, nd_lost, nd_unsupported, nd_mesh_uploads, nd_skipped, nd_arenas;
+    /* (native draw) the CPU plan (nd_plan): its time, the vertices it worked out, and those it found planned
+       already (the same batch by the same matrix: a camera standing still, a picture between) */
+    uint64_t ns_nd_plan, nd_plan_vertices, nd_plan_reused;
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,

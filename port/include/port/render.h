@@ -158,6 +158,8 @@ typedef struct {
     uint64_t lost;   /* draws met after their slot was reused */
     uint64_t meshes_held; /* meshes in the cache now */
     uint64_t waits, waits_given_up; /* rd_begin_frame waiting for the consumer (200 us each) */
+    uint64_t declined; /* models the adapter gave back to the PS2 path (game/native_draw/: a NativeDraw_* call
+                          that returned 0, its caller drawing them the PS2 way) */
 } RdStats;
 extern RdStats rd_stats;
 

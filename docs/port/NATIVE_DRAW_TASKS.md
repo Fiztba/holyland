@@ -408,23 +408,87 @@ side by side, compare **and** onoff, and the switch to accept `map` into `PORT_N
 
 - **The sweep again** (P1-2's method, no code) on the merged tree, compare and onoff, 1x and 4x; and P1-6's
   timings again (the opening's thrash should be gone).
-- **The CPU plan's cost** (`gsn_native_draw.inc`): about twice the VU1 HLE time it saves (145 ns a vertex,
-  2.7-3.5 s per 2,000 vblanks on the GS thread). Plan only what `flush_batch` needs (boxes, rows, the
-  alpha range) in native floats where no decision depends on the exact bits; keep VU1's arithmetic in
-  `nd_000.vert`. Check with the oracle and the sweep.
-- **Mixed batches** (`gsn_native_draw.inc` and `flush_batch`, beyond a hook): decide once for a batch of
-  native and PS2-path corners and draw it in two calls, instead of splitting it (P1-1's note).
+- ~~**The CPU plan's cost**~~ (*done, nd2/a-exact, below*): about twice the VU1 HLE time it saved (145 ns a
+  vertex, 2.7-3.5 s per 2,000 vblanks on the GS thread).
+- ~~**Mixed batches**~~ (*done, nd2/a-exact, below*): decide once for a batch of native and PS2-path corners
+  and draw it in a call a kind, instead of splitting it (P1-1's note). It was the review's blocker.
 - **Wave UVs**: the 039/040 frame lag (the owner's call: the PS2 path's late read or the native
   frame-consistent one), the noise in wave-UV water on 027, 042, 114 and 034, and the 030 scanline at 4x
   (the oracle or a corner-order check tells the two candidate causes apart).
-- **Counting fallbacks**: a stats counter for draws `NativeDraw_Posed` declines (returns 0), so that "0
-  refused" means every record went native.
+- ~~**Counting fallbacks**~~ (*done, nd2/a-exact*): `--stats`' native draw line ends "N models declined
+  (drawn the PS2 way)" (`rd_stats.declined`: a `NativeDraw_*` call that returned 0; `KF4_ND_LOG=1` names the
+  first 32 and why). 0 on 000, 009, 099 and the mirror maps' views, the opening included. (The gotcha above,
+  "0 refused does not mean every record went native", is answered by it.)
+- ~~**The drop rule of pictures between**~~ (*done, nd2/a-exact*): `nd_000.vert` dropped a triangle when its
+  corner's own vertex was dropped as well as for the kick window; it now tests the window only (kick and the
+  two before it), as `gs_replay_corners.comp`. Only a fan's first vertex is outside the window, and program
+  0x000's data has no fans: the tour's 94,593 batches of 0x000 are all strips (so nothing changed: 000
+  walking at 240, compare and onoff, is P1-3's 613 pixels in the sky, picture for picture).
 - **The arena's first size**: 32 MB, about 20 times what these maps use (4 MB holds them).
 - **The CPU walk** (`KF4_INTERP_CPU`, `--renderer both`): native draws are not moved in pictures between;
   it needs the camera move handed to the native GS outside the GPU recording (`frame_interp.c`, `gsn.cpp`).
 - **Docs**: tools/README.md does not yet list `kf4-gsreplay --native-draw` and `--nd-oracle`.
 - **Not native draw's**: no replays from the recording on 000, 013, 099 and 116 (a target gone by the next
   picture, P0-4); the PS2 path's own `KF4_INTERP_STILL` is 52-87 pixels off while turning on 099 (P1-3).
+
+*A-exact (nd2/a-exact, 2026-10-23): map records exact in onoff mode, and the plan's cost.*
+
+- **The blocker: map 009 at 2x-4x in onoff mode** (one pixel at 4x, (1072,49) from vblank 1696 on, 1-2
+  levels, a seam of the ceiling). Not VU1 state: a batch split. `nd_kick` flushed the pending native corners
+  at the PS2 path's next vertex kick, so a native record's corners and the PS2-path triangles after it
+  (the near cut's pieces, other records) were two batches where the PS2 path's was one, and `flush_batch`
+  decided the runs and blending of each part on its own: a pixel of a seam where two triangles of the
+  ceiling meet came out a level apart. Compare mode hid it (`RD_ND_ALT_BEGIN` flushes in both of its runs),
+  and so did a capture's replay (it starts from VRAM at 1x). Found with a local log of every batch
+  (size, state, a hash of the corners) in an off and an onoff run: 3 batches of 009's frame were split
+  (135 = 129 native + 6, 810 = 60 + 750, 867 = 60 + 807); the GS's own stats showed it too (onoff made 61
+  more draws and 368 more shader blends than off by vblank 1500, all in the opening).
+- **The fix (mixed batches)**: in a frame a batch now holds both kinds, as the PS2 path's would, and is
+  decided once over all of it; `nd_draw_range` (the call in `flush_batch`'s pass loop) draws each stretch
+  of one kind with its own vertex shader, in order. A native corner's fog is -1 less its arena vertex
+  (`nd_corner_vertex`: below 0, where the PS2 path's are 0-255), so the corners carry their kind through
+  the runs' reordering. In a picture between the native corners are still drawn as a batch of their own
+  (the PS2 path's corners then come from `gs_replay_corners.comp`, from a buffer of their own). The
+  hooks in `gsn.cpp`: the program is no longer swapped for the whole batch, and `c.draw` in the pass loop
+  is `nd_draw_range`. Now off and onoff give the same GS stats (draws, shader blends, render passes, 466,517
+  / 8,361 on 009 by 2,000 vblanks at 4x).
+- **`--native-draw map` without compare** (P1-6's garbage and the opening's thrash): gone on the merged
+  tree. The opening at 1000 and 1400 and 000 and 009 at 1900 and 2000 are 0 pixels in onoff mode at 1x and
+  4x, and the runs make the same write-backs (9 in 1,707 vblanks) and render passes as `off`.
+- **The plan's cost.** Its decisions need the exact bits (P1-1's alpha range, the runs, the layers' Z; a
+  planned corner a 1/16 pixel off changes which triangles overlap), so it stays VU1's arithmetic, made
+  cheaper. `nd_plan_vertex` works in doubles: a product of two 24-bit significands is exact, a sum is exact
+  or rounded below the 24 bits kept, each result truncated to 24 bits (VU1's rounding toward zero); what a
+  double would do otherwise (a sum that lost a term, a result VU1 makes +-0 or its largest, FTOI's limit,
+  denormal or exponent-255 matrix entries) falls back to `vu_float.h` (`nd_plan_vertex_vu`). 3.2M random
+  and awkward vertices: 0 differ; 140 to 27 ns a vertex. And `nd.planned` keeps each batch's last two plans
+  (the world's camera and the reflection's) by mesh, batch, vertex matrix, XYOFFSET and IIP: a camera
+  standing still, or a frame drawn again for a picture between, takes the corners planned already. `--stats`
+  prints the plan's time and how many vertices were planned and found planned.
+- **Numbers** (4,000 vblanks, 1x, `--fast --headless`, `tests/newgame.pad`, `--teleport 1600:N:0`, standing on
+  the map from about vblank 1,700; 3 runs, two at a time, other agents on the PC: noisy):
+
+  | | wall s | GS GIF s | the plan s |
+  |---|---|---|---|
+  | 000 off (base 95d27ec / this) | 13.36-13.83 / 13.55-13.93 | 11.43-11.70 / 11.62-11.85 | |
+  | 000 map,items (base / this) | 18.21-18.99 / 14.19-15.19 | 16.26-16.96 / 12.34-13.30 | about 5.9 / 0.74-0.84 |
+  | 009 off (base / this) | 10.92-11.66 / 11.23-11.79 | 8.32-8.87 / 8.34-8.85 | |
+  | 009 map,items (base / this) | 12.98-13.66 / 9.74-10.10 | 11.27-11.89 / 8.13-8.50 | about 4.6 / 0.56-0.58 |
+
+  The base's plan time is a run of this branch before the plan's change (a timer in the same place). 009
+  native is now as fast as `off` on the GS thread (and VU1 is spared the map); 000 is about 1 s of GIF over
+  `off` per 4,000 vblanks, most of it no longer the plan. Standing, 84-94% of the vertices are found
+  planned; walking, a frame's are planned anew (about 50 ns a vertex with the corners) and its pictures
+  between find them.
+- **Checks**: the oracle over 64 tour captures (one view a map, `--native-draw off`, this build): 94,593
+  batches of 0x000, 6,120 MSCALs, 1,607,925 vertices, 0 lane differences on drawn vertices with `--vu1 hle`
+  and `--vu1 interp`, and 0 in the plan's lanes on any vertex (drawn or not); the set-up 0. Pixels, all 0:
+  000 start compare 1x and 4x, onoff 1x and 4x (the opening at 1000 and 1400 too); 009 the same; 099 start
+  and herb, compare and onoff, 1x and 4x; the mirror maps from P1-4's made-up saves looking at the water
+  (008 `m8w`, 009 `m9w`, 014 `m14c`, 041 `m41d`; 220-360), compare and onoff, 1x and 4x. 000 walking at
+  240: 613 pixels in pictures between, in the sky, as before. The off check: boot_test, frame_test gs and
+  native, gsn_draw_test (0 of 300), vu1_test (0 of 90), herb with `--native-draw off` against 95d27ec's
+  build (the same log, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures at 1800, 1820, 1840).
 
 ### P2, models: posed, skinned, then the arm
 

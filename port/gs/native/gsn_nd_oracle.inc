@@ -139,7 +139,7 @@ extern "C" int gsn_nd_oracle_run(const GsnNdOracleDraw *draws, uint32_t draw_cou
     for (uint32_t i = 0; i < corners; i++) {
         uint32_t v = i < vertex_count ? i : 0;
         cv[i].rgba = ND_CORNER_GOURAUD | vertex_draw[v] << ND_CORNER_DRAW_SHIFT;
-        cv[i].vertex = float(v);
+        cv[i].vertex = nd_corner_vertex(v);
     }
     c->set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Corner, rgba));
     c->set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Corner, vertex));

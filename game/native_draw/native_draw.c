@@ -24,6 +24,7 @@
 #include "port/render.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 void Packet_BeginGsRegisters(void);
@@ -294,15 +295,35 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
     return 1;
 }
 
+/* A model given back to the caller, to draw the PS2 way: counted (--stats, "models declined"), so that "0
+   refused" with 0 declined means every model of the kinds asked for was drawn natively. With KF4_ND_LOG
+   set, the first few are named. */
+static int declined(ModelInstance *model, int kind, const char *why) {
+    static int logged;
+
+    rd_stats.declined++;
+    if (logged < 32 && getenv("KF4_ND_LOG")) {
+        logged++;
+        fprintf(stderr, "[native draw] kind %d model %#x drawn the PS2 way: %s\n", kind, (u32)EE_WORD(model), why);
+    }
+    return 0;
+}
+
 /* Model_DrawPosedDepthByPart(model), natively (posed_model) */
 int NativeDraw_PosedDepthByPart(ModelInstance *model, int kind, const void *owner) {
-    return posed_model(model, FORM_DEPTH_BY_PART, kind, owner);
+    if (!posed_model(model, FORM_DEPTH_BY_PART, kind, owner)) {
+        return declined(model, kind, "a block the core cannot draw");
+    }
+    return 1;
 }
 
 /* Model_DrawPosed(model), natively (posed_model); a model whose draw_parts is something else is not */
 int NativeDraw_Posed(ModelInstance *model, int kind, const void *owner) {
     if (model->draw_parts != Model_DrawPosed) {
-        return 0;
+        return declined(model, kind, "draw_parts is not Model_DrawPosed");
     }
-    return posed_model(model, FORM_POSED, kind, owner);
+    if (!posed_model(model, FORM_POSED, kind, owner)) {
+        return declined(model, kind, "a block the core cannot draw");
+    }
+    return 1;
 }

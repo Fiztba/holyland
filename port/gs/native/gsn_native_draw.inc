@@ -55,9 +55,17 @@ enum : int32_t {
     ND_C_MOVING = 0x1, // a picture between: moved by the picture's camera (set 1's Picture), see nd_section
     ND_C_OBJ = 0x2,    // ... and with its model, t of the way from its place in the frame before (obj)
 };
-// A corner (Vtx): its fog the vertex's number in the arena; its RGB the kick's number less the vertex's
-// (bits 0-5), IIP (bit 6) and the draw's record (bits 7-23); its alpha the vertex's (flush_batch's)
+// A corner (Vtx): its fog -1 less the vertex's number in the arena (below 0: a native corner, where the
+// PS2 path's fog is 0-255, so that a batch can hold both kinds: nd_draw_range); its RGB the kick's number
+// less the vertex's (bits 0-5), IIP (bit 6) and the draw's record (bits 7-23); its alpha the vertex's
+// (flush_batch's)
 const uint32_t ND_CORNER_GOURAUD = 0x40, ND_CORNER_DRAW_SHIFT = 7, ND_DRAWS_MAX = 1u << 17;
+float nd_corner_vertex(uint32_t at) {
+    return -1.0f - float(at); // (exact: the arena has 2^22 vertices at most)
+}
+bool nd_corner(const Vtx &v) {
+    return v.fog < 0.0f;
+}
 
 const uint32_t N_ND_MAX = 40;          // (a batch's vertices at most: RdBatch)
 const uint32_t ND_VERTEX_BYTES = 64;   // (RdMeshData: four qwords a vertex)
@@ -85,10 +93,27 @@ struct NdKeyHash {
     }
 };
 enum { ND_SECTION_NONE, ND_SECTION_WORLD, ND_SECTION_REFLECT, ND_SECTION_OTHER };
+
+// A batch's last plan (nd_plan), by its mesh and number: what it was planned from, and its corners
+struct NdPlanned {
+    const int32_t *data = nullptr; // (the mesh's vertices)
+    uint64_t offset = 0;           // XYOFFSET
+    uint32_t gouraud = 0;
+    float vm[16] = {};             // the vertex matrix (compared bit for bit)
+    std::vector<Vtx> corners;
+};
+// (two a batch: the world's camera and the reflection's, on the mirror maps)
+struct NdPlannedPair {
+    NdPlanned plan[2];
+    uint32_t older = 0;
+};
+// (batches kept at most, all forgotten when there are more: a frame of 000 has about 850, a plan about
+// 2 KB)
+const size_t ND_PLANNED_MAX = 1u << 12;
 const float ND_MAX_MOVE = 400.0f; // (frame_interp.c's INTERP_MAX_MOVE: more is not a move but a jump)
 
 struct NdState {
-    bool active = false;   // the batch flush_batch is drawing is of native corners
+    bool active = false;   // the batch flush_batch is drawing has native corners (and in a picture between, only those)
     bool pending = false;  // gs->verts holds native corners
     bool skipping = false; // between RD_ND_ALT_BEGIN and _END, drawing the native draws
     NdBuffer arena;        // the meshes' vertices
@@ -100,6 +125,7 @@ struct NdState {
     Shader *vs = nullptr;
     BufferHandle dummy;
     std::vector<std::shared_ptr<const RdMeshData>> fetched;
+    std::unordered_map<uint64_t, NdPlannedPair> planned; // (nd_plan)
     // Pictures between (--frame-rate). Where the frame's marks say the draws are (frame_interp.c's
     // sections, PORT_GS_REG_FRAME_INTERP): only the world's and the reflection's move with the camera, as
     // the PS2 path's vertices do. And each draw's part's place (its matrix's translation) by its identity,
@@ -230,8 +256,8 @@ void vu_transform4(float *out, const float *m, const float *v) {
 
 // A vertex's place as VU1 works it out (vu1_hle.c's vertex: its operations, VU1's arithmetic; the same as
 // nd_000.vert's): q the mesh's vertex (four qwords), vm the vertex matrix. xyz: FTOI4 of the projected
-// place; stq: ST by 1/w; the clip judgement
-void nd_plan_vertex(const int32_t *q, const float *vm, int32_t xyz[3], float stq[3], bool &clip) {
+// place; stq: ST by 1/w; the clip judgement. (vu_float.h's operations: nd_plan_vertex is the same, faster)
+void nd_plan_vertex_vu(const int32_t *q, const float *vm, int32_t xyz[3], float stq[3], bool &clip) {
     float p[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
     float c[4];
     vu_transform4(c, vm, p);
@@ -249,18 +275,112 @@ void nd_plan_vertex(const int32_t *q, const float *vm, int32_t xyz[3], float stq
     stq[2] = vu_mul(float(q[10]) / 4096.0f, qq);
 }
 
-// The batch's triangles planned on the CPU into gs->verts (see the top): those VU1 would kick. base: the
-// batch's first vertex in the arena; record: its draw's
-void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t prim, uint32_t base, uint32_t record) {
-    uint64_t offset = gs->reg[R_XYOFFSET_1 + ((prim >> 9) & 1)];
+// The plan's cost (P1-6: 2.7-3.5 s of the GS thread per 2,000 vblanks, about 130 ns a vertex, most of it
+// vu_float.h's operations one at a time): the same arithmetic, bit for bit, in doubles. A VU float is
+// kept as the double of its value. A product of two 24-bit significands is exact in a double; a sum of
+// two is exact when their exponents are at most 28 apart, and further apart the double's rounding stays
+// below the 24 bits kept, unless it takes the smaller term away whole (VU1 then takes a unit off the
+// larger when their signs differ). Each result is truncated to 24 bits: VU1's rounding toward zero.
+// What a double does otherwise is marked bad, and the vertex is worked out again by vu_float.h: a sum
+// that lost a term, a result VU1 makes +-0 or its largest (below 2^-126, from 2^128), FTOI's limit, and
+// matrix entries VU1 reads otherwise than the PC (denormals, exponent 255: nd_fast_matrix).
+struct NdFast {
+    bool bad = false;
+    static double trunc24(double v) {
+        uint64_t d;
+        memcpy(&d, &v, 8);
+        d &= ~((uint64_t(1) << 29) - 1);
+        memcpy(&v, &d, 8);
+        return v;
+    }
+    double range(double v) {
+        double a = fabs(v);
+        bad |= (a < 0x1p-126 && a != 0.0) || !(a < 0x1p128);
+        return v;
+    }
+    double mul(double a, double b) {
+        return range(trunc24(a * b));
+    }
+    double add(double a, double b) {
+        double s = a + b;
+        bad |= (s == a && b != 0.0) || (s == b && a != 0.0);
+        return range(trunc24(s));
+    }
+    int32_t ftoi4(double v) {
+        bad |= !(fabs(v) < 0x1p27);
+        return bad ? 0 : int32_t(v * 16.0);
+    }
+};
+
+// whether a vertex matrix's entries are read by the PC as by VU1 (no denormals, no exponent 255)
+bool nd_fast_matrix(const float *vm) {
+    bool ok = true;
+    for (int i = 0; i < 16; i++) {
+        uint32_t e = vu_float_bits(vm[i]) & 0x7F800000u;
+        ok &= e != 0x7F800000u && (e != 0 || (vu_float_bits(vm[i]) & 0x007FFFFFu) == 0);
+    }
+    return ok;
+}
+
+// nd_plan_vertex_vu, in doubles where they give the same (vm_ok: nd_fast_matrix(vm))
+void nd_plan_vertex(const int32_t *q, const float *vm, int32_t xyz[3], float stq[3], bool &clip, bool vm_ok) {
+    if (vm_ok) {
+        NdFast f;
+        double p[4] = {double(float(q[0])), double(float(q[1])), double(float(q[2])), double(float(q[3]))};
+        // (MULAx ACC, then MADDAy, MADDAz, MADDw: a column at a time, the four rows together)
+        double c[4];
+        for (int r = 0; r < 4; r++) {
+            c[r] = f.mul(vm[r], p[0]);
+        }
+        for (int col = 1; col < 4; col++) {
+            double t[4];
+            for (int r = 0; r < 4; r++) {
+                t[r] = f.mul(vm[col * 4 + r], p[col]);
+            }
+            for (int r = 0; r < 4; r++) {
+                c[r] = f.add(c[r], t[r]);
+            }
+        }
+        // (DIV: by 0 VU1's largest; else as vu_float_div, a double's quotient truncated)
+        f.bad |= c[3] == 0.0;
+        double qq = f.range(NdFast::trunc24(1.0 / c[3]));
+        double x = f.mul(c[0], qq), y = f.mul(c[1], qq), z = f.mul(c[2], qq);
+        double rx = f.add(x, -2048.0), ry = f.add(y, -2048.0);
+        xyz[0] = f.ftoi4(x);
+        xyz[1] = f.ftoi4(y);
+        xyz[2] = f.ftoi4(z);
+        double s = f.mul(double(float(q[8]) / 4096.0f), qq), t = f.mul(double(float(q[9]) / 4096.0f), qq);
+        double w = f.mul(double(float(q[10]) / 4096.0f), qq);
+        if (!f.bad) {
+            // (z below 0: VU1's sign set and exponent not 0; a result VU1 would make +-0 is bad above)
+            clip = !(fabs(rx) <= 2047.0 && fabs(ry) <= 2047.0) || z < 0.0;
+            stq[0] = float(s);
+            stq[1] = float(t);
+            stq[2] = float(w);
+            return;
+        }
+    }
+    nd_plan_vertex_vu(q, vm, xyz, stq, clip);
+}
+
+void nd_plan_vertex(const int32_t *q, const float *vm, int32_t xyz[3], float stq[3], bool &clip) {
+    nd_plan_vertex(q, vm, xyz, stq, clip, nd_fast_matrix(vm));
+}
+
+// nd_plan's work: the batch's corners (fog: the vertex's number in the batch; RGB without the
+// record)
+void nd_plan_batch(const RdMeshData &m, const RdBatch &b, const float *vm, uint64_t offset, uint32_t gouraud,
+                   std::vector<Vtx> &corners) {
     int32_t ox = int32_t(bits(offset, 0, 16)), oy = int32_t(bits(offset, 32, 16));
     Vtx v[N_ND_MAX];
     bool clip[N_ND_MAX];
+    gsn_stats.nd_plan_vertices += b.count;
+    bool vm_ok = nd_fast_matrix(vm);
     for (uint32_t k = 0; k < b.count; k++) {
         const int32_t *q = &m.vertices[(b.first + k) * 16];
         int32_t xyz[3];
         float stq[3];
-        nd_plan_vertex(q, vm, xyz, stq, clip[k]);
+        nd_plan_vertex(q, vm, xyz, stq, clip[k], vm_ok);
         v[k].x = float(int32_t(uint32_t(xyz[0]) & 0xFFFF) - ox) / 16.0f;
         v[k].y = float(int32_t(uint32_t(xyz[1]) & 0xFFFF) - oy) / 16.0f;
         v[k].z = uint32_t(xyz[2] >> 4) & 0xFFFFFF;
@@ -275,7 +395,7 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
         v[k].t = stq[1];
         v[k].q = stq[2];
     }
-    uint32_t gouraud = ((prim >> 3) & 1) ? ND_CORNER_GOURAUD : 0;
+    corners.clear();
     for (size_t i = 0; i + 2 < b.triangles.size(); i += 3) {
         uint32_t t[3] = {b.triangles[i], b.triangles[i + 1], b.triangles[i + 2]};
         uint32_t kick = t[2];
@@ -288,12 +408,55 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
             if (!gouraud) {
                 w.rgba = v[kick].rgba; // (flat: the kick's colour, as add_triangle has it)
             }
-            w.fog = float(base + b.first + t[j]);
-            w.rgba |= (kick - t[j]) | gouraud | record << ND_CORNER_DRAW_SHIFT;
-            gs->verts.push_back(w);
-            if (interp.active) {
-                interp.vsrc.push_back({GSN_IM_NONE, GSN_IM_NONE, GSN_IM_NONE, uint32_t(j)});
-            }
+            w.fog = float(t[j]);
+            w.rgba |= (kick - t[j]) | gouraud;
+            corners.push_back(w);
+        }
+    }
+}
+
+// The batch's triangles planned on the CPU into gs->verts (see the top): those VU1 would kick. base: the
+// batch's first vertex in the arena; record: its draw's. A batch planned already by the same vertex
+// matrix (the camera standing still; the frame drawn again for a picture between) is taken as it was:
+// nd.planned keeps each batch's last plan, its corners' fog the vertex's number in the batch and their
+// RGB without the record.
+void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t prim, uint32_t base, uint32_t record) {
+    uint64_t offset = gs->reg[R_XYOFFSET_1 + ((prim >> 9) & 1)];
+    uint32_t gouraud = ((prim >> 3) & 1) ? ND_CORNER_GOURAUD : 0;
+    if (nd.planned.size() >= ND_PLANNED_MAX) {
+        nd.planned.clear();
+    }
+    NdPlannedPair &pair = nd.planned[uint64_t(m.id) << 20 | uint64_t(&b - m.batches.data())];
+    auto same = [&](const NdPlanned &e) {
+        return e.data == m.vertices.data() && e.offset == offset && e.gouraud == gouraud && memcmp(e.vm, vm, sizeof(e.vm)) == 0;
+    };
+    uint32_t which = same(pair.plan[0]) ? 0 : same(pair.plan[1]) ? 1 : 2;
+    if (which == 2) {
+        which = pair.older;
+    }
+    pair.older = which ^ 1;
+    NdPlanned &e = pair.plan[which];
+    if (!same(e)) {
+        e.data = m.vertices.data();
+        e.offset = offset;
+        e.gouraud = gouraud;
+        memcpy(e.vm, vm, sizeof(e.vm));
+        nd_plan_batch(m, b, vm, offset, gouraud, e.corners);
+    } else {
+        gsn_stats.nd_plan_reused += b.count;
+    }
+    size_t at = gs->verts.size(), n = e.corners.size();
+    gs->verts.resize(at + n);
+    Vtx *out = gs->verts.data() + at;
+    for (size_t i = 0; i < n; i++) {
+        Vtx w = e.corners[i];
+        w.fog = nd_corner_vertex(base + b.first + uint32_t(w.fog));
+        w.rgba |= record << ND_CORNER_DRAW_SHIFT;
+        out[i] = w;
+    }
+    if (interp.active) {
+        for (size_t i = 0; i < n; i++) {
+            interp.vsrc.push_back({GSN_IM_NONE, GSN_IM_NONE, GSN_IM_NONE, uint32_t(i % 3)});
         }
     }
 }
@@ -389,10 +552,10 @@ void nd_draw(uint64_t value) {
                 gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
             gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
-            // the strip's triangles join the batch (a batch of the PS2 path's or of other buffers drawn
-            // first)
-            if (!gs->verts.empty() && (!nd.pending || nd.batch_arena != nd.arena.buffer.get() ||
-                                       nd.batch_draws != nd.draws.buffer.get())) {
+            // the strip's triangles join the batch, the PS2 path's corners in it too (a batch of other
+            // buffers is drawn first; and in a picture between, a batch of the PS2 path's: nd_kick)
+            if (!gs->verts.empty() && ((interp.active && !nd.pending) || (nd.pending && (nd.batch_arena != nd.arena.buffer.get() ||
+                                                                                       nd.batch_draws != nd.draws.buffer.get())))) {
                 flush_batch();
             }
             uint32_t eprim = effective_prim();
@@ -400,8 +563,12 @@ void nd_draw(uint64_t value) {
                 gs->batch_prim = eprim;
                 gs->batch_sprites = false;
             }
-            nd_plan(*mesh, b, k.vertex, eprim, base, record);
-            nd.pending = !gs->verts.empty();
+            size_t before = gs->verts.size();
+            {
+                Timer plan(gsn_stats.ns_nd_plan);
+                nd_plan(*mesh, b, k.vertex, eprim, base, record);
+            }
+            nd.pending = nd.pending || gs->verts.size() > before;
             nd.batch_arena = nd.arena.buffer.get();
             nd.batch_draws = nd.draws.buffer.get();
             gsn_stats.nd_batches++;
@@ -469,11 +636,37 @@ void nd_skip(uint32_t address) {
     }
 }
 
-// A vertex kick of the PS2 path's while native corners are pending: they are drawn first
+// A vertex kick of the PS2 path's while native corners are pending. In a frame its triangle joins them,
+// as on the PS2 path (the batch is decided once, as the PS2 path's, and drawn in a call a kind:
+// nd_draw_range; split, its runs and blending could be decided otherwise: map 009 at 4x, a pixel of a
+// seam a level apart in onoff mode). In a picture between, the native corners are drawn first: the PS2
+// path's are then the GPU's (gs_replay_corners.comp), from a vertex buffer of their own.
 void nd_kick() {
-    if (nd.pending) {
+    if (nd.pending && interp.active) {
         flush_batch();
     }
+}
+
+// (flush_batch's draw call: n corners from first, of a pass of the run whose vertices start at gs->verts[run],
+// with the program base, the GS's.) A batch with native corners: each stretch of one kind in its own call,
+// in order, the native ones with nd_000.vert (nd_program)
+void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t run) {
+    if (!nd.active) {
+        c.draw(n, first);
+        return;
+    }
+    const Vtx *v = gs->verts.data() + run;
+    for (uint32_t end = first + n; first < end;) {
+        bool native = nd_corner(v[first]);
+        uint32_t to = first + 3;
+        while (to < end && nd_corner(v[to]) == native) {
+            to += 3;
+        }
+        c.set_program(native ? nd_program(base) : base);
+        c.draw(to - first, first);
+        first = to;
+    }
+    c.set_program(base);
 }
 
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
