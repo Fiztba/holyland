@@ -9,7 +9,7 @@
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa", "native_2d": "smooth",
-                    "native_colour": "exact", "native_layer_z": "tolerant", "native_draw": "off",
+                    "native_colour": "exact", "native_layer_z": "tolerant", "native_draw": "off", "native_sky": "modern",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -77,6 +77,7 @@ PortSettings port_settings = {
     .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
     .native_2d = 1, /* GSN_2D_SMOOTH */
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
+    .native_sky = PORT_SKY_MODERN,
 };
 
 static int active;
@@ -418,6 +419,13 @@ void port_settings_load(void) {
         }
     }
     {
+        const char *sky = read_string(display, "native_sky");
+
+        if (sky != NULL) {
+            s->native_sky = strcmp(sky, "ps2") == 0 ? PORT_SKY_PS2 : PORT_SKY_MODERN;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -512,6 +520,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_layer_z_forced) {
         port_options.native_layer_z = s->native_layer_z;
+    }
+    if (!port_options.native_sky_forced) {
+        port_options.native_sky = s->native_sky;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -653,6 +664,7 @@ void port_settings_save(void) {
     put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
+    put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

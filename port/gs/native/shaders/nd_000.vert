@@ -77,6 +77,7 @@ layout(set = 2, binding = 1, std430) readonly buffer Draws {
 #define ND_C_MODEL 4
 #define ND_C_EYE 8
 #define ND_C_WAVE 16
+#define ND_C_FAR 32
 
 #ifdef ND_ORACLE
 // The vertex oracle (nd_000_oracle.vert, built from this with ND_ORACLE: gsn_nd_oracle.inc): what each
@@ -314,6 +315,9 @@ void main() {
             uint k = kick - i;
             gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
         }
+    }
+    if ((d.info.w & ND_C_FAR) != 0) {
+        z = 0u; // at the far plane (the modern sky, P3-2: the Z buffer's clear value, GEQUAL)
     }
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
     float fog = float((w16 >> 4) & 0xFFu);

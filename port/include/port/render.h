@@ -143,6 +143,10 @@ typedef struct {
 /* the game's float code rounds to nearest (--fpu-round nearest), not toward zero as the EE's FPU: for what
    the native draw does in the game's floats (RD_PROGRAM_RIPPLE) */
 #define RD_DRAW_ROUND_NEAREST 0x2u
+/* (program 0x000) at the far plane: every corner's Z is 0, the Z buffer's clear value (GEQUAL: behind everything
+   drawn, before or after it), where its place, fog, colour and ST are its own. The modern sky (--sky modern,
+   game/native_draw/nd_sky.c; P3-2) */
+#define RD_DRAW_FAR_Z 0x4u
 
 /* ---- Screen passes (P7: docs/port/NATIVE_DRAW.md 1.3) ------------------------------------------
    A full-screen pass of GameLoop_DrawFrame's (the brightness, a tint, a fill or fade, the flicker filter,

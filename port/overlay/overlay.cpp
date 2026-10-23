@@ -1139,7 +1139,7 @@ void debug_page() {
             const char *what;
         } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."},
                      {"Map records", PORT_ND_MAP, "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords) but the sky."},
-                     {"Sky", PORT_ND_SKY, "The sky's dome (the map record with flag bit 31), at the feet with its real Z (--sky ps2)."},
+                     {"Sky", PORT_ND_SKY, "The sky's dome (the map record with flag bit 31), drawn as the setting below says."},
                      {"Entities", PORT_ND_SKINNED, "Enemies and NPCs (Entity_DrawAll, the draw list)."},
                      {"Arm", PORT_ND_ARM, "The arm, the held weapon and its trail (Player_DrawArm)."},
                      {"Map objects", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha, MapObject_DrawAll)."},
@@ -1168,6 +1168,26 @@ void debug_page() {
         ImGui::SameLine();
         if (ImGui::Button("None (off)"))
             kinds_on = 0;
+        {
+            // (--sky, settings.json display.native_sky: game/native_draw/nd_sky.c)
+            static const char *const skies[] = {"PS2 (at the feet, its real distance)", "Modern (around the eye, behind everything)"};
+            int sky = port_options.native_sky == PORT_SKY_PS2 ? 0 : 1;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 20.0f);
+            if (ImGui::Combo("Native sky", &sky, skies, 2)) {
+                port_options.native_sky = sky == 0 ? PORT_SKY_PS2 : PORT_SKY_MODERN;
+                port_settings.native_sky = port_options.native_sky;
+                changed();
+            }
+            tooltip("With the sky drawn natively (Sky above): how.\nModern: the dome is centred on the eye and drawn "
+                    "behind everything, as a modern\ngame's sky: what lies beyond it shows (the tops of far hills on "
+                    "a few maps).\nWhere the game draws other things before the sky (maps 000 and 004) it stays "
+                    "the PS2's.\nPS2: the dome at the feet with its real distance, as the PS2 draws it: it hides\n"
+                    "what lies beyond it. Applies at once. (--sky modern|ps2)");
+            if (port_options.native_sky != port_settings.native_sky) {
+                ImGui::SameLine();
+                ImGui::TextColored(colour_note, "(for this run: command line)");
+            }
+        }
         const char *compares[] = {"Off", "Both queued, native drawn", "Both queued, PS2 path drawn"};
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
         ImGui::Combo("Compare", &compare, compares, 3);

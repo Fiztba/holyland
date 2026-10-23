@@ -50,6 +50,7 @@ typedef struct {
     int native_layer_z;    /* the native GS's Z: 0 ps2, 1 tolerant (port_options.native_layer_z) */
     int native_draw;       /* native draw, the whole path: 0 off (the PS2 path), 1 every accepted kind
                               (port_options.native_draw = PORT_ND_ACCEPTED; docs/port/NATIVE_DRAW.md) */
+    int native_sky;        /* the native sky: PORT_SKY_PS2 or PORT_SKY_MODERN (port_options.native_sky) */
     int presenter;         /* how the picture reaches the window, from the next start: PORT_PRESENTER_ */
     /* Audio */
     int volume;            /* 0 to 100 */

@@ -154,6 +154,10 @@ typedef struct {
        tests only, the packet chain sent and waited for at once (no race with the next frame's update) */
     int native_wave_uvs;
     int test_dma_wait;
+    /* --sky (port_native_sky(), port/include/port/host.h): how the native sky is drawn, PORT_SKY_*; settings.json
+       display.native_sky, live from the overlay's Debug page */
+    int native_sky;
+    int native_sky_forced; /* --sky: this run's, whatever settings.json says */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
