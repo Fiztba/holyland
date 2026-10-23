@@ -241,6 +241,7 @@ struct Sa {
     // programs: [SA_VS_*][a cut-out shaded at every sample]
     Shader *vs = nullptr, *vs_280 = nullptr, *vs_700 = nullptr;
     Program *programs[3][2] = {};
+    Program *programs_in[3][2] = {}; // (T8) [SA_VS_*][multisampled]: blending from the pass's scratch (gs_in*.frag)
     Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
     // (T2) the scene's scale (its pixels a GS pixel is, across and down) and samples as its targets have them now,
@@ -1338,7 +1339,8 @@ ImageHandle sa_image(uint32_t width, uint32_t height, VkFormat format, uint32_t 
     ImageCreateInfo info = ImageCreateInfo::render_target(width, height, format);
     info.samples = VkSampleCountFlagBits(samples);
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                 (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+                 (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                        : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT); // (T8: blending in the pass)
     info.layout = ImageLayout::General;
     info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
     return gs->device->create_image(info, nullptr);
@@ -1371,6 +1373,12 @@ void sa_programs() {
     frag.sets[0].fp_mask = (1u << 1) | (1u << 3);
     for (int b : {0, 1, 2, 3}) {
         frag.sets[0].meta[b].array_size = 1;
+    }
+    for (int k = 0; k < 3; k++) {
+        if (gs->program_in && gs->program_in_ms) {
+            sa.programs_in[k][0] = gs->device->request_program(vss[k], gs->program_in->get_shader(ShaderStage::Fragment));
+            sa.programs_in[k][1] = gs->device->request_program(vss[k], gs->program_in_ms->get_shader(ShaderStage::Fragment));
+        }
     }
     if (sample_shading) {
         Shader *fs = gs->device->request_shader(gsn_spv_sa_sample_frag, sizeof(gsn_spv_sa_sample_frag), &frag);
@@ -1772,8 +1780,8 @@ void sa_release() {
 }
 
 // The scene's render pass, unless it is under way
-void sa_begin_pass() {
-    if (gs->in_pass && gs->pass_color == &SA_MARKER) {
+void sa_begin_pass(bool scratch = false) {
+    if (gs->in_pass && gs->pass_color == &SA_MARKER && (gs->pass_scratch || !scratch)) {
         return;
     }
     {
@@ -1789,7 +1797,12 @@ void sa_begin_pass() {
     rp.depth_stencil = &sa.depth->get_view();
     rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
     RenderPassInfo::Subpass subpass;
-    if (sa.samples > 1) {
+    if (scratch) {
+        // (T8: the copy a run blends from, in the pass: colour attachment 1, neither loaded nor kept)
+        rp.num_color_attachments = 2;
+        rp.color_attachments[1] = &blend_scratch(*sa.color).get_view();
+        scratch_subpass(rp, subpass, sa.samples > 1);
+    } else if (sa.samples > 1) {
         msaa_subpass(rp, subpass);
     }
     full_barrier();
@@ -1798,7 +1811,7 @@ void sa_begin_pass() {
     gs->pass_color = const_cast<Target *>(&SA_MARKER);
     gs->pass_depth = const_cast<Target *>(&SA_MARKER);
     gs->pass_ms = sa.samples > 1;
-    gs->pass_scratch = false;
+    gs->pass_scratch = scratch;
     gs->pass_area = false;
     gsn_stats.passes++;
 }
@@ -1961,7 +1974,8 @@ bool sa_shadow_batch() {
 // fine, and the tie's slack); a screen pass in a picture between with nd_pass.vert, as nd_draw_range has it (the
 // batch's corners are one vertex buffer).
 void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end); // (gsn_nd_pass.inc)
-void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first) {
+// (in_pass, T8: the scene's own corners blend from the render pass's scratch, gs_in.frag / gs_in_ms.frag)
+void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass = false) {
     const Vtx *v = gs->verts.data();
     const Buffer *bound = nullptr;
     for (uint32_t end = first + n; first < end;) {
@@ -1986,8 +2000,10 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first) {
                 // (T2) the water's corners, hosted's nd_water.vert with gs_zclamp.frag (its Z kept fine, the slack)
                 c.set_program(ndw_program(sample && gs->program_zclamp_sample ? gs->program_zclamp_sample : gs->program_zclamp));
             } else {
+                int vs = kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000;
                 c.set_program(ndw_batch() ? sat_water_program(sample) // (T3: the reflection's water, sa_water.vert)
-                                          : sa.programs[kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000][sample ? 1 : 0]);
+                              : in_pass   ? sa.programs_in[vs][sa.samples > 1 ? 1 : 0]
+                                          : sa.programs[vs][sample ? 1 : 0]);
             }
             if (want && want != bound) {
                 c.set_storage_buffer(2, 1, *want);
@@ -2287,14 +2303,18 @@ bool sa_draw_batch(int *why) {
         push.misc |= M_ZFINE;
         ps2_bias = 0.5f;
     }
-    // the rows, the scissor; triangles wholly outside it left out (not in a picture between: the GPU moves them)
+    // the rows, the scissor; triangles wholly outside it left out. In a picture between the GPU moves native draw's
+    // corners: one is left out only when outside at t 0 too (nd_box_at_0, as flush_batch has it; the models', the
+    // strip's and the water's are kept, the GS's own corners too). Without this a batch of map records reaching far
+    // past a widescreen frame's edge (the far save: 3,392 triangles, 85 in view) was drawn in a picture between in
+    // 117 runs of its own, each blending from a copy of the whole scene (T8).
     uint32_t scale_x = sa.sx, scale_y = sa.sy; // (the scene's: T2)
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
         gs->verts.clear();
         return true;
     }
-    if (!interp.active) {
+    if (!interp.active || (nd.active && !nd.pass_active && !gpu_corners)) {
         float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
         size_t kept = 0, n = gs->verts.size();
         Vtx *v = gs->verts.data();
@@ -2302,8 +2322,19 @@ bool sa_draw_batch(int *why) {
             float tx0 = std::min(v[i].x, std::min(v[i + 1].x, v[i + 2].x)), tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
             float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y)), ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
             if (tx1 < cx0 || tx0 > cx1 || ty1 < cy0 || ty0 > cy1) {
+                if (!interp.active) {
+                    continue;
+                }
+                bool native = nd_corner_kind(v[i]) != ND_KIND_PS2 && nd_corner_kind(v[i + 1]) != ND_KIND_PS2 &&
+                              nd_corner_kind(v[i + 2]) != ND_KIND_PS2;
+                int32_t box[4] = {int32_t(floorf(tx0)) - 1, int32_t(floorf(ty0)) - 1, int32_t(ceilf(tx1)) + 2, int32_t(ceilf(ty1)) + 2};
+                if (!native || !nd_box_at_0(uint32_t(i), 3, box) ||
+                    !(float(box[2]) < cx0 || float(box[0]) > cx1 || float(box[3]) < cy0 || float(box[1]) > cy1)) {
+                    goto keep; // (where it is at t 0 is not known here, or is in view)
+                }
                 continue;
             }
+        keep:
             if (kept != i) {
                 v[kept] = v[i];
                 v[kept + 1] = v[i + 1];
@@ -2474,13 +2505,31 @@ bool sa_draw_batch(int *why) {
     }
     sa.last_shadow = shadow;
     sa_stats.shadow_batches += shadow;
+    // (T8) Blending in the shader from the destination copied in the render pass (flush_batch's COPY_IN_PASS: the
+    // pass's scratch attachment, read as an input attachment), not from a copy or an MSAA resolve between passes:
+    // each run's copy ended the pass, with barriers around the copy, about 160 times a picture on map 009's poison
+    // pond (its miners and zombies, As above 0x80, in the frame and in the reflection). Only the scene's own corners
+    // (sa_000, sa_280 and sa_700 with gs_in.frag); a multisampled scene's samples are resolved into the scratch by
+    // pass_resolve.frag (each channel the mean, half up; NVIDIA's vkCmdResolveImage rounds a half either way: a level,
+    // where the two samples differ by an odd amount). KF4_SA_BLEND_COPY=1 (tests): the copies between passes.
+    static int blend_copy = -1;
+    if (blend_copy < 0) {
+        blend_copy = getenv("KF4_SA_BLEND_COPY") && atoi(getenv("KF4_SA_BLEND_COPY")) > 0;
+    }
+    bool in_pass = shader_blend && !blend_copy && !per_sample && nd.active && !nd.pass_active && !nd.strip_active &&
+                   !sa.gs3d && !sa.gs_water && !ndw_batch() && sa.programs_in[0][sa.samples > 1 ? 1 : 0] &&
+                   !wide(*sa.color);
+    for (size_t t = 0; in_pass && t < gs->verts.size(); t++) {
+        in_pass = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2;
+    }
+    bool copied_in_pass = false;
     for (size_t r = 0; r + 1 < runs.size(); r++) {
         uint32_t first = runs[r], count = runs[r + 1] - runs[r];
         if (shader_blend) {
             // the run's pixels as they are now, into the copy it blends with
             int32_t box[4] = {0, 0, int32_t(color->width), int32_t(color->height)};
-            if (!interp.active) {
-                run_box(first, count, box);
+            if (!interp.active || (nd.active && !nd.pass_active && !gpu_corners)) {
+                run_box(first, count, box); // (a picture between's: at t 0 too, nd_box_at_0's, whole where not known)
             }
             uint32_t W = sa.color->get_width(), H = sa.color->get_height();
             int32_t x0 = std::max(box[0], 0) * int32_t(scale_x), y0 = std::max(box[1], 0) * int32_t(scale_y);
@@ -2489,7 +2538,34 @@ bool sa_draw_batch(int *why) {
                 sa.copy->get_format() != sa.color->get_format()) {
                 sa.copy = sa_image(W, H, sa.color->get_format(), 1);
             }
-            if (bx1 > x0 && by1 > y0) {
+            if (bx1 > x0 && by1 > y0 && in_pass) {
+                // (T8) in the render pass: the run's pixels into the pass's scratch, as flush_batch's COPY_IN_PASS
+                sa_begin_pass(true);
+                Cmd &c = cmd();
+                in_pass_barrier();
+                c.set_opaque_state();
+                c.set_program(sa.samples > 1 ? gs->program_pass_resolve : gs->program_pass_copy);
+                c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+                c.set_cull_mode(VK_CULL_MODE_NONE);
+                c.set_depth_test(false, false);
+                c.set_blend_enable(false);
+                c.set_color_write_mask(0xF0); // (the scratch only)
+                c.set_viewport({0.0f, 0.0f, float(W), float(H), 0.0f, 1.0f});
+                c.set_scissor({{x0, y0}, {uint32_t(bx1 - x0), uint32_t(by1 - y0)}});
+                c.set_input_attachments(0, 4);
+                if (sa.samples > 1) {
+                    struct {
+                        int32_t samples;
+                        float scale;
+                    } pp = {int32_t(sa.samples), 255.0f};
+                    c.push_constants(&pp, 0, sizeof(pp));
+                }
+                c.draw(3);
+                in_pass_barrier();
+                gsn_stats.blend_copies_in_pass++;
+                gsn_stats.copy_bytes += uint64_t(bx1 - x0) * uint64_t(by1 - y0) * 4;
+                copied_in_pass = true;
+            } else if (bx1 > x0 && by1 > y0) {
                 Why why_(GSN_WHY_BLEND);
                 if (sa.samples > 1) {
                     msaa_resolve(*sa.copy, *sa.color, {x0, y0, 0}, {uint32_t(bx1 - x0), uint32_t(by1 - y0), 1});
@@ -2503,8 +2579,9 @@ bool sa_draw_batch(int *why) {
                 gsn_stats.copy_bytes += uint64_t(bx1 - x0) * uint64_t(by1 - y0) * 4;
             }
         }
-        bool fresh = !(gs->in_pass && gs->pass_color == &SA_MARKER);
-        sa_begin_pass();
+        bool fresh = !(gs->in_pass && gs->pass_color == &SA_MARKER) || copied_in_pass;
+        copied_in_pass = false;
+        sa_begin_pass(in_pass);
         Cmd &c = cmd();
         if (fresh || r == 0) {
             c.set_opaque_state();
@@ -2516,7 +2593,11 @@ bool sa_draw_batch(int *why) {
             c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
             c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
             c.set_texture(0, 1, st.target_view ? *st.target_view : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-            c.set_texture(0, 3, shader_blend ? sa.copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+            if (in_pass) {
+                c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
+            } else {
+                c.set_texture(0, 3, shader_blend ? sa.copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+            }
             uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
             if (st.want_clut) {
                 memcpy(clut_data, st.clut, sizeof(st.clut));
@@ -2563,7 +2644,7 @@ bool sa_draw_batch(int *why) {
                               sa.stencil_gen, 0xFF);
             }
             c.push_constants(&p, 0, sizeof(p));
-            sa_draw_range(c, per_sample, count, first);
+            sa_draw_range(c, per_sample, count, first, in_pass);
             sa_stats.draws++;
             gsn_stats.draws++;
         }
