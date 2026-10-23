@@ -38,7 +38,8 @@ void gs_write(uint32_t address, uint64_t value);
 // matrix, the light directions and the point lights as VU1's set-up leaves them (nd_draw: its arithmetic)
 struct NdConst {
     float vertex[16];    // VU1 0x14-0x17: world to screen by the part's matrix
-    float model[16];     // (pictures between: the part to the world, the world to view, view to screen)
+    float model[16];     // the part to the world, the world to view, view to screen (pictures between:
+                         // the shader takes the screen's sx, sy, cx, cy and cz; the others are for P1-4 and later)
     float view[16];
     float screen[16];
     float light_dir[16]; // vf05-vf07: the light directions by the part's rotation (a column each)
@@ -46,11 +47,13 @@ struct NdConst {
     float fog[4];
     float point_pos[16]; // in the model's space, as VU1's set-up leaves them; w the falloff
     float point_col[16];
+    float obj[4];        // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     int32_t info[4];     // the point lights, XYOFFSET's X and Y (12.4), ND_C_* flags
 };
-static_assert(sizeof(NdConst) == 34 * 16, "NdConst is nd_000.vert's Draw");
+static_assert(sizeof(NdConst) == 35 * 16, "NdConst is nd_000.vert's Draw");
 enum : int32_t {
-    ND_C_MOVING = 0x1, // a picture between: the camera moved by the picture's (set 1's Picture)
+    ND_C_MOVING = 0x1, // a picture between: moved by the picture's camera (set 1's Picture), see nd_section
+    ND_C_OBJ = 0x2,    // ... and with its model, t of the way from its place in the frame before (obj)
 };
 // A corner (Vtx): its fog the vertex's number in the arena; its RGB the kick's number less the vertex's
 // (bits 0-5), IIP (bit 6) and the draw's record (bits 7-23); its alpha the vertex's (flush_batch's)
@@ -65,6 +68,25 @@ struct NdBuffer {
     uint32_t used = 0, room = 0; // vertices or records
 };
 
+// A draw's identity (RdDraw's kind and id: stable from frame to frame)
+struct NdKey {
+    uint32_t k[4];
+    bool operator==(const NdKey &o) const {
+        return memcmp(k, o.k, sizeof(k)) == 0;
+    }
+};
+struct NdKeyHash {
+    size_t operator()(const NdKey &key) const {
+        uint64_t h = 0xcbf29ce484222325ull;
+        for (uint32_t v : key.k) {
+            h = (h ^ v) * 0x100000001b3ull;
+        }
+        return size_t(h ^ (h >> 29));
+    }
+};
+enum { ND_SECTION_NONE, ND_SECTION_WORLD, ND_SECTION_REFLECT, ND_SECTION_OTHER };
+const float ND_MAX_MOVE = 400.0f; // (frame_interp.c's INTERP_MAX_MOVE: more is not a move but a jump)
+
 struct NdState {
     bool active = false;   // the batch flush_batch is drawing is of native corners
     bool pending = false;  // gs->verts holds native corners
@@ -78,6 +100,15 @@ struct NdState {
     Shader *vs = nullptr;
     BufferHandle dummy;
     std::vector<std::shared_ptr<const RdMeshData>> fetched;
+    // Pictures between (--frame-rate). Where the frame's marks say the draws are (frame_interp.c's
+    // sections, PORT_GS_REG_FRAME_INTERP): only the world's and the reflection's move with the camera, as
+    // the PS2 path's vertices do. And each draw's part's place (its matrix's translation) by its identity,
+    // in this frame and the one before: a part that moved between them (the sky, which follows the
+    // player: map records with flags bit 31) is drawn t of the way between its two places, as
+    // frame_interp.c's object_between draws the PS2 path's sky.
+    int section = 0;       // ND_SECTION_*
+    uint32_t serial = 0xFFFFFFFFu; // the frame whose draws `now` holds (RD_ND_FRAME's)
+    std::unordered_map<NdKey, std::array<float, 3>, NdKeyHash> now, before;
 } nd;
 volatile int nd_mode = GSN_NATIVE_DRAW_NATIVE; // (gsn_set_native_draw)
 
@@ -221,8 +252,13 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
         v[k].x = float(int32_t(uint32_t(xi) & 0xFFFF) - ox) / 16.0f;
         v[k].y = float(int32_t(uint32_t(yi) & 0xFFFF) - oy) / 16.0f;
         v[k].z = uint32_t(zi >> 4) & 0xFFFFFF;
-        int32_t a = q[15];
-        v[k].rgba = uint32_t(a < 0 ? 0 : a > 255 ? 255 : a) << 24;
+        // the alpha as VU1 leaves it (1 * the vertex's, at most 255, FTOI0) and the GS takes it: its low 8
+        // bits, so a negative alpha wraps (map 000's floor layers have vertices at -1400: 0x88). Clamped
+        // at 0, a layer's batch had an As range of 0-128 where the PS2 path's had 0-218, and flush_batch
+        // blended it with Vulkan's blending where the PS2 path's took the shader's: a band of the floor a
+        // level or two apart.
+        int32_t a = std::min(q[15], 255);
+        v[k].rgba = (uint32_t(a) & 0xFF) << 24;
         v[k].s = vu_mul(float(q[8]) / 4096.0f, qq);
         v[k].t = vu_mul(float(q[9]) / 4096.0f, qq);
         v[k].q = vu_mul(float(q[10]) / 4096.0f, qq);
@@ -299,7 +335,25 @@ void nd_draw(uint64_t value) {
     k.info[0] = lights;
     k.info[1] = int32_t(bits(offset, 0, 16));
     k.info[2] = int32_t(bits(offset, 32, 16));
-    k.info[3] = interp.active ? ND_C_MOVING : 0;
+    // pictures between: the world and the reflection move with the picture's camera; a part of the world
+    // that moved since the frame before (the sky) also with its model, as frame_interp.c's object_between
+    NdKey key = {{d.kind, d.id[0], d.id[1], d.id[2]}};
+    memset(k.obj, 0, sizeof(k.obj));
+    k.info[3] = 0;
+    if (!interp.active) {
+        nd.now[key] = {m[12], m[13], m[14]};
+    } else if (nd.section == ND_SECTION_WORLD || nd.section == ND_SECTION_REFLECT) {
+        k.info[3] = ND_C_MOVING;
+        auto it = nd.before.find(key);
+        if (nd.section == ND_SECTION_WORLD && it != nd.before.end()) {
+            float move[3] = {m[12] - it->second[0], m[13] - it->second[1], m[14] - it->second[2]};
+            float d2 = move[0] * move[0] + move[1] * move[1] + move[2] * move[2];
+            if (d2 > 0.0f && d2 < ND_MAX_MOVE * ND_MAX_MOVE) {
+                memcpy(k.obj, move, sizeof(move));
+                k.info[3] |= ND_C_OBJ;
+            }
+        }
+    }
     memcpy(nd.draws.map + size_t(record) * sizeof(NdConst), &k, sizeof(k));
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
@@ -353,7 +407,31 @@ void nd_register(uint64_t value) {
         break;
     case RD_ND_FRAME:
         rd_consumer_frame(value);
+        nd.section = ND_SECTION_NONE;
+        // (a frame's packets drawn again, for a picture between or exact, are the same frame)
+        if (!interp.active && (uint32_t(value) & 0xFFFFFF) != nd.serial) {
+            nd.serial = uint32_t(value) & 0xFFFFFF;
+            nd.before.swap(nd.now);
+            nd.now.clear();
+        }
         break;
+    }
+}
+
+// PORT_GS_REG_FRAME_INTERP (game/frame_interp.c's marks, as frame_interp.c's mark() reads them): where
+// the draws after it are. The world (projection 0, mode 0) and the reflection (mode 1) move with the
+// camera in a picture between; the arm, models before the eye and what follows the world stay.
+void nd_mark(uint64_t value) {
+    uint32_t index = uint32_t(value >> 32) & 0xFF, v = uint32_t(value);
+    if (index != PORT_FRAME_INTERP_HEADER) {
+        return;
+    }
+    if (v == PORT_FRAME_INTERP_END || v == PORT_FRAME_INTERP_ARM) {
+        nd.section = ND_SECTION_OTHER;
+    } else if ((v & 0xFF) != 0) {
+        nd.section = (v >> 8) == 1 ? ND_SECTION_REFLECT : ND_SECTION_OTHER;
+    } else {
+        nd.section = (v >> 8) == 2 ? ND_SECTION_OTHER : ND_SECTION_WORLD;
     }
 }
 

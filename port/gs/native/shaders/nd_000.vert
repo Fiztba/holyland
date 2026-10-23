@@ -16,8 +16,14 @@
 // result rounded to nearest, moved a unit toward zero where its exact error says it went past; the
 // division made exact). The draw's constants come as VU1's set-up leaves them (gsn_native_draw.inc,
 // nd_draw: the vertex matrix, the lights). Denormals are taken as the GPU has them (VU1 reads them as 0;
-// the game's numbers do not come near them). In a picture between the camera moves and the place is
-// made in plain floats.
+// the game's numbers do not come near them).
+// In a picture between (ND_C_MOVING) the place is moved as gs_replay.comp moves the PS2 path's vertices,
+// so that the two meet: from VU1's place (X, Y, Z exact, as in the frame) by the change of camera and
+// the part's own move, seen from where the vertex is in the frame's view (its X, Y and 1 / q, as
+// frame_interp.c takes the PS2 path's; plain floats: the move's rounding, not the place's; no move, no
+// change); S, T and Q by the change of depth; the fog and the
+// colour as in the frame. A triangle is not drawn when its kick or one of the two before it goes behind
+// the camera or past the guard band (the ADC frame_interp.c gives such a vertex).
 // Which triangles are drawn (the data's ADC bits, and VU1's clipping) is the CPU's (gsn_native_draw.inc,
 // nd_plan): a corner's fog input is its vertex's number in the arena, and its colour's RGB the kick's
 // number less it (bits 0-5: a flat triangle has the kick's colour), IIP (bit 6) and its draw's record
@@ -34,7 +40,10 @@ layout(location = 3) noperspective out float v_z;
 
 // a picture between's (gs_replay.h's Picture; with nothing moving, a buffer of zeros)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
-    vec4 move[3]; // the frame's view to the picture's: rows of the rotation less the identity, each with its translation
+    vec4 move[3];   // the frame's view to the picture's: rows of the rotation less the identity, each with its translation
+    vec4 mid[3];    // the world to the picture's view: rows of the rotation (and the translation)
+    vec4 screen[2]; // (the frame's projections: the draw has its own)
+    vec4 zt;        // cz (the world's, the reflection's), t, 1 - t
 } pic;
 // the meshes (the arena): four qwords a vertex (position, normal, ST, colour), as VU1 memory had them
 layout(set = 2, binding = 0, std430) readonly buffer Mesh {
@@ -43,14 +52,15 @@ layout(set = 2, binding = 0, std430) readonly buffer Mesh {
 // the draws (gsn_native_draw.inc, NdConst), a record each: matrices a VU qword a column
 struct Draw {
     mat4 vertex;       // VU1 0x14: the set-up's vertex matrix (0x00 by 0x04)
-    mat4 model;        // VU1 0x04: the part to the world (pictures between)
-    mat4 view;         // world to view (pictures between)
-    mat4 screen;       // view to screen (pictures between)
+    mat4 model;        // VU1 0x04: the part to the world (not read yet)
+    mat4 view;         // world to view (not read yet)
+    mat4 screen;       // view to screen (pictures between: sx, sy, cx, cy, cz)
     mat4 light_dir;    // vf05-vf07: the light directions by the part's rotation, a column each
     mat4 light_col;    // VU1 0x10: the light colours, then the ambient
     vec4 fog;          // VU1 0x3C
     vec4 point_pos[4]; // in the model's space, w the falloff
     vec4 point_col[4];
+    vec4 obj;          // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     ivec4 info;        // the point lights, XYOFFSET X and Y (12.4), ND_C_*
 };
 layout(set = 2, binding = 1, std430) readonly buffer Draws {
@@ -58,6 +68,7 @@ layout(set = 2, binding = 1, std430) readonly buffer Draws {
 };
 
 #define ND_C_MOVING 1
+#define ND_C_OBJ 2
 
 Draw d;
 
@@ -151,37 +162,136 @@ uvec4 lit_colour(uint at) {
     return uvec4(c) & 0xFFu;
 }
 
+// A vertex's place as VU1 leaves it: FTOI4 of X, Y and Z (X and Y the GS's 12.4), and q = 1 / w
+struct Place {
+    int x, y, z;
+    float q;
+};
+
+Place vu_place(uint at) {
+    vec4 c = vu_transform(d.vertex, vec4(mesh.q[at * 4u]));
+    Place p;
+    p.q = vu_recip(c.w);
+    p.x = ftoi(vu_mul(c.x, p.q) * 16.0);
+    p.y = ftoi(vu_mul(c.y, p.q) * 16.0);
+    p.z = ftoi(vu_mul(c.z, p.q) * 16.0);
+    return p;
+}
+
+// The GS's Z of a place
+uint gs_z(Place p) {
+    return uint(p.z >> 4) & 0xFFFFFFu;
+}
+
+// n / (dh + dl), the float nearest it: the GPU's quotient, less its remainder's share
+float div_nearest(float n, float dh, float dl) {
+    precise float r = n / dh;
+    for (int i = 0; i < 2; i++) {
+        precise float e = fma(-r, dh, n) - r * dl;
+        r = r + e / dh;
+    }
+    return r;
+}
+
+// (X - cx) / (q sx): a place in the view across, from the screen's (frame_interp.c's (X - cx) depth / sx)
+float view_place(float n, float q, float s) {
+    precise float dh = q * s;
+    precise float dl = fma(q, s, -dh);
+    return div_nearest(n, dh, dl);
+}
+
+// A picture between's place (gs_replay.comp's moved): X and Y 12.4, Z, the depth's change (f), dropped
+struct Moved {
+    int x, y;
+    uint z;
+    float f;
+    bool drop;
+};
+
+Moved moved(uint at, Place p) {
+    Moved r;
+    r.x = p.x & 0xFFFF;
+    r.y = p.y & 0xFFFF;
+    r.z = gs_z(p);
+    r.f = 1.0;
+    r.drop = false;
+    // its place in the frame's view, from its X and Y and its depth 1 / q (frame_interp.c's vertex_view:
+    // the PS2 path's vertices are moved from the same place, and the mirror image's from its own), and
+    // how far the picture moves it: (R - I) v + T, and with its model t of the way from its place in the
+    // frame before (seen from the camera between)
+    // (frame_interp.c works in doubles and hands over floats: each is the float nearest the exact value
+    // here too, the GPU's quotient corrected by its remainder)
+    float depth = div_nearest(1.0, p.q, 0.0);
+    if (!(depth > 0.0) || isinf(depth)) {
+        return r; // (as it is)
+    }
+    vec3 v = vec3(view_place(float(r.x) / 16.0 - d.screen[2].x, p.q, d.screen[0].x),
+                  view_place(float(r.y) / 16.0 - d.screen[2].y, p.q, d.screen[1].y), depth);
+    vec3 dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
+                   dot(pic.move[2].xyz, v) + pic.move[2].w);
+    if ((d.info.w & ND_C_OBJ) != 0) {
+        vec3 e = -d.obj.xyz + d.obj.xyz * pic.zt.z;
+        dm += vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    float mz = v.z + dm.z;
+    if (!(mz > 0.0)) {
+        r.drop = true;
+        return r;
+    }
+    // X = sx m.x / m.z + cx, as VU1's X and how far it moved: sx (m.x / m.z - v.x / v.z); Z = cz + az / m.z,
+    // as VU1's Z less (Z - cz) dm.z / m.z
+    float den = mz * v.z;
+    float nx = float(r.x) / 16.0 + d.screen[0].x * (dm.x * v.z - v.x * dm.z) / den;
+    float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
+    float nz = float(r.z) - (float(r.z) - d.screen[2].z) * dm.z / mz;
+    if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
+        r.drop = true;
+        return r;
+    }
+    r.x = int(floor(nx * 16.0 + 0.5));
+    r.y = int(floor(ny * 16.0 + 0.5));
+    r.z = uint(min(floor(nz + 0.5), 16777215.0));
+    r.f = depth / mz;
+    return r;
+}
+
 void main() {
     uint at = uint(a_vertex);
     uint corner = a_corner.r | a_corner.g << 8 | a_corner.b << 16;
     uint kick = at + (corner & 0x3Fu);
     d = draws[corner >> 7];
-    ivec4 P = mesh.q[at * 4u], N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
-    vec4 pos = vec4(P);
-    vec4 c;
-    if ((d.info.w & ND_C_MOVING) != 0) {
-        // a picture between: seen from its camera (gs_replay.comp's move: m = v + (R - I) v + T)
-        vec4 v = d.view * (d.model * pos);
-        vec3 dm = vec3(dot(pic.move[0].xyz, v.xyz) + pic.move[0].w, dot(pic.move[1].xyz, v.xyz) + pic.move[1].w,
-                       dot(pic.move[2].xyz, v.xyz) + pic.move[2].w);
-        c = d.screen * vec4(v.xyz + dm, 1.0);
-    } else {
-        c = vu_transform(d.vertex, pos);
-    }
-    float q = vu_recip(c.w);
-    vec3 proj = vec3(vu_mul(c.x, q), vu_mul(c.y, q), vu_mul(c.z, q));
+    ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
+    Place p = vu_place(at);
     // the fog: ACC.w = 1 * fog.z, then + fog.w * q; clamped to 0..255
-    float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, q)), 255.0), 0.0);
+    float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, p.q)), 255.0), 0.0);
+    vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
+    vec3 stq = vec3(vu_mul(st.x, p.q), vu_mul(st.y, p.q), vu_mul(st.z, p.q));
 
     // XYZF2 as the GS takes it
-    int xi = ftoi(proj.x * 16.0), yi = ftoi(proj.y * 16.0), zi = ftoi(proj.z * 16.0);
-    uint z = uint(zi >> 4) & 0xFFFFFFu;
+    int xi = p.x, yi = p.y;
+    uint z = gs_z(p);
+    bool gone = false;
+    if ((d.info.w & ND_C_MOVING) != 0) {
+        Moved m = moved(at, p);
+        xi = m.x;
+        yi = m.y;
+        z = m.z;
+        stq *= m.f;
+        gone = m.drop;
+        // (the triangle's kick and the two before it: the same for its three corners)
+        for (uint i = 0u; i < 3u && !gone; i++) {
+            uint k = kick - i;
+            gone = k != at && moved(k, vu_place(k)).drop;
+        }
+    }
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
     float fog = float((w16 >> 4) & 0xFFu);
     vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
+    if (gone) {
+        xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
 
     uvec4 rgba = lit_colour((corner & 0x40u) != 0u ? at : kick);
-    vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
 
     // as gs.vert
     vec2 ndc = (xy + 0.5) * pc.inv_size * 2.0 - 1.0;
@@ -189,6 +299,6 @@ void main() {
     gl_Position = vec4(ndc, depth, 1.0);
     v_z = float(z);
     v_color = vec4(rgba);
-    v_stq = vec3(vu_mul(st.x, q), vu_mul(st.y, q), vu_mul(st.z, q));
+    v_stq = stq;
     v_fog = fog;
 }
