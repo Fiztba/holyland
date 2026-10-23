@@ -38,6 +38,11 @@ typedef struct {
        records and items: --native-draw map,sky,items unless it says otherwise) drawn into the scene's own
        targets (gsn_set_standalone); never saved */
     int renderer_modern;
+    /* --scene-scale, --scene-msaa (P8 T2): with --renderer modern, the scene's own scale (1 to 4; with
+       --native-widescreen and widescreen, 4/3 of it across) and samples (1, 2, 4, 8), apart from the GS's
+       (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */
+    int scene_scale;
+    int scene_msaa;
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
        the default, a swapchain on the native GS's own device (port/platform/present_vk.cpp), with the
        native GS's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the

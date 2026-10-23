@@ -6212,6 +6212,9 @@ void present_scale(ScanoutSlot &sl, const Image &picture) {
     }
 }
 
+bool sa_composite_size(const Shown &s, uint32_t *iw, uint32_t *ih); // (standalone T2: gsn_composite.inc)
+void sa_composite(const Image &dst, const Shown &s);
+
 // The displayed buffer into scanout_image as `mode` says (parity: the lines of this vblank's field; in
 // field mode the buffer is the field's picture, and parity the lines of the woven picture it goes
 // into); with frame, read back into it too. Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has
@@ -6220,6 +6223,7 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     ScanoutImage &so = scanout_image;
     uint32_t lines = mode == SCAN_WEAVE ? s.h * 2 : mode == SCAN_FIELD ? s.h / 2 : s.h;
     uint32_t iw = s.w * s.sx, ih = lines * s.sy;
+    bool composite = mode == SCAN_WHOLE && sa_composite_size(s, &iw, &ih); // (standalone T2: the scene's own scale)
     bool fresh = false;
     int slot = 0;
     ImageHandle before; // (the weave: the picture published last, whose other field's lines are kept)
@@ -6260,7 +6264,11 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     const Image &dst = *so.slots[slot].image;
     switch (mode) {
     case SCAN_WHOLE:
-        copy_lines(dst, s, 0, 1, s.h, 0, 1);
+        if (composite) {
+            sa_composite(dst, s); // (standalone T2)
+        } else {
+            copy_lines(dst, s, 0, 1, s.h, 0, 1);
+        }
         break;
     case SCAN_WEAVE:
         // the field into its own lines, the other field's from the picture before; into both when there
@@ -6932,6 +6940,7 @@ void save_pipeline_cache() {
 }
 
 #include "gsn_standalone.inc" // (P8: the scene drawn into its own targets)
+#include "gsn_composite.inc"  // (P8 T2: the scene at a scale of its own, and the composite)
 
 } // namespace
 
@@ -7261,7 +7270,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     frame->height = h * 2 * sy;
                     ok = 1;
                 }
-            } else if (mode != SCAN_WHOLE || (shown.t && wide(*shown.t->image))) {
+            } else if (mode != SCAN_WHOLE || (shown.t && wide(*shown.t->image)) || sa_composite_size(shown, nullptr, nullptr)) {
                 // (on the GPU, as for the presenter, and read back; --native-colour high's picture so
                 // too, dithered as the window has it)
                 if (want_pixels) {
@@ -7427,6 +7436,12 @@ extern "C" void gsn_set_native_draw(int mode) {
 
 extern "C" void gsn_set_standalone(int on) {
     sa_mode = on; // (taken at the next vblank: gsn_standalone.inc)
+}
+
+extern "C" void gsn_set_scene(int x_scale, int y_scale, int samples) {
+    // (taken when the scene next takes a frame: gsn_standalone.inc, sa_shape)
+    sa_wanted_scale = uint32_t(std::min(std::max(x_scale, 0), GSN_MAX_SCALE_X)) | uint32_t(std::min(std::max(y_scale, 0), 4)) << 8;
+    sa_wanted_samples = uint32_t(std::min(std::max(samples, 0), 8));
 }
 
 extern "C" void gsn_print_standalone_stats(void) {

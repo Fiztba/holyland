@@ -80,6 +80,10 @@ def main():
     p.add_argument("--scale", type=int, default=1)
     p.add_argument("--frame-rate", default="30")
     p.add_argument("--crop")
+    p.add_argument("--first-args", default="", help="more options for the first run only (hosted, ps2, off)")
+    p.add_argument("--second-args", default="", help="more options for the second run only (modern, native, on): "
+                   "e.g. --second-args='--scene-scale 4 --scene-msaa 4' against --first-args='--native-scale 4 "
+                   "--native-msaa 4' with --scale 1 (P8 T2)")
     p.add_argument("--realtime", action="store_true",
                    help="at the game's own speed, not --fast: the pictures between are drawn as on a screen (a "
                         "frame's recording drawn again for each), not only the ones dumped")
@@ -102,6 +106,7 @@ def main():
         runs = [("hosted", ["--native-draw", args.kinds]), ("modern", ["--renderer", "modern", "--native-draw", args.kinds])]
     else:
         runs = [("off", ["--native-draw", "off"]), ("on", ["--native-draw", args.kinds])]
+    runs = [(runs[0][0], runs[0][1] + args.first_args.split()), (runs[1][0], runs[1][1] + args.second_args.split())]
     stats = {}
     for name, extra in runs:
         stats[name] = run(args, os.path.join(args.out, name), extra)
@@ -135,7 +140,7 @@ def main():
         heat[..., 0] = np.maximum(heat[..., 0], np.clip(d * 8, 0, 255).astype(np.uint8))
         Image.fromarray(heat).save(os.path.join(args.out, "heat_%06d.png" % f))
         if crop:
-            s = args.scale
+            s = a.shape[1] // 640
             x0, y0, x1, y1 = (v * s for v in crop)
             parts = [Image.fromarray(np.uint8(x[y0:y1, x0:x1])) for x in (a, b, heat)]
             zoom = 4 if s == 1 else 1

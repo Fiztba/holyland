@@ -113,6 +113,12 @@ static void open_backend(void *unused) {
             gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
                                                                                         : GSN_NATIVE_DRAW_NATIVE);
             gsn_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
+            if (port_options.scene_scale || port_options.scene_msaa) {
+                /* --scene-scale, --scene-msaa (P8 T2): across as port_gs_native_scale_x has it */
+                int s = port_options.scene_scale;
+                int sx = s && port_options.native_widescreen && port_options.widescreen ? (4 * s + 2) / 3 : s;
+                gsn_set_scene(sx, s, port_options.scene_msaa);
+            }
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);

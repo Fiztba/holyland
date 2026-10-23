@@ -18,7 +18,12 @@
                          --renderer-shown native shows the other, and --renderer-shown heatmap
                          where they differ); modern: native, with the scene drawn into targets of
                          its own (P8, in work: docs/port/NATIVE_DRAW_P8.md; --native-draw
-                         map,sky,items unless given)
+                         on unless given)
+       --scene-scale N, --scene-msaa N
+                         with --renderer modern, the scene (the world) at a scale (1 to 4) and samples
+                         (1, 2, 4, 8) of its own, the GS's (--native-scale, --native-msaa) for the 2D, the
+                         menus and the title; the picture shown made from both (gsn_composite.inc). By
+                         default the GS's
        --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
                          the native GS's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
@@ -220,7 +225,7 @@ static void usage(const char *program) {
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
-            "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
+            "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2]\n"
@@ -450,6 +455,19 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.draw_distance_sky_forced = 1;
+        } else if (strcmp(option, "--scene-scale") == 0) {
+            port_options.scene_scale = atoi(value);
+            if (port_options.scene_scale < 1 || port_options.scene_scale > 4) {
+                fprintf(stderr, "--scene-scale wants 1 to 4, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--scene-msaa") == 0) {
+            port_options.scene_msaa = atoi(value);
+            if (port_options.scene_msaa != 1 && port_options.scene_msaa != 2 && port_options.scene_msaa != 4 &&
+                port_options.scene_msaa != 8) {
+                fprintf(stderr, "--scene-msaa wants 1, 2, 4 or 8, not %s\n", value);
+                exit(2);
+            }
         } else if (strcmp(option, "--native-msaa") == 0) {
             port_options.native_msaa = atoi(value);
             if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&

@@ -132,6 +132,9 @@ void gsn_set_native_draw(int mode);
    its --stats line. */
 void gsn_set_standalone(int on);
 void gsn_print_standalone_stats(void);
+/* --scene-scale and --scene-msaa (P8 T2, gsn_composite.inc): the scene's own scale, across and down, and samples,
+   apart from the GS's; 0: the GS's. From when the scene next takes a frame. */
+void gsn_set_scene(int x_scale, int y_scale, int samples);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {

@@ -176,6 +176,96 @@ native surface would lose its tie; T2 or a P1 follow-up). Every modern run that 
 127, or 0xC0000005 / 0xC0000374 at 240, after printing its stats: the first round's build does the same
 (open, T8).
 
+## T2: one turn a frame, the scene's own scale, the composite (branch `p8/t2`)
+
+**One turn a frame.** The scene now keeps the frame from the world's first draw to the 2D:
+- **The GS's clear** (libgraph's at the swap: untextured sprites of one colour, Z 0, the whole frame) is
+  noted (`sa_note_gs_batch`, `sa.clear`). While nothing else of the GS touches that frame and Z buffer, the
+  scene takes the frame by clearing its own targets the same: no copy (`sa_acquire`). Not on the maps whose
+  modern sky (`RD_DRAW_FAR_Z`) the GS still draws first (002, 013, 021, 027, 098, 099: T5's).
+- **The GS's own batches the scene draws** (`sa_gs_batch`, while it has the frame): the PS2 path's 3D (the
+  map records native draw does not take, prim 0x7c: the turns T1 left), with `gs_zclamp.frag`, Z kept fine
+  and the tie's slack plus half a Z (their Z is VU1's whole one, the scene's has its fraction); the reflection's
+  water (`RD_KIND_WATER`, hosted's `nd_water.vert` with the same fragment program); flat fills over the whole
+  screen (`GsDraw_FillScreen` from the player code); and **the screen passes** (`nd_pass_draw` marks them,
+  `sa_pass`). In a picture between the GS's 3D and fills take their corners from `interp.vertices`, made on the
+  GPU from the frame's kicks as `flush_batch` has them; a pass's are the CPU's (`nd_pass.vert`).
+- **A pass that reads the frame** (the brightness, a tint, the flicker filter, haze) reads a copy of the
+  scene's colour, at the scene's scale. **A copy of the frame elsewhere** (`GsDraw_CopyFrame` to 0x2BC0, which the
+  wobble under water and in the MP drain reads) gives the GS the frame and keeps it (`sa_give(true)`), and the
+  scene keeps its own picture as copied (`sa.fcopy`), read for a texture there until those pages are written.
+- The GS's sprites and target-reading draws blend in the shader where Vulkan's blending would round
+  `(Cs - Cd) C + Cd` (as `flush_batch` does), so the passes come out as hosted's.
+- What ends the turn is then the 2D (the HUD, messages) or the vblank. Turns a picture (`--stats`), 1x:
+  herb 0.86 to 0.21, 009's water (`m9w`) 0.81 to 0.27; 000, 016, the far save, the spells, the fight 0.21-0.44
+  (one a frame; a picture is two vblanks).
+
+**The scene's own scale** (`--scene-scale 1-4`, `--scene-msaa 1|2|4|8`; by default the GS's, and then
+nothing below applies). `sa_shape`: the scene's targets are the frame target's size times the scene's
+scale, with the scene's samples; its draws set the viewport and `M_SCALE` to it. Where it differs from the GS
+target's, the copies resample (`shaders/sa_resample.frag`): taking a frame from the GS repeats each GS pixel
+(colour and depth, under its middle), giving it back makes each GS pixel the mean of the scene's pixels and
+samples over it (depth: the one under its middle, rounded as `sa_depth.frag`).
+
+**The composite** (`gsn_composite.inc`, `shaders/sa_composite.frag`). When the scene gives the frame back for
+good (`sa_hold`) it keeps its picture (hi: its samples resolved) and the GS's frame as given (lo). The GS draws
+the 2D over its frame at its own scale as always. Of what it draws over that frame, the batches that are one
+colour over the whole screen are kept in order, the chain: a flat colour blended (fills, fades, the dim, the
+pause's shade; ALPHA with As or FIX), set, or the frame read a texel a pixel and modulated (the brightness,
+the tint). At the scanout (`scanout_to_image`, a hook) the picture is made at the scene's resolution: a pixel
+whose GS pixel is what the chain makes of lo (within 2 levels: Vulkan's blending rounds) has nothing of the 2D
+over it and is the scene's, through the chain in the GS's integer arithmetic; any other is the GS's, its pixel
+repeated (the HUD, messages, menus and title at the GS's scale). Why not the plan's transparent layer: the 2D
+needs the frame's own alpha (the MP orb's mask: FBA, then DATE), and passes after the world read the whole frame
+(the brightness, last, over the HUD too), which a layer's colour and coverage cannot carry. A frame kept is good
+for the vblanks that show it: the GS's clear of that buffer, or a fourth vblank, lets it go. Headless dumps
+of such a frame are the composite's (`--dump-frames` pictures at the scene's size).
+
+**Numbers.** Same scale (the defaults): hosted against modern, the same exe, every set of T1's at 1x and 4x
+and at 240 (herb; 000; 009; 016; the fight; the far save; spells 3, 36, 66; `m8w`; `m9w`; 240: walk on 000, the
+far save, spell 3, 009's fire and water, the fight, the owner's settings on 000) is **the same pixel count as T1's
+to the pixel**, with the water, the PS2 path's batches and the passes now in the scene.
+
+Modern with the GS at 1x and the scene at 4x MSAA 4, against hosted at 4x MSAA 4 (`jobc.sh`; the HUD differs
+by design, its corner left out; pixels a picture off by more than 8 / 32):
+
+| set | outside the HUD corner, > 8 | > 32 | what |
+|---|---|---|---|
+| herb | 96, 38 | 10, 1 | edges |
+| 000 start | 2,804, 2,904 | 271, 275 | edges (T1's 4x) |
+| 009, 016, the far save, the spells, the fight | 170-2,900 | 3-278 | edges |
+| 008's, 009's water | 650-7,000 | 4-470 | the reflection, its scrolling textures at the GS's 1x (T3) |
+| under water (forced: the copy, the wobbles, the tint) | 4,598, 770 | 15, 0 | the lava's scrolling texture at 1x |
+| the frame before (bit 40), aiming | 465-1,070 | 0-2 | it reads the GS's other buffer, at 1x |
+| the brightness 0x40, 0xFF | 36, 0; 166, 12 | 0; 38, 0 | edges |
+| a fill, the fade, haze | 0-96 | 0-10 | edges |
+| the dim and the pause | 12,096 | 7,050 | the PAUSE letters, the GS's 2D at 1x |
+| the flicker filter (`--flicker-filter`) | 590, 411 | 0 | a level or two over the frame |
+
+At 240 the pictures between are composited too (the far save: 12 of 12; between pictures as their frames).
+
+**GPU time** (`quick_far`, 1,400 vblanks, `KF4_GSN_GPU_TIME=1`, no other games running; ms a picture):
+
+| | 30 | 240 (`KF4_PRESENT_SIM`) |
+|---|---|---|
+| hosted 4x | 2.16-2.17 | |
+| modern, GS 1x, scene 4x | **0.83-0.85** | |
+| hosted 4x MSAA 4 | 2.20-2.29 | 2.63 (5,234-5,237 pictures) |
+| modern, GS 1x, scene 4x MSAA 4 | 2.82-3.11 | 5.54 (3,581 pictures) |
+| modern 4x MSAA 4 (same scale) | 2.12-2.26 | 5.91 (3,287 pictures; T1's build 2.41 for 1,577) |
+
+Without MSAA the composite is well below hosted. With the scene's MSAA it is not: its render passes
+(`pass msaa`) cost about 0.7 ms more than the same scene at the GS's MSAA, not found yet (T8). At 240 modern
+draws twice T1's pictures but still falls behind (T8).
+
+**Not done:** the modern sky (`RD_DRAW_FAR_Z`) stays the GS's (T5): at another scale it is the GS's resolution,
+and the frame is taken by a copy, not the clear. The reflection, the scrolling textures and the menus'
+backdrop are the GS's targets at its scale (T3). The frame before (bit 40, aiming) reads the GS's buffer. 2D
+drawn see-through over the world shows the world at the GS's scale under it. A fill or brightness whose colour
+moves in a picture between (the GPU's) is not in the chain: those pictures are the GS's where they differ.
+The overlay has no switch for the scene's scale yet. Every modern run may still crash at teardown (T8): at 240 with the
+composite, 3 of 5 timing runs did, before printing their stats.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
@@ -226,7 +316,9 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
 - **Debug switches** (read at the vblank that turns modern on): `KF4_SA_KINDS=MASK`, `KF4_SA_LOG=1` (each
   batch's FRAME, ZBUF, TEST, ALPHA and Z range, and why one is declined), `KF4_SA_PIXEL=X,Y` (the scene's
   batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack), `KF4_SA_SLACK=LAYER[,TIE]`,
-  `KF4_SA_NO_TABLE=1`.
+  `KF4_SA_NO_TABLE=1`. `KF4_SA_LOG=3` (T2): the GS's batches the scene draws, and those it draws elsewhere.
+- **The scene at its own scale** (T2): `native_draw_compare.py --mode modern --scale 1 --first-args='--native-scale 4
+  --native-msaa 4' --second-args='--scene-scale 4 --scene-msaa 4'`.
 - **Threshold.** Modern is not the PS2's picture bit for bit: the ties are the slack rule, not the GS's
   rounding, and some blends round differently. The bar is the owner's eye on the screenshot sets: no
   blobs, no missing or extra surfaces, no stripes or teeth. Differences are expected along silhouettes,

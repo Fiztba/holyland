@@ -563,9 +563,11 @@ void nd_pass_between(const NdKey &key, const RdPass &p) {
     nd.pass_record = gs->device->create_buffer(info, &b); // (held by a recording that binds it)
 }
 
+void sa_pass(bool begin); // (standalone, T2: a screen pass's batches into the scene: gsn_standalone.inc)
 void nd_pass_draw(const RdDraw &d) {
     RdPass p;
     rd_pass_of(d, p);
+    sa_pass(true); // (standalone)
     NdKey key = nd_key(d);
     gsn_stats.nd_draws++;
     bool between = interp.active;
@@ -626,4 +628,5 @@ void nd_pass_draw(const RdDraw &d) {
         interp.st_src = interp.q_src = interp.rgba_src = interp.rgba_q_src = interp.uv_src = GSN_IM_NONE;
     }
     nd_pass_tex_from = 0xFFFFFFFFu;
+    sa_pass(false); // (standalone)
 }
