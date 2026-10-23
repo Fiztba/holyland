@@ -1701,10 +1701,37 @@ uint32_t depth_max(uint32_t psm) {
 }
 
 // The target's pixels into the CPU's VRAM
+// ---- Write-backs put off (shadows) -------------------------------------------------------------
+// A target an upload (or a copy) writes part of in another shape had to go back to VRAM before the
+// write: the rest of its pages are newer than VRAM. Reading it back waits for the GPU to finish all it
+// was given (12 ms a time on map 060's shop, where the sky's 128 x 128 copy is drawn and then its pages
+// take the shop's textures, a frame's uploads covering them all but one of them only in part). Now the
+// target is kept aside instead, as a shadow of its pages, and what is written over them from then on
+// is noted, bit by bit (shadow_mask: the transfer done again into it with every bit set). A page written
+// over whole needs nothing of it. When the CPU's VRAM of a page still owed is wanted (claim_pages, a
+// write-back over it, a save state), that page goes back as it would have, and then what was written
+// since goes over it again: VRAM as it would have been.
+struct Shadow {
+    std::unique_ptr<Target> t;
+    uint32_t lo, count; // its pages
+};
+std::vector<Shadow> shadows;
+std::vector<uint8_t> shadow_mask; // (GSN_VRAM_BYTES: the bits written since a shadow was made)
+bool shadow_busy;                  // (write_back for a shadow: no shadows looked at again)
+
+void write_back(Target &t);
+void shadow_resolve(uint32_t lo, uint32_t count);
+
 void write_back(Target &t) {
     Timer timer(gsn_stats.ns_writeback);
     if (!t.dirty) {
         return;
+    }
+    if (!shadow_busy && !shadows.empty()) {
+        // (a shadow over its pages is older: it goes back first)
+        uint32_t tlo, tcount;
+        target_pages(t, &tlo, &tcount);
+        shadow_resolve(tlo, tcount);
     }
     Why why(GSN_WHY_WRITEBACK);
     msaa_settle(t);
@@ -1810,6 +1837,12 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     if (w == 0 || h == 0) {
         return;
     }
+    if (!shadows.empty()) {
+        // (VRAM as it should be under the rectangle: a shadow's pages owed there first)
+        uint32_t tlo, tcount;
+        target_pages(t, &tlo, &tcount);
+        shadow_resolve(tlo, tcount);
+    }
     Why why(GSN_WHY_UPLOAD);
     msaa_settle(t); // (the rest of the image stays)
     end_pass();
@@ -1874,6 +1907,153 @@ void drop_target(Target *t) {
     }
 }
 
+// KF4_GSN_SHADOWS=0: write-backs not put off (as before)
+bool shadows_on() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_SHADOWS");
+        on = !(v && atoi(v) == 0);
+    }
+    return on != 0;
+}
+
+// The target, gone from the targets, kept as a shadow (above) of the pages it has newer than VRAM
+void shadow_make(Target *t) {
+    if (gs->pass_color == t || gs->pass_depth == t) {
+        end_pass();
+    }
+    msaa_settle(*t); // (its image as drawn)
+    for (size_t i = 0; i < gs->targets.size(); i++) {
+        if (gs->targets[i].get() == t) {
+            Shadow sh;
+            sh.t = std::move(gs->targets[i]);
+            gs->targets.erase(gs->targets.begin() + long(i));
+            target_pages(*sh.t, &sh.lo, &sh.count);
+            if (shadow_mask.empty()) {
+                shadow_mask.assign(GSN_VRAM_BYTES, 0);
+            }
+            for (uint32_t k = 0; k < sh.count; k++) {
+                memset(shadow_mask.data() + size_t((sh.lo + k) % vram_pages) * 8192, 0, 8192);
+            }
+            GSN_LOG(1, "shadow of target bp %#x bw %u psm %#x %ux%u\n", t->bp, t->bw, t->psm, t->width, t->height);
+            gsn_stats.shadows++;
+            shadows.push_back(std::move(sh));
+            return;
+        }
+    }
+}
+
+// A transfer is about to write its rectangle (DBP, DBW, DPSM; DSAX, DSAY; RRW, RRH): over a shadow, the
+// bits it writes noted, and its pages written over whole let go
+void shadow_written(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
+    if (shadows.empty()) {
+        return;
+    }
+    GsnUpload u;
+    gsn_upload_begin(&u, bitbltbuf, trxpos, trxreg);
+    uint32_t lo, count;
+    buffer_pages(u.bp, u.bw, u.psm, u.x0 + u.w, u.y0 + u.h, &lo, &count);
+    bool any = false;
+    for (const Shadow &sh : shadows) {
+        any = any || pages_overlap(lo, count, sh.lo, sh.count);
+    }
+    if (!any) {
+        return;
+    }
+    // the transfer again, every bit of every pixel set, into the mask
+    size_t bytes = (size_t(u.w) * u.h * size_t(gsn_psm_bits(u.psm)) + 7) / 8;
+    std::vector<uint8_t> ones(bytes + 16, 0xFF);
+    gsn_upload_data(&u, shadow_mask.data(), ones.data(), ones.size(), nullptr, nullptr);
+    for (size_t i = 0; i < shadows.size();) {
+        Shadow &sh = shadows[i];
+        Target &t = *sh.t;
+        bool left = false;
+        for (uint32_t k = 0; k < sh.count && k < t.dirty_pages.size(); k++) {
+            if (!t.dirty_pages[k]) {
+                continue;
+            }
+            const uint8_t *m = shadow_mask.data() + size_t((sh.lo + k) % vram_pages) * 8192;
+            bool whole = true;
+            for (size_t b = 0; b < 8192 && whole; b += 8) {
+                uint64_t v;
+                memcpy(&v, m + b, 8);
+                whole = v == ~uint64_t(0);
+            }
+            if (whole) {
+                t.dirty_pages[k] = 0; // (written over: nothing of the shadow's is owed there)
+            } else {
+                left = true;
+            }
+        }
+        if (!left) {
+            gsn_stats.shadows_gone++;
+            shadows.erase(shadows.begin() + long(i));
+            continue;
+        }
+        i++;
+    }
+}
+
+// The pages lo..count of the CPU's VRAM as they would be had the shadows over them gone back to VRAM
+// when they were made
+void shadow_resolve(uint32_t lo, uint32_t count) {
+    if (shadow_busy) {
+        return;
+    }
+    for (size_t i = 0; i < shadows.size();) {
+        Shadow &sh = shadows[i];
+        Target &t = *sh.t;
+        if (!pages_overlap(lo, count, sh.lo, sh.count)) {
+            i++;
+            continue;
+        }
+        // its pages owed among these: written back alone, then what was written since put back over them
+        std::vector<uint8_t> keep = t.dirty_pages, now(t.dirty_pages.size(), 0);
+        std::vector<uint32_t> pages;
+        for (uint32_t k = 0; k < sh.count && k < t.dirty_pages.size(); k++) {
+            uint32_t page = (sh.lo + k) % vram_pages;
+            if (t.dirty_pages[k] && pages_overlap(lo, count, page, 1)) {
+                now[k] = 1;
+                keep[k] = 0;
+                pages.push_back(page);
+            }
+        }
+        if (pages.empty()) {
+            i++;
+            continue;
+        }
+        std::vector<uint8_t> since(pages.size() * 8192);
+        for (size_t p = 0; p < pages.size(); p++) {
+            memcpy(since.data() + p * 8192, gs->vram.data() + size_t(pages[p]) * 8192, 8192);
+        }
+        t.dirty_pages = now;
+        t.dirty = true;
+        shadow_busy = true;
+        write_back(t);
+        shadow_busy = false;
+        gsn_stats.shadows_resolved++;
+        GSN_LOG(1, "shadow of target bp %#x: %zu pages written back\n", t.bp, pages.size());
+        for (size_t p = 0; p < pages.size(); p++) {
+            uint8_t *v = gs->vram.data() + size_t(pages[p]) * 8192;
+            const uint8_t *m = shadow_mask.data() + size_t(pages[p]) * 8192, *w = since.data() + p * 8192;
+            for (size_t b = 0; b < 8192; b++) {
+                v[b] = uint8_t((v[b] & ~m[b]) | (w[b] & m[b]));
+            }
+        }
+        t.dirty_pages = keep;
+        t.dirty = std::find(keep.begin(), keep.end(), 1) != keep.end();
+        if (!t.dirty) {
+            shadows.erase(shadows.begin() + long(i));
+            continue;
+        }
+        i++;
+    }
+}
+
+void shadows_resolve_all() {
+    shadow_resolve(0, vram_pages);
+}
+
 // Everything on the GPU that is newer than these pages of the CPU's VRAM, written back; and the
 // targets over them that are not `keep`, gone (they are about to be written in another shape)
 bool shares_pages(const Target &a, const Target &b);
@@ -1881,6 +2061,7 @@ bool shares_pages(const Target &a, const Target &b);
 // (sharer: targets that share pages with it (shares_pages) are left alone: take_pages moves pages
 // between them)
 void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer = nullptr) {
+    shadow_resolve(lo, count);
     for (size_t i = 0; i < gs->targets.size();) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
@@ -4658,6 +4839,10 @@ void prepare_write(const TransferRect &r) {
             // (a picture between's own target goes without: the game's frame left VRAM there as it
             // should stay)
             if (!covered && !t->replay_only) {
+                if (t->dirty && regular(*t) && t->dirty_pages.size() && shadows_on()) {
+                    shadow_make(t); // (its write-back put off: above)
+                    continue;
+                }
                 write_back(*t);
             }
             drop_target(t);
@@ -4925,6 +5110,7 @@ void begin_transfer(uint32_t dir) {
     if (dir == 0) {
         TransferRect r = destination_rect();
         prepare_write(r);
+        shadow_written(bitbltbuf, trxpos, trxreg);
         gsn_upload_begin(&gs->upload, bitbltbuf, trxpos, trxreg);
         gsn_stats.uploads++;
         recording = -1;
@@ -4995,6 +5181,7 @@ void begin_transfer(uint32_t dir) {
         buffer_pages(sbp, sbw, spsm, sx + w, sy + h, &lo, &count);
         claim_pages(lo, count, nullptr, false);
         prepare_write(d);
+        shadow_written(bitbltbuf, trxpos, trxreg);
         if (gsn_vram_copy(gs->vram.data(), bitbltbuf, trxpos, trxreg)) {
             uint32_t dlo, dcount;
             rect_pages(d, &dlo, &dcount);
@@ -7012,6 +7199,8 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples ||
         wanted_colour != target_colour) {
         // every target back to VRAM; they come again at the new size as they are drawn into
+        shadows_resolve_all();
+        shadows.clear();
         for (auto &t : gs->targets) {
             write_back(*t);
         }
@@ -7197,6 +7386,7 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
 extern "C" const void *gsn_vram(void) {
     ring_idle();
     flush_batch();
+    shadows_resolve_all();
     for (auto &t : gs->targets) {
         write_back(*t);
     }
@@ -7264,6 +7454,7 @@ extern "C" void gsn_state(PortStateIo *io) {
         flush_batch();
         end_pass();
         gs->targets.clear();
+        shadows.clear();
         gs->textures.clear();
         texture_index.clear();
         forget_uploads();
@@ -7300,6 +7491,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         flush_batch();
         end_pass();
         gs->targets.clear();
+        shadows.clear();
         gs->textures.clear();
         texture_index.clear();
         forget_uploads();

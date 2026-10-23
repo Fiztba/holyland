@@ -1041,6 +1041,10 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
                     (unsigned long long)s->cutout_draws);
         }
+        if (s->shadows) {
+            fprintf(stderr, "[stats] native GS: %llu write-backs put off: %llu never owed, %llu pages' made later\n",
+                    (unsigned long long)s->shadows, (unsigned long long)s->shadows_gone, (unsigned long long)s->shadows_resolved);
+        }
         if (s->silhouettes_whole) {
             fprintf(stderr, "[stats] native GS: %llu silhouettes drawn whole\n", (unsigned long long)s->silhouettes_whole);
         }
