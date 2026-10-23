@@ -172,8 +172,9 @@ struct Push {
                      // (bits 0-15) and down (16-31)
     float lod_bias;  // --native-lod: added to the mipmap level the GS picks (only to which level)
     float zbias;     // --native-layer-z tolerant: added to the pixel's Z (a draw's colour pass)
+    float zslope;    // ... and this times the Z's change across a GS pixel (a layer's colour pass)
 };
-static_assert(sizeof(Push) == 92, "Push is the shaders' push constant block");
+static_assert(sizeof(Push) == 96, "Push is the shaders' push constant block");
 
 enum : uint32_t {
     F_TME = 0x1, F_FST = 0x2, F_TFX_SHIFT = 2, F_TCC = 0x10, F_FGE = 0x20, F_SHADER_BLEND = 0x40,
@@ -3445,6 +3446,7 @@ void flush_batch() {
         uint32_t mask;
         bool zwrite;
         float zbias; // --native-layer-z tolerant: the Z test's tolerance (Z and layers, below)
+        float zslope;
     } passes[4];
     int npasses = 0;
     bool zwrite = depth && !zmsk;
@@ -3488,7 +3490,12 @@ void flush_batch() {
     //   quarter of a pixel and two Z apart), so the layer fails the test in a pattern: a comb of teeth
     //   and scattered pixels, at --native-scale fine hatching on the tower's stone, a swirl on its top
     //   and a lace of light lines in the arches, coming and going as the camera moves. A layer's
-    //   colour passes within one Z of what is there (its depth that much nearer, no Z written), then
+    //   colour passes within one Z of what is there, and half the Z's change across a GS pixel more,
+    //   at most one Z more (its depth that much nearer, no Z written). The meshes are a fraction of a
+    //   pixel apart, so at a grazing angle (a ledge's face, a tower's top seen from below) their Z are
+    //   further apart, and one Z left much of the layer failing, flickering as the camera moved: 21% of
+    //   the ledge's layer at 4x3, 10% with the slope (the rest where the layer adds nothing). Without
+    //   the cap, edge-on layer triangles drew dark one-pixel lines past the creases they sit on. Then
     //   its Z is written where the test passes as the GS's (with the fraction), so the Z buffer is
     //   what it would be: a layer over a layer finds the surface's Z. (Half a Z, the GS's slack on
     //   average, left the far tower's top with a notch of the tower showing through its rock, 9.5% of
@@ -3521,10 +3528,10 @@ void flush_batch() {
         !reads_own_target) {
         for (int i = 0; i < npasses; i++) {
             if (passes[i].mask) {
-                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep};
+                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
             }
             if (passes[i].zwrite) {
-                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f};
+                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
             }
         }
     }
@@ -3792,6 +3799,7 @@ void flush_batch() {
                 Push p = push;
                 p.flags |= rp[i].select << F_PASS_SHIFT;
                 p.zbias = rp[i].zbias;
+                p.zslope = rp[i].zslope;
                 bool zonly = l && !rp[i].mask && rp[i].select == 0 && !(push.flags & F_DATE) &&
                              (per_sample ? gs->program_zonly_sample != nullptr : true);
                 if (zonly) {

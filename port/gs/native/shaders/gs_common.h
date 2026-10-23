@@ -21,6 +21,7 @@ layout(push_constant, std430) uniform Push {
     uint tscale;      // a texture that is a render target: its pixels a GS pixel is, across (bits 0-15) and down (16-31)
     float lod_bias;   // --native-lod: added to the mipmap level the GS picks (only to which level)
     float zbias;      // --native-layer-z tolerant: added to the pixel's Z (a draw's colour pass)
+    float zslope;     // ... and this times the Z's change across a GS pixel, at most zbias (a layer's colour pass)
 } pc;
 
 #define GSN_F_TME 0x1u
