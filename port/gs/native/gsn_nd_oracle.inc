@@ -40,6 +40,9 @@ void nd_oracle_const(NdConst &k, const GsnNdOracleDraw &o) {
         k.info[0] = std::max(0, std::min(4, int32_t(int16_t(w))));
     }
     memcpy(k.fog, o.mem[0x3C], 16);
+    if (o.program == 0x5A0) {
+        nd5a0_const(k); // (gsn_nd_5a0.inc)
+    }
 }
 
 } // namespace

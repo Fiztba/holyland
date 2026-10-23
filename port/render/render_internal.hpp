@@ -62,6 +62,8 @@ bool rd_batch_280_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start
 // written (so past_known is set)
 bool rd_batch_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh);
 bool rd_parse_block(const void *block, uint32_t qwords, RdVertexFormat fmt, RdMeshData &mesh);
+// (the same for a run of program 0x5A0: take_batch's silhouette, RD_VF_SILHOUETTE)
+bool rd_batch_5a0_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh);
 
 // The draw a PORT_GS_REG_NATIVE_DRAW value names, its camera and meshes, if its frame's slot still
 // holds it (any thread)

@@ -66,8 +66,18 @@ uint32_t element(const uint8_t *bytes, uint32_t index, uint32_t vl, bool usn) {
     }
 }
 
-// The batch at top (a VU1 run of program 0x000's shape: vu1_hle.c), into mesh
-bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mesh) {
+// The batch at top (a VU1 run of program 0x000's shape: vu1_hle.c), into mesh. silhouette: a run of program
+// 0x5A0 instead (RD_VF_SILHOUETTE; port/platform/vu1_hle_5a0.c is its specification), on the same blocks: it
+// is 0x000's transform, projection, clipping, ADC and ST by q, but it kicks no A+D packet (the batch has
+// none), its colour is 0 (no lights: RGBAQ 0), its fog 0 (clamped to 0..0), and ST's z is 1.0 for every
+// vertex but the last two, which keep the data's. So the batch is stored as program 0x000 would draw it to
+// give the same: each vertex's colour qword 0 and its ST's z 4096 (ITOF12: exactly 1.0) but the last two's;
+// the draw's record has no lights and no fog (gsn_nd_5a0.inc), and nd_000.vert draws it.
+bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mesh, bool silhouette = false) {
+    if (silhouette && start != RD_PROGRAM_CONTINUE && start != 0x5A0) {
+        why_refused = "an MSCAL of another program in a 0x5A0 block";
+        return false;
+    }
     if (!vu.written[top]) {
         why_refused = "a batch's GIF tag is not the block's";
         return false;
@@ -94,16 +104,20 @@ bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mes
             return false;
         }
     }
-    // the A+D packet at TOP+0xA0: a GIF tag (PACKED, A+D) and its writes
+    // the A+D packet at TOP+0xA0: a GIF tag (PACKED, A+D) and its writes (program 0x5A0 kicks none)
     uint32_t ad = top + 0xA0;
-    if (!vu.written[ad % VU_QWORDS]) {
+    if (silhouette) {
+        // (none)
+    } else if (!vu.written[ad % VU_QWORDS]) {
         why_refused = "a batch's A+D packet is not the block's";
         return false;
     }
-    uint64_t adtag[2];
-    memcpy(adtag, vu.mem[ad % VU_QWORDS], 16);
+    uint64_t adtag[2] = {0, 0};
+    if (!silhouette) {
+        memcpy(adtag, vu.mem[ad % VU_QWORDS], 16);
+    }
     uint32_t ad_n = uint32_t(adtag[0] & 0x7FFF), ad_nreg = uint32_t(adtag[0] >> 60);
-    if (((adtag[0] >> 58) & 3) != 0 || ad_nreg != 1 || (adtag[1] & 0xF) != 0xE || ad_n > 16) {
+    if (!silhouette && (((adtag[0] >> 58) & 3) != 0 || ad_nreg != 1 || (adtag[1] & 0xF) != 0xE || ad_n > 16)) {
         why_refused = "a batch's A+D packet is not A+D";
         return false;
     }
@@ -135,8 +149,15 @@ bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mes
                 mesh.vertices.push_back(int32_t(src[f]));
             }
         }
+        if (silhouette) {
+            int32_t *v = &mesh.vertices[mesh.vertices.size() - 16];
+            if (k + 2 < n) {
+                v[10] = 4096; // (ST's z 1.0)
+            }
+            v[12] = v[13] = v[14] = v[15] = 0; // (the colour: 0)
+        }
         // (the colour's alpha as VU1 leaves it: min(1 * a, 255), FTOI0)
-        int32_t a = int32_t(vu.mem[(top + 4 + 4 * k) % VU_QWORDS][3]);
+        int32_t a = silhouette ? 0 : int32_t(vu.mem[(top + 4 + 4 * k) % VU_QWORDS][3]);
         uint32_t ac = a < 0 ? 0u : a > 255 ? 255u : uint32_t(a);
         b.alpha_lo = std::min(b.alpha_lo, ac);
         b.alpha_hi = std::max(b.alpha_hi, ac);
@@ -466,9 +487,10 @@ bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh, RdVert
             return false;
         case 0x14: // MSCAL
         case 0x15: // MSCALF
-        case 0x17: // MSCNT
-            if (!(fmt == RD_VF_FLOAT_SKIN ? take_batch_280 : take_batch)(vu, tops, cmd == 0x17 ? RD_PROGRAM_CONTINUE : imm,
-                                                                           mesh)) {
+        case 0x17: { // MSCNT
+            uint32_t start = cmd == 0x17 ? RD_PROGRAM_CONTINUE : imm;
+            if (!(fmt == RD_VF_FLOAT_SKIN ? take_batch_280(vu, tops, start, mesh)
+                                          : take_batch(vu, tops, start, mesh, fmt == RD_VF_SILHOUETTE))) {
                 return false;
             }
             // (VIF1 flips TOPS at each run; what the block writes next goes to the other buffer)
@@ -476,6 +498,7 @@ bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh, RdVert
             tops = dbf ? BUFFER_B : BUFFER_A;
             memset(vu.written, 0, sizeof(vu.written));
             break;
+        }
         case 0x20: // STMASK
             i += 1;
             break;
@@ -521,6 +544,7 @@ struct CacheEntry {
     uint32_t gen;      // the caller's, or the bytes' hash folded (RD_GEN_HASH)
     uint32_t touched;  // rd_mesh_touch since
     uint32_t frame;    // last asked for
+    uint32_t format;   // the RdVertexFormat it was asked for (a block asked for as another is parsed again)
     std::shared_ptr<const RdMeshData> mesh; // (null: refused)
 };
 std::unordered_map<uint32_t, CacheEntry> cache;
@@ -606,14 +630,15 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
         }
     }
     auto it = cache.find(key);
-    if (dump.f && !(it != cache.end() && it->second.gen == want && !it->second.touched)) { // (KF4_ND_DUMP)
+    bool hit = it != cache.end() && it->second.gen == want && !it->second.touched && it->second.format == uint32_t(fmt);
+    if (dump.f && !hit) { // (KF4_ND_DUMP)
         dump.parsed++;
         if (it != cache.end()) {
             dump.reparsed++;
             fprintf(dump.f, "P %#x %u\n", key, qwords);
         }
     }
-    if (it != cache.end() && it->second.gen == want && !it->second.touched) {
+    if (hit) {
         it->second.frame = frame_count;
         rd_stats.mesh_hits++;
         if (!it->second.mesh) {
@@ -627,11 +652,12 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
     mesh->gen = want;
     rd_stats.meshes_parsed++;
     auto p0 = dump.f ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
-    bool ok = (fmt == RD_VF_PACKED16 || fmt == RD_VF_FLOAT_SKIN || fmt == RD_VF_GS_STRIP) && parse_block(bytes, qwords, *mesh, fmt);
+    bool ok = (fmt == RD_VF_PACKED16 || fmt == RD_VF_FLOAT_SKIN || fmt == RD_VF_GS_STRIP || fmt == RD_VF_SILHOUETTE) &&
+              parse_block(bytes, qwords, *mesh, fmt);
     if (dump.f) { // (KF4_ND_DUMP)
         dump.parse_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - p0).count());
     }
-    if (fmt != RD_VF_PACKED16 && fmt != RD_VF_FLOAT_SKIN && fmt != RD_VF_GS_STRIP) {
+    if (fmt != RD_VF_PACKED16 && fmt != RD_VF_FLOAT_SKIN && fmt != RD_VF_GS_STRIP && fmt != RD_VF_SILHOUETTE) {
         why_refused = "not a vertex format the parser knows";
     }
     CacheEntry &e = cache[key];
@@ -641,6 +667,7 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
     e.gen = want;
     e.touched = 0;
     e.frame = frame_count;
+    e.format = uint32_t(fmt);
     if (!ok) {
         e.mesh.reset();
         rd_stats.mesh_unsupported++;
@@ -698,6 +725,15 @@ bool rd_batch_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, Rd
     memset(vu.ever, 1, sizeof(vu.ever));
     mesh.format = RD_VF_PACKED16;
     return take_batch(vu, top % VU_QWORDS, start, mesh);
+}
+
+bool rd_batch_5a0_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh) {
+    static VuModel vu; // (kf4-gsreplay's thread only)
+    memcpy(vu.mem, mem, sizeof(vu.mem));
+    memset(vu.written, 1, sizeof(vu.written));
+    memset(vu.ever, 1, sizeof(vu.ever));
+    mesh.format = RD_VF_SILHOUETTE;
+    return take_batch(vu, top % VU_QWORDS, start, mesh, true);
 }
 
 extern "C" int rd_mesh_runs_program(RdMesh mesh, uint32_t program) {
@@ -1035,7 +1071,8 @@ extern "C" int rd_replay_record(uint32_t type, const void *data, size_t size) {
         mesh->block.assign(p + sizeof(head), p + sizeof(head) + size_t(head.qwords) * 16);
         rd_replay_stats.meshes++;
         // (parsed again: this build's parser decides, as it would in the game)
-        bool known = head.format == RD_VF_PACKED16 || head.format == RD_VF_FLOAT_SKIN || head.format == RD_VF_GS_STRIP;
+        bool known = head.format == RD_VF_PACKED16 || head.format == RD_VF_FLOAT_SKIN || head.format == RD_VF_GS_STRIP ||
+                     head.format == RD_VF_SILHOUETTE;
         if (!known || !parse_block(mesh->block.data(), head.qwords, *mesh, RdVertexFormat(head.format))) {
             rd_replay_stats.meshes_refused++;
             fprintf(stderr, "native draw: the capture's block %#x (%u qwords) is refused: %s\n", head.key, head.qwords,

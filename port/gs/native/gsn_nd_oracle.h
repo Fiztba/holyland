@@ -11,10 +11,12 @@
 extern "C" {
 #endif
 
-/* A VU1 run of program 0x000 as it started */
+/* A VU1 run of program 0x000 (or 0x5A0, the shadows': gsn_nd_5a0.inc) as it started */
 typedef struct {
     uint32_t mscal;     /* an MSCAL 0x000: the set-up runs first (from the fixed block); else an MSCNT */
-    uint32_t pad[3];
+    uint32_t program;   /* 0x000, or 0x5A0: the record has no lights and no fog, the vertices are the parser's
+                           (gsn_nd_oracle_5a0_vertices) */
+    uint32_t pad[2];
     float mem[0x52][4]; /* VU1 data memory 0x00-0x51 as the run found it */
     float vf[12][4];    /* vf00-vf11 as the run found them (an MSCNT's: the set-up's before it) */
 } GsnNdOracleDraw;
@@ -44,6 +46,12 @@ int gsn_nd_oracle_ready(void);
 int gsn_nd_oracle_run(const GsnNdOracleDraw *draws, uint32_t draw_count, const int32_t (*vertices)[16],
                       const uint32_t *vertex_draw, uint32_t vertex_count, GsnNdOracleSetup *setups,
                       GsnNdOracleVertex *out);
+
+/* A run of program 0x5A0 at top of VU1 data memory (1024 qwords as the run found it): its vertices as the
+   parser stores them (render.cpp, take_batch's silhouette: four qwords each, as gsn_nd_oracle_run takes
+   them), into out (max at most). Returns how many, or 0 (why: the parser's reason). */
+int gsn_nd_oracle_5a0_vertices(const void *vu_data, uint32_t top, uint32_t mscal, int32_t (*out)[16], uint32_t max,
+                               const char **why);
 
 #ifdef __cplusplus
 }

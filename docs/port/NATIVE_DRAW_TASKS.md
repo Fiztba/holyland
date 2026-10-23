@@ -110,6 +110,7 @@ each described at the end of the task list.
 | `port/gs/native/shaders/nd_700.vert`, `gsn_nd_700.inc` | VU1 program 0x700 (the effects) as a vertex shader on 0x000's records and arena, its CPU plan (the TEX0 swap, vertex n's kick rule) (P4-1) |
 | `tools/gsreplay/nd_oracle_700.c`, `gsn_nd700_oracle.h` | the oracle for 0x700: lanes, kicks, the A+D packet (TEX0 swap), set-up, the parser on the game's blocks (P4-1) |
 | `game/native_draw/nd_effects.c` | the effects (`Model_DrawPosed` with model flag 0x800: the draw list's sfx.dat models, every layer) (P4-2) |
+| `game/native_draw/nd_shadows.c`, `port/gs/native/gsn_nd_5a0.inc` | the shadows (`Entity_DrawPoolModels`, VU1 program 0x5A0 drawn by `nd_000.vert`: P5-1) |
 
 The hooks in `gsn.cpp` are kept to a few lines, each marked "native draw": the include, the register
 case `0x7B` and the ALT skip at the top of `gs_write`, `NdFlush` at the top of `flush_batch` and five
@@ -1080,6 +1081,56 @@ colour 0 and fog 0 (the area's fog colour). First exact as the PS2 path draws it
 its own switch, the stencil (first write wins) that removes the ~240 runs a batch the GS cuts today (STEP3.md,
 "Render passes"). Accepted: the statues on 000, enemies on slopes, 0 pixels against the DATE path in
 compare and onoff, and the GPU time at 240 measured before and after.
+
+*Done (nd3/p5), the exact part; the stencil is not done (below).* The call site is `Entity_DrawPoolModels`'
+`model->draw_parts(model)` (`entity.patch`, one condition): `NativeDraw_Shadow(model, ENTITY_MODEL(entity))`
+(`game/native_draw/nd_shadows.c`, kind `shadows`, `PORT_ND_SHADOWS`, an overlay checkbox) queues what
+`Model_DrawPosed` would: its fixed block without the parts (not in compare mode), then a draw per part of
+program 0x5A0 (identity `RD_KIND_SHADOW`, the entity's own model, the part). The GS registers around it
+(PRMODE 0x248, TEST_2 with DATE, FBA_2, ALPHA_2's FIX) stay the caller's. Every entity has bit 17 unless its
+enemy file clears it, so any entity with a pool model has a shadow.
+- **Program 0x5A0 is 0x000 without the lights and the fog** (`vu1_hle_5a0.c`): the same set-up's vertex
+  matrix, transform, 1/w, FTOI4, guard band, Z clip, ADC and ST by q; but no A+D kick, RGBAQ 0, the fog clamped
+  to 0..0, and ST's z 1.0 for every vertex but the last two. So it has no shader of its own: the parser stores
+  its batches (`RD_VF_SILHOUETTE`, `take_batch`'s `silhouette`: no A+D, each vertex's colour qword 0, ST's z
+  4096 but the last two's) and its record has no lights, point lights or fog (`nd5a0_const`,
+  `gsn_nd_5a0.inc`), and `nd_000.vert` and the CPU plan then give 0x5A0's numbers exactly (every light term is
+  0 times a finite number; the fog clamp(0 + 0 q) = 0). A batch of 0x5A0 corners is one of 0x000's (the same
+  records and program), so mixed batches hold.
+- **The oracle** (`kf4-gsreplay --nd-oracle` takes 0x5A0's runs too, its vertices made by the parser's own
+  code, `gsn_nd_oracle_5a0_vertices`; its own line in the summary): the 64 tour captures, 3,123 batches (1,404
+  MSCALs), 67,346 vertices (22,642 drawn), **0 lane differences on drawn vertices** with `--vu1 hle` and with
+  `--vu1 interp`, the set-up's vertex matrix (VU1's vf01-vf04) 0, no run refused; 39 lanes differ on vertices
+  never drawn (VU1's saturation, as for 0x000).
+- **Pixels** (shadows alone, and every kind at once `map,sky,items,objects,picked,entities,arm,shadows`;
+  compare and onoff, 1x and 4x, all 0 but the known 2D snap): the owner's far quick save (map 000, an NPC's
+  shadow) walked up to (`ly` from 250, pictures 240-420/20; the shadow grows to 348 pixels at 1x); the fight on
+  000 (P2-3's `strong0`, `strong3.pad`: the enemy's shadow as it dies and fades, 1900 and 1930, about 6,000
+  pixels each; its alpha is ALPHA_2's FIX); map 000's start (`newgame.pad`, `--teleport 1600:0:0`, 1900 and
+  2000: 124-132 shadow pixels, a figure's by the gate and an enemy's at the left edge). Every kind at 4x: 000's start 54 and the far walk 13, both `entities` alone
+  (the 2D snap), shadows 0. Where the shadows are was found with a local-only switch that left them out
+  (the sweep's 8 views a map show none: the enemies' shadows on those maps are behind walls). `--log` with
+  `shadows` (compare and onoff) is off's. Not caught: an enemy on a slope.
+- **Pictures between** (240, compare): the game's frames 0; between them 1-28 pixels a picture at the
+  shadows' outlines (the far walk 9 in all over 21 pictures; the dying enemy 232 over 39 pictures, worst 134
+  where the alpha bit FBA left on one pixel feeds a later blend). Shadows are moved by their own matrices
+  (`nd_model_kind`: the flattening matrix has rank 2, which `nd_split` takes).
+- **The GPU time at 240** (headless, `KF4_INTERP_DRAW_ALL=1 KF4_GSN_GPU_TIME=1`, the far save walked up to,
+  1,000 vblanks, `--native-scale 4 --native-msaa 2 --widescreen`, 3,730 pictures; other agents on the GPU,
+  so noisy): off 4.3 and 5.1 ms a picture, `shadows` 12.7 and 11.7 ms, the same 56 render passes and 53
+  resolves a picture. At 30 (no pictures between) off 1.54 and `shadows` 2.01 ms. The runs are the cause: each
+  run of a silhouette is its own render pass and resolve, so the GPU does one run at a time, and a native
+  corner's vertex shader is long (VU1's arithmetic, and in a picture between `moved()` for the corner's kick
+  and the two before it): its latency, about 40 us a run, is paid 200 times a picture. With the perf branch's
+  silhouettes drawn whole (`flush_batch`, "A silhouette"; 3d267b3, tried in a throwaway build, not here): off
+  1.84 and 1.76 ms, `shadows` 2.57 and 2.41 ms, 5.4 render passes a picture, and the pictures still 0 pixels
+  (the far walk compare 1x, the fight onoff 4x). **For that merge**: its test that a silhouette is one colour
+  (`gs->verts[i].rgba == gs->verts[0].rgba`) fails on native corners, whose RGB is the corner's encoding
+  (kick, IIP, record): the throwaway build took native corners of the same alpha as one colour.
+- **The stencil** is not done: perf's whole silhouettes are the same idea in the GS (one draw a batch, each
+  pixel darkened once), for both paths; a native stencil on top would change nothing more. Left to that merge.
+- Also: the mesh cache checks the format a block is asked for (the review's finding 4); `declined` counts
+  `NativeDraw_Shadow`'s declines.
 
 **P6-1 The reflection's target and the rippled water** (owns `map.patch` then, `nd_water.c`). Mode 2's
 256x256 CT16S target at 0x2BC0 (hosted: the GS's target, as today; at `256 x scale` only by the owner's A9),

@@ -39,6 +39,8 @@ Program *nd280_program(Program *p);
 const Buffer *nd280_batch_draws();
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
 void nd_strip_draw(const RdDraw &d); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
+struct NdConst;
+void nd5a0_const(NdConst &k); // (program 0x5A0's records, the shadows: gsn_nd_5a0.inc)
 Program *nd_strip_program(Program *p);
 void nd700_draw(const RdDraw &d, const RdCamera &cam); // (program 0x700's, the effects: gsn_nd_700.inc)
 bool nd700_corner(const Vtx &v);
@@ -598,7 +600,7 @@ void nd_remember(const NdKey &key, const RdDraw &d, const RdCamera &cam) {
 // about keep P1-3's move (the sky by its translation)
 bool nd_model_kind(uint32_t kind) {
     return kind == RD_KIND_MAP_OBJECT || kind == RD_KIND_PICKED || kind == RD_KIND_ENTITY || kind == RD_KIND_ARM ||
-           kind == RD_KIND_GOLD;
+           kind == RD_KIND_GOLD || kind == RD_KIND_SHADOW;
 }
 
 // a b, matrices of VU layout (a qword a column), in doubles
@@ -777,7 +779,7 @@ void nd_draw(uint64_t value) {
         nd.fetched.clear();
         return;
     }
-    if (d.program != 0) {
+    if (d.program != 0 && d.program != 0x5A0) {
         gsn_stats.nd_unsupported++;
         return;
     }
@@ -790,6 +792,9 @@ void nd_draw(uint64_t value) {
     uint32_t record = nd.draws.used++;
     NdConst k;
     nd_const(k, d, cam);
+    if (d.program == 0x5A0) {
+        nd5a0_const(k); // (the shadows: 0x000's maths without the lights and the fog, gsn_nd_5a0.inc)
+    }
     const float *m = &d.model[0][0];
     // (the XYOFFSET of the context the draw's PRIM picks: the game's draws keep both contexts' the same)
     uint64_t offset = gs->reg[R_XYOFFSET_1 + ((effective_prim() >> 9) & 1)];
@@ -1064,3 +1069,4 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
 #include "gsn_nd_280.inc"    // (program 0x280's draws, and its oracle)
 #include "gsn_nd_strip.inc"  // (a PATH2 strip's draws: the trail)
 #include "gsn_nd_700.inc"    // (program 0x700's draws, the effects, and its oracle)
+#include "gsn_nd_5a0.inc"    // (program 0x5A0's: the shadows)
