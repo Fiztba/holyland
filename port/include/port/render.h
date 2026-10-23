@@ -39,7 +39,8 @@ typedef uint32_t RdMesh;
 
 typedef enum {
     RD_VF_PACKED16 = 1,  /* program 0x000's: 4 qwords a vertex (V4-16 position, normal, ST, colour) */
-    RD_VF_FLOAT_SKIN = 2 /* program 0x280's: float vertices (not parsed yet: P2) */
+    RD_VF_FLOAT_SKIN = 2 /* program 0x280's: 4 qwords a vertex of floats (position, normal, ST: its w the
+                            matrix set, colour); every MSCAL in the block must be 0x280's */
 } RdVertexFormat;
 
 /* gen RD_GEN_HASH: the block's bytes are hashed each call, so a block the game rewrote (Model_Set*,
@@ -91,7 +92,7 @@ typedef struct {
     uint32_t kind;            /* RD_KIND_* */
     uint32_t id[3];           /* the rest of its identity, stable from frame to frame: (instance key, part,
                                  slot or record): what pictures between pair draws by (3.5) */
-    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000 (others: later) */
+    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000 or 0x280 (skinned) */
     uint32_t flags;           /* (none yet) */
     uint32_t camera;          /* rd_camera's index */
     uint32_t mesh_count;      /* (filled by rd_draw) */
@@ -106,6 +107,8 @@ typedef struct {
     float point_pos[4][4];    /* VU1 0x41-0x44: positions (world), w the falloff */
     float point_col[4][4];    /* VU1 0x45-0x48: colours */
     float colour[3][4];       /* VU1 0x64-0x66: tint (skinned: scale and bias), effects' colour and TEX0 swap */
+    float turn[2][4][4];      /* VU1 0x24-0x27, 0x28-0x2B (0x280): the part's and the parent's turns, whose
+                                 first three columns map a normal for the sphere pass (Model_DrawSkinned) */
 } RdDraw;
 
 /* Copies d (and the meshes, which stay alive as long as the frame does) into this frame's side buffer;

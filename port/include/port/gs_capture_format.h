@@ -66,7 +66,8 @@ enum {
        stream's first) as it was when parsed. A mesh's id is given once per capture. */
     KF4GS_ND_MESH = 21,
     /* native draw: Kf4GsNdDraws, then cameras Kf4GsNdCamera (the frame's, all of them so far), then
-       count draws, each a Kf4GsNdDraw and its mesh_count mesh ids (uint32, ND_MESH's). The draws are
+       count draws, each a Kf4GsNdDraw and its mesh_count mesh ids (uint32, ND_MESH's), and a draw of
+       program 0x280 then its turns (32 floats: RdDraw's turn; none before 0x280 was drawn). The draws are
        the frame's from index first on; a reader drops any it holds from first on (first 0: the frame
        begins again) */
     KF4GS_ND_DRAWS = 22,

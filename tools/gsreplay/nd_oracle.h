@@ -13,4 +13,12 @@ void nd_oracle_vu1_run(uint32_t program, int mscal, uint32_t top);
 void nd_oracle_gif(int path, const void *data, size_t bytes);
 /* the last vertices run and compared, and the report */
 void nd_oracle_end(void);
+
+/* program 0x280's (nd_oracle_280.c): the same, called by nd_oracle.c's; and the blocks VIF1 is sent
+   (gsreplay.c, before each is fed; program: the VU1 program last started) */
+void nd280_oracle_begin(const uint8_t *vu_data, int limit);
+void nd280_oracle_vu1_run(uint32_t program, int mscal, uint32_t top);
+void nd280_oracle_gif(int path, const void *data, size_t bytes);
+void nd280_oracle_end(void);
+void nd280_oracle_vifdata(const uint32_t *words, size_t count, uint32_t program);
 #endif
