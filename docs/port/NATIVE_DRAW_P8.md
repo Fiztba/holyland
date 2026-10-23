@@ -7,7 +7,7 @@ agents. Read [NATIVE_DRAW_TASKS.md](NATIVE_DRAW_TASKS.md) first: how to build, t
 thresholds and the rules all still apply.
 
 **Status:** T1-T6 are done and merged into `native/draw` ("Integration" below has what the merges settled
-and the checks on the merged build). T7 (review, the owner's sets) and T8 (performance, Linux) remain.
+and the checks on the merged build). T8 (performance) is done ("T8" below): modern keeps up at 240 at the owner's settings and is faster than hosted; `--renderer modern` on Linux's lavapipe is still wrong (pre-existing, open). T7 (review, the owner's sets) remains.
 
 ## What is built
 
@@ -434,6 +434,90 @@ scale and single-sampled (A9, T2/T3); the far-plane sky half a level brighter th
 GS truncates); map 102's one row 2 levels off from the read-extent cut (T4); `host.h`'s `port_native_sky()`
 comment still says 000 and 004 always get the PS2 dome; T7's review and the owner's sets; T8; Linux and
 lavapipe; the 64-map tour in modern was not re-run on the merged build.
+
+## T8: performance, and Linux (branch `p8/t8`, from `native/draw` 782ea5dd)
+
+**Why modern fell behind at 240.** The GPU's own time a picture was low (2.0 ms at 4x), but `KF4_GSN_GPU_TIME` only adds
+intervals within a command buffer. The native GS's thread waited 5-7 ms in Granite's `next_frame_context` fence after
+every picture between, so `gsn_backlog()` stayed above 1 and gs.c gave the pictures between up for whole stretches
+("all of 1,211 vblanks'"). The cause was one batch. In the far save, 3,392 triangles of map records reach far past the
+widescreen frame's right edge, and 85 of them are in view. The batch blends in the shader (As above 0x80). In the frame,
+`sa_draw_batch` drops the triangles outside the scissor first. In a picture between it kept all of them, because the GPU
+moves them. Its runs (cut where triangles overlap) went from 1 to 117, and each run copied the whole scene: a full-screen
+MSAA resolve, with the render pass ended around it.
+
+**What changed** (`gsn_standalone.inc` only, no hooks):
+- **Pictures between are culled as `flush_batch` culls them.** A native triangle outside the scissor is dropped when it
+  is outside at t 0 too (`nd_box_at_0` plus its margin). The models', the strip's and the water's corners are kept
+  (`nd_box_at_0` says "whole"), and so are the GS's own corners. A shader-blending run's copy covers its box (`run_box`,
+  which takes t 0 into account) instead of the whole scene.
+- **Shader blending copies the destination inside the render pass** (`flush_batch`'s COPY_IN_PASS). This applies to the
+  scene's own corners (sa_000, sa_280 and sa_700 with `gs_in.frag` / `gs_in_ms.frag`). Each run's pixels go into the
+  pass's scratch attachment (`pass_copy.frag`, or `pass_resolve.frag` when multisampled), and the run reads that
+  attachment as an input attachment. Before, each run ended the pass, copied or resolved outside it, and began a new
+  one: about 160 times a picture on map 009's poison pond (its miners and zombies, As above 0x80, in the frame and in
+  the reflection). The scene's colour images now have the input-attachment usage. The GS's corners, the water,
+  cut-outs shaded per sample and `--native-colour high` keep the copy. `KF4_SA_BLEND_COPY=1` (tests) brings the
+  copies back for everything.
+  - Single-sampled targets (the reflection) get exactly the same copy as before.
+  - Multisampled targets are resolved by `pass_resolve.frag`: each channel's mean, rounded half up. NVIDIA's
+    `vkCmdResolveImage` rounds a half either way, so a blended pixel can differ by 1-2 levels where its two samples
+    differ by an odd amount. On the pond (3x, MSAA 2): 388 pixels in 2 pictures, worst 2.
+- **Tried, and left out:** a depth-only program (an empty fragment shader) for a tie's Z-first draw when the alpha test
+  cannot fail. It gave no measurable gain at the far save, because most Z-first draws there are cut-outs whose alpha
+  can fail.
+
+**GPU time at the owner's settings** (MSAA 2, native widescreen, cut-out AA, 240, `KF4_PRESENT_SIM=240`,
+`KF4_GSN_GPU_TIME=1`, 1,400 vblanks from each quick save, the only kf4 on the PC, two runs each; the canyon's modern ranges take in two more runs of the culling change alone). Hosted is
+`--renderer native --native-draw on`. Each cell gives ms a picture, then the pictures drawn (out of about 5,230 when a
+run keeps up):
+
+| save | scale | hosted | modern, 782ea5dd | modern, T8 |
+|---|---|---|---|---|
+| far (`quick_far`) | 3x | 2.24-2.26; 5,051-5,237 | | **1.82-1.83; 5,138-5,234** |
+| far | 4x | 3.58; 5,237 | 2.00; **1,598** (pictures between given up) | **3.09; 5,228** |
+| canyon (`quick_slow`) | 3x | 4.06; 3,899-4,124 | | **2.60-3.25; 4,454-5,033** |
+| canyon | 4x | 4.86-6.11; 2,132-2,579 | | **4.08-5.47; 2,924-3,671** |
+| pond (`quick_pond`, map 009) | 3x | 5.08-5.22; 1,713-1,727 | 6.53-6.54; 1,709-1,712 | **2.23; 1,709-1,712** |
+| pond | 4x | 6.22-6.29; 1,679-1,682 | 7.35-7.37; 1,709 | **3.13; 1,709** |
+
+- Modern is now faster than hosted everywhere, and it keeps up at 240 at the far save at 3x and 4x.
+- The canyon falls behind at 240 in both modes. It is GPU-bound (42.8 million triangles in 1,400 vblanks at 4x, the
+  tie's Z-first draws included), and its numbers vary from run to run with how far behind a run falls. Modern draws
+  more of its pictures than hosted.
+- The pond falls behind in both modes, and the GPU is not the limit there. The GS's thread spends about 9 ms a vblank on
+  the frame's own work (GIF 12.8 s for 1,400 vblanks; hosted 15.5 s), mostly native draw's per-draw work
+  (3,129 MB of meshes hashed).
+
+**Pictures:**
+- Modern T8 against modern 782ea5dd at the far save (4x, 240): the game frames differ in 1,974 pixels, worst 3 (the
+  resolve rounding above). The pictures between differ in about 5,000 pixels, worst 9, along triangle seams and the
+  right edge. With `KF4_SA_BLEND_COPY=1` it is 0 and 4,236 (worst 9): the culled pictures between are cut into other
+  runs, and their blending order differs along the seams of overlapping triangles. That is the "risky runs" `flush_batch`
+  has too.
+- Herb modern (1x) is byte for byte 782ea5dd's, with the same log.
+
+**Linux (gcc, WSL, lavapipe).** p8/t8 builds with gcc and `-DKF4_USE_SDL=OFF`, with no warnings in port/gs/native.
+- The herb run hosted (`--native-draw on`) on lavapipe has the same log as Windows. Its pictures differ only by the
+  sampler: worst 18, 61 pixels by more than 1 at vblank 1580.
+- **`--renderer modern` on lavapipe is wrong, and it was already wrong at 782ea5dd.** The log, the PATH1 hash and every
+  `[stats] standalone` count match Windows, and the `KF4_SA_LOG=2` logs are identical, but the pictures are not. From
+  the map entry at about vblank 1552, the frame buffer the GS shows stops getting the scene's picture. It keeps the
+  first frames' content: the clear colour over the sky, an older view of the ground below. The game's fade-in is drawn
+  over it, so the difference grows from 3 levels at 1554 to all of the picture by 1800.
+- What it is not:
+  - It is not a race: `KF4_GSN_THREAD=0` and `LP_NUM_THREADS=1` give it too.
+  - It is not the table (`KF4_SA_NO_TABLE=1`), the stencil (`KF4_SA_NO_STENCIL=1`), T3's named targets
+    (`KF4_SA_NO_NAMED=1`), the sky (`--sky ps2`) or the pictures between (`--frame-rate 30`).
+  - It happens with `KF4_SA_KINDS=0` too.
+  - A one-vblank capture taken on Windows replays on Linux (`kf4-gsreplay --renderer modern`) to the same scanout. So a
+    single vblank's commands give the same result on both, and the fault is in state carried from vblank to vblank.
+  - A capture taken on Linux at 1600 carries the stale buffer: replayed on Windows it shows the same wrong picture.
+- Next step: a validation layer, which neither machine has installed, or GS captures taken every vblank from 1550 on
+  Linux, compared with Windows' captures VRAM page by VRAM page, to find the first page the scene's give-back does not
+  reach.
+- Running `gsn_draw_test`'s 300 cases on lavapipe took the WSL VM down (E_UNEXPECTED; it came back after a minute). The
+  memory note says lavapipe keeps a process's memory. CI was left unchanged: a lavapipe step could not be checked here.
 
 ## The numbers (first round)
 
