@@ -141,7 +141,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   As above 0x80. Overlapping primitives in such a batch are drawn in runs that don't overlap, each
   with its own copy: kept in the render pass (an input attachment), or with MSAA resolved by the run's
   pass into the copy the next run reads (STEP3.md, "Render passes"). A copy outside the pass costs a
-  pass's end and beginning: the shadows' silhouettes are ~240 runs a picture.
+  pass's end and beginning. A silhouette (the shadows: DATE, FBA, one colour, no Z written) is drawn
+  whole, its triangles all making the same pixel (with MSAA its inner seams go: `KF4_GSN_SILHOUETTE_RUNS=1`
+  for the runs), and a multisampled 16-bit target's copies are made in the pass (whole-number means: the
+  pond's reflection). A tie's passes are drawn whole too (STEP3.md, "Hot spots at 240").
 - **NVIDIA's MSAA resolve is not a function of the samples.** Its mean of two 8-bit samples rounds a
   half up or down depending on more than the two values, so no shader reproduces `vkCmdResolveImage`;
   a render pass's resolve attachment does (8-bit; not 16-bit). Exactness at MSAA means resolving.
