@@ -38,7 +38,9 @@ extern "C" {
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
+#include "port/host.h"
 #include "port/quicksave.h"
+#include "port/render.h"
 #include "port/savestate.h"
 #include "port/settings.h"
 #include "port/teleport.h"
@@ -1108,6 +1110,38 @@ void debug_page() {
         ImGui::Text("GIF hand-off: %.1f ms a second    Scanout: %.1f ms a second", gif_ms, vsync_ms);
         ImGui::TextDisabled("VU1 cycles %llu, PATH1 hash %016llx", (unsigned long long)port_stats.vu1_cycles,
                             (unsigned long long)port_stats.path1_hash);
+    }
+
+    ImGui::SeparatorText("Native draw (experimental)");
+    {
+        // (--native-draw, --native-draw-compare: docs/port/NATIVE_DRAW.md)
+        static const struct {
+            const char *name;
+            int bits;
+            const char *what;
+        } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."}};
+        int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
+        for (const auto &k : kinds) {
+            bool on = (kinds_on & k.bits) != 0;
+            if (ImGui::Checkbox(k.name, &on))
+                kinds_on = on ? kinds_on | k.bits : kinds_on & ~k.bits;
+            std::string tip = std::string(k.what) + " Drawn at the game's level: the renderer core and a vertex\n"
+                              "shader doing VU1's maths, instead of VU1 and its packets (--native-draw). Off is the PS2 path.";
+            tooltip(tip.c_str());
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+        const char *compares[] = {"Off", "Both queued, native drawn", "Both queued, PS2 path drawn"};
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
+        ImGui::Combo("Compare", &compare, compares, 3);
+        tooltip("--native-draw-compare: the PS2 path's packets are queued as well (VU1 runs them), and the\n"
+                "native GS draws one of the two: switch to see the difference in the same frame.");
+        if (kinds_on != port_options.native_draw || compare != port_options.native_draw_compare)
+            port_gs_set_native_draw(kinds_on, compare);
+        if (port_options.native_draw)
+            ImGui::TextDisabled("%llu draws queued, %llu lost, %llu meshes held, %llu parsed",
+                                (unsigned long long)rd_stats.draws, (unsigned long long)rd_stats.lost,
+                                (unsigned long long)rd_stats.meshes_held, (unsigned long long)rd_stats.meshes_parsed);
     }
 
     ImGui::SeparatorText("Game");

@@ -55,6 +55,7 @@ extern "C" {
 #include "gsn_vram.h"
 }
 #include "gsn_shaders.h"
+#include "../../render/render_internal.hpp" // (native draw: gsn_native_draw.inc)
 
 using namespace Vulkan;
 
@@ -512,7 +513,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS,
+    OP_INPUT_ATTACHMENTS, OP_STORAGE,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -712,6 +713,14 @@ public:
         dep.memoryBarrierCount = 1;
         dep.pMemoryBarriers = &b;
         gs->device->get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
+    }
+    // (native draw's mesh, and its pictures between's Picture: gsn_native_draw.inc)
+    void set_storage_buffer(unsigned set, unsigned binding, const Buffer &buffer) {
+        if (on()) {
+            rec().hold(buffer);
+            rec().add(OP_STORAGE, ArgBinding{set | binding << 8, &buffer, 0, 0, VK_VERTEX_INPUT_RATE_VERTEX});
+        }
+        raw().set_storage_buffer(set, binding, buffer);
     }
     void set_input_attachments(unsigned set, unsigned first) {
         if (on()) {
@@ -1185,6 +1194,11 @@ void replay_ops(const Recording &r) {
         case OP_INPUT_ATTACHMENTS:
             c.set_input_attachments(r.args<ArgValues>(op).v[0], r.args<ArgValues>(op).v[1]);
             break;
+        case OP_STORAGE: {
+            const ArgBinding &a = r.args<ArgBinding>(op);
+            c.set_storage_buffer(a.binding & 0xFF, a.binding >> 8, *a.buffer);
+            break;
+        }
         }
     }
 
@@ -3027,6 +3041,8 @@ bool perspective_batch(const std::vector<Vtx> &verts) {
     return false;
 }
 
+#include "gsn_native_draw.inc"
+
 void flush_batch() {
     Timer timer(gsn_stats.ns_flush);
     settle_upload();
@@ -3046,6 +3062,9 @@ void flush_batch() {
             interp.vsrc.resize(gs->verts.size(), {GSN_IM_NONE, GSN_IM_NONE, GSN_IM_NONE, 0});
         }
         moving = interp_batch();
+    }
+    if (nd.active && interp.active) {
+        moving.moves = moving.moves_3d = true; // (native draw: moved with the camera by nd_000.vert)
     }
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
@@ -3498,8 +3517,9 @@ void flush_batch() {
     }
     // Triangles wholly outside the scissor draw nothing: left out, before the runs below are cut (a
     // reflection drawn into its 256 x 256 target from the whole scene had most of its triangles off it,
-    // each a run of its own). (A pixel's margin each way.)
-    {
+    // each a run of its own). (A pixel's margin each way.) (Not a native draw's in a picture between:
+    // where they are then is the GPU's.)
+    if (!(nd.active && interp.active)) {
         float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
         size_t kept = 0, n = gs->verts.size();
         Vtx *v = gs->verts.data();
@@ -3838,7 +3858,7 @@ void flush_batch() {
     runs.push_back(uint32_t(gs->verts.size()));
     // a picture between drawn from the frame's packets: the batch's corners, for gs_replay.vert
     uint32_t corners_at = 0;
-    if (interp.active) {
+    if (interp.active && !nd.active) {
         interp.risky_runs += moving.moves && runs.size() > 2;
         corners_at = interp.corner;
         if (size_t(corners_at) + interp.vsrc.size() > size_t(interp.frame->kicks) * 3 + 5) {
@@ -3927,6 +3947,10 @@ void flush_batch() {
             program = per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program;
             c.set_program(program);
         }
+        if (nd.active) {
+            program = nd_program(program); // (native draw: the same, with nd_000.vert)
+            c.set_program(program);
+        }
         if (per_sample && r == 0) {
             gsn_stats.cutout_draws++;
         }
@@ -3975,7 +3999,7 @@ void flush_batch() {
         }
 
         // the vertices
-        if (interp.active) {
+        if (interp.active && !nd.active) {
             // (a picture between's: made of its kicks at its time by gs_replay_corners.comp)
             c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at + first) * sizeof(Vtx), sizeof(Vtx));
         } else {
@@ -3988,6 +4012,9 @@ void flush_batch() {
         c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
         c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
+        if (nd.active) {
+            nd_bind(c); // (native draw: the mesh and the draw's constants)
+        }
 
         // (Z and layers: the run's other triangles with the passes, then its layer's with theirs: the
         // colour within the tolerance, no Z written, then the Z where the test passes, from
@@ -4005,7 +4032,7 @@ void flush_batch() {
                 bool zonly = fine_z && !rp[i].mask && rp[i].zwrite && rp[i].select == 0 && !(push.flags & F_DATE) &&
                              (per_sample ? gs->program_zonly_sample != nullptr : true);
                 if (zonly) {
-                    c.set_program(per_sample ? gs->program_zonly_sample : gs->program_zonly);
+                    c.set_program(nd_program(per_sample ? gs->program_zonly_sample : gs->program_zonly));
                 }
                 c.set_color_write_mask(rp[i].mask);
                 if (depth) {
@@ -4838,6 +4865,10 @@ void mip_addresses(uint32_t ctxt) {
 }
 
 void gs_write(uint32_t address, uint64_t value) {
+    if (nd.skipping && address != 0x7B) {
+        nd_skip(address); // (--native-draw-compare: the PS2 path's packets left out)
+        return;
+    }
     switch (address) {
     case R_XYZF2:
     case R_XYZ2:
@@ -4923,6 +4954,9 @@ void gs_write(uint32_t address, uint64_t value) {
         replay_upload(value);
         return;
     case 0x7E: // the port's widescreen mark (gs.c)
+        return;
+    case 0x7B: // the port's native draw (PORT_GS_REG_NATIVE_DRAW: gsn_native_draw.inc)
+        nd_register(value);
         return;
     case R_SIGNAL:
     case R_FINISH:
@@ -6536,6 +6570,9 @@ PortGsFrame presented;
 int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     Timer timer(gsn_stats.ns_vsync);
     bool extra = (want_pixels & GSN_EXTRA) != 0;
+    if (!extra) {
+        nd_vblank();
+    }
     if (!extra && !uploads_now.empty()) {
         // the uploads of the packets since the last vblank: what the pictures between ask for again
         uploads_frame.swap(uploads_now);
@@ -6808,6 +6845,10 @@ extern "C" void gsn_set_cutout_aa(int mode) {
 
 extern "C" void gsn_set_layer_z(int mode) {
     layer_z_mode = mode == GSN_LAYER_Z_TOLERANT ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
+}
+
+extern "C" void gsn_set_native_draw(int mode) {
+    nd_mode = mode == GSN_NATIVE_DRAW_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE;
 }
 
 extern "C" void gsn_set_colour(int mode) {

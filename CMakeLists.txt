@@ -127,6 +127,13 @@ add_library(kf4_port STATIC
     port/audio/sdrdrv.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_include_directories(kf4_port PRIVATE third_party/cjson)
+# native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the native
+# GS draws them (docs/port/NATIVE_DRAW.md)
+enable_language(CXX)
+add_library(kf4_render STATIC port/render/render.cpp)
+target_include_directories(kf4_render PUBLIC port/include)
+set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
+target_link_libraries(kf4_port PUBLIC kf4_render)
 target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
@@ -195,6 +202,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp port/gs/native/gsn.cpp port/gs/native/gsn_vram.c)
     target_include_directories(kf4_gs PRIVATE port/include PUBLIC port/gs/native)
     target_link_libraries(kf4_gs PRIVATE parallel-gs)
+    target_link_libraries(kf4_gs PUBLIC kf4_render)
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
@@ -317,7 +325,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/quicksave.c game/cheats.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/quicksave.c game/cheats.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)

@@ -119,6 +119,13 @@ void gsn_set_colour(int mode);
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1
 void gsn_set_layer_z(int mode);
+/* --native-draw-compare (docs/port/NATIVE_DRAW.md, gsn_native_draw.inc): which of the two the frame has
+   for the draws the game makes natively it draws: the native draws (GSN_NATIVE_DRAW_NATIVE, the
+   default; the PS2 path's packets queued for comparison between their marks are left out) or the PS2
+   path's packets (GSN_NATIVE_DRAW_PS2; the native draws left out). From the next draw. */
+#define GSN_NATIVE_DRAW_NATIVE 0
+#define GSN_NATIVE_DRAW_PS2 1
+void gsn_set_native_draw(int mode);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {
@@ -280,6 +287,9 @@ typedef struct {
     uint64_t pass_ends[16], resolves_by[16];
     uint64_t pass_load_bytes, pass_store_bytes, resolve_bytes, copy_bytes, pictures;
     uint64_t blend_copies_in_pass; /* shader blending's copies of the target made in the render pass */
+    /* native draw (gsn_native_draw.inc): draws and batches drawn, draws whose frame was gone or whose
+       program is not drawn yet, meshes put on the GPU, register writes left out (--native-draw-compare) */
+    uint64_t nd_draws, nd_batches, nd_lost, nd_unsupported, nd_mesh_uploads, nd_skipped;
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,

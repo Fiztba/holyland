@@ -140,6 +140,13 @@ typedef struct {
     int show_fps;
     int show_fps_forced;     /* --show-fps: on for this run whatever settings.json says */
     int invincible;          /* --invincible, or the Debug page: no HP lost (port_invincible()); never saved */
+    /* --native-draw (port_native_draw(), port/include/port/host.h; docs/port/NATIVE_DRAW.md): which kinds
+       of the game's draws go to the renderer core instead of VU1 and the GS's packets, PORT_ND_* bits (0,
+       off, by default: the PS2 path, the game byte for byte as without it). --native-draw-compare: the PS2
+       path's packets queued too, and which of the two the native GS draws (PORT_ND_COMPARE_*; 0 none).
+       Both live from the overlay's Debug page; never saved. */
+    int native_draw;
+    int native_draw_compare;
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
@@ -366,6 +373,9 @@ void port_gs_set_native_2d(int mode);
 void port_gs_set_native_colour(int mode);
 /* The native GS's Z (port_options.native_layer_z), from the next draw */
 void port_gs_set_native_layer_z(int mode);
+/* --native-draw and --native-draw-compare (port_options.native_draw, native_draw_compare), from the next
+   frame */
+void port_gs_set_native_draw(int kinds, int compare);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {

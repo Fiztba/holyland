@@ -190,6 +190,32 @@ float port_draw_distance_far(void);
 int port_draw_distance_sky(void);
 #define PORT_DRAW_DISTANCE_MAX_FOG 1024.0f
 
+/* port_native_draw(kind): 1 while that kind of draw goes to the renderer core (docs/port/NATIVE_DRAW.md):
+   --native-draw on or a list of kinds, or the overlay's Debug page; off by default. The patched draw
+   code then queues, where it would have queued a model part's packets, a GS register write to
+   PORT_GS_REG_NATIVE_DRAW (another address the GS does not have) naming a draw in the core's side
+   buffer (port/include/port/render.h), and the native GS draws it. Off, the game is what it was.
+   port_native_draw_compare(): PORT_ND_COMPARE_NATIVE or _PS2 while the PS2 path's packets are queued as
+   well, between marks after the native draws (--native-draw-compare), for the native GS to draw one or
+   the other: two runs alike in everything the game does, one drawn each way; 0 otherwise. */
+int port_native_draw(int kind);
+int port_native_draw_compare(void);
+#define PORT_GS_REG_NATIVE_DRAW 0x7B
+#define PORT_ND_MAP 0x1          /* map records (P1) */
+#define PORT_ND_MODELS 0x2       /* posed models: map objects, gold (P2) */
+#define PORT_ND_SKINNED 0x4      /* skinned models: entities (P2) */
+#define PORT_ND_ARM 0x8          /* the arm and the held weapon (P2) */
+#define PORT_ND_SKY 0x10         /* the sky (P3) */
+#define PORT_ND_EFFECTS 0x20     /* effects (P4) */
+#define PORT_ND_SHADOWS 0x40     /* shadows (P5) */
+#define PORT_ND_REFLECTION 0x80  /* the reflection (P6) */
+#define PORT_ND_WATER 0x100      /* water (P6) */
+#define PORT_ND_PASSES 0x200     /* the screen passes (P7) */
+#define PORT_ND_ITEMS 0x400      /* the items lying in the maps (P0's proof: MapItem_DrawAll) */
+#define PORT_ND_ALL 0x7FF
+#define PORT_ND_COMPARE_NATIVE 1 /* the native draws drawn, the PS2 path's packets left out */
+#define PORT_ND_COMPARE_PS2 2    /* the PS2 path's packets drawn, the native draws left out */
+
 /* ---- Opt-in mods the game code reads ---------------------------------------------------------
    Each changes the game, so each is off by default; while it is off the game does what it did on
    the PS2.

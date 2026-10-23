@@ -21,6 +21,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
+#include "port/render.h"
 #include "port/savestate.h"
 #include "port/settings.h"
 
@@ -106,6 +107,8 @@ static void open_backend(void *unused) {
             gsn_set_2d(port_options.native_2d);
             gsn_set_colour(port_options.native_colour);
             gsn_set_layer_z(port_options.native_layer_z);
+            gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
+                                                                                        : GSN_NATIVE_DRAW_NATIVE);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -954,6 +957,16 @@ void port_gs_set_native_colour(int mode) {
 #endif
 }
 
+void port_gs_set_native_draw(int kinds, int compare) {
+    port_options.native_draw = kinds;
+    port_options.native_draw_compare = compare;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
+    }
+#endif
+}
+
 void port_gs_set_native_layer_z(int mode) {
     port_options.native_layer_z = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
@@ -1041,6 +1054,18 @@ void port_gs_print_stats(void) {
         if (s->layer_draws) {
             fprintf(stderr, "[stats] native GS: %llu batches with layers (--native-layer-z tolerant)\n",
                     (unsigned long long)s->layer_draws);
+        }
+        if (port_options.native_draw) {
+            fprintf(stderr,
+                    "[stats] native draw: %llu draws queued, %llu drawn (%llu batches), %llu lost, %llu not drawn yet; "
+                    "%llu meshes parsed (%llu refused), %llu found again, %.1f MB hashed; %llu meshes put on the GPU; "
+                    "%llu PS2-path writes left out\n",
+                    (unsigned long long)rd_stats.draws, (unsigned long long)s->nd_draws,
+                    (unsigned long long)s->nd_batches, (unsigned long long)s->nd_lost,
+                    (unsigned long long)s->nd_unsupported, (unsigned long long)rd_stats.meshes_parsed,
+                    (unsigned long long)rd_stats.mesh_unsupported, (unsigned long long)rd_stats.mesh_hits,
+                    rd_stats.hash_bytes / 1048576.0, (unsigned long long)s->nd_mesh_uploads,
+                    (unsigned long long)s->nd_skipped);
         }
         {
             int w;

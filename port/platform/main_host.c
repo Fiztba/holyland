@@ -57,6 +57,17 @@
                          fraction kept, straight seams where surfaces meet, and the layers the game
                          blends over its surfaces Z tested within one Z: no hatching, teeth or lace)
                          or ps2 (the GS's whole numbers)
+       --native-draw off|on|KINDS
+                         draw these kinds of the game's 3D at the game's level (docs/port/NATIVE_DRAW.md):
+                         the patched draw code hands them to the renderer core, and the native GS draws
+                         them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
+                         on: every kind ported so far; KINDS: map, models, skinned, arm, sky, effects,
+                         shadows, reflection, water, passes, items (only items so far). off (the default)
+                         is the game as without it. The overlay's Debug page changes it live
+       --native-draw-compare native|ps2
+                         with --native-draw, the PS2 path's packets are queued too, and the native GS
+                         draws the native draws (native) or the PS2 path's (ps2): two runs alike in all
+                         the game does, to compare the pictures
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -213,6 +224,8 @@ static void parse_clock(const char *text) {
 }
 
 static const char *gs_capture_at; /* --gs-capture-at (port/debug/gs_capture.c) */
+
+int port_native_draw_parse(const char *value); /* (below) */
 
 static void parse_options(int argc, char **argv) {
     int i;
@@ -468,6 +481,26 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_colour_forced = 1;
+        } else if (strcmp(option, "--native-draw") == 0) {
+            int bits = port_native_draw_parse(value);
+
+            if (bits < 0) {
+                fprintf(stderr, "--native-draw wants off, on or a list of map, models, skinned, arm, sky, effects, "
+                                "shadows, reflection, water, passes, items; not %s\n", value);
+                exit(2);
+            }
+            port_options.native_draw = bits;
+        } else if (strcmp(option, "--native-draw-compare") == 0) {
+            if (strcmp(value, "native") == 0) {
+                port_options.native_draw_compare = PORT_ND_COMPARE_NATIVE;
+            } else if (strcmp(value, "ps2") == 0) {
+                port_options.native_draw_compare = PORT_ND_COMPARE_PS2;
+            } else if (strcmp(value, "off") == 0) {
+                port_options.native_draw_compare = 0;
+            } else {
+                fprintf(stderr, "--native-draw-compare wants native, ps2 or off, not %s\n", value);
+                exit(2);
+            }
         } else if (strcmp(option, "--native-layer-z") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_layer_z = 0;
@@ -619,6 +652,54 @@ static int parse_cheats(const char *list) {
 
 int port_invincible(void) {
     return port_options.invincible != 0;
+}
+
+int port_native_draw(int kind) {
+    return (port_options.native_draw & kind) != 0;
+}
+
+int port_native_draw_compare(void) {
+    return port_options.native_draw ? port_options.native_draw_compare : 0;
+}
+
+/* --native-draw's value: off, on, or a comma-separated list of kinds; -1 if it is none of those */
+int port_native_draw_parse(const char *value) {
+    static const struct {
+        const char *name;
+        int bits;
+    } kinds[] = {{"map", PORT_ND_MAP}, {"models", PORT_ND_MODELS}, {"skinned", PORT_ND_SKINNED}, {"arm", PORT_ND_ARM},
+                 {"sky", PORT_ND_SKY}, {"effects", PORT_ND_EFFECTS}, {"shadows", PORT_ND_SHADOWS},
+                 {"reflection", PORT_ND_REFLECTION}, {"water", PORT_ND_WATER}, {"passes", PORT_ND_PASSES},
+                 {"items", PORT_ND_ITEMS}};
+    const char *at = value;
+    int bits = 0;
+
+    if (strcmp(value, "off") == 0) {
+        return 0;
+    }
+    if (strcmp(value, "on") == 0) {
+        return PORT_ND_ALL;
+    }
+    while (*at) {
+        size_t length = strcspn(at, ",");
+        size_t i;
+        int found = 0;
+
+        for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+            if (strlen(kinds[i].name) == length && strncmp(at, kinds[i].name, length) == 0) {
+                bits |= kinds[i].bits;
+                found = 1;
+            }
+        }
+        if (!found) {
+            return -1;
+        }
+        at += length;
+        if (*at == ',') {
+            at++;
+        }
+    }
+    return bits;
 }
 
 /* ---- The log ---------------------------------------------------------------------------------- */

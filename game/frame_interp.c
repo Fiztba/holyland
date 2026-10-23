@@ -37,7 +37,10 @@ static void add_float(int index, f32 value) {
     add_field(index, bits);
 }
 
+void NativeDraw_BeginFrame(void); /* (game/native_draw/native_draw.c) */
+
 void FrameInterp_BeginFrame(void) {
+    NativeDraw_BeginFrame(); /* (native draw's side buffer: a frame's, as the marks here are) */
     marking = port_frame_interp();
     sky = 0;
 }
