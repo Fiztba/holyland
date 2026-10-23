@@ -332,7 +332,13 @@ void main() {
         if ((pc.misc & GSN_M_ZFINE) == 0u) {
             z = roundEven(z);
         }
-        gl_FragDepth = min(z + pc.zbias, float(pc.zmax)) * pc.zscale;
+        // (a layer's colour pass: also zslope times the Z's change across a GS pixel, the larger of
+        // across and down, at most zbias more: its mesh's vertices are a fraction of a pixel off the
+        // surface's)
+        float sx = float(max(field(pc.misc, GSN_M_SCALE_X_SHIFT, 3u), 1u));
+        float sy = float(max(field(pc.misc, GSN_M_SCALE_SHIFT, 3u), 1u));
+        float slope = max(abs(dFdx(v_z)) * sx, abs(dFdy(v_z)) * sy);
+        gl_FragDepth = min(z + pc.zbias + min(pc.zslope * slope, pc.zbias), float(pc.zmax)) * pc.zscale;
     }
 #endif
     high = (pc.misc & GSN_M_HIGH) != 0u;
