@@ -29,6 +29,8 @@ void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int reg, s64 value);
 void Packet_EndGsRegisters(void);
 void Matrix_Multiply(void *dst, void *matrix, void *src);
+u32 *Packet_Alloc(int quadwords);
+void Packet_AppendToChain(u32 *start, u32 *end);
 void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
 void Model_DrawPosedDepthByPart(ModelInstance *model);
 void Model_DrawPosed(ModelInstance *model);
@@ -37,7 +39,10 @@ extern f32 world_screen_matrix[16]; /* VU1 0x00: what GsDraw_QueueVu1Matrix sent
 extern f32 world_view_matrix[16];
 extern f32 view_screen_matrix[16];
 
-#define ND_MAX_MESHES 64 /* a part's data blocks at most (ModelPart.data_count) */
+/* a part's data blocks at most: ModelPart.data_count is 11 bits. (It was 64, which sent every map record of
+   more blocks the PS2 way without a word, the lava and most big floors among them: the stats' "refused"
+   counts blocks that do not parse, not this.) */
+#define ND_MAX_MESHES 2048
 
 /* At the start of GameLoop_DrawFrame (FrameInterp_BeginFrame): the side buffer's next frame */
 static void queue_mark(u32 command, u64 bits) {
@@ -106,6 +111,75 @@ static int part_meshes(ModelPart *part, RdMesh *meshes) {
     return part->data_count == 0 || rd_mesh_program(meshes[0]) == 0;
 }
 
+/* VU1's fixed block as Model_DrawPosed and Model_DrawPosedDepthByPart queue it ahead of the parts (their
+   first packet: the light matrices at 0x0C-0x13, the fog at 0x3C, the FOGCOL packet at 0x3D, the point
+   lights at 0x40-0x48, and with model flag 0x800 the colours at 0x64-0x66), without the parts: VU1 runs
+   nothing for it. So a model drawn natively leaves VU1's memory as the PS2 path's would, for what runs on
+   VU1 after it and reads what it left: the CPU's near cut (ModelScreen_CutClippedTriangles, after each
+   record of Map_DrawRecords and Map_DrawLateRecords; it stays the PS2 path, --clip ps2) sends only its part
+   matrix and starts program 0x000's set-up, which reads the rest from here. Without this its pieces were
+   lit and fogged by whatever model VU1 drew last (a close wall on map 021 bright, up to 83 levels). With
+   --native-draw-compare the PS2 path's packets that follow do the same, so it is not queued then. */
+static void queue_fixed_block(ModelInstance *model, const void *matrix_a, const void *matrix_b) {
+    u32 *packet_start;
+    u32 *packet;
+    u32 *light_out;
+    u32 *light_out_b;
+    int i;
+
+    packet_start = packet = Packet_Alloc((model->model_flags & 0x800) ? 0x21 : 0x1C);
+    *packet = 0x10000009;
+    packet += 7;
+    *packet++ = 0x6C08000C;
+    memcpy(packet, matrix_a, 0x40);
+    packet += 0x10;
+    memcpy(packet, matrix_b, 0x40);
+    packet += 0x10;
+    *packet = 0x10000002;
+    packet += 7;
+    *packet++ = 0x6C01003C;
+    memcpy(packet, model->fog_block, 16);
+    packet += 4;
+    *packet = 0x10000003;
+    packet += 7;
+    *packet++ = 0x6C02003D;
+    *(u64 *)packet = 0x1000000000008001ull;
+    packet += 2;
+    *(u64 *)packet = 0xE;
+    packet += 2;
+    *(u64 *)packet = ((MapFogBlockValues *)model->fog_block)->unk10;
+    packet += 2;
+    *packet++ = 0x3D;
+    *packet++ = 0;
+    *packet = 0x1000000A;
+    packet += 7;
+    *packet = 0x6C090040;
+    packet += 4;
+    *packet++ = model->hit_count;
+    light_out = packet;
+    light_out_b = packet + 0x10;
+    for (i = 0; i < model->hit_count; i++) {
+        memcpy(light_out, &linked_point_pool[model->hit_handles[i]].position, 16);
+        memcpy(light_out_b, &linked_point_pool[model->hit_handles[i]].target, 16);
+        light_out_b += 4;
+        ((f32 *)light_out)[3] = linked_point_pool[model->hit_handles[i]].progress_scale;
+        light_out += 4;
+    }
+    packet += 0x20;
+    if (model->model_flags & 0x800) {
+        *packet++ = 0x10000004;
+        memset(packet, 0, 6 * 4);
+        packet += 6;
+        *packet++ = 0x6C030064;
+        memcpy(packet, &model->colour_red, 16);
+        packet += 4;
+        packet[3] = model->found_record_id;
+        memcpy(packet + 4, model->found_record, 16);
+    }
+    packet = Packet_Alloc(1);
+    Packet_AppendToChain(packet_start, packet);
+}
+
 /* The two ways model/model.c queues a posed model's parts that are drawn natively so far:
    Model_DrawPosed (the map records' draw_parts, map objects ...) and Model_DrawPosedDepthByPart (items,
    gold: parts scaled to nothing left out, each part's ZBUF and TEST queued before it). */
@@ -136,6 +210,9 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
         }
     }
     ModelMatrix_BuildDrawMatrices(model, model->light_block, model->light_block + 0x40, matrix_a, matrix_b);
+    if (!port_native_draw_compare()) {
+        queue_fixed_block(model, matrix_a, matrix_b);
+    }
     camera = current_camera();
     memset(&d, 0, sizeof(d));
     d.kind = (u32)kind;
