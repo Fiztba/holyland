@@ -176,6 +176,68 @@ native surface would lose its tie; T2 or a P1 follow-up). Every modern run that 
 127, or 0xC0000005 / 0xC0000374 at 240, after printing its stats: the first round's build does the same
 (open, T8).
 
+## T3: render targets by name (branch `p8/t3`, from `p8/t1`)
+
+`port/gs/native/gsn_scene_targets.inc` (included at the end of `gsn_standalone.inc`) is the table's target side.
+
+- **Named targets.** A colour buffer narrower than the frame (under 512 pixels: the reflection, 256 x 256 CT16S at
+  0x2BC0; the scrolling textures' 128 x 128 targets; 0x3A40; the refracting entity's copy at 0x3540; ...) is a
+  scene target named by FRAME's base, width and format, with images of the scene's own (the GS's colour format and
+  scale). Its pages are its own in the table (`sat.page_named`, with `page_drawn`): a texture all of whose blocks are
+  on its pages, drawn into after their upload, is read from its image (`sat_texture`, as flush_batch reads a
+  target: `SRC_TARGET_*` at the offset of its first page). `[stats] standalone targets` counts them.
+- **Who draws it.** The scene, for the 3D it draws there: `sa_draw_batch` no longer declines "another target" for a
+  named one; `sat_acquire` binds it as the scene's frame (its images in place of the frame's, its own D32F S8 depth;
+  no copies) and `sat_release` lets it go. The reflection's clear (`GsDraw_ClearFrame`'s black sprite) is the
+  scene's (`sat_flush`): colour and depth cleared. **The depth is cleared to the far plane**: the PS2 tested the
+  reflection against the main Z buffer's last frame read 256 wide, which can only make holes (hosted shows them as
+  dark notches along 014's water edge; modern has none). The GS, for what it draws there (the scroll sprites, a
+  sprite copying the frame, the PS2 path's map strips the scene does not take): the scene's image is made again
+  from the GS's target when the scene next reads it (`sat_refresh`, with the GS's Z when the scene's was given
+  back). The GS's target is given the scene's picture only when the GS wants it (`sat_give_back`): a batch of the
+  GS's that draws there (with the depth when it uses Z) or reads it, a transfer over it, and `sa_sync` (colour only:
+  a vblank, a read-back, a save state). A batch all outside its scissor gives nothing back.
+- **The water in the scene.** `RD_KIND_WATER` (`RD_PROGRAM_RIPPLE`) is in `sa.kinds`: `nd_water.vert` has an
+  `ND_STANDALONE` block (built again as `sa_water.vert`: Z unrounded, the tie slack), and `sa_draw_range` takes it
+  for a batch of water corners. It reads the reflection the scene drew, so the reflection never goes back to the
+  GS within the frame.
+- **Copies from the table** (`sat_copied`). A local copy whose source is all the table's uploads
+  (`MapScroll_UpdateCopy`'s in-place scroll through 0x3C40, on 000, 008, 009) is made in the scratch VRAM
+  (`gsn_vram_copy` over the source's uploads) and its destination kept as an upload of its own: the scrolled
+  texture is the table's, exact, and found again when the scroll comes round. The GS's VRAM is not read.
+- **Mode 1's mirror** (041). A fill over the frame the scene has (`GsDraw_FillScreen`: untextured, failing into the
+  frame only, Z not tested; `Map_CoverScreenWithMapTint` between the mirror and the real view) is the scene's op
+  (`sat_fill`, `SA_OP_FILL`), blended in the shader from a copy, as flush_batch blends a sprite (the GS's
+  arithmetic). So the mirror, the tint, the depth clear and the real view are one turn.
+- **Hooks** (in `gsn_standalone.inc`, one line each): `sa_drawn`, `sa_copied`, `sa_texture`, `sa_acquire`,
+  `sa_release`, `sa_draw_batch` (the decline test; `sat_blend_exact` in `shader_blend`), `sa_draw_range` (the water
+  program), `sa_flush` (`sat_flush`, `sat_fill`, `sat_gs_batch`), `sa_transfer`, `sa_sync`, `sa_switch`,
+  `sa_forget`, `sa_print_stats`; `sa_kind` takes `RD_PROGRAM_RIPPLE`. None in `gsn.cpp`.
+- **Switches:** `KF4_SA_NO_NAMED=1` (tests): none of this. `KF4_SA_LOG=1`/`2` also say why a named target is given
+  back; `3` also each GS draw into one.
+
+**Numbers** (hosted against modern, `--kinds on`, 1x unless said; T1's build in brackets):
+
+| set | `a render target` / `drawn or copied over` | declined "other target" | turns a picture | pixels |
+|---|---|---|---|---|
+| 000 start | 0 / 0 (622 / 0) | 0 (0) | 0.93 (0.93) | 1,600 (1,600) |
+| 008 `m8w` | 0 / 0 (0 / 136) | 0 (16,957) | 0.92 | 2,320 (2) |
+| 009 `m9w` | 0 / 0 | 0 (43,813) | 1.03 (1.57) | 97,208 (398) |
+| 014 `m14c` | 0 / 0 | 0 (17,463) | 1.08 (1.35) | 33,592 |
+| 041 `m41d` | 0 / 0 | 0 | 0.54 (0.81) | 3 |
+
+- The review's other sets are unchanged (herb 53, 009 start 195, 016 299, the fight 6,337, the far save 603, the
+  spells 3,146-3,147); `quick_lava` 48 and `quick_sky2` 0 as T1's build (the scroll targets are the GS's picture,
+  so `--seamless-scroll` is the same), `quick_teeth` 242 and `quick_underwater` 134,708 as T1's.
+- **What differs on the mirror maps is the reflection's colour.** The GS keeps it at 16 bits, rounding every blend
+  into it to five bits a channel; the scene keeps 8 and rounds once, when the water reads it (`SRC_TARGET_CT16`).
+  The water comes out 1 to 4 levels lighter (009: of 158,720 water pixels, 26,905 more than 2 off, 19 more than 8).
+  This is A9's "CT16-like quantisation"; the geometry is the same (the figure's reflection, the pillars' on 014).
+  Where hosted differs in shape it is the PS2's holes (014's water edge).
+- At 240 (`turn9.pad`, `walk9.pad`, 009, every picture): the reflection moves with the camera in the pictures between
+  as in the frames, the same lighter water (about 46,000 pixels a picture, frames and pictures between alike).
+- Named targets are single-sampled (the GS draws the reflection multisampled under `--native-msaa`).
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
