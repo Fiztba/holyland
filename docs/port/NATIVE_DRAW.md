@@ -864,9 +864,152 @@ The largest share of draws, and static geometry: the best value for the risk.
 ### Open questions
 
 - **The sky's radius per map**, and whether any backdrop is closer than the far geometry it hides (A1).
+  *Measured (P0-3).* See "P0-3's measurements" below. Every sky is a dome, not a backdrop. Its top is
+  4,666 units above the feet (5,400 on 013), and its rim is 24,252 units out (21,200 on 013). On 002, 004,
+  013 and 027 some map geometry that is drawn lies behind the dome, so the PS2's sky hides it.
 - **The HUD orb:** is its texture made anew each frame (STEP3.md) or sent again unchanged (this survey)?
+  *Measured (P0-3): sent again unchanged.* Only the fill level changes, through the alpha test's reference.
+- **The layer meshes per map** (A3). *Measured (P0-3).* 61 of the 64 maps have them. Almost all are
+  records of their own, laid exactly in the plane of an opaque record drawn before them.
 - **The shadow's flatten:** in model space or world space? It decides whether shadows follow slopes.
 - **The cost of hashing mutable blocks:** do the wave UVs and vertex fades touch many blocks a frame?
+  *Measured (P0-3).* Only the wave UVs do, on 6 maps: every block of each wave record, every frame. Hashing
+  costs about 0.14 ns a byte, or 0.03-0.3 ms a frame. `rd_mesh_touch` is not needed.
 - **Interpolating part matrices:** decompose them, or take the parts' PRS from the motion state
   directly (cleaner, but more game structs in the adapter)?
 - **SDL3 or other presenter changes:** independent of this; neither blocks the other.
+
+### P0-3's measurements
+
+**How.** `KF4_ND_DUMP=FILE` is a debug-only dump that writes nothing when it is unset. It records what the
+renderer core is handed: every mesh once (batches, positions, vertex alpha, triangles), every draw (its
+part matrix), each map record's flags with the camera and the model's place, and per frame the meshes
+parsed, the bytes hashed and the time that took. `tools/nd_measure.py FILE` turns the dump into the
+numbers below. There was one run per map, on all 64 maps: `--native-draw map,items`, `tests/herb.pad`,
+`--teleport 1600:N:0` (the map's place 0), and the last whole frame before vblank 2000. The timings are
+noisy: up to 8 other agents shared the PC.
+
+**The sky (A1).** It is one record with flag bit 31, on exactly the 8 maps listed in 1.2.3. "Drawn" is
+its place among the frame's map records. "Behind the sky" counts the drawn map corners (a sample of up
+to about 4,000 per map) whose line from the eye crosses a sky triangle first. On the PS2 the sky hides
+those corners, because its Z is real.
+
+| map | flags | corners | rim from the feet | top above the feet | rim height | drawn | farthest map corner | behind the sky |
+|---|---|---|---|---|---|---|---|---|
+| 000 | 0x82000000 | 432 | 24,252 | 4,666 | 723 above | 32 of 35 | 11,986 | 0 of 4,048 |
+| 002 | 0xA0000004 | 432 | 24,252 | 4,666 | 723 above | 1 of 43 | 26,440 | 152 of 4,192 |
+| 004 | 0xA0000004 | 432 | 24,252 | 4,666 | 723 above | 3 of 6 | 13,441 | 27 of 4,019 |
+| 013 | 0xA0000020 | 336 | 21,200 | 5,400 | 400 above | 1 of 4 | 19,414 | 60 of 2,175 |
+| 021 | 0x80000004 | 528 | 24,252 | 4,666 | 2,000 below | 1 of 17 | 3,180 | 0 of 4,019 |
+| 027 | 0x80000004 | 528 | 24,252 | 4,666 | 2,000 below | 1 of 41 | 22,881 | 14 of 4,473 |
+| 098 | 0x82000064 | 432 | 24,252 | 4,666 | 723 above | 1 of 29 | 6,670 | 0 of 4,637 |
+| 099 | 0x82000004 | 432 | 24,252 | 4,666 | 723 above | 1 of 21 | 7,763 | 0 of 5,313 |
+
+- **What the table shows:**
+  - All eight skies are domes centred on the feet: the same 432-corner dome on five maps, a deeper
+    528-corner one on 021 and 027 that reaches 2,000 below the feet, and a smaller one on 013. None is a
+    nearby backdrop; the "backdrops" of 1.2.3 are a texture on the dome.
+  - The nearest point of the sky is straight up: 4,446 units from the eye (5,180 on 013).
+  - Below the rim there is no sky. The clear colour and the fog show there.
+- **The answer to A1.** On 002, 004, 013 and 027, map geometry that is drawn lies behind the dome: 3.6%,
+  0.7%, 2.8% and 0.3% of the corners sampled from the start place. This is geometry beyond the rim (on
+  002, out to 26,440) or rising through the dome. A sky put at the far plane (A1's modern option) would
+  show it. Look at those four maps before choosing that option.
+- **Draw order.** Map 000 draws its sky near the end of its list (file order), not first. A sky drawn
+  last still hides whatever it covers, because the Z test is GEQUAL.
+
+**The layer meshes (A3).** These are triangles of map records with a corner's alpha below 0x80, matched
+to coplanar triangles: the middle within 0.5 units of the other's plane, the same facing line, and
+inside it. A layer's base is the last opaque coplanar triangle drawn before it, which is the one its Z
+GEQUAL meets. To see a map record by record, run `nd_measure.py --what layers --verbose`.
+
+- **Across the 64 maps:**
+  - 61 maps have such triangles (66,241 in all at the measured views), and 50 have true layers;
+  - 31,539 lie over an opaque triangle drawn before them, and 31,332 of those (99.3%) lie exactly in its
+    plane (within 0.01);
+  - 1,308 lie only over translucent ones drawn before them;
+  - 1,917 have a coplanar triangle only after them;
+  - 31,477 lie over nothing: fades that blend onto whatever is behind (darkness at the end of corridors,
+    the sky's clouds, water).
+- **How layers pair.** The layer and its base are almost always different records (32,466 pairs), and
+  rarely two batches of one record (381). The layer comes later in file order. The darkness strips and
+  the second textures are records of their own, drawn after the wall they lie on.
+- **What a standalone renderer needs.** It can find the pairs when a map loads (a record whose
+  triangles lie in the plane of an earlier record's triangles) and draw the layer as a decal over its
+  base. The layer's Z equals the base's exactly, not just within a Z.
+- **Per map**, as records / such triangles / over an opaque one drawn before:
+
+  000 24/3538/925, 002 35/4983/2416, 004 5/835/0, 005 9/1310/66, 006 2/29/28, 007 5/5/0, 008 28/2717/875,
+  009 11/6024/5865, 011 0/0/0, 012 8/441/40, 013 1/1/0, 014 31/2144/1501, 015 15/360/172, 016 28/1875/1269,
+  017 1/96/0, 018 3/274/5, 019 2/134/1, 020 20/1376/1168, 021 6/486/106, 022 3/6/0, 023 3/116/116,
+  024 42/4131/459, 025 37/3935/2844, 026 31/2997/1947, 027 38/3312/1236, 028 7/1551/589, 029 4/117/50,
+  030 21/710/331, 031 15/1029/593, 032 20/1731/1046, 033 20/1428/820, 034 8/776/250, 035 30/2565/0,
+  036 11/567/346, 037 3/123/28, 038 19/1400/590, 039 5/392/392, 040 8/1584/0, 041 0/0/0, 042 13/750/100,
+  043 1/196/0, 044 6/672/671, 095 5/1149/92, 096 5/375/241, 097 3/261/6, 098 14/1178/604, 099 16/1624/1432,
+  100 5/57/32, 101 0/0/0, 102 10/318/240, 103 3/3/0, 104 1/2/0, 105 11/493/451, 106 12/379/319,
+  107 6/421/39, 108 8/157/135, 109 16/223/119, 110 10/394/360, 111 7/194/124, 112 2/330/0, 113 2/96/60,
+  114 13/1409/279, 115 5/97/96, 116 8/365/65.
+
+  The counts are for one view per map (place 0, at vblank 2000), not the whole map.
+
+**The HUD orb.** In every run, from the title to vblank 2000, a temporary probe hashed each frame the six
+`gage.tx2` chunks in `hud_area` that `Hud_Draw` queues with `TextureTable_QueueAll`. The probe was a debug
+build only and is not committed. No chunk changed after it was loaded, on any of the 64 runs.
+
+- **It is sent again unchanged.** Nothing remakes it, and no CPU code writes it.
+- **What moves once a frame is the fill level:** TEST's alpha reference `fade << 4 | 0x30005` and FBA,
+  over a fixed texture.
+- **Why it is sent every frame anyway.** The HUD's pages (TEX0 in `Hud_Load`: 0x3540, 0x3640, 0x36C0,
+  0x3700, 0x3740, 0x3780) are scratch for other draws: `GsDraw_CopyFrameToTexture(0x3540, ...)` for type
+  0x47 entities writes 256x256 CT32 there, 0x3540-0x393F.
+- **What this means:**
+  - For interpolation, the orb changes only by its level.
+  - In standalone mode its texture is a constant keyed by its source.
+  - STEP3.md's "uploaded as a new texture each frame" is right that it is uploaded every frame, and wrong
+    that the texture is new.
+- **Not covered:** `herb.pad` casts no magic. Casting changes only the MP level, which is the same
+  register.
+
+**How often the mutators run, and the hash's cost.** These are meshes parsed per frame over the last
+100 frames (the runs above).
+
+- **Re-parses come only from the wave UVs.** A block is re-parsed when its bytes change. On 58 of the 64
+  maps that happened 0 times a frame.
+- **On six maps, every block of every visible record with flags 0x100 is re-parsed every frame**
+  (`Wobble_ApplyWaveUvs` from `func_00112BD0`):
+
+  | map | wave records | blocks re-parsed a frame |
+  |---|---|---|
+  | 027 | 2 | 30 |
+  | 029 | 1 | 38 |
+  | 034 | 1 | 3 |
+  | 039 | 6 | 78 |
+  | 042 | 8 | 201 |
+  | 114 | 1 | 26 |
+
+- **What that costs.** A parse takes 1.8-2.5 us a block, so 042 spends about 0.37 ms a frame parsing.
+  Each re-parsed block also goes to the GPU again: 33,626 meshes were put on the GPU in 042's run,
+  against 1,015 in 000's.
+- **New meshes as the view moves are a separate, smaller cost.** 025 averaged 8.6 a frame, with one
+  frame of 634.
+- **The hash:**
+  - each frame hashes 154-2,017 KB (668 blocks and 1,353 KB on map 000);
+  - in the game that took 27-308 us a frame (the clock reads included);
+  - a stand-alone timing of `hash_bytes` gives 0.135-0.149 ns a byte, or about 190 us for 1.35 MB;
+  - that is under 1% of a 33 ms game frame. It runs once a game frame, not once a picture.
+- **The other mutators:**
+  - `Model_SetPrimBits` and `Model_SetAlphaBlend` on map records run once, in `Map_BuildModels` at load.
+  - Items' `Model_SetTextureBase` and `Model_SetVertexColour` run when an item appears; they caused 0
+    re-parses.
+  - `Model_FadeVertexColoursNear` (map triggers: map objects), `Model_SetUvsFromScreen` /
+    `Save/RestoreGsWordsAndUvs` (type 0x47 entities) and the item effects' setters write kinds that are
+    not ported yet. P2 and P4 should measure them again with this dump.
+- **The decision: `rd_mesh_touch` is not needed.** Keep `RD_GEN_HASH`, for three reasons:
+  - the hash is cheap and catches every writer;
+  - the only writer that matters in play rewrites every block of its records every frame, so a touch
+    would save nothing (the blocks change and must be parsed again);
+  - a touch scheme would save at most the hash (about 0.2 ms a frame), at the price of knowing every
+    writer.
+- **What would help instead.** The wave records' per-frame re-parse and re-upload goes away if P6 does
+  the wave UVs on the GPU: the base UVs and wave index per vertex, and the 16 oscillators per draw. The
+  mesh then stays cached and only the oscillators change.

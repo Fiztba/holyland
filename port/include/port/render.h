@@ -136,6 +136,11 @@ typedef struct {
 } RdStats;
 extern RdStats rd_stats;
 
+/* KF4_ND_DUMP=FILE (debug only): the core writes what it is handed to FILE (render.cpp, "KF4_ND_DUMP";
+   tools/nd_measure.py reads it); rd_dump_note adds a line of the caller's. Both nothing when it is unset. */
+int rd_dump_enabled(void);
+void rd_dump_note(const char *line);
+
 #ifdef __cplusplus
 }
 #endif
