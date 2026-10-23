@@ -102,6 +102,11 @@ int port_controls_binding_parse(const char *text, int *binding);
    ACTION_ of the face buttons and d-pad (-1: none) */
 int port_controls_menu_mouse(int button);
 void port_controls_set_menu_mouse(int button, int action);
+/* Verdite outside play (the menu mouse's "not in play"): the keys bound to L1 / R1 (A / D) press d-pad
+   left / right and the keys bound to d-pad left / right (the arrows) press L1 / R1, so A / D move left
+   and right in the menus as W / S move up and down. On by default; the controller is unchanged. */
+int port_controls_menu_side_keys(void);
+void port_controls_set_menu_side_keys(int on);
 /* Verdite's mouse look: a multiple of 0.15 degrees a pixel, and whether up and down are swapped */
 double port_controls_mouse_sensitivity(void);
 int port_controls_mouse_invert(void);

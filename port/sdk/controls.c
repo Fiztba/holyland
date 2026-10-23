@@ -17,6 +17,12 @@
    Mouse, captured, while the player is in control: moving turns and looks; left square, right
    triangle, middle cross (the mouse bindings of the table). Otherwise (menus, pause, dialogue): left
    cross, right circle, middle cross (the menu mouse), the wheel up / down.
+   Outside play, too, A / D (the keys bound to L1 / R1) press d-pad left / right and Left / Right (the
+   keys bound to d-pad left / right) press L1 / R1 (port_controls_menu_side_keys, on by default): A / D
+   then move left and right in the menus as W / S move up and down (the equipment screen's items, a
+   list's pages, the options' values, the King's Map), and the arrows do what L1 / R1 do there (turn
+   the weapon on the equipment screen, zoom the King's Map). A key held as play starts or stops does
+   nothing until it is let go. Not while a pad script plays or one is recorded.
 
    In both, with the separate run mod on (--separate-run, the Mods page), Left Shift and the
    controller's left stick press run while held, and the action button (cross; F in Verdite) only
@@ -64,6 +70,8 @@ static struct {
     int previous_gameplay;
     unsigned int previous_buttons;
     unsigned int swallowed;      /* mouse buttons held across a change of mode, ignored until released */
+    int previous_side;           /* the side keys were swapped at the last read (port_controls_menu_side_keys) */
+    uint64_t swallowed_side;     /* side keys held across that changing, ignored until released */
     uint64_t previous_actions;
     uint64_t swallowed_actions;  /* actions held when the overlay closed */
     int wheel;                   /* wheel movement since the last read: +1 up, -1 down */
@@ -223,6 +231,7 @@ static const int default_menu_mouse[3] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_CR
 static int tables_ready;
 static int bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS];
 static int menu_mouse[3];
+static int menu_side_keys;
 static double sensitivity;
 static int invert_y;
 
@@ -230,6 +239,7 @@ static void reset_layout(int layout) {
     memcpy(bindings[layout], default_bindings[layout], sizeof(bindings[layout]));
     if (layout == CONTROLS_VERDITE) {
         memcpy(menu_mouse, default_menu_mouse, sizeof(menu_mouse));
+        menu_side_keys = 1;
         sensitivity = 1.0;
         invert_y = 0;
     }
@@ -287,6 +297,16 @@ void port_controls_set_menu_mouse(int button, int action) {
     if (button >= 0 && button < 3) {
         menu_mouse[button] = action;
     }
+}
+
+int port_controls_menu_side_keys(void) {
+    tables_init();
+    return menu_side_keys;
+}
+
+void port_controls_set_menu_side_keys(int on) {
+    tables_init();
+    menu_side_keys = on != 0;
 }
 
 double port_controls_mouse_sensitivity(void) {
@@ -727,6 +747,32 @@ static int action_axis(uint64_t held, int low, int high) {
     return l && !h ? 0x00 : h && !l ? 0xFF : 0x80;
 }
 
+#define SIDE_ACTIONS \
+    ((uint64_t)1 << ACTION_LEFT | (uint64_t)1 << ACTION_RIGHT | (uint64_t)1 << ACTION_L1 | (uint64_t)1 << ACTION_R1)
+
+/* Verdite outside play (port_controls_menu_side_keys): the keys' L1 / R1 become d-pad left / right and
+   their d-pad left / right L1 / R1. A side key held when that changes does nothing until it is let go,
+   so a side step held as the menu opens does not move its cursor. */
+static void side_keys(uint64_t *held_keys, int outside_play) {
+    int side = outside_play && menu_side_keys && port_options.input == NULL && port_options.record_input == NULL;
+    uint64_t held = *held_keys;
+
+    if (side != pc.previous_side) {
+        pc.swallowed_side = held & SIDE_ACTIONS;
+        pc.previous_side = side;
+    }
+    pc.swallowed_side &= held;
+    held &= ~pc.swallowed_side;
+    if (side) {
+        uint64_t moved = held & ~SIDE_ACTIONS;
+
+        moved |= (held >> ACTION_L1 & 1u) << ACTION_LEFT | (held >> ACTION_R1 & 1u) << ACTION_RIGHT;
+        moved |= (held >> ACTION_LEFT & 1u) << ACTION_L1 | (held >> ACTION_RIGHT & 1u) << ACTION_R1;
+        held = moved;
+    }
+    *held_keys = held;
+}
+
 /* Once a vblank: the keyboard, mouse and controller into libpad's buttons and the sticks' keys */
 void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller) {
     SDL_GameController *controller = sdl_controller;
@@ -813,6 +859,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     pc.swallowed_actions &= held;
     held_keys &= ~pc.swallowed_actions;
     held_pad &= ~pc.swallowed_actions;
+    side_keys(&held_keys, verdite && !gameplay);
     held = held_keys | held_pad;
     for (action = 0; action < ACTION_COUNT; action++) {
         if (held_keys >> action & 1u) {

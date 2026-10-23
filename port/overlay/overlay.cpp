@@ -541,6 +541,15 @@ void controls_page() {
         }
         tooltip("Outside play (menus, pause, talking) the mouse presses these. In play, with the mouse\ncaptured, "
                 "its buttons are the bindings below.");
+        bool side_keys = port_controls_menu_side_keys() != 0;
+        if (ImGui::Checkbox("A / D move left / right in menus", &side_keys)) {
+            port_controls_set_menu_side_keys(side_keys);
+            changed();
+        }
+        tooltip("Outside play the keys of L1 / R1 (A / D) press d-pad left / right, and the keys of d-pad\n"
+                "left / right (the arrows) press L1 / R1: A / D pick the equipment, turn a list's pages and\n"
+                "change the options' values, and the arrows turn the weapon on the equipment screen. In play\n"
+                "nothing changes, nor does a controller.");
     }
 
     ImGui::Spacing();
