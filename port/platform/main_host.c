@@ -16,7 +16,9 @@
                          it cannot start, paraLLEl-GS), gs (paraLLEl-GS, the reference) or both
                          (side by side, their pictures compared; the window shows gs's,
                          --renderer-shown native shows the other, and --renderer-shown heatmap
-                         where they differ)
+                         where they differ); modern: native, with the scene drawn into targets of
+                         its own (P8, in work: docs/port/NATIVE_DRAW_P8.md; --native-draw
+                         map,sky,items unless given)
        --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
                          the native GS's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
@@ -210,7 +212,7 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
@@ -362,15 +364,17 @@ static void parse_options(int argc, char **argv) {
             int which = heatmap                              ? PORT_RENDERER_NATIVE
                         : strcmp(value, "gs") == 0           ? PORT_RENDERER_GS
                         : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
+                        : both && strcmp(value, "modern") == 0 ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : " or heatmap", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both or modern" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
                 port_options.renderer = which;
                 port_options.renderer_forced = 1;
+                port_options.renderer_modern = strcmp(value, "modern") == 0;
             } else {
                 port_options.renderer_shown = which;
                 port_options.renderer_heatmap = heatmap;
@@ -597,6 +601,9 @@ static void parse_options(int argc, char **argv) {
         } else {
             usage(argv[0]);
         }
+    }
+    if (port_options.renderer_modern && port_options.native_draw == 0) {
+        port_options.native_draw = PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS; /* (the scene's kinds) */
     }
     if (port_options.disc == NULL) {
         fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso or folder> (or KF4_DISC)\n");

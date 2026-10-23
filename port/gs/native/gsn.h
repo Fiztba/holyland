@@ -126,6 +126,12 @@ void gsn_set_layer_z(int mode);
 #define GSN_NATIVE_DRAW_NATIVE 0
 #define GSN_NATIVE_DRAW_PS2 1
 void gsn_set_native_draw(int mode);
+/* --renderer modern (P8, docs/port/NATIVE_DRAW_P8.md; gsn_standalone.inc): the native draws of the scene's
+   kinds drawn into the scene's own targets (D32F depth, its own colour image, MSAA), their textures from the
+   uploads that own them; the GS draws the rest over it. From the next vblank. gsn_print_standalone_stats:
+   its --stats line. */
+void gsn_set_standalone(int on);
+void gsn_print_standalone_stats(void);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {

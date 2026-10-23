@@ -9,7 +9,8 @@ twice from a pad script, drawn once the PS2's way and once natively, and the pic
 --mode compare (the default) runs with --native-draw KINDS and --native-draw-compare ps2, then native: both
 runs queue both kinds of draw (VU1 runs the PS2 path's packets either way), so everything the game does is
 the same and only what the native GS draws differs. --mode onoff runs --native-draw off, then KINDS (VU1
-does not run for the native draws: the game's timing could differ, though it should not).
+does not run for the native draws: the game's timing could differ, though it should not). --mode modern runs
+KINDS hosted, then with --renderer modern (P8: the scene's kinds drawn into the scene's own targets).
 
 Each run is headless, at full speed with a fixed clock, no sound, no memory card, a fresh KF4_DATA_DIR,
 and writes the pictures at --frames (--dump-frames: at --native-scale N they are N times as large). Then
@@ -64,7 +65,7 @@ def run(args, folder, extra):
         sys.stdout.write(result.stdout[-3000:])
         sys.exit("native_draw_compare: the run exited with %d" % result.returncode)
     shutil.rmtree(os.path.join(folder, "data"), ignore_errors=True)
-    return [l for l in result.stdout.splitlines() if l.startswith("[stats] native draw")]
+    return [l for l in result.stdout.splitlines() if l.startswith("[stats] native draw") or l.startswith("[stats] standalone")]
 
 
 def main():
@@ -75,7 +76,7 @@ def main():
     p.add_argument("--input", default=os.path.join(ROOT, "tests", "herb.pad"))
     p.add_argument("--frames", default="1800-1840/5")
     p.add_argument("--kinds", default="items")
-    p.add_argument("--mode", choices=("compare", "onoff"), default="compare")
+    p.add_argument("--mode", choices=("compare", "onoff", "modern"), default="compare")
     p.add_argument("--scale", type=int, default=1)
     p.add_argument("--frame-rate", default="30")
     p.add_argument("--crop")
@@ -96,6 +97,9 @@ def main():
     if args.mode == "compare":
         runs = [("ps2", ["--native-draw", args.kinds, "--native-draw-compare", "ps2"]),
                 ("native", ["--native-draw", args.kinds, "--native-draw-compare", "native"])]
+    elif args.mode == "modern":
+        # (P8: hosted against standalone, the same kinds: docs/port/NATIVE_DRAW_P8.md)
+        runs = [("hosted", ["--native-draw", args.kinds]), ("modern", ["--renderer", "modern", "--native-draw", args.kinds])]
     else:
         runs = [("off", ["--native-draw", "off"]), ("on", ["--native-draw", args.kinds])]
     stats = {}

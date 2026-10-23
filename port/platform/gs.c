@@ -112,6 +112,7 @@ static void open_backend(void *unused) {
             gsn_set_layer_z(port_options.native_layer_z);
             gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
                                                                                         : GSN_NATIVE_DRAW_NATIVE);
+            gsn_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -1086,6 +1087,9 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->nd_skipped, (unsigned long long)rd_stats.declined, s->ns_nd_plan / 1e9,
                     (unsigned long long)s->nd_plan_vertices, (unsigned long long)s->nd_plan_reused,
                     (unsigned long long)s->nd_moved_models, (unsigned long long)s->nd_moved_strips);
+        }
+        if (port_options.renderer_modern) {
+            gsn_print_standalone_stats(); /* (P8) */
         }
         {
             int w;

@@ -26,6 +26,8 @@ VARIANTS = [
     ("nd_000.vert", "nd_000_oracle.vert", ["-DND_ORACLE"]),  # the vertex oracle (gsn_nd_oracle.inc)
     ("nd_280.vert", "nd_280_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x280 (gsn_nd_280.inc)
     ("nd_700.vert", "nd_700_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x700 (gsn_nd_700.inc)
+    ("nd_000.vert", "sa_000.vert", ["-DND_STANDALONE"]),  # P8's scene: the same, its own depth (gsn_standalone.inc)
+    ("sa_depth.frag", "sa_depth_ms.frag", ["-DSA_MS"]),  # ... the scene's depth into a multisampled Z buffer
 ]
 
 
