@@ -21,6 +21,8 @@
 // whether the strip is kicked at all: vertex n) is the CPU's (gsn_nd_700.inc, nd700_plan). A corner is
 // nd_000.vert's: its fog -1 less its vertex's number in the arena, its colour's RGB the kick's number less
 // its own (bits 0-5), IIP (bit 6) and its draw's record (bits 7-23).
+// Built a second time with ND_STANDALONE as sa_700.vert (P8, gsn_standalone.inc): the same, with the scene's own
+// depth (Z before any rounding, nd_000.vert's sa_000.vert) in place of the GS's integer Z.
 #include "gs_common.h"
 
 layout(location = 2) in uvec4 a_corner;
@@ -162,6 +164,9 @@ uvec4 lit_colour(uint at) {
 struct Place {
     int x, y, z;
     float q;
+#ifdef ND_STANDALONE
+    float zf; // (sa_700.vert) Z before FTOI4: what the scene's depth is made of, unrounded
+#endif
 };
 
 Place vu_place(uint at) {
@@ -171,6 +176,9 @@ Place vu_place(uint at) {
     p.x = ftoi(vu_mul(c.x, p.q) * 16.0);
     p.y = ftoi(vu_mul(c.y, p.q) * 16.0);
     p.z = ftoi(vu_mul(c.z, p.q) * 16.0);
+#ifdef ND_STANDALONE
+    p.zf = vu_mul(c.z, p.q);
+#endif
     return p;
 }
 
@@ -202,6 +210,9 @@ struct Moved {
     uint z;
     float f;
     bool drop;
+#ifdef ND_STANDALONE
+    float zf; // (sa_700.vert) Z unrounded
+#endif
 };
 
 Moved moved(uint at, Place p) {
@@ -213,6 +224,9 @@ Moved moved(uint at, Place p) {
     r.z = gs_z(p);
     r.f = 1.0;
     r.drop = false;
+#ifdef ND_STANDALONE
+    r.zf = p.zf;
+#endif
     // its place in the frame's view, from its X and Y and its depth 1 / q (frame_interp.c's vertex_view:
     // the PS2 path's vertices are moved from the same place, and the mirror image's from its own), and
     // how far the picture moves it: (R - I) v + T, and with its model t of the way from its place in the
@@ -255,6 +269,9 @@ Moved moved(uint at, Place p) {
     r.x = int(floor(nx * 16.0 + 0.5));
     r.y = int(floor(ny * 16.0 + 0.5));
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
+#ifdef ND_STANDALONE
+    r.zf = nz;
+#endif
     r.f = depth / mz;
     return r;
 }
@@ -274,12 +291,18 @@ void main() {
     // XYZF2 as the GS takes it
     int xi = p.x, yi = p.y;
     uint z = gs_z(p);
+#ifdef ND_STANDALONE
+    float zf = p.zf;
+#endif
     bool gone = false;
     if ((d.info.w & ND_C_MOVING) != 0) {
         Moved m = moved(at, p);
         xi = m.x;
         yi = m.y;
         z = m.z;
+#ifdef ND_STANDALONE
+        zf = m.zf;
+#endif
         stq *= m.f;
         // dropped when its kick or one of the two kicks before it is (gs_replay_corners.comp: the ADC
         // frame_interp.c gives a vertex it drops and the two after it), whichever vertices the triangle
@@ -301,7 +324,12 @@ void main() {
 
     // as gs.vert
     vec2 ndc = (xy + 0.5) * pc.inv_size * 2.0 - 1.0;
+#ifdef ND_STANDALONE
+    // the scene's own depth, its tie slack and a layer's slope term (pc.zbias, pc.zslope): as sa_000.vert's
+    float depth = clamp((zf + pc.zbias + pc.zslope * float(a_corner.a) / 255.0) * pc.zscale, 0.0, 1.0);
+#else
     float depth = (pc.misc & GSN_M_ZCLAMP) != 0u ? 0.0 : float(min(z, pc.zmax)) * pc.zscale;
+#endif
     gl_Position = vec4(ndc, depth, 1.0);
     v_z = float(z);
     v_color = vec4(rgba);

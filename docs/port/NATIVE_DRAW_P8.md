@@ -9,7 +9,7 @@ thresholds and the rules all still apply.
 ## What is built
 
 `--renderer modern` (the native GS, plus `gsn_set_standalone`). Without `--native-draw` it means
-`--native-draw map,sky,items`. Nothing changes without it: `--native-draw off` is byte for byte the PS2
+`--native-draw on` (since T1; the first round's: `map,sky,items`). Nothing changes without it: `--native-draw off` is byte for byte the PS2
 path, and hosted mode (`--renderer native --native-draw KINDS`) is unchanged.
 
 | Path | What |
@@ -102,6 +102,79 @@ path, and hosted mode (`--renderer native --native-draw KINDS`) is unchanged.
   targets, the reflection, the frame copies), one on a page drawn into or copied over since its upload
   (`MapScroll_UpdateCopy`'s in-place scroll), and the CLUT. The CLUT is the GS's CLUT buffer, loaded by
   TEX0's CLD from VRAM, whose blocks are the same uploads; making it the table's is a task below.
+
+## T1: every program in the scene (branch `p8/t1`)
+
+`--renderer modern` now means `--native-draw on` (`PORT_ND_ACCEPTED`), and the scene takes every ported kind:
+map records and the sky, objects, items, gold, entities, the arm and the held weapon, its trail, effects,
+shadows and the picked item (`sa.kinds`; not the reflection's water, T3, nor the screen passes, the GS's 2D).
+
+- **Programs.** `nd_280.vert` and `nd_700.vert` have `ND_STANDALONE` blocks (built again as `sa_280.vert` and
+  `sa_700.vert`): Z unrounded, with the tie slack and the slope term, as `sa_000.vert`. `sa_draw_range` draws a
+  batch a stretch a kind, as `nd_draw_range`: 0x000's and 0x5A0's with `sa_000.vert`, 0x700's with
+  `sa_700.vert`, 0x280's with `sa_280.vert` and their records, the PS2 path's corners (the trail; the scene's
+  ops) with `gs.vert` (`nd_strip.vert` in a picture between).
+- **A skinned model's second pass** (0x280's sphere-mapped shine) is drawn at its first pass's very corners,
+  the same depth to the bit: no slack and no slope. With the layer slack it shone onto a part a Z or two in
+  front (the seated man's thigh under his coat at the far save, 4x: a light band).
+- **The shadows (A17).** The scene's depth is D32F S8 where the GPU has it. A run of shadow batches (0x5A0's
+  records, DATE with DATM 0) draws where the stencil is not the run's number and writes it there: first
+  write wins. The blending stays the GS's, in the shader, from one copy of the scene's colour a batch (no
+  runs of triangles that do not overlap: the stencil keeps a pixel to one). The stencil is cleared when the
+  scene takes the frame (its depth is then copied in by a pass, `sa_depth.frag`, as a depth with a stencil
+  cannot be copied from the GS's D32F). `KF4_SA_NO_STENCIL=1` (tests): DATE in the shader as before. The
+  fight's pictures are the same either way.
+- **The scene's ops** (`sa_scene_op`): the GS's sprites the scene draws itself, so that it keeps the frame
+  across them: `GsDraw_ClearDepth` (Z 0, every pixel failing the alpha test into Z only) before the picked
+  item and the arm, and, while the scene has the frame, `GsDraw_SetScreenAlpha` (black, failing into the frame
+  only, blended as Cd) before the shadows.
+- **Fewer turns.** An upload or copy ends the scene's turn only when it touches the frame or Z buffer the
+  scene has (`sa_transfer`, the `begin_transfer` hook; before, every texture upload between the world's draws
+  did), and a batch of the GS's elsewhere in VRAM (the scrolling textures' sprites) is drawn while the scene
+  keeps the frame (`sa_gs_touches_scene`).
+- **Hooks** (reported): `gsn.cpp`: `begin_transfer` calls `sa_transfer(dir)` in place of `sa_sync()`, and `Cmd`
+  has `set_stencil` (`OP_STENCIL`, recorded for the pictures between). `main_host.c`: the modern default
+  kinds. `tools/build_shaders.py`: the two variants.
+- **Debug:** `KF4_SA_LOG=2` prints only what ends each turn (1: also every batch and each decline).
+
+**Numbers** (hosted against modern, `--kinds on`, the same exe; the first round's build, e8a89c00, in brackets:
+its modern drew map, sky and items; headless, other agents' games running):
+
+| set | 1x | 4x |
+|---|---|---|
+| herb | 53 (40) | |
+| 000 start | 1,600 (1,233) | 22,688 (16,959) |
+| 009 start | 195 (6) | 2,047 (32) |
+| 016's bats | 299 (0) | 3,062 (102) |
+| the fight (`strong3`) | 6,337 (6,297) | 60,701 (60,413) |
+| the far save | 603 (48) | 4,327 (215) |
+| spells 3, 36, 66 | 3,146 each (2,443) | 22,385 each (16,870) |
+| 008's water (`m8w`) | 2 (4) | 73 (94) |
+| 009's water and the miners (`m9w`) | 398 (121) | 5,866 (1,679) |
+
+What the new pixels are: the edges of the models now in the scene (silhouettes, where parts meet or cross:
+the torch stands' legs, a side face a pixel wide at a grazing angle, the bats' wings, the seated man's hand on
+his thigh). No 8 x 8 block anywhere has more than half its pixels off by more than 8 (the far save's thigh,
+before the second-pass fix, was the one). The shadows match hosted (each pixel darkened once), the spell
+bursts too. At 240 (game frames; pictures between, a picture): walk on 000 3,159 in 4; 791 (base 556); the far
+save 618; 155 (27); spell 3 6,303 in 8; 752 (546); 009's water 744; 219 (29); the fight 6,424; 96 (84).
+
+**Turns** (`[stats] standalone ... turns a picture`): 000 0.93, 009 0.99, 016 0.89, herb 0.88, the spells 0.97,
+the far save 1.05-1.26, `m9w` 1.57, the fight 2.16 (was 3.3 on herb before the transfer and elsewhere rules).
+What still ends a turn mid-world: **map-record batches the PS2 path draws** (textured, fogged strips of 27 to
+375 vertices, `KF4_SA_LOG=2`: prim 0x7c, ALPHA 0x44 and 0x48, at the map records' Z: draws the adapter
+declines), the reflection's draws (declined: another target) and the HUD.
+
+**GPU time** (the far save, `quick_far`, 4x, MSAA 2, native widescreen, 240, `KF4_PRESENT_SIM=240`,
+`KF4_GSN_GPU_TIME=1`, 1,400 vblanks, two runs each, other agents' games running): hosted 3.72-3.89 ms a
+picture; modern 2.73-2.76 (the first round's modern 2.69-2.79). Modern still falls behind at 240 (about 1,580
+pictures against 5,230: T8).
+
+**Not done:** water (its records and the reflection's texture: T3); the PS2 path's leftover map batches
+in the scene (with `gs.vert` their Z would be the GS's whole Z, below the scene's fraction: a layer over a
+native surface would lose its tie; T2 or a P1 follow-up). Every modern run that reaches the end exits with
+127, or 0xC0000005 / 0xC0000374 at 240, after printing its stats: the first round's build does the same
+(open, T8).
 
 ## The numbers (first round)
 

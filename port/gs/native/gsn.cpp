@@ -518,7 +518,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS,
+    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -809,6 +809,22 @@ public:
         c.set_depth_bounds_test(on_);
         if (on_) {
             gs->device->get_device_table().vkCmdSetDepthBounds(c.get_command_buffer(), lo, hi);
+        }
+    }
+    // the stencil test (standalone's shadows, gsn_standalone.inc): on with its compare, the op where it passes
+    // (KEEP where it or the depth test fails), the reference and the write mask; or off
+    void set_stencil(bool on_, VkCompareOp op, VkStencilOp pass, uint32_t ref, uint32_t write_mask) {
+        if (on()) {
+            rec().add(OP_STENCIL, ArgValues{{uint32_t(on_), uint32_t(op), uint32_t(pass), ref | write_mask << 8}, {}});
+        }
+        stencil_raw(raw(), on_, op, pass, ref | write_mask << 8);
+    }
+    static void stencil_raw(CommandBuffer &c, bool on_, VkCompareOp op, VkStencilOp pass, uint32_t ref_mask) {
+        c.set_stencil_test(on_);
+        if (on_) {
+            c.set_stencil_front_ops(op, pass, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+            c.set_stencil_back_ops(op, pass, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+            c.set_stencil_reference(0xFF, uint8_t(ref_mask >> 8), uint8_t(ref_mask));
         }
     }
     void set_depth_compare(VkCompareOp op) {
@@ -1116,6 +1132,10 @@ void replay_ops(const Recording &r) {
             break;
         case OP_DEPTH_BOUNDS:
             Cmd::depth_bounds_raw(c, r.args<ArgValues>(op).v[0] != 0, r.args<ArgValues>(op).f[0], r.args<ArgValues>(op).f[1]);
+            break;
+        case OP_STENCIL:
+            Cmd::stencil_raw(c, r.args<ArgValues>(op).v[0] != 0, VkCompareOp(r.args<ArgValues>(op).v[1]),
+                             VkStencilOp(r.args<ArgValues>(op).v[2]), r.args<ArgValues>(op).v[3]);
             break;
         case OP_VIEWPORT:
             c.set_viewport(r.args<VkViewport>(op));
@@ -1661,6 +1681,7 @@ void sa_draw_begin(uint64_t value);
 void sa_draw_end();
 bool sa_waiting();
 void sa_sync();
+void sa_transfer(uint32_t dir);
 void sa_forget();
 void sa_switch(bool on);
 void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
@@ -5174,7 +5195,7 @@ void forget_uploads() {
 }
 
 void begin_transfer(uint32_t dir) {
-    sa_sync(); // (standalone: the scene's turn ends)
+    sa_transfer(dir); // (standalone: the scene's turn ends if the transfer touches its targets)
     settle_upload();
     uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
     gs->transfer_dir = dir;
