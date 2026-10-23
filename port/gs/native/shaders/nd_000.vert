@@ -23,7 +23,9 @@
 // frame_interp.c takes the PS2 path's; plain floats: the move's rounding, not the place's; no move, no
 // change); S, T and Q by the change of depth; the fog and the
 // colour as in the frame. A triangle is not drawn when its kick or one of the two before it goes behind
-// the camera or past the guard band (the ADC frame_interp.c gives such a vertex).
+// the camera or past the guard band (the ADC frame_interp.c gives such a vertex). The models' parts
+// (ND_C_MODEL: map objects, the picked item) move by their own matrices t of the way from the frame before's
+// (nd_between.h), the camera's move added (ND_C_EYE: not).
 // Which triangles are drawn (the data's ADC bits, and VU1's clipping) is the CPU's (gsn_native_draw.inc,
 // nd_plan): a corner's fog input is -1 less its vertex's number in the arena, and its colour's RGB the kick's
 // number less it (bits 0-5: a flat triangle has the kick's colour), IIP (bit 6) and its draw's record
@@ -49,6 +51,7 @@ layout(set = 1, binding = 0, std430) readonly buffer Picture {
 layout(set = 2, binding = 0, std430) readonly buffer Mesh {
     ivec4 q[];
 } mesh;
+#include "nd_between.h"
 // the draws (gsn_native_draw.inc, NdConst), a record each: matrices a VU qword a column
 struct Draw {
     mat4 vertex;       // VU1 0x14: the set-up's vertex matrix (0x00 by 0x04)
@@ -62,6 +65,7 @@ struct Draw {
     vec4 point_col[4];
     vec4 obj;          // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     ivec4 info;        // the point lights, XYOFFSET X and Y (12.4), ND_C_*
+    Between bt;        // (ND_C_MODEL) the part's own move from the frame before (nd_between.h)
 };
 layout(set = 2, binding = 1, std430) readonly buffer Draws {
     Draw draws[];
@@ -69,6 +73,8 @@ layout(set = 2, binding = 1, std430) readonly buffer Draws {
 
 #define ND_C_MOVING 1
 #define ND_C_OBJ 2
+#define ND_C_MODEL 4
+#define ND_C_EYE 8
 
 #ifdef ND_ORACLE
 // The vertex oracle (nd_000_oracle.vert, built from this with ND_ORACLE: gsn_nd_oracle.inc): what each
@@ -240,6 +246,11 @@ Moved moved(uint at, Place p) {
     if ((d.info.w & ND_C_OBJ) != 0) {
         vec3 e = -d.obj.xyz + d.obj.xyz * pic.zt.z;
         dm += vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    if ((d.info.w & ND_C_MODEL) != 0) {
+        // (the models': by the part's own matrices, nd_between.h; in the eye's space, the arm's, alone)
+        vec3 e = between_move(d.bt, vec4(mesh.q[at * 4u]), pic.zt.w);
+        dm = (d.info.w & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
     }
     float mz = v.z + dm.z;
     if (!(mz > 0.0)) {

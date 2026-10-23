@@ -293,6 +293,9 @@ typedef struct {
     /* (native draw) the CPU plan (nd_plan): its time, the vertices it worked out, and those it found planned
        already (the same batch by the same matrix: a camera standing still, a picture between) */
     uint64_t ns_nd_plan, nd_plan_vertices, nd_plan_reused;
+    /* (native draw) pictures between: model parts drawn between their two places (P2-5), strips (the
+       trail) drawn between their two frames' */
+    uint64_t nd_moved_models, nd_moved_strips;
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,

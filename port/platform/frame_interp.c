@@ -63,6 +63,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/render.h"
 #include "../gs/native/gsn.h"
 
 #define INTERP_MAX_TURN 0.8   /* radians between two frames: more is a cut */
@@ -373,6 +374,7 @@ typedef struct {
     uint64_t tex;      /* and TEX0's texture and CLUT */
     int32_t pair;      /* the run of the frame before that is this one (objects_pair), -1: none */
     int sky;           /* of the sky (PORT_FRAME_INTERP_SKY: a map record that follows the player) */
+    int native;        /* the PS2 path's packets of a native draw, which the GS leaves out (Walk's alt) */
 } Run;
 
 #define VERTEX_SURE 1  /* a vertex without ADC: never one the VU1 program clipped */
@@ -398,7 +400,7 @@ static void objects_reset(Objects *o) {
     o->sky_ok = 0;
 }
 
-static void objects_add_run(Objects *o, uint64_t key, int section, int sky) {
+static void objects_add_run(Objects *o, uint64_t key, int section, int sky, int native) {
     Run *r;
 
     if (o->nruns == o->runs_room) {
@@ -414,6 +416,7 @@ static void objects_add_run(Objects *o, uint64_t key, int section, int sky) {
     r->count = 0;
     r->section = section;
     r->sky = sky && section == SECTION_WORLD;
+    r->native = native;
     r->prim = 0;
     r->tex = 0;
     r->pair = -1;
@@ -503,7 +506,7 @@ static const Run *objects_find(const Objects *o, const Run *cur) {
         double d2 = 0;
         int k;
 
-        if (r->count != cur->count || !r->placed || r->section != cur->section) {
+        if (r->count != cur->count || !r->placed || r->section != cur->section || r->native) {
             continue;
         }
         for (k = 0; k < 3; k++) {
@@ -928,8 +931,12 @@ static void objects_pair(Objects *o, const Objects *prev) {
     }
     for (i = 0; i < o->nruns; i++) {
         Run *r = &o->runs[i];
-        const Run *a = objects_find(prev, r);
+        const Run *a;
 
+        if (r->native) {
+            continue; /* (native draw pairs its draws by their identity: gsn_native_draw.inc) */
+        }
+        a = objects_find(prev, r);
         stat_runs += r->placed;
         if (a != NULL && objects_find(o, a) == r) {
             r->pair = (int32_t)(a - prev->runs);
@@ -940,7 +947,7 @@ static void objects_pair(Objects *o, const Objects *prev) {
     for (i = 0; i < o->nruns; i++) {
         Run *r = &o->runs[i];
 
-        if (r->pair >= 0 || !r->placed || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
+        if (r->pair >= 0 || !r->placed || r->native || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
             continue;
         }
         for (k = at; k < prev->nruns && k < at + 32; k++) {
@@ -948,7 +955,7 @@ static void objects_pair(Objects *o, const Objects *prev) {
             double d2 = 0;
             int c;
 
-            if (taken[k] || !a->placed || a->section != r->section || a->count != r->count || a->prim != r->prim ||
+            if (taken[k] || !a->placed || a->native || a->section != r->section || a->count != r->count || a->prim != r->prim ||
                 a->tex != r->tex) {
                 continue;
             }
@@ -989,6 +996,8 @@ typedef struct {
     int section;
     int world_seen;   /* a world mark has been seen */
     int sky;          /* the runs from here are the sky's (PORT_FRAME_INTERP_SKY) */
+    int alt;          /* the runs from here are the PS2 path's packets of native draws, which the GS leaves out
+                         (--native-draw-compare native: between RD_ND_ALT_BEGIN and _END); not paired */
     Camera camera;    /* SCAN: the first world mark's camera */
     Screen screen;
     Screen screen_reflect; /* the reflection's projection (SECTION_REFLECT) */
@@ -2086,7 +2095,7 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
         w->run_vertex = 0;
         w->nseen = 0;
         if (w->mode == SCAN && w->objects != NULL) {
-            objects_add_run(w->objects, r->key, w->section, w->sky);
+            objects_add_run(w->objects, r->key, w->section, w->sky, w->alt);
         } else if (w->mode == REPLAY) {
             const Objects *o = w->objects;
 
@@ -2254,6 +2263,20 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
             }
             case 0xE: {
                 uint32_t reg = (uint32_t)(v[1] & 0xFF);
+
+                if (reg == PORT_GS_REG_NATIVE_DRAW) {
+                    /* native draw's marks: the PS2 path's packets of the native draws before them follow, for
+                       the native GS to leave out when it draws the native ones (gsn_set_native_draw). Their
+                       runs are not paired: the native draws are, by their identity (gsn_native_draw.inc) */
+                    uint32_t command = RD_ND_COMMAND(v[0]);
+
+                    if (command == RD_ND_ALT_BEGIN) {
+                        w->alt = port_options.renderer == PORT_RENDERER_NATIVE &&
+                                 port_options.native_draw_compare != PORT_ND_COMPARE_PS2;
+                    } else if (command == RD_ND_ALT_END) {
+                        w->alt = 0;
+                    }
+                }
 
                 if (reg == 0x4 || reg == 0x5 || reg == 0xC || reg == 0xD) {
                     if (w->gpu) {

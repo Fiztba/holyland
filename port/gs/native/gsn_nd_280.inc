@@ -19,7 +19,8 @@
 // 7-21 (the record), 22 (the context whose XYOFFSET) and 23 (the second pass). Their records are a buffer
 // of their own, so a batch of 0x280 corners is never one of 0x000's: the GS draws them in two batches
 // (the PS2 path's would hold both: "Mixed batches" in NATIVE_DRAW_TASKS.md).
-// Pictures between are not handled yet (P2-5): 0x280 draws are drawn where they are in the frame.
+// Pictures between (P2-5): as nd_draw's of the models' kinds (nd_model_flags), each matrix set moved by its
+// own matrices (nd_280.vert's moved: the vertex's set's Between).
 
 // nd_280.vert's Draw (std430, a record a draw): matrices VU layout, a qword a column; [0] set A, [1] set B
 struct Nd280Const {
@@ -33,8 +34,10 @@ struct Nd280Const {
     float point_col[4][4];  // VU1 0x4E-0x51
     int32_t info[4];        // the point lights, ND_C_* flags
     int32_t offset[4];      // XYOFFSET_1's X and Y, XYOFFSET_2's (12.4)
+    float screen[16];       // view to screen (pictures between: sx, sy, cx, cy and cz, as nd_000.vert's)
+    NdBetween bt[2];        // (ND_C_MODEL) set A's and set B's moves from the frame before (nd_between)
 };
-static_assert(sizeof(Nd280Const) == 45 * 16, "Nd280Const is nd_280.vert's Draw");
+static_assert(sizeof(Nd280Const) == 71 * 16, "Nd280Const is nd_280.vert's Draw");
 const uint32_t ND280_CORNER_CONTEXT2 = 1u << 22, ND280_CORNER_SPHERE = 1u << 23, ND280_RECORDS = 4096;
 const uint32_t ND280_SLOTS = 2; // (arena places a vertex: eight qwords)
 
@@ -241,6 +244,14 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
         uint64_t offset = gs->reg[R_XYOFFSET_1 + c];
         k.offset[2 * c] = int32_t(bits(offset, 0, 16));
         k.offset[2 * c + 1] = int32_t(bits(offset, 32, 16));
+    }
+    // pictures between: by the camera and the part's two matrix sets' own moves (nd_model_flags)
+    memcpy(k.screen, cam.screen, 64);
+    NdKey key = nd_key(d);
+    if (!interp.active) {
+        nd_remember(key, d, cam);
+    } else {
+        k.info[1] = nd_model_flags(key, d, cam, &k.bt[0], &k.bt[1]);
     }
     memcpy(nd280.draws.map + size_t(record) * sizeof(Nd280Const), &k, sizeof(k));
     Nd280Plan p;
