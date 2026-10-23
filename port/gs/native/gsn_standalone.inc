@@ -2,8 +2,8 @@
 // (docs/port/NATIVE_DRAW.md 3.4 and P8; docs/port/NATIVE_DRAW_P8.md.) Included by gsn.cpp after
 // gsn_native_draw.inc, inside its namespace: the native GS's own code, kept in a file of its own.
 //
-// With --renderer modern (gsn_set_standalone) the native draws of the scene's kinds (map records and the
-// items lying about: sa_kind) are not drawn into the GS's targets with the GS's Z. They are drawn into the
+// With --renderer modern (gsn_set_standalone) the native draws of the scene's kinds (every ported kind:
+// programs 0x000, 0x280, 0x700, 0x5A0 and the trail's strip; sa_kind) are not drawn into the GS's targets with the GS's Z. They are drawn into the
 // scene's own: a colour image as large as the frame target (the GS's colour format, so the GS's
 // arithmetic, gs_frag.h, makes the same colours), multisampled as --native-msaa says, and a D32F depth
 // whose numbers are the GS's Z before any rounding (larger nearer: reversed Z; shaders/nd_000.vert built
@@ -23,8 +23,10 @@
 // The scene and the GS's targets take turns ("islands"): the scene takes the frame target's picture and Z
 // buffer when its first batch comes (sa_acquire: copies), and gives them back (sa_release: its colour
 // copied, its depth as the GS keeps it) before anything else of the GS touches them: a batch the
-// scene does not draw, an upload or copy, a vblank. So everything the scene does not draw yet (entities,
-// effects, the arm, the passes, the 2D, the menus) is drawn by the GS over the scene's picture, in the
+// scene does not draw into the frame or Z buffer (or reading them), an upload or copy over them, a vblank
+// (sa_gs_touches_scene, sa_transfer). The depth clear before the arm and the screen's alpha set before the
+// shadows are the scene's own ops (sa_scene_op). So everything the scene does not draw (the PS2 path's
+// draws left, the water, the passes, the 2D, the menus) is drawn by the GS over the scene's picture, in the
 // chain's order: the 2D and the passes after the world are composited over it as the PS2 drew them. As
 // more kinds move into the scene the turns get fewer, down to one a frame (the world, then the GS's 2D).
 //
@@ -60,6 +62,7 @@ const char *const sa_tex_names[SA_TEX_COUNT] = {"from the table", "a render targ
 
 struct SaStats {
     uint64_t batches, draws, triangles, shader_blends, acquires, releases, frames_touched;
+    uint64_t depth_clears, alpha_sets, shadow_batches; // (the scene's ops, and the shadows by the stencil)
     uint64_t declined[SA_WHY_COUNT];
     uint64_t textures[SA_TEX_COUNT];
     uint64_t decodes, decode_hits, uploads, upload_bytes, chunks_new, replayed_uploads;
@@ -91,8 +94,13 @@ struct Sa {
     bool on = false;
     // the batch's corners, and the draw being met (nd_register): to the scene or not
     bool pending = false, in_draw = false, draw_on = false;
-    uint32_t kinds = (1u << RD_KIND_MAP_RECORD) | (1u << RD_KIND_ITEM); // (KF4_SA_KINDS: a mask of RD_KIND_ bits)
-    bool log = false;                 // (KF4_SA_LOG=1: each batch, and why one is declined)
+    // every ported kind (T1): map records and the sky, objects, items, gold, entities, the arm and the held
+    // weapon (and its trail), effects, shadows, the picked item. Not the reflection's water (its records, a
+    // render target's texture: T3) nor the screen passes (the GS's 2D). (KF4_SA_KINDS: a mask of RD_KIND_ bits)
+    uint32_t kinds = (1u << RD_KIND_MAP_RECORD) | (1u << RD_KIND_MAP_OBJECT) | (1u << RD_KIND_ITEM) | (1u << RD_KIND_GOLD) |
+                     (1u << RD_KIND_ENTITY) | (1u << RD_KIND_ARM) | (1u << RD_KIND_EFFECT) | (1u << RD_KIND_SHADOW) |
+                     (1u << RD_KIND_PICKED);
+    int log = 0;                      // (KF4_SA_LOG=1: each batch, why one is declined and what ends a turn; 2: only the turns)
     float pixel[2] = {-1.0f, -1.0f};  // (KF4_SA_PIXEL=X,Y: the batches over that GS pixel)
     // the table
     std::vector<SaBlock> blocks;
@@ -128,13 +136,24 @@ struct Sa {
     Target *frame_target = nullptr, *z_target = nullptr;
     uint32_t rows0 = 0, rows1 = 0; // the rows the scene drew into since it took them (GS pixels)
     bool z_written = false;
-    // programs
-    Shader *vs = nullptr;
-    Program *program = nullptr, *program_sample = nullptr, *program_copy_ms = nullptr;
+    // The shadows' "each pixel darkened once" (A17): the scene's depth has a stencil (D32F S8, where the GPU has
+    // it), cleared when the scene takes the frame; a run of shadow batches (Entity_DrawPoolModels' loop, after
+    // its GsDraw_SetScreenAlpha(0)) draws where the stencil is not its number and writes it there: first
+    // write wins, as DATE and FBA had it on the GS, without the shader's blending from a copy
+    VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
+    bool stencil = false;
+    uint32_t stencil_gen = 0; // the number of the last run of shadow batches since the stencil was cleared
+    bool last_shadow = false; // the scene's last batch was a shadow's
+    // programs: [SA_VS_*][a cut-out shaded at every sample]
+    Shader *vs = nullptr, *vs_280 = nullptr, *vs_700 = nullptr;
+    Program *programs[3][2] = {};
+    Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
 } sa;
+enum { SA_VS_000, SA_VS_280, SA_VS_700 }; // (sa.programs: sa_000.vert, sa_280.vert, sa_700.vert)
 
 void sa_release();
+void sa_sync();
 
 // The blocks of a rectangle of a buffer (bp, bw, psm), x0..x0+w by y0..y0+h, each with whether the
 // rectangle covers all of it
@@ -668,7 +687,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
 
 // ---- The scene's targets, and its turns with the GS's ------------------------------------------------
 ImageHandle sa_image(uint32_t width, uint32_t height, VkFormat format, uint32_t samples) {
-    bool depth = format == VK_FORMAT_D32_SFLOAT;
+    bool depth = format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D32_SFLOAT_S8_UINT;
     ImageCreateInfo info = ImageCreateInfo::render_target(width, height, format);
     info.samples = VkSampleCountFlagBits(samples);
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
@@ -691,7 +710,12 @@ void sa_programs() {
     vert.sets[2].meta[0].array_size = 1;
     vert.sets[2].meta[1].array_size = 1;
     sa.vs = gs->device->request_shader(gsn_spv_sa_000_vert, sizeof(gsn_spv_sa_000_vert), &vert);
-    sa.program = gs->device->request_program(sa.vs, gs->program->get_shader(ShaderStage::Fragment));
+    sa.vs_280 = gs->device->request_shader(gsn_spv_sa_280_vert, sizeof(gsn_spv_sa_280_vert), &vert);
+    sa.vs_700 = gs->device->request_shader(gsn_spv_sa_700_vert, sizeof(gsn_spv_sa_700_vert), &vert);
+    Shader *vss[3] = {sa.vs, sa.vs_280, sa.vs_700};
+    for (int k = 0; k < 3; k++) {
+        sa.programs[k][0] = gs->device->request_program(vss[k], gs->program->get_shader(ShaderStage::Fragment));
+    }
     ResourceLayout frag = {};
     frag.output_mask = 1;
     frag.push_constant_size = sizeof(Push);
@@ -702,8 +726,10 @@ void sa_programs() {
         frag.sets[0].meta[b].array_size = 1;
     }
     if (sample_shading) {
-        sa.program_sample = gs->device->request_program(
-            sa.vs, gs->device->request_shader(gsn_spv_sa_sample_frag, sizeof(gsn_spv_sa_sample_frag), &frag));
+        Shader *fs = gs->device->request_shader(gsn_spv_sa_sample_frag, sizeof(gsn_spv_sa_sample_frag), &frag);
+        for (int k = 0; k < 3; k++) {
+            sa.programs[k][1] = gs->device->request_program(vss[k], fs);
+        }
     }
     ResourceLayout copy_vert = {};
     ResourceLayout copy = {};
@@ -757,74 +783,18 @@ bool sa_targets(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
     return true;
 }
 
-// The scene takes the frame's picture and Z buffer (all of them: what it draws over blends with them, and is
-// tested against them)
-bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h) {
-    if (sa.bound && sa.fbp == fbp && sa.fbw == fbw && sa.fpsm == fpsm && sa.zbp == zbp && sa.zpsm == zpsm &&
-        find_target(fbp, fbw, fpsm) == sa.frame_target && find_target(zbp, fbw, zpsm) == sa.z_target &&
-        sa.frame_target->height >= need_h) {
-        return true;
-    }
-    sa_release();
-    Target *color, *depth;
-    if (!sa_targets(fbp, fbw, fpsm, zbp, zpsm, need_h, &color, &depth)) {
-        return false;
-    }
-    sa_programs();
-    uint32_t w = color->image->get_width(), h = color->image->get_height();
-    uint32_t samples = target_samples;
-    if (!sa.color || sa.color->get_width() != w || sa.color->get_height() != h || sa.samples != samples ||
-        sa.color->get_format() != color->image->get_format()) {
-        sa.color = sa_image(w, h, color->image->get_format(), samples);
-        sa.depth = sa_image(w, h, VK_FORMAT_D32_SFLOAT, samples);
-        sa.samples = samples;
-    }
-    {
-        Why why(GSN_WHY_COPY);
-        if (samples > 1) {
-            msaa_ready(*color);
-            msaa_ready(*depth);
-        } else {
-            msaa_settle(*color);
-            msaa_settle(*depth);
-        }
-        end_pass();
-    }
-    gpu_mark(GPU_OTHER);
-    transfer_barrier();
-    const Image &cs = samples > 1 ? *color->ms : *color->image;
-    const Image &zs = samples > 1 ? *depth->ms : *depth->image;
-    cmd().copy_image(*sa.color, cs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
-    cmd().copy_image(*sa.depth, zs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
-                     {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1});
-    transfer_barrier();
-    gpu_mark(GPU_COPY);
-    gsn_stats.copy_bytes += uint64_t(w) * h * (wide(cs) ? 12 : 8) * samples;
-    sa.bound = true;
-    sa.fbp = fbp;
-    sa.fbw = fbw;
-    sa.fpsm = fpsm;
-    sa.zbp = zbp;
-    sa.zpsm = zpsm;
-    sa.frame_target = color;
-    sa.z_target = depth;
-    sa.rows0 = UINT32_MAX;
-    sa.rows1 = 0;
-    sa.z_written = false;
-    sa_stats.acquires++;
-    return true;
-}
-
-// One of the copies back (shaders/msaa.vert): src read at each pixel (or sample) of dst, over rows y0..y1
+// One of the copies (shaders/msaa.vert): src read at each pixel (or sample) of dst, over rows y0..y1 (clear:
+// dst's depth and stencil cleared first, for the scene's depth taken)
 void sa_copy_pass(const Image &dst, const Image &src, Program *program, bool depth, uint32_t y0, uint32_t y1,
-                  const void *push, size_t push_size) {
+                  const void *push, size_t push_size, bool clear = false) {
     end_pass();
     RenderPassInfo rp;
     RenderPassInfo::Subpass subpass;
     if (depth) {
         rp.depth_stencil = &dst.get_view();
-        rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+        rp.op_flags = (clear ? RENDER_PASS_OP_CLEAR_DEPTH_STENCIL_BIT : RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT) |
+                      RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+        rp.clear_depth_stencil = {0.0f, 0};
     } else {
         rp.num_color_attachments = 1;
         rp.color_attachments[0] = &dst.get_view();
@@ -847,7 +817,7 @@ void sa_copy_pass(const Image &dst, const Image &src, Program *program, bool dep
     VkViewport vp = {0.0f, 0.0f, float(dst.get_width()), float(dst.get_height()), 0.0f, 1.0f};
     c.set_viewport(vp);
     c.set_scissor(rp.render_area);
-    c.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp);
+    c.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp); // (a depth's: Granite samples its depth view)
     if (push) {
         c.push_constants(push, 0, push_size);
     }
@@ -856,6 +826,76 @@ void sa_copy_pass(const Image &dst, const Image &src, Program *program, bool dep
     gsn_stats.passes++;
     barrier_fresh = false;
     full_barrier();
+}
+
+// The scene takes the frame's picture and Z buffer (all of them: what it draws over blends with them, and is
+// tested against them)
+bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h) {
+    if (sa.bound && sa.fbp == fbp && sa.fbw == fbw && sa.fpsm == fpsm && sa.zbp == zbp && sa.zpsm == zpsm &&
+        find_target(fbp, fbw, fpsm) == sa.frame_target && find_target(zbp, fbw, zpsm) == sa.z_target &&
+        sa.frame_target->height >= need_h) {
+        return true;
+    }
+    sa_release();
+    Target *color, *depth;
+    if (!sa_targets(fbp, fbw, fpsm, zbp, zpsm, need_h, &color, &depth)) {
+        return false;
+    }
+    sa_programs();
+    uint32_t w = color->image->get_width(), h = color->image->get_height();
+    uint32_t samples = target_samples;
+    if (!sa.color || sa.color->get_width() != w || sa.color->get_height() != h || sa.samples != samples ||
+        sa.color->get_format() != color->image->get_format()) {
+        sa.color = sa_image(w, h, color->image->get_format(), samples);
+        sa.depth = sa_image(w, h, sa.depth_format, samples);
+        sa.samples = samples;
+    }
+    {
+        Why why(GSN_WHY_COPY);
+        if (samples > 1) {
+            msaa_ready(*color);
+            msaa_ready(*depth);
+        } else {
+            msaa_settle(*color);
+            msaa_settle(*depth);
+        }
+        end_pass();
+    }
+    gpu_mark(GPU_OTHER);
+    transfer_barrier();
+    const Image &cs = samples > 1 ? *color->ms : *color->image;
+    const Image &zs = samples > 1 ? *depth->ms : *depth->image;
+    cmd().copy_image(*sa.color, cs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+    if (sa.stencil) {
+        // (a depth with a stencil is not the GS's format: its depth written by a pass, sample for sample, and
+        // its stencil cleared)
+        transfer_barrier();
+        float zpush[2] = {-1.0f, 1.0e30f}; // (as it is)
+        sa_copy_pass(*sa.depth, zs, samples > 1 ? sa.program_depth_ms : sa.program_depth, true, 0, h, zpush, sizeof(zpush),
+                     true);
+    } else {
+        cmd().copy_image(*sa.depth, zs, {0, 0, 0}, {0, 0, 0}, {w, h, 1}, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                         {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1});
+    }
+    sa.stencil_gen = 0;
+    sa.last_shadow = false;
+    transfer_barrier();
+    gpu_mark(GPU_COPY);
+    gsn_stats.copy_bytes += uint64_t(w) * h * (wide(cs) ? 12 : 8) * samples;
+    sa.bound = true;
+    sa.fbp = fbp;
+    sa.fbw = fbw;
+    sa.fpsm = fpsm;
+    sa.zbp = zbp;
+    sa.zpsm = zpsm;
+    sa.frame_target = color;
+    sa.z_target = depth;
+    sa.rows0 = UINT32_MAX;
+    sa.rows1 = 0;
+    sa.z_written = false;
+    sa_stats.acquires++;
+    return true;
 }
 
 // The scene gives the frame's picture and Z buffer back to the GS: its colour over the rows it drew into,
@@ -969,6 +1009,131 @@ bool zwrite_any(uint64_t zbuf, uint64_t test) {
     return !bits(zbuf, 32, 1) && bits(test, 16, 1);
 }
 
+// (sa_flush) Whether a batch of the GS's can touch what the scene has taken: its frame, its Z buffer (when it
+// tests or writes Z) or its texture on their pages. One that cannot (the scrolling textures' sprites into their
+// 128 x 128 targets, between the world's draws) is drawn by the GS while the scene keeps the frame
+bool sa_gs_touches_scene() {
+    if (find_target(sa.fbp, sa.fbw, sa.fpsm) != sa.frame_target || find_target(sa.zbp, sa.fbw, sa.zpsm) != sa.z_target) {
+        return true;
+    }
+    uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
+    uint64_t frame = gs->reg[R_FRAME_1 + ctxt], zbuf = gs->reg[R_ZBUF_1 + ctxt], test = gs->reg[R_TEST_1 + ctxt];
+    uint64_t scissor = gs->reg[R_SCISSOR_1 + ctxt], tex0 = gs->reg[R_TEX0_1 + ctxt];
+    uint32_t fbw = bits(frame, 16, 6), h = bits(scissor, 48, 11) + 1;
+    uint32_t tlo[2], tcount[2];
+    target_pages(*sa.frame_target, &tlo[0], &tcount[0]);
+    target_pages(*sa.z_target, &tlo[1], &tcount[1]);
+    auto touches = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t rows) {
+        uint32_t lo, count;
+        buffer_pages(bp, bw, psm, w, rows, &lo, &count);
+        return pages_overlap(lo, count, tlo[0], tcount[0]) || pages_overlap(lo, count, tlo[1], tcount[1]);
+    };
+    if (touches(bits(frame, 0, 9) * 32, fbw, bits(frame, 24, 6), std::max(fbw, 1u) * 64, h)) {
+        return true;
+    }
+    // (the Z buffer as flush_batch needs it: not for ZTST ALWAYS without a write, nor GEQUAL from the format's
+    // largest Z, as the scrolling textures draw)
+    uint32_t zpsm = bits(zbuf, 24, 4) | 0x30, ztst = bits(test, 17, 2), zmin = UINT32_MAX;
+    bool zwrite = !bits(zbuf, 32, 1) && (!bits(test, 0, 1) || bits(test, 1, 3) != 0 || bits(test, 12, 2) == 2);
+    for (const Vtx &v : gs->verts) {
+        zmin = std::min(zmin, v.z);
+    }
+    bool need_z = bits(test, 16, 1) && ztst != 0 && (zwrite || !(ztst == 1 || (ztst == 2 && std::min(zmin, depth_max(zpsm)) == depth_max(zpsm))));
+    if (need_z && touches(bits(zbuf, 0, 9) * 32, fbw, bits(zbuf, 24, 4) | 0x30, std::max(fbw, 1u) * 64, h)) {
+        return true;
+    }
+    if (((prim >> 4) & 1) && touches(bits(tex0, 0, 14), bits(tex0, 14, 6), bits(tex0, 20, 6), 1u << std::min(bits(tex0, 26, 4), 10u),
+                                     1u << std::min(bits(tex0, 30, 4), 10u))) {
+        return true;
+    }
+    return false;
+}
+
+// (sa_draw_batch) Whether the batch is the shadows' (Entity_DrawPoolModels: program 0x5A0's records only)
+bool sa_shadow_batch() {
+    if (gs->verts.empty() || nd.batch_draws != nd.draws.buffer.get()) {
+        return false;
+    }
+    for (const Vtx &v : gs->verts) {
+        uint32_t record = (v.rgba & 0xFFFFFFu) >> ND_CORNER_DRAW_SHIFT;
+        if (nd_corner_kind(v) != ND_KIND_000 || nd700_corner(v) || record >= nd.of5a0.size() || !nd.of5a0[record]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// (sa_draw_batch's draw call: n corners from first) Each stretch of one kind of corner with its program, as
+// nd_draw_range does it: program 0x000's (and 0x5A0's) with sa_000.vert, 0x700's with sa_700.vert (0x000's
+// records), 0x280's with sa_280.vert and its records, and the PS2 path's (the trail; the scene's ops) with the
+// GS's own vertex program (gs.vert: their Z as the GS has it, in the scene's units; nd_strip.vert in a picture
+// between). sample: a cut-out shaded at every sample.
+void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first) {
+    const Vtx *v = gs->verts.data();
+    const Buffer *bound = nullptr;
+    for (uint32_t end = first + n; first < end;) {
+        int kind = nd_corner_kind(v[first]);
+        bool effect = kind == ND_KIND_000 && nd700_corner(v[first]);
+        uint32_t to = first + 3;
+        while (to < end && nd_corner_kind(v[to]) == kind && (kind != ND_KIND_000 || nd700_corner(v[to]) == effect)) {
+            to += 3;
+        }
+        if (kind == ND_KIND_PS2) {
+            c.set_program(nd.strip_active ? nd_strip_program(gs->program) : gs->program);
+        } else {
+            const Buffer *want = kind == ND_KIND_280 ? nd280_batch_draws() : nd.batch_draws;
+            c.set_program(sa.programs[kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000][sample ? 1 : 0]);
+            if (want && want != bound) {
+                c.set_storage_buffer(2, 1, *want);
+                bound = want;
+            }
+        }
+        c.draw(to - first, first);
+        first = to;
+    }
+}
+
+// The GS's sprites the scene draws itself, its ops (not the batch of a draw: the PS2 path's): the depth clear
+// before the picked item and the arm (GsDraw_ClearDepth: Z 0 over the frame, every pixel failing the alpha test
+// into the Z buffer only), and, while the scene has the frame, the screen's alpha set (GsDraw_SetScreenAlpha:
+// black, every pixel failing the alpha test into the frame only, blended as Cd: its alpha written alone; before
+// the shadows). Drawn into the scene as the GS would draw them, so the scene keeps the frame across them.
+enum { SA_OP_NONE, SA_OP_CLEAR_DEPTH, SA_OP_ALPHA };
+int sa_scene_op() {
+    if (!gs->batch_sprites || nd.active || gs->verts.empty()) {
+        return SA_OP_NONE;
+    }
+    uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
+    uint64_t test = gs->reg[R_TEST_1 + ctxt];
+    // (untextured; the alpha test NEVER, no DATE, ZTST ALWAYS)
+    if (((prim >> 4) & 1) || !bits(test, 0, 1) || bits(test, 1, 3) != 0 || bits(test, 14, 1) || !bits(test, 16, 1) ||
+        bits(test, 17, 2) != 1) {
+        return SA_OP_NONE;
+    }
+    uint32_t afail = bits(test, 12, 2);
+    if (afail == 2) {
+        for (const Vtx &v : gs->verts) {
+            if (v.z != 0) {
+                return SA_OP_NONE;
+            }
+        }
+        return SA_OP_CLEAR_DEPTH;
+    }
+    uint64_t frame = gs->reg[R_FRAME_1 + ctxt], zbuf = gs->reg[R_ZBUF_1 + ctxt], alpha = gs->reg[R_ALPHA_1 + ctxt];
+    if (afail != 1 || !sa.bound || bits(frame, 0, 9) * 32 != sa.fbp || bits(frame, 16, 6) != sa.fbw ||
+        bits(frame, 24, 6) != sa.fpsm || bits(zbuf, 0, 9) * 32 != sa.zbp || (bits(zbuf, 24, 4) | 0x30) != sa.zpsm ||
+        !((prim >> 6) & 1) || bits(alpha, 0, 2) != 0 || bits(alpha, 2, 2) != 2 || bits(alpha, 4, 2) != 2 ||
+        bits(alpha, 6, 2) != 1) {
+        return SA_OP_NONE;
+    }
+    for (const Vtx &v : gs->verts) {
+        if (v.rgba & 0xFFFFFFu) {
+            return SA_OP_NONE;
+        }
+    }
+    return SA_OP_ALPHA;
+}
+
 // ---- A batch drawn into the scene ----------------------------------------------------------------------
 // (flush_batch, a batch of the scene's corners) Its GS state as flush_batch works it out, drawn with
 // sa_000.vert into the scene's targets. False: declined (sa_stats.declined[*why]), for the GS to draw.
@@ -991,6 +1156,13 @@ bool sa_draw_batch(int *why) {
     if (!bits(test, 16, 1)) {
         zmsk = true;
     }
+    // the shadows (A17): each pixel darkened once by the stencil (first write wins), not DATE's test of the
+    // alpha bit FBA sets (the screen's alpha cleared before them: DATM 0), which the shader would blend from
+    // copies of the scene's colour, triangle run by triangle run
+    bool shadow = date && sa.stencil && !bits(test, 15, 1) && sa_shadow_batch();
+    if (shadow) {
+        date = false;
+    }
     if ((fpsm != GSN_PSMCT32 && fpsm != GSN_PSMCT24) || fbw * 64 < 512 || sx1 < sx0 || sy1 < sy0) {
         *why = SA_WHY_FRAME;
         return false;
@@ -1011,7 +1183,7 @@ bool sa_draw_batch(int *why) {
         return false;
     }
     Target *color = sa.frame_target;
-    if (sa.log) {
+    if (sa.log == 1) {
         uint32_t zl = UINT32_MAX, zh = 0;
         for (const Vtx &v : gs->verts) {
             zl = std::min(zl, v.z);
@@ -1091,7 +1263,9 @@ bool sa_draw_batch(int *why) {
     // what Vulkan's blending cannot do (DATE, a partial mask, PABE, no COLCLAMP, FBA with As, As above 1.0,
     // Ad or a FIX above 1.0) is blended in the shader, as flush_batch does: from a copy of the scene's colour
     // taken before each run of triangles that do not overlap (gs_frag.h's GSN_F_SHADER_BLEND)
-    bool shader_blend = date || partial_mask ||
+    // (the shadows keep the GS's blending, in the shader: from one copy, as the stencil lets no triangle of the
+    // run draw over another's pixel)
+    bool shader_blend = date || partial_mask || (shadow && abe) ||
                         (abe && ((push.misc & M_PABE) || !(push.misc & M_COLCLAMP) || (bc == 0 && (push.misc & M_FBA)) ||
                                  as_over || !fixed));
     if (shader_blend) {
@@ -1135,6 +1309,19 @@ bool sa_draw_batch(int *why) {
     }
     bool ties = ztst == 2 || ztst == 3;
     float slack = !zwrite_any(zbuf, test) ? slack_tie : same_twice ? slack_tie : slack_layer;
+    // A skinned model's second pass (program 0x280's sphere-mapped shine) is drawn at its first pass's very
+    // corners: the same depth to the bit, so it needs no slack. With one it shone through onto a part a Z or
+    // two in front of its own (the seated man's thigh under his coat, far save, 4x: a light band)
+    bool second_pass = !gs->verts.empty();
+    for (const Vtx &v : gs->verts) {
+        if (nd_corner_kind(v) != ND_KIND_280 || !((v.rgba & 0xFFFFFFu) & ND280_CORNER_SPHERE)) {
+            second_pass = false;
+            break;
+        }
+    }
+    if (second_pass) {
+        slack = 0.0f;
+    }
     // the rows, the scissor; triangles wholly outside it left out (not in a picture between: the GPU moves them)
     uint32_t scale_x = color->sx, scale_y = color->sy;
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
@@ -1208,7 +1395,7 @@ bool sa_draw_batch(int *why) {
     // --native-cutout-aa: a cut-out shaded at every sample (flush_batch's test)
     bool per_sample = false;
     if (st.cut_texels && bits(tex0, 34, 1) && st.cut_lo < st.cut_hi && st.cut_clear * 4 >= st.cut_all && !fst &&
-        cutout_aa_mode == GSN_CUTOUT_AA_SSAA && sa.program_sample) {
+        cutout_aa_mode == GSN_CUTOUT_AA_SSAA && sa.programs[SA_VS_000][1]) {
         uint32_t tfx = bits(tex0, 35, 2);
         uint32_t lo = tfx == 0 ? (as_min * st.cut_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + st.cut_lo) : st.cut_lo;
         uint32_t hi = tfx == 0 ? std::min(255u, (as_max * st.cut_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + st.cut_hi) : st.cut_hi;
@@ -1264,9 +1451,9 @@ bool sa_draw_batch(int *why) {
         }
     }
     // two passes over overlapping triangles, or blending in the shader: in runs that do not overlap, so that
-    // each sees those before it
+    // each sees those before it (not the shadows': a pixel is drawn once, by the stencil)
     std::vector<uint32_t> runs(1, 0);
-    if (npasses > 1 || shader_blend) {
+    if ((npasses > 1 || shader_blend) && !shadow) {
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
         for (uint32_t t = 1; t < triangles; t++) {
             bool cut = t - start >= 256;
@@ -1281,15 +1468,17 @@ bool sa_draw_batch(int *why) {
     }
     runs.push_back(uint32_t(gs->verts.size()));
 
-    Program *program = per_sample ? sa.program_sample : sa.program;
     size_t bytes = gs->verts.size() * sizeof(Vtx);
     // A layer's colour pass also passes within half its Z's change across a GS pixel more, at most a Z more
     // (--native-layer-z tolerant's slope: at a grazing angle the two meshes, a fraction of a pixel apart, are
     // further apart in Z; a tower's top seen from below). Per triangle, from its corners, in each corner's
     // alpha (which the GPU does not read otherwise): 255 is one Z (sa_000.vert, pc.zslope).
-    bool sloped = slack == slack_layer && zwrite_any(zbuf, test) && !same_twice;
+    bool sloped = slack == slack_layer && zwrite_any(zbuf, test) && !same_twice && !second_pass;
     std::vector<Vtx> corners(gs->verts.begin(), gs->verts.end());
     for (size_t t = 0; t + 2 < corners.size(); t += 3) {
+        if (nd_corner_kind(corners[t]) == ND_KIND_PS2) {
+            continue; // (the PS2 path's: its alpha is its own, gs.vert takes no slack)
+        }
         uint32_t extra = 0;
         if (sloped) {
             const Vtx *v = &corners[t];
@@ -1306,6 +1495,20 @@ bool sa_draw_batch(int *why) {
             corners[t + k].rgba = (corners[t + k].rgba & 0xFFFFFFu) | extra << 24;
         }
     }
+    // a run of shadow batches: a number of its own in the stencil (cleared when the scene took the frame; after
+    // 255 runs the frame taken again, to clear it)
+    if (shadow && !sa.last_shadow && sa.stencil_gen >= 255) {
+        sa_release();
+        if (!sa_acquire(fbp, fbw, fpsm, zbp, zpsm, sy1 + 1) || sa.frame_target != color) {
+            *why = SA_WHY_TARGET;
+            return false;
+        }
+    }
+    if (shadow && !sa.last_shadow) {
+        sa.stencil_gen++;
+    }
+    sa.last_shadow = shadow;
+    sa_stats.shadow_batches += shadow;
     for (size_t r = 0; r + 1 < runs.size(); r++) {
         uint32_t first = runs[r], count = runs[r + 1] - runs[r];
         if (shader_blend) {
@@ -1340,7 +1543,7 @@ bool sa_draw_batch(int *why) {
         Cmd &c = cmd();
         if (fresh || r == 0) {
             c.set_opaque_state();
-            c.set_program(program);
+            c.set_program(sa.programs[SA_VS_000][0]); // (each stretch's own: sa_draw_range)
             c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
             c.set_cull_mode(VK_CULL_MODE_NONE);
             VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
@@ -1374,8 +1577,9 @@ bool sa_draw_batch(int *why) {
             c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
             c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
             c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
-            nd_bind(c);
-            c.set_storage_buffer(2, 1, *nd.batch_draws);
+            if (nd.active) {
+                nd_bind(c); // (the arena: not for a batch of the PS2 path's corners only, whose buffers may be gone)
+            }
         }
         for (int i = 0; i < ndraws; i++) {
             Push p = push;
@@ -1384,8 +1588,13 @@ bool sa_draw_batch(int *why) {
             p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
             c.set_color_write_mask(draws[i].mask);
             c.set_depth_test(true, draws[i].zwrite);
+            if (shadow) {
+                // (where the stencil is not this run's number; a colour draw writes it there, the Z-first one not)
+                c.set_stencil(true, VK_COMPARE_OP_NOT_EQUAL, draws[i].mask ? VK_STENCIL_OP_REPLACE : VK_STENCIL_OP_KEEP,
+                              sa.stencil_gen, 0xFF);
+            }
             c.push_constants(&p, 0, sizeof(p));
-            c.draw(count, first);
+            sa_draw_range(c, per_sample, count, first);
             sa_stats.draws++;
             gsn_stats.draws++;
         }
@@ -1410,14 +1619,36 @@ bool sa_flush() {
     if (!sa.on) {
         return false;
     }
-    bool scene = nd.active && !nd.pass_active && !nd.strip_active && (sa.in_draw ? sa.draw_on : sa.pending);
+    // (the batch of a draw of the scene's: its corners, or the trail's, the PS2 path's made by the draw; not a
+    // screen pass's)
+    bool scene = !nd.pass_active && (sa.in_draw ? sa.draw_on : sa.pending);
     sa.pending = false;
-    if (scene) {
+    int op = scene ? SA_OP_NONE : sa_scene_op();
+    if (op == SA_OP_CLEAR_DEPTH) {
+        sa_stats.depth_clears++;
+    } else if (op == SA_OP_ALPHA) {
+        sa_stats.alpha_sets++;
+    }
+    if (scene || op != SA_OP_NONE) {
         int why = SA_WHY_FRAME;
         if (sa_draw_batch(&why)) {
             return true;
         }
         sa_stats.declined[why]++;
+        if (sa.log == 1) {
+            fprintf(stderr, "[sa] declined: %s\n", sa_why_names[why]);
+        }
+    }
+    if (sa.bound && !sa_gs_touches_scene()) {
+        return false; // (the GS's, elsewhere in VRAM: the scene keeps the frame)
+    }
+    if (sa.log && sa.bound) {
+        uint32_t prim = gs->batch_prim, ctxt = (prim >> 9) & 1;
+        fprintf(stderr, "[sa] turn ends: a batch of the GS's: prim %#x frame %#llx test %#llx alpha %#llx tex0 %#llx "
+                        "sprites %d pass %d native %d z %u n %zu\n",
+                prim, (unsigned long long)gs->reg[R_FRAME_1 + ctxt], (unsigned long long)gs->reg[R_TEST_1 + ctxt],
+                (unsigned long long)gs->reg[R_ALPHA_1 + ctxt], (unsigned long long)gs->reg[R_TEX0_1 + ctxt],
+                gs->batch_sprites, nd.pass_active, nd.active, gs->verts.empty() ? 0u : gs->verts[0].z, gs->verts.size());
     }
     sa_release();
     return false;
@@ -1425,7 +1656,9 @@ bool sa_flush() {
 
 // ---- The draws met (nd_register) -----------------------------------------------------------------------
 bool sa_kind(const RdDraw &d) {
-    return d.program == 0 && d.kind < 32 && ((sa.kinds >> d.kind) & 1) && (d.flags & ~uint32_t(RD_DRAW_WAVE_UVS)) == 0;
+    bool program = d.program == 0 || d.program == 0x280 || d.program == 0x700 || d.program == 0x5A0 ||
+                   d.program == RD_PROGRAM_GS_STRIP;
+    return program && d.kind < 32 && ((sa.kinds >> d.kind) & 1) && (d.flags & ~uint32_t(RD_DRAW_WAVE_UVS)) == 0;
 }
 
 // Before a draw is met: whether it goes to the scene; a batch holds the scene's corners or none
@@ -1458,9 +1691,49 @@ bool sa_waiting() {
     return sa.on && sa.pending && !gs->verts.empty();
 }
 
-// (vsync_now, take_snapshot, begin_transfer ...) The GS wants its targets: the scene's turn ends
+// (begin_transfer) A transfer: the scene's turn ends when it can touch the frame or Z buffer the scene has taken
+// (written by an upload or a copy, read by a copy or a read-back). An upload of a texture elsewhere in VRAM, as
+// the models' and effects' are between the world's draws, leaves them alone: the scene's textures are the
+// table's, and the GS's draws read VRAM as before
+void sa_transfer(uint32_t dir) {
+    if (!sa.on || !sa.bound) {
+        return;
+    }
+    uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
+    uint32_t w = bits(trxreg, 0, 12), h = bits(trxreg, 32, 12);
+    bool held = find_target(sa.fbp, sa.fbw, sa.fpsm) == sa.frame_target && find_target(sa.zbp, sa.fbw, sa.zpsm) == sa.z_target;
+    auto touches = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y) {
+        uint32_t lo, count;
+        buffer_pages(bp, bw, psm, x + w, y + h, &lo, &count);
+        for (const Target *t : {sa.frame_target, sa.z_target}) {
+            uint32_t tlo, tcount;
+            target_pages(*t, &tlo, &tcount);
+            if (pages_overlap(lo, count, tlo, tcount)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    bool hit = !held || dir > 2;
+    if (!hit && (dir == 0 || dir == 2)) {
+        hit = touches(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), bits(bitbltbuf, 56, 6), bits(trxpos, 32, 11),
+                      bits(trxpos, 48, 11));
+    }
+    if (!hit && (dir == 1 || dir == 2)) {
+        hit = touches(bits(bitbltbuf, 0, 14), bits(bitbltbuf, 16, 6), bits(bitbltbuf, 24, 6), bits(trxpos, 0, 11),
+                      bits(trxpos, 16, 11));
+    }
+    if (hit) {
+        sa_sync();
+    }
+}
+
+// (vsync_now, take_snapshot, gsn_read_rect ...) The GS wants its targets: the scene's turn ends
 void sa_sync() {
     if (sa.on) {
+        if (sa.log && sa.bound) {
+            fprintf(stderr, "[sa] turn ends: the GS's targets wanted (an upload, a copy, a picture ...)\n");
+        }
         sa_release();
     }
 }
@@ -1474,7 +1747,7 @@ void sa_switch(bool on) {
     sa.on = on;
     sa.pending = sa.in_draw = false;
     if (on) {
-        sa.log = getenv("KF4_SA_LOG") && atoi(getenv("KF4_SA_LOG")) > 0;
+        sa.log = getenv("KF4_SA_LOG") ? atoi(getenv("KF4_SA_LOG")) : 0;
         if (const char *px = getenv("KF4_SA_PIXEL")) {
             sa.pixel[0] = float(atof(px));
             sa.pixel[1] = strchr(px, ',') ? float(atof(strchr(px, ',') + 1)) : sa.pixel[0];
@@ -1482,6 +1755,18 @@ void sa_switch(bool on) {
         const char *kinds = getenv("KF4_SA_KINDS");
         if (kinds && *kinds) {
             sa.kinds = uint32_t(strtoul(kinds, nullptr, 0));
+        }
+        // the scene's depth with a stencil, for the shadows (KF4_SA_NO_STENCIL=1, tests: without, DATE as the GS)
+        const char *no_stencil = getenv("KF4_SA_NO_STENCIL");
+        sa.stencil = !(no_stencil && atoi(no_stencil) > 0) &&
+                     gs->device->image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                                           VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                                               VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT);
+        VkFormat format = sa.stencil ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
+        if (format != sa.depth_format) {
+            sa.depth_format = format;
+            sa.color.reset(); // (the targets made again at the next acquire)
+            sa.depth.reset();
         }
         sa_table_reset();
     }
@@ -1515,6 +1800,9 @@ void sa_print_stats() {
     for (int i = 0; i < SA_TEX_COUNT; i++) {
         fprintf(stderr, "%s%llu %s", i ? ", " : "", (unsigned long long)s.textures[i], sa_tex_names[i]);
     }
+    fprintf(stderr, "; %llu depth clears and %llu alpha sets drawn by the scene, %llu shadow batches by the stencil",
+            (unsigned long long)s.depth_clears, (unsigned long long)s.alpha_sets, (unsigned long long)s.shadow_batches);
+    fprintf(stderr, "; %.2f turns a picture", gsn_stats.pictures ? double(s.acquires) / double(gsn_stats.pictures) : 0.0);
     fprintf(stderr, "; %llu decoded, %llu found again; uploads %llu (%.1f MB, %llu new), %llu asked for again; declined: ",
             (unsigned long long)s.decodes, (unsigned long long)s.decode_hits, (unsigned long long)s.uploads,
             s.upload_bytes / 1048576.0, (unsigned long long)s.chunks_new, (unsigned long long)s.replayed_uploads);

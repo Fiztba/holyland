@@ -31,6 +31,8 @@
 // ND_C_EYE, the arm's, in the eye's space and without the camera's move); S, T and Q of the first pass by
 // the change of depth (the second's are a direction: as they are); a triangle not drawn when its kick or
 // one of the two before it is dropped. With nothing moving the Picture (set 1) is not read.
+// Built a second time with ND_STANDALONE as sa_280.vert (P8, gsn_standalone.inc): the same, with the scene's own
+// depth (Z before any rounding, nd_000.vert's sa_000.vert) in place of the GS's integer Z.
 #include "gs_common.h"
 
 layout(location = 2) in uvec4 a_corner;
@@ -178,6 +180,9 @@ float view_place(float n, float q, float s) {
 struct Place {
     int x, y, z;
     float q;
+#ifdef ND_STANDALONE
+    float zf; // (sa_280.vert) Z before FTOI4: what the scene's depth is made of, unrounded
+#endif
 };
 
 struct Moved {
@@ -185,6 +190,9 @@ struct Moved {
     uint z;
     float f;
     bool drop;
+#ifdef ND_STANDALONE
+    float zf; // (sa_280.vert) Z unrounded
+#endif
 };
 
 Moved moved(uint slot, int s, Place p) {
@@ -194,6 +202,9 @@ Moved moved(uint slot, int s, Place p) {
     r.z = uint(p.z >> 4) & 0xFFFFFFu;
     r.f = 1.0;
     r.drop = false;
+#ifdef ND_STANDALONE
+    r.zf = p.zf;
+#endif
     float depth = div_nearest(1.0, p.q, 0.0);
     if (!(depth > 0.0) || isinf(depth)) {
         return r; // (as it is)
@@ -225,6 +236,9 @@ Moved moved(uint slot, int s, Place p) {
     r.x = int(floor(nx * 16.0 + 0.5));
     r.y = int(floor(ny * 16.0 + 0.5));
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
+#ifdef ND_STANDALONE
+    r.zf = nz;
+#endif
     r.f = depth / mz;
     return r;
 }
@@ -242,6 +256,9 @@ Place vu_place(uint slot) {
     p.x = ftoi(vu_mul(c.x, p.q) * 16.0);
     p.y = ftoi(vu_mul(c.y, p.q) * 16.0);
     p.z = ftoi(vu_mul(c.z, p.q) * 16.0);
+#ifdef ND_STANDALONE
+    p.zf = vu_mul(c.z, p.q);
+#endif
     return p;
 }
 
@@ -299,6 +316,9 @@ void main() {
     float q = pl.q;
     int xi = pl.x, yi = pl.y;
     uint z = uint(pl.z >> 4) & 0xFFFFFFu;
+#ifdef ND_STANDALONE
+    float zf = pl.zf;
+#endif
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, q)), 255.0), 0.0);
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(X.z)) & 0xFFFFu;
     float fog = float((w16 >> 4) & 0xFFu);
@@ -311,6 +331,9 @@ void main() {
         xi = m.x;
         yi = m.y;
         z = m.z;
+#ifdef ND_STANDALONE
+        zf = m.zf;
+#endif
         f = m.f;
         int kk = mesh.q[kick * 4u + 4u].x; // (the kick's number in the batch)
         for (int i = 0; i < 3 && i <= kk && !gone; i++) {
@@ -340,7 +363,12 @@ void main() {
 
     // as gs.vert
     vec2 ndc = (xy + 0.5) * pc.inv_size * 2.0 - 1.0;
+#ifdef ND_STANDALONE
+    // the scene's own depth, its tie slack and a layer's slope term (pc.zbias, pc.zslope): as sa_000.vert's
+    float depth = clamp((zf + pc.zbias + pc.zslope * float(a_corner.a) / 255.0) * pc.zscale, 0.0, 1.0);
+#else
     float depth = (pc.misc & GSN_M_ZCLAMP) != 0u ? 0.0 : float(min(z, pc.zmax)) * pc.zscale;
+#endif
     gl_Position = vec4(ndc, depth, 1.0);
     v_z = float(z);
     v_color = vec4(rgba);

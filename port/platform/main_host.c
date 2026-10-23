@@ -621,7 +621,7 @@ static void parse_options(int argc, char **argv) {
         }
     }
     if (port_options.renderer_modern && port_options.native_draw == 0) {
-        port_options.native_draw = PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS; /* (the scene's kinds) */
+        port_options.native_draw = PORT_ND_ACCEPTED; /* (the scene's kinds: every one, P8 T1) */
         port_options.native_draw_forced = 1; /* (settings.json's "off" must not empty the scene) */
     }
     if (port_options.disc == NULL) {
