@@ -270,7 +270,6 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
         // blended it with Vulkan's blending where the PS2 path's took the shader's: a band of the floor a
         // level or two apart.
         int32_t a = std::min(q[15], 255);
-        int32_t a = std::min(q[15], 255);
         v[k].rgba = (uint32_t(a) & 0xFF) << 24;
         v[k].s = stq[0];
         v[k].t = stq[1];
