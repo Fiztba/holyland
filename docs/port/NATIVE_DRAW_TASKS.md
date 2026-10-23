@@ -75,11 +75,11 @@ up to 8 other agents shared the PC, so nothing here is timed):
   block twice (P2-6's change would save about 40% of the rest); declines of the newer adapters are not
   counted; a 0x280 batch is never one of 0x000's (the PS2 path's can hold both: not seen to matter yet).
 - From P3-1: the rim band in pictures between while pitching (native's camera move of the dome's lowest rows
-  differs from `gs_replay.comp`'s: the moving path's owner; it keeps `sky` out of the accepted kinds); 013
-  looking down at a ledge differs in `map` (22,512 pixels, worst 3; not in these views); P3-2 waits for the
-  owner (A1).
-- The 2D snap at 4x (above), the owner's call; a test-only DMA wait so that the wave-UV maps can be required
-  to be 0 (P2-6's proposal); the follow-ups under "What is left of P1".
+  differs from `gs_replay.comp`'s: the moving path's owner; it keeps `sky` out of the accepted kinds); ~~013
+  looking down at a ledge differs in `map`~~ (*F-013, nd3/f-013: not native draw's; the reference's DMA race on
+  a wave-UV record, 0 with `KF4_ND_DMA_WAIT=1`: under P3-1*); P3-2 waits for the owner (A1).
+- The 2D snap at 4x (above), the owner's call; ~~a test-only DMA wait~~ (*done, F-013: `KF4_ND_DMA_WAIT=1`*;
+  the wave-UV maps can now be required to be 0 with it: not run yet on all six); the follow-ups under "What is left of P1".
 
 **Next:** P2-5, then P4 (effects), P5 (shadows), P6 (the reflection and water) and P7 (the screen passes),
 each described at the end of the task list.
@@ -246,7 +246,10 @@ the same captures (the 414,901 of RENDERER.md is older captures').
     below). Judge 0x280 kinds at 4x knowing it;
   - the PS2 path races its own mutators (P2-6): the DMA thread reads REF'd blocks after the game has gone
     on to the next update, so on the wave-UV maps (027, 034, 039, 040, 042, 114) and with fading objects
-    the reference itself can be a frame late and differ run to run;
+    the reference itself can be a frame late and differ run to run. `KF4_ND_DMA_WAIT=1` (a test switch, in
+    both runs: the environment reaches both) has the game loop wait for the chain it has just sent before
+    the update, so the PS2 path reads every block as the native draw does (F-013). Map 013 has a wave-UV
+    record too (a ledge's water, out of the tour's view): with `map` it differs only through this race;
   - map 000's band needs `--input tests/newgame.pad --frames 1900,2000 -- --teleport 1600:0:0` (herb.pad
     did not show it); the mirror maps are 008, 009, 014 (reflection, flag 0x200) and 041 (the only mode-1
     mirror, flag 0x2), and their water is out of the teleport's view: use made-up saves placed by the water
@@ -818,8 +821,8 @@ not twice.* The numbers are in NATIVE_DRAW.md, "P2-6's measurements". In short:
   game loop, takes compare 1x with all kinds to 0 pixels on 027, 034, 039, 040, 042 and 114. Without it
   they differ by 2,478, 3, 141,243, 145,556, 4,374 and 1,234 pixels. Onoff on 039 with the wait: 1 pixel,
   worst 1.
-- **Proposal (not done; it touches `core.patch` or the DMA):** a test-only switch with that wait, so the
-  sweeps can demand 0 pixels on the wave maps.
+- ~~**Proposal**~~ (*done by F-013*): the test-only switch with that wait is `KF4_ND_DMA_WAIT=1`
+  (`NativeDraw_TestDmaWait`, one condition after `Packet_SendChain` in the game loop, `core.patch`).
 - `--kinds objects,picked` with the single hash: compare 1x and onoff 1x 0 pixels on 63 of 64 maps. 039
   differs as before (141,243 / 35,967 pixels: the race above).
 
@@ -874,6 +877,16 @@ look up with the right stick, look down, walk and turn), 4 vblanks each with the
 - **Not the sky's:** with `map` native, 013 (looking down at a ledge's floor near the camera, up to 22,512
   pixels, worst 3) and 027 (wave-UV water, P1-2's noise, worst 3) differ in the game's frames, identically in
   compare and onoff and with the sky on either path. 013's was not in P1-2's views (new; for P1's follow-ups).
+  *F-013 (nd3/f-013): 013's is P2-6's race, not a decision of the native GS.* The review's capture
+  (`--native-draw map --native-draw-compare native`, 805-809) replayed with a log of every batch: the same
+  batches, state and decisions (blending, passes, runs, layers) in both sets; only one batch of 69 corners
+  differs, a record of flag 0x100 (wave UVs, `Wobble_ApplyWaveUvs` from `func_00112BD0`: alpha 0-128, ALPHA
+  0x44), and only in S. Its PS2-path corners in a frame are the native ones of the frame after: the DMA
+  thread read the block after the next update rewrote it. (The oracle passed because it runs both sides
+  from the VIF data.) With `KF4_ND_DMA_WAIT=1`, P3-1's 013 still views, every kind, are 0 pixels in compare
+  and onoff at 1x and 4x (the review's 8,397 at 1x and 135,213 at 4x; without the wait this build still gives the 8,397), and 800-830 at
+  1x 0 in both modes. Matching the late read in the native draw instead is the owner's call (P1-2's 039/040
+  question): the late read is the port's DMA timing.
 
 **What `--sky modern` would show (for the owner, before P3-2).** Simulated with a local-only switch: the sky
 drawn natively with Z not written (and on 002, 013 and 027, where it is the map's first record, Z ALWAYS: the
