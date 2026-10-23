@@ -25,6 +25,7 @@
 #ifndef PORT_RENDER_H
 #define PORT_RENDER_H
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -127,7 +128,31 @@ void rd_consumer_frame(uint64_t value);
 #define RD_ND_FRAME 0x04u      /* bits 0-23: a frame's serial (rd_begin_frame) */
 #define RD_ND_COMMAND(value) ((uint32_t)((uint64_t)(value) >> 56))
 
-/* ---- What it did (--stats, the overlay) ----------------------------------------------------------- */
+/* ---- Captures (port/debug/gs_capture.c, tools/gsreplay) -------------------------------------------
+   A GS capture (.kf4gs) holds the chain with its PORT_GS_REG_NATIVE_DRAW writes; these put the side
+   buffer's draws beside them, as records of their own (gs_capture_format.h: KF4GS_ND_MESH, the blocks'
+   bytes, and KF4GS_ND_DRAWS, a frame's cameras and draws), and feed them back on replay. */
+/* puts a record (type, a head and data): gs_capture.c's */
+typedef void (*RdCaptureEmit)(uint32_t type, const void *head, size_t head_size, const void *data, size_t size);
+/* (the capture's thread) a capture starts: the frames the GS may not have met yet are given in full at
+   the next rd_capture_poll */
+void rd_capture_begin(void);
+/* (the capture's thread, before each GIF or VIF1 record) emits what rd_draw added since the last call:
+   new meshes first, then the frames' draws. Costs an atomic load when nothing was added. */
+void rd_capture_poll(RdCaptureEmit emit);
+/* (kf4-gsreplay) a KF4GS_ND_MESH or KF4GS_ND_DRAWS record: into the side buffer, for the native GS to
+   meet the frame's writes. 1 if it was one of them (0: another type; -1: one it could not read) */
+int rd_replay_record(uint32_t type, const void *data, size_t size);
+/* (kf4-gsreplay) forgets the replay's meshes (a run of a capture begins) */
+void rd_replay_reset(void);
+/* (kf4-gsreplay) what the replay fed: draws, meshes, and those of its meshes this build refused (their
+   draws are left out and counted lost) */
+typedef struct {
+    uint64_t draws, meshes, meshes_refused, draws_dropped;
+} RdReplayStats;
+extern RdReplayStats rd_replay_stats;
+
+/* ---- What it did (--stats, the overlay)----------------------------------------------------------- */
 typedef struct {
     uint64_t draws, meshes_parsed, mesh_hits, mesh_unsupported, hash_bytes;
     uint64_t lost;   /* draws met after their slot was reused */

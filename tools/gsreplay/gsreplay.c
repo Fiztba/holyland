@@ -50,6 +50,12 @@
                         every sample (--native-cutout-aa)
      --colour MODE      the native GS's colour precision: exact (the default) or high (--native-colour)
      --layer-z MODE     the native GS's Z: ps2 (the default) or tolerant (--native-layer-z)
+     --native-draw MODE a capture of a run with native draws (--native-draw, docs/port/NATIVE_DRAW.md)
+                        holds the draws (records ND_MESH, ND_DRAWS), fed back to the renderer core
+                        before the frame's writes that name them. The native GS draws them (native, the
+                        default) or, of a capture taken with --native-draw-compare, the PS2 path's
+                        packets queued beside them (ps2: --native-draw-compare ps2). paraLLEl-GS always
+                        draws the PS2 path's
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -63,6 +69,7 @@
 #include "port/host.h"
 #include "port/lz4_block.h"
 #include "port/platform.h"
+#include "port/render.h"
 
 int port_gs_backend_open(void);
 void *port_gs_backend_context(void);
@@ -1178,6 +1185,12 @@ static void handle(Run *r, size_t index) {
     case KF4GS_VSYNC:
         vsync(r, rec);
         break;
+    case KF4GS_ND_MESH:
+    case KF4GS_ND_DRAWS:
+        if (rd_replay_record(rec->type, rec->data, rec->size) < 0) {
+            fprintf(stderr, "record %zu (native draw, type %u) is short: left out\n", index, rec->type);
+        }
+        break;
     }
 }
 
@@ -1227,6 +1240,8 @@ static size_t start_state(Run *r) {
         case KF4GS_VU1_RUN:
         case KF4GS_READ_FIFO:
         case KF4GS_VSYNC:
+        case KF4GS_ND_MESH:
+        case KF4GS_ND_DRAWS:
             return i;
         }
     }
@@ -1238,6 +1253,7 @@ static void run_capture(Run *r) {
     Kf4GsVu1Regs vu_start;
 
     port_vu1_debug_regs(&vu_start, 0); /* VU1's clock as the capture starts */
+    rd_replay_reset();
     port_options.stats = r->mode == MODE_VIF; /* vu1.c counts its runs */
     memset(&port_stats, 0, sizeof(port_stats));
     port_stats.vu1_cycles = vu_start.cycle;
@@ -1255,6 +1271,17 @@ static void run_capture(Run *r) {
         handle(r, index);
     }
     port_gs_capture_recording = 0;
+    if (rd_replay_stats.meshes || rd_replay_stats.draws || rd_replay_stats.draws_dropped) {
+        printf("native draw: %llu draws and %llu meshes fed back (%llu meshes refused, %llu draws left out)",
+               (unsigned long long)rd_replay_stats.draws, (unsigned long long)rd_replay_stats.meshes,
+               (unsigned long long)rd_replay_stats.meshes_refused, (unsigned long long)rd_replay_stats.draws_dropped);
+        if (r->render & RENDER_NATIVE) {
+            printf("; the native GS drew %llu (%llu batches), lost %llu, skipped %llu PS2-path writes",
+                   (unsigned long long)gsn_stats.nd_draws, (unsigned long long)gsn_stats.nd_batches,
+                   (unsigned long long)gsn_stats.nd_lost, (unsigned long long)gsn_stats.nd_skipped);
+        }
+        printf("\n");
+    }
     if (r->compare_renderers && r->seen_vsync) {
         /* a capture's last frame is drawn after its last vblank: compared once all of it is */
         compare_display(r, r->last_priv, "end", r->last_vblank);
@@ -1405,7 +1432,8 @@ static void info(const Capture *c) {
     uint64_t bytes[32] = {0};
     static const char *names[32] = {[0] = "END", [1] = "META", [2] = "VRAM", [3] = "GS_REGS", [4] = "GS_PRIV",
                                     [5] = "GS_HISTORY", [6] = "VU1", [7] = "VIF1", [16] = "GIF", [17] = "VIFDATA",
-                                    [18] = "VU1_RUN", [19] = "READ_FIFO", [20] = "VSYNC"};
+                                    [18] = "VU1_RUN", [19] = "READ_FIFO", [20] = "VSYNC",
+                                    [21] = "ND_MESH", [22] = "ND_DRAWS"};
 
     printf("%s", c->meta);
     for (i = 0; i < c->count; i++) {
@@ -1430,6 +1458,7 @@ static void usage(void) {
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
             "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
             "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa] [--layer-z ps2|tolerant]\n"
+            "                    [--native-draw native|ps2]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1443,6 +1472,7 @@ int main(int argc, char **argv) {
     int renderer = RENDER_GS;
     int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1, cutout_aa = GSN_CUTOUT_AA_OFF, colour = GSN_COLOUR_EXACT;
     int layer_z = GSN_LAYER_Z_PS2;
+    int native_draw = GSN_NATIVE_DRAW_NATIVE;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1488,6 +1518,14 @@ int main(int argc, char **argv) {
             i++;
         } else if (strcmp(a, "--layer-z") == 0) {
             layer_z = strcmp(v, "tolerant") == 0 ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
+            i++;
+        } else if (strcmp(a, "--native-draw") == 0) {
+            native_draw = strcmp(v, "ps2") == 0      ? GSN_NATIVE_DRAW_PS2
+                          : strcmp(v, "native") == 0 ? GSN_NATIVE_DRAW_NATIVE
+                                                     : -1;
+            if (native_draw < 0) {
+                usage();
+            }
             i++;
         } else if (strcmp(a, "--colour") == 0) {
             colour = strcmp(v, "high") == 0 ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
@@ -1602,6 +1640,7 @@ int main(int argc, char **argv) {
             gsn_set_cutout_aa(cutout_aa);
             gsn_set_colour(colour);
             gsn_set_layer_z(layer_z);
+            gsn_set_native_draw(native_draw);
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
