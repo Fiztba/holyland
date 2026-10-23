@@ -3050,6 +3050,7 @@ void flush_batch() {
     if (gs->verts.empty()) {
         return;
     }
+    NdFlush nd_flush; // (native draw: whether the batch is native corners, gsn_native_draw.inc)
     // (a picture between drawn from the frame's packets: interp.vsrc is gs->verts as corners)
     struct ForgetCorners {
         ~ForgetCorners() {
@@ -4229,6 +4230,7 @@ uint32_t interp_kick(const QVertex &v, uint32_t prim) {
 }
 
 void vertex_kick(uint32_t address, uint64_t value) {
+    nd_kick(); // (native draw: native corners pending are drawn first)
     bool fog = address == R_XYZF2 || address == R_XYZF3;
     bool draw = address == R_XYZF2 || address == R_XYZ2;
     QVertex v;
@@ -6571,9 +6573,6 @@ PortGsFrame presented;
 int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     Timer timer(gsn_stats.ns_vsync);
     bool extra = (want_pixels & GSN_EXTRA) != 0;
-    if (!extra) {
-        nd_vblank();
-    }
     if (!extra && !uploads_now.empty()) {
         // the uploads of the packets since the last vblank: what the pictures between ask for again
         uploads_frame.swap(uploads_now);

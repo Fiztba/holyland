@@ -289,7 +289,7 @@ typedef struct {
     uint64_t blend_copies_in_pass; /* shader blending's copies of the target made in the render pass */
     /* native draw (gsn_native_draw.inc): draws and batches drawn, draws whose frame was gone or whose
        program is not drawn yet, meshes put on the GPU, register writes left out (--native-draw-compare) */
-    uint64_t nd_draws, nd_batches, nd_lost, nd_unsupported, nd_mesh_uploads, nd_skipped;
+    uint64_t nd_draws, nd_batches, nd_lost, nd_unsupported, nd_mesh_uploads, nd_skipped, nd_arenas;
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,

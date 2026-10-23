@@ -19,11 +19,13 @@
 // the game's numbers do not come near them). In a picture between the camera moves and the place is
 // made in plain floats.
 // Which triangles are drawn (the data's ADC bits, and VU1's clipping) is the CPU's (gsn_native_draw.inc,
-// nd_plan): a corner's fog input names its vertex (bits 0-7) and the kick's (8-15), whose colour a flat
-// triangle has.
+// nd_plan): a corner's fog input is its vertex's number in the arena, and its colour's RGB the kick's
+// number less it (bits 0-5: a flat triangle has the kick's colour), IIP (bit 6) and its draw's record
+// (bits 7-23).
 #include "gs_common.h"
 
-layout(location = 4) in float a_code;
+layout(location = 2) in uvec4 a_corner;
+layout(location = 4) in float a_vertex;
 
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
@@ -34,12 +36,12 @@ layout(location = 3) noperspective out float v_z;
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 move[3]; // the frame's view to the picture's: rows of the rotation less the identity, each with its translation
 } pic;
-// the mesh: four qwords a vertex (position, normal, ST, colour), as VU1 memory had them
+// the meshes (the arena): four qwords a vertex (position, normal, ST, colour), as VU1 memory had them
 layout(set = 2, binding = 0, std430) readonly buffer Mesh {
     ivec4 q[];
 } mesh;
-// the draw (gsn_native_draw.inc, NdConst): matrices a VU qword a column
-layout(set = 2, binding = 1, std140) uniform Draw {
+// the draws (gsn_native_draw.inc, NdConst), a record each: matrices a VU qword a column
+struct Draw {
     mat4 vertex;       // VU1 0x14: the set-up's vertex matrix (0x00 by 0x04)
     mat4 model;        // VU1 0x04: the part to the world (pictures between)
     mat4 view;         // world to view (pictures between)
@@ -50,11 +52,14 @@ layout(set = 2, binding = 1, std140) uniform Draw {
     vec4 point_pos[4]; // in the model's space, w the falloff
     vec4 point_col[4];
     ivec4 info;        // the point lights, XYOFFSET X and Y (12.4), ND_C_*
-    ivec4 info2;       // the batch's first vertex
-} d;
+};
+layout(set = 2, binding = 1, std430) readonly buffer Draws {
+    Draw draws[];
+};
 
 #define ND_C_MOVING 1
-#define ND_C_GOURAUD 2
+
+Draw d;
 
 // FTOI: toward zero, kept within what an int holds
 int ftoi(float v) {
@@ -119,8 +124,7 @@ float vu_recip(float w) {
 }
 
 // The vertex's colour as VU1 leaves it in RGBAQ (the lights; the point lights' passes)
-uvec4 lit_colour(uint k) {
-    uint at = uint(d.info2.x) + k;
+uvec4 lit_colour(uint at) {
     ivec4 P = mesh.q[at * 4u], N = mesh.q[at * 4u + 1u], C = mesh.q[at * 4u + 3u];
     vec3 n = vec3(N.xyz) / 4096.0; // (ITOF12: exact)
     // the light dots: MULAx ACC, l0, n.x; MADDAy; MADDz; floored at 0
@@ -148,9 +152,10 @@ uvec4 lit_colour(uint k) {
 }
 
 void main() {
-    uint code = uint(a_code);
-    uint k = code & 0xFFu, kick = (code >> 8) & 0xFFu;
-    uint at = uint(d.info2.x) + k;
+    uint at = uint(a_vertex);
+    uint corner = a_corner.r | a_corner.g << 8 | a_corner.b << 16;
+    uint kick = at + (corner & 0x3Fu);
+    d = draws[corner >> 7];
     ivec4 P = mesh.q[at * 4u], N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
     vec4 pos = vec4(P);
     vec4 c;
@@ -175,7 +180,7 @@ void main() {
     float fog = float((w16 >> 4) & 0xFFu);
     vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
 
-    uvec4 rgba = lit_colour((d.info.w & ND_C_GOURAUD) != 0 ? k : kick);
+    uvec4 rgba = lit_colour((corner & 0x40u) != 0u ? at : kick);
     vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
 
     // as gs.vert
