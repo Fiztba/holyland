@@ -73,7 +73,9 @@ up to 8 other agents shared the PC, so nothing here is timed):
   not seen yet; a breaking object's fade not caught; `nd_arm.c` and `nd_entities.c` each hold a copy of
   `Model_DrawSkinned` without the data blocks (to share); `native_draw.c`'s `posed_model` still hashes each
   block twice (P2-6's change would save about 40% of the rest); declines of the newer adapters are not
-  counted; a 0x280 batch is never one of 0x000's (the PS2 path's can hold both: not seen to matter yet).
+  counted; ~~a 0x280 batch is never one of 0x000's~~ (*F-mixed, nd3/f-013: they join now; no view of the
+  64 maps, the fight, the arm or the miners has such a batch; and the records buffers no longer split a
+  batch: under P2-2*).
 - From P3-1: the rim band in pictures between while pitching (native's camera move of the dome's lowest rows
   differs from `gs_replay.comp`'s: the moving path's owner; it keeps `sky` out of the accepted kinds); ~~013
   looking down at a ledge differs in `map`~~ (*F-013, nd3/f-013: not native draw's; the reference's DMA race on
@@ -139,10 +141,12 @@ section a draw is in, for the pictures between).
    test's passes, Z and layer rules, runs). Only the draw call differs: `nd_draw_range` draws each stretch
    of one kind in its own call, a native stretch with the GS's own fragment shader and `nd_000.vert`
    (`nd_280.vert` for 0x280's corners), and each native corner says which arena vertex (its fog, -1 less
-   it: below 0, where the PS2 path's are 0-255), which kick (flat shading) and which draw record it is.
-   Program 0x280's corners have a records buffer of their own, so they never share a batch with
-   0x000's; a weapon trail (`RD_PROGRAM_GS_STRIP`) is written register by register and its corners are
-   the PS2 path's.
+   it: below 0, where the PS2 path's are 0-255; 0x280's a further 2^22 less, so a corner says its
+   program too), which kick (flat shading) and which draw record it is. Program 0x280's corners have a
+   records buffer of their own, bound a stretch at a time, so a batch holds the PS2 path's, 0x000's and
+   0x280's corners together (F-mixed); a records buffer or the arena is replaced early, between
+   batches (`nd_buffer_room`), so that it seldom splits one. A weapon trail (`RD_PROGRAM_GS_STRIP`) is
+   written register by register and its corners are the PS2 path's.
 4. **`nd_000.vert`** does program 0x000 per corner: the vertex matrix and lights as VU1's set-up leaves
    them (computed on the CPU, `vu_float.h`), then per vertex the transform, 1/w, fog, the three lights
    and ambient, the point lights, ST, FTOI4, all rounded toward zero in the program's order. It writes
@@ -250,6 +254,11 @@ the same captures (the 414,901 of RENDERER.md is older captures').
     both runs: the environment reaches both) has the game loop wait for the chain it has just sent before
     the update, so the PS2 path reads every block as the native draw does (F-013). Map 013 has a wave-UV
     record too (a ledge's water, out of the tour's view): with `map` it differs only through this race;
+  - **compare the batches, not only the pictures**: a batch split where the PS2 path's goes on can leave
+    the dumped pictures 0 and still decide runs and blending otherwise elsewhere. `--stats`' "native GS"
+    line (draws, render passes, shader blends) off against onoff shows a split; a local log of every
+    flush (size, the corners' kinds, a hash of X, Y, Z and alpha, the draws it made: F-mixed's
+    `blog_debug.diff`) finds it. At 4x the 2D snap changes the draws too;
   - map 000's band needs `--input tests/newgame.pad --frames 1900,2000 -- --teleport 1600:0:0` (herb.pad
     did not show it); the mirror maps are 008, 009, 014 (reflection, flag 0x200) and 041 (the only mode-1
     mirror, flag 0x2), and their water is out of the teleport's view: use made-up saves placed by the water
@@ -628,7 +637,52 @@ clipped) is in the plan but never seen in the tour. A throwaway call site in `Mo
 committed) drew the arm's swing on map 000 with its second pass: 0 pixels in compare mode at 1x and 4x and
 in onoff mode (leaving the second pass out: up to 38,822 pixels). A batch of 0x280 corners is never one
 of 0x000's (their own records buffer and program): where the PS2 path's batch holds both, the GS splits it
-("Mixed batches"). Pictures between are not handled for 0x280 yet (P2-5).
+("Mixed batches"). Pictures between are not handled for 0x280 yet (P2-5). *(Both since: F-mixed below, P2-5.)*
+
+*F-mixed (nd3/f-013, 2026-10-23): 0x000's and 0x280's corners in one batch, and batches the records split.*
+- **The change.** A 0x280 corner's fog is -1 less 2^22 less its slot (`nd280_corner_vertex`; `nd_280.vert`
+  and the 0x280 oracle take it back), so each corner says its kind: the PS2 path's (0-255), 0x000's (-1 to
+  -2^22) or 0x280's (below). `nd_draw` and `nd280_draw` no longer flush for the other program's corners,
+  only for another arena or another records buffer of their own program (`nd.pending_000`,
+  `nd280.pending`, `nd280.batch_draws`). The batch is decided once over all of it; `nd_draw_range` draws
+  each stretch with its program (`nd_program`, `nd280_program`, the GS's) and binds the stretch's records
+  itself (set 2, binding 1; `nd_bind` binds the arena). In a picture between 0x000's and 0x280's corners
+  join too (both native); the PS2 path's still do not (below). A later program (0x700, P4-1) takes the
+  next 2^22 of the fog (2^24 is still exact).
+- **Not seen in the game.** A local log of every flush (`flush_batch`'s batch: its size, corners of each
+  kind, a hash of X, Y, Z and alpha, its draws and shader blends; `blog_debug.diff` in the task's
+  evidence) over B-sweep's 64 maps, 8 views each, with every kind: 0 batches with both. Nor on 016's
+  bats, 009's start, the 000 fight, the arm saves (w5, w46) or 009's miners. An object's and an entity's
+  A+D packets (TEX0 at least) differ, so the PS2 path's batch ends between them in every view tried.
+- **What did split: the records buffers.** With every kind, onoff made 8 more draws than off on 016 and
+  on 009 by 2,000 vblanks (and 1 more shader blend on 016). The logs showed 8 batches split in two, all
+  of one kind: `nd.draws` (4,096 records) or `nd280.draws` filled up in the middle of a batch and
+  `nd_new_buffer` drew it first (map records 318 = 48 + 270, an entity's 144 = 120 + 24). Now
+  `nd_buffer_room` replaces a records buffer or the arena early, when a quarter of its room is left and no
+  pending corner names it, and flushes only when it is full while one does. The logs of off and onoff
+  are now the same batch for batch (size, state, hash, draws, shader blends) on 016 (130,127 batches),
+  009 (157,344), the fight (631,033), arm05, arm46 and 009's miners.
+- **Numbers** (every kind; headless, `--no-audio`, a fresh data folder, two games at a time, other agents on
+  the PC: nothing timed). Pixels, compare 1x / 4x and onoff 1x / 4x: 016's bats 0 / 26 / 0 / 26; 009 start
+  0 / 0 / 0 / 0; the 000 fight 0 / 0 / 0 / 0; 009's miners 0 / 28 / 0 / 28; 000 start 0 / 54 / 0 / 54; herb
+  0 / 0 / 0 / 0; arm05 0 / 24 / 0 / 24. GS stats (draws, triangles, render passes, shader blends, target
+  copies) off against onoff, the same at 1x on all seven (016: 832,854 draws, 7,998 shader blends; 009:
+  466,517 and 69,698) and at 4x on 009 and the herb. At 4x the others' draws still differ (016: 832,980
+  off, 832,854 on; the fight 3,140,193 and 3,132,149; 000 975,628 and 974,676) with the same passes and
+  blends: the 2D snap. With `flat_2d` switched off in a local build, those five are 0 pixels in onoff at
+  4x and their GS stats are the same: the snap moves the PS2 path's sphere-pass triangles, which changes
+  the runs. It stays the owner's call (above). The 0x280 oracle over the 64 tour captures (HLE and
+  interpreter) is still 0 lanes, 19,528 runs, kicks and parser the same.
+- **Pictures between, the PS2 path's corners with native ones: not done.** There the PS2 path's corners
+  are made on the GPU (`gs_replay_corners.comp`) into `interp.vertices`, a slot of the corner map per
+  kick (sized by the frame's kicks: native corners have none), and `flush_batch`'s picture-between paths
+  decide for the whole batch (the moves of `interp_batch`, the scissor cut skipped for native corners,
+  `corners_at`, the vertex binding). Joining them needs those four places in `gsn.cpp` to work by
+  stretch, more than a hook. Measured on 009 at 240 (onoff, 2,000 vblanks): 332,848 batches against
+  off's 329,824, but native batches in a picture between already draw otherwise (the scissor cut is
+  skipped for them: 2,663,384 draws against 1,358,196), so its GS stats cannot be equal either way. 016 at
+  240 (1900-1939/3) is the same as before this change: the game's frames 0, the pictures between 3,137
+  pixels at the top of the view, as with the base build.
 
 **P2-3 Entities** (owns `entity.patch` then; after P2-2). `Entity_DrawAll`'s opaque and translucent draws
 (the draw list's order kept: the draws go out in the game's order), the tint (hit flash, ailments), hidden
@@ -915,7 +969,8 @@ settings.
 
 The plan is NATIVE_DRAW.md 4 (P4-P7) and the survey in its 1.2.5-1.2.8 and 1.3. The same rules as P1 and P2:
 a call site is one condition, the rest in `game/native_draw/`; draws join the GS's batch as the PS2 path's
-would (mixed batches: a native corner's fog below 0, `nd_draw_range`); a new VU1 program is a shader in VU1's
+would (mixed batches: a native corner's fog below 0, each program its own 2^22 of it, `nd_draw_range`
+binding each stretch's records); a new VU1 program is a shader in VU1's
 arithmetic with its oracle, as P2-2 did for 0x280; the game's own frames 0 pixels in compare **and** onoff
 mode, at 1x and 4x (knowing the 2D snap); every kind at once checked again before a merge.
 

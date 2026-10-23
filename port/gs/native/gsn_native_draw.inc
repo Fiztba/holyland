@@ -35,8 +35,8 @@ void flush_batch();
 void gs_write(uint32_t address, uint64_t value);
 // (program 0x280's draws: gsn_nd_280.inc, included at the end; these are its hooks below)
 void nd280_flush(bool begin);
-bool nd280_batch();
 Program *nd280_program(Program *p);
+const Buffer *nd280_batch_draws();
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
 void nd_strip_draw(const RdDraw &d); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
 Program *nd_strip_program(Program *p);
@@ -81,15 +81,22 @@ enum : int32_t {
     ND_C_EYE = 0x8,    // (with ND_C_MODEL) the matrices are the eye's (the arm): not moved by the camera
 };
 // A corner (Vtx): its fog -1 less the vertex's number in the arena (below 0: a native corner, where the
-// PS2 path's fog is 0-255, so that a batch can hold both kinds: nd_draw_range); its RGB the kick's number
-// less the vertex's (bits 0-5), IIP (bit 6) and the draw's record (bits 7-23); its alpha the vertex's
-// (flush_batch's)
+// PS2 path's fog is 0-255, so that a batch can hold both kinds: nd_draw_range), and for program 0x280's
+// a further 2^22 less (nd280_corner_vertex: a batch holds 0x000's and 0x280's corners too, as the PS2
+// path's batch would); its RGB the kick's number less the vertex's (bits 0-5), IIP (bit 6) and the draw's
+// record (bits 7-23); its alpha the vertex's (flush_batch's)
 const uint32_t ND_CORNER_GOURAUD = 0x40, ND_CORNER_DRAW_SHIFT = 7, ND_DRAWS_MAX = 1u << 17;
+const uint32_t ND_ARENA_MAX = 1u << 22; // (vertices, or 0x280's slots: a corner names one in 22 bits)
 float nd_corner_vertex(uint32_t at) {
     return -1.0f - float(at); // (exact: the arena has 2^22 vertices at most)
 }
-bool nd_corner(const Vtx &v) {
-    return v.fog < 0.0f;
+float nd280_corner_vertex(uint32_t slot) {
+    return -1.0f - float(ND_ARENA_MAX) - float(slot); // (exact: 2^23 at most; nd_280.vert takes it back)
+}
+// a corner's kind: the PS2 path's, program 0x000's or program 0x280's
+enum { ND_KIND_PS2, ND_KIND_000, ND_KIND_280 };
+int nd_corner_kind(const Vtx &v) {
+    return v.fog >= 0.0f ? ND_KIND_PS2 : v.fog > -1.0f - float(ND_ARENA_MAX) ? ND_KIND_000 : ND_KIND_280;
 }
 
 const uint32_t N_ND_MAX = 40;          // (a batch's vertices at most: RdBatch)
@@ -159,8 +166,10 @@ struct NdState {
     NdBuffer arena;        // the meshes' vertices
     std::unordered_map<RdMesh, uint32_t> placed; // a mesh's first vertex in the arena
     NdBuffer draws;        // the draws' records
-    // the buffers the pending corners name
+    // the buffers the pending corners name (batch_draws: 0x000's records, when pending_000; 0x280's are
+    // nd280's)
     const Buffer *batch_arena = nullptr, *batch_draws = nullptr;
+    bool pending_000 = false; // gs->verts holds program 0x000's corners
     std::unordered_map<Program *, Program *> programs; // the GS's programs, with nd_000.vert
     Shader *vs = nullptr;
     BufferHandle dummy;
@@ -187,7 +196,7 @@ struct NdFlush {
     NdFlush() {
         nd.active = nd.pending;
         nd.strip_active = nd.strip_pending;
-        nd.pending = nd.strip_pending = false;
+        nd.pending = nd.strip_pending = nd.pending_000 = false;
         nd280_flush(true); // (0x280's: gsn_nd_280.inc)
     }
     ~NdFlush() {
@@ -200,9 +209,6 @@ struct NdFlush {
 Program *nd_program(Program *p) {
     if (!nd.active || !p) {
         return p;
-    }
-    if (nd280_batch()) {
-        return nd280_program(p); // (with nd_280.vert: gsn_nd_280.inc)
     }
     auto it = nd.programs.find(p);
     if (it != nd.programs.end()) {
@@ -224,11 +230,11 @@ Program *nd_program(Program *p) {
     return np;
 }
 
-// (flush_batch, a native batch's draw: the arena and the draws' records)
+// (flush_batch, a native batch's draw: the arena; the draws' records are bound a stretch at a time, a
+// kind's own: nd_draw_range)
 void nd_bind(Cmd &c) {
-    if (nd.batch_arena && nd.batch_draws) {
+    if (nd.batch_arena) {
         c.set_storage_buffer(2, 0, *nd.batch_arena);
-        c.set_storage_buffer(2, 1, *nd.batch_draws);
     }
     if (!interp.active) {
         // (a picture between's Picture is bound by its kicks' pass, recorded; else nothing moves)
@@ -245,10 +251,11 @@ void nd_bind(Cmd &c) {
 }
 
 // A buffer of room units of size bytes, mapped for the CPU to write (what a draw reads is never written
-// again: a full buffer is replaced, the old one kept by what still names it)
-void nd_new_buffer(NdBuffer &b, uint32_t room, uint32_t size) {
-    if (nd.pending) {
-        flush_batch(); // (the pending corners name the old one)
+// again: a full buffer is replaced, the old one kept by what still names it). named: the pending corners
+// name the old one, so the batch is drawn first (split where the PS2 path's is not: nd_buffer_room)
+void nd_new_buffer(NdBuffer &b, uint32_t room, uint32_t size, bool named) {
+    if (named) {
+        flush_batch();
     }
     if (b.buffer && b.map) {
         gs->device->unmap_host_buffer(*b.buffer, MEMORY_ACCESS_WRITE_BIT);
@@ -263,6 +270,17 @@ void nd_new_buffer(NdBuffer &b, uint32_t room, uint32_t size) {
     b.room = room;
 }
 
+// Whether a buffer is to be replaced before n more units go in: when they do not fit, or, while no pending
+// corner names it, when it is past ND_BUFFER_EARLY of its room. A batch can only name one arena and one
+// buffer of records of each program, so a buffer replaced while the batch names it splits the batch
+// where the PS2 path's goes on (the records filling up in the middle of a map record's or an entity's
+// batch: 8 batches more than off on 016 and on 009 by vblank 2,000); replaced early, between batches, it
+// seldom is (F-mixed)
+const uint32_t ND_BUFFER_EARLY = 4; // (a quarter of the room left)
+bool nd_buffer_room(const NdBuffer &b, uint32_t n, bool named) {
+    return !b.buffer || b.used + n > b.room || (!named && b.used + n > b.room - b.room / ND_BUFFER_EARLY);
+}
+
 // The mesh's first vertex in the arena, put there if it is not yet
 uint32_t nd_place(const RdMeshData &m) {
     auto it = nd.placed.find(m.id);
@@ -270,11 +288,11 @@ uint32_t nd_place(const RdMeshData &m) {
         return it->second;
     }
     uint32_t n = uint32_t(m.vertices.size() * sizeof(int32_t) / ND_VERTEX_BYTES);
-    if (!nd.arena.buffer || nd.arena.used + n > nd.arena.room) {
+    if (nd_buffer_room(nd.arena, n, nd.pending)) {
         // (full: a new arena, the meshes put in it again as they are drawn)
         uint32_t room = std::max(nd.arena.room ? nd.arena.room * 2 : 1u << 19, n);
-        room = std::min(room, 1u << 22); // (64 MB at most: a corner names a vertex in 24 bits)
-        nd_new_buffer(nd.arena, room, ND_VERTEX_BYTES);
+        room = std::min(room, ND_ARENA_MAX); // (64 MB at most: a corner names a vertex in 22 bits)
+        nd_new_buffer(nd.arena, room, ND_VERTEX_BYTES, nd.pending);
         nd.placed.clear();
         gsn_stats.nd_arenas++;
     }
@@ -748,8 +766,8 @@ void nd_draw(uint64_t value) {
     }
     gsn_stats.nd_draws++;
     // the draw's record (nd_const: VU1's set-up)
-    if (!nd.draws.buffer || nd.draws.used == nd.draws.room) {
-        nd_new_buffer(nd.draws, 4096, sizeof(NdConst));
+    if (nd_buffer_room(nd.draws, 1, nd.pending_000)) {
+        nd_new_buffer(nd.draws, 4096, sizeof(NdConst), nd.pending_000);
     }
     uint32_t record = nd.draws.used++;
     NdConst k;
@@ -797,8 +815,11 @@ void nd_draw(uint64_t value) {
             gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
             // the strip's triangles join the batch, the PS2 path's corners in it too (a batch of other
             // buffers is drawn first; and in a picture between, a batch of the PS2 path's: nd_kick)
-            if (!gs->verts.empty() && ((interp.active && !nd.pending) || (nd.pending && (nd.batch_arena != nd.arena.buffer.get() ||
-                                                                                       nd.batch_draws != nd.draws.buffer.get())))) {
+            // (0x280's corners pending join too: nd_draw_range draws each kind with its program and records)
+            if (!gs->verts.empty() &&
+                ((interp.active && !nd.pending) ||
+                 (nd.pending && (nd.batch_arena != nd.arena.buffer.get() ||
+                                 (nd.pending_000 && nd.batch_draws != nd.draws.buffer.get()))))) {
                 flush_batch();
             }
             uint32_t eprim = effective_prim();
@@ -811,7 +832,9 @@ void nd_draw(uint64_t value) {
                 Timer plan(gsn_stats.ns_nd_plan);
                 nd_plan(*mesh, b, k.vertex, eprim, base, record);
             }
-            nd.pending = nd.pending || gs->verts.size() > before;
+            if (gs->verts.size() > before) {
+                nd.pending = nd.pending_000 = true;
+            }
             nd.batch_arena = nd.arena.buffer.get();
             nd.batch_draws = nd.draws.buffer.get();
             gsn_stats.nd_batches++;
@@ -898,20 +921,33 @@ void nd_kick() {
 
 // (flush_batch's draw call: n corners from first, of a pass of the run whose vertices start at gs->verts[run],
 // with the program base, the GS's.) A batch with native corners: each stretch of one kind in its own call,
-// in order, the native ones with nd_000.vert (nd_program)
+// in order: the PS2 path's with base, program 0x000's with nd_000.vert (nd_program) and its records,
+// program 0x280's with nd_280.vert (nd280_program) and its records. The batch was decided once over all
+// of them, as the PS2 path's would be (0x000's and 0x280's corners together: a posed model and an
+// entity, F-mixed)
 void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t run) {
     if (!nd.active) {
         c.draw(n, first);
         return;
     }
     const Vtx *v = gs->verts.data() + run;
+    const Buffer *draws = nullptr;
     for (uint32_t end = first + n; first < end;) {
-        bool native = nd_corner(v[first]);
+        int kind = nd_corner_kind(v[first]);
         uint32_t to = first + 3;
-        while (to < end && nd_corner(v[to]) == native) {
+        while (to < end && nd_corner_kind(v[to]) == kind) {
             to += 3;
         }
-        c.set_program(native ? nd_program(base) : nd.strip_active ? nd_strip_program(base) : base);
+        if (kind == ND_KIND_PS2) {
+            c.set_program(nd.strip_active ? nd_strip_program(base) : base);
+        } else {
+            const Buffer *want = kind == ND_KIND_280 ? nd280_batch_draws() : nd.batch_draws;
+            c.set_program(kind == ND_KIND_280 ? nd280_program(base) : nd_program(base));
+            if (want && want != draws) {
+                c.set_storage_buffer(2, 1, *want);
+                draws = want;
+            }
+        }
         c.draw(to - first, first);
         first = to;
     }

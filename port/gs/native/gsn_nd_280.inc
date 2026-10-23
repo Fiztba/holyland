@@ -15,10 +15,11 @@
 //   matrices and the normals, white with vertex 1's alpha (blended as its ALPHA says, Cs + Cd As).
 // Corners are nd_000.vert's (a corner's fog -1 less the vertex's place in the arena: nd_corner_vertex,
 // so that a batch holds them and the PS2 path's corners together, drawn a call a kind by nd_draw_range;
-// its RGB the kick and the draw's record) but for the arena's eight qwords a vertex and the corner's bits
-// 7-21 (the record), 22 (the context whose XYOFFSET) and 23 (the second pass). Their records are a buffer
-// of their own, so a batch of 0x280 corners is never one of 0x000's: the GS draws them in two batches
-// (the PS2 path's would hold both: "Mixed batches" in NATIVE_DRAW_TASKS.md).
+// its RGB the kick and the draw's record) but for the arena's eight qwords a vertex, the fog a further 2^22
+// less (nd280_corner_vertex) and the corner's bits 7-21 (the record), 22 (the context whose XYOFFSET) and
+// 23 (the second pass). Their records are a buffer of their own; a batch holds 0x280's and 0x000's
+// corners as the PS2 path's would (F-mixed), and nd_draw_range draws each stretch with its program and
+// its records.
 // Pictures between (P2-5): as nd_draw's of the models' kinds (nd_model_flags), each matrix set moved by its
 // own matrices (nd_280.vert's moved: the vertex's set's Between).
 
@@ -42,27 +43,26 @@ const uint32_t ND280_CORNER_CONTEXT2 = 1u << 22, ND280_CORNER_SPHERE = 1u << 23,
 const uint32_t ND280_SLOTS = 2; // (arena places a vertex: eight qwords)
 
 struct Nd280State {
-    bool pending = false; // the pending native corners are 0x280's
-    bool active = false;  // the batch flush_batch is drawing is
+    bool pending = false; // gs->verts holds 0x280's corners
     NdBuffer draws;       // the records
+    const Buffer *batch_draws = nullptr; // the records the pending corners name (and the batch being drawn)
     std::unordered_map<Program *, Program *> programs;
     Shader *vs = nullptr;
 } nd280;
 
 // (NdFlush, the hook in gsn_native_draw.inc: after nd.active is set, and when the flush ends)
 void nd280_flush(bool begin) {
-    nd280.active = begin && nd.active && nd280.pending;
     if (begin) {
         nd280.pending = false;
     }
 }
 
-// (nd_program, the hook) whether the batch flush_batch is drawing is of 0x280 corners
-bool nd280_batch() {
-    return nd280.active;
+// (nd_draw_range, the hook) the records the batch's 0x280 corners name
+const Buffer *nd280_batch_draws() {
+    return nd280.batch_draws;
 }
 
-// (nd_program, the hook: while a batch of 0x280 corners is drawn) the GS's program p with nd_280.vert
+// (nd_draw_range, the hook: a stretch of 0x280 corners) the GS's program p with nd_280.vert
 Program *nd280_program(Program *p) {
     auto it = nd280.programs.find(p);
     if (it != nd280.programs.end()) {
@@ -198,7 +198,7 @@ void nd280_corners(const RdBatch &b, const Nd280Plan &p, bool sphere, uint32_t p
             w.s = sphere ? p.sphere[t[j]][0] : p.stq[t[j]][0];
             w.t = sphere ? p.sphere[t[j]][1] : p.stq[t[j]][1];
             w.q = sphere ? 1.0f : p.stq[t[j]][2];
-            w.fog = nd_corner_vertex(base + ND280_SLOTS * (b.first + t[j]));
+            w.fog = nd280_corner_vertex(base + ND280_SLOTS * (b.first + t[j]));
             w.rgba |= (kick - t[j]) | gouraud | flags;
             gs->verts.push_back(w);
             if (interp.active) {
@@ -234,8 +234,8 @@ void nd280_const(Nd280Const &k, const RdDraw &d, const RdCamera &cam) {
 // (nd_draw, the hook: a draw of program 0x280) as nd_draw draws 0x000's
 void nd280_draw(const RdDraw &d, const RdCamera &cam) {
     gsn_stats.nd_draws++;
-    if (!nd280.draws.buffer || nd280.draws.used == nd280.draws.room) {
-        nd_new_buffer(nd280.draws, ND280_RECORDS, sizeof(Nd280Const));
+    if (nd_buffer_room(nd280.draws, 1, nd280.pending)) {
+        nd_new_buffer(nd280.draws, ND280_RECORDS, sizeof(Nd280Const), nd280.pending);
     }
     uint32_t record = nd280.draws.used++;
     Nd280Const k;
@@ -282,13 +282,13 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                     }
                 }
                 gs_write(R_PRIM, uint32_t(((pass ? b.tag2[0] : b.tag[0]) >> 47) & 0x7FF));
-                // (as nd_draw's: the strip joins the batch, the PS2 path's corners in it too; a batch of
-                // 0x000's or of other buffers is drawn first, and in a picture between a batch of the PS2
+                // (as nd_draw's: the strip joins the batch, the PS2 path's corners and 0x000's in it too; a
+                // batch of other buffers is drawn first, and in a picture between a batch of the PS2
                 // path's: nd_kick)
                 if (!gs->verts.empty() &&
                     ((interp.active && !nd.pending) ||
-                     (nd.pending && (!nd280.pending || nd.batch_arena != nd.arena.buffer.get() ||
-                                     nd.batch_draws != nd280.draws.buffer.get())))) {
+                     (nd.pending && (nd.batch_arena != nd.arena.buffer.get() ||
+                                     (nd280.pending && nd280.batch_draws != nd280.draws.buffer.get()))))) {
                     flush_batch();
                 }
                 uint32_t eprim = effective_prim();
@@ -302,7 +302,7 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                     nd.pending = nd280.pending = true;
                 }
                 nd.batch_arena = nd.arena.buffer.get();
-                nd.batch_draws = nd280.draws.buffer.get();
+                nd280.batch_draws = nd280.draws.buffer.get();
             }
         }
     }
@@ -490,7 +490,7 @@ extern "C" int gsn_nd280_oracle_run(const GsnNd280OracleDraw *draws, uint32_t dr
                     continue;
                 }
                 corners.push_back({ND_CORNER_GOURAUD | i << ND_CORNER_DRAW_SHIFT | (pass ? ND280_CORNER_SPHERE : 0),
-                                   nd_corner_vertex(slot + ND280_SLOTS * k)});
+                                   nd280_corner_vertex(slot + ND280_SLOTS * k)});
                 corner_out.push_back(out_at + 2 * k + pass);
             }
         }
