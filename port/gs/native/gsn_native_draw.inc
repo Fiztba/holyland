@@ -40,6 +40,9 @@ Program *nd280_program(Program *p);
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
 void nd_strip_draw(const RdDraw &d); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
 Program *nd_strip_program(Program *p);
+void nd700_draw(const RdDraw &d, const RdCamera &cam); // (program 0x700's, the effects: gsn_nd_700.inc)
+bool nd700_corner(const Vtx &v);
+Program *nd700_program(Program *p);
 
 // A model part's move in the pictures between (P2-5; nd_between): its matrix in the frame before (P) and in
 // this frame (C), each split into a rotation R and the rest S (R S the linear part: a scale, or a shear), and
@@ -742,6 +745,11 @@ void nd_draw(uint64_t value) {
         nd.fetched.clear();
         return;
     }
+    if (d.program == 0x700) {
+        nd700_draw(d, cam); // (gsn_nd_700.inc)
+        nd.fetched.clear();
+        return;
+    }
     if (d.program != 0) {
         gsn_stats.nd_unsupported++;
         return;
@@ -898,7 +906,7 @@ void nd_kick() {
 
 // (flush_batch's draw call: n corners from first, of a pass of the run whose vertices start at gs->verts[run],
 // with the program base, the GS's.) A batch with native corners: each stretch of one kind in its own call,
-// in order, the native ones with nd_000.vert (nd_program)
+// in order, the native ones with nd_000.vert (nd_program), program 0x700's with nd_700.vert (nd700_program)
 void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t run) {
     if (!nd.active) {
         c.draw(n, first);
@@ -906,12 +914,12 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
     }
     const Vtx *v = gs->verts.data() + run;
     for (uint32_t end = first + n; first < end;) {
-        bool native = nd_corner(v[first]);
+        bool native = nd_corner(v[first]), effect = native && nd700_corner(v[first]);
         uint32_t to = first + 3;
-        while (to < end && nd_corner(v[to]) == native) {
+        while (to < end && nd_corner(v[to]) == native && (!native || nd700_corner(v[to]) == effect)) {
             to += 3;
         }
-        c.set_program(native ? nd_program(base) : nd.strip_active ? nd_strip_program(base) : base);
+        c.set_program(effect ? nd700_program(base) : native ? nd_program(base) : nd.strip_active ? nd_strip_program(base) : base);
         c.draw(to - first, first);
         first = to;
     }
@@ -921,3 +929,4 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
 #include "gsn_nd_280.inc"    // (program 0x280's draws, and its oracle)
 #include "gsn_nd_strip.inc"  // (a PATH2 strip's draws: the trail)
+#include "gsn_nd_700.inc"    // (program 0x700's draws, the effects, and its oracle)

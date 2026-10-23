@@ -54,7 +54,8 @@
                         through nd_000.vert on the GPU and the CPU's plan, compared lane by lane with
                         what VU1 kicked (implies --mode vif; --vu1 hle unless given); and every run of
                         0x280 through nd_280.vert, both passes, and the parser on its blocks
-                        (nd_oracle_280.c)
+                        (nd_oracle_280.c); and of 0x700 (the effects) through nd_700.vert, its kicks
+                        and TEX0 swap, and the parser on its blocks (nd_oracle_700.c)
      --native-draw MODE a capture of a run with native draws (--native-draw, docs/port/NATIVE_DRAW.md)
                         holds the draws (records ND_MESH, ND_DRAWS), fed back to the renderer core
                         before the frame's writes that name them. The native GS draws them (native, the
@@ -1182,6 +1183,7 @@ static void handle(Run *r, size_t index) {
         if (r->mode == MODE_VIF) {
             if (nd_oracle_on()) {
                 nd280_oracle_vifdata((const uint32_t *)rec->data, rec->size / 4, current_program);
+                nd700_oracle_vifdata((const uint32_t *)rec->data, rec->size / 4, current_program);
             }
             port_vif1_feed((const uint32_t *)rec->data, rec->size / 4);
         }

@@ -38,7 +38,8 @@ const char *why_refused = "";
 
 struct VuModel {
     uint32_t mem[VU_QWORDS][4];
-    uint8_t written[VU_QWORDS];
+    uint8_t written[VU_QWORDS]; // by the block, since its last run
+    uint8_t ever[VU_QWORDS];    // by the block, in any of its runs (program 0x700's vertex n: RdBatch::past)
 };
 
 uint32_t unpack_bits(uint32_t cmd) {
@@ -120,6 +121,11 @@ bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mes
     b.start = start;
     b.first = uint32_t(mesh.vertices.size() / 16);
     b.count = n;
+    {
+        uint32_t past = (top + 1 + 4 * n) % VU_QWORDS;
+        b.past_known = vu.ever[past] != 0;
+        memcpy(b.past, vu.mem[past], 16);
+    }
     b.alpha_lo = 255;
     b.alpha_hi = 0;
     for (uint32_t k = 0; k < n; k++) {
@@ -366,6 +372,7 @@ bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh, RdVert
     }
     static VuModel vu; // (the game's thread only)
     memset(vu.written, 0, sizeof(vu.written));
+    memset(vu.ever, 0, sizeof(vu.ever));
     uint32_t cl = 1, wl = 1, mode = 0, tops = BUFFER_A;
     bool dbf = false;
     uint32_t row[4] = {};
@@ -432,6 +439,7 @@ bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh, RdVert
                     vu.mem[q][f] = v[f];
                 }
                 vu.written[q] = 1;
+                vu.ever[q] = 1;
             }
             i += need;
             continue;
@@ -681,6 +689,28 @@ bool rd_batch_280_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start
     memset(vu.written, 1, sizeof(vu.written));
     mesh.format = RD_VF_FLOAT_SKIN;
     return take_batch_280(vu, top % VU_QWORDS, start, mesh);
+}
+
+bool rd_batch_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh) {
+    static VuModel vu; // (kf4-gsreplay's thread only)
+    memcpy(vu.mem, mem, sizeof(vu.mem));
+    memset(vu.written, 1, sizeof(vu.written));
+    memset(vu.ever, 1, sizeof(vu.ever));
+    mesh.format = RD_VF_PACKED16;
+    return take_batch(vu, top % VU_QWORDS, start, mesh);
+}
+
+extern "C" int rd_mesh_runs_program(RdMesh mesh, uint32_t program) {
+    auto it = by_id.find(mesh);
+    if (it == by_id.end()) {
+        return 0;
+    }
+    for (const RdBatch &b : it->second->batches) {
+        if (b.start != RD_PROGRAM_CONTINUE && b.start != program) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 bool rd_parse_block(const void *block, uint32_t qwords, RdVertexFormat fmt, RdMeshData &mesh) {

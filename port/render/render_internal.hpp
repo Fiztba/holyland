@@ -27,6 +27,13 @@ struct RdBatch {
     bool sphere = false;
     uint64_t tag2[2] = {0, 0};
     std::vector<uint64_t> ad2;
+    // Program 0x700's (the effects; render.cpp, take_batch): its loop runs n + 1 times, so a "vertex n" past
+    // the strip is transformed and clip-tested too, from the position qword at TOP+1+4n, and counts among
+    // the clipped vertices that decide whether the strip is kicked at all (vu1_hle_700.c). That qword, as
+    // VU1 memory has it when the run starts, if this block wrote it (in this run or an earlier one of the
+    // block): past_known; else it is what the packets before the block left there, not known here.
+    bool past_known = false;
+    int32_t past[4] = {0, 0, 0, 0};
 };
 
 // A mesh: a block parsed. Vertices are as VU1 memory has them after VIF1's UNPACK: four qwords each
@@ -51,6 +58,9 @@ inline uint32_t rd_vertex_words(uint32_t format) {
 // found) The batch at top of VU1 data memory mem (1024 qwords, all taken as written), as take_batch_280
 // makes it, appended to mesh; and a block parsed as rd_mesh_from_block does. false: refused (rd_mesh_why)
 bool rd_batch_280_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh);
+// (the oracle, program 0x700) the batch at top as take_batch makes it (RD_VF_PACKED16), all of mem taken as
+// written (so past_known is set)
+bool rd_batch_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh);
 bool rd_parse_block(const void *block, uint32_t qwords, RdVertexFormat fmt, RdMeshData &mesh);
 
 // The draw a PORT_GS_REG_NATIVE_DRAW value names, its camera and meshes, if its frame's slot still

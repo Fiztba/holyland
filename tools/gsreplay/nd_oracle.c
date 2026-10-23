@@ -91,6 +91,7 @@ void nd_oracle_begin(const uint8_t *vu_data, int limit) {
     o.expect = calloc(BATCH_VERTICES, sizeof(*o.expect));
     o.out = calloc(BATCH_VERTICES, sizeof(*o.out));
     nd280_oracle_begin(vu_data, limit); /* (program 0x280's: nd_oracle_280.c) */
+    nd700_oracle_begin(vu_data, limit); /* (program 0x700's: nd_oracle_700.c) */
     if (!o.draws || !o.setups || !o.setup_vu || !o.vertices || !o.vertex_draw || !o.expect || !o.out) {
         fprintf(stderr, "kf4-gsreplay: --nd-oracle: out of memory\n");
         exit(1);
@@ -288,6 +289,7 @@ void nd_oracle_vu1_run(uint32_t program, int mscal, uint32_t top) {
     }
     o.runs++;
     nd280_oracle_vu1_run(program, mscal, top);
+    nd700_oracle_vu1_run(program, mscal, top);
     if (program != 0) {
         return;
     }
@@ -316,6 +318,7 @@ void nd_oracle_gif(int path, const void *data, size_t bytes) {
     uint32_t k, d, first;
 
     nd280_oracle_gif(path, data, bytes);
+    nd700_oracle_gif(path, data, bytes);
     if (!o.pending || path != 1 || bytes != 16 + 48 * (size_t)o.n || memcmp(w, o.tag, 16) != 0) {
         return;
     }
@@ -419,4 +422,5 @@ void nd_oracle_end(void) {
            (unsigned long long)total, (unsigned long long)total_clipped, (unsigned long long)o.undrawn_differ,
            (unsigned long long)o.undrawn_differ_w0);
     nd280_oracle_end();
+    nd700_oracle_end();
 }

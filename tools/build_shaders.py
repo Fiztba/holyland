@@ -25,6 +25,7 @@ OUT = os.path.join(ROOT, "port", "gs", "native", "gsn_shaders.h")
 VARIANTS = [
     ("nd_000.vert", "nd_000_oracle.vert", ["-DND_ORACLE"]),  # the vertex oracle (gsn_nd_oracle.inc)
     ("nd_280.vert", "nd_280_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x280 (gsn_nd_280.inc)
+    ("nd_700.vert", "nd_700_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x700 (gsn_nd_700.inc)
 ]
 
 
