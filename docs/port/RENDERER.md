@@ -164,6 +164,16 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   textured in perspective (ST with a Q not 1: `perspective_batch`): a far billboard of program 0x700
   (a brazier's glow) is such a triangle pair once its Z rounds the same at its corners, and its halves,
   each moved out to whole GS pixels, overlapped along the diagonal: a bright line across the glow.
+- **Granite is changed at configure** (`cmake/granite_depth_bounds.cmake`, from CMakeLists.txt before
+  paraLLEl-GS is added): four lines added to its checkout, each beside one of Granite's own lines, with the
+  file's line endings, once (a checkout that has them is left alone): a pipeline state bit, `depth_bounds_test`,
+  with its setter, the depth bounds as dynamic state, and the device feature turned on where the GPU has it
+  (the bounds themselves are a raw `vkCmdSetDepthBounds`, recorded as a `Cmd` op for the replays). Granite is a
+  submodule of paraLLEl-GS's, so this is how the change survives a fresh clone and `git submodule update`; the
+  side effect is that `git status` shows `third_party/parallel-gs` as modified. If Granite moves on and an
+  anchor line is gone, configure stops and says so. Used by the ties' first phase (STEP3.md, "Hot spots at
+  240"); without the GPU feature, or with `KF4_GSN_DEPTH_BOUNDS=0`, the test is not used. Not yet tried on a
+  Linux (gcc) build.
 - **Granite:** `update_image` with row length 0 means the image's width; there is no SPIRV-Cross,
   so resource layouts are written by hand; its render pass cache ignores the sample count (MSAA
   passes name their subpass).
