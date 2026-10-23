@@ -268,11 +268,23 @@ typedef struct {
     const ModelWaveUv *table;
     u32 now[16];
     u32 late[16];
+    u32 frame; /* the frame it was applied for (wave_frame's, NativeDraw_WaveFrame) */
 } WaveSnapshot;
 
 #define WAVE_SNAPSHOTS 64
 static WaveSnapshot wave_snapshots[WAVE_SNAPSHOTS];
 static int wave_next;
+
+/* The frames drawn (NativeDraw_BeginFrame, at the start of GameLoop_DrawFrame). A snapshot is applied in the
+   update before the frame it is drawn in (func_00112BD0), so it is for the frame wave_frame + 1. One kept
+   from an earlier frame is not used (NativeDraw_WaveOffsets): after a map change a model of the new map at
+   the same address with the same part count would find the old map's table and offsets; the record is
+   drawn from the coordinates the game wrote instead (as --native-wave-uvs cpu). */
+static u32 wave_frame;
+
+void NativeDraw_WaveFrame(void) {
+    wave_frame++;
+}
 
 /* a model's snapshot, or NULL */
 static WaveSnapshot *wave_snapshot(const ModelInstance *model) {
@@ -306,6 +318,7 @@ void NativeDraw_WaveUvsApplied(const ModelInstance *model, const WaveOscillator 
         s->part_count = model->part_count;
     }
     s->table = model->wave_uvs;
+    s->frame = wave_frame + 1;
     for (i = 0; i < 16; i++) {
         const WaveOscillator *o = &oscillators[i];
         float step = 0.06981317f;
@@ -337,6 +350,20 @@ static int wave_block_ok(const ModelPartData *data) {
            0x80 + n * 0x20 <= qwc * 16;
 }
 
+/* --native-wave-uvs, its default (PORT_WAVE_UVS_PS2) made one of the others: the PS2 path's picture, which is
+   late (its DMA's race) unless the test wait (NativeDraw_TestDmaWait) takes the race away, and then the frame
+   the game drew (gpu) */
+int NativeDraw_TestDmaWait(void);
+
+static int wave_uvs_mode(void) {
+    int mode = port_native_wave_uvs();
+
+    if (mode == PORT_WAVE_UVS_PS2) {
+        mode = NativeDraw_TestDmaWait() ? PORT_WAVE_UVS_GPU : PORT_WAVE_UVS_LATE;
+    }
+    return mode;
+}
+
 /* The offsets a map record's model is drawn with on the GPU (16, RdDraw.parent's), or NULL: drawn from the
    coordinates the game wrote (--native-wave-uvs cpu, not a wave record, no offsets kept, a block not of
    the shape the copies take) */
@@ -347,13 +374,15 @@ const u32 *NativeDraw_WaveOffsets(const ModelInstance *model, const MapDrawRecor
     int i;
     int j;
 
+    int mode = wave_uvs_mode();
+
     wave_record = record;
-    if (port_native_wave_uvs() == PORT_WAVE_UVS_CPU || !(record->flags & 0x100) || model->wave_uvs == NULL) {
+    if (mode == PORT_WAVE_UVS_CPU || !(record->flags & 0x100) || model->wave_uvs == NULL) {
         return NULL;
     }
     WaveSnapshot *s = wave_snapshot(model);
 
-    if (s == NULL || s->table == NULL) {
+    if (s == NULL || s->table == NULL || s->frame != wave_frame) {
         return NULL;
     }
     part = model->parts;
@@ -368,7 +397,7 @@ const u32 *NativeDraw_WaveOffsets(const ModelInstance *model, const MapDrawRecor
             data = (const ModelPartData *)((const char *)data + (data->length + 1) * 0x10);
         }
     }
-    return port_native_wave_uvs() == PORT_WAVE_UVS_LATE ? s->late : s->now;
+    return mode == PORT_WAVE_UVS_LATE ? s->late : s->now;
 }
 
 /* The meshes of part part_index of a wave record's model (as NativeDraw_PartMeshes), each from a copy of

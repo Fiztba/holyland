@@ -57,7 +57,10 @@ static void queue_mark(u32 command, u64 bits) {
     Packet_EndGsRegisters();
 }
 
+void NativeDraw_WaveFrame(void); /* (nd_water.c: the wave snapshots' frame) */
+
 void NativeDraw_BeginFrame(void) {
+    NativeDraw_WaveFrame();
     if (port_native_draw(PORT_ND_ALL)) {
         u64 mark = rd_begin_frame();
 

@@ -32,6 +32,12 @@ struct Nd700State {
     Shader *vs = nullptr;
 } nd700;
 
+// (nd_new_buffer: nd.draws replaced) the flags go with the old buffer
+void nd700_records_gone() {
+    nd700.of.clear();
+    nd700.records = nullptr;
+}
+
 // (nd_draw_range, the hook) whether a native corner is of a 0x700 draw (its record's)
 bool nd700_corner(const Vtx &v) {
     if (nd_corner_kind(v) != ND_KIND_000 || nd700.records != nd.batch_draws) {

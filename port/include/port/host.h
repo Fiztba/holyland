@@ -221,6 +221,9 @@ int port_native_draw_compare(void);
 /* port_native_wave_uvs(): how the wave UVs of a native map record (flag 0x100: Wobble_ApplyWaveUvs) are drawn
    (--native-wave-uvs; P6-2 of docs/port/NATIVE_DRAW_TASKS.md). The game writes them into the model's
    vertices every frame either way (the PS2 path and the CPU's near cut read them).
+   PORT_WAVE_UVS_PS2 (the default, `ps2`): the PS2 path's picture, LATE unless the test wait
+     (port_test_dma_wait, KF4_ND_DMA_WAIT) takes its race away, and then GPU (game/native_draw/nd_water.c);
+     the owner's decision 2 picks between GPU and LATE.
    PORT_WAVE_UVS_GPU: the mesh keeps each vertex's own coordinates and wave, the 16 waves' offsets of the
      frame are the draw's and the shader adds them (no block parsed again each frame); the frame the game
      drew, as PORT_WAVE_UVS_CPU's.
@@ -233,6 +236,7 @@ int port_native_draw_compare(void);
 #define PORT_WAVE_UVS_GPU 0
 #define PORT_WAVE_UVS_CPU 1
 #define PORT_WAVE_UVS_LATE 2
+#define PORT_WAVE_UVS_PS2 3
 int port_native_wave_uvs(void);
 int port_test_dma_wait(void);
 #define PORT_ND_COMPARE_NATIVE 1 /* the native draws drawn, the PS2 path's packets left out */

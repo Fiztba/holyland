@@ -291,12 +291,17 @@ void nd_bind(Cmd &c) {
 // A buffer of room units of size bytes, mapped for the CPU to write (what a draw reads is never written
 // again: a full buffer is replaced, the old one kept by what still names it). named: the pending corners
 // name the old one, so the batch is drawn first (split where the PS2 path's is not: nd_buffer_room)
+void nd700_records_gone();
 void nd_new_buffer(NdBuffer &b, uint32_t room, uint32_t size, bool named) {
     if (named) {
         flush_batch();
     }
     if (&b == &nd.draws) {
-        nd.of5a0.clear(); // (the old buffer's records' flags go with it)
+        // (what is known of the old buffer's records goes with it: Granite pools its Buffer objects, so a
+        // new buffer can come back at a freed one's address, and a flag kept by the address would then
+        // name the new buffer's records)
+        nd.of5a0.clear();
+        nd700_records_gone();
     }
     if (b.buffer && b.map) {
         gs->device->unmap_host_buffer(*b.buffer, MEMORY_ACCESS_WRITE_BIT);
