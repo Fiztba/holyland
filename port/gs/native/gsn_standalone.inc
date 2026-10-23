@@ -943,6 +943,7 @@ struct SaTexture {
     bool cut_texels = false;
     uint32_t cut_lo = 255, cut_hi = 0;
     uint64_t cut_clear = 0, cut_all = 0;
+    const uint32_t *texels = nullptr; // (the texture's texels by alpha, CLUT index or CT32's alpha, where known)
     bool reads_target = false, reads_own = false;
     bool own_named = false; // (reads_own: the named target bound, T3)
 };
@@ -1307,6 +1308,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
             }
         }
         if (texels && (st.src == SRC_CLUT || st.src == SRC_CT32)) {
+            st.texels = texels;
             st.tex_lo = 255;
             st.tex_hi = 0;
             for (uint32_t i = 0; i < 256; i++) {
@@ -2057,6 +2059,32 @@ int sa_scene_op() {
 }
 
 // ---- A batch drawn into the scene ----------------------------------------------------------------------
+// A tie blended (Cs - Cd) As + Cd whose every pixel the alpha test passes has As 0x80 (a cut-out: its clear texels
+// fail the test, the rest are 0x80): its colour comes out the same drawn twice, as same_twice's, so it needs no runs
+// (sa_draw_batch, tie_runs). From the texture's alphas (st.texels) with the corners' one alpha; false where unknown.
+static bool sa_passing_same_twice(const SaTexture &st, uint64_t tex0, uint64_t test, uint64_t alpha, bool abe,
+                                  uint32_t as_min, uint32_t as_max, uint32_t select, int npasses) {
+    if (!abe || bits(alpha, 0, 2) != 0 || bits(alpha, 2, 2) != 1 || bits(alpha, 4, 2) != 0 || bits(alpha, 6, 2) != 1 ||
+        npasses != 1 || !st.texels || !bits(tex0, 34, 1) || as_min != as_max) {
+        return false;
+    }
+    uint32_t tfx = bits(tex0, 35, 2), atst = bits(test, 1, 3), aref = bits(test, 4, 8);
+    for (uint32_t i = 0; i < 256; i++) {
+        if (!st.texels[i]) {
+            continue;
+        }
+        uint32_t at = st.src == SRC_CLUT ? st.clut[i] >> 24 : i;
+        uint32_t as = tfx == 0 ? std::min(255u, (as_min * at) >> 7) : tfx == 2 ? std::min(255u, as_min + at) : at;
+        bool passes = select == 0 || atst == 1 || (atst == 2 && as < aref) || (atst == 3 && as <= aref) ||
+                      (atst == 4 && as == aref) || (atst == 5 && as >= aref) || (atst == 6 && as > aref) ||
+                      (atst == 7 && as != aref);
+        if (passes && as != 0x80) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // (flush_batch, a batch of the scene's corners) Its GS state as flush_batch works it out, drawn with
 // sa_000.vert into the scene's targets. False: declined (sa_stats.declined[*why]), for the GS to draw.
 bool sa_draw_batch(int *why) {
@@ -2447,9 +2475,17 @@ bool sa_draw_batch(int *why) {
         }
     }
     // two passes over overlapping triangles, or blending in the shader: in runs that do not overlap, so that
-    // each sees those before it (not the shadows': a pixel is drawn once, by the stencil)
+    // each sees those before it (not the shadows': a pixel is drawn once, by the stencil). And a tie that writes
+    // Z whose colour does not come out the same drawn twice (flush_batch's tie_runs): drawn whole, its Z first
+    // for every triangle, its back triangles' colour failed against its front ones' Z, so a blended mesh over
+    // itself kept only its nearest layer (a tree's leaves on maps 004 and 013, the sky through them). In runs
+    // each run's Z then its colour: a back triangle is blended before a front one over it, as on the GS. (Not a
+    // skinned model's second pass: its triangles are its first pass's, whose Z is there; drawn whole, as the GS,
+    // only the nearest gets the shine.)
+    bool tie_runs = ties && zwrite && !same_twice && !second_pass &&
+                    !sa_passing_same_twice(st, tex0, test, alpha, abe, as_min, as_max, passes[0].select, npasses);
     std::vector<uint32_t> runs(1, 0);
-    if ((npasses > 1 || shader_blend) && !shadow) {
+    if ((npasses > 1 || shader_blend || tie_runs) && !shadow) {
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
         for (uint32_t t = 1; t < triangles; t++) {
             bool cut = t - start >= 256;

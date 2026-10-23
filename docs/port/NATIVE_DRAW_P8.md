@@ -519,6 +519,41 @@ run keeps up):
 - Running `gsn_draw_test`'s 300 cases on lavapipe took the WSL VM down (E_UNEXPECTED; it came back after a minute). The
   memory note says lavapipe keeps a process's memory. CI was left unchanged: a lavapipe step could not be checked here.
 
+## T7 review, finding 1: a blended mesh over itself keeps every layer
+
+**The bug.** A draw tested GEQUAL that writes Z (the tie rule) was drawn as its Z for the whole batch, then its
+colour within the slack. The batch was cut into runs of triangles that do not overlap only for two alpha-test
+passes or blending in the shader. So in a blended batch whose triangles overlap (the trees' foliage: ALPHA
+`0x8000000044`, (Cs - Cd) As + Cd, TEST `0x5000d`, Z written), the back leaves failed against the front leaves'
+Z and only the nearest layer was blended. The trees on 004 (looking up) and 013 (ahead) were thinned, the sky
+showing through the leaves.
+
+**The fix** (`sa_draw_batch`, `tie_runs`, as `flush_batch`'s): a tie that writes Z whose colour does not come out
+the same drawn twice is drawn in runs of triangles that do not overlap, each run's Z then its colour. Not cut:
+a skinned model's second pass (its triangles are its first pass's: drawn whole, only the nearest gets the shine,
+as on the GS), and a cut-out whose every pixel the alpha test passes has As 0x80 (`sa_passing_same_twice`, from
+the texture's alphas: blended, it is Cs).
+
+**Pictures** (the owner's settings, still at 400; pixels differing from hosted, more than 8 in brackets):
+
+| view | before | after |
+|---|---|---|
+| 004 looking up (`--sky ps2`, the geometry alone) | 312,394 (71,471) | 43,377 (5,757) |
+| 004 looking up (modern sky: the clouds differ by design) | 1,820,728 (489,635) | 1,589,928 (425,788) |
+| 013 ahead | 143,374 (31,498) | 18,822 (3,065) |
+| 013 looking up | 240,235 (38,510) | 56,339 (6,301) |
+
+The review's other sets (its spots, the sky maps, water, menus) are the same or fewer pixels off: brick 10,682
+to 4,235 with `--sky ps2`, blotch 3,407 to 1,941, fire 4,973 to 3,858, underwater 1,302 to 543 more than 8;
+014's water 33 pixels more (of 167,834). The seated man (finding 3) is unchanged: not this mechanism.
+
+**Cost.** GPU time at the far save (4x, MSAA 2, native widescreen, 240, two runs each): 3.09 ms a picture before,
+3.55 after; hosted 3.58. It still keeps up (5,228 pictures). The draws went from 425,650 to 1,110,866, but those
+are about 0.08 ms of it (the same runs drawn in the old order: 3.17 ms). The rest is the back leaves now
+shaded and blended, which the GS draws too: before, early Z threw them away.
+
+**Finding 2** (009's water much lighter under `--scene-scale`) is not looked at yet.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
