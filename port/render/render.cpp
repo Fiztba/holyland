@@ -326,6 +326,51 @@ std::unordered_map<uint32_t, CacheEntry> cache;
 std::unordered_map<RdMesh, std::shared_ptr<const RdMeshData>> by_id; // (the meshes cache holds)
 RdMesh next_id = 1;
 
+// ---- KF4_ND_DUMP=FILE (debug only; NATIVE_DRAW.md's open questions, P0-3) ------------------------
+// A text file of what the core is handed, for tools/nd_measure.py: per frame "F serial parsed reparsed
+// hashed_bytes hash_ns parse_ns"; per new mesh "M id key batches", then per batch "B start prim alpha_lo alpha_hi
+// count" + "A reg value ..." + "V x y z w a ..." (positions, ITOF0 as VU1 reads them, and the colour's alpha) + "T i j k ...";
+// per draw "D kind id0 id1 id2 m[16] meshes...", and the adapter's notes (rd_dump_note). Off: nothing.
+struct Dump {
+    FILE *f = nullptr;
+    bool checked = false;
+    uint64_t parsed = 0, reparsed = 0, hashed = 0, hash_ns = 0, parse_ns = 0;
+    std::unordered_map<RdMesh, bool> written;
+    FILE *file() {
+        if (!checked) {
+            checked = true;
+            const char *path = getenv("KF4_ND_DUMP");
+            if (path && *path) {
+                f = fopen(path, "w");
+            }
+        }
+        return f;
+    }
+} dump;
+
+void dump_mesh(const RdMeshData &m) {
+    FILE *f = dump.f;
+    fprintf(f, "M %u %#x %zu\n", m.id, m.key, m.batches.size());
+    for (const RdBatch &b : m.batches) {
+        fprintf(f, "B %#x %#llx %u %u %u\n", b.start, (unsigned long long)((b.tag[0] >> 47) & 0x7FF), b.alpha_lo,
+                b.alpha_hi, b.count);
+        fprintf(f, "A");
+        for (uint64_t v : b.ad) {
+            fprintf(f, " %#llx", (unsigned long long)v);
+        }
+        fprintf(f, "\nV");
+        for (uint32_t k = 0; k < b.count; k++) {
+            const int32_t *v = &m.vertices[size_t(b.first + k) * 16];
+            fprintf(f, " %d %d %d %d %d", v[0], v[1], v[2], v[3], v[15]);
+        }
+        fprintf(f, "\nT");
+        for (uint8_t t : b.triangles) {
+            fprintf(f, " %u", t);
+        }
+        fprintf(f, "\n");
+    }
+}
+
 // ---- The side buffer ----------------------------------------------------------------------------
 const uint32_t SLOTS = 128; // (a power of two: the 24-bit serial wraps onto the same slot)
 struct Slot {
@@ -350,11 +395,23 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
     const uint8_t *bytes = static_cast<const uint8_t *>(block);
     uint32_t want = gen;
     if (gen == RD_GEN_HASH) {
+        auto t0 = dump.file() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
         uint64_t h = hash_bytes(bytes, size_t(qwords) * 16);
         want = uint32_t(h ^ (h >> 32)) | 1u;
         rd_stats.hash_bytes += uint64_t(qwords) * 16;
+        if (dump.f) { // (KF4_ND_DUMP)
+            dump.hash_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+            dump.hashed += uint64_t(qwords) * 16;
+        }
     }
     auto it = cache.find(key);
+    if (dump.f && !(it != cache.end() && it->second.gen == want && !it->second.touched)) { // (KF4_ND_DUMP)
+        dump.parsed++;
+        if (it != cache.end()) {
+            dump.reparsed++;
+            fprintf(dump.f, "P %#x %u\n", key, qwords);
+        }
+    }
     if (it != cache.end() && it->second.gen == want && !it->second.touched) {
         it->second.frame = frame_count;
         rd_stats.mesh_hits++;
@@ -368,7 +425,11 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
     mesh->key = key;
     mesh->gen = want;
     rd_stats.meshes_parsed++;
+    auto p0 = dump.f ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
     bool ok = fmt == RD_VF_PACKED16 && parse_block(bytes, qwords, *mesh);
+    if (dump.f) { // (KF4_ND_DUMP)
+        dump.parse_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - p0).count());
+    }
     if (fmt != RD_VF_PACKED16) {
         why_refused = "only RD_VF_PACKED16 is parsed so far";
     }
@@ -398,6 +459,16 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
     by_id[mesh->id] = mesh;
     rd_stats.meshes_held = by_id.size();
     return mesh->id;
+}
+
+extern "C" int rd_dump_enabled(void) {
+    return dump.file() != nullptr;
+}
+
+extern "C" void rd_dump_note(const char *line) {
+    if (dump.file()) {
+        fprintf(dump.f, "%s\n", line);
+    }
 }
 
 extern "C" void rd_mesh_touch(uint32_t key) {
@@ -436,6 +507,13 @@ extern "C" uint64_t rd_begin_frame(void) {
     std::lock_guard<std::mutex> g(slots_lock);
     serial = next;
     frame_count++;
+    if (dump.file()) { // (KF4_ND_DUMP: the frame before's counts, then this frame's serial)
+        fprintf(dump.f, "F %u %llu %llu %llu %llu %llu\n", serial, (unsigned long long)dump.parsed,
+                (unsigned long long)dump.reparsed, (unsigned long long)dump.hashed, (unsigned long long)dump.hash_ns,
+                (unsigned long long)dump.parse_ns);
+        dump.parsed = dump.reparsed = dump.hashed = dump.hash_ns = dump.parse_ns = 0;
+        fflush(dump.f);
+    }
     Slot &s = slots[serial % SLOTS];
     s.serial = serial;
     s.draws.clear();
@@ -493,6 +571,24 @@ extern "C" uint64_t rd_draw(const RdDraw *d, const RdMesh *meshes, uint32_t coun
         s.meshes.push_back(by_id[meshes[i]]);
     }
     rd_stats.draws++;
+    if (dump.file()) { // (KF4_ND_DUMP)
+        for (uint32_t i = 0; i < count; i++) {
+            if (!dump.written[meshes[i]]) {
+                dump.written[meshes[i]] = true;
+                dump_mesh(*by_id[meshes[i]]);
+            }
+        }
+        fprintf(dump.f, "D %u %#x %u %u", d->kind, d->id[0], d->id[1], d->id[2]);
+        for (int c = 0; c < 4; c++) {
+            for (int r = 0; r < 4; r++) {
+                fprintf(dump.f, " %.9g", d->model[c][r]);
+            }
+        }
+        for (uint32_t i = 0; i < count; i++) {
+            fprintf(dump.f, " %u", meshes[i]);
+        }
+        fprintf(dump.f, "\n");
+    }
     drawn.fetch_add(1, std::memory_order_release);
     return (uint64_t(RD_ND_DRAW) << 56) | (uint64_t(serial) << 32) | index;
 }

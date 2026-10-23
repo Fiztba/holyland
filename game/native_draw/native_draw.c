@@ -23,6 +23,7 @@
 #include "gfx/gs.h"
 #include "port/render.h"
 
+#include <stdio.h>
 #include <string.h>
 
 void Packet_BeginGsRegisters(void);
@@ -236,6 +237,19 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
         d.colour[0][2] = model->colour_blue;
         memcpy(&d.colour[0][3], &model->found_record_id, 4);
         memcpy(d.colour[1], &model->found_record, 16);
+    }
+    if (kind == RD_KIND_MAP_RECORD && rd_dump_enabled()) {
+        /* KF4_ND_DUMP (debug only, P0-3): the record's flags, the camera's view and the model's place, before its parts' D lines */
+        char line[512];
+        int n = snprintf(line, sizeof(line), "R %#x %#x", (u32)EE_WORD(owner), (u32)((const MapDrawRecord *)owner)->flags);
+
+        for (i = 0; i < 16; i++) {
+            n += snprintf(line + n, sizeof(line) - (size_t)n, " %.9g", world_view_matrix[i]);
+        }
+        for (i = 0; i < 3; i++) { /* the model's place (the sky's: the player's feet) */
+            n += snprintf(line + n, sizeof(line) - (size_t)n, " %.9g", ((f32 *)model->model_matrix)[12 + i]);
+        }
+        rd_dump_note(line);
     }
     part = model->parts;
     for (i = 0; i < model->part_count; i++, part++) {
