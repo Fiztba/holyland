@@ -1119,7 +1119,9 @@ void debug_page() {
             const char *name;
             int bits;
             const char *what;
-        } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."}};
+        } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."},
+                     {"Map records (in work)", PORT_ND_MAP,
+                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords): in work, not yet checked."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
         for (const auto &k : kinds) {
             bool on = (kinds_on & k.bits) != 0;

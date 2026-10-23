@@ -61,9 +61,10 @@
                          draw these kinds of the game's 3D at the game's level (docs/port/NATIVE_DRAW.md):
                          the patched draw code hands them to the renderer core, and the native GS draws
                          them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
-                         on: every kind ported so far; KINDS: map, models, skinned, arm, sky, effects,
-                         shadows, reflection, water, passes, items (only items so far). off (the default)
-                         is the game as without it. The overlay's Debug page changes it live
+                         on: the kinds that have passed their checks (items so far); KINDS, by name: map,
+                         models, skinned, arm, sky, effects, shadows, reflection, water, passes, items
+                         (items and map, in work, are ported so far). off (the default) is the game as
+                         without it. The overlay's Debug page changes it live
        --native-draw-compare native|ps2
                          with --native-draw, the PS2 path's packets are queued too, and the native GS
                          draws the native draws (native) or the PS2 path's (ps2): two runs alike in all
@@ -678,7 +679,7 @@ int port_native_draw_parse(const char *value) {
         return 0;
     }
     if (strcmp(value, "on") == 0) {
-        return PORT_ND_ALL;
+        return PORT_ND_ACCEPTED;
     }
     while (*at) {
         size_t length = strcspn(at, ",");
