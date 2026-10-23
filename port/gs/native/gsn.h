@@ -232,6 +232,8 @@ void gsn_scanout_release(void);
 #define GSN_IM_REFLECT 0x40u /* by the reflection's projection */
 #define GSN_IM_SCALE_ST 0x80u /* its own ST (Q 1/w): S and T scaled, Q made 1/w again */
 #define GSN_IM_XYZF 0x100u   /* 24-bit Z */
+#define GSN_IM_SCREEN_ST 0x200u /* its S and T made from the screen, with the place (frame_interp.c, StPlane):
+                                   H's h0..h5 in w[8..13], h6 in w[15], h7 in w[1] (floats) */
 /* FLAT */
 #define GSN_IM_XY 0x4u
 #define GSN_IM_RGBA 0x8u
@@ -276,6 +278,8 @@ typedef struct {
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
     uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
+    uint64_t shadows, shadows_gone, shadows_resolved; /* write-backs put off, never owed, made later (gsn.cpp, shadows) */
+    uint64_t silhouettes_whole;     /* silhouettes drawn whole, not in runs (flush_batch, "A silhouette") */
     uint64_t layer_draws;           /* --native-layer-z tolerant: batches with layers (flush_batch, "Z and layers") */
     /* --frame-rate's pictures between on the GPU (gsn_interp_picture): drawn from the packets (the first
        of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */

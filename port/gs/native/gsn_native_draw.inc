@@ -201,6 +201,9 @@ struct NdState {
     // nd280's)
     const Buffer *batch_arena = nullptr, *batch_draws = nullptr;
     bool pending_000 = false; // gs->verts holds program 0x000's corners
+    // nd.draws' records of program 0x5A0 (the shadows: nd_corner_colour), 1 each; cleared when nd.draws is
+    // replaced (nd_new_buffer)
+    std::vector<uint8_t> of5a0;
     std::unordered_map<Program *, Program *> programs; // the GS's programs, with nd_000.vert
     Shader *vs = nullptr;
     BufferHandle dummy;
@@ -291,6 +294,9 @@ void nd_bind(Cmd &c) {
 void nd_new_buffer(NdBuffer &b, uint32_t room, uint32_t size, bool named) {
     if (named) {
         flush_batch();
+    }
+    if (&b == &nd.draws) {
+        nd.of5a0.clear(); // (the old buffer's records' flags go with it)
     }
     if (b.buffer && b.map) {
         gs->device->unmap_host_buffer(*b.buffer, MEMORY_ACCESS_WRITE_BIT);
@@ -846,6 +852,10 @@ void nd_draw(uint64_t value) {
     nd_const(k, d, cam);
     if (d.program == 0x5A0) {
         nd5a0_const(k); // (the shadows: 0x000's maths without the lights and the fog, gsn_nd_5a0.inc)
+        if (nd.of5a0.size() <= record) {
+            nd.of5a0.resize(record + 1, 0);
+        }
+        nd.of5a0[record] = 1;
     }
     const float *m = &d.model[0][0];
     // (the XYOFFSET of the context the draw's PRIM picks: the game's draws keep both contexts' the same)
@@ -1089,6 +1099,25 @@ void nd_kick() {
     if ((nd.pending || (nd.pass_pending && !nd.pass_kicking)) && interp.active) {
         flush_batch();
     }
+}
+
+// (flush_batch, a silhouette: whether a batch is one colour) The colour a corner is drawn with, when the CPU
+// knows it: a PS2 path's corner's own; a native corner of a program 0x5A0 record's (the shadows, whose RGB
+// nd_000.vert makes an exact 0: gsn_nd_5a0.inc) 0, with the plan's alpha. False for any other native corner
+// (its RGB is the corner's encoding, its colour the shader's)
+bool nd_corner_colour(const Vtx &v, uint32_t *rgba) {
+    int kind = nd_corner_kind(v);
+    if (kind == ND_KIND_PS2) {
+        *rgba = v.rgba;
+        return true;
+    }
+    uint32_t record = (v.rgba & 0xFFFFFFu) >> ND_CORNER_DRAW_SHIFT;
+    if (kind != ND_KIND_000 || nd.batch_draws != nd.draws.buffer.get() || record >= nd.of5a0.size() ||
+        !nd.of5a0[record] || ndw_batch() || nd700_corner(v)) {
+        return false;
+    }
+    *rgba = v.rgba & 0xFF000000u;
+    return true;
 }
 
 // (flush_batch's draw call: n corners from first, of a pass of the run whose vertices start at gs->verts[run],

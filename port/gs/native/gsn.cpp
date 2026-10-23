@@ -212,6 +212,9 @@ struct Target {
     // of the two has pixels the other does not (msaa_settle, msaa_ready)
     ImageHandle ms;
     bool ms_newer, image_newer;
+    // made, and drawn into since, only by a picture between (replaying): what it has is the picture's,
+    // not the game's, and need not go back to VRAM when dropped (prepare_write)
+    bool replay_only = false;
 };
 
 // --frame-rate's pictures between (frame_interp.c): between their marks, and the frame shown before them
@@ -515,7 +518,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS, OP_STORAGE,
+    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -794,6 +797,19 @@ public:
             rec().add(OP_DEPTH_TEST, ArgValues{{test, write}, {}});
         }
         raw().set_depth_test(test, write);
+    }
+    // the depth bounds test (Granite as cmake/granite_depth_bounds.cmake makes it): on with its bounds, or off
+    void set_depth_bounds(bool on_, float lo, float hi) {
+        if (on()) {
+            rec().add(OP_DEPTH_BOUNDS, ArgValues{{uint32_t(on_)}, {lo, hi}});
+        }
+        depth_bounds_raw(raw(), on_, lo, hi);
+    }
+    static void depth_bounds_raw(CommandBuffer &c, bool on_, float lo, float hi) {
+        c.set_depth_bounds_test(on_);
+        if (on_) {
+            gs->device->get_device_table().vkCmdSetDepthBounds(c.get_command_buffer(), lo, hi);
+        }
     }
     void set_depth_compare(VkCompareOp op) {
         if (on()) {
@@ -1097,6 +1113,9 @@ void replay_ops(const Recording &r) {
             break;
         case OP_DEPTH_COMPARE:
             c.set_depth_compare(VkCompareOp(r.args<ArgValues>(op).v[0]));
+            break;
+        case OP_DEPTH_BOUNDS:
+            Cmd::depth_bounds_raw(c, r.args<ArgValues>(op).v[0] != 0, r.args<ArgValues>(op).f[0], r.args<ArgValues>(op).f[1]);
             break;
         case OP_VIEWPORT:
             c.set_viewport(r.args<VkViewport>(op));
@@ -1698,10 +1717,37 @@ uint32_t depth_max(uint32_t psm) {
 }
 
 // The target's pixels into the CPU's VRAM
+// ---- Write-backs put off (shadows) -------------------------------------------------------------
+// A target an upload (or a copy) writes part of in another shape had to go back to VRAM before the
+// write: the rest of its pages are newer than VRAM. Reading it back waits for the GPU to finish all it
+// was given (12 ms a time on map 060's shop, where the sky's 128 x 128 copy is drawn and then its pages
+// take the shop's textures, a frame's uploads covering them all but one of them only in part). Now the
+// target is kept aside instead, as a shadow of its pages, and what is written over them from then on
+// is noted, bit by bit (shadow_mask: the transfer done again into it with every bit set). A page written
+// over whole needs nothing of it. When the CPU's VRAM of a page still owed is wanted (claim_pages, a
+// write-back over it, a save state), that page goes back as it would have, and then what was written
+// since goes over it again: VRAM as it would have been.
+struct Shadow {
+    std::unique_ptr<Target> t;
+    uint32_t lo, count; // its pages
+};
+std::vector<Shadow> shadows;
+std::vector<uint8_t> shadow_mask; // (GSN_VRAM_BYTES: the bits written since a shadow was made)
+bool shadow_busy;                  // (write_back for a shadow: no shadows looked at again)
+
+void write_back(Target &t);
+void shadow_resolve(uint32_t lo, uint32_t count);
+
 void write_back(Target &t) {
     Timer timer(gsn_stats.ns_writeback);
     if (!t.dirty) {
         return;
+    }
+    if (!shadow_busy && !shadows.empty()) {
+        // (a shadow over its pages is older: it goes back first)
+        uint32_t tlo, tcount;
+        target_pages(t, &tlo, &tcount);
+        shadow_resolve(tlo, tcount);
     }
     Why why(GSN_WHY_WRITEBACK);
     msaa_settle(t);
@@ -1728,7 +1774,30 @@ void write_back(Target &t) {
         row1 = std::min(t.height, (last / t.bw + 1) * ph);
     }
     uint32_t sx = t.sx, sy = t.sy, pw = t.width * sx;
-    const uint8_t *pixels = read_image(*t.image, 0, row0 * sy, pw, (row1 - row0) * sy);
+    const uint8_t *pixels;
+    if (!t.depth && (sx > 1 || sy > 1)) {
+        // A scaled colour target: the pixel in the middle of each GS pixel's, taken on the GPU (a blit,
+        // nearest: GS pixel x reads x sx + sx / 2) into an image at the PS2's size, and only that read
+        // back: at --native-scale 4 a 640 x 448 target read whole was 27 MB a write-back (the water's
+        // wobble copies the frame into VRAM that the next frame's textures go through: one a frame)
+        static ImageHandle small;
+        uint32_t rows = row1 - row0;
+        if (!small || small->get_width() < t.width || small->get_height() < rows ||
+            small->get_format() != t.image->get_format()) {
+            small = make_image(std::max(t.width, small ? small->get_width() : 0u),
+                               std::max(rows, small ? small->get_height() : 0u), t.image->get_format(), 1, false);
+        }
+        end_pass();
+        transfer_barrier();
+        cmd().raw().blit_image(*small, *t.image, {0, 0, 0}, {int32_t(t.width), int32_t(rows), 1},
+                               {0, int32_t(row0 * sy), 0}, {int32_t(pw), int32_t(rows * sy), 1}, 0, 0, 0, 0, 1,
+                               VK_FILTER_NEAREST);
+        pixels = read_image(*small, 0, 0, t.width, rows);
+        sx = sy = 1;
+        pw = t.width;
+    } else {
+        pixels = read_image(*t.image, 0, row0 * sy, pw, (row1 - row0) * sy);
+    }
     // (a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into the same
     // buffer wrote it: the whole word goes back either way)
     uint32_t psm = t.depth ? t.psm : psm_layout(t.psm);
@@ -1783,6 +1852,12 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     h = std::min(h, t.height - y0);
     if (w == 0 || h == 0) {
         return;
+    }
+    if (!shadows.empty()) {
+        // (VRAM as it should be under the rectangle: a shadow's pages owed there first)
+        uint32_t tlo, tcount;
+        target_pages(t, &tlo, &tcount);
+        shadow_resolve(tlo, tcount);
     }
     Why why(GSN_WHY_UPLOAD);
     msaa_settle(t); // (the rest of the image stays)
@@ -1848,6 +1923,153 @@ void drop_target(Target *t) {
     }
 }
 
+// KF4_GSN_SHADOWS=0: write-backs not put off (as before)
+bool shadows_on() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_SHADOWS");
+        on = !(v && atoi(v) == 0);
+    }
+    return on != 0;
+}
+
+// The target, gone from the targets, kept as a shadow (above) of the pages it has newer than VRAM
+void shadow_make(Target *t) {
+    if (gs->pass_color == t || gs->pass_depth == t) {
+        end_pass();
+    }
+    msaa_settle(*t); // (its image as drawn)
+    for (size_t i = 0; i < gs->targets.size(); i++) {
+        if (gs->targets[i].get() == t) {
+            Shadow sh;
+            sh.t = std::move(gs->targets[i]);
+            gs->targets.erase(gs->targets.begin() + long(i));
+            target_pages(*sh.t, &sh.lo, &sh.count);
+            if (shadow_mask.empty()) {
+                shadow_mask.assign(GSN_VRAM_BYTES, 0);
+            }
+            for (uint32_t k = 0; k < sh.count; k++) {
+                memset(shadow_mask.data() + size_t((sh.lo + k) % vram_pages) * 8192, 0, 8192);
+            }
+            GSN_LOG(1, "shadow of target bp %#x bw %u psm %#x %ux%u\n", t->bp, t->bw, t->psm, t->width, t->height);
+            gsn_stats.shadows++;
+            shadows.push_back(std::move(sh));
+            return;
+        }
+    }
+}
+
+// A transfer is about to write its rectangle (DBP, DBW, DPSM; DSAX, DSAY; RRW, RRH): over a shadow, the
+// bits it writes noted, and its pages written over whole let go
+void shadow_written(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
+    if (shadows.empty()) {
+        return;
+    }
+    GsnUpload u;
+    gsn_upload_begin(&u, bitbltbuf, trxpos, trxreg);
+    uint32_t lo, count;
+    buffer_pages(u.bp, u.bw, u.psm, u.x0 + u.w, u.y0 + u.h, &lo, &count);
+    bool any = false;
+    for (const Shadow &sh : shadows) {
+        any = any || pages_overlap(lo, count, sh.lo, sh.count);
+    }
+    if (!any) {
+        return;
+    }
+    // the transfer again, every bit of every pixel set, into the mask
+    size_t bytes = (size_t(u.w) * u.h * size_t(gsn_psm_bits(u.psm)) + 7) / 8;
+    std::vector<uint8_t> ones(bytes + 16, 0xFF);
+    gsn_upload_data(&u, shadow_mask.data(), ones.data(), ones.size(), nullptr, nullptr);
+    for (size_t i = 0; i < shadows.size();) {
+        Shadow &sh = shadows[i];
+        Target &t = *sh.t;
+        bool left = false;
+        for (uint32_t k = 0; k < sh.count && k < t.dirty_pages.size(); k++) {
+            if (!t.dirty_pages[k]) {
+                continue;
+            }
+            const uint8_t *m = shadow_mask.data() + size_t((sh.lo + k) % vram_pages) * 8192;
+            bool whole = true;
+            for (size_t b = 0; b < 8192 && whole; b += 8) {
+                uint64_t v;
+                memcpy(&v, m + b, 8);
+                whole = v == ~uint64_t(0);
+            }
+            if (whole) {
+                t.dirty_pages[k] = 0; // (written over: nothing of the shadow's is owed there)
+            } else {
+                left = true;
+            }
+        }
+        if (!left) {
+            gsn_stats.shadows_gone++;
+            shadows.erase(shadows.begin() + long(i));
+            continue;
+        }
+        i++;
+    }
+}
+
+// The pages lo..count of the CPU's VRAM as they would be had the shadows over them gone back to VRAM
+// when they were made
+void shadow_resolve(uint32_t lo, uint32_t count) {
+    if (shadow_busy) {
+        return;
+    }
+    for (size_t i = 0; i < shadows.size();) {
+        Shadow &sh = shadows[i];
+        Target &t = *sh.t;
+        if (!pages_overlap(lo, count, sh.lo, sh.count)) {
+            i++;
+            continue;
+        }
+        // its pages owed among these: written back alone, then what was written since put back over them
+        std::vector<uint8_t> keep = t.dirty_pages, now(t.dirty_pages.size(), 0);
+        std::vector<uint32_t> pages;
+        for (uint32_t k = 0; k < sh.count && k < t.dirty_pages.size(); k++) {
+            uint32_t page = (sh.lo + k) % vram_pages;
+            if (t.dirty_pages[k] && pages_overlap(lo, count, page, 1)) {
+                now[k] = 1;
+                keep[k] = 0;
+                pages.push_back(page);
+            }
+        }
+        if (pages.empty()) {
+            i++;
+            continue;
+        }
+        std::vector<uint8_t> since(pages.size() * 8192);
+        for (size_t p = 0; p < pages.size(); p++) {
+            memcpy(since.data() + p * 8192, gs->vram.data() + size_t(pages[p]) * 8192, 8192);
+        }
+        t.dirty_pages = now;
+        t.dirty = true;
+        shadow_busy = true;
+        write_back(t);
+        shadow_busy = false;
+        gsn_stats.shadows_resolved++;
+        GSN_LOG(1, "shadow of target bp %#x: %zu pages written back\n", t.bp, pages.size());
+        for (size_t p = 0; p < pages.size(); p++) {
+            uint8_t *v = gs->vram.data() + size_t(pages[p]) * 8192;
+            const uint8_t *m = shadow_mask.data() + size_t(pages[p]) * 8192, *w = since.data() + p * 8192;
+            for (size_t b = 0; b < 8192; b++) {
+                v[b] = uint8_t((v[b] & ~m[b]) | (w[b] & m[b]));
+            }
+        }
+        t.dirty_pages = keep;
+        t.dirty = std::find(keep.begin(), keep.end(), 1) != keep.end();
+        if (!t.dirty) {
+            shadows.erase(shadows.begin() + long(i));
+            continue;
+        }
+        i++;
+    }
+}
+
+void shadows_resolve_all() {
+    shadow_resolve(0, vram_pages);
+}
+
 // Everything on the GPU that is newer than these pages of the CPU's VRAM, written back; and the
 // targets over them that are not `keep`, gone (they are about to be written in another shape)
 bool shares_pages(const Target &a, const Target &b);
@@ -1855,13 +2077,16 @@ bool shares_pages(const Target &a, const Target &b);
 // (sharer: targets that share pages with it (shares_pages) are left alone: take_pages moves pages
 // between them)
 void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer = nullptr) {
+    shadow_resolve(lo, count);
     for (size_t i = 0; i < gs->targets.size();) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
         target_pages(*t, &tlo, &tcount);
         if (t != keep && pages_overlap(lo, count, tlo, tcount) && !(sharer && shares_pages(*sharer, *t))) {
             if (drop) {
-                write_back(*t);
+                if (!t->replay_only) { // (a picture between's own: VRAM keeps the game's, prepare_write)
+                    write_back(*t);
+                }
                 drop_target(t);
                 continue;
             }
@@ -2003,7 +2228,19 @@ void take_pages(Target &t, bool only_stale) {
 }
 
 // The target that is the buffer at bp, at least width x height, made (from the CPU's VRAM) or grown
+Target *get_target_made(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height);
+
 Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
+    bool existed = find_target(bp, bw, psm) != nullptr;
+    Target *t = get_target_made(bp, bw, psm, width, height);
+    if (t) {
+        // (a picture between's own target, until the game's frame draws into it)
+        t->replay_only = replaying && (!existed || t->replay_only);
+    }
+    return t;
+}
+
+Target *get_target_made(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
     Target *t = find_target(bp, bw, psm);
     width = std::max(width, std::max(bw, 1u) * 64);
     if (t && t->stale) {
@@ -2526,6 +2763,57 @@ bool blend_copy_forced() {
     return forced != 0;
 }
 
+// KF4_GSN_SILHOUETTE_RUNS=1: the silhouettes drawn in runs as before (flush_batch, "A silhouette"):
+// with MSAA a pixel half covered by one run's triangle and half by the next's came out a little darker
+// where the next read the first's resolve; drawn whole, it is darkened once, as the GS's pixel is.
+int silhouette_runs_mode() {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *v = getenv("KF4_GSN_SILHOUETTE_RUNS");
+        mode = v && atoi(v) > 0;
+    }
+    return mode;
+}
+
+// The depth bounds test (flush_batch, "The first phase"): the GPU has it (Granite turns it on) and
+// KF4_GSN_DEPTH_BOUNDS is not 0
+bool depth_bounds_ok() {
+    static int ok = -1;
+    if (ok < 0) {
+        const char *v = getenv("KF4_GSN_DEPTH_BOUNDS");
+        ok = gs->device->get_device_features().enabled_features.depthBounds && !(v && atoi(v) == 0);
+    }
+    return ok != 0;
+}
+
+// The Z a triangle's pixels can have: its corners', and a GS pixel's change of Z more each way (a pixel
+// shaded once, at its middle, outside the triangle where only some of its samples are inside)
+void z_reach(const Vtx *v, double *lo, double *hi) {
+    double z0 = v[0].z, z1 = v[1].z, z2 = v[2].z;
+    double ax = double(v[1].x) - v[0].x, ay = double(v[1].y) - v[0].y;
+    double bx = double(v[2].x) - v[0].x, by = double(v[2].y) - v[0].y;
+    double area = ax * by - ay * bx;
+    double slope = 0.0;
+    if (area != 0.0) {
+        double dzdx = ((z1 - z0) * by - (z2 - z0) * ay) / area;
+        double dzdy = ((z2 - z0) * ax - (z1 - z0) * bx) / area;
+        slope = fabs(dzdx) + fabs(dzdy);
+    }
+    *lo = std::min({z0, z1, z2}) - slope;
+    *hi = std::max({z0, z1, z2}) + slope;
+}
+
+// KF4_GSN_BLEND16_BY_PASS=1: a multisampled 16-bit target's copies resolved by the passes, as before
+// (flush_batch, "a 16-bit target's samples"), for comparisons
+bool blend_copy_16_by_pass() {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *v = getenv("KF4_GSN_BLEND16_BY_PASS");
+        mode = v && atoi(v) > 0;
+    }
+    return mode != 0;
+}
+
 // KF4_GSN_MSAA_BLEND=fast: a multisampled target's copies made in the render pass too, its samples'
 // mean rounded here (pass_resolve.frag), which is not always the resolve's: a few pixels at edges come
 // out 1 or 2 apart from the default's (about a hundred a picture on map 000). A third less GPU time a
@@ -2936,7 +3224,8 @@ bool interp_t_at_0(const std::array<uint32_t, 4> &c, bool fst, float rows, float
 // A kick's place at t 0 (gs_replay.comp's moved at the frame's t 0 cameras, frame->move0 and mid0), in GS
 // pixels less its XYOFFSET: with its model and with the camera when it may be either. Adds to box (x0 y0 x1
 // y1); how far it is from where it is at t 1 (x, y) to most.
-void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most) {
+void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most, float z1 = 0.0f, float *zlo = nullptr,
+                       float *zhi = nullptr) {
     if (k >= interp.frame->kicks) {
         return;
     }
@@ -2979,6 +3268,12 @@ void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most) 
             }
             if (!(v[2] > 0.0f)) {
                 continue;
+            }
+            if (zlo) {
+                // (gs_replay.comp's Z: the kick's less (Z - cz) dm.z / m.z)
+                float nz = z1 - f(14) * (v[2] - p[2]) / v[2];
+                *zlo = std::min(*zlo, nz);
+                *zhi = std::max(*zhi, nz);
             }
             float nx = screen[0] * v[0] / v[2] + screen[2], ny = screen[1] * v[1] / v[2] + screen[3];
             if (!(fabsf(nx - 2048.0f) <= 2047.0f && fabsf(ny - 2048.0f) <= 2047.0f)) {
@@ -3025,6 +3320,28 @@ void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
     box[1] -= margin;
     box[2] += margin;
     box[3] += margin;
+}
+
+// A batch's Z at t 0 too (a picture between's moving vertices), as interp_box_at_0 its places: lo and hi
+// widened to take them in, and a quarter of the furthest a Z went more each way (the camera's path is not a
+// line between its ends)
+void interp_z_at_0(double *lo, double *hi) {
+    float zl = INFINITY, zh = -INFINITY;
+    int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+    float most = 0.0f;
+    for (size_t i = 0; i < interp.vsrc.size() && i < gs->verts.size(); i++) {
+        const auto &c = interp.vsrc[i];
+        const Vtx &v = gs->verts[i];
+        if (!(c[3] & IC_SPRITE)) {
+            interp_place_at_0(c[c[3] & 3], v.x, v.y, box, &most, float(v.z), &zl, &zh);
+        }
+    }
+    if (zl > zh) {
+        return;
+    }
+    double far = std::max({0.0, *lo - double(zl), double(zh) - *hi});
+    *lo = std::min(*lo, double(zl)) - far * 0.25;
+    *hi = std::max(*hi, double(zh)) + far * 0.25;
 }
 
 // The batch, drawn
@@ -3497,7 +3814,25 @@ void flush_batch() {
                             : tex_alpha_max;
     }
     bool as_over = bc == 0 && !blend.premul && as_max > 0x80;
-    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || dst16 ||
+    // (Cs - Cd) As + Cd with As 0x80 at every pixel (or FIX 0x80) is Cs: no blending at all, the GS's
+    // ((Cs - Cd) 0x80 >> 7) + Cd being Cs whatever Cd. Into a 16-bit target it is drawn unblended
+    // rather than by the shader, which drew the batch in runs of triangles that do not overlap, each
+    // its own render pass and MSAA resolve: the reflections' walls and models (map 009's poison pond,
+    // 1,600 render passes a picture). The colour, its alpha (FBA, the alpha bit) and the masks come
+    // out the same either way (gs_frag.h). (--native-colour high blends in floats: as before.)
+    bool blend_is_cs = false;
+    if (abe && ba == 0 && bb == 1 && bd == 1 && (bc == 0 || bc == 2) && !blend.premul) {
+        uint32_t c_lo = as_min, c_hi = as_max;
+        if (bc == 2) {
+            c_lo = c_hi = fix;
+        } else if (tme && bits(tex0, 34, 1)) {
+            uint32_t tfx = bits(tex0, 35, 2);
+            c_lo = tfx == 0 ? (as_min * tex_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + tex_lo) : tex_lo;
+            c_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
+        }
+        blend_is_cs = c_lo == 0x80 && c_hi == 0x80 && dst16 && !wide(*color->image);
+    }
+    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || (dst16 && !blend_is_cs) ||
                                          (push.misc & (M_PABE)) || !(push.misc & M_COLCLAMP) ||
                                          (bc == 0 && (push.misc & M_FBA)) || as_over || !fixed))) {
         shader_blend = true;
@@ -3508,6 +3843,7 @@ void flush_batch() {
             push.alpha = (2 << 0) | (2 << 2) | (2 << 4) | (0 << 6); // (0 - 0) * FIX + Cs: no blending
         }
         gsn_stats.shader_blends++;
+    } else if (blend_is_cs) {
     } else if (abe && blend.premul) {
         push.flags |= blend.premul;
     } else if (abe && bc == 0 && !(ba == bb)) {
@@ -3703,6 +4039,14 @@ void flush_batch() {
         a_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
     }
     bool same_twice = !abe || (ba == 0 && bb == 1 && bd == 1 && (bc == 0 ? a_lo == 0x80 && a_hi == 0x80 : bc == 2 && fix == 0x80));
+    // (the same for a layer batch's other triangles, whose corners' alphas are all 0x80: the As they make)
+    uint32_t o_lo = 0x80, o_hi = 0x80;
+    if (tme && bits(tex0, 34, 1)) {
+        uint32_t tfx = bits(tex0, 35, 2);
+        o_lo = tfx == 0 ? (0x80 * tex_lo) >> 7 : tfx == 2 ? std::min(255u, 0x80 + tex_lo) : tex_lo;
+        o_hi = tfx == 0 ? std::min(255u, (0x80 * tex_hi) >> 7) : tfx == 2 ? std::min(255u, 0x80 + tex_hi) : tex_hi;
+    }
+    bool others_same_twice = o_lo == 0x80 && o_hi == 0x80;
     // the alpha test passes every pixel the batch can make: its Z pass needs no texture (gs_zonly.frag)
     uint32_t aref = bits(test, 4, 8);
     bool atest_always = !ate || atst == 1 ||
@@ -3728,7 +4072,73 @@ void flush_batch() {
         gs->tie_tick = gs->tick;
         gs->tie_verts.assign(gs->verts.begin(), gs->verts.end());
     }
-    if (tie) {
+    Pass layer_passes[4];
+    int nlayer_passes = 0;
+    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
+        !reads_own_target) {
+        for (int i = 0; i < npasses; i++) {
+            if (passes[i].mask) {
+                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
+            }
+            if (passes[i].zwrite) {
+                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
+            }
+        }
+    }
+    // A layer batch's other triangles (every corner's alpha 0x80: the wall's overlay where it does not
+    // fade, the brick over the end wall of a corridor on map 1D) are ties too when their colour comes out
+    // the same drawn twice: they lie on their surface as the layer does, and with no slack they lost to
+    // it where its Z came out a hair nearer, the surface's own texture showing through the overlay in
+    // flat patches that came and went as the camera moved.
+    // A tie drawn in one pass (no alpha test's second pass, no layers) whose colour comes out the same
+    // drawn twice: its colour within half a Z of what was there before the batch, no Z written, then the
+    // batch again as the GS draws it, Z tested and written exactly (with the fraction). So it wins over
+    // what was there within half a Z, and among its own triangles the nearer wins, as it should: with its
+    // Z first and then its colour within half a Z of that, a batch's later triangles won over its earlier
+    // ones within half a Z of them, and on map 3's rope bridge, far off, the planks' faces (a log of
+    // strips a Z apart, one batch) came out as light and dark blocks that moved with the distance where
+    // the GS hatches them. (Its second pass, repeat, keeps the Z first: drawn twice it would blend twice.)
+    // (the passes the batch needs whatever the ties: a tie's passes need no runs, below)
+    int own_passes = npasses;
+    bool two_phase = tie && same_twice && npasses == 1 && !nlayer_passes;
+    // The first phase matters only where what was there lies behind a triangle's Z by half a Z or less
+    // (where it is not behind, the second phase draws over it): a pixel whose Z is outside the batch's Zs
+    // and half a Z more has nothing of it, and the depth bounds test turns it away, before the shading
+    // where the GPU can (the first phase is a second colour pass: the tower on map 000 24% more GPU time a
+    // picture without it). The batch's Zs: its corners', a GS pixel's change of Z more (a pixel shaded at
+    // its middle outside the triangle), and in a picture between its Zs at t 0 too (interp_z_at_0).
+    // KF4_GSN_DEPTH_BOUNDS=0: without it.
+    bool two_phase_bounds = false;
+    float bounds_lo = 0.0f, bounds_hi = 1.0f;
+    // (Not a native batch's in a picture between: nd_000.vert moves its corners on the GPU, and where their
+    // Zs are at t 0 is not worked out here, as interp_z_at_0 works out the PS2 path's.)
+    if (two_phase && depth_bounds_ok() && !(nd.active && interp.active && !nd.pass_active)) {
+        double lo = INFINITY, hi = -INFINITY;
+        for (size_t t = 0; t + 2 < gs->verts.size(); t += 3) {
+            double a, b;
+            z_reach(&gs->verts[t], &a, &b);
+            lo = std::min(lo, a);
+            hi = std::max(hi, b);
+        }
+        if (interp.active && moving.moves_3d) {
+            interp_z_at_0(&lo, &hi);
+        }
+        double scale = depth_scale(zpsm);
+        lo = (std::max(lo, 0.0) - 2.0 * zstep) * scale;
+        hi = (std::min(hi, double(depth_max(zpsm))) + 2.5 * zstep) * scale;
+        if (lo > 0.0 || hi < 1.0) {
+            two_phase_bounds = true;
+            bounds_lo = float(std::max(lo * (1.0 - 1e-6), 0.0));
+            bounds_hi = float(std::min(hi * (1.0 + 1e-6), 1.0));
+        }
+    }
+    if (two_phase) {
+        Pass p0 = passes[0];
+        passes[0] = {p0.select, p0.mask, false, 0.5f * zstep, 0.0f};
+        passes[1] = p0;
+        npasses = 2;
+    } else if (tie || (nlayer_passes && others_same_twice && fine_z && any_zwrite_pass && ztst == 2 &&
+                       !reads_own_target && !(push.flags & F_DATE))) {
         Pass z_first[4];
         int n = 0;
         for (int i = 0; i < npasses; i++) {
@@ -3744,19 +4154,6 @@ void flush_batch() {
         npasses = n;
         for (int i = 0; i < n; i++) {
             passes[i] = z_first[i];
-        }
-    }
-    Pass layer_passes[4];
-    int nlayer_passes = 0;
-    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
-        !reads_own_target) {
-        for (int i = 0; i < npasses; i++) {
-            if (passes[i].mask) {
-                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
-            }
-            if (passes[i].zwrite) {
-                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
-            }
         }
     }
     auto is_layer = [&](uint32_t t) {
@@ -3806,8 +4203,39 @@ void flush_batch() {
     // order, as do the others among themselves, with their Z.)
     std::vector<uint32_t> runs(1, 0);
     std::vector<uint32_t> layers_at;
-    if (!reads_own_target && (shader_blend || npasses > 1 || nlayer_passes)) {
-        bool all = shader_blend || npasses > 1;
+    // A tie's passes need no runs when its colour comes out the same drawn twice. Drawn in two phases
+    // (above), each pass is the whole batch's in order. Its Z first, then its colour within half a Z (a
+    // layer batch's other triangles): drawn whole, a pixel's colour is the last of the batch's triangles within half a
+    // Z of the nearest of them all; in runs, the last within half a Z of the nearest of those before it
+    // and itself. A triangle the batch leaves out that runs keep has a nearer one after it, which both
+    // keep: the same last. (A repeat's colour is blended: in runs, as before.) Cut into runs, a tie's
+    // triangle strips were drawn a few triangles a draw: ten times the draws, the native GS's thread the
+    // limit at 240 where many models are in view.
+    bool tie_runs = tie && !same_twice;
+    // A silhouette (the shadows of VU1 program 0x5A0: DATE with DATM 0 and FBA, so the first triangle over
+    // a pixel sets the alpha bit the test then turns the others away with) of one colour, untextured,
+    // unfogged, writing no Z, makes the same pixel whichever of its triangles draws it: drawn whole, each
+    // reads the target as it was before the batch, which is what the first over the pixel reads in runs,
+    // and writes what it would. No runs (a zombie's or a statue's shadow: 1,000 runs a frame on map 009's
+    // poison pond, each a render pass and an MSAA resolve).
+    bool silhouette = shader_blend && date && !bits(test, 15, 1) && (push.misc & M_FBA) && !(push.misc & M_DST24) &&
+                      !(fbmsk & 0x80000000u) && !tme && !fge && !any_zwrite_pass && own_passes == 1 &&
+                      !reads_own_target && !gs->verts.empty() && silhouette_runs_mode() == 0;
+    // (one colour: a native corner's RGB is its encoding, not its colour; nd_corner_colour gives the colour
+    // its shader makes where the CPU knows it, the shadows' native corners' (0x5A0: RGB 0) among them, so
+    // that native shadows are drawn whole exactly when the PS2 path's are)
+    uint32_t colour0 = 0;
+    silhouette = silhouette && nd_corner_colour(gs->verts[0], &colour0);
+    for (size_t i = 1; silhouette && i < gs->verts.size(); i++) {
+        uint32_t colour;
+        silhouette = nd_corner_colour(gs->verts[i], &colour) && colour == colour0;
+    }
+    bool blend_runs = shader_blend && !silhouette;
+    if (silhouette) {
+        gsn_stats.silhouettes_whole++;
+    }
+    if (!reads_own_target && (blend_runs || own_passes > 1 || tie_runs || nlayer_passes)) {
+        bool all = blend_runs || own_passes > 1 || tie_runs;
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
         std::vector<uint8_t> layer(triangles);
         for (uint32_t t = 0; t < triangles; t++) {
@@ -3888,7 +4316,12 @@ void flush_batch() {
     if (reads_own_target) {
         how = COPY_OUTSIDE;
     } else if (shader_blend) {
-        how = blend_copy_forced() ? COPY_OUTSIDE : !ms || msaa_blend_in_pass() ? COPY_IN_PASS : COPY_BY_PASS;
+        // (a 16-bit target's samples are whole multiples of 8, its alpha 0 or 0x80: the mean of 2, 4 or 8
+        // of them is a whole number, which pass_resolve.frag makes as the resolve does, with no half to
+        // round either way. Its runs are copies in one pass, not a pass and a resolve each: map 009's
+        // poison pond reflected, hundreds of runs a frame.)
+        bool exact_mean = ms && dst16 && !wide(*color->image) && !blend_copy_16_by_pass();
+        how = blend_copy_forced() ? COPY_OUTSIDE : !ms || msaa_blend_in_pass() || exact_mean ? COPY_IN_PASS : COPY_BY_PASS;
         if (how == COPY_BY_PASS && wide(*color->image)) {
             how = COPY_OUTSIDE; // (--native-colour high: a pass's resolve of 16-bit samples is not always vkCmdResolveImage's)
         }
@@ -3989,7 +4422,7 @@ void flush_batch() {
             c.set_depth_test(false, false);
         }
         // blending
-        if (abe && !shader_blend) {
+        if (abe && !shader_blend && !blend_is_cs) {
             float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
             c.set_blend_enable(true);
             c.set_blend_constants(constants);
@@ -4043,7 +4476,14 @@ void flush_batch() {
                     c.set_depth_test(true, rp[i].zwrite);
                 }
                 c.push_constants(&p, 0, sizeof(p));
+                bool bounded = two_phase_bounds && l == 0 && i == 0;
+                if (bounded) {
+                    c.set_depth_bounds(true, bounds_lo, bounds_hi);
+                }
                 nd_draw_range(c, base, n, from, first); // (native draw: c.draw, a call a kind of corner)
+                if (bounded) {
+                    c.set_depth_bounds(false, 0.0f, 1.0f);
+                }
                 gsn_stats.draws++;
                 if (zonly) {
                     c.set_program(program);
@@ -4356,6 +4796,17 @@ void sync_targets(const TransferRect &r) {
             uint32_t tlo, tcount;
             target_pages(*t, &tlo, &tcount);
             uint32_t ph = page_height(t->psm);
+            if (t->replay_only && !t->depth) {
+                // (prepare_write kept it: all its pages under the transfer as VRAM has them now)
+                uint32_t lo, count;
+                rect_pages(r, &lo, &count);
+                for (uint32_t k = 0; k < tcount; k++) {
+                    if (pages_overlap(lo, count, (tlo + k) % vram_pages, 1)) {
+                        load_target_rect(*t, (k % t->bw) * 64, (k / t->bw) * ph, 64, ph);
+                    }
+                }
+                continue;
+            }
             for (uint32_t page : whole) {
                 uint32_t k = (page + vram_pages - tlo) % vram_pages;
                 if (k < tcount) {
@@ -4418,7 +4869,21 @@ void prepare_write(const TransferRect &r) {
                 i++;
                 continue;
             }
-            if (!covered) {
+            if (t->replay_only && regular(*t) && !t->depth) {
+                // A picture between's own target (the water's wobble: its copy of the picture's frame)
+                // stays, and takes the pages under the transfer from VRAM after it (sync_targets): what
+                // the game's frame left there, the transfer's bytes added. Dropped, the picture's draws
+                // after it that read the copy read it from VRAM at 1x, decoded again every picture.
+                i++;
+                continue;
+            }
+            // (a picture between's own target goes without: the game's frame left VRAM there as it
+            // should stay)
+            if (!covered && !t->replay_only) {
+                if (t->dirty && regular(*t) && t->dirty_pages.size() && shadows_on()) {
+                    shadow_make(t); // (its write-back put off: above)
+                    continue;
+                }
                 write_back(*t);
             }
             drop_target(t);
@@ -4686,6 +5151,7 @@ void begin_transfer(uint32_t dir) {
     if (dir == 0) {
         TransferRect r = destination_rect();
         prepare_write(r);
+        shadow_written(bitbltbuf, trxpos, trxreg);
         gsn_upload_begin(&gs->upload, bitbltbuf, trxpos, trxreg);
         gsn_stats.uploads++;
         recording = -1;
@@ -4756,6 +5222,7 @@ void begin_transfer(uint32_t dir) {
         buffer_pages(sbp, sbw, spsm, sx + w, sy + h, &lo, &count);
         claim_pages(lo, count, nullptr, false);
         prepare_write(d);
+        shadow_written(bitbltbuf, trxpos, trxreg);
         if (gsn_vram_copy(gs->vram.data(), bitbltbuf, trxpos, trxreg)) {
             uint32_t dlo, dcount;
             rect_pages(d, &dlo, &dcount);
@@ -5493,28 +5960,35 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
     transfer_barrier();
 }
 
-// The weave of a field at a scale (whole frames: the two fields are the same moment, drawn half a line
-// apart, port/platform/field_frames.c). Field p's row r of pixels (of h * sy) is at the woven picture's
-// line 2 r / sy + p, so its rows go to the picture's rows 2 r + p sy: with sy odd the two fields'
-// rows take turns, every row of the picture its own (at 1x, the weave of lines). Woven a line (sy rows)
-// at a time instead, each band of sy rows held a line drawn over twice the height, the other field's
-// band half a line off: at 3x the menus' text in stripes of three rows, its edges broken. With sy even
-// the two fields' rows fall on the same rows of the picture: the field fills all of them, each of its
-// rows twice (the other field's rows are the same picture). The top rows field 1 has none for are its
-// first row's. Only from a target in the picture's format; else 0 (the weave a line at a time).
+// The picture of a field-mode screen at a scale (whole frames: the two fields are the same moment,
+// port/platform/field_frames.c): field 0's rows, each twice (its rows are 2 sy a line of the picture),
+// whichever field the vblank is (a field 1 vblank reads the other buffer, which has field 0 of the same
+// moment). Woven a line (sy rows) at a time, each band of sy rows held a line drawn over twice the
+// height, the other field's band half a line off: at 3x the menus' text in stripes of three rows. Woven
+// a row at a time (field p's row r at the picture's row 2 r + p sy), whatever the game draws alike in
+// both fields, not moved by the half line (Menu_DrawItemModel's models: field_frames.c), was combed half
+// a line apart; and the vblank's own field alone made it jump half a line every vblank at 4x (the shop's
+// goods, the Journal's pictures, October 2026). Only from a target in the picture's format; else 0 (a
+// line at a time).
+Shown field0_buffer; // the buffer the last field 0 was read from (whole frames: this vblank's, in the
+bool field0_set;     // other buffer when the vblank is field 1)
+
 int weave_fine(const Image &dst, const Shown &s, uint32_t p) {
     if (!s.t || s.sy < 2) {
         return 0;
     }
-    uint32_t rows = s.h * s.sy, out = rows * 2, off = p * s.sy;
-    uint32_t count = std::min(rows, (out - off + 1) / 2);
-    narrow_pass(dst, s, 0, 1, count, off, 2, 1);
-    if (s.sy % 2 == 0) {
-        narrow_pass(dst, s, 0, 1, std::min(rows, (out - off) / 2), off + 1, 2, 1);
+    Shown f = s;
+    if (p == 1 && field0_set) {
+        // (as it is now: the same buffer, still a target of this size)
+        f = shown_buffer(field0_buffer.fbp, field0_buffer.fbw, field0_buffer.psm, field0_buffer.dbx, field0_buffer.dby,
+                         field0_buffer.w, field0_buffer.h);
+        if (!f.t || f.sx != s.sx || f.sy != s.sy) {
+            f = s;
+        }
     }
-    if (off) {
-        narrow_pass(dst, s, 0, 0, s.sy % 2 ? (off - 1) / 2 : off, s.sy % 2 ? 1 : 0, s.sy % 2 ? 2 : 1, 1);
-    }
+    uint32_t rows = s.h * s.sy;
+    narrow_pass(dst, f, 0, 1, rows, 0, 2, 1);
+    narrow_pass(dst, f, 0, 1, rows, 1, 2, 1);
     return 1;
 }
 
@@ -6080,6 +6554,27 @@ int interp_cannot_replay() {
     }
     now.vram_writes = interp.start.vram_writes;
     now.clut_version = interp.start.clut_version;
+    // A target the recording made that is still there (the frame drawn by the game had none at that
+    // buffer, the picture's own is kept: the sky's scrolling copy on map 063, since targets made only by
+    // pictures between are dropped at the frame's end): its calls make it again, from VRAM, over the
+    // same image. Without it the frame's second picture was drawn from the packets again each frame.
+    auto key_of = [](const InterpTargetState &x) { return std::make_tuple(x.bp, x.bw, x.psm, x.depth); };
+    auto shape_same = [](const InterpTargetState &x, const InterpTargetState &y) {
+        return x.has_ms == y.has_ms && x.width == y.width && x.height == y.height && x.sx == y.sx && x.sy == y.sy;
+    };
+    now.targets.erase(std::remove_if(now.targets.begin(), now.targets.end(), [&](const InterpTargetState &x) {
+        for (const InterpTargetState &s : interp.start.targets) {
+            if (key_of(s) == key_of(x)) {
+                return false;
+            }
+        }
+        for (const InterpTargetState &e : interp.end.targets) {
+            if (key_of(e) == key_of(x) && shape_same(e, x)) {
+                return true;
+            }
+        }
+        return false;
+    }), now.targets.end());
     if (!interp_same(now, interp.start)) {
         return 1;
     }
@@ -6090,7 +6585,14 @@ int interp_cannot_replay() {
     replay_images.clear();
     for (const Recording::TargetImage &ti : recording_ops.target_images) {
         Target *t = find_target(ti.bp, ti.bw, ti.psm);
-        const Image *now = !t ? nullptr : ti.ms ? t->ms.get() : t->image.get();
+        if (!t) {
+            // A target the recording made and dropped (a scrolling texture's, made, grown up a page row
+            // and dropped each picture: map 063's sky). The GS has the targets it had before the recording
+            // (above), so none was this buffer then: the image is the recording's own, made and filled by
+            // its calls, and they are made again on it.
+            continue;
+        }
+        const Image *now = ti.ms ? t->ms.get() : t->image.get();
         if (!now || now->get_width() != ti.image->get_width() || now->get_height() != ti.image->get_height() ||
             now->get_format() != ti.image->get_format()) {
             GSN_LOG(1, "interp: target bp %#x%s is not as recorded\n", ti.bp, ti.ms ? " (multisampled)" : "");
@@ -6649,6 +7151,10 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         if (w > 0 && h > 0 && w <= 1024 && h <= 1024 &&
             size_t(w) * h * sx * sy * (mode == SCAN_WEAVE ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
             Shown shown = shown_buffer(fbp, fbw, psm, dbx, dby, w, h);
+            if (mode == SCAN_WEAVE && parity == 0) {
+                field0_buffer = shown; // (weave_fine: field 1's picture is field 0's, of this vblank)
+                field0_set = true;
+            }
             if (mode == SCAN_DEINTERLACE) {
                 record_history(shown, parity);
                 history_kept = true;
@@ -6684,9 +7190,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     for (uint32_t y = 0; y < h * 2 * sy; y++) {
                         uint32_t l = y / sy, row = (l / 2) * sy + y % sy, from = l & 1;
                         if (scanout_fine_weave && sy >= 2) {
-                            // (as weave_fine: a row of pixels at a time; with sy even, this field's rows)
-                            from = sy % 2 ? y & 1 : uint32_t(f);
-                            row = y >= from * sy ? (y - from * sy) / 2 : 0;
+                            // (as weave_fine: field 0's rows, each twice)
+                            from = 0;
+                            row = y / 2;
                         }
                         memcpy(frame->rgba + size_t(y) * w * sx, gs->fields[from].data() + size_t(row) * w * sx,
                                w * sx * 4);
@@ -6744,6 +7250,8 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples ||
         wanted_colour != target_colour) {
         // every target back to VRAM; they come again at the new size as they are drawn into
+        shadows_resolve_all();
+        shadows.clear();
         for (auto &t : gs->targets) {
             write_back(*t);
         }
@@ -6933,6 +7441,7 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
 extern "C" const void *gsn_vram(void) {
     ring_idle();
     flush_batch();
+    shadows_resolve_all();
     for (auto &t : gs->targets) {
         write_back(*t);
     }
@@ -7000,6 +7509,7 @@ extern "C" void gsn_state(PortStateIo *io) {
         flush_batch();
         end_pass();
         gs->targets.clear();
+        shadows.clear();
         gs->textures.clear();
         texture_index.clear();
         forget_uploads();
@@ -7036,6 +7546,7 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         flush_batch();
         end_pass();
         gs->targets.clear();
+        shadows.clear();
         gs->textures.clear();
         texture_index.clear();
         forget_uploads();

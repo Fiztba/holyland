@@ -54,6 +54,9 @@ static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
 static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
 static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
+/* --frame-rate: vblanks with no pictures between, the native GS a vblank behind (port_gs_run_vsync) */
+static uint64_t interp_vblanks_left_out, interp_rest_until, interp_rest = 30;
+static int interp_behind_run;
 
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
@@ -1030,9 +1033,9 @@ void port_gs_print_stats(void) {
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
-        if (interp_behind) {
-            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu\n",
-                    (unsigned long long)interp_behind);
+        if (interp_behind || interp_vblanks_left_out) {
+            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu (and all of "
+                    "%llu vblanks')\n", (unsigned long long)interp_behind, (unsigned long long)interp_vblanks_left_out);
         }
         if (s->interp_records || s->interp_replays || s->interp_misses) {
             fprintf(stderr,
@@ -1056,6 +1059,13 @@ void port_gs_print_stats(void) {
                     "draws shaded at every sample\n",
                     (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
                     (unsigned long long)s->cutout_draws);
+        }
+        if (s->shadows) {
+            fprintf(stderr, "[stats] native GS: %llu write-backs put off: %llu never owed, %llu pages' made later\n",
+                    (unsigned long long)s->shadows, (unsigned long long)s->shadows_gone, (unsigned long long)s->shadows_resolved);
+        }
+        if (s->silhouettes_whole) {
+            fprintf(stderr, "[stats] native GS: %llu silhouettes drawn whole\n", (unsigned long long)s->silhouettes_whole);
         }
         if (s->layer_draws) {
             fprintf(stderr, "[stats] native GS: %llu batches with layers (--native-layer-z tolerant)\n",
@@ -1214,6 +1224,27 @@ void port_gs_run_vsync(void) {
         }
         port_interp_reset(idle);
         interp_live = idle && port_interp_active();
+        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_native && gsn_backlog() > 1
+                                ? interp_behind_run + 1
+                                : 0;
+        if (interp_behind_run >= 2 && request->vblank >= interp_rest_until) {
+            /* The native GS's thread a vblank behind as this vblank and the one before began: no pictures between
+               for a while (the game's own pictures shown, as at 30), so that a place whose pictures
+               between cost more than a vblank (under water: the wobble's copy of each picture's frame,
+               which goes back to VRAM) keeps the game's rate instead of slowing it. Tried again after
+               half a second; when it is behind again within half a second of trying, after twice as
+               long (up to 4 s). */
+            if (request->vblank > interp_rest_until + 30) {
+                interp_rest = 30;
+            } else if (interp_rest < 240) {
+                interp_rest *= 2;
+            }
+            interp_rest_until = request->vblank + interp_rest;
+        }
+        if (interp_live && !dump && request->vblank < interp_rest_until) {
+            interp_live = 0;
+            interp_vblanks_left_out++;
+        }
         /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
         own_shown = interp_phases[0] == 0 || !interp_live;
         if (interp_live && (own_shown || dump)) {

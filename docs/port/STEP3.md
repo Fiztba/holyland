@@ -822,6 +822,62 @@ pictures left out before (KF4_PRESENT_SIM=240; 2,535 in a window with the render
 (186 in a window); map 000 standing, none.
 Headless with `--fast` the GPU is what is left: 2,000 vblanks of map 009 in 34.8 s (40.5 s before).
 
+### Hot spots at 240 (October 2026)
+
+Two places the owner met at 240 with `--native-scale 4`, native widescreen, MSAA 2 and `--native-layer-z
+tolerant`: map 063's canyon towards the temple (beetles in view: 59 pictures a second, the game at 29) and
+map 009's poison pond with its zombies and their reflection (8 pictures, the game at 6). Measured headless
+(`KF4_PRESENT_SIM=240`, `KF4_GSN_GPU_TIME=1`, 1,200 vblanks from the quick save, the pipeline cache warm,
+the GPU to ourselves; RTX 5080, Ryzen 9 9900X3D):
+
+- **Ties in runs.** `--native-layer-z tolerant` draws a tie (an opaque draw that writes Z, tested GEQUAL)
+  in two passes, its Z and then its colour within half a Z, and two passes made `flush_batch` cut the batch
+  into runs of triangles that do not overlap: a strip a few triangles a draw, ten times the draws of `ps2`
+  (5.6 million where `ps2` made 0.57 million in a run at the canyon). A tie whose colour comes out the
+  same drawn twice needs no runs: drawn whole, a pixel's colour is the last of its triangles within half a
+  Z of the nearest of them all; in runs, the last within half a Z of the nearest of those before it, and a
+  triangle the one way leaves out and the other keeps has a nearer one after it that both keep. The
+  pictures are the same byte for byte. (A repeat, VU1 program 0x280's second pass, is blended: in runs as
+  before. Drawn whole it was not the same, in two pixels of the pond.)
+- **Pictures between drawn from the packets every time.** The canyon's sky copies (0x3A80, grown up a
+  page row to 0x3A40 and dropped within each picture) were named by the recording as targets that were
+  not there when it was made again, so each picture was recorded anew (14 ms on the GS's thread) and the
+  rest left out. A target the recording made and dropped is its own: the replay uses its image. With
+  fix/underwater's dropping of targets only pictures between made, a target the recording made and kept
+  is there at the next picture: made again from VRAM by the recorded calls, it no longer stops the replay.
+- **Silhouettes in runs.** The shadows (VU1 program 0x5A0: DATE with DATM 0, FBA, (Cs - Cd) FIX + Cd)
+  are shader blending, each run a pass and an MSAA resolve: a zombie's shadow 1,000 runs a frame. A
+  silhouette of one colour, untextured, unfogged, writing no Z, makes the same pixel whichever of its
+  triangles draws it (the first sets the alpha bit DATE turns the others away with; drawn whole, each
+  reads the target before the batch, as the first does in runs): drawn whole. Without MSAA the same
+  pictures; with it a few hundred pixels a picture at the triangles' shared edges are 1 to 3 lighter (in
+  runs, the second triangle over a half-covered pixel read the first's resolve and darkened it again: a
+  seam the GS has not). `KF4_GSN_SILHOUETTE_RUNS=1` brings the runs back.
+- **The reflection's blending.** The pond's reflection is a 16-bit target, and a 16-bit target blends in
+  the shader: a pass and a resolve a run. Its samples are whole multiples of 8 (alpha 0 or 0x80), so the
+  mean of 2, 4 or 8 of them is a whole number and `pass_resolve.frag` makes it as the resolve does: the
+  copies are made in the pass (`KF4_GSN_BLEND16_BY_PASS=1`: as before). And (Cs - Cd) As + Cd with As
+  0x80 everywhere is Cs: drawn unblended. The same pictures.
+
+| | main 91c890e | fix/underwater 47922dd | now |
+|---|---|---|---|
+| pond: wall for 1,200 vblanks (20.0 s real time) | 32.7 s | 20.7 s | 20.5 s |
+| pond: pictures shown (of 4,800) | 1,400 | 1,415 | 1,841 |
+| pond: vblanks resting (no pictures between) | | 956 | 395 |
+| pond: GPU ms a picture, render passes a picture | 19.9, 2,236 | 10.9, 1,135 | 5.6, 126 |
+| pond at 30: GPU ms a picture, passes | 11.1, 1,283 | | 3.3, 115 |
+| canyon: pictures shown | 1,535 | 1,241 | 4,046 |
+| canyon: GPU ms a picture, passes | 5.4, 103 | 2.2, 40 | 4.1, 11 |
+| canyon: recordings, replays, recordings again | 875, 0, 338 | 60, 0, 45 | 537, 2,849, 0 |
+| the wooden hut at the pond (`quick_slow2`): pictures shown | 1,319 | 1,319 | 2,243 |
+| the hut: GPU ms a picture, passes | 16.8, 1,645 | 9.4, 852 | 6.3, 68 |
+
+The pond is still more than a picture's time of GPU a picture at these settings (5.6 ms where 240 gives
+4.17): its reflection's blended passes (Cd As + Cs into the 16-bit target, the second pass of VU1
+program 0x280) run in hundreds of runs a frame, now in one pass. Maps 000 and 009 at 240 (2,600 vblanks,
+walking): GPU 3.9 and 3.8 ms a picture (main 4.2 and 3.7), no picture drawn from the packets again (main
+2,540 and 2,451).
+
 ### The menus and the gold message (October 2026)
 
 Three faults the owner met at 240 with `--native-scale 3`, native widescreen and MSAA 2; none was the
@@ -855,6 +911,18 @@ picture was wrong (no HUD, black, the HUD's textures down the screen), at 60 to 
 `submit` now gives the passes the corners so far and flushes the mapped buffers first, and records the
 passes again after it for the draws to come. The coin and the shop: the pictures between as the CPU's
 way draws them (`KF4_INTERP_CPU=1`), none flashing; the game's own frames the same at 30 and 240.
+
+**Under water, the shop, the pools** (October 2026, 240 at 4x):
+- Under water the pictures between were noise and bands of light: the wobble's copy of the frame was not
+  made again (`flat_copies` counted reads of textures the frame uploaded over the copy's VRAM as reads of
+  the copy). Made again, it cost more than a vblank a picture (write-backs, decodes): the pictures between
+  now give way while the native GS is behind (gs.c), the game's own 30 a second at full speed; the
+  pictures' own targets go without write-backs, and write-backs read back the PS2's size.
+- The menus' item models (the shop's goods) jumped half a line every vblank at 4x and were combed at 3x:
+  field_frames.c moved their fixed XYOFFSET_2 by the half line, and the scanout took the vblank's own
+  field. Both fixed (RENDERER.md).
+- The pools went black while the camera turned: their surfaces are CPU-projected meshes (PATH2, Q 1,
+  S and T from the reflection's view), paired as 2D; now moved with the camera (RENDERER.md).
 
 ### What moves by itself
 

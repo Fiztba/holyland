@@ -114,6 +114,48 @@ typedef struct {
     int frame_set[2], tex0_set[2], xyoffset_set[2], bitbltbuf_set;
 } Walk;
 
+/* The draw offsets the game wrote in its last picture (and that picture's half line), and in the one
+   before it: an offset the game wrote in the picture before, for the other field, and writes again
+   unchanged is not moved by the half line. Menu_DrawItemModel draws the item models at a fixed
+   XYOFFSET_2 in both fields; moved in the redraw, a model was half a line apart in the game's field and
+   in the redrawn one, and at --native-scale 4 jumped every vblank (the shop's goods, the Equipment
+   screen's weapon, October 2026). */
+#define OFFSETS_KEPT 8
+typedef struct {
+    uint64_t value[2][OFFSETS_KEPT];
+    int count[2];
+    uint32_t half;
+    int set;
+} Offsets;
+static Offsets offsets_now, offsets_before;
+
+static void offsets_add(Offsets *o, int r, uint64_t value) {
+    int i;
+
+    for (i = 0; i < o->count[r]; i++) {
+        if (o->value[r][i] == value) {
+            return;
+        }
+    }
+    if (o->count[r] < OFFSETS_KEPT) {
+        o->value[r][o->count[r]++] = value;
+    }
+}
+
+static int offset_fixed(int r, uint64_t value, uint32_t half) {
+    int i;
+
+    if (!offsets_before.set || offsets_before.half == half) {
+        return 0;
+    }
+    for (i = 0; i < offsets_before.count[r]; i++) {
+        if (offsets_before.value[r][i] == value) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 #define GS_DROPPED ((uint64_t)0x7D) /* a register the GS does not have (PORT_GS_REG_FRAME_INTERP) */
 
 static void ad_write(Walk *w, uint32_t *reg, uint64_t *value) {
@@ -146,10 +188,13 @@ static void ad_write(Walk *w, uint32_t *reg, uint64_t *value) {
     case GS_XYOFFSET_2:
         w->xyoffset[r - GS_XYOFFSET_1] = *value;
         w->xyoffset_set[r - GS_XYOFFSET_1] = 1;
-        if (w->mode == SCAN && r == GS_XYOFFSET_1) {
-            w->offset_set = 1;
-            w->half = (uint32_t)(*value >> 32) & 8;
-        } else if (w->mode == REPLAY) {
+        if (w->mode == SCAN) {
+            offsets_add(&offsets_now, (int)(r - GS_XYOFFSET_1), *value);
+            if (r == GS_XYOFFSET_1) {
+                w->offset_set = 1;
+                w->half = (uint32_t)(*value >> 32) & 8;
+            }
+        } else if (w->mode == REPLAY && !offset_fixed((int)(r - GS_XYOFFSET_1), *value, w->half)) {
             /* half a line the other way: the other field's lines (Y is 12.4, in bits 32-47) */
             uint64_t y = (*value >> 32) & 0xFFFF;
 
@@ -298,6 +343,7 @@ int port_field_frames_vsync(const uint64_t *privileged, void (*send)(int path, c
         return 0;
     }
     walk_init(&scan, SCAN);
+    memset(&offsets_now, 0, sizeof(offsets_now));
     for (at = 0; at < kept_size;) {
         Record r;
 
@@ -310,6 +356,8 @@ int port_field_frames_vsync(const uint64_t *privileged, void (*send)(int path, c
         !scan.offset_set || ((uint32_t)(dispfb >> 9) & 0x3F) != ((uint32_t)(scan.frame[0] >> 16) & 0x3F)) {
         return 0;
     }
+    offsets_now.half = scan.half;
+    offsets_now.set = 1;
     walk_init(&w, REPLAY);
     w.draw_fbp = scan.draw_fbp;
     w.shown_fbp = shown;
@@ -361,6 +409,7 @@ int port_field_frames_vsync(const uint64_t *privileged, void (*send)(int path, c
         send(3, fix, (size_t)(n + 1) * 16);
     }
     stat_replays++;
+    offsets_before = offsets_now;
     *drawn = scan.draw_fbp;
     return 1;
 }
