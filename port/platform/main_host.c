@@ -63,8 +63,8 @@
                          them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
                          on: the kinds that have passed their checks (items so far); KINDS, by name: map,
                          models (objects and picked), skinned (or entities), arm, sky, effects, shadows,
-                         reflection, water, passes, items, objects, picked (items, and map, objects,
-                         picked, entities and arm in work, are ported so far). off (the default) is the game as
+                         reflection, water, passes, items, objects, picked, gold (items, and map, objects,
+                         picked, entities, arm and gold in work, are ported so far). off (the default) is the game as
                          without it. The overlay's Debug page changes it live
        --native-draw-compare native|ps2
                          with --native-draw, the PS2 path's packets are queued too, and the native GS
@@ -673,7 +673,7 @@ int port_native_draw_parse(const char *value) {
                  {"sky", PORT_ND_SKY}, {"effects", PORT_ND_EFFECTS}, {"shadows", PORT_ND_SHADOWS},
                  {"reflection", PORT_ND_REFLECTION}, {"water", PORT_ND_WATER}, {"passes", PORT_ND_PASSES},
                  {"items", PORT_ND_ITEMS},
-                 {"objects", PORT_ND_OBJECTS}, {"picked", PORT_ND_PICKED}};
+                 {"objects", PORT_ND_OBJECTS}, {"picked", PORT_ND_PICKED}, {"gold", PORT_ND_GOLD}};
     const char *at = value;
     int bits = 0;
 

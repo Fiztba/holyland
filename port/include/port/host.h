@@ -213,8 +213,9 @@ int port_native_draw_compare(void);
 #define PORT_ND_PASSES 0x200     /* the screen passes (P7) */
 #define PORT_ND_ITEMS 0x400      /* the items lying in the maps (P0's proof: MapItem_DrawAll) */
 #define PORT_ND_PICKED 0x800     /* the item being picked up, after its depth clear (P2-1: MapItem_DrawPickup) */
+#define PORT_ND_GOLD 0x1000      /* the gold lying in the maps (Gold_Draw: skinned, program 0x280) */
 #define PORT_ND_MODELS (PORT_ND_OBJECTS | PORT_ND_PICKED) /* the posed models (--native-draw models) */
-#define PORT_ND_ALL 0xFFF
+#define PORT_ND_ALL 0x1FFF
 #define PORT_ND_ACCEPTED PORT_ND_ITEMS /* --native-draw on: the kinds that have passed their checks
                                           (docs/port/NATIVE_DRAW_TASKS.md); the others by name */
 #define PORT_ND_COMPARE_NATIVE 1 /* the native draws drawn, the PS2 path's packets left out */

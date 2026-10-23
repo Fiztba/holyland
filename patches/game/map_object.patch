@@ -144,7 +144,7 @@ index 9a588f29bf8faf3a2c193f5c5fa8ebf9c4ad7203..7c9aa87feec6b946fb176acd99967e9f
  
  /* Start handler of the light kind: makes a light of the colour in its source at
 diff --git a/src/game/map_object/map_object.c b/src/game/map_object/map_object.c
-index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4e470e285 100644
+index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571609b8355 100644
 --- a/src/game/map_object/map_object.c
 +++ b/src/game/map_object/map_object.c
 @@ -9,8 +9,8 @@
@@ -157,8 +157,21 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
  float sinf(float);
  float sqrtf(float);
  float atan2f(float, float);
-@@ -53,7 +53,8 @@ void Vector_Copy(void *, void *);
+@@ -51,9 +51,21 @@ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+ int Script_Start(int, int);
+ void Vector_Copy(void *, void *);
  void Vector_Add(void *, void *, void *);
++void Model_DrawSkinned(ModelInstance *);
++int NativeDraw_SkinnedObject(ModelInstance *); /* PC: --native-draw (game/native_draw/) */
++
++/* PC: --native-draw (game/native_draw/nd_objects.c): the draw_parts of a map object of definition bit8 1 (the
++   jointed ones, set up by Model_SetUpSkinned), straight from MapObject_DrawAll or from DrawList_Draw:
++   Model_DrawSkinned, or the same drawn natively */
++static void MapObject_DrawSkinnedParts(ModelInstance *model) {
++    if (!port_native_draw(PORT_ND_OBJECTS) || !NativeDraw_SkinnedObject(model)) {
++        Model_DrawSkinned(model);
++    }
++}
  
  extern MapDrawState map_draw_state;
 -extern int suspended_updates[3];
@@ -167,7 +180,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
  extern MapSlot map_slots[];
  extern Vector4 map_object_glow_colors[4];
  extern u8 item_counts[];
-@@ -71,7 +72,7 @@ extern int current_map_slot;
+@@ -71,7 +83,7 @@ extern int current_map_slot;
  static s32 sway_frame = 0;                      /* 0x4467A0 counts 0 to 59 */
  static s32 next_sound_channel = 0;              /* 0x4467A4 0 to 31, the next of the channels 0x20 to 0x3F */
  s32 map_objects_started[2] = { 0, 0 };         /* the objects of each map have been started */
@@ -176,7 +189,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
  s32 map_object_counts[2] = { 0, 0 };           /* how many objects each map has */
  
  static s32 glow_item_worn;                      /* 0x447078 Myu's Necklace is worn */
-@@ -105,7 +106,7 @@ void MapObject_InitMap(int map) {
+@@ -105,7 +117,7 @@ void MapObject_InitMap(int map) {
      for (; i < count; i++, object++) {
          MAP_OBJECT_BYTES(object)->step = 0;
          if (object->definition->model_index == 0xFFFF) {
@@ -185,7 +198,17 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
              object->model->update_bone_points = (void (*)(ModelInstance *))MapObject_UpdateNoBonePoints;
          }
          if (object->source->spawn_flags.bytes[2] != 0) {
-@@ -232,7 +233,7 @@ void MapObject_StartMap(int map) {
+@@ -150,6 +162,9 @@ void MapObject_InitMap(int map) {
+                 break;
+             case 1:
+                 object->model->draw = MapObject_DrawModelWithAlpha;
++                if (object->model->draw_parts == Model_DrawSkinned) { /* PC: --native-draw (game/native_draw/): Model_DrawSkinned unless native */
++                    object->model->draw_parts = MapObject_DrawSkinnedParts;
++                }
+                 break;
+             default:
+                 object->model->draw = NULL;
+@@ -232,7 +247,7 @@ void MapObject_StartMap(int map) {
          if (Game_GetTriggerItem(tag, object->source->spawn_flags.bytes[2])) {
              flag = 1;
          }
@@ -194,7 +217,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
          if (in_use) {
              MapObject_Activate(object);
          } else {
-@@ -455,7 +456,8 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -455,7 +470,8 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
      MapObject *object;
  
      glow_item_was_worn = glow_item_worn;
@@ -204,7 +227,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
      if (glow_item_was_worn != glow_item_worn) {
          glow_frame = 0;
      } else if (glow_item_was_worn != 0) {
-@@ -535,19 +537,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -535,19 +551,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              }
              if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
@@ -230,7 +253,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
                  }
              }
              if ((s8)object->source->spawn_flags.bytes[4] != -1) {
-@@ -564,7 +566,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -564,7 +580,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              } else {
                  LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
              }
@@ -239,7 +262,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
                  DrawList_Add(object->model, 0, mode);
              } else {
                  ModelTexture_SendForModel(object->model);
-@@ -594,19 +596,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -594,19 +610,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              }
              if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
@@ -265,7 +288,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
                  }
              }
              if ((s8)object->source->spawn_flags.bytes[4] == -1) {
-@@ -625,7 +627,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -625,7 +641,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              } else {
                  LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
              }
@@ -274,7 +297,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
                  DrawList_Add(object->model, 0, mode);
              } else {
                  ModelTexture_SendForModel(object->model);
-@@ -719,6 +721,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
+@@ -719,6 +735,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
      channel->frame = 0;
      channel->frame_fixed = 0;
      MapObject_StepAnim(object);
@@ -282,7 +305,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
  }
  
  /* Advances a map object's animation one frame, starting the sounds tied to the
-@@ -740,8 +743,9 @@ int MapObject_StepAnim(MapObject *object) {
+@@ -740,8 +757,9 @@ int MapObject_StepAnim(MapObject *object) {
                      Sound_PlayCommonAt(range, anim->sound, &model->position);
                      break;
                  case 1:
@@ -294,7 +317,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
                      break;
                  case 2:
                      Sound_StartTaggedAt((u8)next_sound_channel + 0x20, anim->sound, object->definition->sound_falloff_mode, range, (Vector4Arg *)&model->position);
-@@ -787,7 +791,7 @@ void MapObject_MarkEmptied(MapObject *object) {
+@@ -787,7 +805,7 @@ void MapObject_MarkEmptied(MapObject *object) {
      u8 kind = object->definition->kind;
  
      if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
@@ -303,7 +326,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
          object->state_flags |= MAP_OBJECT_EMPTIED;
      }
  }
-@@ -800,7 +804,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
+@@ -800,7 +818,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
      if (object != NULL) {
          kind = object->definition->kind;
          if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
@@ -312,7 +335,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..02afee4cc1198c51765ddf0c812e13b4
              object->state_flags |= MAP_OBJECT_EMPTIED;
          }
      }
-@@ -862,11 +866,11 @@ void MapObject_DrawModel(int *model) {
+@@ -862,11 +880,11 @@ void MapObject_DrawModel(int *model) {
  void MapObject_DrawModelWithAlpha(ModelInstance *model) {
      Packet_BeginGsRegisters();
      if (model->alpha < 128.0f) {

@@ -1,5 +1,5 @@
 diff --git a/src/game/item/gold.c b/src/game/item/gold.c
-index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e54487bb74ea 100644
+index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..c0981fc93bb3caac1655debb5e7e34e1a4f0fc5c 100644
 --- a/src/game/item/gold.c
 +++ b/src/game/item/gold.c
 @@ -7,12 +7,12 @@
@@ -17,7 +17,15 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e544
  void Gold_PrepareFadedDraw(OverlaySprite *);
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
-@@ -35,7 +35,8 @@ extern ObjectMarkRow map_object_marks[];
+@@ -20,6 +20,7 @@ void Packet_EndGsRegisters(void);
+ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+ void ModelTexture_SendForModel(void *);
+ void Model_DrawSkinned(ModelInstance *);
++int NativeDraw_Gold(ModelInstance *); /* PC: --native-draw (game/native_draw/) */
+ void DrawList_Add(ModelInstance *, s32, s32);
+ int Collision_FindFloorBelow(f32, void *);
+ void Vector_Copy(void *, void *);
+@@ -35,7 +36,8 @@ extern ObjectMarkRow map_object_marks[];
  extern MapLoadState map_load_state;
  extern GameStatus game_status;
  extern f32 identity_matrix[16];
@@ -27,7 +35,7 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e544
  extern PlayerState player_state;
  extern u16 action_button;
  extern int current_map_slot;
-@@ -56,7 +57,8 @@ static MapActor map_actors[2][MAP_ACTOR_COUNT]; /* 0x5B6100 sixteen piles per lo
+@@ -56,7 +58,8 @@ static MapActor map_actors[2][MAP_ACTOR_COUNT]; /* 0x5B6100 sixteen piles per lo
  static ModelInstance map_actor_models[2][MAP_ACTOR_COUNT]; /* 0x5B6680 */
  static char map_gold_texture[0x2000];           /* 0x5B9E80 item/i0000.tx2 */
  static char map_gold_model[0x2000];             /* 0x5BBE80 item/i0000.om2 */
@@ -37,7 +45,21 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e544
  
  /* Clears the map actors and loads their model (item/i0000.om2) and texture (item/i0000.tx2). */
  void Gold_Init(void) {
-@@ -95,8 +97,8 @@ void Gold_InitMap(int map) {
+@@ -89,14 +92,22 @@ static inline void copy_matrix(ModelMatrixQwords *target, ModelMatrixQwords *ori
+     target->rows[3] = row3;
+ }
+ 
++/* PC: --native-draw (game/native_draw/nd_objects.c): a pile's draw_parts (DrawList_Draw's fading piles):
++   Model_DrawSkinned, or the same drawn natively */
++static void Gold_DrawSkinnedParts(ModelInstance *model) {
++    if (!port_native_draw(PORT_ND_GOLD) || !NativeDraw_Gold(model)) {
++        Model_DrawSkinned(model);
++    }
++}
++
+ /* Sets up a map slot's gold: gives each of the 16 map actors its model, then drops again what the map's marks
+    say was lying there when it was left, and clears the marks. */
+ void Gold_InitMap(int map) {
      f32 position[4];
      f32 rotation[4];
      ObjectMarkRow marks;
@@ -48,7 +70,7 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e544
      MapActor *actor;
      ModelInstance *model;
      char *matrix;
-@@ -114,15 +116,15 @@ void Gold_InitMap(int map) {
+@@ -114,17 +125,18 @@ void Gold_InitMap(int map) {
      actor = map_actors[map];
      model = map_actor_models[map];
      matrix = map_actor_matrices[map][0];
@@ -68,8 +90,22 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e544
 +        model->texture_data = (sptr)map_gold_texture;
          model->texture_slot = 2;
          model->draw = (void (*)(ModelInstance *))Gold_PrepareFadedDraw;
++        model->draw_parts = Gold_DrawSkinnedParts; /* PC: --native-draw (game/native_draw/): Model_DrawSkinned unless native */
      }
-@@ -320,7 +322,7 @@ int Gold_DropFromEntity(Entity *entity) {
+     tag = map_slots[map].tag; // match: kept in a variable, retail does not read it again after the copy
+     marks = map_object_marks[tag];
+@@ -244,7 +256,9 @@ void Gold_Draw(s32 list) {
+         ModelMatrix_Build(actor->body, &actor->body->position, &actor->body->rotation, &actor->body->scale_x);
+         if (actor->body->fade_enabled == 0) {
+             ModelTexture_SendForModel(actor->body);
+-            Model_DrawSkinned(actor->body);
++            if (!port_native_draw(PORT_ND_GOLD) || !NativeDraw_Gold(actor->body)) { /* PC: --native-draw (game/native_draw/) */
++                Model_DrawSkinned(actor->body);
++            }
+         } else {
+             DrawList_Add(actor->body, 0, list);
+         }
+@@ -320,7 +334,7 @@ int Gold_DropFromEntity(Entity *entity) {
      f32 angle;
  
      if (entity->params->gold == 0) {
@@ -78,7 +114,7 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e544
      }
      amount = 1;
      if (entity->params->gold >= 2) {
-@@ -431,7 +433,7 @@ void Gold_ClearMark(MapActor *actor) {
+@@ -431,7 +445,7 @@ void Gold_ClearMark(MapActor *actor) {
  
      map_slot = (actor->flags >> 2) & 1;
      entry = &map_slots[map_slot];
