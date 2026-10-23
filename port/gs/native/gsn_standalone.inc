@@ -17,8 +17,8 @@
 // wrote since. A texture whose blocks all belong to uploads is decoded once from those uploads alone,
 // written into a scratch VRAM (gsn_vram.c's model) and read back as the GS samples it, and found again by
 // the uploads it came from. A texture read from a render target (the scrolling textures' 128 x 128
-// targets, the reflection, frame copies) or from a page a copy wrote is the GS's own (its targets and
-// VRAM: for now; named targets are a P8 task).
+// targets, the reflection, frame copies) is read from the named target's scene image, and a copy of the
+// table's uploads is the table's (T3: gsn_scene_targets.inc); anything else from the GS's targets and VRAM.
 //
 // The scene and the GS's targets take turns ("islands"): the scene takes the frame target's picture and Z
 // buffer when its first batch comes (sa_acquire: copies), and gives them back (sa_release: its colour
@@ -105,11 +105,12 @@ struct Sa {
     // the batch's corners, and the draw being met (nd_register): to the scene or not
     bool pending = false, in_draw = false, draw_on = false;
     // every ported kind (T1): map records and the sky, objects, items, gold, entities, the arm and the held
-    // weapon (and its trail), effects, shadows, the picked item. Not the reflection's water (its records, a
-    // render target's texture: T3) nor the screen passes (the GS's 2D). (KF4_SA_KINDS: a mask of RD_KIND_ bits)
+    // weapon (and its trail), effects, shadows, the picked item, and (T3) the reflection's water, reading the
+    // reflection the scene drew (gsn_scene_targets.inc). Not the screen passes (the GS's 2D). (KF4_SA_KINDS: a
+    // mask of RD_KIND_ bits)
     uint32_t kinds = (1u << RD_KIND_MAP_RECORD) | (1u << RD_KIND_MAP_OBJECT) | (1u << RD_KIND_ITEM) | (1u << RD_KIND_GOLD) |
                      (1u << RD_KIND_ENTITY) | (1u << RD_KIND_ARM) | (1u << RD_KIND_EFFECT) | (1u << RD_KIND_SHADOW) |
-                     (1u << RD_KIND_PICKED);
+                     (1u << RD_KIND_PICKED) | (1u << RD_KIND_WATER);
     int log = 0;                      // (KF4_SA_LOG=1: each batch, why one is declined and what ends a turn; 2: only the turns)
     float pixel[2] = {-1.0f, -1.0f};  // (KF4_SA_PIXEL=X,Y: the batches over that GS pixel)
     // the table
@@ -190,6 +191,23 @@ enum { SA_VS_000, SA_VS_280, SA_VS_700 }; // (sa.programs: sa_000.vert, sa_280.v
 
 void sa_release();
 void sa_sync();
+// (T3: render targets by name, gsn_scene_targets.inc, included at the end)
+struct SaTexture;
+void sat_drawn(const Target &t, uint32_t y0, uint32_t y1);
+bool sat_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+bool sat_texture(SaTexture &st, uint32_t tbp, uint32_t tbw, uint32_t tpsm, uint32_t cols, uint32_t rows, uint32_t levels);
+bool sat_scene_frame(uint32_t fbw, uint32_t fpsm);
+Program *sat_water_program(bool sample);
+bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h);
+bool sat_release();
+bool sat_flush();
+bool sat_fill();
+bool sat_blend_exact();
+void sat_gs_batch();
+bool sat_transfer(uint32_t dir);
+void sat_sync();
+void sat_reset();
+void sat_print_stats();
 
 // The blocks of a rectangle of a buffer (bp, bw, psm), x0..x0+w by y0..y0+h, each with whether the
 // rectangle covers all of it
@@ -251,6 +269,7 @@ void sa_drawn(const Target &t, uint32_t y0, uint32_t y1) {
         sa.page_drawn[(lo + k) % vram_pages] = sa.seq;
     }
     sa_copy_written(lo, count);
+    sat_drawn(t, y0, y1); // (T3: a named target's pages, or none's)
 }
 
 // (begin_transfer) A local-to-local copy's destination: its pages are not their uploads' any more
@@ -261,6 +280,10 @@ void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
     uint32_t lo, count;
     buffer_pages(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), bits(bitbltbuf, 56, 6),
                  bits(trxpos, 32, 11) + bits(trxreg, 0, 12), bits(trxpos, 48, 11) + bits(trxreg, 32, 12), &lo, &count);
+    if (sat_copied(bitbltbuf, trxpos, trxreg)) {
+        sa_copy_written(lo, count); // (T2: the scene's copy of its frame there let go)
+        return;                     // (T3: a copy of the table's uploads is the table's)
+    }
     sa.seq++;
     for (uint32_t k = 0; k < count && k < vram_pages; k++) {
         sa.page_drawn[(lo + k) % vram_pages] = sa.seq;
@@ -488,6 +511,7 @@ struct SaTexture {
     uint32_t cut_lo = 255, cut_hi = 0;
     uint64_t cut_clear = 0, cut_all = 0;
     bool reads_target = false, reads_own = false;
+    bool own_named = false; // (reads_own: the named target bound, T3)
 };
 
 // A texture (TEX0's, its mipmap levels', the part of level 0 the draws read) decoded from the uploads that
@@ -664,6 +688,18 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
             push.tscale = st.tscale;
             return;
         }
+    }
+    // (T3) a named target's: from the scene's image
+    if (sat_texture(st, tbp, tbw, tpsm, cols, rows, levels)) {
+        if (st.reads_own) {
+            st.own_named = true; // (the named target bound itself: declined, sa_draw_batch)
+        } else {
+            push.flags |= st.src << F_SRC_SHIFT;
+            push.src_offset[0] = st.src_offset[0];
+            push.src_offset[1] = st.src_offset[1];
+            push.tscale = st.tscale;
+        }
+        return;
     }
     // from the table
     int why = SA_TEX_TARGET;
@@ -974,6 +1010,9 @@ bool sa_same_shape(const Target &color) {
 // The scene takes the frame's picture and Z buffer (all of them: what it draws over blends with them, and is
 // tested against them)
 bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h) {
+    if (sat_scene_frame(fbw, fpsm)) {
+        return sat_acquire(fbp, fbw, fpsm, zbp, zpsm, need_h); // (T3: a named target: the scene's own)
+    }
     if (sa.bound && sa.fbp == fbp && sa.fbw == fbw && sa.fpsm == fpsm && sa.zbp == zbp && sa.zpsm == zpsm &&
         find_target(fbp, fbw, fpsm) == sa.frame_target && find_target(zbp, fbw, zpsm) == sa.z_target &&
         sa.frame_target->height >= need_h) {
@@ -1096,8 +1135,8 @@ bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
 // composite: gsn_composite.inc, sa_hold.)
 void sa_hold(Target &color);
 void sa_give(bool keep) {
-    if (!sa.bound) {
-        return;
+    if (!sa.bound || sat_release()) {
+        return; // (T3: a named target bound: let go, nothing copied)
     }
     if (keep) {
         sa_stats.published++;
@@ -1425,7 +1464,8 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first) {
                 // (T2) the water's corners, hosted's nd_water.vert with gs_zclamp.frag (its Z kept fine, the slack)
                 c.set_program(ndw_program(sample && gs->program_zclamp_sample ? gs->program_zclamp_sample : gs->program_zclamp));
             } else {
-                c.set_program(sa.programs[kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000][sample ? 1 : 0]);
+                c.set_program(ndw_batch() ? sat_water_program(sample) // (T3: the reflection's water, sa_water.vert)
+                                          : sa.programs[kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000][sample ? 1 : 0]);
             }
             if (want && want != bound) {
                 c.set_storage_buffer(2, 1, *want);
@@ -1442,7 +1482,7 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first) {
 // into the Z buffer only), and, while the scene has the frame, the screen's alpha set (GsDraw_SetScreenAlpha:
 // black, every pixel failing the alpha test into the frame only, blended as Cd: its alpha written alone; before
 // the shadows). Drawn into the scene as the GS would draw them, so the scene keeps the frame across them.
-enum { SA_OP_NONE, SA_OP_CLEAR_DEPTH, SA_OP_ALPHA };
+enum { SA_OP_NONE, SA_OP_CLEAR_DEPTH, SA_OP_ALPHA, SA_OP_FILL /* (T3: sat_fill) */ };
 int sa_scene_op() {
     if (!gs->batch_sprites || nd.active || gs->verts.empty()) {
         return SA_OP_NONE;
@@ -1507,7 +1547,8 @@ bool sa_draw_batch(int *why) {
     if (shadow) {
         date = false;
     }
-    if ((fpsm != GSN_PSMCT32 && fpsm != GSN_PSMCT24) || fbw * 64 < 512 || sx1 < sx0 || sy1 < sy0) {
+    if (((fpsm != GSN_PSMCT32 && fpsm != GSN_PSMCT24) || fbw * 64 < 512 || sx1 < sx0 || sy1 < sy0) &&
+        !(sat_scene_frame(fbw, fpsm) && sx1 >= sx0 && sy1 >= sy0)) { // (T3: a named target's)
         *why = SA_WHY_FRAME;
         return false;
     }
@@ -1598,6 +1639,10 @@ bool sa_draw_batch(int *why) {
     SaTexture st;
     if (tme) {
         sa_texture(st, push, ctxt, tex0, tex1, clamp, fst, color);
+        if (st.own_named) {
+            *why = SA_WHY_OWN; // (a named target's draw reading that target: T3, the GS's)
+            return false;
+        }
         if (st.reads_own) {
             // (T2) the frame it draws into (a screen pass: the brightness, the flicker filter, haze): read from a
             // copy of the scene's colour taken now (resolved), at the scene's scale
@@ -1656,7 +1701,7 @@ bool sa_draw_batch(int *why) {
     // them, exactly, where Vulkan's blending would round where the GS truncates ((Cs - Cd) C + Cd): a level a draw,
     // which the passes over the whole frame carry on
     bool exact = fixed && (blend.premul != 0 || ba == bb);
-    bool shader_blend = date || partial_mask || (shadow && abe) ||
+    bool shader_blend = date || partial_mask || (shadow && abe) || (abe && sat_blend_exact()) ||
                         (abe && ((push.misc & M_PABE) || !(push.misc & M_COLCLAMP) || (bc == 0 && (push.misc & M_FBA)) ||
                                  as_over || !fixed || ((ps2_only || sa.gs_water) && (st.reads_target || gs->batch_sprites) && !exact)));
     if (shader_blend) {
@@ -2030,10 +2075,16 @@ bool sa_flush() {
     bool scene = !nd.pass_active && (sa.in_draw ? sa.draw_on : sa.pending);
     sa.pending = false;
     int op = scene ? SA_OP_NONE : sa_scene_op();
+    if (!scene && op == SA_OP_NONE && sat_fill()) {
+        op = SA_OP_FILL; // (T3: a fill over the frame the scene has, as mode 1's tint between its two views)
+    }
     if (op == SA_OP_CLEAR_DEPTH) {
         sa_stats.depth_clears++;
     } else if (op == SA_OP_ALPHA) {
         sa_stats.alpha_sets++;
+    }
+    if (!scene && op == SA_OP_NONE && sat_flush()) {
+        return true; // (T3: a named target's clear, the scene's)
     }
     if (scene || op != SA_OP_NONE) {
         int why = SA_WHY_FRAME;
@@ -2074,6 +2125,7 @@ bool sa_flush() {
             fprintf(stderr, "[sa] the GS's declined: %s\n", sa_why_names[why]);
         }
     }
+    sat_gs_batch();     // (T3: a named target the scene drew that the batch touches is the GS's first)
     sa_note_gs_batch(); // (the GS draws it: its clear, and what it draws over a frame the scene gave it: gsn_composite.inc)
     if (sa.bound && !sa_gs_touches_scene()) {
         if (sa.log == 3) {
@@ -2099,7 +2151,7 @@ bool sa_flush() {
 // ---- The draws met (nd_register) -----------------------------------------------------------------------
 bool sa_kind(const RdDraw &d) {
     bool program = d.program == 0 || d.program == 0x280 || d.program == 0x700 || d.program == 0x5A0 ||
-                   d.program == RD_PROGRAM_GS_STRIP;
+                   d.program == RD_PROGRAM_GS_STRIP || d.program == RD_PROGRAM_RIPPLE;
     return program && d.kind < 32 && ((sa.kinds >> d.kind) & 1) && (d.flags & ~uint32_t(RD_DRAW_WAVE_UVS)) == 0;
 }
 
@@ -2153,6 +2205,7 @@ void sa_transfer(uint32_t dir) {
     if (!sa.on) {
         return;
     }
+    bool named_bound = sat_transfer(dir); // (T3: the named targets it touches; a named target bound is not the frame's turn)
     uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
     uint32_t w = bits(trxreg, 0, 12), h = bits(trxreg, 32, 12);
     auto touches = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t fbp, uint32_t fbw,
@@ -2182,7 +2235,7 @@ void sa_transfer(uint32_t dir) {
             fprintf(stderr, "[sa] the GS's clear written over: a transfer, dir %u\n", dir);
         }
     }
-    if (!sa.bound) {
+    if (!sa.bound || named_bound) {
         return;
     }
     bool held = find_target(sa.fbp, sa.fbw, sa.fpsm) == sa.frame_target && find_target(sa.zbp, sa.fbw, sa.zpsm) == sa.z_target;
@@ -2242,6 +2295,7 @@ void sa_sync() {
             fprintf(stderr, "[sa] turn ends: the GS's targets wanted (an upload, a copy, a picture ...)\n");
         }
         sa_release();
+        sat_sync(); // (T3: the named targets the scene drew)
     }
 }
 
@@ -2277,6 +2331,7 @@ void sa_switch(bool on) {
             sa.depth.reset();
         }
         sa_table_reset();
+        sat_reset(); // (T3)
     }
     sa.clear.valid = false;
     sa.fcopy.valid = false;
@@ -2292,6 +2347,7 @@ void sa_forget() {
     if (gs->in_pass && gs->pass_color == &SA_MARKER) {
         end_pass();
     }
+    sat_reset(); // (T3)
     sa.bound = false;
     sa.pending = false;
     sa.clear.valid = false;
@@ -2334,4 +2390,7 @@ void sa_print_stats() {
         fprintf(stderr, "%s%llu %s", i ? ", " : "", (unsigned long long)s.declined[i], sa_why_names[i]);
     }
     fprintf(stderr, "\n");
+    sat_print_stats(); // (T3)
 }
+
+#include "gsn_scene_targets.inc"

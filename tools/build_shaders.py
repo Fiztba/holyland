@@ -29,6 +29,7 @@ VARIANTS = [
     ("nd_000.vert", "sa_000.vert", ["-DND_STANDALONE"]),  # P8's scene: the same, its own depth (gsn_standalone.inc)
     ("nd_280.vert", "sa_280.vert", ["-DND_STANDALONE"]),  # ... program 0x280's in the scene
     ("nd_700.vert", "sa_700.vert", ["-DND_STANDALONE"]),  # ... program 0x700's in the scene
+    ("nd_water.vert", "sa_water.vert", ["-DND_STANDALONE"]),  # ... the reflection's water in the scene (T3)
     ("sa_depth.frag", "sa_depth_ms.frag", ["-DSA_MS"]),  # ... the scene's depth into a multisampled Z buffer
     ("sa_resample.frag", "sa_resample_ms.frag", ["-DSA_MS"]),  # ... T2: from a multisampled image at another scale
     ("sa_resample.frag", "sa_resample_depth.frag", ["-DSA_DEPTH"]),  # ... a depth at another scale

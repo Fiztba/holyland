@@ -14,6 +14,8 @@
 // nd_000.vert's). Which triangles are drawn in the frame (the strip's ADC: the data's and the EE's bounds
 // test) is the CPU's (the plan): a corner's fog is -1 less its vertex's number in the arena, its colour's RGB
 // the kick's number less it (bits 0-5) and its draw's record (bits 7-23).
+// Built a second time with ND_STANDALONE as sa_water.vert (P8 T3, gsn_scene_targets.inc): the same, with the
+// scene's own depth (Z before any rounding, as sa_000.vert's) in place of the GS's integer Z.
 #include "gs_common.h"
 
 layout(location = 2) in uvec4 a_corner;
@@ -117,6 +119,9 @@ float vu_recip(float w) {
 struct Place {
     int x, y, z;
     float q;
+#ifdef ND_STANDALONE
+    float zf; // (sa_water.vert) Z before FTOI4, unrounded
+#endif
 };
 
 Place vu_place(vec4 v) {
@@ -126,6 +131,9 @@ Place vu_place(vec4 v) {
     p.x = ftoi(vu_mul(c.x, p.q) * 16.0);
     p.y = ftoi(vu_mul(c.y, p.q) * 16.0);
     p.z = ftoi(vu_mul(c.z, p.q) * 16.0);
+#ifdef ND_STANDALONE
+    p.zf = vu_mul(c.z, p.q);
+#endif
     return p;
 }
 
@@ -191,6 +199,9 @@ struct Moved {
     int x, y;
     uint z;
     bool drop;
+#ifdef ND_STANDALONE
+    float zf; // (sa_water.vert) Z unrounded
+#endif
 };
 
 Moved moved(Place p, uint z) {
@@ -199,6 +210,9 @@ Moved moved(Place p, uint z) {
     r.y = p.y & 0xFFFF;
     r.z = z;
     r.drop = false;
+#ifdef ND_STANDALONE
+    r.zf = p.zf;
+#endif
     float depth = div_nearest(1.0, p.q, 0.0);
     if (!(depth > 0.0) || isinf(depth)) {
         return r; // (as it is)
@@ -223,6 +237,9 @@ Moved moved(Place p, uint z) {
     r.x = int(floor(nx * 16.0 + 0.5));
     r.y = int(floor(ny * 16.0 + 0.5));
     r.z = uint(min(floor(nz + 0.5), 4294967040.0));
+#ifdef ND_STANDALONE
+    r.zf = nz;
+#endif
     return r;
 }
 
@@ -249,12 +266,18 @@ void main() {
     float y = nearest() ? y_n : vu_add(float(P.y), lift);
     Place w = vu_place(vec4(float(P.x), y, float(P.z), 1.0));
     int xi = p.x, yi = p.y, wx = w.x, wy = w.y;
+#ifdef ND_STANDALONE
+    float zf = p.zf;
+#endif
     bool gone = false;
     if ((d.info.z & ND_C_MOVING) != 0) {
         Moved m = moved(p, z);
         xi = m.x;
         yi = m.y;
         z = m.z;
+#ifdef ND_STANDALONE
+        zf = m.zf;
+#endif
         Moved mw = moved(w, 0u);
         // (a moved place off the 16 bits keeps the frame's S and T: moved() starts from the GS's 16 bits)
         if (!mw.drop && ((w.x | w.y) & int(0xFFFF0000u)) == 0) {
@@ -279,7 +302,12 @@ void main() {
 
     // as gs.vert
     vec2 ndc = (xy + 0.5) * pc.inv_size * 2.0 - 1.0;
+#ifdef ND_STANDALONE
+    // the scene's own depth, as sa_000.vert's (nd_000.vert, ND_STANDALONE): unrounded, with the tie's slack
+    float depth = clamp((zf + pc.zbias + pc.zslope * float(a_corner.a) / 255.0) * pc.zscale, 0.0, 1.0);
+#else
     float depth = (pc.misc & GSN_M_ZCLAMP) != 0u ? 0.0 : float(min(z, pc.zmax)) * pc.zscale;
+#endif
     gl_Position = vec4(ndc, depth, 1.0);
     v_z = float(z);
     v_color = vec4(float(rgba & 0xFFu), float((rgba >> 8) & 0xFFu), float((rgba >> 16) & 0xFFu), float(rgba >> 24));
