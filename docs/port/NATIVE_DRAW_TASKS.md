@@ -4,7 +4,95 @@ Branch `native/draw` (long-lived; main stays safe). Read [NATIVE_DRAW.md](NATIVE
 the assumptions A1-A20 and the plan P0-P9. This page is the state of the work and the task list for the
 agents: P0-P7 so far (hosted mode), next P8. October 2026.
 
-## Where it stands (2026-10-23, after the third workflow)
+## Where it stands (2026-10-23, after merging perf/gpu-vram)
+
+**perf/gpu-vram merged** (9e9c2a12; the branch the owner plays: fix/underwater, fix/wall-blink, perf/hotspot's
+ties drawn whole, replays over targets the recording made, silhouettes drawn whole, 16-bit reflection blends in
+the pass, depth bounds on two-phase ties, and the write-backs put off). It is now the PS2-path reference: with
+`--native-draw off` this tree is perf/gpu-vram's build (C:\code\kf4-builds\play-932801f) byte for byte. The
+merge's conflicts were in gsn.cpp only (OpKind: `OP_STORAGE` and `OP_DEPTH_BOUNDS` both; the draw call: the
+depth bounds set around `nd_draw_range`); `gsn_shaders.h` was made again (tools/build_shaders.py). Where the
+two lines meet:
+- **Native shadows drawn whole.** perf draws a silhouette (0x5A0: DATE, FBA, one colour, no texture, no Z
+  written) whole instead of in runs when its corners are one colour; a native corner's RGB is its encoding,
+  so P5's native shadows stayed in runs (about 3x the GPU at 240). `nd_corner_colour` (gsn_native_draw.inc)
+  gives the colour a corner is drawn with where the CPU knows it: the PS2 path's own, and a native corner of
+  a 0x5A0 record (RGB 0 exactly, the plan's alpha; the records flagged in `nd.of5a0`, cleared with the
+  buffer). Native and PS2-path silhouettes are drawn whole in the same batches: the far save at 4x MSAA 2,
+  off against `--native-draw shadows`, byte for byte (vblanks 300-420), 101 silhouettes whole in both.
+- **Ties and native batches.** The batch decisions are perf's, over native corners as over the PS2 path's
+  (their places, Z and alpha are the plan's): a two-phase tie's passes go through `nd_draw_range`, a call a
+  kind of corner, as before, and the batches are joined as before. The depth bounds of a two-phase tie are
+  not used for a native batch in a picture between (its corners' Z at t 0 is the GPU's; perf's
+  `interp_z_at_0` is the PS2 path's): the picture is the same either way, only the first phase costs more.
+- **Pictures between.** fix/underwater's `replay_only` targets, the pools' screen-made S and T and perf's
+  replays apply to the PS2 path's draws; native draws are untouched by them (their moves are the shaders').
+  The PS2 path's black blocks over 009's water at 240 are gone with fix/underwater (decision 3 below).
+
+**The review's latent findings 1-3 fixed** (cf3aa186): 0x700's (and 0x5A0's) record flags are dropped when the
+records buffer is replaced (`nd700_records_gone`; Granite reuses `Buffer` addresses); a wave snapshot keeps the
+frame it was applied for and an older one is not used (`NativeDraw_WaveFrame`; the record is then drawn from
+the game's coordinates, as `cpu`); `--native-wave-uvs` defaults to `ps2`: `late`, or `gpu` under the test wait
+(the PS2 path's picture either way). Map 039 view 0, compare 1x without the wait: 771 pixels, worst 3 (`gpu`:
+55k-130k); onoff 0; with the wait 0 and 0. The default still draws the offsets on the GPU (78 meshes parsed in
+600 vblanks of 039; `cpu` 18,642).
+
+**Every ported kind at once** (`map,sky,items,objects,picked,entities,arm,gold,effects,shadows,water,passes`),
+pixels differing; headless, `--no-audio`, a fresh data folder, at most 2 games at a time:
+
+| | compare 1x | compare 4x | onoff 1x | onoff 4x |
+|---|---|---|---|---|
+| 000 start (`newgame.pad`, `--teleport 1600:0:0`, 1900, 2000) | 0 | 54 (the 2D snap) | 0 | 54 |
+| 009 start (`1600:9:0`, 1900-2000/50) | 0 | 0 | 0 | 0 |
+| 016's bats (`1600:16:0`, 1900-2100/100) | 0 | 6 (the 2D snap) | 0 | 6 |
+| 099 herb (`herb.pad`, 1800-1840/20) | 0 | 0 | 0 | 0 |
+| 008's water, a mirror map (`m8w`, 300, 400) | 0 | 0 | 0 | 0 |
+| the far save (an NPC's shadow, `walkfar.pad`, 240-420/60) | 0 | 9 (the 2D snap) | 0 | 9 |
+| the fight on 000 (`strong3.pad`: hit flashes, shadows, the death fade) | 0 | 0 | 0 | 0 |
+
+**At 240**, every kind, 1x (the game's frames; the pictures between):
+
+| | compare | onoff |
+|---|---|---|
+| 000 walking and turning (`walk.pad`, 1900-1906) | 0; 17,286 in 24 (10,409 by more than 1), worst 54 | the same |
+| the far save (300-306) | 0; 11,997 in 24, worst 135 (the shadow's and the NPC's outline) | the same |
+| 009's water, turning (`turn9.pad`, 300-306) | 0; 764,999 in 24, worst 109 (was 1,127,017: the PS2 path's black blocks are gone; left is the ripple's texture, native's ST rebuilt against perf's screen-made ST) | the same |
+| 009's fire (1900-1907) | 0; 248,873 in 28, worst 95 (as before) | |
+| the fight's death fade (1926-1934) | 0; 85 in 31, worst 17 | |
+
+**GPU time at the owner's settings** (`--native-scale 4 --native-msaa 2 --widescreen --native-widescreen`, 240,
+`KF4_PRESENT_SIM=240`, `KF4_GSN_GPU_TIME=1`, 1,400 vblanks real time from bugs1022's `quick_far.kf4quick`, the
+GPU otherwise idle, two runs each, the same to 0.01 ms; RTX 5080):
+
+| `--native-draw` | GPU ms a picture | render passes a picture | pictures | pictures between left out |
+|---|---|---|---|---|
+| off | 2.94 | 5.8 | 5,234 | 3-6 |
+| shadows | 2.98 | 5.8 | 5,234 | 6 |
+| shadows, `KF4_GSN_SILHOUETTE_RUNS=1` (P5's runs) | 3.22 | 94.0 | 1,754 (pictures between given way for 1,166 vblanks) | 78 |
+| every kind | 4.88 | 14.2 | 4,259 | 981 |
+| map alone | 4.38 | 12.8 | 4,712 | 528 |
+| sky, or passes, alone | 2.94 | 5.8-5.9 | 5,231-5,237 | 3-9 |
+
+So the shadows cost nothing now (P5's "about 3x" was the runs). **Open:** `map` at 240 costs about 1.4 ms a
+picture more and falls behind. At 30 the two make the same draws and passes (10.4 a picture; native 2.69 ms
+against 2.40, the vertex shader), so it is the pictures between: there native draws make 9.0M draws against
+5.2M and end 43,923 render passes for shader blending against 12,823 (and a replay costs 1,626 us against 518
+on the GS's thread). Likely causes, not yet measured apart: the PS2 path's corners do not join native ones in
+a picture between (decision 9), and a native batch in a picture between keeps its triangles outside the
+scissor (in a blended batch, runs of their own). Probably not the merge (perf changed neither), but not
+checked against a pre-merge build at these settings.
+
+**The off check** passes: boot_test, frame_test gs and native, gsn_draw_test 0 of 300 (seeds 1, 7, 1234),
+gsn_vram_test (20 rounds, all agree), vu1_test 0 of 90; against perf/gpu-vram's build (play-932801f): herb with
+`--native-draw off`, the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820
+and 1840 byte for byte; the far save at 240, 4x, MSAA 2, widescreen: the same `--log`, PATH1 hash
+0f244d52ae8941bd, and all 12 pictures (game frames and pictures between) byte for byte.
+
+**Left**, as after the third workflow (below), with these changes: decision 5 (`shadows`) has its answer for
+the cost (the stencil question stays); decision 2's default is now the PS2 path's (`ps2`); decision 3's PS2
+side no longer has black blocks; and the open item above (`map` at 240).
+
+### Before: after the third workflow (2026-10-23)
 
 Merged into `native/draw` on top of the second workflow (below), each with a merge commit: **nd3/f-013**
 (F-013: map 013's ledge is the reference's DMA race, `KF4_ND_DMA_WAIT=1`; F-mixed: 0x000's and 0x280's
@@ -299,8 +387,9 @@ section a draw is in, for the pictures between).
   `sky` (P3-1), `objects` and `picked` (P2-1; `models` is both), `entities` (P2-3; an alias of `skinned`),
   `arm` (P2-4), `gold` (G-gold), `effects` (P4-2), `shadows` (P5-1), `water` (P6-1) and `passes` (P7-1).
   Every ported kind at once: `map,sky,items,objects,picked,entities,arm,gold,effects,shadows,water,passes`.
-- `--native-wave-uvs gpu|cpu|late` (P6-2): how a native map record's wave UVs are drawn; `gpu` (the default)
-  and `cpu` give the same picture, `late` the PS2 path's racing one. `--test-dma-wait` (tests only): each
+- `--native-wave-uvs ps2|gpu|cpu|late` (P6-2): how a native map record's wave UVs are drawn; `ps2` (the
+  default since the merge of perf/gpu-vram: `late`, or `gpu` under the test wait); `gpu` and `cpu` give the
+  same picture, `late` the PS2 path's racing one. `--test-dma-wait` (tests only): each
   frame's chain waited for as it is sent, so the PS2 path draws the blocks the game changes as the game drew
   them (P2-6's race gone): the reference for the wave maps. `KF4_ND_DMA_WAIT=1` (F-013) is the same wait from
   the environment (the game loop waits after `Packet_SendChain`); either turns on both.
