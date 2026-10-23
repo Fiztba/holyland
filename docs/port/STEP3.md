@@ -468,7 +468,13 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
   so in the pictures between the glows came through the walls before them, and walking toward the
   wall lights of map 000 made them flicker at 30 Hz. Checked on that walk: the pictures between now
   lie between the frames on each side in the glow's bright pixels, where they were 1,000 to 2,000
-  above both, with either renderer, MSAA 1 or 2, widescreen or not.)
+  above both, with either renderer, MSAA 1 or 2, widescreen or not.) The 16 is in Q, not in Z:
+  program 0x700 divides by the w of positions whose own w is 16, so its Q is 1/(16 w) and its Z the
+  world's. Its depth is now Q's divided by the power of two that brings it to the Z's (`vertex_view`,
+  the records marked `RECORD_EFFECTS`), and Q is scaled by the depth's change on the CPU's way as on the
+  GPU's. Taken as 1/w, a fire was put 16 times as far: turning moved it with the room, but strafing past
+  the tower's fire moved it a 16th as much, so it stood still between the game's frames and jumped at
+  each ("a jittery dance").
 - It does not care which program or which matrix made the vertex. It costs no VU1 run.
 - The game tells, by marks in its chain, where the world is and with which camera.
 - The other way, the game drawing twice a pass, would run the draw code's side effects twice (the wobble
