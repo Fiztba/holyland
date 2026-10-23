@@ -57,7 +57,8 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
    999999-999999 --limit 0` and read the `end-other` and `scanouts:` lines. Keep the sum of
    differing pixels over the 64 maps from before your change; no map should get worse without a
    reason you can name. Captures made with today's defaults (the game's flicker filter off): 414,901
-   pixels, worst difference 53 x 2 = 106, all scanouts identical. Captures with `--flicker-filter`
+   pixels, worst difference 53 x 2 = 106, all scanouts identical; with `--layer-z tolerant` (the game's
+   default, not the comparison's) 416,255, worst 130. Captures with `--flicker-filter`
    (or older ones, such as October 2026's): 362,601 pixels, worst 53. The filter blends every row
    half over the row above, which halves any difference between the renderers.
 5. **Live:** a few maps (`--teleport 1900:N:0` after `tests/newgame.pad`) with `--renderer both
@@ -84,6 +85,20 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   its own; other draws that write Z draw their Z first and their colour within half a Z (the GS's ties on average: signs on walls), and a draw without Z writes within half a Z (PLAN.md; `gsn.cpp`, "Z and layers"); `ps2` is
   the GS's. A test pass with no Z written must not see its own batch's triangles as a pass with Z
   would: drawn as one, a layer mesh folded over itself was blended twice (flat olive patches).
+- **A buffer that starts mid-page** reaches the page after its last only where its blocks run past the
+  page's 32 (`buffer_pages`). Counted as one page more whatever it covered, a CLUT uploaded to VRAM's last
+  page (0x3FE1, 8 x 2: the "N Gold" message's) reached round to page 0, the frame buffer, which was written
+  back and dropped every frame: the picture shown from VRAM at 1x every other frame, the pictures between
+  drawn from the packets again, some black (October 2026).
+- **A texture decoded from VRAM watches only the pages its draws read** (without mipmaps: the rows and
+  columns from its vertices, to whole pages). The menus read the play's frame kept at 0x3240 as a
+  1024 x 512 texture, which runs on round VRAM's end into their field buffers: taken whole, every field
+  sent both field buffers back to VRAM and decoded the texture again, 30 ms a vblank, the menus at 20 to 40
+  vblanks a second (at every frame rate, since before the render passes).
+- **The menus' fields at a scale are woven a row at a time** (`weave_fine`, whole frames on): field p's row
+  r of h x sy is the picture's line 2 r / sy + p, so its rows go to rows 2 r + p sy. Woven a line (sy rows)
+  at a time, each band held a line drawn over twice the height, the other field's half a line off: the
+  menus' text in stripes of three rows at 3x. `--no-whole-frame` (two moments) keeps the lines.
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a

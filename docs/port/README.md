@@ -212,7 +212,8 @@ F3 (rebindable on the Controls page: "Show / hide the frame rate"), the Interfac
 "Frame-rate counter" or `--show-fps` shows the pictures the window presents a second in the picture's
 top right corner, with the overlay closed, on a dark square sized to the picture (about 28 pixels high
 at 1440); below it, when they differ, the game's own frames a second (`144 FPS` over `30 GAME` at
-`--frame-rate 144`: the game runs at 30, the pictures between are the PC's). Both are sampled twice a
+`--frame-rate 144`: the game runs at 30, the pictures between are the PC's; the menus, the title and
+the movies, whose loops the play's frame count does not count, show their pictures alone). Both are sampled twice a
 second (`port_video_pictures_per_second`, `port_video_frames_per_second` in `port/platform/video.c`):
 the pictures counted are the new ones the window presented, by the game's thread or the pictures
 between's own, so it reads true at 144 and 240. The presenters draw it themselves as plain squares
