@@ -3727,8 +3727,22 @@ void flush_batch() {
     // the same drawn twice: they lie on their surface as the layer does, and with no slack they lost to
     // it where its Z came out a hair nearer, the surface's own texture showing through the overlay in
     // flat patches that came and went as the camera moved.
-    if (tie || (nlayer_passes && others_same_twice && fine_z && any_zwrite_pass && ztst == 2 && !reads_own_target &&
-                !(push.flags & F_DATE))) {
+    // A tie drawn in one pass (no alpha test's second pass, no layers) whose colour comes out the same
+    // drawn twice: its colour within half a Z of what was there before the batch, no Z written, then the
+    // batch again as the GS draws it, Z tested and written exactly (with the fraction). So it wins over
+    // what was there within half a Z, and among its own triangles the nearer wins, as it should: with its
+    // Z first and then its colour within half a Z of that, a batch's later triangles won over its earlier
+    // ones within half a Z of them, and on map 3's rope bridge, far off, the planks' faces (a log of
+    // strips a Z apart, one batch) came out as light and dark blocks that moved with the distance where
+    // the GS hatches them. (Its second pass, repeat, keeps the Z first: drawn twice it would blend twice.)
+    bool two_phase = tie && same_twice && npasses == 1 && !nlayer_passes;
+    if (two_phase) {
+        Pass p0 = passes[0];
+        passes[0] = {p0.select, p0.mask, false, 0.5f * zstep, 0.0f};
+        passes[1] = p0;
+        npasses = 2;
+    } else if (tie || (nlayer_passes && others_same_twice && fine_z && any_zwrite_pass && ztst == 2 &&
+                       !reads_own_target && !(push.flags & F_DATE))) {
         Pass z_first[4];
         int n = 0;
         for (int i = 0; i < npasses; i++) {
@@ -3793,8 +3807,8 @@ void flush_batch() {
     // order, as do the others among themselves, with their Z.)
     std::vector<uint32_t> runs(1, 0);
     std::vector<uint32_t> layers_at;
-    if (!reads_own_target && (shader_blend || npasses > 1 || nlayer_passes)) {
-        bool all = shader_blend || npasses > 1;
+    if (!reads_own_target && (shader_blend || (npasses > 1 && !two_phase) || nlayer_passes)) {
+        bool all = shader_blend || (npasses > 1 && !two_phase); // (two_phase: one run, its passes in order)
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
         std::vector<uint8_t> layer(triangles);
         for (uint32_t t = 0; t < triangles; t++) {
