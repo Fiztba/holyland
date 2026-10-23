@@ -46,6 +46,10 @@ void NativeDraw_QueueFixedBlock(ModelInstance *model, const void *matrix_a, cons
 extern f32 world_view_matrix[16];
 
 #define ND_MAX_MESHES 2048 /* (ModelPart.data_count is 11 bits; as native_draw.c) */
+/* the meshes of all a model's parts, kept from the check that every block parses to the draws, so each
+   block is hashed once a draw, not twice (P2-6: the hash is most of what a cached draw costs); a model
+   with more blocks than this has its parts' meshes found again (and hashed again) part by part */
+#define ND_MODEL_MESHES 8192
 
 /* set while the PS2 path's packets are queued for --native-draw-compare: Model_DrawPosedWithAlpha, whose
    head calls in here, then draws the PS2 way */
@@ -54,12 +58,15 @@ static int queuing_ps2_path;
 /* Model_DrawPosedWithAlpha(model), natively: 1 if drawn (or nothing to draw), 0 if the caller is to draw
    it the PS2 way (a block the core cannot draw, model flag 0x800, or the compare mode's own call). */
 int NativeDraw_PosedWithAlpha(ModelInstance *model) {
-    static RdMesh meshes[ND_MAX_MESHES];
+    static RdMesh meshes[ND_MODEL_MESHES];
+    static RdMesh scratch[ND_MAX_MESHES];
     f32 (*matrix_a)[4] = MODEL_DRAW_MATRIX_A;
     f32 (*matrix_b)[4] = MODEL_DRAW_MATRIX_B;
     ModelPart *part;
     RdDraw d;
     EEWord owner = 0;
+    int kept = 1; /* every part's meshes are in meshes[], one part after another */
+    u32 used = 0;
     int i;
 
     if (queuing_ps2_path) {
@@ -77,9 +84,15 @@ int NativeDraw_PosedWithAlpha(ModelInstance *model) {
     /* every part's blocks first: a model is drawn one way or the other, whole */
     part = model->parts;
     for (i = 0; i < model->part_count; i++, part++) {
-        if (!NativeDraw_PartMeshes(part, meshes)) {
+        RdMesh *into = kept && used + part->data_count <= ND_MODEL_MESHES ? meshes + used : scratch;
+
+        if (into == scratch) {
+            kept = 0;
+        }
+        if (!NativeDraw_PartMeshes(part, into)) {
             return 0;
         }
+        used += part->data_count;
     }
     ModelMatrix_BuildDrawMatrices(model, model->light_block, model->light_block + 0x40, matrix_a, matrix_b);
     if (!port_native_draw_compare()) {
@@ -103,22 +116,27 @@ int NativeDraw_PosedWithAlpha(ModelInstance *model) {
         memcpy(d.point_col[i], &linked_point_pool[model->hit_handles[i]].target, 16);
     }
     part = model->parts;
+    used = 0;
     for (i = 0; i < model->part_count; i++, part++) {
         f32 matrix[4][4] __attribute__((aligned(16)));
         ModelPartData *data;
+        RdMesh *these = kept ? meshes + used : scratch;
         u64 value;
 
+        used += part->data_count;
         if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT40) {
             continue;
         }
         if (part->scale[0] == 0.0f && part->scale[1] == 0.0f && part->scale[2] == 0.0f) {
             continue;
         }
-        NativeDraw_PartMeshes(part, meshes); /* (found again in the cache) */
+        if (!kept) {
+            NativeDraw_PartMeshes(part, scratch); /* (found again in the cache) */
+        }
         Matrix_Multiply(matrix, model->model_matrix, part);
         memcpy(d.model, matrix, sizeof(d.model));
         d.id[1] = (u32)i;
-        value = rd_draw(&d, meshes, part->data_count);
+        value = rd_draw(&d, these, part->data_count);
         Packet_BeginGsRegisters();
         if (model->fade_enabled == 0) {
             Packet_AddGsRegister(0x1A, 1);

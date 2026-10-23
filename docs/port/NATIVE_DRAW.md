@@ -1013,3 +1013,80 @@ build only and is not committed. No chunk changed after it was loaded, on any of
 - **What would help instead.** The wave records' per-frame re-parse and re-upload goes away if P6 does
   the wave UVs on the GPU: the base UVs and wave index per vertex, and the 16 oscillators per draw. The
   mesh then stays cached and only the oscillators change.
+
+### P2-6's measurements: the mutators, with map objects native
+
+**How.** The same `KF4_ND_DUMP` (with `tools/nd_measure.py`'s reading of it), on all 64 maps. Each map was
+run with P1-2's 8 made-up views (two places, four headings, a load every 100 vblanks, then 300 vblanks
+more), and `--native-draw map,items,objects,picked` against `map,items`. A temporary probe build (not
+committed) added a note to the dump at every call of `Model_SetPrimBits`, `SetTexture`, `SetAlphaBlend`,
+`SetVertexColour`, `SetTextureBase`, `SetBlockGsWords`, `SetUvsFromScreen`, `Save/RestoreGsWordsAndUvs`
+and `FadeVertexColoursNear`. It also noted the fading objects' start and signal, and could signal them or
+fade any object on demand. Timings are noisy: up to 8 agents shared the PC.
+
+- **The mutators run at load.**
+  - Every call of `Set*` came in the 2 or 3 frames after a view's load: the map's records and objects
+    being set up, then the items appearing. That is 4 to 21 frames of about 530 a run.
+  - They cause no re-parse in play.
+  - `SetBlockGsWords`, `SetUvsFromScreen` and `Save/RestoreGsWordsAndUvs` never ran. They belong to the
+    type 0x47 entities, which are skinned and are not native yet.
+  - When P2-2/P2-3 make those entities native: with `MODEL_FLAG_800`, their blocks are rewritten before
+    every draw (UVs from the screen position), so they are re-parsed whenever the model or the camera
+    moves. A touch would save nothing there either.
+- **`Model_FadeVertexColoursNear`: the fading objects.** These are trigger kind 31, on 039 and 040 only.
+  They fade only when a switch signals them.
+  - Signalled by the probe, the hash re-parsed only the blocks the growing radius reached. On 040 that was
+    2,044 re-parses in 208 frames of fading, about 10 of the model's 45 blocks a frame. Each re-parse is
+    about 2 us.
+  - These objects sit above the cave ceilings at every place tried, so they were checked by the probe's
+    fade below instead.
+- **Writers that are not mutators.** On 015 and 101, object blocks (8 and 6) changed at a view's load with
+  no mutator call, and the hash re-parsed them. A touch scheme has to know every writer, the loads included.
+- **The hash's cost with objects native** (the last 300 frames of each run):
+  - Hashing took 1,094-4,426 KB a frame, in 329 us on average and 747 us at worst (107). With `map,items`
+    it was 220 us.
+  - Objects added 629 KB and 111 us a frame on average, and 2,667 KB and 465 us at worst (116).
+  - The cause was the check pass: `NativeDraw_PosedWithAlpha` hashed every block once in its check
+    ("every part parses") and again for the draws.
+  - It now keeps the check's meshes, up to 8,192 blocks a model; past that, parts are looked up again.
+  - Objects' hashing then fell to 339 KB and 39 us a frame on average, and 1,346 KB and 222 us at worst.
+    The draws and the re-parses were the same on all 64 maps.
+  - `native_draw.c`'s `posed_model` (map records, items, the picked item) has the same double hash.
+- **The decision: still no `rd_mesh_touch`.** These are P0-3's three reasons, now with objects:
+  - the hash catches the load's writes, which no mutator reports;
+  - a mutated block has to be parsed again with or without a touch;
+  - what the hash cost was mostly the second pass, now gone for objects.
+- **Vertex fades, checked on screen (013).** The probe faded the colours of every object drawn through
+  `Model_DrawPosedWithAlpha` in the update (`MapObject_UpdateAll`, where the real fades run), down to
+  0x10 and back by 6 a frame, with a `Packet_WaitForSend()` before its writes (see the next point).
+  - Native against the PS2 path: 0 pixels in compare 1x, compare 4x and onoff 1x, at all 8 views.
+  - Native with the fade against native without it: 86,747 pixels (worst 67) at 220, 974 at 420 and 98
+    at 820. So the test sees the fade.
+  - With a fixed gen in place of the hash, the native pictures go stale at those places (87,874 pixels,
+    worst 67).
+- **The PS2 path races the next frame's update.**
+  - `Packet_SendChain` starts VIF1's DMA and returns. The port's DMA thread (`port/platform/dmac.c`) then
+    reads the chain, and with it the model blocks the chain REFs.
+  - Meanwhile the game runs the next frame's update: `func_00112BD0`'s wave UVs, then
+    `MapObject_UpdateAll`'s fades.
+  - So a block mutated in the update can reach VU1 already one step on: the PS2 path draws frame N with
+    some of frame N+1's colours or UVs. The PS2 had the same race; the port keeps it.
+  - The native draw parses the block at the draw call, so it draws what the game drew that frame.
+  - Shown with the fade probe in the update but without the wait: compare differs by 86,840 pixels (one
+    fade step, worst 24). With the wait, 0.
+  - **This is the wave maps' difference.** A probe build waited for the DMA (`Packet_WaitForSend()`, under
+    an environment variable) just before `func_00112BD0` in `GameLoop_Run`'s update. It ran compare 1x with
+    `map,items,objects,picked`, 8 sweep views a map.
+    - 027: 2,478 pixels without the wait, 0 with it.
+    - 034: 3, then 0.
+    - 039: 141,243 with `objects,picked`, 0 with it. That was P2-1's run-to-run map, which differs with no
+      native draws at all.
+    - 040: 145,556, then 0.
+    - 042: 4,374, then 0.
+    - 114: 1,234, then 0.
+    - 029: 0 either way.
+    - Onoff on 039 with the wait: 1 pixel, worst 1.
+  - So P1-2's "wave-UV" differences are the PS2 path's race, not the native draw.
+  - A test-only wait like this one (a switch that makes `Packet_SendChain` wait for its DMA, or a wait
+    before the update) would let the sweep demand 0 pixels on those maps too. The game itself should
+    keep the race: it is how the PS2 drew.
