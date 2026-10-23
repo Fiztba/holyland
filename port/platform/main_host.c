@@ -61,11 +61,13 @@
                          draw these kinds of the game's 3D at the game's level (docs/port/NATIVE_DRAW.md):
                          the patched draw code hands them to the renderer core, and the native GS draws
                          them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
-                         on: the kinds that have passed their checks (items so far); KINDS, by name: map,
-                         models (objects and picked), skinned (or entities), arm, sky, effects, shadows,
-                         reflection, water, passes, items, objects, picked, gold (items, and map, objects,
-                         picked, entities, arm and gold in work, are ported so far). off (the default) is the game as
-                         without it. The overlay's Debug page changes it live
+                         on: the kinds that have passed their checks (map, sky, items, objects, picked,
+                         entities, arm, gold, effects, shadows and water); KINDS, by name: map, models
+                         (objects and picked), skinned (or entities), arm, sky, effects, shadows,
+                         reflection, water, passes, items, objects, picked, gold (passes in work). off is
+                         the game as without it, and the default unless settings.json says "native_draw":
+                         "on" (the overlay's Renderer section). The overlay's Debug page changes the kinds
+                         live
        --native-draw-compare native|ps2
                          with --native-draw, the PS2 path's packets are queued too, and the native GS
                          draws the native draws (native) or the PS2 path's (ps2): two runs alike in all
@@ -502,10 +504,11 @@ static void parse_options(int argc, char **argv) {
 
             if (bits < 0) {
                 fprintf(stderr, "--native-draw wants off, on or a list of map, models, skinned (entities), arm, sky, effects, "
-                                "shadows, reflection, water, passes, items, objects, picked; not %s\n", value);
+                                "shadows, reflection, water, passes, items, objects, picked, gold; not %s\n", value);
                 exit(2);
             }
             port_options.native_draw = bits;
+            port_options.native_draw_forced = 1;
         } else if (strcmp(option, "--native-draw-compare") == 0) {
             if (strcmp(value, "native") == 0) {
                 port_options.native_draw_compare = PORT_ND_COMPARE_NATIVE;
@@ -708,7 +711,8 @@ int port_native_draw_parse(const char *value) {
                  {"sky", PORT_ND_SKY}, {"effects", PORT_ND_EFFECTS}, {"shadows", PORT_ND_SHADOWS},
                  {"reflection", PORT_ND_REFLECTION}, {"water", PORT_ND_WATER}, {"passes", PORT_ND_PASSES},
                  {"items", PORT_ND_ITEMS},
-                 {"objects", PORT_ND_OBJECTS}, {"picked", PORT_ND_PICKED}, {"gold", PORT_ND_GOLD}};
+                 {"objects", PORT_ND_OBJECTS}, {"picked", PORT_ND_PICKED}, {"gold", PORT_ND_GOLD},
+                 {"on", PORT_ND_ACCEPTED}}; /* ("on,passes": the accepted kinds and more) */
     const char *at = value;
     int bits = 0;
 

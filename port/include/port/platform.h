@@ -144,8 +144,10 @@ typedef struct {
        of the game's draws go to the renderer core instead of VU1 and the GS's packets, PORT_ND_* bits (0,
        off, by default: the PS2 path, the game byte for byte as without it). --native-draw-compare: the PS2
        path's packets queued too, and which of the two the native GS draws (PORT_ND_COMPARE_*; 0 none).
-       Both live from the overlay's Debug page; never saved. */
+       Both live from the overlay's Debug page. Of the kinds only the switch for the whole path is saved:
+       settings.json's "native_draw", on (PORT_ND_ACCEPTED) or off, also the overlay's Renderer section. */
     int native_draw;
+    int native_draw_forced; /* --native-draw: this run's, whatever settings.json says */
     int native_draw_compare;
     /* --native-wave-uvs (port_native_wave_uvs(), port/include/port/host.h): how a native map record's wave
        UVs (flag 0x100) are drawn, PORT_WAVE_UVS_*; never saved. --test-dma-wait (port_test_dma_wait()):

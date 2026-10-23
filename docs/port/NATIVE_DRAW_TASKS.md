@@ -6,6 +6,47 @@ agents: P0-P7 so far (hosted mode), next P8. October 2026.
 
 ## Where it stands (2026-10-23, after merging perf/gpu-vram)
 
+**The owner's decisions of 2026-10-23 (morning), on the review of the third workflow** (scratchpad nd3_review;
+the owner's own numbering, which is not the list below):
+1. **The 2D snap at 4x on the entities' sphere passes:** no visible difference to the owner (a spot in a
+   creature's mouth, the tips of the bats' wings); native's picture is accepted. Native draws need not
+   reproduce the PS2 path's `flat_2d` snap of 3D batches. *Applied (nd5/dec):* a batch holding native corners
+   is left out of `flat_2d` (`nd_batch_3d`, gsn_native_draw.inc; a hook at both of flush_batch's calls), so a
+   PS2-path corner sharing a batch with native ones is not snapped either; native corners never were (their
+   RGB is their encoding). The PS2 path's own picture is unchanged (off, nothing is native). `entities` joins
+   the accepted kinds with its 4x numbers as they are (000: 54, 016: 6, 009's water: 28, the far save: 9, the
+   arm scene: 24, spells 3 and 66: 55 and 54; every other kind 0 at 4x).
+2. **The wave UVs** (039's view is a rippling flesh cavern near the end of the game, not water): undecided, the
+   owner will judge in motion. `--native-wave-uvs ps2` (the PS2 path's late picture) stays the default; `gpu`,
+   `cpu` and `late` stay selectable.
+3. **The sky:** a native/modern sky unless there is a solid reason not to (`--sky modern`, its own task; the
+   default if it is clean). Until it lands, `sky` is accepted as the PS2's dome (0 pixels everywhere).
+4. **The miners' idle sway at 240:** the new smooth movement is preferred: native's interpolation of models
+   between frames (P2-5's slerp) stays the default.
+5. **The spell bursts in the pictures between:** undecided, the owner will look in play (`effects` is in `on`
+   so that it can be seen there).
+6. **"Passes" at 240 with non-default switches** (under water at 4x; the view shift with `--no-whole-frame`):
+   the heat map shows heavy corruption: must be fixed. Until then `passes` stays out of `on`.
+7. **P8, standalone: start it** (the native renderer's own targets and modern depth, so that the Z tie-break
+   bugs go away).
+
+**`--native-draw on` is now every accepted kind** (nd5/dec; `PORT_ND_ACCEPTED`, port/include/port/host.h):
+`map`, `sky`, `items`, `objects`, `picked`, `entities`, `arm`, `gold`, `effects`, `shadows`, `water`. Out of it:
+`passes` (decision 6 above) and `reflection` (no call site). The evidence: the review's table (every kind 0 in
+the game's frames, compare and onoff, at 1x, 4x and wide, but the entities' snap at 4x, now accepted), the
+numbers below, and GPU time: `shadows` costs nothing since perf's whole silhouettes; `map` at 240 still costs
+about 1.4 ms a picture (open, below). The whole path is one switch for the owner: the overlay's Debug page,
+Renderer section, "Native draw (experimental)" (on = `PORT_ND_ACCEPTED`, off = the PS2 path; live), saved as
+`settings.json`'s `display.native_draw` (`"on"`/`"off"`, default off; `--native-draw` on the command line wins
+for the run, `native_draw_forced`; headless and pad-script runs read no settings, so tests are unchanged). The
+Debug page's per-kind boxes stay (not saved), with "Accepted kinds (on)" and "None (off)" buttons.
+Checked: m000 at 4x onoff (`newgame.pad`, 1900, 2000): 54 and 0, both runs byte for byte the merged tree's
+(native-73887b9) with the same kinds; 000 walking at 240, 4x, MSAA 2, widescreen (`walk.pad`, 1912-1915, 32
+pictures, game frames and pictures between, off and on): byte for byte the merged tree's. The off check passes
+(below's list: boot_test, frame_test gs and native, gsn_draw_test 0 of 300 for seeds 1, 7 and 1234, vu1_test 0
+of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1
+cycles 460424273, pictures 1800, 1820 and 1840 byte for byte).
+
 **perf/gpu-vram merged** (9e9c2a12; the branch the owner plays: fix/underwater, fix/wall-blink, perf/hotspot's
 ties drawn whole, replays over targets the recording made, silhouettes drawn whole, 16-bit reflection blends in
 the pass, depth bounds on two-phase ties, and the write-backs put off). It is now the PS2-path reference: with
@@ -184,26 +225,32 @@ vu1_test 0 of 90, and herb with `--native-draw off` against main's 91c890e: the 
   left of P1".
 
 **The owner's decisions, collected** (where implemented at all, behind a switch that defaults to the PS2
-picture):
-1. The 2D snap at 4x (`flush_batch`'s `flat_2d` moves the PS2 path's corners of an entity's sphere pass,
-   never native ones): keep 3D out of `flat_2d`, or snap native corners too (on the GPU). It is every 4x
-   difference above (000: 54, 016: 26, 009's water: 28) and the entities' share at 240.
+picture; the answers of 2026-10-23 are at the top of "Where it stands"):
+1. ~~The 2D snap at 4x~~ (*decided 2026-10-23: native's picture accepted; nd5/dec keeps native batches out of
+   `flat_2d`*): `flush_batch`'s `flat_2d` moves the PS2 path's corners of an entity's sphere pass, never native
+   ones. It is every 4x difference above (000: 54, 016: 26, 009's water: 28) and the entities' share at 240.
 2. Blocks the game changes in place (wave UVs, object fades): copy the PS2 path's late read, or keep the
-   frame-consistent one. `--native-wave-uvs gpu` (the default: the frame the game drew, equal to the PS2 path
+   frame-consistent one (*2026-10-23: undecided, the owner judges 039's flesh cavern in motion; the default
+   stays `ps2`*). `--native-wave-uvs gpu` (the default until the merge of perf/gpu-vram: the frame the game drew, equal to the PS2 path
    with `--test-dma-wait`) or `late` (the PS2 path's race; 27 of 28 views equal to the racing reference).
    P1-2's 039/040 question; 013 joins it (F-013).
 3. The water in pictures between: native recomputes the ripple's ST with the camera between (the reflection
    stays under the water); the PS2 path keeps the frame's ST and jumps at each frame.
 4. A9: the reflection target's resolution and widescreen projection (untouched: 256x256).
-5. `shadows` into the accepted kinds before or after perf's whole silhouettes (about 3x the GPU time at 240
+5. ~~`shadows` into the accepted kinds~~ (*accepted, nd5/dec: perf's whole silhouettes are merged, the cost
+   is gone; the stencil question stays*) before or after perf's whole silhouettes (about 3x the GPU time at 240
    without them); how perf's one-colour silhouette test treats native corners at that merge (their RGB is the
    corner encoding); whether the stencil (first write wins) is still wanted after it.
-6. `passes`: the under-water pictures between at 4x, and the view shift at 240 with `--no-whole-frame`.
-7. Whether the spell bursts' pictures between (whole translucent polygons, up to 19 levels) count as "edges".
+6. `passes`: the under-water pictures between at 4x, and the view shift at 240 with `--no-whole-frame`
+   (*2026-10-23: wrong, to be fixed; `passes` stays out of `on` until it is*).
+7. Whether the spell bursts' pictures between (whole translucent polygons, up to 19 levels) count as "edges"
+   (*2026-10-23: undecided, the owner looks in play; `effects` is in `on`*).
 8. The draw_parts wrappers set with native draw off (gold, jointed objects, entities): accept them, or one
    hook in `DrawList_Draw` (gfx.patch).
 9. Whether PS2-path corners should join native ones in pictures between (for gsn.cpp's owner).
-10. From before: P3-2's modern sky (A1), and the A-items' defaults (NATIVE_DRAW.md 5).
+10. From before: P3-2's modern sky (A1; *2026-10-23: a modern sky unless there is a solid reason not to*), and
+   the A-items' defaults (NATIVE_DRAW.md 5). And (2026-10-23) the miners' sway at 240: native's smooth movement
+   is preferred (the default); P8: start it.
 
 **Next: P8, standalone** (NATIVE_DRAW.md 3.4, and P8 in 4), once the owner says it is wanted (NATIVE_DRAW.md 5)
 and the gates above are decided. Hosted mode now draws the play's 3D and the screen passes from draws; P8
@@ -383,10 +430,13 @@ section a draw is in, for the pictures between).
 ### The switches
 
 - `--native-draw off|on|KINDS` (`port_options.native_draw`, `port_native_draw(kind)`): `on` is
-  `PORT_ND_ACCEPTED`, the kinds that have passed their checks (items); others by name. In work: `map`,
-  `sky` (P3-1), `objects` and `picked` (P2-1; `models` is both), `entities` (P2-3; an alias of `skinned`),
-  `arm` (P2-4), `gold` (G-gold), `effects` (P4-2), `shadows` (P5-1), `water` (P6-1) and `passes` (P7-1).
-  Every ported kind at once: `map,sky,items,objects,picked,entities,arm,gold,effects,shadows,water,passes`.
+  `PORT_ND_ACCEPTED`, the kinds that have passed their checks and the owner's review (since nd5/dec: `map`,
+  `sky` (P3-1), `items`, `objects` and `picked` (P2-1; `models` is both), `entities` (P2-3; an alias of
+  `skinned`), `arm` (P2-4), `gold` (G-gold), `effects` (P4-2), `shadows` (P5-1) and `water` (P6-1)); others by
+  name. In work: `passes` (P7-1; decision 6). Every ported kind at once:
+  `map,sky,items,objects,picked,entities,arm,gold,effects,shadows,water,passes` (`on,passes`).
+  `settings.json`'s `display.native_draw` (`on`/`off`) and the overlay's Debug > Renderer "Native draw
+  (experimental)" switch the whole path (`PORT_ND_ACCEPTED` or nothing); `--native-draw` wins for the run.
 - `--native-wave-uvs ps2|gpu|cpu|late` (P6-2): how a native map record's wave UVs are drawn; `ps2` (the
   default since the merge of perf/gpu-vram: `late`, or `gpu` under the test wait); `gpu` and `cpu` give the
   same picture, `late` the PS2 path's racing one. `--test-dma-wait` (tests only): each
@@ -395,8 +445,9 @@ section a draw is in, for the pictures between).
   the environment (the game loop waits after `Packet_SendChain`); either turns on both.
   Since P3-1 the sky (the map record with flag bit 31) is its own kind, `sky` (`game/native_draw/nd_sky.c`):
   `map` is every other map record, so what `map` meant before is now `map,sky`.
-  The overlay's Debug page, "Native draw (experimental)", has a checkbox per ported kind and the compare
-  mode, live. Never saved. Needs the native GS: off with `--renderer gs`.
+  The overlay's Debug page, "Native draw (experimental)", has a checkbox per ported kind, "Accepted kinds
+  (on)" and "None (off)", and the compare mode, live; never saved (the Renderer section's switch is).
+  Needs the native GS: off with `--renderer gs`.
 - `--native-draw-compare native|ps2`: the adapter queues the PS2 path's packets too, after the native
   draws, between `RD_ND_ALT_BEGIN`/`END`; the native GS draws one set (`gsn_set_native_draw`), skipping the
   other's register writes (counting their vertex kicks for the pictures between). VU1 runs the packets
@@ -473,7 +524,8 @@ the same captures (the 414,901 of RENDERER.md is older captures').
     draw that splits the PS2 path's batch shows only in onoff mode (B-sweep, A-exact);
   - at 4x, `flush_batch`'s 2D snap (`flat_2d`, scale above 1) moves the PS2 path's corners of a sphere pass
     (Q 1, white, one Z) taken for a rectangle, never the native ones: a few pixels on enemies at 4x (P2-3;
-    below). Judge 0x280 kinds at 4x knowing it;
+    below). Judge 0x280 kinds at 4x knowing it. The owner accepted native's picture (decision 1 of
+    2026-10-23); since nd5/dec a batch with native corners is not passed to `flat_2d` at all (`nd_batch_3d`);
   - the PS2 path races its own mutators (P2-6): the DMA thread reads REF'd blocks after the game has gone
     on to the next update, so on the wave-UV maps (027, 034, 039, 040, 042, 114) and with fading objects
     the reference itself can be a frame late and differ run to run. `KF4_ND_DMA_WAIT=1` (a test switch, in
