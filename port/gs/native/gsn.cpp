@@ -2944,6 +2944,25 @@ void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
 }
 
 // The batch, drawn
+// The batch is textured in perspective (ST, a Q not 1 at some vertex): the 3D, never a 2D rectangle,
+// whatever its Z and colour. flat_2d takes a triangle of one Z and colour whose corners are those of
+// its bounding box for half of a 2D rectangle; a billboard of program 0x700 (a brazier's glow) far
+// enough away that its Z rounds the same at its corners, and upright on the screen, is one too, and
+// moving each half's corners out to whole GS pixels made the halves overlap along their diagonal: a
+// bright line across the glow at --native-scale above 1, on and off with the distance.
+bool perspective_batch(const std::vector<Vtx> &verts) {
+    uint32_t prim = gs->batch_prim;
+    if (!((prim >> 4) & 1) || ((prim >> 8) & 1)) {
+        return false;
+    }
+    for (const Vtx &v : verts) {
+        if (v.q != 1.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void flush_batch() {
     Timer timer(gsn_stats.ns_flush);
     settle_upload();
@@ -3542,6 +3561,7 @@ void flush_batch() {
     // --native-msaa: the draws with Z to the multisampled images, and those without while they are newer
     // (unless they read their own target, which is resolved for it); the rest to the image
     bool ms = target_samples > 1 && (depth || (color->ms_newer && !reads_own_target));
+    bool perspective = perspective_batch(gs->verts);
     if (ms) {
         msaa_ready(*color);
         if (depth) {
@@ -3553,13 +3573,13 @@ void flush_batch() {
             depth->ms_newer = true;
         }
         // (the 2D, rectangles of one colour and Z, is shaded once a pixel: --native-cutout-aa)
-        if (flat_2d(gs->verts)) {
+        if (!perspective && flat_2d(gs->verts)) {
             cutout = false;
         }
     } else {
         Why why(GSN_WHY_MSAA);
         msaa_settle(*color);
-        if (scale_x > 1 || scale_y > 1) {
+        if ((scale_x > 1 || scale_y > 1) && !perspective) {
             flat_2d(gs->verts);
         }
     }
@@ -3636,7 +3656,7 @@ void flush_batch() {
             interp.broken = true; // (never: a kick adds three corners at most)
             corners_at = 0;
         } else {
-            uint32_t flags = ms || scale_x > 1 || scale_y > 1 ? IC_FLAT_2D : 0;
+            uint32_t flags = (ms || scale_x > 1 || scale_y > 1) && !perspective ? IC_FLAT_2D : 0;
             for (size_t i = 0; i < interp.vsrc.size(); i++) {
                 uint32_t c[4] = {interp.vsrc[i][0], interp.vsrc[i][1], interp.vsrc[i][2], interp.vsrc[i][3] | flags};
                 memcpy(interp.corner_map[1 + corners_at + i], c, sizeof(c)); // (after the count)
