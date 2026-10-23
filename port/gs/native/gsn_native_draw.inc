@@ -221,8 +221,13 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
         v[k].x = float(int32_t(uint32_t(xi) & 0xFFFF) - ox) / 16.0f;
         v[k].y = float(int32_t(uint32_t(yi) & 0xFFFF) - oy) / 16.0f;
         v[k].z = uint32_t(zi >> 4) & 0xFFFFFF;
-        int32_t a = q[15];
-        v[k].rgba = uint32_t(a < 0 ? 0 : a > 255 ? 255 : a) << 24;
+        // the alpha as VU1 leaves it (1 * the vertex's, at most 255, FTOI0) and the GS takes it: its low 8
+        // bits, so a negative alpha wraps (map 000's floor layers have vertices at -1400: 0x88). Clamped
+        // at 0, a layer's batch had an As range of 0-128 where the PS2 path's had 0-218, and flush_batch
+        // blended it with Vulkan's blending where the PS2 path's took the shader's: a band of the floor a
+        // level or two apart.
+        int32_t a = std::min(q[15], 255);
+        v[k].rgba = (uint32_t(a) & 0xFF) << 24;
         v[k].s = vu_mul(float(q[8]) / 4096.0f, qq);
         v[k].t = vu_mul(float(q[9]) / 4096.0f, qq);
         v[k].q = vu_mul(float(q[10]) / 4096.0f, qq);
