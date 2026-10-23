@@ -219,11 +219,11 @@ int port_native_draw_compare(void);
 #define PORT_ND_ALL 0x1FFF
 /* --native-draw on (and the overlay's and settings.json's native draw switch): the kinds that have passed
    their checks and the owner's review (docs/port/NATIVE_DRAW_TASKS.md, the decisions of 2026-10-23); the
-   others by name. Not yet: the screen passes (their pictures between at 4x under water and the view shift
-   with --no-whole-frame, decision 6) and the reflection (no draws of its own). */
+   others by name. The screen passes joined with decision 6's fix (nd5/passes: 0 pixels at 240 with every
+   switch); not yet: the reflection (no draws of its own). */
 #define PORT_ND_ACCEPTED                                                                               \
     (PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS | PORT_ND_MODELS | PORT_ND_SKINNED | PORT_ND_ARM | PORT_ND_GOLD | \
-     PORT_ND_EFFECTS | PORT_ND_SHADOWS | PORT_ND_WATER)
+     PORT_ND_EFFECTS | PORT_ND_SHADOWS | PORT_ND_WATER | PORT_ND_PASSES)
 /* port_native_wave_uvs(): how the wave UVs of a native map record (flag 0x100: Wobble_ApplyWaveUvs) are drawn
    (--native-wave-uvs; P6-2 of docs/port/NATIVE_DRAW_TASKS.md). The game writes them into the model's
    vertices every frame either way (the PS2 path and the CPU's near cut read them).

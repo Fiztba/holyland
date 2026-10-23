@@ -1148,8 +1148,8 @@ void debug_page() {
                      {"Effects", PORT_ND_EFFECTS, "Fire, glows, magic (the draw list's effects, VU1 program 0x700)."},
                      {"Shadows", PORT_ND_SHADOWS, "The entities' shadows (Entity_DrawPoolModels, VU1 program 0x5A0)."},
                      {"Water", PORT_ND_WATER, "The reflection's rippled water on maps 008, 009 and 014 (Wobble_DrawRippledModel)."},
-                     {"Screen passes (in work)", PORT_ND_PASSES,
-                      "The brightness, tints, fills and fades, the flicker filter, the frame before, haze, the wobble: in work."}};
+                     {"Screen passes", PORT_ND_PASSES,
+                      "The brightness, tints, fills and fades, the flicker filter, the frame before, haze, the wobble."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
         for (const auto &k : kinds) {
             bool on = (kinds_on & k.bits) != 0;
@@ -1164,7 +1164,7 @@ void debug_page() {
         if (ImGui::Button("Accepted kinds (on)"))
             kinds_on = PORT_ND_ACCEPTED;
         tooltip("Every kind that has passed its checks, as --native-draw on and the Renderer section's\n"
-                "switch below (the screen passes are still in work). Saved only from that switch.");
+                "switch below. Saved only from that switch.");
         ImGui::SameLine();
         if (ImGui::Button("None (off)"))
             kinds_on = 0;

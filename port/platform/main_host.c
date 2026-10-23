@@ -64,9 +64,9 @@
                          the patched draw code hands them to the renderer core, and the native GS draws
                          them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
                          on: the kinds that have passed their checks (map, sky, items, objects, picked,
-                         entities, arm, gold, effects, shadows and water); KINDS, by name: map, models
+                         entities, arm, gold, effects, shadows, water and passes); KINDS, by name: map, models
                          (objects and picked), skinned (or entities), arm, sky, effects, shadows,
-                         reflection, water, passes, items, objects, picked, gold (passes in work). off is
+                         reflection, water, passes, items, objects, picked, gold. off is
                          the game as without it, and the default unless settings.json says "native_draw":
                          "on" (the overlay's Renderer section). The overlay's Debug page changes the kinds
                          live
