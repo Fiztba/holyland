@@ -515,7 +515,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS,
+    OP_INPUT_ATTACHMENTS, OP_DEPTH_BOUNDS,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -786,6 +786,19 @@ public:
             rec().add(OP_DEPTH_TEST, ArgValues{{test, write}, {}});
         }
         raw().set_depth_test(test, write);
+    }
+    // the depth bounds test (Granite as cmake/granite_depth_bounds.cmake makes it): on with its bounds, or off
+    void set_depth_bounds(bool on_, float lo, float hi) {
+        if (on()) {
+            rec().add(OP_DEPTH_BOUNDS, ArgValues{{uint32_t(on_)}, {lo, hi}});
+        }
+        depth_bounds_raw(raw(), on_, lo, hi);
+    }
+    static void depth_bounds_raw(CommandBuffer &c, bool on_, float lo, float hi) {
+        c.set_depth_bounds_test(on_);
+        if (on_) {
+            gs->device->get_device_table().vkCmdSetDepthBounds(c.get_command_buffer(), lo, hi);
+        }
     }
     void set_depth_compare(VkCompareOp op) {
         if (on()) {
@@ -1089,6 +1102,9 @@ void replay_ops(const Recording &r) {
             break;
         case OP_DEPTH_COMPARE:
             c.set_depth_compare(VkCompareOp(r.args<ArgValues>(op).v[0]));
+            break;
+        case OP_DEPTH_BOUNDS:
+            Cmd::depth_bounds_raw(c, r.args<ArgValues>(op).v[0] != 0, r.args<ArgValues>(op).f[0], r.args<ArgValues>(op).f[1]);
             break;
         case OP_VIEWPORT:
             c.set_viewport(r.args<VkViewport>(op));
@@ -2562,6 +2578,34 @@ int silhouette_runs_mode() {
     return mode;
 }
 
+// The depth bounds test (flush_batch, "The first phase"): the GPU has it (Granite turns it on) and
+// KF4_GSN_DEPTH_BOUNDS is not 0
+bool depth_bounds_ok() {
+    static int ok = -1;
+    if (ok < 0) {
+        const char *v = getenv("KF4_GSN_DEPTH_BOUNDS");
+        ok = gs->device->get_device_features().enabled_features.depthBounds && !(v && atoi(v) == 0);
+    }
+    return ok != 0;
+}
+
+// The Z a triangle's pixels can have: its corners', and a GS pixel's change of Z more each way (a pixel
+// shaded once, at its middle, outside the triangle where only some of its samples are inside)
+void z_reach(const Vtx *v, double *lo, double *hi) {
+    double z0 = v[0].z, z1 = v[1].z, z2 = v[2].z;
+    double ax = double(v[1].x) - v[0].x, ay = double(v[1].y) - v[0].y;
+    double bx = double(v[2].x) - v[0].x, by = double(v[2].y) - v[0].y;
+    double area = ax * by - ay * bx;
+    double slope = 0.0;
+    if (area != 0.0) {
+        double dzdx = ((z1 - z0) * by - (z2 - z0) * ay) / area;
+        double dzdy = ((z2 - z0) * ax - (z1 - z0) * bx) / area;
+        slope = fabs(dzdx) + fabs(dzdy);
+    }
+    *lo = std::min({z0, z1, z2}) - slope;
+    *hi = std::max({z0, z1, z2}) + slope;
+}
+
 // KF4_GSN_BLEND16_BY_PASS=1: a multisampled 16-bit target's copies resolved by the passes, as before
 // (flush_batch, "a 16-bit target's samples"), for comparisons
 bool blend_copy_16_by_pass() {
@@ -2979,7 +3023,8 @@ bool interp_t_at_0(const std::array<uint32_t, 4> &c, bool fst, float rows, float
 // A kick's place at t 0 (gs_replay.comp's moved at the frame's t 0 cameras, frame->move0 and mid0), in GS
 // pixels less its XYOFFSET: with its model and with the camera when it may be either. Adds to box (x0 y0 x1
 // y1); how far it is from where it is at t 1 (x, y) to most.
-void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most) {
+void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most, float z1 = 0.0f, float *zlo = nullptr,
+                       float *zhi = nullptr) {
     if (k >= interp.frame->kicks) {
         return;
     }
@@ -3022,6 +3067,12 @@ void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most) 
             }
             if (!(v[2] > 0.0f)) {
                 continue;
+            }
+            if (zlo) {
+                // (gs_replay.comp's Z: the kick's less (Z - cz) dm.z / m.z)
+                float nz = z1 - f(14) * (v[2] - p[2]) / v[2];
+                *zlo = std::min(*zlo, nz);
+                *zhi = std::max(*zhi, nz);
             }
             float nx = screen[0] * v[0] / v[2] + screen[2], ny = screen[1] * v[1] / v[2] + screen[3];
             if (!(fabsf(nx - 2048.0f) <= 2047.0f && fabsf(ny - 2048.0f) <= 2047.0f)) {
@@ -3068,6 +3119,28 @@ void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
     box[1] -= margin;
     box[2] += margin;
     box[3] += margin;
+}
+
+// A batch's Z at t 0 too (a picture between's moving vertices), as interp_box_at_0 its places: lo and hi
+// widened to take them in, and a quarter of the furthest a Z went more each way (the camera's path is not a
+// line between its ends)
+void interp_z_at_0(double *lo, double *hi) {
+    float zl = INFINITY, zh = -INFINITY;
+    int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+    float most = 0.0f;
+    for (size_t i = 0; i < interp.vsrc.size() && i < gs->verts.size(); i++) {
+        const auto &c = interp.vsrc[i];
+        const Vtx &v = gs->verts[i];
+        if (!(c[3] & IC_SPRITE)) {
+            interp_place_at_0(c[c[3] & 3], v.x, v.y, box, &most, float(v.z), &zl, &zh);
+        }
+    }
+    if (zl > zh) {
+        return;
+    }
+    double far = std::max({0.0, *lo - double(zl), double(zh) - *hi});
+    *lo = std::min(*lo, double(zl)) - far * 0.25;
+    *hi = std::max(*hi, double(zh)) + far * 0.25;
 }
 
 // The batch, drawn
@@ -3820,6 +3893,35 @@ void flush_batch() {
     // (the passes the batch needs whatever the ties: a tie's passes need no runs, below)
     int own_passes = npasses;
     bool two_phase = tie && same_twice && npasses == 1 && !nlayer_passes;
+    // The first phase matters only where what was there lies behind a triangle's Z by half a Z or less
+    // (where it is not behind, the second phase draws over it): a pixel whose Z is outside the batch's Zs
+    // and half a Z more has nothing of it, and the depth bounds test turns it away, before the shading
+    // where the GPU can (the first phase is a second colour pass: the tower on map 000 24% more GPU time a
+    // picture without it). The batch's Zs: its corners', a GS pixel's change of Z more (a pixel shaded at
+    // its middle outside the triangle), and in a picture between its Zs at t 0 too (interp_z_at_0).
+    // KF4_GSN_DEPTH_BOUNDS=0: without it.
+    bool two_phase_bounds = false;
+    float bounds_lo = 0.0f, bounds_hi = 1.0f;
+    if (two_phase && depth_bounds_ok()) {
+        double lo = INFINITY, hi = -INFINITY;
+        for (size_t t = 0; t + 2 < gs->verts.size(); t += 3) {
+            double a, b;
+            z_reach(&gs->verts[t], &a, &b);
+            lo = std::min(lo, a);
+            hi = std::max(hi, b);
+        }
+        if (interp.active && moving.moves_3d) {
+            interp_z_at_0(&lo, &hi);
+        }
+        double scale = depth_scale(zpsm);
+        lo = (std::max(lo, 0.0) - 2.0 * zstep) * scale;
+        hi = (std::min(hi, double(depth_max(zpsm))) + 2.5 * zstep) * scale;
+        if (lo > 0.0 || hi < 1.0) {
+            two_phase_bounds = true;
+            bounds_lo = float(std::max(lo * (1.0 - 1e-6), 0.0));
+            bounds_hi = float(std::min(hi * (1.0 + 1e-6), 1.0));
+        }
+    }
     if (two_phase) {
         Pass p0 = passes[0];
         passes[0] = {p0.select, p0.mask, false, 0.5f * zstep, 0.0f};
@@ -4154,7 +4256,14 @@ void flush_batch() {
                     c.set_depth_test(true, rp[i].zwrite);
                 }
                 c.push_constants(&p, 0, sizeof(p));
+                bool bounded = two_phase_bounds && l == 0 && i == 0;
+                if (bounded) {
+                    c.set_depth_bounds(true, bounds_lo, bounds_hi);
+                }
                 c.draw(n, from);
+                if (bounded) {
+                    c.set_depth_bounds(false, 0.0f, 1.0f);
+                }
                 gsn_stats.draws++;
                 if (zonly) {
                     c.set_program(program);
