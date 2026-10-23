@@ -1065,13 +1065,13 @@ void port_gs_print_stats(void) {
             fprintf(stderr,
                     "[stats] native draw: %llu draws queued, %llu drawn (%llu batches), %llu lost, %llu not drawn yet; "
                     "%llu meshes parsed (%llu refused), %llu found again, %.1f MB hashed; %llu meshes put on the GPU; "
-                    "%llu PS2-path writes left out\n",
+                    "%llu PS2-path writes left out; %llu models declined (drawn the PS2 way)\n",
                     (unsigned long long)rd_stats.draws, (unsigned long long)s->nd_draws,
                     (unsigned long long)s->nd_batches, (unsigned long long)s->nd_lost,
                     (unsigned long long)s->nd_unsupported, (unsigned long long)rd_stats.meshes_parsed,
                     (unsigned long long)rd_stats.mesh_unsupported, (unsigned long long)rd_stats.mesh_hits,
                     rd_stats.hash_bytes / 1048576.0, (unsigned long long)s->nd_mesh_uploads,
-                    (unsigned long long)s->nd_skipped);
+                    (unsigned long long)s->nd_skipped, (unsigned long long)rd_stats.declined);
         }
         {
             int w;

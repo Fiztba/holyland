@@ -3950,10 +3950,6 @@ void flush_batch() {
             program = per_sample ? gs->program_zclamp_sample : zclamp ? gs->program_zclamp : gs->program;
             c.set_program(program);
         }
-        if (nd.active) {
-            program = nd_program(program); // (native draw: the same, with nd_000.vert)
-            c.set_program(program);
-        }
         if (per_sample && r == 0) {
             gsn_stats.cutout_draws++;
         }
@@ -4034,15 +4030,16 @@ void flush_batch() {
                 p.zslope = rp[i].zslope;
                 bool zonly = fine_z && !rp[i].mask && rp[i].zwrite && rp[i].select == 0 && !(push.flags & F_DATE) &&
                              (per_sample ? gs->program_zonly_sample != nullptr : true);
+                Program *base = zonly ? (per_sample ? gs->program_zonly_sample : gs->program_zonly) : program;
                 if (zonly) {
-                    c.set_program(nd_program(per_sample ? gs->program_zonly_sample : gs->program_zonly));
+                    c.set_program(base);
                 }
                 c.set_color_write_mask(rp[i].mask);
                 if (depth) {
                     c.set_depth_test(true, rp[i].zwrite);
                 }
                 c.push_constants(&p, 0, sizeof(p));
-                c.draw(n, from);
+                nd_draw_range(c, base, n, from, first); // (native draw: c.draw, a call a kind of corner)
                 gsn_stats.draws++;
                 if (zonly) {
                     c.set_program(program);

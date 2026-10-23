@@ -25,7 +25,7 @@
 // colour as in the frame. A triangle is not drawn when its kick or one of the two before it goes behind
 // the camera or past the guard band (the ADC frame_interp.c gives such a vertex).
 // Which triangles are drawn (the data's ADC bits, and VU1's clipping) is the CPU's (gsn_native_draw.inc,
-// nd_plan): a corner's fog input is its vertex's number in the arena, and its colour's RGB the kick's
+// nd_plan): a corner's fog input is -1 less its vertex's number in the arena, and its colour's RGB the kick's
 // number less it (bits 0-5: a flat triangle has the kick's colour), IIP (bit 6) and its draw's record
 // (bits 7-23).
 #include "gs_common.h"
@@ -264,7 +264,7 @@ Moved moved(uint at, Place p) {
 }
 
 void main() {
-    uint at = uint(a_vertex);
+    uint at = uint(-a_vertex) - 1u; // (-1 less it: nd_corner_vertex)
     uint corner = a_corner.r | a_corner.g << 8 | a_corner.b << 16;
     uint kick = at + (corner & 0x3Fu);
     d = draws[corner >> 7];
@@ -285,11 +285,13 @@ void main() {
         yi = m.y;
         z = m.z;
         stq *= m.f;
-        gone = m.drop;
-        // (the triangle's kick and the two before it: the same for its three corners)
+        // dropped when its kick or one of the two kicks before it is (gs_replay_corners.comp: the ADC
+        // frame_interp.c gives a vertex it drops and the two after it), whichever vertices the triangle
+        // has: the same for its three corners. (Not the corner's own: a fan's first vertex is a corner of
+        // every triangle but in the window of the first only.)
         for (uint i = 0u; i < 3u && !gone; i++) {
             uint k = kick - i;
-            gone = k != at && moved(k, vu_place(k)).drop;
+            gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
         }
     }
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;

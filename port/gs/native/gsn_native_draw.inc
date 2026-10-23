@@ -55,9 +55,17 @@ enum : int32_t {
     ND_C_MOVING = 0x1, // a picture between: moved by the picture's camera (set 1's Picture), see nd_section
     ND_C_OBJ = 0x2,    // ... and with its model, t of the way from its place in the frame before (obj)
 };
-// A corner (Vtx): its fog the vertex's number in the arena; its RGB the kick's number less the vertex's
-// (bits 0-5), IIP (bit 6) and the draw's record (bits 7-23); its alpha the vertex's (flush_batch's)
+// A corner (Vtx): its fog -1 less the vertex's number in the arena (below 0: a native corner, where the
+// PS2 path's fog is 0-255, so that a batch can hold both kinds: nd_draw_range); its RGB the kick's number
+// less the vertex's (bits 0-5), IIP (bit 6) and the draw's record (bits 7-23); its alpha the vertex's
+// (flush_batch's)
 const uint32_t ND_CORNER_GOURAUD = 0x40, ND_CORNER_DRAW_SHIFT = 7, ND_DRAWS_MAX = 1u << 17;
+float nd_corner_vertex(uint32_t at) {
+    return -1.0f - float(at); // (exact: the arena has 2^22 vertices at most)
+}
+bool nd_corner(const Vtx &v) {
+    return v.fog < 0.0f;
+}
 
 const uint32_t N_ND_MAX = 40;          // (a batch's vertices at most: RdBatch)
 const uint32_t ND_VERTEX_BYTES = 64;   // (RdMeshData: four qwords a vertex)
@@ -88,7 +96,7 @@ enum { ND_SECTION_NONE, ND_SECTION_WORLD, ND_SECTION_REFLECT, ND_SECTION_OTHER }
 const float ND_MAX_MOVE = 400.0f; // (frame_interp.c's INTERP_MAX_MOVE: more is not a move but a jump)
 
 struct NdState {
-    bool active = false;   // the batch flush_batch is drawing is of native corners
+    bool active = false;   // the batch flush_batch is drawing has native corners (and in a picture between, only those)
     bool pending = false;  // gs->verts holds native corners
     bool skipping = false; // between RD_ND_ALT_BEGIN and _END, drawing the native draws
     NdBuffer arena;        // the meshes' vertices
@@ -288,7 +296,7 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
             if (!gouraud) {
                 w.rgba = v[kick].rgba; // (flat: the kick's colour, as add_triangle has it)
             }
-            w.fog = float(base + b.first + t[j]);
+            w.fog = nd_corner_vertex(base + b.first + t[j]);
             w.rgba |= (kick - t[j]) | gouraud | record << ND_CORNER_DRAW_SHIFT;
             gs->verts.push_back(w);
             if (interp.active) {
@@ -389,10 +397,10 @@ void nd_draw(uint64_t value) {
                 gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
             gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
-            // the strip's triangles join the batch (a batch of the PS2 path's or of other buffers drawn
-            // first)
-            if (!gs->verts.empty() && (!nd.pending || nd.batch_arena != nd.arena.buffer.get() ||
-                                       nd.batch_draws != nd.draws.buffer.get())) {
+            // the strip's triangles join the batch, the PS2 path's corners in it too (a batch of other
+            // buffers is drawn first; and in a picture between, a batch of the PS2 path's: nd_kick)
+            if (!gs->verts.empty() && ((interp.active && !nd.pending) || (nd.pending && (nd.batch_arena != nd.arena.buffer.get() ||
+                                                                                       nd.batch_draws != nd.draws.buffer.get())))) {
                 flush_batch();
             }
             uint32_t eprim = effective_prim();
@@ -400,8 +408,9 @@ void nd_draw(uint64_t value) {
                 gs->batch_prim = eprim;
                 gs->batch_sprites = false;
             }
+            size_t before = gs->verts.size();
             nd_plan(*mesh, b, k.vertex, eprim, base, record);
-            nd.pending = !gs->verts.empty();
+            nd.pending = nd.pending || gs->verts.size() > before;
             nd.batch_arena = nd.arena.buffer.get();
             nd.batch_draws = nd.draws.buffer.get();
             gsn_stats.nd_batches++;
@@ -469,11 +478,37 @@ void nd_skip(uint32_t address) {
     }
 }
 
-// A vertex kick of the PS2 path's while native corners are pending: they are drawn first
+// A vertex kick of the PS2 path's while native corners are pending. In a frame its triangle joins them,
+// as on the PS2 path (the batch is decided once, as the PS2 path's, and drawn in a call a kind:
+// nd_draw_range; split, its runs and blending could be decided otherwise: map 009 at 4x, a pixel of a
+// seam a level apart in onoff mode). In a picture between, the native corners are drawn first: the PS2
+// path's are then the GPU's (gs_replay_corners.comp), from a vertex buffer of their own.
 void nd_kick() {
-    if (nd.pending) {
+    if (nd.pending && interp.active) {
         flush_batch();
     }
+}
+
+// (flush_batch's draw call: n corners from first, of a pass of the run whose vertices start at gs->verts[run],
+// with the program base, the GS's.) A batch with native corners: each stretch of one kind in its own call,
+// in order, the native ones with nd_000.vert (nd_program)
+void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t run) {
+    if (!nd.active) {
+        c.draw(n, first);
+        return;
+    }
+    const Vtx *v = gs->verts.data() + run;
+    for (uint32_t end = first + n; first < end;) {
+        bool native = nd_corner(v[first]);
+        uint32_t to = first + 3;
+        while (to < end && nd_corner(v[to]) == native) {
+            to += 3;
+        }
+        c.set_program(native ? nd_program(base) : base);
+        c.draw(to - first, first);
+        first = to;
+    }
+    c.set_program(base);
 }
 
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
