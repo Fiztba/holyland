@@ -45,6 +45,7 @@ typedef struct {
     int native_lod;        /* the native GS's mipmap levels: 0 ps2, 1 scale, 2 full (port_options.native_lod) */
     int native_aniso;      /* the native GS's anisotropic filtering: 1 off, 2 to 16 (port_options.native_aniso) */
     int native_cutout_aa;  /* with MSAA, the native GS's cut-outs: 0 off, 1 ssaa (port_options.native_cutout_aa) */
+    int native_2d;         /* at a larger scale, the native GS's 2D: 0 ps2, 1 smooth (port_options.native_2d) */
     int native_colour;     /* the native GS's colour precision: 0 exact, 1 high (port_options.native_colour) */
     int native_layer_z;    /* the native GS's Z: 0 ps2, 1 tolerant (port_options.native_layer_z) */
     int presenter;         /* how the picture reaches the window, from the next start: PORT_PRESENTER_ */

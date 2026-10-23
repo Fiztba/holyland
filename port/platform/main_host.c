@@ -36,6 +36,10 @@
                          with --native-msaa, the cut-outs (netting, foliage, fences, grates):
                          ssaa (the default: shaded at every sample, their edges smoothed) or off
                          (shaded once a pixel, as the rest of the 3D)
+       --native-2d MODE  at a --native-scale above 1, the 2D's textures (the font, the HUD, the menus'
+                         and title's pictures) that the game reads nearest: smooth (the default: read
+                         bilinear where they are magnified, so letters have smooth, even edges) or ps2
+                         (nearest, at the GS pixel's point: each texel a block, as the PS2 at 1x)
        --native-lod MODE the mipmap level the native GS reads textures at: scale (the default: the
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
@@ -189,7 +193,7 @@ static void usage(const char *program) {
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
-            "          [--native-cutout-aa ssaa|off] [--native-colour exact|high]\n"
+            "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
@@ -225,6 +229,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
     port_options.native_cutout_aa = 1; /* GSN_CUTOUT_AA_SSAA */
+    port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
     port_options.presenter = PORT_PRESENTER_VULKAN;
@@ -443,6 +448,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_cutout_aa_forced = 1;
+        } else if (strcmp(option, "--native-2d") == 0) {
+            if (strcmp(value, "ps2") == 0) {
+                port_options.native_2d = 0;
+            } else if (strcmp(value, "smooth") == 0) {
+                port_options.native_2d = 1;
+            } else {
+                fprintf(stderr, "--native-2d wants smooth or ps2, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_2d_forced = 1;
         } else if (strcmp(option, "--native-colour") == 0) {
             if (strcmp(value, "exact") == 0) {
                 port_options.native_colour = 0;

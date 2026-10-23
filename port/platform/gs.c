@@ -103,6 +103,7 @@ static void open_backend(void *unused) {
             gsn_set_lod(port_options.native_lod);
             port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
             gsn_set_cutout_aa(port_options.native_cutout_aa);
+            gsn_set_2d(port_options.native_2d);
             gsn_set_colour(port_options.native_colour);
             gsn_set_layer_z(port_options.native_layer_z);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
@@ -926,6 +927,15 @@ void port_gs_set_native_lod(int mode) {
 #endif
 }
 
+void port_gs_set_native_2d(int mode) {
+    port_options.native_2d = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_2d(mode);
+    }
+#endif
+}
+
 void port_gs_set_native_cutout_aa(int mode) {
     port_options.native_cutout_aa = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
@@ -1009,13 +1019,13 @@ void port_gs_print_stats(void) {
             fprintf(stderr,
                     "[stats] native GS pictures between on the GPU: %llu drawn from the packets (%.3f s, %.1f us each), "
                     "%llu from the recording (%.3f s, %.1f us each), %llu of no frame; drawn from the packets again as "
-                    "the GS was not as recorded: %llu (targets), %llu (registers)\n",
+                    "the GS was not as recorded: %llu (targets), %llu (registers); %llu submits while recording\n",
                     (unsigned long long)s->interp_records, s->ns_interp_record / 1e9,
                     s->interp_records ? s->ns_interp_record / 1e3 / (double)s->interp_records : 0.0,
                     (unsigned long long)s->interp_replays, s->ns_interp_replay / 1e9,
                     s->interp_replays ? s->ns_interp_replay / 1e3 / (double)s->interp_replays : 0.0,
                     (unsigned long long)s->interp_misses, (unsigned long long)s->interp_rerecord[1],
-                    (unsigned long long)s->interp_rerecord[2]);
+                    (unsigned long long)s->interp_rerecord[2], (unsigned long long)s->interp_mid_submits);
         }
         if (s->replay_uploads || s->replay_misses) {
             fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",

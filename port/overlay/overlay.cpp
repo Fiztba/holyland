@@ -833,6 +833,16 @@ void renderer_section() {
                 "shaded at every sample instead of once a pixel, so the edges inside them are smoothed and\n"
                 "shimmer less (more so with more samples). Costs GPU time only where they are drawn.\n"
                 "Without MSAA it changes nothing. (--native-cutout-aa ssaa|off)");
+        bool smooth = port_options.native_2d != 0;
+        if (ImGui::Checkbox("Native GS: smooth 2D at the larger resolution", &smooth)) {
+            port_gs_set_native_2d(smooth ? 1 : 0);
+            port_settings.native_2d = smooth ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("At a resolution above the PS2's: the text, the HUD and the menus' and title's pictures, which\n"
+                "the game reads a texel a pixel, are read smoothly where they are magnified: letters with even,\n"
+                "smooth edges. Off, each texel is a block, as the PS2's picture at 1x blown up. Nothing at 1x.\n"
+                "(--native-2d smooth|ps2)");
         static const char *const lod_names[] = {"PS2's (ps2)", "Matched to the resolution (scale, the default)",
                                                 "Finest everywhere (full)"};
         int lod = port_options.native_lod;

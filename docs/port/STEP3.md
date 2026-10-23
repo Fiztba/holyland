@@ -822,6 +822,40 @@ pictures left out before (KF4_PRESENT_SIM=240; 2,535 in a window with the render
 (186 in a window); map 000 standing, none.
 Headless with `--fast` the GPU is what is left: 2,000 vblanks of map 009 in 34.8 s (40.5 s before).
 
+### The menus and the gold message (October 2026)
+
+Three faults the owner met at 240 with `--native-scale 3`, native widescreen and MSAA 2; none was the
+pictures between's (the menus have none: their pictures are the game's own, 60 a second).
+
+- **The menus ran at 20 to 40 vblanks a second**, the move into a page (Item) slowest: the game itself held
+  up, at every frame rate and since before the render passes (1805c8f the same). The menus' backdrop, the
+  play's frame kept at 0x3240, is read as a 1024 x 512 texture: decoded from VRAM, its pages ran on round
+  VRAM's end into the menus' two field buffers, so each field sent both back to VRAM (a read-back) and the
+  texture was decoded again (950 vblanks through the menus: 2,364 write-backs, 125 M texels, 12 s). A
+  texture without mipmaps now watches only the pages its draws read (`rows_read`, `cols_read`): 13
+  write-backs, 9 M texels, 0.2 s; 59.8 vblanks a second in the menus at 240 and at 30
+  (`KF4_PRESENT_SIM`), the pictures the same.
+- **The menus' text in stripes**: the weave of their fields a line (3 rows at 3x) at a time; now a row at
+  a time with whole frames (`weave_fine`, RENDERER.md).
+- **"N Gold"**: the message's CLUT, uploaded to 0x3FE1 each frame, was counted as reaching page 0
+  (`buffer_pages`' extra page for a buffer starting mid-page, round VRAM's end): the frame buffer at 0 was
+  written back and dropped every frame, so every other frame was shown from VRAM at 1x and 4:3, and the
+  pictures between, drawn again from the packets, were black or broken. The extra page now counts only
+  when a block covered runs past the page.
+
+Checked: the game's own pictures the same at 30 and 240 (the menus, the gold); the menus' pictures the
+build before's but for the weave (and with `--no-whole-frame` the same); the map tour, gsn_draw_test
+(seeds 1-3), gsn_vram_test, vu1_test, boot_test, frame_test (gs and native).
+
+**A submit in the middle** (October 2026): a write-back while a picture between is recorded (an upload
+asked for again over a scrolling texture's 128 x 128 target, which then goes back to VRAM and is made
+again each picture: a coin lying on the ground, the shopkeeper's home on map 060) submitted the draws
+recorded so far before the compute passes had the picture's kicks and corners' count: every such
+picture was wrong (no HUD, black, the HUD's textures down the screen), at 60 to 240, since d8f152d.
+`submit` now gives the passes the corners so far and flushes the mapped buffers first, and records the
+passes again after it for the draws to come. The coin and the shop: the pictures between as the CPU's
+way draws them (`KF4_INTERP_CPU=1`), none flashing; the game's own frames the same at 30 and 240.
+
 ### What moves by itself
 
 The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned

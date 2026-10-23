@@ -94,6 +94,12 @@ int gsn_set_msaa(int samples);
 #define GSN_CUTOUT_AA_OFF 0
 #define GSN_CUTOUT_AA_SSAA 1
 void gsn_set_cutout_aa(int mode);
+/* --native-2d: at a target scale above 1, the 2D (batches flat_2d takes whole) textured from VRAM and
+   read nearest is read bilinear at each pixel's own place where its texture is magnified (smooth), or
+   nearest at the GS pixel's integer point as at 1x (ps2). Nothing at 1x. */
+#define GSN_2D_PS2 0
+#define GSN_2D_SMOOTH 1
+void gsn_set_2d(int mode);
 /* --native-colour: how precisely colours are kept, from the next vblank. GSN_COLOUR_EXACT (the default)
    is the GS's: 8 bits a channel, every step of its arithmetic rounded as the GS rounds it, the PS2's
    picture. GSN_COLOUR_HIGH keeps the 32-bit targets at 16 bits a channel and the colour arithmetic in
@@ -267,6 +273,7 @@ typedef struct {
     /* --frame-rate's pictures between on the GPU (gsn_interp_picture): drawn from the packets (the first
        of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */
     uint64_t interp_records, interp_replays, interp_misses, ns_interp_record, ns_interp_replay;
+    uint64_t interp_mid_submits; /* submits while a picture between is recorded (write-backs in it) */
     uint64_t interp_rerecord[4]; /* why drawn from the packets again: the GS changed, the recording could not be */
     /* Why render passes ended, and why multisampled images were resolved (GSN_WHY_*); the bytes the
        passes loaded and stored (their attachments, whole), resolves and copies moved; pictures made */

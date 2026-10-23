@@ -449,7 +449,10 @@ static void sample_rates(void) {
     if (rate_wall > 0) {
         rate = (double)(pictures - rate_pictures) / span;
         __atomic_store(&pictures_rate, &rate, __ATOMIC_RELEASE);
-        rate = (double)(game.frame - rate_frames) / span;
+        /* (the menus, the title and the movies have loops of their own, which the play's frame counter
+           does not count: their pictures are the game's own, none between, so the counter says one rate,
+           not "0 GAME") */
+        rate = game.frame != rate_frames ? (double)(game.frame - rate_frames) / span : pictures_rate;
         __atomic_store(&frames_rate, &rate, __ATOMIC_RELEASE);
     }
     rate_wall = now;

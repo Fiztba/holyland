@@ -188,6 +188,7 @@ enum : uint32_t {
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
     M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000, M_ZFINE = 0x40000,
+    M_SMOOTH_2D = 0x80000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -221,6 +222,7 @@ struct Snapshot {
 
 struct Texture {
     uint32_t tbp, tbw, psm, tw, th, levels;
+    uint32_t cols, rows; // of level 0, those its draws read (1 << tw, 1 << th, or fewer without mipmaps)
     uint32_t mip_tbp[7], mip_tbw[7];
     ImageHandle image;
     uint32_t page_lo[7], page_count[7];
@@ -406,6 +408,7 @@ volatile uint32_t wanted_samples = 1;
 // --native-cutout-aa (gsn_set_cutout_aa): with MSAA, the cut-outs (flush_batch) shaded at every
 // sample; sample_shading, whether the GPU can (sampleRateShading)
 volatile int cutout_aa_mode = GSN_CUTOUT_AA_OFF;
+volatile int smooth_2d_mode = GSN_2D_PS2; // --native-2d (gsn_set_2d)
 bool sample_shading = false;
 // --native-layer-z (gsn_set_layer_z): Z as the GS has it (GSN_LAYER_Z_PS2), or kept fine and tested
 // with a tolerance for the layers (GSN_LAYER_Z_TOLERANT: flush_batch, "Z and layers")
@@ -1237,6 +1240,21 @@ void submit(bool wait) {
     if (!gs->cmd) {
         return;
     }
+    // A submit in the middle of a picture between drawn on the GPU (a write-back or read-back while it
+    // is recorded: an upload asked for again over a target, say): the compute passes at its start
+    // (interp_kicks_pass) move the kicks the stream has given so far, which the draws submitted now
+    // use, so the corners' count so far goes in first and the buffers are flushed; after it, the passes
+    // again, for the draws to come (recorded too, so a replay does the same). Without it the draws
+    // already recorded ran with the corners' count of the picture before and the kicks not yet
+    // written: pictures between with the HUD gone, the floor out of place, textures in wrong places
+    // (a coin on the ground, map 000's HUD, October 2026).
+    bool mid_picture = interp.active && recording_ops.on && interp.kick_map && interp.corner_map;
+    if (mid_picture) {
+        uint32_t count[4] = {interp.corner, 0, 0, 0};
+        memcpy(interp.corner_map[0], count, sizeof(count));
+        gs->device->unmap_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT);
+        gs->device->unmap_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT);
+    }
     if (wait) {
         Fence fence;
         gs->device->submit(gs->cmd, &fence);
@@ -1245,6 +1263,13 @@ void submit(bool wait) {
         gs->device->submit(gs->cmd);
     }
     gs->cmd.reset();
+    if (mid_picture) {
+        interp.kick_map = static_cast<InterpKick *>(gs->device->map_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT));
+        interp.corner_map =
+            static_cast<uint32_t(*)[4]>(gs->device->map_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT));
+        gsn_stats.interp_mid_submits++;
+        cmd().interp_kicks();
+    }
 }
 
 // A barrier between transfers and the draws or transfers after them
@@ -1471,8 +1496,9 @@ void msaa_forget(Target &t) {
 // picture, and showed it as bright lines where their texture repeats; the frame's passes over the
 // whole picture left its first column and row: a line down the screen's left edge.) A triangle with a slant, or with its colour or Z not
 // the same at its corners, is left as it is: the 3D. Returns whether it moved any.
-bool flat_2d(std::vector<Vtx> &verts) {
+bool flat_2d(std::vector<Vtx> &verts, bool *all = nullptr) {
     bool moved = false;
+    size_t count = 0;
     for (size_t i = 0; i + 3 <= verts.size(); i += 3) {
         Vtx *v = &verts[i];
         if (v[0].z != v[1].z || v[0].z != v[2].z || v[0].rgba != v[1].rgba || v[0].rgba != v[2].rgba) {
@@ -1515,6 +1541,10 @@ bool flat_2d(std::vector<Vtx> &verts) {
             v[k].y = float(ny);
         }
         moved = true;
+        count++;
+    }
+    if (all) {
+        *all = moved && count == verts.size() / 3;
     }
     return moved;
 }
@@ -1534,7 +1564,27 @@ void buffer_pages(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32
     uint32_t across = std::max(std::max(bw, 1u) * 64 / pw, (width + pw - 1) / pw);
     uint32_t rows = (height + ph - 1) / ph;
     *lo = bp / 32;
-    *count = across * rows + (bp % 32 ? 1 : 0);
+    *count = across * rows;
+    if (bp % 32) {
+        // A buffer that starts mid-page reaches into the page after its last only where one of its
+        // blocks is numbered past the page's 32 once its start is added. The blocks of a page it
+        // covers are those of the part of a page its pixels reach (all of it past the first page across
+        // or down). Counted as one page more whatever it covers, a CLUT uploaded to the last page of
+        // VRAM (bp 0x3FE1, 8x2) reached round to page 0, the frame buffer: written back and dropped,
+        // the frame shown from VRAM at 1x each time (the "N Gold" message, October 2026).
+        uint32_t cw = (across > 1 || rows > 1) ? pw : std::min(width, pw);
+        uint32_t ch = rows > 1 ? ph : std::min(height, ph);
+        uint32_t most = 0;
+        for (uint32_t y = 0; y < std::max(ch, 1u); y += 8) {
+            for (uint32_t x = 0; x < std::max(cw, 1u); x += 8) {
+                // (blocks are at least 8x8 in every layout: their first pixels found every 8)
+                most = std::max(most, gsn_vram_offset(psm, 0, pw / 64, x, y, nullptr) / 256);
+            }
+        }
+        if (most + bp % 32 >= 32) {
+            *count += 1;
+        }
+    }
 }
 
 bool pages_overlap(uint32_t lo_a, uint32_t count_a, uint32_t lo_b, uint32_t count_b) {
@@ -2064,6 +2114,7 @@ bool texture_current(const Texture &tex) {
 // uploads each frame) are decoded once each and found again by this
 uint64_t texture_hash(const Texture &tex) {
     uint64_t h = 0x9E3779B97F4A7C15ull ^ (uint64_t(tex.tbp) << 32 | tex.tbw << 24 | tex.psm << 16 | tex.tw << 8 | tex.th);
+    h = (h ^ (uint64_t(tex.cols) << 16 | tex.rows)) * 0x100000001B3ull;
     for (uint32_t l = 0; l < tex.levels; l++) {
         h ^= uint64_t(tex.mip_tbp[l]) << 20 | tex.mip_tbw[l];
         for (uint32_t i = 0; i < tex.page_count[l]; i++) {
@@ -2161,9 +2212,9 @@ void decode_texture(Texture &tex) {
 std::unordered_map<uint64_t, Texture *> texture_index;
 
 uint64_t texture_key(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t levels,
-                     const uint32_t *mip_tbp, const uint32_t *mip_tbw) {
+                     const uint32_t *mip_tbp, const uint32_t *mip_tbw, uint32_t cols, uint32_t rows) {
     uint64_t k = uint64_t(tbp) | uint64_t(tbw) << 14 | uint64_t(psm) << 20 | uint64_t(tw) << 26 | uint64_t(th) << 30 |
-                 uint64_t(levels) << 34;
+                 uint64_t(levels) << 34 | uint64_t(rows) << 37 | uint64_t(cols) << 48;
     for (uint32_t l = 1; l < levels; l++) {
         k = (k ^ (uint64_t(mip_tbp[l]) | uint64_t(mip_tbw[l]) << 14)) * 0x100000001B3ull;
     }
@@ -2171,16 +2222,21 @@ uint64_t texture_key(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint
 }
 
 bool same_texture(const Texture &t, uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t levels,
-                  const uint32_t *mip_tbp, const uint32_t *mip_tbw) {
+                  const uint32_t *mip_tbp, const uint32_t *mip_tbw, uint32_t cols, uint32_t rows) {
     return t.tbp == tbp && t.tbw == tbw && t.psm == psm && t.tw == tw && t.th == th && t.levels == levels &&
-           memcmp(t.mip_tbp, mip_tbp, levels * 4) == 0 && memcmp(t.mip_tbw, mip_tbw, levels * 4) == 0;
+           t.cols == cols && t.rows == rows && memcmp(t.mip_tbp, mip_tbp, levels * 4) == 0 &&
+           memcmp(t.mip_tbw, mip_tbw, levels * 4) == 0;
 }
 
+// cols, rows: of level 0, those the draw reads (1 << tw and 1 << th, or fewer without mipmaps): the
+// pages it watches and hashes are theirs, so draws into the pages past them (where a texture larger
+// than the part used runs on, round the end of VRAM, into the menus' field buffers) leave it as it is
 Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t levels,
-                     const uint32_t *mip_tbp, const uint32_t *mip_tbw) {
-    uint64_t key = texture_key(tbp, tbw, psm, tw, th, levels, mip_tbp, mip_tbw);
+                     const uint32_t *mip_tbp, const uint32_t *mip_tbw, uint32_t cols, uint32_t rows) {
+    uint64_t key = texture_key(tbp, tbw, psm, tw, th, levels, mip_tbp, mip_tbw, cols, rows);
     auto found = texture_index.find(key);
-    if (found != texture_index.end() && same_texture(*found->second, tbp, tbw, psm, tw, th, levels, mip_tbp, mip_tbw)) {
+    if (found != texture_index.end() &&
+        same_texture(*found->second, tbp, tbw, psm, tw, th, levels, mip_tbp, mip_tbw, cols, rows)) {
         Texture *t = found->second;
         t->used = gs->tick;
         if (t->decoded != gs->vram_writes && !texture_current(*t)) {
@@ -2195,10 +2251,12 @@ Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint
     tex->tw = tw;
     tex->th = th;
     tex->levels = levels;
+    tex->cols = cols;
+    tex->rows = rows;
     memcpy(tex->mip_tbp, mip_tbp, levels * 4);
     memcpy(tex->mip_tbw, mip_tbw, levels * 4);
     for (uint32_t l = 0; l < levels; l++) {
-        buffer_pages(mip_tbp[l], mip_tbw[l], psm, std::max(1u, (1u << tw) >> l), std::max(1u, (1u << th) >> l),
+        buffer_pages(mip_tbp[l], mip_tbw[l], psm, std::max(1u, cols >> l), std::max(1u, rows >> l),
                      &tex->page_lo[l], &tex->page_count[l]);
     }
     tex->used = gs->tick;
@@ -2217,7 +2275,8 @@ Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint
                                        });
         if (oldest->get() != made) {
             Texture *t = oldest->get();
-            auto at = texture_index.find(texture_key(t->tbp, t->tbw, t->psm, t->tw, t->th, t->levels, t->mip_tbp, t->mip_tbw));
+            auto at = texture_index.find(
+                texture_key(t->tbp, t->tbw, t->psm, t->tw, t->th, t->levels, t->mip_tbp, t->mip_tbw, t->cols, t->rows));
             if (at != texture_index.end() && at->second == t) {
                 texture_index.erase(at);
             }
@@ -3170,27 +3229,10 @@ void flush_batch() {
         push.lod_bias = mode == GSN_LOD_FULL ? -64.0f : mode == GSN_LOD_SCALE ? -log2f(float(finer)) : 0.0f;
         push.misc |= uint32_t(aniso_log2) << M_ANISO_SHIFT; // (--native-aniso: gs_frag.h, sample_texture)
 
-        // a texture that is a target, or in one: read from the target
-        Target *source = nullptr;
-        for (auto &t : gs->targets) {
-            if (t->depth || tbw != t->bw || tbp < t->bp) {
-                continue;
-            }
-            uint32_t blocks = tbp - t->bp;
-            uint32_t layout = psm_layout(tpsm);
-            if (layout != psm_layout(t->psm) || blocks % 32 != 0) {
-                continue;
-            }
-            uint32_t page = blocks / 32, across = std::max(t->bw, 1u);
-            uint32_t x0 = (page % across) * page_width(t->psm), y0 = (page / across) * page_height(t->psm);
-            if (y0 >= t->height) {
-                continue;
-            }
-            // A texture whose rows the batch reads run past the target's is decoded from VRAM, the
-            // targets' pages back there first: the rows past are VRAM's, or another target's. (The
-            // rows read, from the vertices' V, or T/Q: a frame read as a 1024 x 512 texture reads
-            // only the frame's rows. A pixel samples above its V's largest, which is at a vertex
-            // when Q stays above 0; bilinear filtering's row past that has no weight.)
+        // The rows of the texture the batch reads, from the vertices' V, or T/Q (a frame read as a
+        // 1024 x 512 texture reads only the frame's rows). A pixel samples above its V's largest, which
+        // is at a vertex when Q stays above 0; bilinear filtering's row past that has no weight.
+        auto rows_read = [&]() -> uint32_t {
             uint32_t rows = 1u << th;
             float vmin = 0.0f, vmax = 0.0f;
             for (const Vtx &v : gs->verts) {
@@ -3209,6 +3251,45 @@ void flush_batch() {
             if (vmin >= 0.0f && vmax < float(rows)) {
                 rows = std::max(1u, uint32_t(ceilf(vmax)));
             }
+            return rows;
+        };
+        // (the same across, from U or S/Q, for a texture decoded from VRAM; not in a picture between,
+        // whose 2D items' S was elsewhere in the frame before: all of it)
+        auto cols_read = [&]() -> uint32_t {
+            uint32_t cols = 1u << tw;
+            if (interp.active && moving.moves) {
+                return cols;
+            }
+            float umin = 0.0f, umax = 0.0f;
+            for (const Vtx &v : gs->verts) {
+                float tu = fst ? v.s : v.q > 0.0f ? v.s / v.q * float(cols) : -1.0f;
+                umin = std::min(umin, tu);
+                umax = std::max(umax, tu);
+            }
+            if (umin >= 0.0f && umax < float(cols)) {
+                cols = std::max(1u, uint32_t(ceilf(umax)));
+            }
+            return cols;
+        };
+        // a texture that is a target, or in one: read from the target
+        Target *source = nullptr;
+        for (auto &t : gs->targets) {
+            if (t->depth || tbw != t->bw || tbp < t->bp) {
+                continue;
+            }
+            uint32_t blocks = tbp - t->bp;
+            uint32_t layout = psm_layout(tpsm);
+            if (layout != psm_layout(t->psm) || blocks % 32 != 0) {
+                continue;
+            }
+            uint32_t page = blocks / 32, across = std::max(t->bw, 1u);
+            uint32_t x0 = (page % across) * page_width(t->psm), y0 = (page / across) * page_height(t->psm);
+            if (y0 >= t->height) {
+                continue;
+            }
+            // A texture whose rows the batch reads run past the target's is decoded from VRAM, the
+            // targets' pages back there first: the rows past are VRAM's, or another target's
+            uint32_t rows = rows_read();
             if (y0 + rows > t->height) {
                 break;
             }
@@ -3249,14 +3330,27 @@ void flush_batch() {
                 }
                 levels = std::min(levels, std::max(tw, th) + 1);
             }
+            // Without mipmaps, only the rows read (to a whole page row) are the texture's: the menus'
+            // backdrop, the play's frame kept at 0x3240 and read as 1024 x 512, runs on round the end of
+            // VRAM into their two field buffers, and taken whole it sent both back to VRAM and was
+            // decoded again at every field (October 2026: 30 ms a vblank)
+            uint32_t cols = 1u << tw, rows = 1u << th;
+            if (levels == 1 && bits(clamp, 0, 2) != 3) { // (REGION_REPEAT reads by its masks)
+                uint32_t pw = page_width(tpsm);
+                cols = std::min(cols, (cols_read() + pw - 1) / pw * pw);
+            }
+            if (levels == 1 && bits(clamp, 2, 2) != 3) {
+                uint32_t ph = page_height(tpsm);
+                rows = std::min(rows, (rows_read() + ph - 1) / ph * ph);
+            }
             // the texture's pages may have been drawn into: back to VRAM first
             for (uint32_t l = 0; l < levels; l++) {
                 uint32_t lo, count;
-                buffer_pages(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, (1u << tw) >> l),
-                             std::max(1u, (1u << th) >> l), &lo, &count);
+                buffer_pages(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, cols >> l), std::max(1u, rows >> l), &lo,
+                             &count);
                 claim_pages(lo, count, nullptr, false);
             }
-            Texture *tex = get_texture(tbp, tbw, tpsm, tw, th, levels, mip_tbp, mip_tbw);
+            Texture *tex = get_texture(tbp, tbw, tpsm, tw, th, levels, mip_tbp, mip_tbw, cols, rows);
             raw_view = &tex->image->get_view();
             uint32_t src = psm_is_palette(tpsm)  ? SRC_CLUT
                            : tpsm == GSN_PSMCT24 ? SRC_CT24
@@ -3625,6 +3719,7 @@ void flush_batch() {
     // (unless they read their own target, which is resolved for it); the rest to the image
     bool ms = target_samples > 1 && (depth || (color->ms_newer && !reads_own_target));
     bool perspective = perspective_batch(gs->verts);
+    bool all_flat = false; // (every triangle of the batch the 2D: flat_2d)
     if (ms) {
         msaa_ready(*color);
         if (depth) {
@@ -3636,15 +3731,18 @@ void flush_batch() {
             depth->ms_newer = true;
         }
         // (the 2D, rectangles of one colour and Z, is shaded once a pixel: --native-cutout-aa)
-        if (!perspective && flat_2d(gs->verts)) {
+        if (!perspective && flat_2d(gs->verts, &all_flat)) {
             cutout = false;
         }
     } else {
         Why why(GSN_WHY_MSAA);
         msaa_settle(*color);
         if ((scale_x > 1 || scale_y > 1) && !perspective) {
-            flat_2d(gs->verts);
+            flat_2d(gs->verts, &all_flat);
         }
+    }
+    if (all_flat && tme && !reads_target && smooth_2d_mode) {
+        push.misc |= M_SMOOTH_2D; // (--native-2d smooth: gs_frag.h, sample_level)
     }
 
     // (Z and layers: within a run its other triangles are drawn first, then its layer's, layers_at
@@ -5217,7 +5315,7 @@ void present_extensions(std::vector<const char *> &instance_ext, std::vector<con
 }
 
 // gsn_vsync's want_pixels as vsync_now has it: the PC's switches (port_options) added
-enum : int { VSYNC_PROGRESSIVE = 1 << 8, VSYNC_DEINTERLACE = 1 << 9 };
+enum : int { VSYNC_PROGRESSIVE = 1 << 8, VSYNC_DEINTERLACE = 1 << 9, VSYNC_FINE_WEAVE = 1 << 10 };
 
 // How the displayed buffer becomes the picture ("The scanout", at vsync_now)
 enum ScanMode : uint32_t {
@@ -5246,15 +5344,11 @@ Shown shown_buffer(uint32_t fbp, uint32_t fbw, uint32_t psm, uint32_t dbx, uint3
     return s;
 }
 
-// count of the buffer's lines, from line `first` every `step`, into dst: the m-th into the band of sy
-// rows of its line dst_first + dst_step * m. From the target on the GPU, or else from the CPU's VRAM
-// (each GS pixel repeated sx times across and sy down).
-void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step, uint32_t count, uint32_t dst_first,
-                uint32_t dst_step) {
-    const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    uint32_t iw = s.w * s.sx, sy = s.sy;
-    if (s.t && s.t->image->get_format() != dst.get_format()) {
-        // --native-colour high: the 16-bit target dithered into the 8-bit image (shaders/narrow.frag)
+// shaders/narrow.frag over dst from s's target: the image's line dst_first + dst_step * m (sy rows of
+// pixels each) is the target's line first + step * m, for m below count (sy 1: rows of pixels)
+void narrow_pass(const Image &dst, const Shown &s, uint32_t first, uint32_t step, uint32_t count, uint32_t dst_first,
+                 uint32_t dst_step, uint32_t sy) {
+    {
         msaa_settle(*s.t);
         end_pass();
         RenderPassInfo rp;
@@ -5272,13 +5366,26 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
         c.set_cull_mode(VK_CULL_MODE_NONE);
         c.set_depth_test(false, false);
         c.set_texture(0, 0, s.t->image->get_view(), StockSampler::NearestClamp);
-        int32_t push[8] = {int32_t(s.dbx * s.sx), int32_t(s.dby * sy), int32_t(first), int32_t(step),
+        int32_t push[8] = {int32_t(s.dbx * s.sx), int32_t(s.dby * s.sy), int32_t(first), int32_t(step),
                            int32_t(dst_first), int32_t(dst_step), int32_t(count), int32_t(sy)};
         c.push_constants(push, 0, sizeof(push));
         c.draw(3);
         c.end_render_pass();
         c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    }
+}
+
+// count of the buffer's lines, from line `first` every `step`, into dst: the m-th into the band of sy
+// rows of its line dst_first + dst_step * m. From the target on the GPU, or else from the CPU's VRAM
+// (each GS pixel repeated sx times across and sy down).
+void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step, uint32_t count, uint32_t dst_first,
+                uint32_t dst_step) {
+    const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    uint32_t iw = s.w * s.sx, sy = s.sy;
+    if (s.t && s.t->image->get_format() != dst.get_format()) {
+        // --native-colour high: the 16-bit target dithered into the 8-bit image (shaders/narrow.frag)
+        narrow_pass(dst, s, first, step, count, dst_first, dst_step, sy);
         return;
     }
     if (s.t) {
@@ -5313,6 +5420,31 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
         }
     }
     transfer_barrier();
+}
+
+// The weave of a field at a scale (whole frames: the two fields are the same moment, drawn half a line
+// apart, port/platform/field_frames.c). Field p's row r of pixels (of h * sy) is at the woven picture's
+// line 2 r / sy + p, so its rows go to the picture's rows 2 r + p sy: with sy odd the two fields'
+// rows take turns, every row of the picture its own (at 1x, the weave of lines). Woven a line (sy rows)
+// at a time instead, each band of sy rows held a line drawn over twice the height, the other field's
+// band half a line off: at 3x the menus' text in stripes of three rows, its edges broken. With sy even
+// the two fields' rows fall on the same rows of the picture: the field fills all of them, each of its
+// rows twice (the other field's rows are the same picture). The top rows field 1 has none for are its
+// first row's. Only from a target in the picture's format; else 0 (the weave a line at a time).
+int weave_fine(const Image &dst, const Shown &s, uint32_t p) {
+    if (!s.t || s.sy < 2) {
+        return 0;
+    }
+    uint32_t rows = s.h * s.sy, out = rows * 2, off = p * s.sy;
+    uint32_t count = std::min(rows, (out - off + 1) / 2);
+    narrow_pass(dst, s, 0, 1, count, off, 2, 1);
+    if (s.sy % 2 == 0) {
+        narrow_pass(dst, s, 0, 1, std::min(rows, (out - off) / 2), off + 1, 2, 1);
+    }
+    if (off) {
+        narrow_pass(dst, s, 0, 0, s.sy % 2 ? (off - 1) / 2 : off, s.sy % 2 ? 1 : 0, s.sy % 2 ? 2 : 1, 1);
+    }
+    return 1;
 }
 
 // The deinterlace's history let go (a vblank not read a field at a time, or a new size)
@@ -5388,6 +5520,7 @@ void deinterlace_pass(const Image &dst, int parity, uint32_t sy, uint32_t lines)
 std::atomic<uint32_t> present_size{0};    // width << 16 | height, 0: none
 std::atomic<uint32_t> present_sharpen{0}; // strength in thousandths
 bool scanout_wants_scaled;                // (vsync_now: GSN_WANT_SCALED)
+bool scanout_fine_weave;                  // (vsync_now: VSYNC_FINE_WEAVE)
 uint64_t present_scale_passes;
 
 void draw_pass(const Image &dst, Program *program, const ImageView &src, const void *push, size_t push_size) {
@@ -5540,7 +5673,9 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
             transfer_barrier();
         }
         for (uint32_t p = before ? uint32_t(parity) : 0; p <= (before ? uint32_t(parity) : 1u); p++) {
-            copy_lines(dst, s, 0, 1, s.h, p, 2);
+            if (!(scanout_fine_weave && weave_fine(dst, s, p))) {
+                copy_lines(dst, s, 0, 1, s.h, p, 2);
+            }
         }
         break;
     case SCAN_FIELD:
@@ -6402,6 +6537,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     // the PC's switches (gsn_vsync)
     bool progressive = want_pixels & VSYNC_PROGRESSIVE, deinterlace = want_pixels & VSYNC_DEINTERLACE;
     scanout_wants_scaled = (want_pixels & GSN_WANT_SCALED) != 0;
+    scanout_fine_weave = (want_pixels & VSYNC_FINE_WEAVE) != 0;
     want_pixels &= GSN_WANT_PIXELS | GSN_WANT_IMAGE | GSN_PRESENT;
     // a frame-mode picture read a field at a time: 4 vblanks after a tall SCANMSK primitive (scanmsk_seen)
     bool field_scan = gs->field_scan_vblanks > 0;
@@ -6475,8 +6611,14 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                 if (want_pixels) {
                     // the woven picture's line l is field (l & 1)'s line l / 2, each line sy rows of pixels
                     for (uint32_t y = 0; y < h * 2 * sy; y++) {
-                        uint32_t l = y / sy, row = (l / 2) * sy + y % sy;
-                        memcpy(frame->rgba + size_t(y) * w * sx, gs->fields[l & 1].data() + size_t(row) * w * sx, w * sx * 4);
+                        uint32_t l = y / sy, row = (l / 2) * sy + y % sy, from = l & 1;
+                        if (scanout_fine_weave && sy >= 2) {
+                            // (as weave_fine: a row of pixels at a time; with sy even, this field's rows)
+                            from = sy % 2 ? y & 1 : uint32_t(f);
+                            row = y >= from * sy ? (y - from * sy) / 2 : 0;
+                        }
+                        memcpy(frame->rgba + size_t(y) * w * sx, gs->fields[from].data() + size_t(row) * w * sx,
+                               w * sx * 4);
                     }
                     frame->width = w * sx;
                     frame->height = h * 2 * sy;
@@ -6573,7 +6715,9 @@ extern "C" int gsn_vsync(const uint64_t *privileged, int field, int want_pixels,
 
 extern "C" int gsn_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     // the PC's switches for the scanout, as they are at this vblank
-    want_pixels |= (port_options.progressive ? VSYNC_PROGRESSIVE : 0) | (port_options.deinterlace ? VSYNC_DEINTERLACE : 0);
+    // (whole frames: a field-mode screen's two fields are one moment, woven a row of pixels at a time)
+    want_pixels |= (port_options.progressive ? VSYNC_PROGRESSIVE : 0) | (port_options.deinterlace ? VSYNC_DEINTERLACE : 0) |
+                   (port_options.whole_frame ? VSYNC_FINE_WEAVE : 0);
     // On the GS's thread, with the sender going on: a vblank whose picture nobody waits for (none, or
     // one the GS's thread hands to the presenter). A picture wanted in frame, or an image the caller
     // goes on to show itself, waits for the thread to be idle and is made here.
@@ -6624,6 +6768,10 @@ extern "C" int gsn_set_aniso(int taps) {
     }
     aniso_log2 = l;
     return 1 << l;
+}
+
+extern "C" void gsn_set_2d(int mode) {
+    smooth_2d_mode = mode;
 }
 
 extern "C" void gsn_set_cutout_aa(int mode) {

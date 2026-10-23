@@ -67,6 +67,11 @@ typedef struct {
        ssaa, the default). Nothing without MSAA. Live from the overlay. */
     int native_cutout_aa;
     int native_cutout_aa_forced;
+    /* --native-2d: at a --native-scale above 1, the 2D's textures read nearest by the game (the font,
+       the HUD, the menus' and title's pictures) read bilinear where magnified (GSN_2D_*,
+       port/gs/native/gsn.h: 0 ps2, 1 smooth, the default). Nothing at 1x. Live from the overlay. */
+    int native_2d;
+    int native_2d_forced;
     /* --native-colour: how precisely the native GS keeps colours (GSN_COLOUR_*, port/gs/native/gsn.h: 0
        exact, the default, the GS's 8 bits a channel and its roundings; 1 high, 16 bits a channel and the
        colours' arithmetic in floats, dithered to 8 bits on the way out). Live from the overlay. */
@@ -355,6 +360,8 @@ void port_gs_set_native_lod(int mode);
 void port_gs_set_native_aniso(int taps);
 /* The native GS's cut-outs with MSAA (port_options.native_cutout_aa), from the next draw */
 void port_gs_set_native_cutout_aa(int mode);
+/* The native GS's 2D at a larger scale (port_options.native_2d), from the next draw */
+void port_gs_set_native_2d(int mode);
 /* The native GS's colour precision (port_options.native_colour), from the next vblank */
 void port_gs_set_native_colour(int mode);
 /* The native GS's Z (port_options.native_layer_z), from the next draw */
