@@ -238,6 +238,16 @@ int port_native_draw_compare(void);
 #define PORT_WAVE_UVS_LATE 2
 #define PORT_WAVE_UVS_PS2 3
 int port_native_wave_uvs(void);
+/* port_native_sky(): how the sky is drawn when it is drawn natively (--native-draw sky; --sky, settings.json
+   display.native_sky, the overlay's Debug page, live; P3-2 of docs/port/NATIVE_DRAW_TASKS.md, NATIVE_DRAW.md A1).
+   PORT_SKY_MODERN (the default, `modern`): where the sky is the frame's first draw, the dome centred on the
+     eye and at the far plane (Z 0: it hides nothing drawn after it), its fog and colour the game's; where
+     other records are drawn before it (maps 000 and 004), the PS2's (game/native_draw/nd_sky.c).
+   PORT_SKY_PS2 (`ps2`): as the PS2 draws it, at the feet with its real Z (what lies beyond the dome is
+     hidden by it). The PS2 path's sky (--native-draw without sky) is always this. */
+#define PORT_SKY_PS2 0
+#define PORT_SKY_MODERN 1
+int port_native_sky(void);
 int port_test_dma_wait(void);
 #define PORT_ND_COMPARE_NATIVE 1 /* the native draws drawn, the PS2 path's packets left out */
 #define PORT_ND_COMPARE_PS2 2    /* the PS2 path's packets drawn, the native draws left out */

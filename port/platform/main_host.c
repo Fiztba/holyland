@@ -76,6 +76,10 @@
                          added in the shader), cpu (the coordinates the game wrote, the blocks parsed
                          again each frame; gpu's picture) or late (the offsets of the frame after, as the
                          PS2 path's DMA mostly reads them)
+       --sky modern|ps2  with --native-draw sky, how the sky is drawn: modern (the default: the dome
+                         centred on the eye and behind everything, so what lies beyond it shows) or ps2
+                         (at the feet with its real distance, as the PS2 draws it). modern keeps the
+                         PS2's where other records are drawn before the sky (maps 000 and 004)
        --test-dma-wait   (tests) each frame's packet chain waited for as soon as it is sent: the PS2
                          path then draws the blocks the game changes as the game drew them
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
@@ -216,7 +220,7 @@ static void usage(const char *program) {
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2]\n"
-            "          [--native-wave-uvs ps2|gpu|cpu|late] [--test-dma-wait]\n"
+            "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
@@ -256,6 +260,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
+    port_options.native_sky = PORT_SKY_MODERN;
     port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
@@ -530,6 +535,16 @@ static void parse_options(int argc, char **argv) {
                 fprintf(stderr, "--native-wave-uvs wants ps2, gpu, cpu or late, not %s\n", value);
                 exit(2);
             }
+        } else if (strcmp(option, "--sky") == 0) {
+            if (strcmp(value, "ps2") == 0) {
+                port_options.native_sky = PORT_SKY_PS2;
+            } else if (strcmp(value, "modern") == 0) {
+                port_options.native_sky = PORT_SKY_MODERN;
+            } else {
+                fprintf(stderr, "--sky wants modern or ps2, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_sky_forced = 1;
         } else if (strcmp(option, "--native-layer-z") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_layer_z = 0;
@@ -693,6 +708,10 @@ int port_native_draw_compare(void) {
 
 int port_native_wave_uvs(void) {
     return port_options.native_wave_uvs;
+}
+
+int port_native_sky(void) {
+    return port_options.native_sky;
 }
 
 int port_test_dma_wait(void) {

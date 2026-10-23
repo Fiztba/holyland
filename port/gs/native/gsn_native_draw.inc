@@ -94,6 +94,7 @@ enum : int32_t {
     ND_C_MODEL = 0x4,  // ... and with its model, by its matrices between the frame before's and this one's (bt)
     ND_C_EYE = 0x8,    // (with ND_C_MODEL) the matrices are the eye's (the arm): not moved by the camera
     ND_C_WAVE = 0x10,  // the wave UVs on the GPU (RD_DRAW_WAVE_UVS, P6-2): S and T moved by their wave's offsets
+    ND_C_FAR = 0x20,   // at the far plane (RD_DRAW_FAR_Z: the modern sky, P3-2): Z 0, in the frame and between
 };
 // A corner (Vtx): its fog -1 less the vertex's number in the arena (below 0: a native corner, where the
 // PS2 path's fog is 0-255, so that a batch can hold both kinds: nd_draw_range), and for program 0x280's
@@ -898,6 +899,10 @@ void nd_draw(uint64_t value) {
         k.info[3] |= ND_C_WAVE;
         wave = k.wave;
     }
+    // at the far plane (the modern sky, P3-2): Z 0, the plan's corners as the shader's (below)
+    if (d.flags & RD_DRAW_FAR_Z) {
+        k.info[3] |= ND_C_FAR;
+    }
     memcpy(nd.draws.map + size_t(record) * sizeof(NdConst), &k, sizeof(k));
     if (interp.active) {
         nd.boxes.resize(record + 1);
@@ -934,6 +939,11 @@ void nd_draw(uint64_t value) {
             {
                 Timer plan(gsn_stats.ns_nd_plan);
                 nd_plan(*mesh, b, k.vertex, eprim, base, record, wave);
+            }
+            if (k.info[3] & ND_C_FAR) {
+                for (size_t i = before; i < gs->verts.size(); i++) {
+                    gs->verts[i].z = 0;
+                }
             }
             if (gs->verts.size() > before) {
                 nd.pending = nd.pending_000 = true;

@@ -203,7 +203,7 @@ picture):
 8. The draw_parts wrappers set with native draw off (gold, jointed objects, entities): accept them, or one
    hook in `DrawList_Draw` (gfx.patch).
 9. Whether PS2-path corners should join native ones in pictures between (for gsn.cpp's owner).
-10. From before: P3-2's modern sky (A1), and the A-items' defaults (NATIVE_DRAW.md 5).
+10. From before: ~~P3-2's modern sky (A1)~~ (*decided 2026-10-23: modern unless a solid reason; done, nd5/sky: `--sky modern` the default, the PS2's kept on 000 and 004, P3-2 below*), and the A-items' defaults (NATIVE_DRAW.md 5).
 
 **Next: P8, standalone** (NATIVE_DRAW.md 3.4, and P8 in 4), once the owner says it is wanted (NATIVE_DRAW.md 5)
 and the gates above are decided. Hosted mode now draws the play's 3D and the screen passes from draws; P8
@@ -395,6 +395,7 @@ section a draw is in, for the pictures between).
   the environment (the game loop waits after `Packet_SendChain`); either turns on both.
   Since P3-1 the sky (the map record with flag bit 31) is its own kind, `sky` (`game/native_draw/nd_sky.c`):
   `map` is every other map record, so what `map` meant before is now `map,sky`.
+  `--sky modern|ps2` (P3-2, `game/native_draw/nd_sky.c`; default `modern`, `settings.json` `display.native_sky`, the Debug page's "Native sky"): with `sky` native, the dome at the eye and the far plane where it is the frame's first draw (002, 013, 021, 027, 098, 099), the PS2's elsewhere (000, 004); `ps2` the PS2's everywhere.
   The overlay's Debug page, "Native draw (experimental)", has a checkbox per ported kind and the compare
   mode, live. Never saved. Needs the native GS: off with `--renderer gs`.
 - `--native-draw-compare native|ps2`: the adapter queues the PS2 path's packets too, after the native
@@ -1228,6 +1229,51 @@ the far plane, drawn first. P0-3 found geometry behind the dome from the eye on 
 what appears when the dome goes to the far plane, with pictures, before anything is made the default. The
 scroll targets stay the GS's (hosted). Accepted: the owner's look at the 8 maps and the draw-distance
 settings.
+
+*Done (nd5/sky, 2026-10-23; the owner chose a modern sky unless there is a solid reason not to).* `--sky modern|ps2`
+(`port_native_sky()`, default `modern`; `settings.json` `display.native_sky`; the overlay's Debug page, "Native
+sky", live; PLAN.md's row). It does something only with `sky` in `--native-draw`.
+- **What modern is** (`game/native_draw/nd_sky.c`). Where the sky is the frame's first draw (no map record drawn
+  before it in the frame, and it is its map's record 0), a copy of its model is put at the eye (the inverse of
+  `world_view_matrix`: the camera the world is drawn from, head bob and shakes in it), the TEST around it is
+  `0x3000D` (Z ALWAYS) and back to `0x5000D` after, and its draws carry `RD_DRAW_FAR_Z` (render.h): every corner's
+  Z is 0, the Z buffer's clear value, in the CPU plan (`nd_draw`, after `nd_plan`) and in `nd_000.vert` (`ND_C_FAR`,
+  in the game's frames and in pictures between). So it is literally drawn first at the far plane; everything
+  drawn after it passes over it. Its place on the screen, fog, colour, clouds and pictures between are worked out
+  as before (`ND_C_OBJ` moves it with the eye). Elsewhere it is the PS2's (at the feet, real Z). The game's model
+  is not touched; `--native-draw-compare`'s PS2 path draws the game's model (`NativeDraw_PosedAs`, native_draw.c),
+  so compare mode's reference is the PS2 sky (checked: 0 pixels against `--sky ps2`). The sky is record 0 on 002,
+  013, 021, 027, 098 and 099 (`KF4_ND_LOG=1` prints it), 48 on 000 and 20 on 004.
+- **Why not 000 and 004.** 000 draws its sky after 32 other records, and its dome is translucent: it is blended
+  over the canyon's silhouettes that rise beyond it, which darken the clouds overhead. At the far plane (and also
+  moved to the eye with its real Z) those silhouettes come out as hard black shapes (looking up from 2260,-5200:
+  130k pixels, worst 76; picture `000_lookup_ps2_farplane_why_000_stays_ps2.png`: PS2, far plane, the
+  difference). That is the PS2 look the dome was made for, so 000 keeps it. 004 (record 20, drawn 3rd of 6 from
+  most places, first from a few) showed nothing behind its dome from 56+64 views; a sky that is modern only in the
+  frames where it happens to be drawn first would jump half a degree as records come and go, so it keeps the
+  PS2's too (the first-in-file rule).
+- **Hiding nothing.** What the far plane shows that the PS2's dome hid (the dome at the feet at the far plane against
+  the PS2's, so that the eye's move is not counted), 14 places x 4 headings at pitch 0 and 6 places x 4 headings x
+  2 pitches (0.25, 0.6) a map, `--draw-distance 1` and `2` (the same at both: the sky keeps the PS2's fog): 002 the
+  top of a hill behind the walls (3 views, 517 pixels; at 2850,-315 and -4683,-2696); 027 the far hill's ridge (1,114
+  pixels in 4 views, at -12155,3128 heading 1.57: a strip along its top); 013 a sliver of far trunks between the
+  trees (11-13 views, 143-193 pixels, worst 40); none on 021, 098 and 099. They are the hills and trunks whole where
+  the dome cut them; nothing is out of place. Pictures: `027_far_hill`, `002_hill_*`, `013_trunk` (PS2 above,
+  modern below).
+- **The eye's 220 units.** The dome and its rim are about half a degree higher from the eye: its clouds move a
+  little (the large pixel counts of modern against PS2, worst 23-51, are that: 002 still 480k pixels in 6 of 8
+  views, the same picture to the eye), and the rows where it fades into the fog colour go up 2-8 rows at 1x
+  (worst 2-10 levels: `002_rim`). The one place the clear colour shows where the dome did: a one-pixel crack between
+  two walls on 013 (6 pixels at 373,-1235, `013_crack`).
+- **The checks.** `--sky ps2` against the build before (`--native-draw sky`): 0 pixels on the 8 maps' still views.
+  Modern at 4x: as 1x (the same views, the same regions). At 240 (P3-1's 8 moving views a map: walking, turning,
+  strafing, looking up and down), modern against PS2: every picture between within its two frames' difference (no
+  band, no jump; one picture of 098's pitch with 5 rows more); filmstrip `002_240_pitching`. Every kind at once
+  with modern against with ps2: the same numbers as `sky` alone (002, 013, 027 still, 002 at 240). 000 and 004:
+  modern is the PS2's (0 pixels in 64 + 64 views and at 240).
+- **Default: modern.** Clean on the six maps where it applies; the owner's look is still the acceptance (the 8 maps
+  and the draw distances). The pictures are outside the repository, with the task's report
+  (scratchpad nd5_sky/evidence).
 
 ### P4-P7 (the third workflow: merged; what is left is in "Where it stands")
 

@@ -58,9 +58,11 @@ static void queue_mark(u32 command, u64 bits) {
 }
 
 void NativeDraw_WaveFrame(void); /* (nd_water.c: the wave snapshots' frame) */
+void NativeDraw_SkyFrame(void);  /* (nd_sky.c: no map record drawn yet) */
 
 void NativeDraw_BeginFrame(void) {
     NativeDraw_WaveFrame();
+    NativeDraw_SkyFrame();
     if (port_native_draw(PORT_ND_ALL)) {
         u64 mark = rd_begin_frame();
 
@@ -198,8 +200,9 @@ enum { FORM_POSED, FORM_DEPTH_BY_PART };
    same VU1 fixed block. kind and owner make the draws' identity. 1 if drawn; 0 if the model has a block
    the core cannot draw (another VU1 program, a block that is not self-contained ...), and nothing was
    queued: the caller draws it the PS2 way. With --native-draw-compare the PS2 path's packets follow,
-   between the marks. */
-static int posed_model(ModelInstance *model, int form, int kind, const void *owner) {
+   between the marks: game's (the game's model, where model is a changed copy of it: the modern sky's). flags:
+   RD_DRAW_* the draws carry besides (the modern sky's RD_DRAW_FAR_Z). */
+static int posed_model(ModelInstance *model, int form, int kind, const void *owner, u32 flags, ModelInstance *game) {
     static RdMesh meshes[ND_MAX_MESHES];
     f32 (*matrix_a)[4] = MODEL_DRAW_MATRIX_A;
     f32 (*matrix_b)[4] = MODEL_DRAW_MATRIX_B;
@@ -231,6 +234,7 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
     d.id[0] = (u32)EE_WORD(owner);
     d.program = 0x000;
     d.camera = camera;
+    d.flags = flags;
     if (wave) {
         d.flags |= RD_DRAW_WAVE_UVS;
         memcpy(d.parent, wave, sizeof(d.parent));
@@ -304,9 +308,9 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
     if (port_native_draw_compare()) {
         queue_mark(RD_ND_ALT_BEGIN, 0);
         if (form == FORM_DEPTH_BY_PART) {
-            Model_DrawPosedDepthByPart(model);
+            Model_DrawPosedDepthByPart(game);
         } else {
-            Model_DrawPosed(model);
+            Model_DrawPosed(game);
         }
         queue_mark(RD_ND_ALT_END, 0);
     }
@@ -329,18 +333,26 @@ static int declined(ModelInstance *model, int kind, const char *why) {
 
 /* Model_DrawPosedDepthByPart(model), natively (posed_model) */
 int NativeDraw_PosedDepthByPart(ModelInstance *model, int kind, const void *owner) {
-    if (!posed_model(model, FORM_DEPTH_BY_PART, kind, owner)) {
+    if (!posed_model(model, FORM_DEPTH_BY_PART, kind, owner, 0, model)) {
         return declined(model, kind, "a block the core cannot draw");
     }
     return 1;
 }
 
+int NativeDraw_PosedAs(ModelInstance *model, ModelInstance *game, int kind, const void *owner, u32 flags);
+
 /* Model_DrawPosed(model), natively (posed_model); a model whose draw_parts is something else is not */
 int NativeDraw_Posed(ModelInstance *model, int kind, const void *owner) {
+    return NativeDraw_PosedAs(model, model, kind, owner, 0);
+}
+
+/* NativeDraw_Posed of model, a changed copy of the game's model game (whose packets --native-draw-compare
+   queues), its draws carrying flags (RD_DRAW_*) besides: nd_sky.c's modern sky */
+int NativeDraw_PosedAs(ModelInstance *model, ModelInstance *game, int kind, const void *owner, u32 flags) {
     if (model->draw_parts != Model_DrawPosed) {
         return declined(model, kind, "draw_parts is not Model_DrawPosed");
     }
-    if (!posed_model(model, FORM_POSED, kind, owner)) {
+    if (!posed_model(model, FORM_POSED, kind, owner, flags, game)) {
         return declined(model, kind, "a block the core cannot draw");
     }
     return 1;
