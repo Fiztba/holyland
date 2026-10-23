@@ -257,8 +257,8 @@ the same captures (the 414,901 of RENDERER.md is older captures').
   - **compare the batches, not only the pictures**: a batch split where the PS2 path's goes on can leave
     the dumped pictures 0 and still decide runs and blending otherwise elsewhere. `--stats`' "native GS"
     line (draws, render passes, shader blends) off against onoff shows a split; a local log of every
-    flush (size, the corners' kinds, a hash of X, Y, Z and alpha, the draws it made: F-mixed's
-    `blog_debug.diff`) finds it. At 4x the 2D snap changes the draws too;
+    flush (size, the corners' kinds, a hash of X, Y, Z and alpha, the draws it made: a local
+    patch, F-mixed) finds it. At 4x the 2D snap changes the draws too;
   - map 000's band needs `--input tests/newgame.pad --frames 1900,2000 -- --teleport 1600:0:0` (herb.pad
     did not show it); the mirror maps are 008, 009, 014 (reflection, flag 0x200) and 041 (the only mode-1
     mirror, flag 0x2), and their water is out of the teleport's view: use made-up saves placed by the water
@@ -650,7 +650,7 @@ of 0x000's (their own records buffer and program): where the PS2 path's batch ho
   join too (both native); the PS2 path's still do not (below). A later program (0x700, P4-1) takes the
   next 2^22 of the fog (2^24 is still exact).
 - **Not seen in the game.** A local log of every flush (`flush_batch`'s batch: its size, corners of each
-  kind, a hash of X, Y, Z and alpha, its draws and shader blends; `blog_debug.diff` in the task's
+  kind, a hash of X, Y, Z and alpha, its draws and shader blends; a local patch, kept with the task's
   evidence) over B-sweep's 64 maps, 8 views each, with every kind: 0 batches with both. Nor on 016's
   bats, 009's start, the 000 fight, the arm saves (w5, w46) or 009's miners. An object's and an entity's
   A+D packets (TEX0 at least) differ, so the PS2 path's batch ends between them in every view tried.
