@@ -141,10 +141,11 @@ typedef struct {
     uint32_t what;
     uint32_t bytes;
     uint32_t serial;
-    uint32_t unused;
+    uint32_t program;  /* RECORD_EFFECTS: sent by VU1 program 0x700 */
     uint64_t key;
 } Record;
 #define RECORD_3D 0x100
+#define RECORD_EFFECTS 1
 
 static uint8_t *kept;
 static size_t kept_size, kept_room;
@@ -178,7 +179,7 @@ void port_interp_keep(int path, const void *data, size_t bytes) {
     }
     r.bytes = (uint32_t)bytes;
     r.serial = port_vif1_run_serial;
-    r.unused = 0;
+    r.program = path == 1 && port_vu1_run_pc >= 0x700 && port_vu1_run_pc < 0x7D2 ? RECORD_EFFECTS : 0;
     r.key = port_vif1_run_key;
     memcpy(kept + kept_size, &r, sizeof(r));
     memcpy(kept + kept_size + sizeof(r), data, bytes);
@@ -1026,6 +1027,7 @@ typedef struct {
     uint64_t seen_xy[SEEN];
     double seen_z[SEEN], seen_depth[SEEN];
     int nseen;
+    int effects;         /* the record is program 0x700's (RECORD_EFFECTS): its Q is not 1/w (vertex_view) */
     double run_most;     /* REPLAY: the most a vertex of it without ADC moved */
     double eye_move[3];  /* REPLAY: how far the camera moved from the frame before to this one */
     /* REPLAY */
@@ -1158,6 +1160,18 @@ static int vertex_view(Walk *w, const GifWalk *p, const uint8_t *q, int xyzf, do
     if (perspective_q(p)) {
         memcpy(sq, p->st, 12);
         depth = 1.0 / sq[2];
+        if (w->effects && z - s->cz > 0) {
+            /* Program 0x700 (the fires, glows and magic of sfx.dat) divides by the w of a position whose own
+               w is not 1 (16 for the fire of the tower): its Q is 1/w over that, its Z the world's. The
+               depth is Q's, made the Z's size by the nearest power of two (Q's precision, Z's scale).
+               Taken as 1/w, the fire was put 16 times as far: turning moved it as the room, but a step
+               sideways hardly at all, and it stood still on the screen between the game's frames. */
+            double ratio = depth / (s->az / (z - s->cz));
+
+            if (ratio > 1.5 || ratio < 0.67) {
+                depth /= pow(2.0, floor(log2(ratio) + 0.5));
+            }
+        }
         if (w->nseen < SEEN) {
             /* (for a second pass over the same points) */
             w->seen_xy[w->nseen] = lo & 0x0000FFFF0000FFFFull;
@@ -1491,7 +1505,7 @@ static void move_vertex_in(Walk *w, GifWalk *p, uint8_t *q, int xyzf, int sectio
 
                 sq[0] = (float)(sq[0] * f);
                 sq[1] = (float)(sq[1] * f);
-                sq[2] = (float)(1.0 / m[2]);
+                sq[2] = (float)(sq[2] * f); /* (1 / m[2], or for program 0x700 that over its scale: vertex_view) */
                 memcpy(p->st, sq, 12);
             }
             w->moved++;
@@ -2057,6 +2071,8 @@ static void gpu_flat_vertex(Walk *w, GifWalk *p) {
    it). Returns the bytes left. */
 static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
     int path = (int)(r->what & 0xFF), is_3d = (r->what & RECORD_3D) != 0;
+
+    w->effects = (r->program & RECORD_EFFECTS) != 0;
     GifWalk *p = &w->paths[path];
     size_t count = r->bytes / 16, i = 0, out = 0;
 
