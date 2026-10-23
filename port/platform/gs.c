@@ -1383,6 +1383,10 @@ static void take_other_vram(PortStateIo *io, uint64_t bytes, int into_native) {
 void port_gs_state(PortStateIo *io) {
     uint64_t backend_bytes = 0;
     uint64_t native_bytes = 0;
+    uint64_t table_bytes = 0;
+    int native_loaded = 0;
+
+    (void)native_loaded;
 
     if (io->loading) {
         port_interp_forget(); /* (--frame-rate 60) the packets kept are not this state's */
@@ -1424,12 +1428,31 @@ void port_gs_state(PortStateIo *io) {
 #ifdef KF4_HAVE_PARALLEL_GS
         if (have_native && native_bytes == gsn_state_size()) {
             gsn_state(io);
+            native_loaded = 1;
         } else if (have_gs && io->loading && !backend_bytes) {
             take_other_vram(io, native_bytes, 0);
         } else
 #endif
         {
             port_state_bytes(io, NULL, (size_t)native_bytes);
+        }
+    }
+    /* (--renderer modern) the native GS's page-ownership table, when the scene was on: kept when it is
+       on again, so that its textures come from their uploads at once */
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native && !io->loading) {
+        table_bytes = gsn_table_state_size();
+    }
+#endif
+    PORT_STATE(io, table_bytes);
+    if (table_bytes != 0) {
+#ifdef KF4_HAVE_PARALLEL_GS
+        if (have_native && (!io->loading || native_loaded)) {
+            gsn_table_state(io, (size_t)table_bytes);
+        } else
+#endif
+        {
+            port_state_bytes(io, NULL, (size_t)table_bytes);
         }
     }
 }

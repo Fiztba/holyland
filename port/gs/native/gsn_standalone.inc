@@ -83,6 +83,7 @@ struct SaStats {
     uint64_t verify_not[SA_TEX_COUNT];
     // texture packs (KF4_SA_PACK, KF4_SA_PACK_DUMP)
     uint64_t packed_chunks, dumped_chunks;
+    uint64_t tables_loaded; // (a save state's or a capture's table)
 };
 SaStats sa_stats;
 
@@ -2863,9 +2864,15 @@ void sa_switch(bool on) {
     sa_held_forget();
 }
 
-// (gsn_state's loading, gsn_restore) VRAM made anew: the scene's turn and the table forgotten
+// (gsn_state's loading, gsn_restore) VRAM made anew: the scene's turn and the table forgotten. A
+// state's or a capture's table comes after (sa_table_load). With --renderer modern asked for and not
+// on yet (a --state-load before the first vblank, kf4-gsreplay's start) the scene starts now, so that
+// the table loaded next is kept.
 void sa_forget() {
     if (!sa.on) {
+        if (sa_mode) {
+            sa_switch(true);
+        }
         return;
     }
     if (gs->in_pass && gs->pass_color == &SA_MARKER) {
@@ -2939,6 +2946,270 @@ void sa_print_table_stats() {
     }
 }
 
+// ---- The table in save states and captures ---------------------------------------------------------
+// Without it, after a load every texture is the GS's ("not uploaded") until the game uploads it again,
+// and a map's textures are uploaded once, when it loads. So a state (port/platform/gs.c, after the
+// native GS's part) and a capture (record KF4GS_SA_TABLE, after the GS's) carry the table: the blocks
+// that have owners (T4's: each owner with the nibbles of the block it still has), the pages' counts (low
+// 24 bits and top byte), the CLUT mirror, and the uploads the owners name, bytes and all. Nothing of the
+// program's layout: the uploads are the PS2's (BITBLTBUF, TRXPOS, TRXREG and the bytes the GS took).
+// Little-endian, every field 4 or 8 bytes (u16 for the CLUT's halfwords):
+//   u32 'SAT2', u32 chunks, u32 blocks, u32 pages (512); u64 seq;
+//   u64 page_drawn_lo[pages]; u64 page_drawn_hi[pages];
+//   u16 clut[512]; u32 clut_cbp[2]; u64 clut_gs[8]; u64 clut_packed[8];
+//   chunks x {u32 id, u32 size, u64 seq, u64 bitbltbuf, u64 trxpos, u64 trxreg, size bytes padded to 4};
+//   blocks x {u32 block, u32 n; n x {u32 id, u32 0, u64 seq, u64 cover[8]}}  (only blocks with owners)
+// Loaded, an upload already kept (the same bytes, where they went) is the same chunk; any other gets a
+// new id, so the decoded textures (found again by their uploads' ids) are never another's. An owner
+// naming an upload the saver had let go names an id no chunk has (its texture the GS's, "upload let go").
+const uint32_t SA_TABLE_MAGIC = 0x32544153u; // ("SAT2": T4's table; T6's first, "SAT1", had 4 owners a block)
+
+struct SaTableHead {
+    uint32_t magic, chunks, blocks, pages;
+    uint64_t seq;
+};
+struct SaTableChunk {
+    uint32_t id, size;
+    uint64_t seq, bitbltbuf, trxpos, trxreg;
+};
+struct SaTableBlock {
+    uint32_t block, n;
+};
+struct SaTableOwner {
+    uint32_t id, pad;
+    uint64_t seq;
+    uint64_t cover[8];
+};
+struct SaTableClut {
+    uint16_t clut[512];
+    uint32_t cbp[2];
+    uint64_t gs[8], packed[8];
+};
+static_assert(sizeof(SaTableHead) == 24 && sizeof(SaTableChunk) == 40 && sizeof(SaTableBlock) == 8 &&
+                  sizeof(SaTableOwner) == 80 && sizeof(SaTableClut) == 1160,
+              "the table's records are the file's");
+
+// The table as bytes (none when the scene is off)
+void sa_table_save(std::vector<uint8_t> &out) {
+    out.clear();
+    if (!sa.on || sat.blocks.size() != SA_BLOCKS) {
+        return;
+    }
+    auto put = [&](const void *p, size_t n) {
+        out.insert(out.end(), static_cast<const uint8_t *>(p), static_cast<const uint8_t *>(p) + n);
+    };
+    std::vector<uint32_t> ids;
+    uint32_t blocks = 0;
+    for (const SaBlock &b : sat.blocks) {
+        if (b.owners.empty()) {
+            continue;
+        }
+        blocks++;
+        for (const SaOwner &o : b.owners) {
+            if (o.id && sa_chunk(o.id)) {
+                ids.push_back(o.id);
+            }
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    SaTableHead head = {SA_TABLE_MAGIC, uint32_t(ids.size()), blocks, 512, sa.seq};
+    put(&head, sizeof(head));
+    put(sat.page_drawn_lo, sizeof(sat.page_drawn_lo));
+    put(sat.page_drawn_hi, sizeof(sat.page_drawn_hi));
+    SaTableClut tcl;
+    memcpy(tcl.clut, sat.clut, sizeof(tcl.clut));
+    memcpy(tcl.cbp, sat.clut_cbp, sizeof(tcl.cbp));
+    memcpy(tcl.gs, sat.clut_gs, sizeof(tcl.gs));
+    memcpy(tcl.packed, sat.clut_packed, sizeof(tcl.packed));
+    put(&tcl, sizeof(tcl));
+    for (uint32_t id : ids) {
+        const SaChunk &c = *sa_chunk(id);
+        SaTableChunk tc = {id, uint32_t(c.bytes.size()), c.seq, c.bitbltbuf, c.trxpos, c.trxreg};
+        put(&tc, sizeof(tc));
+        put(c.bytes.data(), c.bytes.size());
+        out.resize((out.size() + 3) & ~size_t(3), 0);
+    }
+    for (uint32_t k = 0; k < SA_BLOCKS; k++) {
+        const SaBlock &b = sat.blocks[k];
+        if (b.owners.empty()) {
+            continue;
+        }
+        SaTableBlock tb = {k, uint32_t(b.owners.size())};
+        put(&tb, sizeof(tb));
+        for (const SaOwner &o : b.owners) {
+            SaTableOwner to = {o.id, 0, o.seq, {}};
+            memcpy(to.cover, o.cover.q, sizeof(to.cover));
+            put(&to, sizeof(to));
+        }
+    }
+}
+
+// A state's or a capture's table, after sa_forget (VRAM loaded). False, and the table left empty (the
+// GS's textures), when it does not read; true and nothing done when the scene is off.
+bool sa_table_load(const uint8_t *data, size_t size) {
+    if (!sa.on) {
+        return true;
+    }
+    sa_table_reset();
+    const uint8_t *at = data, *end = data + size;
+    SaTableHead head;
+    std::vector<uint64_t> drawn_lo(512), drawn_hi(512);
+    SaTableClut tcl;
+    if (size < sizeof(head) + 2 * 512 * sizeof(uint64_t) + sizeof(tcl)) {
+        return false;
+    }
+    memcpy(&head, at, sizeof(head));
+    at += sizeof(head);
+    if (head.magic != SA_TABLE_MAGIC || head.pages != 512) {
+        return false;
+    }
+    memcpy(drawn_lo.data(), at, 512 * sizeof(uint64_t));
+    at += 512 * sizeof(uint64_t);
+    memcpy(drawn_hi.data(), at, 512 * sizeof(uint64_t));
+    at += 512 * sizeof(uint64_t);
+    memcpy(&tcl, at, sizeof(tcl));
+    at += sizeof(tcl);
+    std::unordered_map<uint32_t, uint32_t> id_now; // (the saver's id: this table's)
+    for (uint32_t i = 0; i < head.chunks; i++) {
+        SaTableChunk tc;
+        if (size_t(end - at) < sizeof(tc)) {
+            return false;
+        }
+        memcpy(&tc, at, sizeof(tc));
+        at += sizeof(tc);
+        size_t padded = (size_t(tc.size) + 3) & ~size_t(3);
+        if (size_t(end - at) < padded) {
+            return false;
+        }
+        const uint8_t *bytes = at;
+        at += padded;
+        // (kept as sa_uploaded keeps an upload, without owning its blocks: they come below)
+        PendingUpload p;
+        p.bitbltbuf = tc.bitbltbuf;
+        p.trxpos = tc.trxpos;
+        p.trxreg = tc.trxreg;
+        uint64_t hash = upload_hash(p, bytes, tc.size);
+        uint32_t id = 0;
+        auto found = sa.chunk_by_hash.find(hash);
+        if (found != sa.chunk_by_hash.end()) {
+            SaChunk *c = sa_chunk(found->second);
+            if (c && c->bitbltbuf == tc.bitbltbuf && c->trxpos == tc.trxpos && c->trxreg == tc.trxreg &&
+                c->bytes.size() == tc.size && memcmp(c->bytes.data(), bytes, tc.size) == 0) {
+                id = found->second;
+            }
+        }
+        if (!id) {
+            id = sa.next_id++;
+            if (!sa.next_id) {
+                sa.next_id = 1;
+            }
+            SaChunk &c = sa.chunks[id];
+            c.bitbltbuf = tc.bitbltbuf;
+            c.trxpos = tc.trxpos;
+            c.trxreg = tc.trxreg;
+            c.bytes.assign(bytes, bytes + tc.size);
+            c.hash = hash;
+            if (!sat.pack_dir.empty() || !sat.dump_dir.empty()) {
+                c.key = sa_pack_key(tc.bitbltbuf, tc.trxreg, bytes, tc.size);
+                c.pack = sa_pack_bytes(c.key, tc.size);
+                sa_stats.packed_chunks += c.pack ? 1 : 0;
+            }
+            sa.chunk_by_hash[hash] = id;
+            sa.chunk_order.push_back(id);
+            sa.chunk_bytes += tc.size;
+            sa_stats.chunks_new++;
+        }
+        SaChunk &c = sa.chunks[id];
+        c.seq = tc.seq;
+        c.used = sa.frame;
+        id_now[tc.id] = id;
+    }
+    std::vector<SaBlock> blocks(SA_BLOCKS);
+    size_t most = 0;
+    for (uint32_t i = 0; i < head.blocks; i++) {
+        SaTableBlock tb;
+        if (size_t(end - at) < sizeof(tb)) {
+            return false;
+        }
+        memcpy(&tb, at, sizeof(tb));
+        at += sizeof(tb);
+        if (tb.block >= SA_BLOCKS || tb.n == 0 || tb.n > 64 * 8 || size_t(end - at) < size_t(tb.n) * sizeof(SaTableOwner)) {
+            return false;
+        }
+        std::vector<SaOwner> &owners = blocks[tb.block].owners;
+        owners.resize(tb.n);
+        for (uint32_t k = 0; k < tb.n; k++) {
+            SaTableOwner to;
+            memcpy(&to, at, sizeof(to));
+            at += sizeof(to);
+            uint32_t id = 0;
+            if (to.id) {
+                auto it = id_now.find(to.id);
+                if (it == id_now.end()) {
+                    // (an upload the saver had let go: an id no chunk has, "upload let go")
+                    id = sa.next_id++;
+                    if (!sa.next_id) {
+                        sa.next_id = 1;
+                    }
+                    id_now[to.id] = id;
+                } else {
+                    id = it->second;
+                }
+            }
+            owners[k].id = id;
+            owners[k].seq = to.seq;
+            memcpy(owners[k].cover.q, to.cover, sizeof(to.cover));
+        }
+        most = std::max(most, owners.size());
+    }
+    sat.blocks.swap(blocks);
+    sat.owners_most = std::max(sat.owners_most, most);
+    memcpy(sat.page_drawn_lo, drawn_lo.data(), sizeof(sat.page_drawn_lo));
+    memcpy(sat.page_drawn_hi, drawn_hi.data(), sizeof(sat.page_drawn_hi));
+    memcpy(sat.clut, tcl.clut, sizeof(tcl.clut));
+    memcpy(sat.clut_cbp, tcl.cbp, sizeof(tcl.cbp));
+    memcpy(sat.clut_gs, tcl.gs, sizeof(tcl.gs));
+    memcpy(sat.clut_packed, tcl.packed, sizeof(tcl.packed));
+    sa.seq = std::max(sa.seq, head.seq);
+    sa_stats.tables_loaded++;
+    return true;
+}
+
+// (gsn_capture) the table as a capture's record, when the scene is on
+void sa_capture(void (*emit)(uint32_t type, const void *data, size_t size)) {
+    std::vector<uint8_t> bytes;
+    sa_table_save(bytes);
+    if (!bytes.empty()) {
+        emit(KF4GS_SA_TABLE, bytes.data(), bytes.size());
+    }
+}
+
+// (port/platform/gs.c: gsn_table_state_size, gsn_table_state) a save state's table: its size first
+// (the bytes kept until they are written), then the bytes
+std::vector<uint8_t> sa_state_bytes;
+size_t sa_state_size() {
+    sa_table_save(sa_state_bytes);
+    return sa_state_bytes.size();
+}
+void sa_state(PortStateIo *io, size_t size) {
+    if (!io->loading) {
+        size_t have = std::min(size, sa_state_bytes.size());
+        port_state_bytes(io, sa_state_bytes.data(), have);
+        if (size > have) {
+            port_state_bytes(io, nullptr, size - have);
+        }
+        std::vector<uint8_t>().swap(sa_state_bytes);
+        return;
+    }
+    std::vector<uint8_t> bytes(size);
+    port_state_bytes(io, bytes.data(), size);
+    if (!sa_table_load(bytes.data(), size)) {
+        sa_table_reset();
+        fprintf(stderr, "[gs] the state's page-ownership table does not read: its textures are the GS's\n");
+    }
+}
+
 // --stats
 void sa_print_stats() {
     if (!sa.on && !sa_stats.batches && !sa_stats.acquires) {
@@ -2971,6 +3242,9 @@ void sa_print_stats() {
             s.upload_bytes / 1048576.0, (unsigned long long)s.chunks_new, (unsigned long long)s.replayed_uploads);
     for (int i = 0; i < SA_WHY_COUNT; i++) {
         fprintf(stderr, "%s%llu %s", i ? ", " : "", (unsigned long long)s.declined[i], sa_why_names[i]);
+    }
+    if (s.tables_loaded) {
+        fprintf(stderr, "; %llu tables loaded (save states, captures)", (unsigned long long)s.tables_loaded);
     }
     fprintf(stderr, "\n");
     sat_print_stats(); // (T3)

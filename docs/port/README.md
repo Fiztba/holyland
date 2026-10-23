@@ -640,7 +640,12 @@ kf4-gsreplay a.kf4gs --compare b.kf4gs           # two captures, draw by draw
 ```
 
 With `--renderer native` it draws with the native GS instead, and with `--renderer both` with both
-(`--draws` and `--frames` then write `_native` pictures beside paraLLEl-GS's).
+(`--draws` and `--frames` then write `_native` pictures beside paraLLEl-GS's). `--renderer modern` is
+the native GS with the scene in its own targets (P8, [NATIVE_DRAW_P8.md](NATIVE_DRAW_P8.md)), from
+the capture's start; a capture taken with the game's `--renderer modern` carries the page-ownership
+table (record `SA_TABLE`), so the scene's textures come from their uploads from the first draw, and
+the `[stats] standalone` line at the end says where each came from. A save state taken in modern
+carries the table too.
 `--compare-renderers` runs both and, after each draw, compares the pixels of its box: it lists the
 draws whose box differs by more than 1 in a channel, then puts the native GS back in step with
 paraLLEl-GS's pixels so that the next draw listed made its own difference (`--no-resync`: not). At

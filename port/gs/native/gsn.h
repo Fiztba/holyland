@@ -169,6 +169,10 @@ int gsn_restore(uint32_t type, const void *data, size_t size);
    buffer. Taken between GIF packets. */
 size_t gsn_state_size(void);
 void gsn_state(PortStateIo *io);
+/* (--renderer modern) the page-ownership table (gsn_standalone.inc), after gsn_state: saving, its size
+   (0 with the scene off) and then its bytes; loading, a state's `size` bytes (kept when the scene is on) */
+size_t gsn_table_state_size(void);
+void gsn_table_state(PortStateIo *io, size_t size);
 
 /* A presenter on the native GS's own Vulkan device (port/platform/present_vk.cpp): the window's
    swapchain takes the picture straight from the GPU, with no read-back.
