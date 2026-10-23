@@ -1028,6 +1028,10 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
                     (unsigned long long)s->cutout_draws);
         }
+        if (s->layer_draws) {
+            fprintf(stderr, "[stats] native GS: %llu batches with layers (--native-layer-z tolerant)\n",
+                    (unsigned long long)s->layer_draws);
+        }
         {
             int w;
             double pictures = s->pictures ? (double)s->pictures : 1.0;

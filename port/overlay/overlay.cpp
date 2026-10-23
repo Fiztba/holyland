@@ -879,11 +879,12 @@ void renderer_section() {
             port_settings_changed();
         }
         tooltip("How the native GS keeps the 3D's depth. Much of a map is drawn twice, a surface and then a\n"
-                "second texture over it, and on the PS2 the second fails the depth test in places: dark\n"
-                "hatching and combs of teeth, very visible at a higher resolution. Where two surfaces meet\n"
-                "at a shallow angle the PS2's whole-number depth makes a sawtooth. Tolerant keeps depth's\n"
-                "fraction and lets a surface pass a hair behind what is drawn: clean layers and straight\n"
-                "seams. PS2's is the PS2's picture. (--native-layer-z)");
+                "layer blended over it (a second texture, the darkness in the arches), and on the PS2 the\n"
+                "layer fails the depth test in places: dark hatching, combs of teeth, a lace of light lines,\n"
+                "very visible at a higher resolution. Where two surfaces meet at a shallow angle the PS2's\n"
+                "whole-number depth makes a sawtooth. Tolerant keeps depth's fraction and lets a layer pass\n"
+                "within a hair of the surface under it: clean layers and straight seams. PS2's is the PS2's\n"
+                "picture. (--native-layer-z)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();

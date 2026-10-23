@@ -73,9 +73,9 @@ typedef struct {
     int native_colour;
     int native_colour_forced;
     /* --native-layer-z: how the native GS keeps and tests the 3D's Z (GSN_LAYER_Z_*, port/gs/native/gsn.h:
-       0 ps2, the GS's whole numbers, a texture drawn over a surface failing the test in places and
-       surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and half a Z of
-       tolerance, clean layers and seams). Live from the overlay. */
+       0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
+       surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
+       within one Z, clean layers and seams). Live from the overlay. */
     int native_layer_z;
     int native_layer_z_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
