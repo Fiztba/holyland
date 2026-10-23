@@ -151,7 +151,7 @@ typedef struct {
    GS draws it into its own targets with its own state and fragment shader (gsn_nd_pass.inc), exactly as
    the packets would have been drawn; a pass is a draw of the side buffer of its own kind (RD_KIND_PASS,
    program RD_PROGRAM_PASS), its identity the pass and the call site's count in the frame. */
-#define RD_KIND_PASS 10u
+#define RD_KIND_PASS 11u
 #define RD_PROGRAM_PASS 0x20000u
 enum {
     RD_PASS_SCALE = 1,  /* the frame times RGB / 128 (Game_ApplyBrightness, Game_TintScreen): arg 0-2 RGB */
