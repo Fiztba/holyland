@@ -132,6 +132,8 @@ void gsn_set_native_draw(int mode);
    its --stats line. */
 void gsn_set_standalone(int on);
 void gsn_print_standalone_stats(void);
+/* (modern) The map the game is in (MapSlot.tag; -1 none), for --stats' counts a map: at each vblank */
+void gsn_set_scene_map(int map);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {

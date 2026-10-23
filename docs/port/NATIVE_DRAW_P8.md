@@ -17,9 +17,10 @@ path, and hosted mode (`--renderer native --native-draw KINDS`) is unchanged.
 | `port/gs/native/gsn_standalone.inc` | the core: the page-ownership table, textures from their source, the scene's targets and its turns with the GS's, a batch drawn into the scene. Included by `gsn.cpp` at the end of its namespace. |
 | `port/gs/native/shaders/nd_000.vert` (`ND_STANDALONE`, built again as `sa_000.vert`) | program 0x000 with the scene's own depth: the GS's Z before any rounding (`p.zf`, the moved `zf` in a picture between), plus `pc.zbias` and the layer slope (`pc.zslope`, the corner's alpha) |
 | `shaders/sa_depth.frag` (and `sa_depth_ms.frag`), `sa_copy_ms.frag`, `sa_sample.frag` | the scene's depth and colour given back to the GS's Z buffer and frame (sample for sample), and the cut-outs shaded at every sample |
-| hooks in `gsn.cpp` (each one line, marked "standalone") | `sa_flush()` in `flush_batch`; `sa_drawn` in `mark_dirty`; `sa_uploaded` in `complete_upload` and `upload_done`; `sa_upload_begins` / `sa_copied` / `sa_sync` in `begin_transfer`; `sa_upload_replayed` in `replay_upload`; `sa_sync` in `take_snapshot`, `vsync_now`, `gsn_read_rect*`, `gsn_write_rect`, `gsn_vram`; `sa_forget` in `gsn_state` loading and `gsn_restore`; `gsn_set_standalone`, `gsn_print_standalone_stats` |
+| hooks in `gsn.cpp` (each one line, marked "standalone") | `sa_flush()` in `flush_batch`; `sa_drawn` in `mark_dirty`; `sa_uploaded` in `complete_upload` and `upload_done`; `sa_upload_begins` / `sa_copied` / `sa_sync` in `begin_transfer`; `sa_upload_replayed` in `replay_upload`; `sa_sync` in `take_snapshot`, `vsync_now`, `gsn_read_rect*`, `gsn_write_rect`, `gsn_vram`; `sa_forget` in `gsn_state` loading and `gsn_restore`; `sa_clut_load` in `gs_write` (TEX0, after the GS's own CLUT load and flush); `sa_verify` in `flush_batch` (after `get_texture`: `KF4_SA_VERIFY` only); `gsn_set_standalone`, `gsn_set_scene_map`, `gsn_print_standalone_stats` |
 | hooks in `gsn_native_draw.inc` | `sa_draw_begin`/`sa_draw_end` around `nd_draw` in `nd_register`; `sa_waiting()` in `nd_kick` |
-| `port/platform/main_host.c`, `gs.c`, `platform.h` | `--renderer modern` (`port_options.renderer_modern`), its default kinds, its `--stats` line |
+| `port/platform/main_host.c`, `gs.c`, `platform.h` | `--renderer modern` (`port_options.renderer_modern`), its default kinds, its `--stats` lines; `gs.c` tells the GS the map at each vblank (`gsn_set_scene_map`, for the counts a map) |
+| `tools/texture_pack.py` | texture packs: the dumped uploads as pictures and back, a CLUT tinted |
 | `tools/native_draw_compare.py --mode modern` | the same game hosted, then modern; the `[stats] standalone` line in `report.txt` |
 
 ### How a scene batch goes
@@ -74,10 +75,18 @@ path, and hosted mode (`--renderer native --native-draw KINDS`) is unchanged.
 
 ### Textures from their source: the page-ownership table
 
-- **What it records.** For each 256-byte block of VRAM: the uploads that wrote it since one covered it
-  whole (up to 4, oldest first), and the table's count at the last of them. For each 8 KB page: the
-  count when a render target was last drawn into it (`mark_dirty`) or a copy wrote it (`sa_copied`). A
-  block whose page was drawn into after its upload is not the upload's any more.
+- **What it records.** For each 256-byte block of VRAM: the uploads that own part of it, in the order they
+  came, each with the nibbles of the block's 64 words that are still its own (`SaCover`, 512 bits) and the
+  table's count when it was written. An upload takes its nibbles from those before it, which keep the
+  rest; one left with none is dropped, so there is no limit on the owners (the most seen on the 64-map
+  tour: 2). The nibbles are what make the formats that own part of each word exact: PSMCT24 and Z24 the
+  low 24 bits, PSMT8H the top byte, PSMT4HL and PSMT4HH a nibble of it; a CLUT's 16 entries, a 4-bit
+  texture's half a byte, a rectangle's edge own their pixels and no more. For each 8 KB page: the count
+  when a render target was last drawn into it (`mark_dirty`) or a copy wrote it (`sa_copied`), kept for
+  its low 24 bits and its top byte apart (a 24-bit frame drawn over a page leaves PSMT8H and the 4-bit
+  high textures in its top byte theirs). An owner whose page was drawn into after it in the nibbles a
+  texture reads is not the upload's any more, and a texture's nibble that no upload owns is not the
+  table's either (`sa_owners`: every nibble the texture reads, of every block).
 - **The chain's order.** The uploads are recorded on the GS's thread as the transfers complete
   (`complete_upload`; `upload_done` for one written as it came, read back from VRAM). That is the order
   of the CPU's chain, so the owner a draw sees is the one the PS2 would have sampled. A picture between's
@@ -98,10 +107,47 @@ path, and hosted mode (`--renderer native --native-draw KINDS`) is unchanged.
   again by what it is plus its chunks' ids. So a texture is decoded once per source, however VRAM is
   shared. `KF4_SA_NO_TABLE=1` (tests) uses the GS's textures instead. The pictures were the same on the
   herb run: the table is exact.
+- **The CLUT** (T4) is the table's too: `sa_clut_load` (TEX0 written, after the GS's own load and flush)
+  mirrors the GS's CLUT buffer (`clut_load`): CLD 0-5 with the mirror's own CBP0/CBP1, the 8-bit and 4-bit
+  formats, CSM1 (the 16 x 16 or 8 x 2 rectangle, entries 8-15 and 16-23 of each 32 swapped) and CSM2
+  (TEXCLUT's line), CSA, the 32 and 16-bit CLUT formats. A load whose nibbles all belong to uploads is
+  read from those uploads written into the scratch VRAM (found again by what it is and its uploads); one
+  that is not is read from the GS's VRAM, its halfwords marked. A scene batch takes its colours from the
+  mirror (`sa_clut_colours`, `clut_colours`' arithmetic), or the GS's buffer whole when one halfword it
+  reads is marked. A scene batch waiting keeps the colours it was made with (the mirror changing alone, a
+  texture pack's upload in it, flushes it).
 - **What still comes from the GS:** a texture that is a render target (the scrolling textures' 128 x 128
-  targets, the reflection, the frame copies), one on a page drawn into or copied over since its upload
-  (`MapScroll_UpdateCopy`'s in-place scroll), and the CLUT. The CLUT is the GS's CLUT buffer, loaded by
-  TEX0's CLD from VRAM, whose blocks are the same uploads; making it the table's is a task below.
+  targets, the reflection, the frame copies) and one on a page drawn into or copied over since its upload
+  (`MapScroll_UpdateCopy`'s in-place scroll: a local copy from 0x3C40 back over the texture, on 008, 018
+  and 097): T3's. A TEX0 of a format the GS does not have (psm 0x10, on 103) is the GS's (its VRAM).
+- **Checking it** (`KF4_SA_VERIFY=1`): every batch's texture, the GS's batches (`flush_batch`, after
+  `get_texture`) and the scene's, as the table has it against the GS's VRAM, every row of every level, and
+  the CLUT the mirror gives against the GS's buffer; `--stats` counts them (2 logs each that differs, 3
+  also each not the table's, 4 each TEX0 once). On the 64-map tour in modern: 1,971,324 textures the same
+  and 0 different (49 more before the psm-0x10 fix), 1,970,336 CLUTs the same and 0 different; the GS's
+  batches' textures not the table's: 598, all the in-place scroll's. The font (PSMT4 at 0x3B40, its two
+  sheets by CLUT at 0x3FE0 and 0x3FE1, CLD 4) is among them: the same wherever text was drawn on these
+  runs (the title, the opening's messages, PAUSE). No run showed an item's name yet (picking up the herb
+  by pad did not take); that check is still open.
+- **`--stats` a map.** `[stats] standalone table` (CLUT loads by where they came from, the scene's CLUTs,
+  the most owners of a block, what `KF4_SA_VERIFY` found, the texture pack), and `[stats] standalone map
+  NNN` for each map the game was in (`gsn_set_scene_map` from `gs.c` at each vblank, the counts that grew
+  since the last vblank given to it; -1: no map, the title): the scene's batches, the declined, its
+  textures by where they came from, its CLUTs, and the verification.
+- **Texture packs** (the mods' groundwork). An upload is known to a pack by its key: a hash of its format,
+  its rectangle's size and its bytes, not where it went, so a pack follows a texture wherever the game puts
+  it. `KF4_SA_PACK_DUMP=DIR` writes each upload a scene texture or CLUT came from, once: `DIR/<key>.bin`
+  (its bytes as sent) and `DIR/<key>.txt` (format, size, where it went, the map). `KF4_SA_PACK=DIR` reads
+  `DIR/<key>.bin` in place of an upload's bytes when the game sends it (the same size only): the scene
+  decodes the pack's bytes (textures and the CLUT mirror), the GS's VRAM keeps the game's, so only the
+  scene changes (the GS's batches, and hosted mode, draw the game's). `tools/texture_pack.py` makes
+  pictures of the dumped uploads (`show`; PSMCT32 RGBA as the GS has it, the indices as grey), puts edited
+  pictures back (`pack`; exact both ways: the 42 uploads of the herb run come back byte for byte), and
+  tints a colour upload or part of it (`tint`). The game uploads its textures as PSMCT32 rectangles read
+  as PSMT8 and PSMT4, and a map's CLUTs as one PSMCT32 upload (099's: 64 x 320 at 0x3D40, 80 CLUTs of 16
+  x 16): to recolour a texture, tint its CLUT's 16 x 16 in that upload. The proof: the rock wall of 099
+  (TEX0 0x8007a80265423140, CBP 0x3D40) tinted blue on the herb run, the floor, the herb and the HUD
+  as they were (`texture_pack.py tint DUMP PACK 7347638491fdb72e 0.4,1.3,1.9 --rect 0,0,16,16`).
 
 ## The numbers (first round)
 
@@ -153,7 +199,18 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
 - **Debug switches** (read at the vblank that turns modern on): `KF4_SA_KINDS=MASK`, `KF4_SA_LOG=1` (each
   batch's FRAME, ZBUF, TEST, ALPHA and Z range, and why one is declined), `KF4_SA_PIXEL=X,Y` (the scene's
   batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack), `KF4_SA_SLACK=LAYER[,TIE]`,
-  `KF4_SA_NO_TABLE=1`.
+  `KF4_SA_NO_TABLE=1`; the table's (read once): `KF4_SA_VERIFY=1..4`, `KF4_SA_PACK=DIR`,
+  `KF4_SA_PACK_DUMP=DIR`.
+- **The map tour in modern.** `map_tour.py` has no `--renderer modern` yet (T6's); the T4 runs changed its
+  commands on the way (`--renderer modern`, `--no-audio`). A modern run ended in a broken heap at its exit
+  (0xC0000374 or 0xC0000005, after the last picture, 009 every time from a quick load): `sa_draw_begin`'s
+  fetched meshes were a function's static, made on the GS's thread after main's `atexit(print_stats)`, so
+  destroyed before it while the GS's thread still drew. They are `sa.fetched` now (T4). Native/draw
+  e8a89c00's tour in modern: 19 of 64 maps ended so; T4's: none.
+- **T4's tour in modern** (64 maps, 8 views each, 1x): its 508 pictures byte for byte those of e8a89c00
+  (the CLUT and textures from the table change nothing where the table is exact). The scene's textures:
+  900,486 from the table, 11,604 render targets (T3), 495 drawn or copied over (the in-place scroll on
+  008, 018 and 097: T3), 49 not uploaded (103's psm 0x10); its CLUTs: 900,295 the table's, 0 the GS's.
 - **Threshold.** Modern is not the PS2's picture bit for bit: the ties are the slack rule, not the GS's
   rounding, and some blends round differently. The bar is the owner's eye on the screenshot sets: no
   blobs, no missing or extra surfaces, no stripes or teeth. Differences are expected along silhouettes,

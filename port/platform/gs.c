@@ -23,6 +23,7 @@
 #include "port/present_vk.h"
 #include "port/render.h"
 #include "port/savestate.h"
+#include "port/overlay.h"
 #include "port/settings.h"
 
 #ifdef KF4_HAVE_PARALLEL_GS
@@ -879,6 +880,14 @@ void port_gs_post_vsync(void) {
     memcpy(request->privileged, ee_hw_ptr(0x12000000), sizeof(request->privileged));
     request->vblank = port_vblank_count();
     request->field = (int)((*(volatile uint64_t *)ee_hw_ptr(0x12001000) >> 13) & 1);
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native && port_options.renderer_modern) {
+        PortGameReadout game; /* --renderer modern's --stats a map (P8) */
+
+        kf4_game_readout(&game);
+        gsn_set_scene_map(game.map_loaded ? game.map_tag : -1);
+    }
+#endif
     if (port_gs_capture_armed) {
         port_gs_capture_note_vblank(request->vblank);
     }

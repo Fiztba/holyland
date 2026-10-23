@@ -1669,6 +1669,10 @@ void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uin
 void sa_uploaded_from_vram(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 void sa_upload_replayed(uint32_t k);
 void sa_vblank(bool extra);
+void sa_clut_load(uint64_t tex0);
+void sa_verify(uint64_t tex0, uint32_t levels, const uint32_t *mip_tbp, const uint32_t *mip_tbw, uint32_t cols,
+               uint32_t rows);
+void sa_set_map(int map);
 extern volatile int sa_mode;
 
 // Rows y0..y1-1 of the target drawn into (all of it, for one that is not regular)
@@ -3720,6 +3724,7 @@ void flush_batch() {
                 claim_pages(lo, count, nullptr, false);
             }
             Texture *tex = get_texture(tbp, tbw, tpsm, tw, th, levels, mip_tbp, mip_tbw, cols, rows);
+            sa_verify(tex0, levels, mip_tbp, mip_tbw, cols, rows); // (standalone: KF4_SA_VERIFY)
             raw_view = &tex->image->get_view();
             uint32_t src = psm_is_palette(tpsm)  ? SRC_CLUT
                            : tpsm == GSN_PSMCT24 ? SRC_CT24
@@ -5430,6 +5435,7 @@ void gs_write(uint32_t address, uint64_t value) {
             flush_batch();
             memcpy(gs->clut, now, sizeof(now));
         }
+        sa_clut_load(value); // (standalone: the table's CLUT)
         gs->reg[address] = value;
         mip_addresses(address - R_TEX0_1);
         return;
@@ -7406,6 +7412,10 @@ extern "C" void gsn_set_native_draw(int mode) {
 
 extern "C" void gsn_set_standalone(int on) {
     sa_mode = on; // (taken at the next vblank: gsn_standalone.inc)
+}
+
+extern "C" void gsn_set_scene_map(int map) {
+    sa_set_map(map); // (standalone: --stats per map)
 }
 
 extern "C" void gsn_print_standalone_stats(void) {
