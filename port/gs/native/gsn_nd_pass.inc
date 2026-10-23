@@ -33,10 +33,12 @@ enum : uint32_t {
     ND_PASS_PREV = 0x2, // the frame shown before, blended in by A^t (A t of the way from prev_rgba's when paired)
     ND_PASS_PAIRED = 0x4,
     ND_PASS_GRID = 0x8, // the wobble grid's texels t of the way from the frame before's (prev_uv, by the corner's place)
+    ND_PASS_SHIFT = 0x10, // the view-turn shift's strips t of the way from the frame before's (pad[0]: those paired)
 };
 struct NdPassBetween {
     uint32_t mode, prev_rgba, pad[2];
     uint32_t prev_uv[88], uv[88]; // (U | V << 16, 12.4: the frame before's and this frame's)
+    uint32_t cells[4];            // (ND_PASS_GRID: the wobble's cells frame_interp.c pairs, i * 10 + j)
 };
 
 // A GIF packet built here as the game builds its packet, then walked as gif() walks a PACKED one (each tag:
@@ -284,6 +286,8 @@ Program *nd_pass_program(Program *p) {
         vert.sets[2].storage_buffer_mask = 3u;
         vert.sets[2].meta[0].array_size = 1;
         vert.sets[2].meta[1].array_size = 1;
+        vert.sets[2].uniform_buffer_mask = 4u;
+        vert.sets[2].meta[2].array_size = 1;
         nd.pass_vs = gs->device->request_shader(gsn_spv_nd_pass_vert, sizeof(gsn_spv_nd_pass_vert), &vert);
     }
     Program *np = gs->device->request_program(nd.pass_vs, p->get_shader(ShaderStage::Fragment));
@@ -291,9 +295,191 @@ Program *nd_pass_program(Program *p) {
     return np;
 }
 
+// (a picture between's pass whose corners nd_pass.vert moves by its triangles, nd_pass_bind_tris: the wobble
+// grid's texels, ND_PASS_GRID, or the view-turn shift's strips, ND_PASS_SHIFT; and that pass)
+uint32_t nd_pass_tris_mode = 0;
+RdPass nd_pass_tris_of;
+
+// What nd_pass.vert reads of a draw's triangles (set 2, binding 2): the XYOFFSET its corners were placed by,
+// the place of the wobble grid's first point, and for each triangle of the run (by its corners' place in it):
+// - the wobble's, a cell's triangle that flush_batch's flat_2d moved out to the edges of its GS pixels: its
+//   corners' points of the grid (7 bits each, in their order; bit 31). The shader moves its texels by the
+//   picture's slopes, as gs_replay_corners.comp moves the PS2 path's cells (the CPU's are the frame's);
+// - the view-turn shift's, a strip's triangle: the strip (bits 0-4), which of its sprite's two (bit 5), whether
+//   flat_2d moved it (bit 30; bit 31). The shader makes its corners again from the strip's two places t of the
+//   way from the frame before's, as gs_replay.comp and gs_replay_corners.comp make the PS2 path's.
+struct NdPassTris {
+    float origin[2];
+    uint32_t offset, pad;
+    uint32_t tri[256];
+};
+
+// (the view-turn shift's) strip i's corners: X and Y (12.4, the u16 the game writes), U and V (12.4)
+struct NdShiftStrip {
+    int32_t x[2], y[2], u[2], v[2];
+};
+NdShiftStrip nd_shift_strip(const RdPass &p, int i) {
+    NdShiftStrip s;
+    uint32_t step = p.arg[0];
+    for (int k = 0; k < 2; k++) {
+        const uint32_t *c = p.data + 8 + k * 4; // (GsSpriteCorner)
+        s.x[k] = int32_t(((c[0] & 0xFFFF) + step * uint32_t(i)) & 0xFFFF);
+        s.y[k] = int32_t(c[0] >> 16);
+        s.u[k] = int32_t(c[2] + step * uint32_t(i));
+        s.v[k] = int32_t(c[3]);
+    }
+    return s;
+}
+
+// frame_interp.c's items_pair for a strip of the view-turn shift (a sprite: two corners, UV, its colour the
+// same), b this frame's, a the frame before's: whether the pictures between move it
+bool nd_shift_pairs(const NdShiftStrip &a, const NdShiftStrip &b, uint64_t tex0) {
+    int changed = 0, uniform = 1, moved_only = 1;
+    float ds0 = 0, dt0 = 0, smin = 1e30f, smax = -1e30f, tmin = 1e30f, tmax = -1e30f;
+    float tw = float(1u << ((tex0 >> 26) & 0xF)), th = float(1u << ((tex0 >> 30) & 0xF)), eps = 0.07f;
+    for (int k = 0; k < 2; k++) {
+        int32_t dx = b.x[k] - a.x[k], dy = b.y[k] - a.y[k];
+        if (dx > 2048 || dx < -2048 || dy > 2048 || dy < -2048) {
+            return false;
+        }
+        changed |= dx != 0 || dy != 0;
+        float bs = float(b.u[k] & 0x3FFF) / 16.0f, bt = float(b.v[k] & 0x3FFF) / 16.0f;
+        float ds = bs - float(a.u[k] & 0x3FFF) / 16.0f, dt = bt - float(a.v[k] & 0x3FFF) / 16.0f;
+        if (k == 0) {
+            ds0 = ds, dt0 = dt;
+        } else if (fabsf(ds - ds0) > eps || fabsf(dt - dt0) > eps) {
+            uniform = 0;
+        }
+        if ((fabsf(ds) > eps || fabsf(dt) > eps) && dx == 0 && dy == 0) {
+            moved_only = 0;
+        }
+        smin = std::min(smin, bs), smax = std::max(smax, bs), tmin = std::min(tmin, bt), tmax = std::max(tmax, bt);
+    }
+    if (uniform && (fabsf(ds0) > eps || fabsf(dt0) > eps)) {
+        float s = ds0 - tw * floorf(ds0 / tw + 0.5f), t = dt0 - th * floorf(dt0 / th + 0.5f);
+        if (fabsf(s) > 0.25f * (smax - smin) + eps || fabsf(t) > 0.25f * (tmax - tmin) + eps) {
+            return false;
+        }
+        if (ds0 - s != 0 || dt0 - t != 0) {
+            return false; // (a scroll past the texture's wrap: never, the strips' texels move with their places)
+        }
+        changed = 1;
+    } else if (!uniform) {
+        if (!moved_only) {
+            return false; // (a sprite's texture changed in place)
+        }
+        changed = 1;
+    }
+    return changed != 0;
+}
+
+// frame_interp.c's items_pair for the wobble's cell (i, j) (a strip of four corners, UV, the pass's colour; its
+// places the same each frame), b this frame's, a the frame before's: whether the pictures between move it
+bool nd_wobble_pairs(const RdPass &a, const RdPass &b, int i, int j, uint64_t tex0) {
+    int changed = 0, uniform = 1, moved_only = 1;
+    float ds0 = 0, dt0 = 0, smin = 1e30f, smax = -1e30f, tmin = 1e30f, tmax = -1e30f, dsmost = 0, dtmost = 0;
+    float tw = float(1u << ((tex0 >> 26) & 0xF)), th = float(1u << ((tex0 >> 30) & 0xF)), eps = 0.07f;
+    for (int k = 0; k < 4; k++) {
+        uint32_t g = uint32_t((i + (k >> 1)) * 11 + j + (k & 1));
+        uint32_t ua = a.data[g], ub = b.data[g];
+        changed |= memcmp(a.arg, b.arg, 16) != 0;
+        float bs = float(ub & 0x3FFF) / 16.0f, bt = float((ub >> 16) & 0x3FFF) / 16.0f;
+        float ds = bs - float(ua & 0x3FFF) / 16.0f, dt = bt - float((ua >> 16) & 0x3FFF) / 16.0f;
+        if (k == 0) {
+            ds0 = ds, dt0 = dt;
+        } else if (fabsf(ds - ds0) > eps || fabsf(dt - dt0) > eps) {
+            uniform = 0;
+        }
+        if (fabsf(ds) > eps || fabsf(dt) > eps) {
+            moved_only = 0; // (its places never move)
+        }
+        dsmost = std::max(dsmost, fabsf(ds)), dtmost = std::max(dtmost, fabsf(dt));
+        smin = std::min(smin, bs), smax = std::max(smax, bs), tmin = std::min(tmin, bt), tmax = std::max(tmax, bt);
+    }
+    if (uniform && (fabsf(ds0) > eps || fabsf(dt0) > eps)) {
+        float s = ds0 - tw * floorf(ds0 / tw + 0.5f), t = dt0 - th * floorf(dt0 / th + 0.5f);
+        if (fabsf(s) > 0.25f * (smax - smin) + eps || fabsf(t) > 0.25f * (tmax - tmin) + eps) {
+            return false;
+        }
+        if (ds0 - s != 0 || dt0 - t != 0) {
+            return false; // (a scroll past the texture's wrap: never, the springs move a few texels)
+        }
+        changed = 1;
+    } else if (!uniform) {
+        if (!moved_only && (dsmost > 0.25f * (smax - smin) + eps || dtmost > 0.25f * (tmax - tmin) + eps)) {
+            return false;
+        }
+        changed = 1;
+    }
+    return changed != 0;
+}
+
+// (nd_draw_range, a picture between's pass batch: the draw of corners up to end, of the run from gs->verts[run])
+void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end) {
+    auto *t = c.allocate_typed_constant_data<NdPassTris>(2, 2, 1);
+    memset(t, 0, sizeof(*t));
+    // (the passes' corners are context 1's)
+    uint64_t offset = gs->reg[R_XYOFFSET_1];
+    int32_t offx = int32_t(bits(offset, 0, 16)), offy = int32_t(bits(offset, 32, 16));
+    t->offset = uint32_t(offx) | uint32_t(offy) << 16;
+    if (nd_pass_tris_mode & ND_PASS_GRID) {
+        // (the grid's points: GS X 0x6C0 + 64 j, Y 0x720 + 64 i)
+        float ox = float(0x6C00 - offx) / 16.0f, oy = float(0x7200 - offy) / 16.0f;
+        t->origin[0] = ox, t->origin[1] = oy;
+        for (uint32_t tri = 0; tri < 256 && run + tri * 3 + 3 <= gs->verts.size() && tri * 3 < end; tri++) {
+            const Vtx *v = &gs->verts[run + tri * 3];
+            uint32_t points = 0x80000000u;
+            int moved = -1;
+            for (uint32_t k = 0; k < 3 && points; k++) {
+                // (as made, or moved: at ceil - 0.5 of the grid point's place)
+                int j = int(floorf((v[k].x - ox) / 64.0f + 0.5f)), i = int(floorf((v[k].y - oy) / 64.0f + 0.5f));
+                float px = ox + float(j) * 64.0f, py = oy + float(i) * 64.0f;
+                int here = v[k].x == px && v[k].y == py ? 0 : v[k].x == ceilf(px) - 0.5f && v[k].y == ceilf(py) - 0.5f ? 1 : -1;
+                if (j < 0 || j > 10 || i < 0 || i > 7 || here < 0 || (moved >= 0 && here != moved)) {
+                    points = 0;
+                    break;
+                }
+                moved = here;
+                points |= uint32_t(i * 11 + j) << (k * 7);
+            }
+            t->tri[tri] = points ? points | (moved > 0 ? 0x40000000u : 0) : 0;
+        }
+    } else if (nd_pass_tris_mode & ND_PASS_SHIFT) {
+        // (each triangle found among the strips' by its corners: add_sprite's 0, 1, 2 and 1, 3, 2 of corners
+        // 0 a's X and Y, 1 b's X a's Y, 2 a's X b's Y, 3 b's; as made, or as flat_2d moved them)
+        static const int corner[2][3] = {{0, 1, 2}, {1, 3, 2}};
+        for (uint32_t tri = 0; tri < 256 && run + tri * 3 + 3 <= gs->verts.size() && tri * 3 < end; tri++) {
+            const Vtx *v = &gs->verts[run + tri * 3];
+            uint32_t found = 0;
+            for (int i = 0; i < 20 && !found; i++) {
+                NdShiftStrip s = nd_shift_strip(nd_pass_tris_of, i);
+                for (int h = 0; h < 2 && !found; h++) {
+                    for (int moved = 0; moved < 2 && !found; moved++) {
+                        bool same = true;
+                        for (int k = 0; k < 3 && same; k++) {
+                            int c = corner[h][k];
+                            float x = float(s.x[c == 0 || c == 2 ? 0 : 1] - offx) / 16.0f;
+                            float y = float(s.y[c < 2 ? 0 : 1] - offy) / 16.0f;
+                            if (moved) {
+                                x = float(ceil(double(x)) - 0.5), y = float(ceil(double(y)) - 0.5);
+                            }
+                            same = v[k].x == x && v[k].y == y;
+                        }
+                        if (same) {
+                            found = 0x80000000u | (moved ? 0x40000000u : 0) | uint32_t(h) << 5 | uint32_t(i);
+                        }
+                    }
+                }
+            }
+            t->tri[tri] = found;
+        }
+    }
+}
+
 // A picture between's record of the pass: how its corners move, from the frame before's same pass
 void nd_pass_between(const NdKey &key, const RdPass &p) {
     NdPassBetween b = {};
+    nd_pass_tris_mode = 0;
     auto it = nd.pass_before.find(key);
     const RdPass *was = it != nd.pass_before.end() ? &it->second : nullptr;
     auto rgba_of = [](const uint32_t *a) {
@@ -307,7 +493,17 @@ void nd_pass_between(const NdKey &key, const RdPass &p) {
             b.mode |= ND_PASS_RGBA;
             b.prev_rgba = rgba_of(was->arg);
         }
-        if (p.pass == RD_PASS_WOBBLE && was && memcmp(was->data, p.data, 88 * 4) != 0) {
+        if (p.pass == RD_PASS_WOBBLE && was && (memcmp(was->data, p.data, 88 * 4) != 0 || (b.mode & ND_PASS_RGBA))) {
+            // (each cell a 2D item of frame_interp.c's, moved, colour and texels, only when items_pair takes
+            // it: a cell whose texels changed by more than a quarter of its own is drawn as the frame has it)
+            uint64_t tex0 = gs->reg[R_TEX0_1]; // (the game's, before: the frame grabbed at 0x2BC0)
+            for (int i = 0; i < 7; i++) {
+                for (int j = 0; j < 10; j++) {
+                    if (nd_wobble_pairs(*was, p, i, j, tex0)) {
+                        b.cells[(i * 10 + j) >> 5] |= 1u << ((i * 10 + j) & 31);
+                    }
+                }
+            }
             b.mode |= ND_PASS_GRID;
             memcpy(b.prev_uv, was->data, sizeof(b.prev_uv));
             memcpy(b.uv, p.data, sizeof(b.uv));
@@ -317,6 +513,32 @@ void nd_pass_between(const NdKey &key, const RdPass &p) {
         if (was && memcmp(was->arg, p.arg, 12) != 0) {
             b.mode |= ND_PASS_RGBA;
             b.prev_rgba = rgba_of(was->arg) | 0x80000000u;
+        }
+        break;
+    case RD_PASS_VIEW_SHIFT:
+        // (frame_interp.c: each strip a 2D item, paired with the frame before's in order, and moved t of the
+        // way from there when items_pair takes the pair: the turn's change. uv[0..1] this frame's first strip's
+        // corners' X | Y << 16, uv[2..3] their U | V << 16 (12.4), uv[4] the step from strip to strip; prev_uv
+        // the frame before's; pad[0] the strips paired. Not with a bilinear TEX1: snap_sprite_uv's, not here)
+        if (was && !((p.data[2] >> 5) & 1)) {
+            uint64_t tex0 = p.data[0] | uint64_t(p.data[1]) << 32;
+            for (int i = 0; i < 20; i++) {
+                if (nd_shift_pairs(nd_shift_strip(*was, i), nd_shift_strip(p, i), tex0)) {
+                    b.pad[0] |= 1u << i;
+                }
+            }
+            if (b.pad[0]) {
+                b.mode |= ND_PASS_SHIFT;
+                for (int k = 0; k < 2; k++) {
+                    const uint32_t *c = p.data + 8 + k * 4, *d = was->data + 8 + k * 4;
+                    b.uv[k] = c[0];
+                    b.uv[2 + k] = (c[2] & 0xFFFF) | c[3] << 16;
+                    b.prev_uv[k] = d[0];
+                    b.prev_uv[2 + k] = (d[2] & 0xFFFF) | d[3] << 16;
+                }
+                b.uv[4] = p.arg[0];
+                b.prev_uv[4] = was->arg[0];
+            }
         }
         break;
     case RD_PASS_PREVIOUS:
@@ -332,6 +554,8 @@ void nd_pass_between(const NdKey &key, const RdPass &p) {
     default:
         break;
     }
+    nd_pass_tris_mode = b.mode & (ND_PASS_GRID | ND_PASS_SHIFT);
+    nd_pass_tris_of = p;
     BufferCreateInfo info = {};
     info.domain = BufferDomain::Device;
     info.size = sizeof(b);

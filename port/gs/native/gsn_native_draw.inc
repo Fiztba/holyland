@@ -1131,6 +1131,7 @@ bool nd_corner_colour(const Vtx &v, uint32_t *rgba) {
 // program 0x700's with nd_700.vert (nd700_program; 0x000's records), program 0x280's with nd_280.vert
 // (nd280_program) and its records. The batch was decided once over all of them, as the PS2 path's would be
 // (0x000's and 0x280's corners together: a posed model and an entity, F-mixed)
+void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end); // (gsn_nd_pass.inc)
 void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t run) {
     if (!nd.active) {
         c.draw(n, first);
@@ -1147,6 +1148,9 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
         }
         if (kind == ND_KIND_PS2) {
             c.set_program(nd.strip_active ? nd_strip_program(base) : nd.pass_active ? nd_pass_program(base) : base);
+            if (nd.pass_active) {
+                nd_pass_bind_tris(c, run, to); // (its triangles, for nd_pass.vert: gsn_nd_pass.inc)
+            }
         } else {
             // (a batch of the water's corners is theirs alone: their records, nd.batch_draws, nd_water.vert)
             const Buffer *want = kind == ND_KIND_280 ? nd280_batch_draws() : nd.batch_draws;
