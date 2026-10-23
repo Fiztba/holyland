@@ -210,6 +210,76 @@ switch. Accepted: maps 000 (lava), 021, 112 at 1x/4x 0 pixels with `--clip ps2`.
 and flush time, the hash's MB a frame, the arena's size. The CPU plan costs about what VU1 HLE's position
 maths did; if it shows, plan only what `flush_batch` needs (boxes and alpha) and leave the rest to the GPU.
 
+*Measured 2026-10-23 (native/draw 4d35c35, 1x, `--fast --headless`, `tests/newgame.pad`, `--teleport
+1600:N:0`, dump at the last vblank; 3 runs a case, median [min-max]). Up to 8 other agents shared the CPU
+and GPU, so the timings are noisy; the counts were the same in every run. Each run's data folder was fresh
+but seeded with a warm pipeline cache: without one, 40-65 s of a run were pipeline compiles, more than
+everything measured here. Timers for the plan, the hash and the arena were a local patch, not committed
+(`nd_plan`, `nd_draw`, `rd_mesh_from_block`, `nd_place`).*
+
+**First: `--native-draw map` without `--native-draw-compare` draws garbage.** Every check of `map` so far
+used compare mode, where VU1 still runs the map's packets. Without compare mode, VU1 does not run them,
+and the PS2-path draws that come after go wrong. The opening (vblanks about 700-1600, before control) is
+black. Maps 000 and 009 at vblank 2000 and 4000 have a band of noise across rows 190-290, and the HUD and
+the scene are smeared (about 210,000 pixels differ). With compare mode on, the same frames match `off`
+except for P1-1's band. My guess is that VU1 or VIF1 state set by the map's packets is used by later
+programs, but I have not checked it. It also costs time: the GS keeps rebuilding the frame buffers at
+640x448, where `off` uses 640x224. That is 1,566 write-backs and 1,520-1,554 texture decodes (about 350M
+texels), against 5 and 135-177 with `off`. All of them happen before the teleport, and they take 40-47 s
+of a 2,000-vblank run. Needs fixing before `map` goes into `PORT_ND_ACCEPTED`; P1-2's sweep should also
+run with compare mode off.
+
+The task's own runs (2,000 vblanks, the whole run: the boot, the opening, then about 400 vblanks on the map):
+
+| | wall s | GS GIF s | VU1 s (HLE) | write-backs / decodes |
+|---|---|---|---|---|
+| 000 off | 3.97 [3.95-5.07] | 2.95 | 1.23 (1.19) | 5 / 135 |
+| 000 map,items | 48.89 [46.68-51.09] | 47.67 (decodes 41.8) | 0.72 (0.68) | 1,566 / 1,520 |
+| 000 map,items, compare | 5.45 (1 run) | | | 5 / 136 |
+| 009 off | 3.75 [3.02-4.10] | 2.47 | 1.07 (1.04) | 5 / 170 |
+| 009 map,items | 46.60 [43.39-49.80] | 45.48 (decodes 40.1) | 0.55 (0.51) | 1,566 / 1,554 |
+
+The opening hides the map's cost here. To measure the map alone, each 4,000-vblank run minus the same
+case's 2,000-vblank run gives 2,000 vblanks standing on the map (paired by run; one picture a vblank).
+Compare mode runs VU1 for the map as well, so its VU1 line is `off`'s, but its GS thread does the same work
+as the real mode would without the bug:
+
+| 2,000 vblanks on the map | wall s | GS GIF s | `nd_draw` s (plan) | VU1 HLE s | hand-off s |
+|---|---|---|---|---|---|
+| 000 off | 12.66 [11.05-14.92] | 11.72 [10.29-13.47] | | 5.17 [4.92-5.83] | 4.79 |
+| 000 map,items, compare | 15.46 [13.74-16.56] | 14.56 [13.45-15.38] | 3.96 (2.89 [2.76-3.07]) | 5.10 | 7.90 |
+| 000 map,items | 22.37 [16.01-23.87] | 20.61 [14.89-21.83] | 4.72 (2.70 [2.62-3.29]) | 3.66 [3.54-4.34] | 16.95 |
+| 009 off | 8.25 [8.21-8.69] | 7.19 [6.89-7.22] | | 4.17 [4.17-4.29] | 1.62 |
+| 009 map,items, compare | 12.28 [9.75-14.30] | 11.38 [9.68-11.58] | 3.96 (3.53 [3.17-3.55]) | 4.50 | 5.07 |
+| 009 map,items | 13.70 [12.26-22.45] | 12.35 [11.40-21.12] | 3.89 (3.32 [3.32-3.63]) | 2.56 [2.55-2.68] | 9.13 |
+
+- **The CPU plan shows.** It is 2.7-3.5 s per 2,000 vblanks, which is 1.35-1.75 ms a vblank or 2.7-3.5 ms
+  per 30 fps game frame, on the GS thread. That is 20.0M vertices on 000 and 23.8M on 009, about 145 ns a
+  vertex. The VU1 HLE time it saves is only 1.5-1.6 s per 2,000 vblanks (000: 5.17 to 3.66 s; 009: 4.17
+  to 2.56 s), so the plan costs about 1.8-2.1 times the VU1 maths it replaces. It runs every `vu_float`
+  operation in software. `nd_draw` outside the plan (set-up 0.07 s per run, the register writes and the
+  flushes it causes) is a further 1.1 s on 000 and 0.4-0.6 s on 009. Compare mode's GS thread goes from
+  35% to 44% of real time on 000 (33.3 s is 2,000 vblanks), and from 22% to 34% on 009. That is still
+  far below the limit, but it is the largest new cost, and it sits on the thread that already sets the
+  pace (the hand-off waits grow). It is worth doing what the plan above says: plan only what
+  `flush_batch` needs, or plan with native floats where nothing depends on the exact bits (the boxes,
+  rows and alpha ranges), and keep VU1's arithmetic in `nd_000.vert`.
+- **The GS's other work** barely changes in compare mode. Working out state goes 0.99 to 0.98 s (000) and
+  0.98 to 1.09 s (009); recording goes 5.94 to 6.03 s (000) and 0.51 to 0.60 s (009). The GS draws
+  4.11M on 000 in both modes, and 166,661 off against 179,661 compare on 009.
+- **The hash**: 1,417 MB per 2,000 vblanks on 000 and 1,710 MB on 009. That is 0.71 and 0.86 MB a vblank
+  (1.4 and 1.7 MB per game frame). It takes 0.24 and 0.30 s per 2,000 vblanks (0.12-0.15 ms a vblank,
+  about 5.9 GB/s). The whole block lookup, hash included, is 0.39-0.50 s. Parsing is 3-4 ms per run (1,255
+  meshes on 000 and 1,091 on 009, none refused, about 2.0M and 2.5M found again). Cheap; it is on
+  the game thread.
+- **The arena**: one arena per run, never grown: 524,288 vertices of room (32 MB). The whole run used
+  29,005 vertices (1.8 MB) on 000 and 23,899 (1.5 MB) on 009, the opening's map 099 included; that is
+  1,047 and 883 meshes put on the GPU. The 32 MB first size is far more than needed: 4 MB would hold these
+  maps. Draw records are 544 bytes each, 62,641 and 66,124 in a 4,000-vblank run (about 16 a vblank,
+  8.5 KB).
+- **GPU**: not measured (no GPU timers in `--stats` headless). The GS's render passes per picture are the
+  same in compare mode as `off`.
+
 **P1-7 Review and the owner's gate** (independent agent): the screenshot set (maps 000, 004, 009, 013, 021,
 035, 112, 116 at 1x, 4x, widescreen) side by side, and the switch to accept `map` into `PORT_ND_ACCEPTED`.
 
