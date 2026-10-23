@@ -1121,7 +1121,9 @@ void debug_page() {
             const char *what;
         } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."},
                      {"Map records (in work)", PORT_ND_MAP,
-                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords): in work, not yet checked."}};
+                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords): in work, not yet checked."},
+                     {"Map objects (in work)", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha): in work."},
+                     {"Picked item (in work)", PORT_ND_PICKED, "The item being picked up, after its depth clear: in work."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
         for (const auto &k : kinds) {
             bool on = (kinds_on & k.bits) != 0;

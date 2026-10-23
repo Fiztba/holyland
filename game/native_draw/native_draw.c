@@ -306,3 +306,20 @@ int NativeDraw_Posed(ModelInstance *model, int kind, const void *owner) {
     }
     return posed_model(model, FORM_POSED, kind, owner);
 }
+
+/* ---- For the other adapter files (nd_*.c): the helpers above ---------------------------------- */
+int NativeDraw_PartMeshes(ModelPart *part, RdMesh *meshes) {
+    return part_meshes(part, meshes);
+}
+
+u32 NativeDraw_CurrentCamera(void) {
+    return current_camera();
+}
+
+void NativeDraw_QueueMark(u32 command, u64 bits) {
+    queue_mark(command, bits);
+}
+
+void NativeDraw_QueueFixedBlock(ModelInstance *model, const void *matrix_a, const void *matrix_b) {
+    queue_fixed_block(model, matrix_a, matrix_b);
+}

@@ -440,6 +440,31 @@ for `MapObject_DrawAll` (`Model_DrawPosedWithAlpha`: context 2, `ALPHA_2` with t
 the sweep's views with those kinds, 0 pixels in compare and onoff on the maps with map objects, a fading
 object caught mid-fade, and a gold drop.
 
+*Done for objects and picked (nd2/p2-1); gold is not posed.* Kinds `objects` (0x2, was `models`) and
+`picked` (0x800); `models` is both. `game/native_draw/nd_objects.c` draws `Model_DrawPosedWithAlpha`
+(its GS registers per part: context 1 solid, or PRMODE context 2 with TEX1_2/TEX0_2 and `ALPHA_2` FIX = the
+fade; the trailer; the fixed block in onoff). The call site is the head of `Model_DrawPosedWithAlpha`
+(`model.patch`), the one function every map object with definition bit8 0 draws through, both straight from
+`MapObject_DrawAll` and from `DrawList_Draw` (the translucent and fading ones); a guard lets the compare
+mode's own call through. Model flag 0x800 is left to the PS2 path (the function allocates 5 quadwords it
+never writes). The picked item: `MapItem_DrawPicked` through `NativeDraw_PosedDepthByPart`, kind
+`RD_KIND_PICKED` (`item.patch`). `native_draw.c` exports its helpers for nd_*.c files (`NativeDraw_PartMeshes`
+...). **Gold is skinned** (`Gold_Draw` calls `Model_DrawSkinned`, program 0x280): it waits for P2-2, and its
+call site goes with P2-3. Not native: map objects with bit8 1 or 2 (`Model_DrawPosed` straight from
+`MapObject_DrawAll`; they go with the call sites when someone needs them).
+
+Results (1x unless said; 8 sweep views a map, made-up saves as P1-2): `--kinds objects,picked` 0 pixels on
+all 64 maps in compare 1x, compare 4x and onoff 1x, but 039, which differs with **0** native draws in both
+runs (its wave-UV timing; not this). 2,000-130,000 object draws queued a map. With every ported kind
+(`map,items,objects,picked`), the differences are exactly `map,items`' own: 027, 034, 039, 040, 042, 114
+(P1-2's wave UVs) and in onoff 028 (1 pixel), 037 (20,666, worst 2) and 109 (2), the same with objects
+off: **the merged tree's map kind is not 0 in onoff on 028, 037 and 109** (for the sweep again). Fading:
+only map 013's views have fading objects (pulsing glints, fade 0-32, through the draw list); 41 pictures
+720-920 0 pixels in compare and onoff, and hiding them shows where they are (up to 61 levels). The picked
+herb (`herb.pad` and CROSS at 1825-1885): 1840-1930 0 pixels in compare and onoff at 1x and 4x; at 240 the
+pictures between differ at the moving herb's edges (1,100-2,600 pixels, worst 82: P2-5's moving path),
+the game's frames 0. `--log` with `objects,picked` equals off's.
+
 **P2-2 Program 0x280 as a shader** (owns `port/gs/native/shaders/nd_280.vert`, its part of
 `gsn_native_draw.inc`, and the parser's 0x280 batches in `render.cpp`). Skinned models: float vertices,
 two matrices picked by ST.w, the colour scale and bias (0x64-0x65), and the second (sphere, "phong") pass
