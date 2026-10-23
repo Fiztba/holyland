@@ -304,6 +304,10 @@ struct Gs {
     Program *program_pass_copy = nullptr, *program_pass_resolve = nullptr;
     std::vector<ImageHandle> scratch;
 
+    // the last batch drawn as a tie (flush_batch, "Ties"): when (tick), and its triangles
+    uint64_t tie_tick = UINT64_MAX - 1;
+    std::vector<Vtx> tie_verts;
+
     // ---- the batch being gathered: triangles since the last register write
     std::vector<Vtx> verts;
     uint32_t batch_prim = 0; // PRIM's attributes (PRMODE's when PRMODECONT says)
@@ -3642,7 +3646,13 @@ void flush_batch() {
     for (int i = 0; i < npasses; i++) {
         any_zwrite_pass |= passes[i].zwrite;
     }
-    float zstep = zpsm == 0x30 ? 65536.0f : zpsm == 0x31 ? 256.0f : 1.0f; // (a 16-bit Z's step)
+    // (a Z: the GS rounds to whole Z of the buffer's format, whatever its width. The tolerance used to
+    // be a 16-bit Z's step, 65,536 Z of a 32-bit buffer: the menus draw the figure on the Equipment
+    // screen into one, its whole depth within 4,000 Z, so every part of it tied with every other, and
+    // parts behind showed through in patches. Where the Z are too large for a float to hold a whole Z,
+    // a float's step at the batch's largest.)
+    uint32_t zbig = std::min(zmax, depth_max(zpsm));
+    float zstep = zbig < (1u << 24) ? 1.0f : float(zbig) / 8388608.0f;
     if (fine_z && !any_zwrite_pass && (ztst == 2 || ztst == 3)) {
         for (int i = 0; i < npasses; i++) {
             passes[i].zbias = 0.5f * zstep;
@@ -3672,7 +3682,25 @@ void flush_batch() {
                         (atst == 2 && a_hi < aref) || (atst == 3 && a_hi <= aref) || (atst == 5 && a_lo >= aref) ||
                         (atst == 6 && a_lo > aref) || (atst == 4 && a_lo == aref && a_hi == aref) ||
                         (atst == 7 && (a_hi < aref || a_lo > aref));
-    bool tie = fine_z && any_zwrite_pass && ztst == 2 && same_twice && !reads_own_target && !(push.flags & F_DATE);
+    // A draw of the same triangles as the tie drawn just before it (VU1 program 0x280's second pass: the
+    // menus' figure and the models drawn dark, then a sphere map added over them, Cd As + Cs) is tested as
+    // that one was: else where the first passed within half a Z of a part in front, the second failed,
+    // and the figure on the Equipment screen came out in light and dark patches, triangle by triangle.
+    // Its colour is drawn over its own triangles where they lie within half a Z of each other, as the
+    // tie's is (a second pass's do not: they are the first's).
+    bool repeat = fine_z && any_zwrite_pass && ztst == 2 && !reads_own_target && !(push.flags & F_DATE) &&
+                  gs->tick == gs->tie_tick + 1 && gs->tie_verts.size() == gs->verts.size();
+    for (size_t i = 0; repeat && i < gs->tie_verts.size(); i++) {
+        const Vtx &a = gs->tie_verts[i], &b = gs->verts[i];
+        repeat = a.x == b.x && a.y == b.y && a.z == b.z;
+    }
+    bool tie = fine_z && any_zwrite_pass && ztst == 2 && (same_twice || repeat) && !reads_own_target &&
+               !(push.flags & F_DATE);
+    if (tie) {
+        // (its triangles, for a second pass over them: repeat above)
+        gs->tie_tick = gs->tick;
+        gs->tie_verts.assign(gs->verts.begin(), gs->verts.end());
+    }
     if (tie) {
         Pass z_first[4];
         int n = 0;
