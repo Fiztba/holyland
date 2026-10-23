@@ -103,6 +103,14 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   cubic at the pixel's own place, moved half a GS pixel on (a filter centres a texel where nearest at the
   GS pixel's integer point has its left edge: unmoved, the letters sat half a GS pixel right). Read
   nearest at the integer point, each texel was a block and the letters differed from scale to scale.
+- **A picture between recorded on the GPU must not be submitted half drawn without its moves.** Its
+  compute passes (the kicks moved, the corners made) are recorded at its start and read what the stream
+  writes into mapped buffers as it goes, the corners' count last. A write-back in the middle (an upload
+  asked for again over a scrolling texture's target: a coin on the ground, the shop on map 060) submitted
+  the draws so far with the count of the picture before and kicks not yet written: pictures between with
+  the HUD gone, black, or textures across the screen, in main since the pictures between went to the GPU.
+  `submit` now writes the count so far, flushes, and runs the passes again after (`--stats`: "submits
+  while recording").
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a

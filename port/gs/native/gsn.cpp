@@ -1240,6 +1240,21 @@ void submit(bool wait) {
     if (!gs->cmd) {
         return;
     }
+    // A submit in the middle of a picture between drawn on the GPU (a write-back or read-back while it
+    // is recorded: an upload asked for again over a target, say): the compute passes at its start
+    // (interp_kicks_pass) move the kicks the stream has given so far, which the draws submitted now
+    // use, so the corners' count so far goes in first and the buffers are flushed; after it, the passes
+    // again, for the draws to come (recorded too, so a replay does the same). Without it the draws
+    // already recorded ran with the corners' count of the picture before and the kicks not yet
+    // written: pictures between with the HUD gone, the floor out of place, textures in wrong places
+    // (a coin on the ground, map 000's HUD, October 2026).
+    bool mid_picture = interp.active && recording_ops.on && interp.kick_map && interp.corner_map;
+    if (mid_picture) {
+        uint32_t count[4] = {interp.corner, 0, 0, 0};
+        memcpy(interp.corner_map[0], count, sizeof(count));
+        gs->device->unmap_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT);
+        gs->device->unmap_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT);
+    }
     if (wait) {
         Fence fence;
         gs->device->submit(gs->cmd, &fence);
@@ -1248,6 +1263,13 @@ void submit(bool wait) {
         gs->device->submit(gs->cmd);
     }
     gs->cmd.reset();
+    if (mid_picture) {
+        interp.kick_map = static_cast<InterpKick *>(gs->device->map_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT));
+        interp.corner_map =
+            static_cast<uint32_t(*)[4]>(gs->device->map_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT));
+        gsn_stats.interp_mid_submits++;
+        cmd().interp_kicks();
+    }
 }
 
 // A barrier between transfers and the draws or transfers after them

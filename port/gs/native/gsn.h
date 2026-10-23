@@ -273,6 +273,7 @@ typedef struct {
     /* --frame-rate's pictures between on the GPU (gsn_interp_picture): drawn from the packets (the first
        of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */
     uint64_t interp_records, interp_replays, interp_misses, ns_interp_record, ns_interp_replay;
+    uint64_t interp_mid_submits; /* submits while a picture between is recorded (write-backs in it) */
     uint64_t interp_rerecord[4]; /* why drawn from the packets again: the GS changed, the recording could not be */
     /* Why render passes ended, and why multisampled images were resolved (GSN_WHY_*); the bytes the
        passes loaded and stored (their attachments, whole), resolves and copies moved; pictures made */

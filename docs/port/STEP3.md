@@ -847,6 +847,15 @@ Checked: the game's own pictures the same at 30 and 240 (the menus, the gold); t
 build before's but for the weave (and with `--no-whole-frame` the same); the map tour, gsn_draw_test
 (seeds 1-3), gsn_vram_test, vu1_test, boot_test, frame_test (gs and native).
 
+**A submit in the middle** (October 2026): a write-back while a picture between is recorded (an upload
+asked for again over a scrolling texture's 128 x 128 target, which then goes back to VRAM and is made
+again each picture: a coin lying on the ground, the shopkeeper's home on map 060) submitted the draws
+recorded so far before the compute passes had the picture's kicks and corners' count: every such
+picture was wrong (no HUD, black, the HUD's textures down the screen), at 60 to 240, since d8f152d.
+`submit` now gives the passes the corners so far and flushes the mapped buffers first, and records the
+passes again after it for the draws to come. The coin and the shop: the pictures between as the CPU's
+way draws them (`KF4_INTERP_CPU=1`), none flashing; the game's own frames the same at 30 and 240.
+
 ### What moves by itself
 
 The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned
