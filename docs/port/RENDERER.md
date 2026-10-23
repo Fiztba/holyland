@@ -22,6 +22,7 @@ draws instead when the native GS cannot start.
 | `port/platform/video.c` | the window, SDL_Renderer, frame pacing and dumps |
 | `port/platform/vu1.c`, `vu1_hle*.c` | the VU1 interpreter and the four programs in C (bit for bit the interpreter's) |
 | `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times. With the native GS alone the pictures are drawn on the GPU: the frame walked once, its draws recorded once, each picture the recorded calls again with its vertices moved by compute (`shaders/gs_replay*.comp`; STEP3.md, "On the GPU") |
+| `port/render/`, `game/native_draw/`, `port/gs/native/gsn_native_draw.inc` | native draw (`--native-draw`, in work on branch `native/draw`): the game's draws handed to a renderer core and drawn by the native GS with a vertex shader doing VU1's maths (NATIVE_DRAW.md, NATIVE_DRAW_TASKS.md) |
 | `tools/gsreplay/` | `kf4-gsreplay`: a GS capture (F9) drawn again by either renderer, compared draw by draw and picture by picture |
 
 ## The rules

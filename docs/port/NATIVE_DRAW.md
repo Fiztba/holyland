@@ -1,7 +1,10 @@
 # Drawing at the game's level ("option 4"): a proposal
 
-Status: proposal for discussion (October 2026), branch `plan/native-draw`. Nothing here is built
-yet. Written for the owner, Andrew and Fizban, and for the agents that would do the work.
+Status: approved; P0's core is built on branch `native/draw` (October 2026): the renderer core, hosted
+draws in the native GS, the switches, and MapItem_DrawAll's items drawn natively, bit for bit as the PS2
+path. [NATIVE_DRAW_TASKS.md](NATIVE_DRAW_TASKS.md) has what is built, the numbers, how to work on it, the
+tasks next, and where the build changed this plan. Written for the owner, Andrew and Fizban, and for the
+agents doing the work.
 
 Today the port draws the PS2's way. The game builds its DMA chain, VIF1 unpacks the data, the VU1
 programs (C versions of them, `port/platform/vu1_hle*.c`) transform it, and the native GS
