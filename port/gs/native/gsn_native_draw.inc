@@ -197,6 +197,27 @@ void vu_transform4(float *out, const float *m, const float *v) {
     }
 }
 
+// A vertex's place as VU1 works it out (vu1_hle.c's vertex: its operations, VU1's arithmetic; the same as
+// nd_000.vert's): q the mesh's vertex (four qwords), vm the vertex matrix. xyz: FTOI4 of the projected
+// place; stq: ST by 1/w; the clip judgement
+void nd_plan_vertex(const int32_t *q, const float *vm, int32_t xyz[3], float stq[3], bool &clip) {
+    float p[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
+    float c[4];
+    vu_transform4(c, vm, p);
+    float qq = vu_float_from_bits(vu_float_div(0x3F800000u, vu_float_bits(c[3])));
+    float x = vu_mul(c[0], qq), y = vu_mul(c[1], qq), z = vu_mul(c[2], qq);
+    // VU1's clip judgement: past the guard band (2047 about the 2048 middle) in X or Y, or Z below 0
+    float rx = vu_sub(x, 2048.0f), ry = vu_sub(y, 2048.0f);
+    clip = !(fabsf(rx) <= 2047.0f && fabsf(ry) <= 2047.0f) ||
+           (vu_float_bits(z) > 0x80000000u && (vu_float_bits(z) & 0x7F800000u) != 0);
+    xyz[0] = vu_float_ftoi(vu_float_bits(x), 4);
+    xyz[1] = vu_float_ftoi(vu_float_bits(y), 4);
+    xyz[2] = vu_float_ftoi(vu_float_bits(z), 4);
+    stq[0] = vu_mul(float(q[8]) / 4096.0f, qq);
+    stq[1] = vu_mul(float(q[9]) / 4096.0f, qq);
+    stq[2] = vu_mul(float(q[10]) / 4096.0f, qq);
+}
+
 // The batch's triangles planned on the CPU into gs->verts (see the top): those VU1 would kick. base: the
 // batch's first vertex in the arena; record: its draw's
 void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t prim, uint32_t base, uint32_t record) {
@@ -206,26 +227,17 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
     bool clip[N_ND_MAX];
     for (uint32_t k = 0; k < b.count; k++) {
         const int32_t *q = &m.vertices[(b.first + k) * 16];
-        // (vu1_hle.c's vertex: its operations, VU1's arithmetic; the same as nd_000.vert's)
-        float p[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
-        float c[4];
-        vu_transform4(c, vm, p);
-        float qq = vu_float_from_bits(vu_float_div(0x3F800000u, vu_float_bits(c[3])));
-        float x = vu_mul(c[0], qq), y = vu_mul(c[1], qq), z = vu_mul(c[2], qq);
-        // VU1's clip judgement: past the guard band (2047 about the 2048 middle) in X or Y, or Z below 0
-        float rx = vu_sub(x, 2048.0f), ry = vu_sub(y, 2048.0f);
-        clip[k] = !(fabsf(rx) <= 2047.0f && fabsf(ry) <= 2047.0f) || (vu_float_bits(z) > 0x80000000u &&
-                                                                       (vu_float_bits(z) & 0x7F800000u) != 0);
-        int32_t xi = vu_float_ftoi(vu_float_bits(x), 4), yi = vu_float_ftoi(vu_float_bits(y), 4);
-        int32_t zi = vu_float_ftoi(vu_float_bits(z), 4);
-        v[k].x = float(int32_t(uint32_t(xi) & 0xFFFF) - ox) / 16.0f;
-        v[k].y = float(int32_t(uint32_t(yi) & 0xFFFF) - oy) / 16.0f;
-        v[k].z = uint32_t(zi >> 4) & 0xFFFFFF;
+        int32_t xyz[3];
+        float stq[3];
+        nd_plan_vertex(q, vm, xyz, stq, clip[k]);
+        v[k].x = float(int32_t(uint32_t(xyz[0]) & 0xFFFF) - ox) / 16.0f;
+        v[k].y = float(int32_t(uint32_t(xyz[1]) & 0xFFFF) - oy) / 16.0f;
+        v[k].z = uint32_t(xyz[2] >> 4) & 0xFFFFFF;
         int32_t a = q[15];
         v[k].rgba = uint32_t(a < 0 ? 0 : a > 255 ? 255 : a) << 24;
-        v[k].s = vu_mul(float(q[8]) / 4096.0f, qq);
-        v[k].t = vu_mul(float(q[9]) / 4096.0f, qq);
-        v[k].q = vu_mul(float(q[10]) / 4096.0f, qq);
+        v[k].s = stq[0];
+        v[k].t = stq[1];
+        v[k].q = stq[2];
     }
     uint32_t gouraud = ((prim >> 3) & 1) ? ND_CORNER_GOURAUD : 0;
     for (size_t i = 0; i + 2 < b.triangles.size(); i += 3) {
@@ -250,28 +262,12 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
     }
 }
 
-void nd_draw(uint64_t value) {
-    RdDraw d;
-    RdCamera cam;
-    if (!rd_fetch(value, d, cam, nd.fetched)) {
-        gsn_stats.nd_lost++;
-        return;
-    }
-    if (d.program != 0) {
-        gsn_stats.nd_unsupported++;
-        return;
-    }
-    gsn_stats.nd_draws++;
-    // the draw's record. VU1's set-up (vu1_hle.c, setup), in its arithmetic: the vertex matrix (VU1 0x00
-    // by 0x04), the light directions by the part's rotation (0x0C-0x0F by 0x04-0x06's columns), the point
-    // lights into the part's space: less its translation, then by its rotation with the off-diagonal signs
-    // turned (the set-up's own maths: the transpose only for a turn about one axis, as the game's models
-    // are)
-    if (!nd.draws.buffer || nd.draws.used == nd.draws.room) {
-        nd_new_buffer(nd.draws, 4096, sizeof(NdConst));
-    }
-    uint32_t record = nd.draws.used++;
-    NdConst k;
+// A draw's record: VU1's set-up (vu1_hle.c, setup), in its arithmetic: the vertex matrix (VU1 0x00 by
+// 0x04), the light directions by the part's rotation (0x0C-0x0F by 0x04-0x06's columns), the point lights
+// into the part's space: less its translation, then by its rotation with the off-diagonal signs turned
+// (the set-up's own maths: the transpose only for a turn about one axis, as the game's models are). Of
+// info only the point lights' count: the rest is the GS's
+void nd_const(NdConst &k, const RdDraw &d, const RdCamera &cam) {
     const float *m = &d.model[0][0];
     for (int col = 0; col < 4; col++) {
         vu_transform4(&k.vertex[col * 4], &cam.world_screen[0][0], &m[col * 4]);
@@ -284,8 +280,12 @@ void nd_draw(uint64_t value) {
     memcpy(k.fog, d.fog, 16);
     int32_t lights = std::max(0, std::min(4, int32_t(int16_t(d.point_count))));
     for (int l = 0; l < 4; l++) {
-        float p[3] = {vu_sub(d.point_pos[l][0], m[12]), vu_sub(d.point_pos[l][1], m[13]), vu_sub(d.point_pos[l][2], m[14])};
-        float r0[3] = {m[0], -m[1], -m[2]}, r1[3] = {-m[4], m[5], -m[6]}, r2[3] = {-m[8], -m[9], m[10]};
+        // (as the set-up does it, to the sign of a 0: the translation as 0 + it, the turned signs as 0 - them)
+        float p[3] = {vu_sub(d.point_pos[l][0], vu_add(0.0f, m[12])), vu_sub(d.point_pos[l][1], vu_add(0.0f, m[13])),
+                      vu_sub(d.point_pos[l][2], vu_add(0.0f, m[14]))};
+        float r0[3] = {vu_add(0.0f, m[0]), vu_sub(0.0f, m[1]), vu_sub(0.0f, m[2])};
+        float r1[3] = {vu_sub(0.0f, m[4]), vu_add(0.0f, m[5]), vu_sub(0.0f, m[6])};
+        float r2[3] = {vu_sub(0.0f, m[8]), vu_sub(0.0f, m[9]), vu_add(0.0f, m[10])};
         for (int i = 0; i < 3; i++) {
             float acc = vu_mul(r0[i], p[0]);
             acc = vu_add(acc, vu_mul(r1[i], p[1]));
@@ -294,9 +294,30 @@ void nd_draw(uint64_t value) {
         k.point_pos[l * 4 + 3] = d.point_pos[l][3];
         memcpy(&k.point_col[l * 4], d.point_col[l], 16);
     }
+    k.info[0] = lights;
+}
+
+void nd_draw(uint64_t value) {
+    RdDraw d;
+    RdCamera cam;
+    if (!rd_fetch(value, d, cam, nd.fetched)) {
+        gsn_stats.nd_lost++;
+        return;
+    }
+    if (d.program != 0) {
+        gsn_stats.nd_unsupported++;
+        return;
+    }
+    gsn_stats.nd_draws++;
+    // the draw's record (nd_const: VU1's set-up)
+    if (!nd.draws.buffer || nd.draws.used == nd.draws.room) {
+        nd_new_buffer(nd.draws, 4096, sizeof(NdConst));
+    }
+    uint32_t record = nd.draws.used++;
+    NdConst k;
+    nd_const(k, d, cam);
     // (the XYOFFSET of the context the draw's PRIM picks: the game's draws keep both contexts' the same)
     uint64_t offset = gs->reg[R_XYOFFSET_1 + ((effective_prim() >> 9) & 1)];
-    k.info[0] = lights;
     k.info[1] = int32_t(bits(offset, 0, 16));
     k.info[2] = int32_t(bits(offset, 32, 16));
     k.info[3] = interp.active ? ND_C_MOVING : 0;
@@ -375,3 +396,5 @@ void nd_kick() {
         flush_batch();
     }
 }
+
+#include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)

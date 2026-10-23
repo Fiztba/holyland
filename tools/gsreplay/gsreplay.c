@@ -50,6 +50,9 @@
                         every sample (--native-cutout-aa)
      --colour MODE      the native GS's colour precision: exact (the default) or high (--native-colour)
      --layer-z MODE     the native GS's Z: ps2 (the default) or tolerant (--native-layer-z)
+     --nd-oracle        native draw's vertex oracle (nd_oracle.c): every run of VU1 program 0x000 also
+                        through nd_000.vert on the GPU and the CPU's plan, compared lane by lane with
+                        what VU1 kicked (implies --mode vif; --vu1 hle unless given)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -70,6 +73,7 @@ void port_gs_backend_gif(int path, const void *data, size_t bytes);
 void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 #include "gsn.h"
+#include "nd_oracle.h"
 
 /* ---- What vif1.c, vu1.c, video.c and gs_parallel.cpp need of the program --------------------- */
 PortOptions port_options;
@@ -148,6 +152,9 @@ void port_gs_capture_vu1_run(uint32_t address, uint32_t top, uint32_t itop) {
         current_program = address;
     }
     current_kick = 0;
+    if (nd_oracle_on()) {
+        nd_oracle_vu1_run(current_program, address != KF4GS_MSCNT, top);
+    }
 }
 
 static void die(const char *fmt, ...) {
@@ -1113,6 +1120,9 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     int matched = 0;
     uint64_t start = port_ticks(); /* the time here is not VU1's (vu1.c leaves it out) */
 
+    if (nd_oracle_on()) {
+        nd_oracle_gif(path, data, bytes);
+    }
     /* what was recorded before this packet: PATH3, read-backs (VU1_RUN is this run's own) */
     while (r->cursor < r->capture->count) {
         const Record *rec = &recs[r->cursor];
@@ -1430,6 +1440,7 @@ static void usage(void) {
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
             "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
             "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa] [--layer-z ps2|tolerant]\n"
+            "                    [--nd-oracle]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1443,6 +1454,7 @@ int main(int argc, char **argv) {
     int renderer = RENDER_GS;
     int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1, cutout_aa = GSN_CUTOUT_AA_OFF, colour = GSN_COLOUR_EXACT;
     int layer_z = GSN_LAYER_Z_PS2;
+    int nd_oracle = 0, vu1_given = 0;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1465,6 +1477,8 @@ int main(int argc, char **argv) {
             exact = 1;
         } else if (strcmp(a, "--no-resync") == 0) {
             run.resync = -1;
+        } else if (strcmp(a, "--nd-oracle") == 0) {
+            nd_oracle = 1;
         } else if (strcmp(a, "--compare-renderers") == 0) {
             run.compare_renderers = 1;
             renderer = RENDER_GS | RENDER_NATIVE;
@@ -1543,6 +1557,7 @@ int main(int argc, char **argv) {
             }
             i++;
         } else if (strcmp(a, "--vu1") == 0) {
+            vu1_given = 1;
             if (strcmp(v, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;
             } else if (strcmp(v, "hle") == 0) {
@@ -1606,10 +1621,21 @@ int main(int argc, char **argv) {
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
+    if (nd_oracle) {
+        run.mode = MODE_VIF;
+        if (!vu1_given) {
+            port_options.vu1 = PORT_VU1_HLE;
+        }
+        if (!(run.render & RENDER_NATIVE) && !gsn_open(NULL)) {
+            die("--nd-oracle: no native GS: it needs a Vulkan GPU");
+        }
+        nd_oracle_begin(vu1_data_memory, limit);
+    }
     if (show_info && !list && !run.render && vertices < 0 && compare_file == NULL && run.mode == MODE_GIF) {
         return 0;
     }
     run_capture(&run);
+    nd_oracle_end();
     printf("%zu draws, %zu vertices\n", run.gif.count, run.gif.vertex_count);
     if (run.compare_renderers) {
         printf("renderers: %llu draws compared, %llu differ\n", (unsigned long long)run.compared,
