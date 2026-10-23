@@ -9,7 +9,7 @@
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa", "native_2d": "smooth",
-                    "native_colour": "exact", "native_layer_z": "tolerant",
+                    "native_colour": "exact", "native_layer_z": "tolerant", "native_draw": "off",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -410,6 +410,14 @@ void port_settings_load(void) {
         }
     }
     {
+        /* "on": every kind native draw has accepted (PORT_ND_ACCEPTED), "off" the PS2 path */
+        const char *native_draw = read_string(display, "native_draw");
+
+        if (native_draw != NULL) {
+            s->native_draw = strcmp(native_draw, "on") == 0;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -507,6 +515,9 @@ void port_settings_load(void) {
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
+    }
+    if (!port_options.native_draw_forced) {
+        port_options.native_draw = s->native_draw ? PORT_ND_ACCEPTED : 0;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -641,6 +652,7 @@ void port_settings_save(void) {
     put(display, "native_2d", cJSON_CreateString(s->native_2d == 0 ? "ps2" : "smooth"));
     put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
+    put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

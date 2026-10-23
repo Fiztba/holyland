@@ -906,6 +906,24 @@ void renderer_section() {
                 "whole-number depth makes a sawtooth. Tolerant keeps depth's fraction and lets a layer pass\n"
                 "within a hair of the surface under it: clean layers and straight seams. PS2's is the PS2's\n"
                 "picture. (--native-layer-z)");
+        // (--native-draw on / off, saved; the kinds one by one are the Debug page's: docs/port/NATIVE_DRAW.md)
+        bool native_draw = (port_options.native_draw & PORT_ND_ACCEPTED) == PORT_ND_ACCEPTED;
+        if (ImGui::Checkbox("Native draw (experimental)", &native_draw)) {
+            port_gs_set_native_draw(native_draw ? PORT_ND_ACCEPTED : 0, port_options.native_draw_compare);
+            port_settings.native_draw = native_draw ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("The game's 3D (the map, the sky, items, objects, entities, the arm, gold, effects, shadows and\n"
+                "the water) drawn at the game's level: the renderer core and vertex shaders doing VU1's maths,\n"
+                "instead of VU1 and its packets. The picture is the PS2 path's (at a larger resolution the\n"
+                "enemies' highlights are not snapped to pixel edges); between the game's frames at a higher\n"
+                "frame rate, moving models move smoothly. The way to the native renderer's own targets (P8).\n"
+                "Off is the PS2 path. Applies at once. (--native-draw on|off; the kinds one by one on the\n"
+                "Debug page)");
+        if (port_options.native_draw != 0 && port_options.native_draw != PORT_ND_ACCEPTED) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(this run: a choice of kinds, the Debug page)");
+        }
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();
@@ -1120,19 +1138,16 @@ void debug_page() {
             int bits;
             const char *what;
         } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."},
-                     {"Map records (in work)", PORT_ND_MAP,
-                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords) but the sky: in work, not yet checked."},
+                     {"Map records", PORT_ND_MAP, "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords) but the sky."},
                      {"Sky", PORT_ND_SKY, "The sky's dome (the map record with flag bit 31), at the feet with its real Z (--sky ps2)."},
-                     {"Entities (in work)", PORT_ND_SKINNED,
-                      "Enemies and NPCs (Entity_DrawAll, the draw list): in work, not yet checked."},
-                     {"Arm (in work)", PORT_ND_ARM, "The arm, the held weapon and its trail (Player_DrawArm): in work."},
-                     {"Map objects (in work)", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha): in work."},
-                     {"Picked item (in work)", PORT_ND_PICKED, "The item being picked up, after its depth clear: in work."},
-                     {"Gold (in work)", PORT_ND_GOLD, "The gold lying in the maps (Gold_Draw, the draw list): in work."},
-                     {"Effects (in work)", PORT_ND_EFFECTS, "Fire, glows, magic (the draw list's effects, VU1 program 0x700): in work."},
-                     {"Shadows (in work)", PORT_ND_SHADOWS, "The entities' shadows (Entity_DrawPoolModels, VU1 program 0x5A0): in work."},
-                     {"Water (in work)", PORT_ND_WATER,
-                      "The reflection's rippled water on maps 008, 009 and 014 (Wobble_DrawRippledModel): in work."},
+                     {"Entities", PORT_ND_SKINNED, "Enemies and NPCs (Entity_DrawAll, the draw list)."},
+                     {"Arm", PORT_ND_ARM, "The arm, the held weapon and its trail (Player_DrawArm)."},
+                     {"Map objects", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha, MapObject_DrawAll)."},
+                     {"Picked item", PORT_ND_PICKED, "The item being picked up, after its depth clear."},
+                     {"Gold", PORT_ND_GOLD, "The gold lying in the maps (Gold_Draw, the draw list)."},
+                     {"Effects", PORT_ND_EFFECTS, "Fire, glows, magic (the draw list's effects, VU1 program 0x700)."},
+                     {"Shadows", PORT_ND_SHADOWS, "The entities' shadows (Entity_DrawPoolModels, VU1 program 0x5A0)."},
+                     {"Water", PORT_ND_WATER, "The reflection's rippled water on maps 008, 009 and 014 (Wobble_DrawRippledModel)."},
                      {"Screen passes (in work)", PORT_ND_PASSES,
                       "The brightness, tints, fills and fades, the flicker filter, the frame before, haze, the wobble: in work."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
@@ -1146,6 +1161,13 @@ void debug_page() {
             ImGui::SameLine();
         }
         ImGui::NewLine();
+        if (ImGui::Button("Accepted kinds (on)"))
+            kinds_on = PORT_ND_ACCEPTED;
+        tooltip("Every kind that has passed its checks, as --native-draw on and the Renderer section's\n"
+                "switch below (the screen passes are still in work). Saved only from that switch.");
+        ImGui::SameLine();
+        if (ImGui::Button("None (off)"))
+            kinds_on = 0;
         const char *compares[] = {"Off", "Both queued, native drawn", "Both queued, PS2 path drawn"};
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
         ImGui::Combo("Compare", &compare, compares, 3);

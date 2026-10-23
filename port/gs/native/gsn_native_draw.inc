@@ -184,6 +184,7 @@ struct NdBoxInfo {
 struct NdState {
     bool active = false;   // the batch flush_batch is drawing has native corners (and in a picture between, only those)
     bool pending = false;  // gs->verts holds native corners
+    bool corners_active = false; // the batch flush_batch is drawing holds native corners (nd_batch_3d)
     bool skipping = false; // between RD_ND_ALT_BEGIN and _END, drawing the native draws
     bool strip_pending = false, strip_active = false; // (a picture between's strip: gsn_nd_strip.inc's batch)
     // (a picture between's screen pass: gsn_nd_pass.inc's batch; its kicks queued uncounted)
@@ -230,6 +231,7 @@ volatile int nd_mode = GSN_NATIVE_DRAW_NATIVE; // (gsn_set_native_draw)
 struct NdFlush {
     NdFlush() {
         nd.active = nd.pending || nd.pass_pending;
+        nd.corners_active = nd.pending;
         nd.strip_active = nd.strip_pending;
         nd.pass_active = nd.pass_pending;
         nd.pending = nd.strip_pending = nd.pending_000 = nd.pass_pending = false;
@@ -237,11 +239,22 @@ struct NdFlush {
         ndw_flush(true);   // (the water's: gsn_nd_water.inc)
     }
     ~NdFlush() {
-        nd.active = nd.strip_active = nd.pass_active = false;
+        nd.active = nd.corners_active = nd.strip_active = nd.pass_active = false;
         nd280_flush(false);
         ndw_flush(false);
     }
 };
+
+// Whether flush_batch's batch holds native corners: the 3D of a model or a map record, whatever its
+// corners look like, so flat_2d leaves the batch alone. The PS2 path's 2D snap (at --native-scale above 1
+// or with MSAA, flat_2d moves the corners of a triangle it takes for half a rectangle: one Z, one colour, its
+// corners those of its box) also catches the small triangles of an entity's sphere pass (Q 1, white, one Z)
+// and moves them to pixel edges; native corners were never moved (their RGB is their encoding), and a PS2-path
+// corner in a batch with native ones is not moved now either. The owner's decision 1 (2026-10-23): native
+// draws need not reproduce that snap. A screen pass's batch (nd.pass_active) is the PS2 path's 2D: snapped.
+bool nd_batch_3d() {
+    return nd.corners_active;
+}
 
 // The program p (one of the GS's, its fragment shader) with nd_000.vert, while a native batch is drawn
 Program *nd_program(Program *p) {

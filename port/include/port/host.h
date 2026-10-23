@@ -191,7 +191,8 @@ int port_draw_distance_sky(void);
 #define PORT_DRAW_DISTANCE_MAX_FOG 1024.0f
 
 /* port_native_draw(kind): 1 while that kind of draw goes to the renderer core (docs/port/NATIVE_DRAW.md):
-   --native-draw on or a list of kinds, or the overlay's Debug page; off by default. The patched draw
+   --native-draw on or a list of kinds, the overlay's Debug page, or settings.json's display.native_draw
+   (PORT_ND_ACCEPTED); off by default. The patched draw
    code then queues, where it would have queued a model part's packets, a GS register write to
    PORT_GS_REG_NATIVE_DRAW (another address the GS does not have) naming a draw in the core's side
    buffer (port/include/port/render.h), and the native GS draws it. Off, the game is what it was.
@@ -216,8 +217,13 @@ int port_native_draw_compare(void);
 #define PORT_ND_GOLD 0x1000      /* the gold lying in the maps (Gold_Draw: skinned, program 0x280) */
 #define PORT_ND_MODELS (PORT_ND_OBJECTS | PORT_ND_PICKED) /* the posed models (--native-draw models) */
 #define PORT_ND_ALL 0x1FFF
-#define PORT_ND_ACCEPTED PORT_ND_ITEMS /* --native-draw on: the kinds that have passed their checks
-                                          (docs/port/NATIVE_DRAW_TASKS.md); the others by name */
+/* --native-draw on (and the overlay's and settings.json's native draw switch): the kinds that have passed
+   their checks and the owner's review (docs/port/NATIVE_DRAW_TASKS.md, the decisions of 2026-10-23); the
+   others by name. Not yet: the screen passes (their pictures between at 4x under water and the view shift
+   with --no-whole-frame, decision 6) and the reflection (no draws of its own). */
+#define PORT_ND_ACCEPTED                                                                               \
+    (PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS | PORT_ND_MODELS | PORT_ND_SKINNED | PORT_ND_ARM | PORT_ND_GOLD | \
+     PORT_ND_EFFECTS | PORT_ND_SHADOWS | PORT_ND_WATER)
 /* port_native_wave_uvs(): how the wave UVs of a native map record (flag 0x100: Wobble_ApplyWaveUvs) are drawn
    (--native-wave-uvs; P6-2 of docs/port/NATIVE_DRAW_TASKS.md). The game writes them into the model's
    vertices every frame either way (the PS2 path and the CPU's near cut read them).

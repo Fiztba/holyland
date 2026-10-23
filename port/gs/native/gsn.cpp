@@ -4183,13 +4183,13 @@ void flush_batch() {
             depth->ms_newer = true;
         }
         // (the 2D, rectangles of one colour and Z, is shaded once a pixel: --native-cutout-aa)
-        if (!perspective && flat_2d(gs->verts, &all_flat)) {
+        if (!perspective && !nd_batch_3d() && flat_2d(gs->verts, &all_flat)) { // (native draw: nd_batch_3d)
             cutout = false;
         }
     } else {
         Why why(GSN_WHY_MSAA);
         msaa_settle(*color);
-        if ((scale_x > 1 || scale_y > 1) && !perspective) {
+        if ((scale_x > 1 || scale_y > 1) && !perspective && !nd_batch_3d()) { // (native draw: nd_batch_3d)
             flat_2d(gs->verts, &all_flat);
         }
     }
