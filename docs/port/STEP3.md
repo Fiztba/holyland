@@ -856,6 +856,18 @@ picture was wrong (no HUD, black, the HUD's textures down the screen), at 60 to 
 passes again after it for the draws to come. The coin and the shop: the pictures between as the CPU's
 way draws them (`KF4_INTERP_CPU=1`), none flashing; the game's own frames the same at 30 and 240.
 
+**Under water, the shop, the pools** (October 2026, 240 at 4x):
+- Under water the pictures between were noise and bands of light: the wobble's copy of the frame was not
+  made again (`flat_copies` counted reads of textures the frame uploaded over the copy's VRAM as reads of
+  the copy). Made again, it cost more than a vblank a picture (write-backs, decodes): the pictures between
+  now give way while the native GS is behind (gs.c), the game's own 30 a second at full speed; the
+  pictures' own targets go without write-backs, and write-backs read back the PS2's size.
+- The menus' item models (the shop's goods) jumped half a line every vblank at 4x and were combed at 3x:
+  field_frames.c moved their fixed XYOFFSET_2 by the half line, and the scanout took the vblank's own
+  field. Both fixed (RENDERER.md).
+- The pools went black while the camera turned: their surfaces are CPU-projected meshes (PATH2, Q 1,
+  S and T from the reflection's view), paired as 2D; now moved with the camera (RENDERER.md).
+
 ### What moves by itself
 
 The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned

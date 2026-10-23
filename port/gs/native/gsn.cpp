@@ -209,6 +209,9 @@ struct Target {
     // of the two has pixels the other does not (msaa_settle, msaa_ready)
     ImageHandle ms;
     bool ms_newer, image_newer;
+    // made, and drawn into since, only by a picture between (replaying): what it has is the picture's,
+    // not the game's, and need not go back to VRAM when dropped (prepare_write)
+    bool replay_only = false;
 };
 
 // --frame-rate's pictures between (frame_interp.c): between their marks, and the frame shown before them
@@ -1712,7 +1715,30 @@ void write_back(Target &t) {
         row1 = std::min(t.height, (last / t.bw + 1) * ph);
     }
     uint32_t sx = t.sx, sy = t.sy, pw = t.width * sx;
-    const uint8_t *pixels = read_image(*t.image, 0, row0 * sy, pw, (row1 - row0) * sy);
+    const uint8_t *pixels;
+    if (!t.depth && (sx > 1 || sy > 1)) {
+        // A scaled colour target: the pixel in the middle of each GS pixel's, taken on the GPU (a blit,
+        // nearest: GS pixel x reads x sx + sx / 2) into an image at the PS2's size, and only that read
+        // back: at --native-scale 4 a 640 x 448 target read whole was 27 MB a write-back (the water's
+        // wobble copies the frame into VRAM that the next frame's textures go through: one a frame)
+        static ImageHandle small;
+        uint32_t rows = row1 - row0;
+        if (!small || small->get_width() < t.width || small->get_height() < rows ||
+            small->get_format() != t.image->get_format()) {
+            small = make_image(std::max(t.width, small ? small->get_width() : 0u),
+                               std::max(rows, small ? small->get_height() : 0u), t.image->get_format(), 1, false);
+        }
+        end_pass();
+        transfer_barrier();
+        cmd().raw().blit_image(*small, *t.image, {0, 0, 0}, {int32_t(t.width), int32_t(rows), 1},
+                               {0, int32_t(row0 * sy), 0}, {int32_t(pw), int32_t(rows * sy), 1}, 0, 0, 0, 0, 1,
+                               VK_FILTER_NEAREST);
+        pixels = read_image(*small, 0, 0, t.width, rows);
+        sx = sy = 1;
+        pw = t.width;
+    } else {
+        pixels = read_image(*t.image, 0, row0 * sy, pw, (row1 - row0) * sy);
+    }
     // (a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into the same
     // buffer wrote it: the whole word goes back either way)
     uint32_t psm = t.depth ? t.psm : psm_layout(t.psm);
@@ -1845,7 +1871,9 @@ void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, con
         target_pages(*t, &tlo, &tcount);
         if (t != keep && pages_overlap(lo, count, tlo, tcount) && !(sharer && shares_pages(*sharer, *t))) {
             if (drop) {
-                write_back(*t);
+                if (!t->replay_only) { // (a picture between's own: VRAM keeps the game's, prepare_write)
+                    write_back(*t);
+                }
                 drop_target(t);
                 continue;
             }
@@ -1987,7 +2015,19 @@ void take_pages(Target &t, bool only_stale) {
 }
 
 // The target that is the buffer at bp, at least width x height, made (from the CPU's VRAM) or grown
+Target *get_target_made(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height);
+
 Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
+    bool existed = find_target(bp, bw, psm) != nullptr;
+    Target *t = get_target_made(bp, bw, psm, width, height);
+    if (t) {
+        // (a picture between's own target, until the game's frame draws into it)
+        t->replay_only = replaying && (!existed || t->replay_only);
+    }
+    return t;
+}
+
+Target *get_target_made(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
     Target *t = find_target(bp, bw, psm);
     width = std::max(width, std::max(bw, 1u) * 64);
     if (t && t->stale) {
@@ -4323,6 +4363,17 @@ void sync_targets(const TransferRect &r) {
             uint32_t tlo, tcount;
             target_pages(*t, &tlo, &tcount);
             uint32_t ph = page_height(t->psm);
+            if (t->replay_only && !t->depth) {
+                // (prepare_write kept it: all its pages under the transfer as VRAM has them now)
+                uint32_t lo, count;
+                rect_pages(r, &lo, &count);
+                for (uint32_t k = 0; k < tcount; k++) {
+                    if (pages_overlap(lo, count, (tlo + k) % vram_pages, 1)) {
+                        load_target_rect(*t, (k % t->bw) * 64, (k / t->bw) * ph, 64, ph);
+                    }
+                }
+                continue;
+            }
             for (uint32_t page : whole) {
                 uint32_t k = (page + vram_pages - tlo) % vram_pages;
                 if (k < tcount) {
@@ -4385,7 +4436,17 @@ void prepare_write(const TransferRect &r) {
                 i++;
                 continue;
             }
-            if (!covered) {
+            if (t->replay_only && regular(*t) && !t->depth) {
+                // A picture between's own target (the water's wobble: its copy of the picture's frame)
+                // stays, and takes the pages under the transfer from VRAM after it (sync_targets): what
+                // the game's frame left there, the transfer's bytes added. Dropped, the picture's draws
+                // after it that read the copy read it from VRAM at 1x, decoded again every picture.
+                i++;
+                continue;
+            }
+            // (a picture between's own target goes without: the game's frame left VRAM there as it
+            // should stay)
+            if (!covered && !t->replay_only) {
                 write_back(*t);
             }
             drop_target(t);
@@ -5450,28 +5511,35 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
     transfer_barrier();
 }
 
-// The weave of a field at a scale (whole frames: the two fields are the same moment, drawn half a line
-// apart, port/platform/field_frames.c). Field p's row r of pixels (of h * sy) is at the woven picture's
-// line 2 r / sy + p, so its rows go to the picture's rows 2 r + p sy: with sy odd the two fields'
-// rows take turns, every row of the picture its own (at 1x, the weave of lines). Woven a line (sy rows)
-// at a time instead, each band of sy rows held a line drawn over twice the height, the other field's
-// band half a line off: at 3x the menus' text in stripes of three rows, its edges broken. With sy even
-// the two fields' rows fall on the same rows of the picture: the field fills all of them, each of its
-// rows twice (the other field's rows are the same picture). The top rows field 1 has none for are its
-// first row's. Only from a target in the picture's format; else 0 (the weave a line at a time).
+// The picture of a field-mode screen at a scale (whole frames: the two fields are the same moment,
+// port/platform/field_frames.c): field 0's rows, each twice (its rows are 2 sy a line of the picture),
+// whichever field the vblank is (a field 1 vblank reads the other buffer, which has field 0 of the same
+// moment). Woven a line (sy rows) at a time, each band of sy rows held a line drawn over twice the
+// height, the other field's band half a line off: at 3x the menus' text in stripes of three rows. Woven
+// a row at a time (field p's row r at the picture's row 2 r + p sy), whatever the game draws alike in
+// both fields, not moved by the half line (Menu_DrawItemModel's models: field_frames.c), was combed half
+// a line apart; and the vblank's own field alone made it jump half a line every vblank at 4x (the shop's
+// goods, the Journal's pictures, October 2026). Only from a target in the picture's format; else 0 (a
+// line at a time).
+Shown field0_buffer; // the buffer the last field 0 was read from (whole frames: this vblank's, in the
+bool field0_set;     // other buffer when the vblank is field 1)
+
 int weave_fine(const Image &dst, const Shown &s, uint32_t p) {
     if (!s.t || s.sy < 2) {
         return 0;
     }
-    uint32_t rows = s.h * s.sy, out = rows * 2, off = p * s.sy;
-    uint32_t count = std::min(rows, (out - off + 1) / 2);
-    narrow_pass(dst, s, 0, 1, count, off, 2, 1);
-    if (s.sy % 2 == 0) {
-        narrow_pass(dst, s, 0, 1, std::min(rows, (out - off) / 2), off + 1, 2, 1);
+    Shown f = s;
+    if (p == 1 && field0_set) {
+        // (as it is now: the same buffer, still a target of this size)
+        f = shown_buffer(field0_buffer.fbp, field0_buffer.fbw, field0_buffer.psm, field0_buffer.dbx, field0_buffer.dby,
+                         field0_buffer.w, field0_buffer.h);
+        if (!f.t || f.sx != s.sx || f.sy != s.sy) {
+            f = s;
+        }
     }
-    if (off) {
-        narrow_pass(dst, s, 0, 0, s.sy % 2 ? (off - 1) / 2 : off, s.sy % 2 ? 1 : 0, s.sy % 2 ? 2 : 1, 1);
-    }
+    uint32_t rows = s.h * s.sy;
+    narrow_pass(dst, f, 0, 1, rows, 0, 2, 1);
+    narrow_pass(dst, f, 0, 1, rows, 1, 2, 1);
     return 1;
 }
 
@@ -6606,6 +6674,10 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         if (w > 0 && h > 0 && w <= 1024 && h <= 1024 &&
             size_t(w) * h * sx * sy * (mode == SCAN_WEAVE ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
             Shown shown = shown_buffer(fbp, fbw, psm, dbx, dby, w, h);
+            if (mode == SCAN_WEAVE && parity == 0) {
+                field0_buffer = shown; // (weave_fine: field 1's picture is field 0's, of this vblank)
+                field0_set = true;
+            }
             if (mode == SCAN_DEINTERLACE) {
                 record_history(shown, parity);
                 history_kept = true;
@@ -6641,9 +6713,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     for (uint32_t y = 0; y < h * 2 * sy; y++) {
                         uint32_t l = y / sy, row = (l / 2) * sy + y % sy, from = l & 1;
                         if (scanout_fine_weave && sy >= 2) {
-                            // (as weave_fine: a row of pixels at a time; with sy even, this field's rows)
-                            from = sy % 2 ? y & 1 : uint32_t(f);
-                            row = y >= from * sy ? (y - from * sy) / 2 : 0;
+                            // (as weave_fine: field 0's rows, each twice)
+                            from = 0;
+                            row = y / 2;
                         }
                         memcpy(frame->rgba + size_t(y) * w * sx, gs->fields[from].data() + size_t(row) * w * sx,
                                w * sx * 4);
