@@ -388,7 +388,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # kf4-gsreplay draws a GS frame capture again (tools/gsreplay): the GIF stream, or the VIF1 stream
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
-    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c port/platform/vif1.c port/platform/vu1.c
+    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c tools/gsreplay/nd_oracle.c port/platform/vif1.c port/platform/vu1.c
         port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})

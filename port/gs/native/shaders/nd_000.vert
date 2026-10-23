@@ -70,6 +70,14 @@ layout(set = 2, binding = 1, std430) readonly buffer Draws {
 #define ND_C_MOVING 1
 #define ND_C_OBJ 2
 
+#ifdef ND_ORACLE
+// The vertex oracle (nd_000_oracle.vert, built from this with ND_ORACLE: gsn_nd_oracle.inc): what each
+// corner gives the GS, two qwords a corner: X, Y and Z as worked out below, XYZF2's w; RGBA, S, T, Q
+layout(set = 2, binding = 2, std430) writeonly buffer Oracle {
+    uvec4 o[];
+} oracle;
+#endif
+
 Draw d;
 
 // FTOI: toward zero, kept within what an int holds
@@ -301,4 +309,8 @@ void main() {
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = fog;
+#ifdef ND_ORACLE
+    oracle.o[gl_VertexIndex * 2] = uvec4(uint(xi), uint(yi), z, w16);
+    oracle.o[gl_VertexIndex * 2 + 1] = uvec4(rgba.r | rgba.g << 8 | rgba.b << 16 | rgba.a << 24, floatBitsToUint(v_stq));
+#endif
 }

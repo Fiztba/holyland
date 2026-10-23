@@ -21,6 +21,12 @@ SHADERS = os.path.join(ROOT, "port", "gs", "native", "shaders")
 OUT = os.path.join(ROOT, "port", "gs", "native", "gsn_shaders.h")
 
 
+# Shaders built a second time with a define, under a name of their own: (source, name, defines)
+VARIANTS = [
+    ("nd_000.vert", "nd_000_oracle.vert", ["-DND_ORACLE"]),  # the vertex oracle (gsn_nd_oracle.inc)
+]
+
+
 def find_glslang(given):
     for candidate in (given, os.environ.get("GLSLANG"), "glslangValidator", "glslang"):
         if candidate and (os.path.isfile(candidate) or shutil.which(candidate)):
@@ -42,11 +48,12 @@ def main():
         "#include <stdint.h>",
         "",
     ]
+    builds = [(name, name, []) for name in sources] + [v for v in VARIANTS if v[0] in sources]
     with tempfile.TemporaryDirectory() as tmp:
-        for name in sources:
+        for source, name, defines in builds:
             out = os.path.join(tmp, name + ".spv")
-            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + SHADERS, "-o", out,
-                   os.path.join(SHADERS, name)]
+            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + SHADERS] + defines + ["-o", out,
+                   os.path.join(SHADERS, source)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 sys.exit("%s failed:\n%s%s" % (name, result.stdout, result.stderr))
@@ -60,7 +67,7 @@ def main():
             lines.append("")
     with open(OUT, "w", newline="\n") as f:
         f.write("\n".join(lines))
-    print("wrote %s (%d shaders)" % (os.path.relpath(OUT, ROOT), len(sources)))
+    print("wrote %s (%d shaders)" % (os.path.relpath(OUT, ROOT), len(builds)))
 
 
 if __name__ == "__main__":
