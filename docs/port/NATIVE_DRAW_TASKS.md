@@ -16,8 +16,9 @@ commit made 0x280's corners use A-exact's corner encoding (below). The per-task 
 
 Kinds: `items` is accepted (`--native-draw on`); `map`, `sky`, `objects`, `picked`, `entities` and `arm` are
 ported and in work. Not ported: gold (it is skinned: P2-1's note), map objects with definition bit8 1 or 2
-(`Model_DrawPosed` straight from `MapObject_DrawAll`), type 0x47 entities, effects (P4), shadows (P5), the
-reflection's water and wave UVs (P6), the screen passes (P7).
+(`Model_DrawPosed` straight from `MapObject_DrawAll`), type 0x47 entities, effects (P4), shadows (P5), the screen
+passes (P7). P6 (nd3/p6) added the kind `water` (the reflection's rippled water) and the wave UVs on the GPU
+(`--native-wave-uvs`, for `map`), under their tasks below.
 
 **Every ported kind at once** (`--kinds map,sky,items,objects,picked,entities,arm`) against the PS2 path, on
 the merged tree, pixels differing (1x and 4x, compare and onoff; headless, `--no-audio`, a fresh data folder;
@@ -82,6 +83,9 @@ up to 8 other agents shared the PC, so nothing here is timed):
   a wave-UV record, 0 with `KF4_ND_DMA_WAIT=1`: under P3-1*); P3-2 waits for the owner (A1).
 - The 2D snap at 4x (above), the owner's call; ~~a test-only DMA wait~~ (*done, F-013: `KF4_ND_DMA_WAIT=1`*;
   the wave-UV maps can now be required to be 0 with it: not run yet on all six); the follow-ups under "What is left of P1".
+- From P6 (nd3/p6): the owner's calls, the wave UVs' default (`gpu`, the frame drawn, or `late`, the PS2 path's
+  race) and the water's pictures between (made by the camera between, not the PS2 path's); the PS2 path's
+  black blocks over 009's water in pictures between (its moving path); type 0x47's frame copy; A9.
 
 **Next:** P2-5, then P4 (effects), P5 (shadows), P6 (the reflection and water) and P7 (the screen passes),
 each described at the end of the task list.
@@ -170,7 +174,13 @@ section a draw is in, for the pictures between).
 - `--native-draw off|on|KINDS` (`port_options.native_draw`, `port_native_draw(kind)`): `on` is
   `PORT_ND_ACCEPTED`, the kinds that have passed their checks (items); others by name. In work: `map`,
   `sky` (P3-1), `objects` and `picked` (P2-1; `models` is both), `entities` (P2-3; an alias of `skinned`),
-  `arm` (P2-4) and `effects` (P4-2). Every ported kind at once: `map,sky,items,objects,picked,entities,arm,effects`.
+  `arm` (P2-4), `effects` (P4-2) and `water` (P6-1). Every ported kind at once:
+  `map,sky,items,objects,picked,entities,arm,effects,water`.
+- `--native-wave-uvs gpu|cpu|late` (P6-2): how a native map record's wave UVs are drawn; `gpu` (the default)
+  and `cpu` give the same picture, `late` the PS2 path's racing one. `--test-dma-wait` (tests only): each
+  frame's chain waited for as it is sent, so the PS2 path draws the blocks the game changes as the game drew
+  them (P2-6's race gone): the reference for the wave maps. `KF4_ND_DMA_WAIT=1` (F-013) is the same wait from
+  the environment (the game loop waits after `Packet_SendChain`); either turns on both.
   Since P3-1 the sky (the map record with flag bit 31) is its own kind, `sky` (`game/native_draw/nd_sky.c`):
   `map` is every other map record, so what `map` meant before is now `map,sky`.
   The overlay's Debug page, "Native draw (experimental)", has a checkbox per ported kind and the compare
@@ -268,7 +278,13 @@ the same captures (the 414,901 of RENDERER.md is older captures').
     mirror, flag 0x2), and their water is out of the teleport's view: use made-up saves placed by the water
     record's box (`tools/map_tour.write_made_up`);
   - the GPU's `1/x` is not correctly rounded and fused multiply-adds change results: the shader's
-    `vu_*` helpers and `precise` are what make it exact; keep new maths in them.
+    `vu_*` helpers and `precise` are what make it exact; keep new maths in them;
+  - **the game's own float code rounds toward zero** (its threads run with the EE's MXCSR, PORT_MXCSR_EE:
+    port/platform/fiber.c; `--fpu-round nearest` to compare), the GS's thread to nearest: maths the game does
+    in C floats (not VU0) and the native side redoes must round toward zero too (P6-1: the ripple's
+    `/ 10240` was an ulp off until it did);
+  - records can share their model's data blocks (the same model of the map file set up for each): a
+    mutator's writes are the last writer's for all of them (P6-2: 042's wave records).
 
 ## The tasks
 
@@ -1139,10 +1155,59 @@ from the sine phase, the refracting entity's frame copy (type 0x47's `GsDraw_Cop
 Accepted: 008 and 009 at 1x and 4x, 0 pixels, and 009 walking and turning at 240 (pictures between: the
 water moves with the camera).
 
+*Done (nd3/p6).* Kind `water` (`PORT_ND_WATER`, an overlay checkbox), identity `RD_KIND_WATER` (the model, the
+part), program `RD_PROGRAM_RIPPLE`. The call site is `Wobble_DrawRippledModel`'s last line, where it appends its
+packets (`gfx.patch`; `map.patch` unchanged): the function still runs, so VU0's registers and the packet buffer
+are the PS2 path's. `game/native_draw/nd_water.c` queues the strip's GS registers as the packets write them
+(TEX0_1, TEX1_1, ALPHA_1, CLAMP_1, RGBAQ; CLAMP_1 after), and a draw a part: its matrix (Matrix_Multiply in VU
+arithmetic, without VU0) and the 32 sines (in `point_pos`/`point_col`). The meshes are the record's own blocks
+(cached, `RD_VF_PACKED16`: only the positions and the data's ADC are read). `port/gs/native/gsn_nd_water.inc`
+plans the strips on the CPU and `shaders/nd_water.vert` makes each corner on the GPU, both as the EE does:
+places in VU0's arithmetic, the bounds test's ADC window, the sine `|(x+z)^3 % 32|`, S and T in the game's
+floats, which round toward zero (the GPU's quotient made the nearest by Markstein's step, then moved toward
+zero by its residual; checked against exact quotients). Records of their own, so a water batch is never one of
+0x000's or 0x280's (the PS2 path's strips are a batch of their own too). `KF4_ND_WATER_CHECK=1` compares the
+game's own packets with the same maths, vertex by vertex (0 of 824 differ on 009).
+- The game's frames, every kind and `water` (and `water` alone), compare and onoff: 0 pixels on 008 (`m8w`),
+  009 (`m9w`) and 014 (`m14c`) at 1x, on 008 and 009 at 4x but 009's 3 pixels of the 2D snap (an entity, as
+  before). `--log` with `map,water` equals off's on 009 (600 vblanks, turning).
+- Pictures between (009, 240, turning and walking, onoff, every kind): the native water's ST is made from the
+  moved place, so the reflection stays under the water; the change from picture to picture in the water is
+  even (1.6-2.3 a pixel, a step at each frame from the sines). The PS2 path's strip keeps the frame's ST and
+  jumps at each frame (3.7-7.9). And **the PS2 path's pictures between draw black blocks over the water** while
+  turning or walking (`--native-draw off` too: a PS2-path bug of the moving path, not native draw's; evidence
+  `009_turn240_off_top_water_bottom.png`). So the pictures between differ from the PS2 path's over the water
+  (about 47,000-80,000 pixels a picture at 1x); that is the design (the owner's look).
+- Not done: the refracting entity's frame copy (type 0x47's `GsDraw_CopyFrameToTexture`): type 0x47 entities
+  are still the PS2 path's (P2-3's leftover); the copy is the GS's and stays hosted. The 0x2BC0 target stays
+  the GS's at 256 x 256 (A9 is the owner's).
+
 **P6-2 Wave UVs on the GPU** (owns `gfx.patch` then, for `gfx/wobble.c`; after P6-1). The 16 oscillators as a per-vertex
 offset in the shader instead of writes into the file's UVs, behind its own switch; then no block re-parses on
 the six wave maps (P0-3) and no DMA race (P2-6). Accepted: 027, 034, 039, 040, 042 and 114 at 0 pixels
 against the PS2 path with P2-6's DMA wait (the test switch first), and the hash's cost on 042 gone.
+
+*Done (nd3/p6).* `--test-dma-wait`: `Packet_SendChain` waits for its DMA before the game goes on (`gfx.patch`).
+`--native-wave-uvs gpu` (the default): a wave record's meshes are made from copies of its blocks holding the
+vertices' own coordinates and each vertex's wave in the ST's w (`nd_water.c`, `NativeDraw_WaveMeshes`; a hook
+in `native_draw.c`'s `posed_model`); the draw carries the 16 offsets (`RD_DRAW_WAVE_UVS`, in `RdDraw.parent`),
+`NdConst.wave` (50 qwords now) and `ND_C_WAVE`; `nd_plan` and `nd_000.vert` add them in 16 bits as
+`Wobble_ApplyWaveUvs` does. The offsets are kept at `Wobble_ApplyWaveUvs` (`gfx.patch`, behind
+`port_native_draw(PORT_ND_MAP)`) by the model's data, with the writer's table: records sharing a model's
+blocks show the last writer's coordinates (042, view 3: 1,504 pixels until it was so). The game still writes
+the coordinates (the PS2 path, compare mode and the CPU's near cut read them).
+- Against the PS2 path with `--test-dma-wait`, every kind and `water`, the 4 sweep views of 027, 029, 034, 039,
+  040, 042 and 114: compare 1x, onoff 1x and compare 4x, all 28 views 0 pixels.
+- Cost (042, view 0, 700 vblanks, onoff): blocks parsed 58,823 with `cpu`, 935 with `gpu` (put on the GPU
+  59,356 against 935); the plan 0.159 s against 0.101 s. Hashing is the same (528.8 MB: the copies are hashed,
+  so a writer we do not know of is still seen; cheap, P0-3). `gpu` against `cpu` at 240 (042 turning): the
+  same 28 pictures, between too.
+- **The reference (the owner's call).** Without the wait the PS2 path draws most wave blocks a frame late (its
+  DMA reads them after the next update). `--native-wave-uvs late` uses the next step's offsets (worked out as
+  `Wobble_StepOscillators` would): against the racing PS2 path, 27 of the 28 views are 0 pixels, and 039 v1
+  19,958 (part of that frame read before the update); `gpu` against it: 039 87,000-130,000 a view, 040 v2
+  156,018, 042 287-3,410, 034 and 114 a few. The default here is the frame the game drew (`gpu`, as native
+  `map` already was); `late` is the PS2 path's picture, as far as a race can be had.
 
 **P7-1 The screen passes** (owns `core.patch`'s pass call sites, `nd_passes.c`, `rd_pass`). Brightness, the
 tint, fades and fills, the previous frame (aiming), the wobble grid, the depth clear, haze from depth and the

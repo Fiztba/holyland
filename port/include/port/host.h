@@ -218,6 +218,23 @@ int port_native_draw_compare(void);
 #define PORT_ND_ALL 0x1FFF
 #define PORT_ND_ACCEPTED PORT_ND_ITEMS /* --native-draw on: the kinds that have passed their checks
                                           (docs/port/NATIVE_DRAW_TASKS.md); the others by name */
+/* port_native_wave_uvs(): how the wave UVs of a native map record (flag 0x100: Wobble_ApplyWaveUvs) are drawn
+   (--native-wave-uvs; P6-2 of docs/port/NATIVE_DRAW_TASKS.md). The game writes them into the model's
+   vertices every frame either way (the PS2 path and the CPU's near cut read them).
+   PORT_WAVE_UVS_GPU: the mesh keeps each vertex's own coordinates and wave, the 16 waves' offsets of the
+     frame are the draw's and the shader adds them (no block parsed again each frame); the frame the game
+     drew, as PORT_WAVE_UVS_CPU's.
+   PORT_WAVE_UVS_CPU: the vertices as the game wrote them, read at the draw (each block parsed again each
+     frame its coordinates change).
+   PORT_WAVE_UVS_LATE: as GPU, with the offsets of the frame after: what the PS2 path mostly draws, its DMA
+     reading the blocks after the next frame's update has written them (P2-6's race).
+   port_test_dma_wait(): 1 with --test-dma-wait (tests only): Packet_SendChain waits for the chain it sent,
+   so the PS2 path draws the blocks as the game drew them (the race gone), to compare against. */
+#define PORT_WAVE_UVS_GPU 0
+#define PORT_WAVE_UVS_CPU 1
+#define PORT_WAVE_UVS_LATE 2
+int port_native_wave_uvs(void);
+int port_test_dma_wait(void);
 #define PORT_ND_COMPARE_NATIVE 1 /* the native draws drawn, the PS2 path's packets left out */
 #define PORT_ND_COMPARE_PS2 2    /* the PS2 path's packets drawn, the native draws left out */
 

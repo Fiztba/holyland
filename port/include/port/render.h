@@ -93,6 +93,7 @@ enum {
     RD_KIND_EFFECT,
     RD_KIND_SHADOW,
     RD_KIND_PICKED, /* the item being picked up (MapItem_DrawPickup) */
+    RD_KIND_WATER,  /* the reflection's water: Wobble_DrawRippledModel (P6-1, game/native_draw/nd_water.c) */
 };
 
 /* One draw: a model part (or a map record's part) with its meshes, and what VU1's fixed block holds
@@ -105,8 +106,8 @@ typedef struct {
     uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000, 0x280 (skinned), 0x700
                                  (the effects: meshes of RD_VF_PACKED16, colour[] carrying VU1 0x64-0x66) or
                                  0x5A0 (the shadows, meshes of RD_VF_SILHOUETTE); or RD_PROGRAM_GS_STRIP (meshes
-                                 of RD_VF_GS_STRIP, written to the GS as they are) */
-    uint32_t flags;           /* (none yet) */
+                                 of RD_VF_GS_STRIP, written to the GS as they are) or RD_PROGRAM_RIPPLE */
+    uint32_t flags;           /* RD_DRAW_* */
     uint32_t camera;          /* rd_camera's index */
     uint32_t mesh_count;      /* (filled by rd_draw) */
     float model[4][4];        /* VU1 0x04-0x07: the part to the world (model x part) */
@@ -126,6 +127,22 @@ typedef struct {
 
 /* RdDraw.program of a draw of RD_VF_GS_STRIP meshes (not a VU1 address) */
 #define RD_PROGRAM_GS_STRIP 0x10000u
+/* RdDraw.program of the reflection's rippled water (Wobble_DrawRippledModel: no VU1 program, the EE's
+   maths; P6-1): meshes of RD_VF_PACKED16 (the water record's part's blocks, of which only the positions and
+   the data's ADC are read), model the part to the world (model x part, as the EE multiplies them), and the
+   32 sines of the wobble (wobble_sines) in point_pos then point_col, in order. The GS state (the
+   reflection's texture, the tint in RGBAQ) is the chain's. */
+#define RD_PROGRAM_RIPPLE 0x10001u
+
+/* RdDraw.flags */
+/* (program 0x000) the wave UVs on the GPU (P6-2, --native-wave-uvs): the meshes hold the vertices' own
+   texture coordinates and each vertex's wave (0-15) in its ST's w; parent holds the 16 waves' offsets
+   (S's in the low 16 bits of each word, T's in the high), added to S and T as Wobble_ApplyWaveUvs adds
+   them (16-bit) */
+#define RD_DRAW_WAVE_UVS 0x1u
+/* the game's float code rounds to nearest (--fpu-round nearest), not toward zero as the EE's FPU: for what
+   the native draw does in the game's floats (RD_PROGRAM_RIPPLE) */
+#define RD_DRAW_ROUND_NEAREST 0x2u
 
 /* Copies d (and the meshes, which stay alive as long as the frame does) into this frame's side buffer;
    returns the handle to queue as PORT_GS_REG_NATIVE_DRAW's value (RD_ND_DRAW), 0 if it cannot */

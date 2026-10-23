@@ -70,6 +70,13 @@
                          with --native-draw, the PS2 path's packets are queued too, and the native GS
                          draws the native draws (native) or the PS2 path's (ps2): two runs alike in all
                          the game does, to compare the pictures
+       --native-wave-uvs gpu|cpu|late
+                         with --native-draw map, the wave UVs of the water records: gpu (the default: the
+                         frame's offsets added in the shader), cpu (the coordinates the game wrote, the
+                         blocks parsed again each frame; the same picture) or late (the offsets of the
+                         frame after, as the PS2 path's DMA mostly reads them)
+       --test-dma-wait   (tests) each frame's packet chain waited for as soon as it is sent: the PS2
+                         path then draws the blocks the game changes as the game drew them
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -208,6 +215,7 @@ static void usage(const char *program) {
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2]\n"
+            "          [--native-wave-uvs gpu|cpu|late] [--test-dma-wait]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
@@ -318,6 +326,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--invincible") == 0) {
             port_options.invincible = 1;
+            continue;
+        }
+        if (strcmp(option, "--test-dma-wait") == 0) {
+            port_options.test_dma_wait = 1;
             continue;
         }
         if (strcmp(option, "--myus-necklace") == 0) {
@@ -503,6 +515,17 @@ static void parse_options(int argc, char **argv) {
                 fprintf(stderr, "--native-draw-compare wants native, ps2 or off, not %s\n", value);
                 exit(2);
             }
+        } else if (strcmp(option, "--native-wave-uvs") == 0) {
+            if (strcmp(value, "gpu") == 0) {
+                port_options.native_wave_uvs = PORT_WAVE_UVS_GPU;
+            } else if (strcmp(value, "cpu") == 0) {
+                port_options.native_wave_uvs = PORT_WAVE_UVS_CPU;
+            } else if (strcmp(value, "late") == 0) {
+                port_options.native_wave_uvs = PORT_WAVE_UVS_LATE;
+            } else {
+                fprintf(stderr, "--native-wave-uvs wants gpu, cpu or late, not %s\n", value);
+                exit(2);
+            }
         } else if (strcmp(option, "--native-layer-z") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_layer_z = 0;
@@ -662,6 +685,14 @@ int port_native_draw(int kind) {
 
 int port_native_draw_compare(void) {
     return port_options.native_draw ? port_options.native_draw_compare : 0;
+}
+
+int port_native_wave_uvs(void) {
+    return port_options.native_wave_uvs;
+}
+
+int port_test_dma_wait(void) {
+    return port_options.test_dma_wait;
 }
 
 /* --native-draw's value: off, on, or a comma-separated list of kinds; -1 if it is none of those */

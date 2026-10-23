@@ -66,6 +66,7 @@ struct Draw {
     vec4 obj;          // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     ivec4 info;        // the point lights, XYOFFSET X and Y (12.4), ND_C_*
     Between bt;        // (ND_C_MODEL) the part's own move from the frame before (nd_between.h)
+    uvec4 wave[4];     // (ND_C_WAVE) the 16 waves' offsets to S (low 16 bits) and T (high)
 };
 layout(set = 2, binding = 1, std430) readonly buffer Draws {
     Draw draws[];
@@ -75,6 +76,7 @@ layout(set = 2, binding = 1, std430) readonly buffer Draws {
 #define ND_C_OBJ 2
 #define ND_C_MODEL 4
 #define ND_C_EYE 8
+#define ND_C_WAVE 16
 
 #ifdef ND_ORACLE
 // The vertex oracle (nd_000_oracle.vert, built from this with ND_ORACLE: gsn_nd_oracle.inc): what each
@@ -283,6 +285,14 @@ void main() {
     Place p = vu_place(at);
     // the fog: ACC.w = 1 * fog.z, then + fog.w * q; clamped to 0..255
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, p.q)), 255.0), 0.0);
+    if ((d.info.w & ND_C_WAVE) != 0) {
+        // the wave UVs on the GPU (P6-2): the vertex's own S and T moved by its wave's (ST's w) offsets in 16
+        // bits, as Wobble_ApplyWaveUvs writes them, read back signed as VIF1's UNPACK does
+        uint w = uint(T.w) & 15u;
+        uint o = d.wave[w >> 2][w & 3u];
+        T.x = (int(uint(T.x) + (o & 0xFFFFu)) << 16) >> 16;
+        T.y = (int(uint(T.y) + (o >> 16)) << 16) >> 16;
+    }
     vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
     vec3 stq = vec3(vu_mul(st.x, p.q), vu_mul(st.y, p.q), vu_mul(st.z, p.q));
 

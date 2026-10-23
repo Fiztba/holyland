@@ -287,7 +287,7 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                 // path's: nd_kick)
                 if (!gs->verts.empty() &&
                     ((interp.active && !nd.pending) ||
-                     (nd.pending && (nd.batch_arena != nd.arena.buffer.get() ||
+                     (nd.pending && (ndw_pending() || nd.batch_arena != nd.arena.buffer.get() ||
                                      (nd280.pending && nd280.batch_draws != nd280.draws.buffer.get()))))) {
                     flush_batch();
                 }

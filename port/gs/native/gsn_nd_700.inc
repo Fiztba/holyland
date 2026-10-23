@@ -196,6 +196,7 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
     NdKey key = nd_key(d);
     memset(k.obj, 0, sizeof(k.obj));
     memset(&k.bt, 0, sizeof(k.bt));
+    memset(k.wave, 0, sizeof(k.wave)); // (0x000's wave UVs: not 0x700's)
     k.info[3] = 0;
     if (!interp.active) {
         nd_remember(key, d, cam);
@@ -245,7 +246,7 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
             // other buffers is drawn first, and in a picture between a batch of the PS2 path's: nd_kick)
             if (!gs->verts.empty() &&
                 ((interp.active && !nd.pending) ||
-                 (nd.pending && (nd.batch_arena != nd.arena.buffer.get() ||
+                 (nd.pending && (ndw_pending() || nd.batch_arena != nd.arena.buffer.get() ||
                                  (nd.pending_000 && nd.batch_draws != nd.draws.buffer.get()))))) {
                 flush_batch();
             }

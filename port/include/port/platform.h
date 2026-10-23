@@ -147,6 +147,11 @@ typedef struct {
        Both live from the overlay's Debug page; never saved. */
     int native_draw;
     int native_draw_compare;
+    /* --native-wave-uvs (port_native_wave_uvs(), port/include/port/host.h): how a native map record's wave
+       UVs (flag 0x100) are drawn, PORT_WAVE_UVS_*; never saved. --test-dma-wait (port_test_dma_wait()):
+       tests only, the packet chain sent and waited for at once (no race with the next frame's update) */
+    int native_wave_uvs;
+    int test_dma_wait;
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */

@@ -57,6 +57,7 @@ struct Draw {
     vec4 obj;          // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     ivec4 info;        // (0), XYOFFSET X and Y (12.4), ND_C_*
     Between bt;        // (ND_C_MODEL) the part's own move from the frame before (nd_between.h)
+    uvec4 wave[4];     // (nd_000.vert's ND_C_WAVE: not read here; the records are NdConst, 0x000's)
 };
 layout(set = 2, binding = 1, std430) readonly buffer Draws {
     Draw draws[];
