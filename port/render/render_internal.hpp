@@ -44,7 +44,7 @@ struct RdMeshData {
 
 // The words a vertex of a mesh of this format takes in RdMeshData::vertices
 inline uint32_t rd_vertex_words(uint32_t format) {
-    return format == RD_VF_FLOAT_SKIN ? 32u : 16u;
+    return format == RD_VF_FLOAT_SKIN ? 32u : format == RD_VF_GS_STRIP ? 8u : 16u;
 }
 
 // (the vertex oracle, kf4-gsreplay --nd-oracle: the parser's own code on what a VU1 run of program 0x280

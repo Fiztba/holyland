@@ -38,6 +38,7 @@ void nd280_flush(bool begin);
 bool nd280_batch();
 Program *nd280_program(Program *p);
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
+void nd_strip_draw(); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
 
 // nd_000.vert's Draw (std430, a record a draw): matrices are VU layout, a qword a column; the vertex
 // matrix, the light directions and the point lights as VU1's set-up leaves them (nd_draw: its arithmetic)
@@ -518,6 +519,11 @@ void nd_draw(uint64_t value) {
         nd.fetched.clear();
         return;
     }
+    if (d.program == RD_PROGRAM_GS_STRIP) {
+        nd_strip_draw(); // (gsn_nd_strip.inc)
+        nd.fetched.clear();
+        return;
+    }
     if (d.program != 0) {
         gsn_stats.nd_unsupported++;
         return;
@@ -686,3 +692,4 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
 
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
 #include "gsn_nd_280.inc"    // (program 0x280's draws, and its oracle)
+#include "gsn_nd_strip.inc"  // (a PATH2 strip's draws: the trail)

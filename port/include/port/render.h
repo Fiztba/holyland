@@ -39,8 +39,11 @@ typedef uint32_t RdMesh;
 
 typedef enum {
     RD_VF_PACKED16 = 1,  /* program 0x000's: 4 qwords a vertex (V4-16 position, normal, ST, colour) */
-    RD_VF_FLOAT_SKIN = 2 /* program 0x280's: 4 qwords a vertex of floats (position, normal, ST: its w the
+    RD_VF_FLOAT_SKIN = 2, /* program 0x280's: 4 qwords a vertex of floats (position, normal, ST: its w the
                             matrix set, colour); every MSCAL in the block must be 0x280's */
+    RD_VF_GS_STRIP = 3   /* no VU1 program: the block is a PATH2 GIF packet, one PACKED tag (PRE, a triangle
+                            strip) of RGBAQ and XYZ2 per vertex (the weapon's trail); drawn by a draw of
+                            program RD_PROGRAM_GS_STRIP */
 } RdVertexFormat;
 
 /* gen RD_GEN_HASH: the block's bytes are hashed each call, so a block the game rewrote (Model_Set*,
@@ -92,7 +95,8 @@ typedef struct {
     uint32_t kind;            /* RD_KIND_* */
     uint32_t id[3];           /* the rest of its identity, stable from frame to frame: (instance key, part,
                                  slot or record): what pictures between pair draws by (3.5) */
-    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000 or 0x280 (skinned) */
+    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000 or 0x280 (skinned); or
+                                 RD_PROGRAM_GS_STRIP (meshes of RD_VF_GS_STRIP, written to the GS as they are) */
     uint32_t flags;           /* (none yet) */
     uint32_t camera;          /* rd_camera's index */
     uint32_t mesh_count;      /* (filled by rd_draw) */
@@ -110,6 +114,9 @@ typedef struct {
     float turn[2][4][4];      /* VU1 0x24-0x27, 0x28-0x2B (0x280): the part's and the parent's turns, whose
                                  first three columns map a normal for the sphere pass (Model_DrawSkinned) */
 } RdDraw;
+
+/* RdDraw.program of a draw of RD_VF_GS_STRIP meshes (not a VU1 address) */
+#define RD_PROGRAM_GS_STRIP 0x10000u
 
 /* Copies d (and the meshes, which stay alive as long as the frame does) into this frame's side buffer;
    returns the handle to queue as PORT_GS_REG_NATIVE_DRAW's value (RD_ND_DRAW), 0 if it cannot */

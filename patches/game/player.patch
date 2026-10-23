@@ -433,7 +433,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
              *out = request->unk50;
          } else {
 diff --git a/src/game/player/held_weapon.c b/src/game/player/held_weapon.c
-index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad42887f58406 100644
+index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..b3ad5af997297de86f9ef76ba9191c46e8d5e66e 100644
 --- a/src/game/player/held_weapon.c
 +++ b/src/game/player/held_weapon.c
 @@ -6,14 +6,14 @@
@@ -455,7 +455,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
  void TextureTable_QueueAll(TextureTableHeader *);
  MotionData *ModelMotion_LoadFile(MotionFile *, ModelChannel **, ModelInstance *, int);
  void GsDraw_QueueTexFlush(void);
-@@ -24,10 +24,6 @@ u32 *Packet_Alloc(int);
+@@ -24,28 +24,25 @@ u32 *Packet_Alloc(int);
  void Packet_AppendToChain(u32 *, u32 *);
  void Model_MultiplyChildMatrices(ModelPart *);
  void Sound_LoadSwBank(int);
@@ -466,7 +466,11 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
  void Vector_Copy(void *, void *);
  void Vector_CopyQuadword(void *, void *);
  void Vector_Add(void *, void *, void *);
-@@ -37,15 +33,14 @@ void Vu0_ProjectToScreen(int *, void *);
+ void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
+ void Vu0_LoadMatrix(void *);
+ void Vu0_ProjectToScreen(int *, void *);
++int NativeDraw_Arm(ModelInstance *, int);   /* PC: --native-draw (game/native_draw/) */
++int NativeDraw_ArmTrail(u32 *, u32 *);      /* PC: --native-draw (game/native_draw/) */
  
  extern char *held_weapon_area;
  extern PlayerState player_state;
@@ -484,7 +488,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
  extern CameraState camera_state;
  extern f32 identity_matrix[16];
  extern f32 world_screen_matrix[16];
-@@ -75,18 +70,20 @@ PlayerArmPoints held_item_arm_points_prev = { 0 }; /* 0x4147A0 the same for the
+@@ -75,18 +72,20 @@ PlayerArmPoints held_item_arm_points_prev = { 0 }; /* 0x4147A0 the same for the
  
  ModelInstance held_item_model __attribute__((section(".bss"))); /* 0x57B6A0 the held item; held_item_model_ptr in asm .sdata points here */
  static ModelInstance arm_model;         /* 0x57B860 */
@@ -514,7 +518,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
  static s32 trail_min_life;              /* 0x447178 */
  static s32 trail_count;                 /* 0x44717C */
  static s32 trail_write_index;           /* 0x447180 */
-@@ -103,25 +100,25 @@ int WeaponTrail_GetCount(void);
+@@ -103,25 +102,25 @@ int WeaponTrail_GetCount(void);
  
  void HeldWeapon_Init(void) {
      int file_handle;
@@ -547,7 +551,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
      File_Close(file_handle);
      Player_LoadArmModels();
  }
-@@ -131,8 +128,8 @@ void HeldWeapon_Init(void) {
+@@ -131,8 +130,8 @@ void HeldWeapon_Init(void) {
     the model, its motions and its textures from the parts the file has. */
  void Player_LoadArmModels(void) {
      char path[0x100];
@@ -558,7 +562,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
      GameDefinition *item = &weapon_name_defs[player_state.weapon];
      GameDefinition *arm = &weapon_name_defs[player_state.equipment[EQUIP_GAUNTLET] + 70];
      PlayerArmFile *file;
-@@ -146,9 +143,9 @@ void Player_LoadArmModels(void) {
+@@ -146,9 +145,9 @@ void Player_LoadArmModels(void) {
              Effect_FreePlayerWeaponKinds();
          }
          memset((void *)held_item_file, 0, 0x30000);
@@ -571,7 +575,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
          held_item_textures = 0;
          sprintf(path, item_arm_path_format, item->model_file_number);
          handle = File_Open(path, 0, 1);
-@@ -170,20 +167,20 @@ void Player_LoadArmModels(void) {
+@@ -170,20 +169,20 @@ void Player_LoadArmModels(void) {
          memcpy((void *)held_item_file, file_load_buffer, size);
          file = (PlayerArmFile *)held_item_file;
          if (file->model_size != 0) {
@@ -598,7 +602,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
          MODEL_CHANNEL(&held_item_model)->blend_speed = 0x80;
          Sound_LoadSwBank(player_state.weapon);
          WeaponTrail_Reset();
-@@ -195,9 +192,9 @@ void Player_LoadArmModels(void) {
+@@ -195,9 +194,9 @@ void Player_LoadArmModels(void) {
      if (loaded_arm_gauntlet != player_state.equipment[EQUIP_GAUNTLET]) {
          loaded_arm_gauntlet = player_state.equipment[EQUIP_GAUNTLET];
          memset((void *)arm_file, 0, 0x50000);
@@ -611,7 +615,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
          arm_textures = 0;
          sprintf(path, item_arm_path_format, arm->model_file_number);
          handle = File_Open(path, 0, 1);
-@@ -217,15 +214,15 @@ void Player_LoadArmModels(void) {
+@@ -217,15 +216,15 @@ void Player_LoadArmModels(void) {
          memcpy((void *)arm_file, file_load_buffer, size);
          file = (PlayerArmFile *)arm_file;
          if (file->model_size != 0) {
@@ -631,7 +635,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
      }
  }
  
-@@ -285,10 +282,10 @@ void Player_UpdateArmModels(void) {
+@@ -285,10 +284,10 @@ void Player_UpdateArmModels(void) {
              *(ModelMatrix *)arm_part->matrix = *(ModelMatrix *)part->matrix;
          }
          held_item_model.update_bone_points(&held_item_model);
@@ -645,7 +649,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
  }
  
  /* each frame: ages the weapon trail and queues the two ends of the held weapon, in screen space */
-@@ -315,8 +312,8 @@ void WeaponTrail_Update(void) {
+@@ -315,8 +314,8 @@ void WeaponTrail_Update(void) {
          if (item == 0x98) {
              return;
          }
@@ -656,7 +660,44 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
          sceVu0MulMatrix(world_screen, world_screen_matrix, identity_matrix);
          Vu0_LoadMatrix(world_screen);
          Vu0_ProjectToScreen((int *)&point, blade_base);
-@@ -387,7 +384,7 @@ void Player_DrawArm(void) {
+@@ -359,16 +358,22 @@ void Player_DrawArm(void) {
+         Packet_EndGsRegisters();
+         TextureTable_QueueAll((TextureTableHeader *)arm_textures);
+         GsDraw_QueueTexFlush();
+-        arm_model.draw_parts(&arm_model);
++        if (!port_native_draw(PORT_ND_ARM) || !NativeDraw_Arm(&arm_model, 0)) { /* PC: --native-draw (game/native_draw/) */
++            arm_model.draw_parts(&arm_model);
++        }
+         TextureTable_QueueAll((TextureTableHeader *)held_item_textures);
+         GsDraw_QueueTexFlush();
+         if (player_state.weapon != 0x2E) {
+-            held_item_model.draw_parts(&held_item_model);
++            if (!port_native_draw(PORT_ND_ARM) || !NativeDraw_Arm(&held_item_model, 1)) { /* PC: --native-draw (game/native_draw/) */
++                held_item_model.draw_parts(&held_item_model);
++            }
+         } else {
+             for (i = 0; i < held_item_model.part_count; i++) {
+                 MODEL_PART_FLAG_BITS(&held_item_model.parts[i])->bit40 = i == 5;
+             }
+-            held_item_model.draw_parts(&held_item_model);
++            if (!port_native_draw(PORT_ND_ARM) || !NativeDraw_Arm(&held_item_model, 1)) { /* PC: --native-draw (game/native_draw/) */
++                held_item_model.draw_parts(&held_item_model);
++            }
+             for (i = 0; i < held_item_model.part_count; i++) {
+                 MODEL_PART_FLAG_BITS(&held_item_model.parts[i])->bit40 = i != 5;
+             }
+@@ -376,7 +381,9 @@ void Player_DrawArm(void) {
+             Packet_AddGsRegister(GS_REG_ALPHA_1, 0x48);
+             Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+             Packet_EndGsRegisters();
+-            held_item_model.draw_parts(&held_item_model);
++            if (!port_native_draw(PORT_ND_ARM) || !NativeDraw_Arm(&held_item_model, 1)) { /* PC: --native-draw (game/native_draw/) */
++                held_item_model.draw_parts(&held_item_model);
++            }
+             for (i = 0; i < held_item_model.part_count; i++) {
+                 MODEL_PART_FLAG_BITS(&held_item_model.parts[i])->bit40 = FALSE;
+             }
+@@ -387,7 +394,7 @@ void Player_DrawArm(void) {
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_ALPHA_1, weapon_trail_kinds[trail_kind].blend);
          Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -665,7 +706,7 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
          Packet_EndGsRegisters();
          clipped = 6;
          size = count * 2 + 1;
-@@ -396,8 +393,8 @@ void Player_DrawArm(void) {
+@@ -396,8 +403,8 @@ void Player_DrawArm(void) {
          packet += 7;
          *packet++ = size | 0x51000000;
          /* GIF tag: count vertices of two registers each, a shaded, blended triangle strip */
@@ -676,6 +717,17 @@ index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad428
          *(u64 *)packet = tag;
          packet += 2;
          *(u64 *)packet = 0x51; /* the registers: RGBAQ, XYZ2 */
+@@ -420,7 +427,9 @@ void Player_DrawArm(void) {
+                 *packet++ = 0;
+             }
+         }
+-        Packet_AppendToChain(packet_start, packet);
++        if (!port_native_draw(PORT_ND_ARM) || !NativeDraw_ArmTrail(packet_start, packet)) { /* PC: --native-draw (game/native_draw/) */
++            Packet_AppendToChain(packet_start, packet);
++        }
+         Packet_BeginGsRegisters();
+         Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+         Packet_EndGsRegisters();
 diff --git a/src/game/player/interact.c b/src/game/player/interact.c
 index 2dd7e3a28c7dcd32e01114557118f2cce488dc67..910c81f35bad67f25a81194ad372a199c74ef9ed 100644
 --- a/src/game/player/interact.c

@@ -177,6 +177,7 @@ bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mes
 // the normal's w ORed into XYZF2's w, but the last vertex's; ST's w the matrix set), TOP+0xA0 the A+D
 // packet kicked before the strip, and the second (sphere-mapped) pass when TOP+0xA4.z's low 16 bits
 // are not 0: then the A+D packet at TOP+0xA3 and a strip of the same XYZF2s under the tag at TOP+1.
+const uint32_t N_MAX_STRIP = 64; // (the trail: WeaponTrail_Push keeps 64 points at most; a triangle's numbers are bytes)
 const uint32_t N_MAX_280 = 36; // (vu1_hle_280.c: the HLE leaves more to the interpreter; none in the game)
 
 // a GIF tag of a strip of n vertices of ST, RGBAQ, XYZF2 with PRE; why not, or nullptr
@@ -312,7 +313,57 @@ bool take_batch_280(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData 
     return true;
 }
 
+// ---- A PATH2 strip (RD_VF_GS_STRIP: the weapon's trail, game/native_draw/nd_arm.c) ----------------
+// The block is the GIF packet as the game built it: one PACKED tag with PRE, a triangle strip (PRIM's type
+// 4), its registers RGBAQ and XYZ2, then NLOOP vertices of the two qwords. One batch: its tag, the
+// vertices as the packet has them (eight words: RGBAQ's qword, XYZ2's; the ADC bit is XYZ2's bit 111,
+// word 7 bit 15), the triangles the GS makes of them (a kick with ADC makes none), and the alpha range.
+// The native GS writes them as the GIF would (gsn_nd_strip.inc).
+bool parse_gs_strip(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh) {
+    if (qwords < 1) {
+        why_refused = "a strip without its GIF tag";
+        return false;
+    }
+    uint64_t tag[2];
+    memcpy(tag, bytes, 16);
+    uint32_t nloop = uint32_t(tag[0] & 0x7FFF), flg = uint32_t(tag[0] >> 58) & 3, nreg = uint32_t(tag[0] >> 60);
+    if (flg != 0 || nreg != 2 || (tag[1] & 0xFF) != 0x51 || !((tag[0] >> 46) & 1) || ((tag[0] >> 47) & 7) != 4 ||
+        !((tag[0] >> 15) & 1)) {
+        why_refused = "not a PACKED strip of RGBAQ and XYZ2 with PRE and EOP";
+        return false;
+    }
+    if (nloop > N_MAX_STRIP || 1 + 2 * nloop != qwords) {
+        why_refused = "a strip whose NLOOP is not the block's size";
+        return false;
+    }
+    RdBatch b;
+    b.tag[0] = tag[0];
+    b.tag[1] = tag[1];
+    b.start = RD_PROGRAM_CONTINUE;
+    b.first = uint32_t(mesh.vertices.size() / 8);
+    b.count = nloop;
+    b.alpha_lo = 255;
+    b.alpha_hi = 0;
+    const int32_t *v = reinterpret_cast<const int32_t *>(bytes + 16);
+    mesh.vertices.insert(mesh.vertices.end(), v, v + size_t(nloop) * 8);
+    for (uint32_t k = 0; k < nloop; k++) {
+        uint32_t a = uint32_t(v[k * 8 + 3]) & 0xFF; // (PACKED RGBAQ: the GS takes the low 8 bits)
+        b.alpha_lo = std::min(b.alpha_lo, a);
+        b.alpha_hi = std::max(b.alpha_hi, a);
+        if (k >= 2 && !(uint32_t(v[k * 8 + 7]) & 0x8000)) {
+            b.triangles.push_back(uint8_t(k - 2));
+            b.triangles.push_back(uint8_t(k - 1));
+            b.triangles.push_back(uint8_t(k));
+        }
+    }
+    mesh.batches.push_back(std::move(b));
+    return true;
+}
+
 bool parse_block(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh, RdVertexFormat fmt = RD_VF_PACKED16) {
+    if (fmt == RD_VF_GS_STRIP) {
+        return parse_gs_strip(bytes, qwords, mesh);
+    }
     static VuModel vu; // (the game's thread only)
     memset(vu.written, 0, sizeof(vu.written));
     uint32_t cl = 1, wl = 1, mode = 0, tops = BUFFER_A;
@@ -503,7 +554,7 @@ void dump_mesh(const RdMeshData &m) {
         fprintf(f, "\nV");
         for (uint32_t k = 0; k < b.count; k++) {
             const int32_t *v = &m.vertices[size_t(b.first + k) * rd_vertex_words(m.format)];
-            fprintf(f, " %d %d %d %d %d", v[0], v[1], v[2], v[3], v[15]);
+            fprintf(f, " %d %d %d %d %d", v[0], v[1], v[2], v[3], v[m.format == RD_VF_GS_STRIP ? 3 : 15]);
         }
         fprintf(f, "\nT");
         for (uint8_t t : b.triangles) {
@@ -568,11 +619,11 @@ extern "C" RdMesh rd_mesh_from_block(const void *block, uint32_t qwords, uint32_
     mesh->gen = want;
     rd_stats.meshes_parsed++;
     auto p0 = dump.f ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
-    bool ok = (fmt == RD_VF_PACKED16 || fmt == RD_VF_FLOAT_SKIN) && parse_block(bytes, qwords, *mesh, fmt);
+    bool ok = (fmt == RD_VF_PACKED16 || fmt == RD_VF_FLOAT_SKIN || fmt == RD_VF_GS_STRIP) && parse_block(bytes, qwords, *mesh, fmt);
     if (dump.f) { // (KF4_ND_DUMP)
         dump.parse_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - p0).count());
     }
-    if (fmt != RD_VF_PACKED16 && fmt != RD_VF_FLOAT_SKIN) {
+    if (fmt != RD_VF_PACKED16 && fmt != RD_VF_FLOAT_SKIN && fmt != RD_VF_GS_STRIP) {
         why_refused = "not a vertex format the parser knows";
     }
     CacheEntry &e = cache[key];
@@ -954,7 +1005,7 @@ extern "C" int rd_replay_record(uint32_t type, const void *data, size_t size) {
         mesh->block.assign(p + sizeof(head), p + sizeof(head) + size_t(head.qwords) * 16);
         rd_replay_stats.meshes++;
         // (parsed again: this build's parser decides, as it would in the game)
-        bool known = head.format == RD_VF_PACKED16 || head.format == RD_VF_FLOAT_SKIN;
+        bool known = head.format == RD_VF_PACKED16 || head.format == RD_VF_FLOAT_SKIN || head.format == RD_VF_GS_STRIP;
         if (!known || !parse_block(mesh->block.data(), head.qwords, *mesh, RdVertexFormat(head.format))) {
             rd_replay_stats.meshes_refused++;
             fprintf(stderr, "native draw: the capture's block %#x (%u qwords) is refused: %s\n", head.key, head.qwords,
