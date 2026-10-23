@@ -31,6 +31,7 @@ void Packet_EndGsRegisters(void);
 void Matrix_Multiply(void *dst, void *matrix, void *src);
 void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
 void Model_DrawPosedDepthByPart(ModelInstance *model);
+void Model_DrawPosed(ModelInstance *model);
 
 extern f32 world_screen_matrix[16]; /* VU1 0x00: what GsDraw_QueueVu1Matrix sent last */
 extern f32 world_view_matrix[16];
@@ -87,18 +88,24 @@ static int part_meshes(ModelPart *part, RdMesh *meshes) {
     return part->data_count == 0 || rd_mesh_program(meshes[0]) == 0;
 }
 
-/* What Model_DrawPosedDepthByPart queues (model/model.c), drawn natively: the same parts left out, each
-   part's ZBUF and TEST, the same VU1 fixed block. kind and owner make the draws' identity. 1 if drawn;
-   0 if the model has a block the core cannot draw, and nothing was queued (the caller draws it the PS2
-   way). */
-int NativeDraw_PosedDepthByPart(ModelInstance *model, int kind, const void *owner) {
+/* The two ways model/model.c queues a posed model's parts that are drawn natively so far:
+   Model_DrawPosed (the map records' draw_parts, map objects ...) and Model_DrawPosedDepthByPart (items,
+   gold: parts scaled to nothing left out, each part's ZBUF and TEST queued before it). */
+enum { FORM_POSED, FORM_DEPTH_BY_PART };
+
+/* What the form's function queues, drawn natively: the same parts left out, the same GS registers, the
+   same VU1 fixed block. kind and owner make the draws' identity. 1 if drawn; 0 if the model has a block
+   the core cannot draw (another VU1 program, a block that is not self-contained ...), and nothing was
+   queued: the caller draws it the PS2 way. With --native-draw-compare the PS2 path's packets follow,
+   between the marks. */
+static int posed_model(ModelInstance *model, int form, int kind, const void *owner) {
     static RdMesh meshes[ND_MAX_MESHES];
     f32 (*matrix_a)[4] = MODEL_DRAW_MATRIX_A;
     f32 (*matrix_b)[4] = MODEL_DRAW_MATRIX_B;
     ModelPart *part;
     RdDraw d;
     u32 camera;
-    int i, n;
+    int i;
 
     if (model->parts == NULL || model->part_count == 0) {
         return 1; /* (the PS2 path queues nothing either) */
@@ -128,10 +135,12 @@ int NativeDraw_PosedDepthByPart(ModelInstance *model, int kind, const void *owne
         memcpy(d.point_col[i], &linked_point_pool[model->hit_handles[i]].target, 16);
     }
     if (model->model_flags & 0x800) {
+        /* (VU1 0x64-0x66: read by program 0x700 only; carried for the effects, P4) */
         d.colour[0][0] = model->colour_red;
         d.colour[0][1] = model->colour_green;
         d.colour[0][2] = model->colour_blue;
-        d.colour[0][3] = model->alpha;
+        memcpy(&d.colour[0][3], &model->found_record_id, 4);
+        memcpy(d.colour[1], &model->found_record, 16);
     }
     part = model->parts;
     for (i = 0; i < model->part_count; i++, part++) {
@@ -141,31 +150,50 @@ int NativeDraw_PosedDepthByPart(ModelInstance *model, int kind, const void *owne
         if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT40) {
             continue;
         }
-        if (part->scale[0] == 0.0f && part->scale[1] == 0.0f && part->scale[2] == 0.0f) {
+        if (form == FORM_DEPTH_BY_PART && part->scale[0] == 0.0f && part->scale[1] == 0.0f && part->scale[2] == 0.0f) {
             continue;
         }
-        n = part_meshes(part, meshes);
+        part_meshes(part, meshes); /* (found again in the cache) */
         Matrix_Multiply(matrix, model->model_matrix, part);
         memcpy(d.model, matrix, sizeof(d.model));
         d.id[1] = (u32)i;
         value = rd_draw(&d, meshes, part->data_count);
         Packet_BeginGsRegisters();
-        if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT41) {
-            Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
-            Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
-        } else {
-            Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
-            Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+        if (form == FORM_DEPTH_BY_PART) {
+            if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT41) {
+                Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+                Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+            } else {
+                Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118LL);
+                Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
+            }
         }
-        if (n && value != 0) {
+        if (value != 0) {
             Packet_AddGsRegister(PORT_GS_REG_NATIVE_DRAW, (s64)value);
         }
         Packet_EndGsRegisters();
     }
     if (port_native_draw_compare()) {
         queue_mark(RD_ND_ALT_BEGIN, 0);
-        Model_DrawPosedDepthByPart(model);
+        if (form == FORM_DEPTH_BY_PART) {
+            Model_DrawPosedDepthByPart(model);
+        } else {
+            Model_DrawPosed(model);
+        }
         queue_mark(RD_ND_ALT_END, 0);
     }
     return 1;
+}
+
+/* Model_DrawPosedDepthByPart(model), natively (posed_model) */
+int NativeDraw_PosedDepthByPart(ModelInstance *model, int kind, const void *owner) {
+    return posed_model(model, FORM_DEPTH_BY_PART, kind, owner);
+}
+
+/* Model_DrawPosed(model), natively (posed_model); a model whose draw_parts is something else is not */
+int NativeDraw_Posed(ModelInstance *model, int kind, const void *owner) {
+    if (model->draw_parts != Model_DrawPosed) {
+        return 0;
+    }
+    return posed_model(model, FORM_POSED, kind, owner);
 }

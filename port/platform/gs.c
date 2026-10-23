@@ -121,6 +121,11 @@ static void open_backend(void *unused) {
             fprintf(stderr, "[gs] the native GS did not start: paraLLEl-GS draws instead\n");
         }
     }
+    if (port_options.native_draw && !have_native) {
+        /* (the native draws are the native GS's: without it, nothing would draw them) */
+        fprintf(stderr, "[gs] --native-draw needs the native GS: off\n");
+        port_options.native_draw = 0;
+    }
     /* what did start, for the window (the Vulkan presenter needs the native GS), the overlay and --stats */
     if (have_gs || have_native) {
         port_options.renderer = have_gs && have_native ? PORT_RENDERER_BOTH
@@ -958,10 +963,11 @@ void port_gs_set_native_colour(int mode) {
 }
 
 void port_gs_set_native_draw(int kinds, int compare) {
-    port_options.native_draw = kinds;
+    port_options.native_draw = 0; /* (the native draws are the native GS's) */
     port_options.native_draw_compare = compare;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
+        port_options.native_draw = kinds;
         gsn_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
     }
 #endif
