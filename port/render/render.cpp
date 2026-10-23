@@ -799,6 +799,62 @@ extern "C" uint64_t rd_draw(const RdDraw *d, const RdMesh *meshes, uint32_t coun
     return (uint64_t(RD_ND_DRAW) << 56) | (uint64_t(serial) << 32) | index;
 }
 
+// A pass's words in a draw (rd_pass, rd_pass_of): its first twelve in colour, its data in the six
+// matrices a capture keeps (model, parent, light_dir, light_col, point_pos, point_col), so that a capture
+// carries passes as it carries draws (gs_capture_format.h's Kf4GsNdDraw)
+static_assert(sizeof(RdPass) == (12 + 96) * 4, "RdPass is twelve words and its data");
+static void pass_words(RdDraw &d, RdPass &p, bool to_draw) {
+    uint32_t *head = reinterpret_cast<uint32_t *>(&p);
+    float *parts[6] = {&d.model[0][0], &d.parent[0][0], &d.light_dir[0][0], &d.light_col[0][0], &d.point_pos[0][0],
+                       &d.point_col[0][0]};
+    if (to_draw) {
+        memcpy(&d.colour[0][0], head, 12 * 4);
+        for (int i = 0; i < 6; i++) {
+            memcpy(parts[i], p.data + i * 16, 64);
+        }
+    } else {
+        memcpy(head, &d.colour[0][0], 12 * 4);
+        for (int i = 0; i < 6; i++) {
+            memcpy(p.data + i * 16, parts[i], 64);
+        }
+    }
+}
+
+void rd_pass_of(const RdDraw &d, RdPass &p) {
+    pass_words(const_cast<RdDraw &>(d), p, false);
+}
+
+extern "C" uint64_t rd_pass(const RdPass *p) {
+    static uint32_t counted_serial = 0xFFFFFFFFu;
+    static uint32_t counts[16];
+    RdDraw d;
+    memset(&d, 0, sizeof(d));
+    d.kind = RD_KIND_PASS;
+    d.program = RD_PROGRAM_PASS;
+    pass_words(d, const_cast<RdPass &>(*p), true);
+    std::lock_guard<std::mutex> g(slots_lock);
+    Slot &s = slots[serial % SLOTS];
+    if (counted_serial != serial) {
+        counted_serial = serial;
+        memset(counts, 0, sizeof(counts));
+    }
+    // (its identity: the pass, its call site, and the call site's count in the frame)
+    d.id[0] = p->pass;
+    d.id[1] = p->site;
+    d.id[2] = counts[p->site & 15]++;
+    if (s.cameras.empty()) {
+        s.cameras.push_back(RdCamera{}); // (a pass has no camera; rd_fetch takes one all the same)
+    }
+    d.camera = 0;
+    uint32_t index = uint32_t(s.draws.size());
+    s.draws.push_back(d);
+    s.first_mesh.push_back(uint32_t(s.meshes.size()));
+    rd_stats.draws++;
+    rd_stats.passes++;
+    drawn.fetch_add(1, std::memory_order_release);
+    return (uint64_t(RD_ND_DRAW) << 56) | (uint64_t(serial) << 32) | index;
+}
+
 bool rd_fetch(uint64_t value, RdDraw &draw, RdCamera &camera, std::vector<std::shared_ptr<const RdMeshData>> &meshes) {
     uint32_t want = uint32_t(value >> 32) & 0xFFFFFF, index = uint32_t(value);
     std::lock_guard<std::mutex> g(slots_lock);

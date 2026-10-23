@@ -56,3 +56,5 @@ bool rd_parse_block(const void *block, uint32_t qwords, RdVertexFormat fmt, RdMe
 // The draw a PORT_GS_REG_NATIVE_DRAW value names, its camera and meshes, if its frame's slot still
 // holds it (any thread)
 bool rd_fetch(uint64_t value, RdDraw &draw, RdCamera &camera, std::vector<std::shared_ptr<const RdMeshData>> &meshes);
+// A pass's words (rd_pass) out of the draw that carries them (RD_PROGRAM_PASS)
+void rd_pass_of(const RdDraw &d, RdPass &p);

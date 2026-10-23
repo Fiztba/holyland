@@ -943,6 +943,78 @@ map change's capture as a short post chain instead of the GS's 64-pixel strips. 
 integer-exact with `--native-colour exact` against the strips, aiming, underwater and the MP drain, the
 brightness option's range; with the effects' on-top layer and the 2D still drawn after them.
 
+*Done in part (nd3/p7): the eight passes of the task's text, as kind `passes`.* `game/native_draw/nd_passes.c`
+(the adapter), `rd_pass` (render.h, render.cpp: a pass is a draw of the side buffer of `RD_KIND_PASS`, program
+`RD_PROGRAM_PASS`, its words in `colour` and the six matrices a capture keeps, its identity the pass, its call
+site and the site's count in the frame), `port/gs/native/gsn_nd_pass.inc` and `shaders/nd_pass.vert`.
+- **What it is.** The brightness and the under-water tint (`RD_PASS_SCALE`), `GameLoop_DrawFrame`'s fills (the
+  guardian's water, `map_draw_state`'s fill, the message dim, the pause), `Game_DrawFade`, the flicker filter (both),
+  the frame shown before (bit 40 and aiming), the view-turn shift, haze and the wobble grid's cells. The native GS
+  draws each into its own targets as the packets would have been drawn: the same register writes in the same order
+  (so its state, batches and what follows are the PS2 path's) and the same primitives through its own rasteriser and
+  `gs.frag`, but no VU1 run (0x276) and no packets. The brightness, the tint and the fills are **one sprite** instead
+  of ten 64-pixel strips (each strip reads its own pixels, nearest, a texel a pixel; the registers left are the last
+  strip's). The flicker filter's strips (63.5 pixels over 64 texels: a column of each is never drawn), the view-turn
+  shift's 20 SCANMSK strips and the wobble's 70 cells keep the game's primitives.
+- **Call sites** (`core.patch`): whole calls in `GameLoop_DrawFrame` (`if (!port_native_draw(PORT_ND_PASSES) ||
+  !NativeDraw_X(...)) { Game_X(...); }`); inside `Game_DrawFade`, `Game_ShiftScreenByViewTurn` and
+  `Game_DrawWobblingScreen`, around the drawing only (the fade's colour, the turn's offset, the grid's springs and
+  its `rand()` stay the game's), followed by `NativeDraw_PassEnd()` (it closes `--native-draw-compare`'s PS2
+  packets). The view-turn shift's and the wobble's register lists before and after stay the game's packets.
+  `--flicker-filter` and `--no-whole-frame` work as before (the filter's strips only with the switch, its registers
+  always; the shift only without whole frames).
+- **Pictures between.** A pass is paired with the frame before's of the same identity and drawn by `nd_pass.vert`
+  from a record (`NdPassBetween`), as frame_interp.c moves the PS2 path's 2D: a fill's or fade's colour t of the way,
+  the frame shown before by A^t (reading the GS's copy, as marks 0xF4/0xF5 do), the wobble's texels t of the way.
+  Its kicks are queued uncounted (`nd.pass_kicking`: frame_interp.c never saw them) and it is a batch of its own with
+  the CPU's corners (`nd.pass_pending`). Its TEX0 of the frame drawn is moved to the buffer the picture is drawn
+  into, as frame_interp.c's `ad_write` moves the PS2 path's (without it every picture between was the game's frame).
+  The adapter queues `RD_ND_READS_SHOWN` before the previous-frame pass, so that frame_interp.c keeps the frame shown
+  (it looked for a packet reading it; without it aiming's pictures between differed everywhere in onoff mode).
+- **Hooks outside the task's files** (each a line or two): `gsn.cpp` (`vertex_kick`'s kick number; one condition in
+  `flush_batch`: a pass batch does not move with the camera), `gsn_native_draw.inc` (the state's fields, `NdFlush`,
+  `nd_kick`, `nd_draw_range`'s program, `nd_draw`'s dispatch, the frame's swap, the include), `frame_interp.c`
+  (`RD_ND_READS_SHOWN`), `gs.c` (`--stats` counts the passes), `overlay.cpp` (a checkbox), CMakeLists.txt.
+
+Checked headless, `--fast`, `--no-audio`, a fresh data folder each run; up to 7 other agents shared the PC, so
+nothing is timed. The passes that `herb.pad` does not show were forced by a **local-only** switch (not committed):
+under water with the tint and both wobbles, the MP drain's tint changing, bit 40 with its alpha changing, aiming,
+bit 43, haze at three depths, the brightness option at 0x40 and 0xFF, a fill with its alpha changing, a fade every
+120 frames, the message dim, the pause. `--native-draw passes`, pixels differing:
+
+| | compare 1x | onoff 1x | compare 4x | onoff 4x |
+|---|---|---|---|---|
+| `herb.pad` 1800-1840 (brightness 0x88, the flicker filter's registers, the view-turn shift with `--no-whole-frame`) | 0 | 0 | 0 | 0 |
+| under water: the copy, both wobbles, the tint (forced) | 0 | 0 | 0 | 0 |
+| bit 40 and aiming (forced) | 0 | 0 | 0 | 0 |
+| bit 43 and haze, `--flicker-filter` (forced) | 0 (and bit 43 alone) | 0 | 0 | 0 |
+| a fill, a fade, the dim, the pause (forced) | 0 | 0 | 0 | 0 |
+| the brightness at 0xFF, 0x40 (forced) | 0 (0xFF) | 0 (0x40) | | |
+| a fight on 000 (`strong0`, `strong3.pad`: knock-back's previous frame, the death fade at 1930) | 0 | 0 | | 0 |
+| the herb picked up, its message (`herbpick.pad`) | | 0 | | |
+| every kind at once and `passes`: the fight, under water, 000 at 1900 and 2000 | 0 (fight) | 0 (fight, water) | 54 (000: the 2D snap) | |
+
+At 240 (`--frame-rate 240`, every picture): the game's frames 0 in every case below; pictures between 0 for the
+brightness, a fill changing, bit 40 changing (compare and onoff), aiming (onoff), the fight (onoff), haze with the
+flicker filter, and the fills with `--realtime` (pictures drawn again from the recording). **Not 0:** under water,
+compare 1x 1,322 pixels in 24 pictures (worst 251: a few edge pixels where the wobble's texel rounds the other way;
+onoff 875 in 17); compare 4x about 1M pixels a picture, worst 25 (the 2D snap at 4x moves the cells' corners and
+their texels by the frame's slope, the PS2 path's by the picture's: `nd_pass.vert` adds the frame's); and the
+view-turn shift with `--no-whole-frame` at 240 (about 13,000 pixels a picture, worst 22, the game's frames too:
+frame_interp.c's replay moves the PS2 path's strips by the turn between, the native ones are not moved; only with
+both switches, which are not the defaults).
+
+The off check passes: boot_test, frame_test gs and native, gsn_draw_test (0 of 300), vu1_test (0 of 90), and
+`herb.pad` with `--native-draw off` against native/draw 66ffde6: the same `--log`, PATH1 hash 204e443a9fc49731,
+VU1 cycles 460424273, byte-identical pictures at 1800, 1820 and 1840.
+
+Left: `GsDraw_CopyFrame` (before the wobble, and the map change's), `GsDraw_ClearDepth`, `MapChange_FadeOutCapture`,
+`GsDraw_CopyFrameToTexture` (P6-1's), and the passes the player code draws (`Player_DrawScreenFade`,
+`Player_DrawScreenTints`: `player.patch`) are still the PS2 path's; the view-turn shift's and the wobble's register
+lists are still packets; the under-water 4x pictures between and the view shift at 240 (above); real under-water,
+MP-drain and bit-40 scenes from saves (only forced ones were seen); the standalone post chain (P8: the passes as
+shaders of their own, once the targets are not the GS's). Nothing here changes the picture from the PS2's.
+
 **P4-P7 reviews** (independent agents, one a phase): each phase's screenshot set side by side, compare and
 onoff, and the switch to accept its kinds.
 

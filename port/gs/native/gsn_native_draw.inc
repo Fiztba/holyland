@@ -40,6 +40,8 @@ Program *nd280_program(Program *p);
 void nd280_draw(const RdDraw &d, const RdCamera &cam);
 void nd_strip_draw(const RdDraw &d); // (a PATH2 strip's draws, the trail: gsn_nd_strip.inc)
 Program *nd_strip_program(Program *p);
+void nd_pass_draw(const RdDraw &d); // (a screen pass: gsn_nd_pass.inc)
+Program *nd_pass_program(Program *p);
 
 // A model part's move in the pictures between (P2-5; nd_between): its matrix in the frame before (P) and in
 // this frame (C), each split into a rotation R and the rest S (R S the linear part: a scale, or a shear), and
@@ -154,6 +156,11 @@ struct NdState {
     bool pending = false;  // gs->verts holds native corners
     bool skipping = false; // between RD_ND_ALT_BEGIN and _END, drawing the native draws
     bool strip_pending = false, strip_active = false; // (a picture between's strip: gsn_nd_strip.inc's batch)
+    // (a picture between's screen pass: gsn_nd_pass.inc's batch; its kicks queued uncounted)
+    bool pass_pending = false, pass_active = false, pass_kicking = false;
+    std::unordered_map<Program *, Program *> pass_programs; // (and the GS's programs with nd_pass.vert)
+    Shader *pass_vs = nullptr;
+    BufferHandle pass_record; // (the pass's NdPassBetween, in a picture between)
     std::unordered_map<Program *, Program *> strip_programs; // (and the GS's programs with nd_strip.vert)
     Shader *strip_vs = nullptr;
     NdBuffer arena;        // the meshes' vertices
@@ -179,19 +186,21 @@ struct NdState {
     std::unordered_map<NdKey, NdPlace, NdKeyHash> now, before;
     std::unordered_map<NdKey, uint32_t, NdKeyHash> seen; // (nd_key: the draws of an identity so far in the frame)
     std::unordered_map<NdKey, NdStripPoints, NdKeyHash> strip_now, strip_before;
+    std::unordered_map<NdKey, RdPass, NdKeyHash> pass_now, pass_before; // (the screen passes': gsn_nd_pass.inc)
 } nd;
 volatile int nd_mode = GSN_NATIVE_DRAW_NATIVE; // (gsn_set_native_draw)
 
 // (flush_batch: whether its batch is native corners, for the whole of it)
 struct NdFlush {
     NdFlush() {
-        nd.active = nd.pending;
+        nd.active = nd.pending || nd.pass_pending;
         nd.strip_active = nd.strip_pending;
-        nd.pending = nd.strip_pending = false;
+        nd.pass_active = nd.pass_pending;
+        nd.pending = nd.strip_pending = nd.pass_pending = false;
         nd280_flush(true); // (0x280's: gsn_nd_280.inc)
     }
     ~NdFlush() {
-        nd.active = nd.strip_active = false;
+        nd.active = nd.strip_active = nd.pass_active = false;
         nd280_flush(false);
     }
 };
@@ -742,6 +751,11 @@ void nd_draw(uint64_t value) {
         nd.fetched.clear();
         return;
     }
+    if (d.program == RD_PROGRAM_PASS) {
+        nd_pass_draw(d); // (gsn_nd_pass.inc)
+        nd.fetched.clear();
+        return;
+    }
     if (d.program != 0) {
         gsn_stats.nd_unsupported++;
         return;
@@ -848,6 +862,8 @@ void nd_register(uint64_t value) {
             nd.now.clear();
             nd.strip_before.swap(nd.strip_now);
             nd.strip_now.clear();
+            nd.pass_before.swap(nd.pass_now);
+            nd.pass_now.clear();
         }
         break;
     }
@@ -891,7 +907,7 @@ void nd_skip(uint32_t address) {
 // seam a level apart in onoff mode). In a picture between, the native corners are drawn first: the PS2
 // path's are then the GPU's (gs_replay_corners.comp), from a vertex buffer of their own.
 void nd_kick() {
-    if (nd.pending && interp.active) {
+    if ((nd.pending || (nd.pass_pending && !nd.pass_kicking)) && interp.active) {
         flush_batch();
     }
 }
@@ -911,7 +927,8 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
         while (to < end && nd_corner(v[to]) == native) {
             to += 3;
         }
-        c.set_program(native ? nd_program(base) : nd.strip_active ? nd_strip_program(base) : base);
+        c.set_program(native ? nd_program(base) : nd.strip_active ? nd_strip_program(base)
+                                               : nd.pass_active ? nd_pass_program(base) : base);
         c.draw(to - first, first);
         first = to;
     }
@@ -921,3 +938,4 @@ void nd_draw_range(Cmd &c, Program *base, uint32_t n, uint32_t first, uint32_t r
 #include "gsn_nd_oracle.inc" // (the vertex oracle: kf4-gsreplay --nd-oracle)
 #include "gsn_nd_280.inc"    // (program 0x280's draws, and its oracle)
 #include "gsn_nd_strip.inc"  // (a PATH2 strip's draws: the trail)
+#include "gsn_nd_pass.inc"   // (the screen passes' draws)
