@@ -177,6 +177,38 @@ T1's 0x280 for the entities in it. T4, T5, T6 and T8 can start at once. T7 revie
 | T7 | **Review and the owner's sets.** An independent review of `gsn_standalone.inc` and the hooks: races (the turns against every path that touches a target; `ring_idle` callers from other threads), the pictures between (recordings with turns in them), MSAA and colour-high, widescreen, `--native-layer-z ps2` (rounded release). The screenshot set for the owner at his settings (3x, native widescreen, MSAA 2, cut-out AA, 240): the spots in bugs1022 and bugs1024, hosted and modern, still and in motion (strips of the pictures between). | read-only | the review's findings ranked; the sets in the owner's index |
 | T8 | **Performance, and Linux.** Time at the owner's settings at 240 on an idle PC (hosted against modern, `KF4_GSN_GPU_TIME`, `KF4_PRESENT_SIM=240`). The turns: copy only the rows drawn on acquire too, or draw the scene straight into the GS's images while they are the scene's (no copies), until T2 removes them. The tie rule's Z-first passes: batch them, or use `gs_zonly`-style programs. Linux build with gcc and lavapipe: `--renderer modern` on the herb run. | `gsn_standalone.inc` (the turns' copies, with T1's agreement), CI | modern no slower than hosted at 240 at the owner's settings; the herb run on lavapipe, its pictures against Windows' within edges |
 
+### T5: the sky in the scene (done, branch p8/t5)
+
+- **Far-plane skies (002, 013, 021, 027, 098, 099).** `sa_kind` now takes `RD_DRAW_FAR_Z` draws, so the modern
+  sky is drawn into the scene, not by the GS between turns. `sa_000.vert` gives a far corner a depth of 0
+  (`zf = 0`, the scene's clear value). Before this, only the GS's Z was 0. The dome's TEST stays Z ALWAYS, so it
+  lays down the far plane wherever it is drawn (013's frame is not cleared under the sky).
+- **000 and 004, `--renderer modern` only** (`nd_sky.c`). The dome is put at the eye, uses its own Z (the scene's,
+  unrounded) and keeps the game's TEST (GEQUAL, Z written). It is drawn where the game draws it. Hosted mode
+  keeps the PS2's dome, unchanged. On 000 the dome adds its clouds (ALPHA `0x48`, Cs * As + Cd) over the canyon's
+  silhouettes beyond it. With real depth those stay soft dark shapes under the clouds, as on the PS2. Only the far
+  plane turns them into black cut-outs. So no stencil or second pass is needed for them. The note in
+  NATIVE_DRAW_TASKS.md that the eye with real Z also gives black shapes did not reproduce: hosted and modern
+  at the eye both keep the shapes soft.
+- **What the dome still hides.** It hides what the PS2's dome hides: pieces of `Map_DrawLateRecords`' records
+  (drawn after objects, entities and items) that lie beyond the dome. On 000 that is 6 of 64 views, all at
+  2260,-5200 looking up, up to 4,163 pixels at 1x. On 004 nothing hides in 64 views (the eye against the far
+  plane: 0 pixels). Showing those pieces under the clouds needs the dome drawn after them. A try at that (the
+  sky's batches held until the end of the scene's turn) did not help yet. A PS2-path draw (an additive object,
+  Z written) comes between the sky and the late records and ends the turn, and an additive Z-writing draw
+  must see the sky first anyway. It becomes possible once T1/T2 leave one turn a frame.
+- **Numbers** (1x, 64 views a map: 8 places x 4 headings x pitch 0 and 0.6). Hosted `--sky modern` against
+  modern: 002 3.1M pixels, 013 5,283, 027 4.4M. The far-plane maps' large counts are 1-2 levels all over
+  the sky (on average +0.5 a channel), because Vulkan's blending rounds to nearest where the GS truncates (P8's
+  known blend rounding, in the batch path). The hosted PS2 dome against modern on 000 is 7.7M (the clouds from
+  220 units higher) and on 004 0.76M. At 240 (walking, turning, strafing, looking up and down, 128 pictures a
+  map on 000 and 013), modern's step from picture to picture matches hosted's to within 2% in every view: no
+  jumps.
+- **Checks.** The off check is the same as before. Hosted `--native-draw on` and `--sky ps2` on the herb run
+  are byte for byte e8a89c00's. Modern's herb pictures are the same too (no sky in them). Long modern runs with
+  many quick loads still exit with 0xC0000005 or 0xC0000374 after printing their stats. e8a89c00 does the
+  same (T8's open item).
+
 **What the owner decides for P8:**
 - The tie rule's look against the PS2's. Modern draws ties by the slack rule, so seams and layer edges
   can sit a fraction of a pixel from hosted. This is the cost of having no tie-break artefacts.

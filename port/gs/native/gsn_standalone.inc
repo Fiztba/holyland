@@ -1425,7 +1425,7 @@ bool sa_flush() {
 
 // ---- The draws met (nd_register) -----------------------------------------------------------------------
 bool sa_kind(const RdDraw &d) {
-    return d.program == 0 && d.kind < 32 && ((sa.kinds >> d.kind) & 1) && (d.flags & ~uint32_t(RD_DRAW_WAVE_UVS)) == 0;
+    return d.program == 0 && d.kind < 32 && ((sa.kinds >> d.kind) & 1) && (d.flags & ~uint32_t(RD_DRAW_WAVE_UVS | RD_DRAW_FAR_Z)) == 0;
 }
 
 // Before a draw is met: whether it goes to the scene; a batch holds the scene's corners or none
