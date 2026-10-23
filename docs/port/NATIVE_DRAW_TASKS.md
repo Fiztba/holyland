@@ -2,7 +2,32 @@
 
 Branch `native/draw` (long-lived; main stays safe). Read [NATIVE_DRAW.md](NATIVE_DRAW.md) first: the survey,
 the assumptions A1-A20 and the plan P0-P9. This page is the state of the work and the task list for the
-agents doing the rest of P0 and P1. October 2026.
+agents doing the rest of P0 and P1 and then P2 and P3. October 2026.
+
+## Where it stands (2026-10-23, after the first workflow)
+
+P0-1 to P0-4 and P1-1 to P1-6 are done and merged into `native/draw` (each task's branch `nd/<task>` with a
+merge commit; the per-task notes are under each task below). Left: **P0-5** (review), **P1-7** (review and
+the owner's gate), and the follow-ups under "What is left of P1". Next: **P2** (models, skinned, the arm)
+and **P3** (the sky), at the end of the task list.
+
+The merged tree, `--native-draw map,items` against the PS2 path, pixels differing (timings noisy: up to 8
+agents shared the PC):
+
+| | compare 1x | compare 4x | onoff 1x |
+|---|---|---|---|
+| 000 start (`newgame.pad`, `--teleport 1600:0:0`, vblanks 1900, 2000) | 0 | 0 | 0 |
+| 009 start (the same, `1600:9:0`) | 0 | 0 | 0 |
+| 099 herb (`herb.pad`, 1800-1840/10) | 0 | 0 | 0 (the opening at 1000 and 1400 too) |
+| 099 start (`--teleport 1600:99:0`, 1900, 2000) | 0 | | |
+| 000 at 240, every vblank 1990-2000 (the game's frames) | 0 | | |
+| 000 at 240 walking (P1-3's `walk000.pad`), 32 pictures 1990-2004 | the game's frames 0; pictures between 613 in all, at most 2, all in the sky (P1-3's figure) | | |
+| P0-4's artefact views at 240 (items; 020 place 1 and 004 place 2, turning) | 0 in all 69 pictures of each (were up to 830,000 before P1-3) | | |
+
+The off check passes on the merged tree: boot_test, frame_test (gs and native), gsn_draw_test (0 of 300),
+vu1_test (0 of 90), and a herb run with `--native-draw off` against main's build 91c890e: the same `--log`,
+PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, and byte-identical pictures at 1800, 1820 and 1840. The
+oracle on the merged tree (tour capture 000): 0 lane differences on drawn vertices.
 
 ## What P0's core is
 
@@ -14,11 +39,16 @@ agents doing the rest of P0 and P1. October 2026.
 | `port/gs/native/gsn_native_draw.inc` | the native GS's side: `PORT_GS_REG_NATIVE_DRAW`, the CPU plan, the arena and draw records, the ALT marks |
 | `port/gs/native/shaders/nd_000.vert` | VU1 program 0x000 as a vertex shader, in VU1's arithmetic; pairs with every fragment shader of the native GS |
 | `tools/native_draw_compare.py`, `tests/herb.pad` | the same-game comparison, and a pad script that walks up to an item |
+| `port/debug/gs_capture.c`, `gs_capture_format.h` (ND_MESH, ND_DRAWS) | captures hold the side buffer's draws and meshes (P0-1); `kf4-gsreplay --native-draw native\|ps2` feeds them back (`rd_replay_record`) |
+| `tools/gsreplay/nd_oracle.c`, `port/gs/native/gsn_nd_oracle.inc`, `shaders/nd_oracle.frag` | the vertex oracle, `kf4-gsreplay CAPTURE --nd-oracle [--vu1 interp]` (P0-2): `nd_000.vert` (built again with `-DND_ORACLE`) and the CPU plan against VU1's XGKICK, lane by lane |
+| `KF4_ND_DUMP=FILE`, `tools/nd_measure.py` | a debug dump of what the core is handed, and the script that measures the sky, layers and re-parses from it (P0-3) |
+| `docs/port/ND_SWEEP.md` | the 64-map sweep (P1-2): a table per map, every difference with its cause |
 
 The hooks in `gsn.cpp` are kept to a few lines, each marked "native draw": the include, the register
 case `0x7B` and the ALT skip at the top of `gs_write`, `NdFlush` at the top of `flush_batch` and five
 one-line conditions in it (`nd.active`), `nd_kick()` at the top of `vertex_kick`, `Cmd::set_storage_buffer`
-(`OP_STORAGE`) and `gsn_set_native_draw`.
+(`OP_STORAGE`), `gsn_set_native_draw`, and `nd_mark(value)` in the `0x7D` case (the frame-rate marks: which
+section a draw is in, for the pictures between).
 
 ### How a draw goes
 
@@ -50,9 +80,12 @@ one-line conditions in it (`nd.active`), `nd_kick()` at the top of `vertex_kick`
    and ambient, the point lights, ST, FTOI4, all rounded toward zero in the program's order. It writes
    exactly what `gs.vert` would have been given: the GS's integer Z, so the layer rules see no difference.
 5. **Pictures between** (`--frame-rate`, the GPU replay): the ND draws are met again when the frame's
-   stream is drawn for a picture; their records then carry `ND_C_MOVING`, and the shader moves the place
-   by the picture's camera (`Picture.move`, as `gs_replay.comp` does), from the part matrix, the view and
-   the projection.
+   stream is drawn for a picture. Draws in the world and the reflection sections (`nd_mark`, from the
+   frame-rate marks) carry `ND_C_MOVING`, and `nd_000.vert` moves them as `gs_replay.comp`'s `moved()`
+   moves the PS2 path's vertices: from VU1's exact X, Y, Z and the place in view taken from them, by the
+   picture's `(R - I)v + T`, rounded the same, with the same drop rule (ADC) for each corner. A part whose
+   translation moved since the frame before by less than 400 (the sky follows the feet) gets `ND_C_OBJ`
+   and is moved t of the way with its model, as `frame_interp.c`'s `object_between` (P1-3).
 
 ### The switches
 
@@ -123,8 +156,17 @@ the same captures (the 414,901 of RENDERER.md is older captures').
 - **Gotchas found so far:**
   - a VU1 batch tag's "w" is its fourth word (`tag[1] >> 32`), not bits 48-63 of the first;
   - `--teleport` needs `VBLANK:MAP:PLACE` when a vblank is given;
-  - headless pictures between are never drawn from the recording (the scroll target on map 099 is "not as
-    recorded" every picture, in main too): `OP_STORAGE`'s replay is not yet exercised (P0-4);
+  - pictures between are drawn from the recording (`OP_STORAGE`) only windowed, and never on maps 000, 013,
+    099 and 116: a target the recording names (bp 0x3a80 on 099) no longer exists at the next picture, in
+    main and with native draw off too (P0-4). Map 002 replays; native items were in place there;
+  - **compare mode hides bugs that depend on VU1's state**: VU1 runs the PS2 packets in both runs. Run
+    `--mode onoff` too (what a player gets): the near cut's lighting bug (P1-5) showed only there;
+  - "0 refused" does not mean every record went native: a draw the adapter declines (another `draw_parts`,
+    or before P1-5 a part over 64 blocks) falls back to the PS2 path uncounted;
+  - map 000's band needs `--input tests/newgame.pad --frames 1900,2000 -- --teleport 1600:0:0` (herb.pad
+    did not show it); the mirror maps are 008, 009, 014 (reflection, flag 0x200) and 041 (the only mode-1
+    mirror, flag 0x2), and their water is out of the teleport's view: use made-up saves placed by the water
+    record's box (`tools/map_tour.write_made_up`);
   - the GPU's `1/x` is not correctly rounded and fused multiply-adds change results: the shader's
     `vu_*` helpers and `precise` are what make it exact; keep new maths in them.
 
@@ -143,11 +185,27 @@ a capture taken with `--native-draw items --native-draw-compare native` replays 
 (native GS drawing ND, paraLLEl-GS drawing the ALT set) and the items show; the map tour's captures
 (off) unchanged; old captures still load.
 
+*Done (nd/p0-1, b87de3f).* Records `KF4GS_ND_MESH` (21: the raw block, parsed again on replay) and
+`KF4GS_ND_DRAWS` (22: a frame's cameras and draws, in a file layout of their own); old readers skip them, the
+version stays 1. `rd_capture_poll` runs before each GIF and VIFDATA record. `kf4-gsreplay --native-draw
+native|ps2` picks the set the native GS draws. Herb capture: the native replay of the ND set equals the ALT
+set's and an off capture's (0 pixels, 1x and 4x); the tour's 64 captures replay unchanged (415,016, worst
+106). Note: `--compare-renderers` resyncs by default, which overwrites the native draws: judge them with
+`--no-resync`. Each `RdMeshData` now keeps its block's bytes (30-50% more mesh memory).
+
 **P0-2 Vertex oracle** (owns `tests/nd_oracle_test.c` or a `kf4-gsreplay --nd-oracle` mode; may add a
 compute or transform-feedback path to `gsn_native_draw.inc` behind a debug switch). For batches from
 captures (or the herb run): `nd_000.vert`'s outputs (X, Y, Z, RGBA, S, T, Q, F) against `vu1_hle.c`'s
 XGKICK for the same VU memory. Accepted: 0 differences over the map tour's 0x000 batches, including point
 lights and fog; a report of any lane that differs and why.
+
+*Done (nd/p0-2, d79e05e).* `kf4-gsreplay CAPTURE --nd-oracle [--vu1 interp]`. Over the 64 tour captures
+(86,404 batches, 1,488,158 vertices, 5,651 MSCALs): 0 differences in any lane of a drawn vertex, against
+the HLE and the interpreter; the set-up matches in every MSCAL. Vertices never drawn differ where VU1's
+arithmetic saturates and the shader goes to inf/NaN (13,832, all undrawn): the `vu_*` helpers and `ftoi`
+need VU1's saturation before anything draws such vertices (`--clip gpu`). `nd_plan_vertex` and `nd_const`
+are split out of `nd_plan` and `nd_draw` so the oracle checks the real code. Not covered: the flat-shading
+choice and the parser's triangle lists (the pixel comparisons cover those).
 
 **P0-3 Measurements** (two agents; write into NATIVE_DRAW.md's open questions, no code in the game):
 - the sky's radius and distance per sky map (000, 002, 004, 013, 021, 027, 098, 099): from the parsed
@@ -159,13 +217,30 @@ lights and fog; a report of any lane that differs and why.
   `rd_stats.meshes_parsed` per frame on water and lava maps (`RD_GEN_HASH` re-parses a block each frame
   its bytes change) and the hash's cost (`hash_bytes`); decide whether `rd_mesh_touch` is needed.
 
+*Done (nd/p0-3, 3bd8d3f).* The answers are in NATIVE_DRAW.md, "P0-3's measurements". In short: every sky is
+a dome on the feet (rim 24,252, top 4,666 above; 013 smaller; 021 and 027 deeper), its nearest point 4,446
+from the eye, and on 002, 004, 013 and 027 some geometry lies behind the dome, so A1's "sky at the far
+plane" would show it. Layer meshes on 61 of 64 maps, 99.3% exactly coplanar over an earlier opaque
+triangle, nearly always of another record. The HUD orb's texture is sent unchanged every frame (only the
+fill level changes). Only the wave UVs (flag 0x100, 6 maps) re-parse, up to 201 blocks a frame on 042;
+the hash is cheap (about 0.14 ns a byte): `rd_mesh_touch` is not needed and `RD_GEN_HASH` stays; the fix
+for the wave cost is wave UVs on the GPU (P6). The debug dump: `KF4_ND_DUMP=FILE`, `tools/nd_measure.py`.
+
 **P0-4 Replays of the recording** (owns nothing new; a test). Find a map where pictures between are drawn
 from the recording (the windowed run's `--stats`: "from the recording" above 0) with items visible, and
 check the native draws there at 240 (windowed, `KF4_PRESENT_SIM` does not replay). Accepted: no
 re-recording caused by native draws, the items in place in a screenshot of a replayed picture.
 
-**P0-5 Review** (an independent agent): read render.h, the adapter and `gsn_native_draw.inc` against
-NATIVE_DRAW.md 3.2-3.3 and this page; run the proof; list what is wrong or missing.
+*Done (a test; nothing committed).* Pictures between replay from the recording windowed on maps 002, 004,
+009, 012, 020, 021, 027, 035 and 112, never on 000, 013, 099 and 116 (a GS issue, off too: a target the
+recording names is gone by the next picture; not native draw's). Map 002, a potion bottle while turning:
+items and off both replay 596 pictures, 0 re-recorded; the native bottle is in place in the replayed
+pictures (edges only, as the herb). Along the way it found large artefacts in native items' pictures
+between (020 place 1, 004 places 2-5); on the merged tree (P1-3's drop rule) those views are 0 pixels.
+
+**P0-5 Review** (an independent agent; **not done**): read render.h, the adapter and `gsn_native_draw.inc`
+against NATIVE_DRAW.md 3.2-3.3 and this page; run the proof; list what is wrong or missing. Now also the
+capture records, the oracle, the moving path (`nd_mark`, `ND_C_OBJ`) and P1-5's fixed-block packet.
 
 ### P1, map records (in this order where it says so)
 
@@ -181,10 +256,25 @@ or the CPU near cut's pieces (`ModelScreen_CutClippedTriangles`, program 0x280 o
 native triangles. Find which draw (`KF4_GSN_LOG=2` prints batches), fix. Accepted: 0 pixels on map 000's
 start at 1x and 4x.
 
+*Done (nd/p1-1, 21fb36a).* VU1 leaves a vertex's alpha as min(alpha, 255) through FTOI0 and the GS takes
+the low 8 bits, so a negative alpha wraps (-1400 is 0x88). `nd_plan` clamped it at 0, so a layer batch's As
+range was 0-128 instead of 0-218 and `flush_batch` chose Vulkan's blending where the PS2 path chose the
+shader's. Map 000's start: 0 pixels at 1x and 4x (was 2,054). Left: a native batch can split where the PS2
+path's does not (a PS2-path kick flushes pending native corners: one draw cannot hold both kinds); 0
+pixels today, but a mixed batch whose PS2 part had alpha above 0x80 would decide its blending differently.
+
 **P1-2 The map sweep** (no code; then fixes go to P1-1's owner). `native_draw_compare.py --kinds map,items`
 on all 64 maps (the map tour's places: `--quick-load` a made-up save from `tools/map_tour.py`'s
 `write_made_up`, or `--teleport`), 1x and 4x. Accepted: a table per map; every difference explained or
 fixed; refusals (`KF4_ND_LOG=1`) listed with their reason.
+
+*Done (nd/p1-2, c2285c7): [ND_SWEEP.md](ND_SWEEP.md).* 8 views a map (made-up quick saves), compare 1x and
+4x and onoff 1x: 0 refusals, 0 lost; 56 of 64 maps 0 pixels in compare mode. Measured before P1-1, P1-3
+and P1-5 were in: map 000's band and the onoff near-cut lighting (016, 022, 027, 037, 099, 102, 106) are
+fixed since. Still open: maps 039 and 040 are a game frame apart (the native draw reads a wave-UV block
+when the game calls it, VU1 reads it a frame later on the DMA thread: match the late read or keep the
+native one, the owner's call); sparse noise in wave-UV water near the camera on 027, 042, 114 and 034; one
+scanline on 030 at 4x. **The sweep should be run again on the merged tree, in both modes.**
 
 **P1-3 Pictures between for the world** (owns `gsn_native_draw.inc`'s moving path and `nd_000.vert`'s).
 Today a moving record goes by the camera only, in plain floats; records that follow the player (the sky,
@@ -193,11 +283,26 @@ flags bit 31) and the mirror's camera are not handled. Pair with `frame_interp.c
 frame) and the pixel step per picture on the sky walk. Accepted: at 240, no seams or jumps between native
 records and the PS2-path draws around them on maps 000, 009, 099; `KF4_INTERP_STILL` exact.
 
+*Done (nd/p1-1, 4ef0b50).* `nd_000.vert`'s moving path does what `gs_replay.comp`'s `moved()` does (see "How
+a draw goes", 5); the sections come from the frame-rate marks (`nd_mark`, a hook in gsn.cpp's `0x7D`
+case); `NdConst` grew to 35 qwords (`obj`). At 240: map 000 walking, 613 pixels over 24 pictures between
+(was 1,295,167), all 1-2 levels in the sky; 009 0; 099 turning 0, walking 478-647 in the sky; herb 0;
+`KF4_INTERP_STILL` 0 for native draws on 000 and 099; the sky steps as the PS2 path's does (0.01 px
+between pictures). The sky's remaining speckle: the PS2 path moves its sky by the median of its runs,
+native by the record's own move. Left: with the CPU walk (`KF4_INTERP_CPU`, `--renderer both`) native
+draws are not moved; the mirror's pictures between are untested.
+
 **P1-4 The mirror modes and the reflection** (owns `map.patch` then; `game/native_draw/`). Modes 1 and 2
 (maps 008 and 009) call the same functions with the mirrored camera (`rd_camera`'s mode and projection
 are 0 today: fill them from `GameLoop_SetCameraMatrices`' arguments, e.g. a hook in
 `FrameInterp_MarkCamera`), the reflection's target is CT16S at 0x2BC0. Accepted: maps 008 and 009 at 1x
 and 4x, 0 pixels in the reflection and the water; the winding flip does not matter (no culling, A7).
+
+*Done (nd/p1-4, 23d78c6).* The draws were already right in both modes; `RdCamera.mode` and `.projection` are
+now filled (`NativeDraw_MarkCamera`, a hook in `FrameInterp_MarkCamera`); `map.patch` unchanged. Made-up
+saves looking at the water: 009 (lamps and an enemy reflected), 008 (the drip pool), 014 and 041, at 1x
+and 4x: 0 pixels. The mirror maps are 008, 009, 014 (reflection) and 041 (mode 1). Nothing reads `mode`
+or `projection` yet.
 
 **P1-5 Late records and the near cut** (owns `map.patch` then). Late records (flag 0x1, Z write by 0x80)
 are already native; check their order and Z against the PS2 path on lava and glass. The CPU near cut
@@ -205,12 +310,22 @@ are already native; check their order and Z against the PS2 path on lava and gla
 whether `--clip gpu` (real clipping instead of dropping, A5) is wanted, and if so add it behind its
 switch. Accepted: maps 000 (lava), 021, 112 at 1x/4x 0 pixels with `--clip ps2`.
 
+*Done (nd/p1-4, b27274b).* Two bugs in `native_draw.c`. Parts over 64 blocks (`ND_MAX_MESHES`) silently went
+the PS2 way (the lava and the big floors): the limit is now 2048 (`data_count`'s 11 bits). And the near
+cut's pieces (`ModelScreen_CutClippedTriangles`, still the PS2 path) read the lights, fog and point lights
+that a native record no longer left in VU1 memory (a bright wall on 021, 260,513 pixels, onoff only):
+outside compare mode the adapter now queues `Model_DrawPosed`'s fixed-block packet without the parts. 000
+lava, 021 and 112: 0 pixels at 1x and 4x (compare) and in onoff. Hashing roughly doubles on 000 now that
+the big records are native. `--clip gpu` is **not** added; the design is in the task's report (a switch,
+skip the near cut for native records, clip in clip space in the CPU plan, CPU-made vertices in
+`nd_000.vert`; it draws what the PS2 dropped, so it needs its own review): the owner decides.
+
 **P1-6 Performance** (owns nothing; a measurement). `--stats` on maps 000 and 009, 2,000 vblanks
 `--fast --headless --dump-frames 1999`, `--native-draw off` against `map,items`: VU1's time, the GS's GIF
 and flush time, the hash's MB a frame, the arena's size. The CPU plan costs about what VU1 HLE's position
 maths did; if it shows, plan only what `flush_batch` needs (boxes and alpha) and leave the rest to the GPU.
 
-*Measured 2026-10-23 (native/draw 4d35c35, 1x, `--fast --headless`, `tests/newgame.pad`, `--teleport
+*Done (nd/p1-6, cb9b0ad). Measured 2026-10-23 (native/draw 4d35c35, 1x, `--fast --headless`, `tests/newgame.pad`, `--teleport
 1600:N:0`, dump at the last vblank; 3 runs a case, median [min-max]). Up to 8 other agents shared the CPU
 and GPU, so the timings are noisy; the counts were the same in every run. Each run's data folder was fresh
 but seeded with a warm pipeline cache: without one, 40-65 s of a run were pipeline compiles, more than
@@ -280,8 +395,96 @@ as the real mode would without the bug:
 - **GPU**: not measured (no GPU timers in `--stats` headless). The GS's render passes per picture are the
   same in compare mode as `off`.
 
-**P1-7 Review and the owner's gate** (independent agent): the screenshot set (maps 000, 004, 009, 013, 021,
-035, 112, 116 at 1x, 4x, widescreen) side by side, and the switch to accept `map` into `PORT_ND_ACCEPTED`.
+*Note after the merge:* P1-6 measured on 4d35c35, before P1-5's fixed-block packet. On the merged tree
+`--mode onoff` (no compare) gives 0 pixels on 000 and 009 at 1900 and 2000 and on the opening at 1000 and
+1400, so the "draws garbage" above looks fixed by P1-5; the opening's frame-buffer thrash and the timings
+should be measured again.
+
+**P1-7 Review and the owner's gate** (independent agent; **not done**): the screenshot set (maps 000, 004,
+009, 013, 021, 035, 112, 116, and the mirror maps 008, 014, 041 from made-up saves, at 1x, 4x, widescreen)
+side by side, compare **and** onoff, and the switch to accept `map` into `PORT_ND_ACCEPTED`.
+
+### What is left of P1 (follow-ups)
+
+- **The sweep again** (P1-2's method, no code) on the merged tree, compare and onoff, 1x and 4x; and P1-6's
+  timings again (the opening's thrash should be gone).
+- **The CPU plan's cost** (`gsn_native_draw.inc`): about twice the VU1 HLE time it saves (145 ns a vertex,
+  2.7-3.5 s per 2,000 vblanks on the GS thread). Plan only what `flush_batch` needs (boxes, rows, the
+  alpha range) in native floats where no decision depends on the exact bits; keep VU1's arithmetic in
+  `nd_000.vert`. Check with the oracle and the sweep.
+- **Mixed batches** (`gsn_native_draw.inc` and `flush_batch`, beyond a hook): decide once for a batch of
+  native and PS2-path corners and draw it in two calls, instead of splitting it (P1-1's note).
+- **Wave UVs**: the 039/040 frame lag (the owner's call: the PS2 path's late read or the native
+  frame-consistent one), the noise in wave-UV water on 027, 042, 114 and 034, and the 030 scanline at 4x
+  (the oracle or a corner-order check tells the two candidate causes apart).
+- **Counting fallbacks**: a stats counter for draws `NativeDraw_Posed` declines (returns 0), so that "0
+  refused" means every record went native.
+- **The arena's first size**: 32 MB, about 20 times what these maps use (4 MB holds them).
+- **The CPU walk** (`KF4_INTERP_CPU`, `--renderer both`): native draws are not moved in pictures between;
+  it needs the camera move handed to the native GS outside the GPU recording (`frame_interp.c`, `gsn.cpp`).
+- **Docs**: tools/README.md does not yet list `kf4-gsreplay --native-draw` and `--nd-oracle`.
+- **Not native draw's**: no replays from the recording on 000, 013, 099 and 116 (a target gone by the next
+  picture, P0-4); the PS2 path's own `KF4_INTERP_STILL` is 52-87 pixels off while turning on 099 (P1-3).
+
+### P2, models: posed, skinned, then the arm
+
+The plan is NATIVE_DRAW.md 4, P2. The same rules as P1: a call site is one condition, the rest in
+`game/native_draw/`; draws join the GS's batch as the PS2 path's would; the game's own frames 0 pixels in
+compare **and** onoff mode; pictures between, edges only. `patches/game/model.patch` (model.c holds all
+the draw functions) and `entity.patch` have one writer at a time.
+
+**P2-1 Posed models: map objects, gold, the picked item** (owns `model.patch` then, `game/native_draw/`).
+`NativeDraw_Posed` and `NativeDraw_PosedDepthByPart` already draw items and map records. Add the call sites
+for `MapObject_DrawAll` (`Model_DrawPosedWithAlpha`: context 2, `ALPHA_2` with the fade as FIX),
+`Gold_Draw` and the picked item after its depth clear, as kinds `objects`, `gold` and `picked`. Accepted:
+the sweep's views with those kinds, 0 pixels in compare and onoff on the maps with map objects, a fading
+object caught mid-fade, and a gold drop.
+
+**P2-2 Program 0x280 as a shader** (owns `port/gs/native/shaders/nd_280.vert`, its part of
+`gsn_native_draw.inc`, and the parser's 0x280 batches in `render.cpp`). Skinned models: float vertices,
+two matrices picked by ST.w, the colour scale and bias (0x64-0x65), and the second (sphere, "phong") pass
+gated by TOP+0xA4.z, blended `Cs + Cd*As`; VU1's arithmetic as `vu1_hle_280.c` does it, in `vu_*`
+helpers. Extend the oracle (P0-2) to 0x280, both passes. Accepted: 0 lane differences on the tour's 0x280
+batches.
+
+**P2-3 Entities** (owns `entity.patch` then; after P2-2). `Entity_DrawAll`'s opaque and translucent draws
+(the draw list's order kept: the draws go out in the game's order), the tint (hit flash, ailments), hidden
+parts and fades, and the Fire Lord's afterimages. Type 0x47 (the frame copied to 0x3540 and mapped by
+screen UVs) stays the PS2 path's at first. Kind `entities`. Accepted: maps with enemies (016's bats, 009's
+skeleton) 0 pixels in compare and onoff, with a hit flash and a death fade caught.
+
+**P2-4 The arm, the held weapon and the trail** (owns `held_weapon.c`'s call sites through its patch;
+after P2-2). The depth clear first (`GsDraw_ClearDepth`), then the arm and the weapon on 0x280 with
+`held_item_light_blocks`, weapon 0x2E's additive part 5, and the trail as a native strip (additive, Z
+ALWAYS). Kind `arm`. Accepted: 0 pixels while swinging, at 1x and 4x, every weapon class.
+
+**P2-5 Pictures between for models** (owns the moving path for the kinds `objects`, `entities` and `arm`).
+Pair draws by identity (kind and id, as P1-3 does) and move the parts by their own matrices t of the way,
+then remove `objects_pair` for native draws. Accepted: at 240, the arm's swing and 016's bats with no
+jumps, edges only against the PS2 path; `KF4_INTERP_STILL` exact.
+
+**P2-6 The mutators** (owns the call sites of `Model_Set*`, `Model_FadeVertexColoursNear`,
+`Model_SetUvsFromScreen` and `Model_Save/RestoreGsWordsAndUvs`). Measure them with `KF4_ND_DUMP` as P0-3
+did for the map (it could not: those kinds were not native yet), and wire `rd_mesh_touch` only where the
+hash's cost shows.
+
+**P2-7 Review** (independent agent): P2's screenshot set side by side, compare and onoff, and the switch to
+accept each kind.
+
+### P3, the sky (can run beside P2)
+
+**P3-1 `--sky ps2`** (owns the sky's records in `game/native_draw/` and its switch). The sky records (flags
+bit 31) are already native as map records, with their Z and fog; make the sky a kind of its own (`sky`)
+so it can be switched, and check it on all 8 sky maps (000, 002, 004, 013, 021, 027, 098, 099) at 1x, 4x
+and 240 (walking, turning, strafing, looking up and down, from made-up saves). Compare
+`FrameInterp_MarkSky`'s sky with the native one (the 1-2 level speckle P1-3 measured). Accepted: the game's
+frames 0 pixels; pictures between only that speckle, explained.
+
+**P3-2 `--sky modern`** (owns its shader path; the owner decides A1 first). Centred on the eye, depth at
+the far plane, drawn first. P0-3 found geometry behind the dome from the eye on 002, 004, 013 and 027: list
+what appears when the dome goes to the far plane, with pictures, before anything is made the default. The
+scroll targets stay the GS's (hosted). Accepted: the owner's look at the 8 maps and the draw-distance
+settings.
 
 ## What I would change in the plan
 
