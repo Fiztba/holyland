@@ -3676,6 +3676,14 @@ void flush_batch() {
         a_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
     }
     bool same_twice = !abe || (ba == 0 && bb == 1 && bd == 1 && (bc == 0 ? a_lo == 0x80 && a_hi == 0x80 : bc == 2 && fix == 0x80));
+    // (the same for a layer batch's other triangles, whose corners' alphas are all 0x80: the As they make)
+    uint32_t o_lo = 0x80, o_hi = 0x80;
+    if (tme && bits(tex0, 34, 1)) {
+        uint32_t tfx = bits(tex0, 35, 2);
+        o_lo = tfx == 0 ? (0x80 * tex_lo) >> 7 : tfx == 2 ? std::min(255u, 0x80 + tex_lo) : tex_lo;
+        o_hi = tfx == 0 ? std::min(255u, (0x80 * tex_hi) >> 7) : tfx == 2 ? std::min(255u, 0x80 + tex_hi) : tex_hi;
+    }
+    bool others_same_twice = o_lo == 0x80 && o_hi == 0x80;
     // the alpha test passes every pixel the batch can make: its Z pass needs no texture (gs_zonly.frag)
     uint32_t aref = bits(test, 4, 8);
     bool atest_always = !ate || atst == 1 ||
@@ -3701,7 +3709,26 @@ void flush_batch() {
         gs->tie_tick = gs->tick;
         gs->tie_verts.assign(gs->verts.begin(), gs->verts.end());
     }
-    if (tie) {
+    Pass layer_passes[4];
+    int nlayer_passes = 0;
+    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
+        !reads_own_target) {
+        for (int i = 0; i < npasses; i++) {
+            if (passes[i].mask) {
+                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
+            }
+            if (passes[i].zwrite) {
+                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
+            }
+        }
+    }
+    // A layer batch's other triangles (every corner's alpha 0x80: the wall's overlay where it does not
+    // fade, the brick over the end wall of a corridor on map 1D) are ties too when their colour comes out
+    // the same drawn twice: they lie on their surface as the layer does, and with no slack they lost to
+    // it where its Z came out a hair nearer, the surface's own texture showing through the overlay in
+    // flat patches that came and went as the camera moved.
+    if (tie || (nlayer_passes && others_same_twice && fine_z && any_zwrite_pass && ztst == 2 && !reads_own_target &&
+                !(push.flags & F_DATE))) {
         Pass z_first[4];
         int n = 0;
         for (int i = 0; i < npasses; i++) {
@@ -3717,19 +3744,6 @@ void flush_batch() {
         npasses = n;
         for (int i = 0; i < n; i++) {
             passes[i] = z_first[i];
-        }
-    }
-    Pass layer_passes[4];
-    int nlayer_passes = 0;
-    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
-        !reads_own_target) {
-        for (int i = 0; i < npasses; i++) {
-            if (passes[i].mask) {
-                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
-            }
-            if (passes[i].zwrite) {
-                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
-            }
         }
     }
     auto is_layer = [&](uint32_t t) {
