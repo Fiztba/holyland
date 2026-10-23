@@ -772,6 +772,8 @@ The largest share of draws, and static geometry: the best value for the risk.
 
 ### P8: standalone (4-6 weeks)
 
+*Begun: [NATIVE_DRAW_P8.md](NATIVE_DRAW_P8.md) has what is built and the tasks left.*
+
 - **Deliverables:**
   - the page-ownership table and source-decoded textures;
   - the scene's own targets (D32F reversed Z, float colour, real MSAA);

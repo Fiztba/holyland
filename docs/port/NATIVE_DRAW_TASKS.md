@@ -6,6 +6,10 @@ agents: P0-P7 so far (hosted mode), next P8. October 2026.
 
 ## Where it stands (2026-10-23, after merging perf/gpu-vram)
 
+**P8 has begun** (branch `nd5/p8`): `--renderer modern`, the scene's map records and items drawn into the
+scene's own targets with unrounded depth and textures from the page-ownership table, the GS drawing the rest
+over it. What is built, its numbers and the remaining P8 tasks: [NATIVE_DRAW_P8.md](NATIVE_DRAW_P8.md).
+
 **perf/gpu-vram merged** (9e9c2a12; the branch the owner plays: fix/underwater, fix/wall-blink, perf/hotspot's
 ties drawn whole, replays over targets the recording made, silhouettes drawn whole, 16-bit reflection blends in
 the pass, depth bounds on two-phase ties, and the write-backs put off). It is now the PS2-path reference: with
