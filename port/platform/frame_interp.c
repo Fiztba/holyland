@@ -362,6 +362,19 @@ enum { SECTION_NONE, SECTION_WORLD, SECTION_OTHER, SECTION_EYE, SECTION_ARM, SEC
      of program 0x280 (Q 1.0) goes over the first pass's points, and takes their depth (the arm's Z is
      pulled near, so its Z gives the wrong depth).
    - Vertices with ADC may have been clipped in one of the frames (object_between). */
+/* Texture coordinates made from the screen: Q 1, and S, T near one projective map H of X, Y over the
+   vertices without ADC, S = (h0 x + h1 y + h2) / (h6 x + h7 y + 1), T = (h3 x + h4 y + h5) / (the
+   same) (least squares of the linear form; the residue within a 20th of their spread: a pool's surface,
+   its reflection's target read where the pool is on the screen, with the ripple's small offsets). Such
+   S and T go with the vertex's place on the screen, not with the surface: in a picture between
+   S + H(x', y') - H(x, y). state 0 collecting, 1 a map, -1 not, 2 an item without a texture. */
+typedef struct {
+    int state, n;
+    double ata[8][8], atb[8], btb; /* the normal equations of the linear form */
+    double sum[4];                  /* s, s s, t, t t */
+    double h[8];
+} StPlane;
+
 typedef struct {
     uint64_t key;
     uint32_t first;    /* its first vertex in pos */
@@ -418,6 +431,108 @@ static void objects_add_run(Objects *o, uint64_t key, int section, int sky) {
     r->tex = 0;
     r->pair = -1;
 }
+
+/* H at x, y (StPlane) */
+static void st_map(const StPlane *r, double x, double y, double *s, double *t) {
+    const double *h = r->h;
+    double d = h[6] * x + h[7] * y + 1.0;
+
+    *s = (h[0] * x + h[1] * y + h[2]) / d;
+    *t = (h[3] * x + h[4] * y + h[5]) / d;
+}
+
+/* A vertex for a StPlane (SCAN): x, y in pixels, its S, T, Q */
+static void st_plane_vertex(StPlane *r, double x, double y, const float stq[3]) {
+    double u = stq[0], v = stq[1];
+    double rows[2][8] = {{x, y, 1, 0, 0, 0, -u * x, -u * y}, {0, 0, 0, x, y, 1, -v * x, -v * y}};
+    double b[2] = {u, v};
+    int k, i, j;
+
+    if (r->state != 0) {
+        return;
+    }
+    if (stq[2] != 1.0f || !isfinite(u) || !isfinite(v)) {
+        r->state = -1;
+        return;
+    }
+    r->n++;
+    for (k = 0; k < 2; k++) {
+        for (i = 0; i < 8; i++) {
+            for (j = 0; j < 8; j++) {
+                r->ata[i][j] += rows[k][i] * rows[k][j];
+            }
+            r->atb[i] += rows[k][i] * b[k];
+        }
+        r->btb += b[k] * b[k];
+    }
+    r->sum[0] += u;
+    r->sum[1] += u * u;
+    r->sum[2] += v;
+    r->sum[3] += v * v;
+}
+
+/* The fit, once (the 8 x 8 normal equations by Gaussian elimination): state 1 when it holds */
+static void st_finish(StPlane *r) {
+    double a[8][9], fitted = 0, spread;
+    int i, j, k;
+
+    if (r->state != 0) {
+        return;
+    }
+    r->state = -1;
+    if (r->n < 8) {
+        return;
+    }
+    for (i = 0; i < 8; i++) {
+        memcpy(a[i], r->ata[i], sizeof(r->ata[i]));
+        a[i][8] = r->atb[i];
+    }
+    for (i = 0; i < 8; i++) {
+        int best = i;
+
+        for (j = i + 1; j < 8; j++) {
+            if (fabs(a[j][i]) > fabs(a[best][i])) {
+                best = j;
+            }
+        }
+        if (!(fabs(a[best][i]) > 1e-12)) {
+            return;
+        }
+        if (best != i) {
+            for (k = 0; k < 9; k++) {
+                double tmp = a[i][k];
+
+                a[i][k] = a[best][k];
+                a[best][k] = tmp;
+            }
+        }
+        for (j = 0; j < 8; j++) {
+            if (j != i) {
+                double f = a[j][i] / a[i][i];
+
+                for (k = i; k < 9; k++) {
+                    a[j][k] -= f * a[i][k];
+                }
+            }
+        }
+    }
+    for (i = 0; i < 8; i++) {
+        r->h[i] = a[i][8] / a[i][i];
+        fitted += r->h[i] * r->atb[i];
+    }
+    /* the residue's sum of squares (b.b - h . A^T b), against the values' spread about their means */
+    spread = (r->sum[1] - r->sum[0] * r->sum[0] / r->n) + (r->sum[3] - r->sum[2] * r->sum[2] / r->n);
+    if (!(spread > 1e-12) || r->btb - fitted > spread * 0.0025 + 1e-12) {
+        return;
+    }
+    r->state = 1;
+}
+
+static int st_screen(StPlane *r) {
+    st_finish(r);
+    return r->state == 1;
+}
+
 
 static void objects_add_vertex(Objects *o, const double place[3], int valid) {
     if (o->npos == o->pos_room) {
@@ -596,6 +711,14 @@ typedef struct {
     uint32_t count;
     int32_t pair;      /* the item of the frame before (-1: none, or nothing to do) */
     float wrap_s, wrap_t; /* added to the frame before's texture coordinates (a scroll past the wrap) */
+    /* A mesh of the world the CPU projected itself (item_mesh): triangles whose Z is not one, their
+       texture coordinates made from the screen (st). Such an item is moved with the camera as
+       the world is, not t of the way from the frame before's: the pools' reflecting surfaces (PATH2,
+       Q 1, S and T from the reflection's view) are drawn over their basin with a Z test, and paired
+       2D-wise their Z stayed the frame's while the basin's moved: the surface hidden, the basin's dark
+       floor showing, while the camera turned (October 2026). */
+    uint32_t zlo, zhi;
+    StPlane st;
 } Item;
 
 typedef struct {
@@ -645,6 +768,10 @@ static Item *flat_add_item(Flat *f, uint32_t prim, uint64_t tex0, uint32_t fbp) 
     it->count = 0;
     it->pair = -1;
     it->wrap_s = it->wrap_t = 0;
+    it->zlo = 0xFFFFFFFFu;
+    it->zhi = 0;
+    memset(&it->st, 0, sizeof(it->st));
+    it->st.state = (prim & 0x10) ? 0 : 2; /* (2: no texture) */
     return it;
 }
 
@@ -781,15 +908,32 @@ static void flat_copies(Flat *f, const Uploads *u) {
     for (c = 0; c < u->ncopies; c++) {
         const Event *copy = &u->ev[u->copies[c]];
         int read_after = 0, read_before = 0;
+        /* (pages of the copy's that the frame has uploaded or drawn into so far: a read of those before
+           the copy reads what the frame put there, not the copy of the frame before. The water's wobble
+           copies the frame over VRAM the frame's textures came through earlier in it, read as textures
+           there: counted as reads of the copy, the copy was not made again, and the pictures between
+           drew the wobble's strips from those textures: noise and bands of light over the screen.) */
+        uint8_t written[512];
 
+        memset(written, 0, sizeof(written));
         for (e = 0; e < u->nev; e++) {
             const Event *ev = &u->ev[e];
+            uint32_t p, lo, hi;
 
-            if (ev->kind == EV_READ && ev->first <= copy->last && ev->last >= copy->first) {
-                if (e < u->copies[c]) {
+            if (ev->first > copy->last || ev->last < copy->first) {
+                continue;
+            }
+            lo = ev->first > copy->first ? ev->first : copy->first;
+            hi = ev->last < copy->last ? ev->last : copy->last;
+            if (e >= u->copies[c]) {
+                read_after |= ev->kind == EV_READ;
+                continue;
+            }
+            for (p = lo; p <= hi; p++) {
+                if (ev->kind != EV_READ) {
+                    written[p % 512] = 1;
+                } else if (!written[p % 512]) {
                     read_before = 1;
-                } else {
-                    read_after = 1;
                 }
             }
         }
@@ -1689,11 +1833,29 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
 
 /* SCAN: a 2D vertex kept for the pairs (its place, and its colour and texture coordinates when they are
    in this tag's qwords, where a picture between can change them) */
-static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q) {
+static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf) {
     FlatVertex *v = flat_add_vertex(w->flat);
-    uint64_t lo;
+    Item *it = &w->flat->items[w->flat->nitems - 1];
+    uint64_t lo, hi;
 
     memcpy(&lo, q, 8);
+    memcpy(&hi, q + 8, 8);
+    if (!((hi >> 47) & 1)) {
+        uint32_t z = xyzf ? (uint32_t)((hi >> 4) & 0xFFFFFF) : (uint32_t)hi;
+
+        it->zlo = z < it->zlo ? z : it->zlo;
+        it->zhi = z > it->zhi ? z : it->zhi;
+        if (it->st.state >= 0 && it->st.state != 2) {
+            if ((p->prim & 0x100) || p->st == NULL) {
+                it->st.state = -1;
+            } else {
+                float stq[3];
+
+                memcpy(stq, p->st, 12);
+                st_plane_vertex(&it->st, (double)(lo & 0xFFFF) / 16.0, (double)((lo >> 32) & 0xFFFF) / 16.0, stq);
+            }
+        }
+    }
     v->x = (int32_t)(lo & 0xFFFF);
     v->y = (int32_t)((lo >> 32) & 0xFFFF);
     v->has_rgba = p->rgbaq != NULL;
@@ -1722,6 +1884,73 @@ static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q) {
         v->coords = 2;
         v->s = (float)(uv[0] & 0x3FFF) / 16.0f;
         v->t = (float)(uv[1] & 0x3FFF) / 16.0f;
+    }
+}
+
+/* A mesh of the world the CPU projected (Item's zlo, zhi, st): triangles, Z varying, S and T made from
+   the screen; while the world has a camera */
+static int item_mesh(const Walk *w, const Item *b) {
+    int tri = (b->prim & 7) >= 3 && (b->prim & 7) <= 5;
+
+    return tri && b->zhi > b->zlo + 1 && b->zlo != 0xFFFFFFFFu && st_screen((StPlane *)&b->st) &&
+           w->screen.sx != 0 && w->screen.sy != 0 && b->fbp == w->draw_fbp;
+}
+
+/* REPLAY, a vertex of an item_mesh: moved with the camera as the world is (move_vertex_in's way), S and T
+   with its place on the screen */
+static void move_mesh_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf, const Item *b) {
+    const Screen *s = &w->screen;
+    double z, depth = 0, v[3], m[3], nx, ny, nz;
+    uint64_t lo, hi;
+    int i;
+
+    memcpy(&lo, q, 8);
+    memcpy(&hi, q + 8, 8);
+    if (!vertex_view(w, p, q, xyzf, v, &depth, &z)) {
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        m[i] = w->move.r[i][0] * v[0] + w->move.r[i][1] * v[1] + w->move.r[i][2] * v[2] + w->move.t[i];
+    }
+    if (!(m[2] > 0)) {
+        p->adc_left = 3;
+        return;
+    }
+    nx = s->sx * m[0] / m[2] + s->cx;
+    ny = s->sy * m[1] / m[2] + s->cy;
+    nz = s->cz + (z - s->cz) * depth / m[2];
+    if (!(fabs(nx - 2048.0) <= 2047.0 && fabs(ny - 2048.0) <= 2047.0 && nz >= 0)) {
+        p->adc_left = 3;
+        return;
+    }
+    {
+        int64_t ix = (int64_t)floor(nx * 16.0 + 0.5), iy = (int64_t)floor(ny * 16.0 + 0.5);
+
+        if (b->st.state == 1 && p->st != NULL) {
+            float st[2];
+            double s0, t0, s1, t1;
+
+            st_map(&b->st, (double)(lo & 0xFFFF) / 16.0, (double)((lo >> 32) & 0xFFFF) / 16.0, &s0, &t0);
+            st_map(&b->st, (double)ix / 16.0, (double)iy / 16.0, &s1, &t1);
+            memcpy(st, p->st, 8);
+            st[0] = (float)(st[0] + (s1 - s0));
+            st[1] = (float)(st[1] + (t1 - t0));
+            memcpy(p->st, st, 8);
+        }
+        nz = floor(nz + 0.5);
+        lo = (lo & ~(uint64_t)0xFFFF & ~((uint64_t)0xFFFF << 32)) | (uint64_t)ix | ((uint64_t)iy << 32);
+        if (xyzf) {
+            uint64_t zz = nz > 16777215.0 ? 16777215u : (uint64_t)nz;
+
+            hi = (hi & ~((uint64_t)0xFFFFFF << 4)) | (zz << 4);
+        } else {
+            uint64_t zz = nz > 4294967295.0 ? 4294967295u : (uint64_t)nz;
+
+            hi = (hi & ~(uint64_t)0xFFFFFFFF) | zz;
+        }
+        memcpy(q, &lo, 8);
+        memcpy(q + 8, &hi, 8);
+        w->moved++;
     }
 }
 
@@ -1937,6 +2166,17 @@ static int gpu_zm_ok(const Objects *o, const Objects *before, const Run *cur, co
     return 1;
 }
 
+/* GSN_IM_SCREEN_ST's map in a GsnInterpMove: h0..h5 in w[8..13], h6 in w[15], h7 in w[1] */
+static void gpu_st_map(GsnInterpMove *e, const StPlane *st) {
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        e->w[8 + i] = float_bits(st->h[i]);
+    }
+    e->w[15] = float_bits(st->h[6]);
+    e->w[1] = float_bits(st->h[7]);
+}
+
 /* A vertex of the world (move_vertex's) as a GsnInterpMove: its place in the frame's view, depth and Z,
    and when its run is paired its model's two places (object_between's) */
 static void gpu_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf, int section) {
@@ -2065,6 +2305,32 @@ static void gpu_flat_vertex(Walk *w, GifWalk *p) {
         memcpy(&e->w[7], &ds, 4);
         memcpy(&e->w[8], &dt, 4);
     }
+}
+
+/* An item_mesh's vertex as a GsnInterpMove: a vertex of the world, with the camera (gpu_vertex's), S and T
+   made from the screen with its place */
+static void gpu_mesh_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf, const Item *b) {
+    GsnInterpMove *e = gpu_move(w);
+    double v[3], depth, z;
+
+    if (!vertex_view(w, p, q, xyzf, v, &depth, &z)) {
+        return;
+    }
+    e->w[0] = GSN_IM_3D | GSN_IM_VIEW | GSN_IM_WORLD | (xyzf ? GSN_IM_XYZF : 0) |
+              (b->st.state == 1 ? GSN_IM_SCREEN_ST : 0);
+    e->w[1] = GSN_IM_NONE;
+    e->w[4] = float_bits(v[0]);
+    e->w[5] = float_bits(v[1]);
+    e->w[6] = float_bits(v[2]);
+    e->w[7] = float_bits(depth);
+    e->w[14] = float_bits(z - w->screen.cz);
+    if (b->st.state == 1) {
+        gpu_st_map(e, &b->st);
+    }
+    e->w[2] = p->win[0];
+    e->w[3] = p->win[1];
+    p->win[1] = p->win[0];
+    p->win[0] = w->kick;
 }
 
 /* One record: in REPLAY, data is the copy to send, and is changed (uploads left out are taken out of
@@ -2216,7 +2482,14 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                         }
                     }
                     if (w->mode == SCAN) {
-                        keep_flat_vertex(w, p, q);
+                        keep_flat_vertex(w, p, q, d == 0x4);
+                    } else if ((size_t)w->item < w->flat->nitems && w->item_vertex < w->flat->items[w->item].count &&
+                               item_mesh(w, &w->flat->items[w->item])) {
+                        if (w->gpu) {
+                            gpu_mesh_vertex(w, p, q, d == 0x4, &w->flat->items[w->item]);
+                        } else {
+                            move_mesh_vertex(w, p, q, d == 0x4, &w->flat->items[w->item]);
+                        }
                     } else if ((size_t)w->item < w->flat->nitems && w->gpu) {
                         gpu_flat_vertex(w, p);
                     } else if ((size_t)w->item < w->flat->nitems) {

@@ -95,10 +95,31 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   1024 x 512 texture, which runs on round VRAM's end into their field buffers: taken whole, every field
   sent both field buffers back to VRAM and decoded the texture again, 30 ms a vblank, the menus at 20 to 40
   vblanks a second (at every frame rate, since before the render passes).
-- **The menus' fields at a scale are woven a row at a time** (`weave_fine`, whole frames on): field p's row
-  r of h x sy is the picture's line 2 r / sy + p, so its rows go to rows 2 r + p sy. Woven a line (sy rows)
-  at a time, each band held a line drawn over twice the height, the other field's half a line off: the
-  menus' text in stripes of three rows at 3x. `--no-whole-frame` (two moments) keeps the lines.
+- **The menus' fields at a scale are field 0's rows, each twice** (`weave_fine`, whole frames on; a field 1
+  vblank reads the other buffer, field 0 of the same moment). Woven a line (sy rows) at a time, each band
+  held a line drawn over twice the height (the text in stripes of three rows at 3x); woven a row at a
+  time, what the game draws alike in both fields (the item models: `Menu_DrawItemModel`'s fixed
+  XYOFFSET_2, which field_frames.c no longer moves by the half line either) was combed half a line apart,
+  and taking the vblank's own field made it jump half a line every vblank at 4x. `--no-whole-frame` keeps
+  the lines.
+- **A copy of the frame is made again in the pictures between when the frame reads it after**, and not
+  when it reads it before: but a read before that only reads what the frame uploaded there first is not
+  one (`flat_copies`). Under water the wobble copies the frame over VRAM the frame's textures came through
+  earlier: counted as a read of the copy, the pictures between drew the wobble from those textures (noise
+  and bands of light over the screen, since the pictures between began).
+- **A picture between's own targets** (`replay_only`: made, and drawn into since, only by a picture between)
+  go without a write-back when dropped (VRAM keeps the game's), and stay over a transfer into them, the
+  pages under it taken from VRAM after it. A write-back of a target at a scale reads only the middle
+  pixel of each GS pixel back, taken on the GPU (a blit): at 4x a 640 x 448 target was 27 MB.
+- **The pictures between give way when the native GS falls behind**: a native GS thread a vblank behind at
+  two vblanks' starts in a row takes them away for half a second (longer, to 4 s, when it falls behind
+  again at once), the game's own pictures shown: under water each picture between costs more than a
+  vblank (the wobble's copies and their write-backs), and the game ran at 13 frames a second.
+- **Meshes the CPU projects itself** (PATH2 triangles with Z varying and S, T near one projective map of
+  the screen's X, Y, Q 1: the pools' reflecting surfaces) are moved with the camera as the world is, S and
+  T with their place on the screen (`item_mesh`, `StPlane`; GSN_IM_SCREEN_ST on the GPU). Paired as 2D
+  they kept the frame's Z while the basin under them moved, and failed their Z test: black wedges across
+  the pools while the camera turned.
 - **The 2D at a larger scale** (`--native-2d smooth`, the default): magnified 2D textures read with a
   cubic at the pixel's own place, moved half a GS pixel on (a filter centres a texel where nearest at the
   GS pixel's integer point has its left edge: unmoved, the letters sat half a GS pixel right). Read

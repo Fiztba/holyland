@@ -228,6 +228,8 @@ void gsn_scanout_release(void);
 #define GSN_IM_REFLECT 0x40u /* by the reflection's projection */
 #define GSN_IM_SCALE_ST 0x80u /* its own ST (Q 1/w): S and T scaled, Q made 1/w again */
 #define GSN_IM_XYZF 0x100u   /* 24-bit Z */
+#define GSN_IM_SCREEN_ST 0x200u /* its S and T made from the screen, with the place (frame_interp.c, StPlane):
+                                   H's h0..h5 in w[8..13], h6 in w[15], h7 in w[1] (floats) */
 /* FLAT */
 #define GSN_IM_XY 0x4u
 #define GSN_IM_RGBA 0x8u
