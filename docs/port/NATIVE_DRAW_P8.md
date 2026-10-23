@@ -6,6 +6,9 @@ GS's targets with the GS's Z. This page covers what the first round built (branc
 agents. Read [NATIVE_DRAW_TASKS.md](NATIVE_DRAW_TASKS.md) first: how to build, the switches, the
 thresholds and the rules all still apply.
 
+**Status:** T1-T6 are done and merged into `native/draw` ("Integration" below has what the merges settled
+and the checks on the merged build). T7 (review, the owner's sets) and T8 (performance, Linux) remain.
+
 ## What is built
 
 `--renderer modern` (the native GS, plus `gsn_set_standalone`). Without `--native-draw` it means
@@ -374,6 +377,64 @@ composite, 3 of 5 timing runs did, before printing their stats.
   as in the frames, the same lighter water (about 46,000 pixels a picture, frames and pictures between alike).
 - Named targets are single-sampled (the GS draws the reflection multisampled under `--native-msaa`).
 
+## Integration: T1-T6 on `native/draw`
+
+T1, T2, T3, T4, T5 and T6 are merged into `native/draw` (merge commits, in that order, from e8a89c00). What the
+merges had to settle, besides putting both sides' hooks next to each other:
+
+- **T2 with T3.** `sa_give` (T2's `sa_release`) lets a bound named target go first (`sat_release`). A texture
+  is T2's copy of the frame (`sa.fcopy`, 640 wide at 0x2BC0) before it is a named target (the reflection, 256
+  wide at the same base: told apart by TBW). A draw into a named target that reads that target is declined as
+  before T2 (`SaTexture::own_named`); T2's copy of the scene's own colour is for the frame. T2's water batch
+  (`sa.gs_water`, hosted's `nd_water.vert`) stays for a `KF4_SA_KINDS` without `RD_KIND_WATER`; with it (the
+  default) the water is T3's `sa_water.vert`. `sa_transfer` keeps T2's watch on the GS's clear with T3's hook
+  first. A copy the table makes (`sat_copied`) lets T2's frame copy there go too. `sat_acquire` keeps the scene's
+  scale and puts the GS's while a named target is bound (named targets stay at the GS's scale: T2's open item).
+- **T3 with T4.** T3's named targets were a global `sat`, the same name as T4's table: they are `snt` now.
+  T3's `sat_own_rows`, `sat_texture` and `sat_copied` use T4's table (`sa_pages_drawn` by nibble, owners with
+  their covers, `sa_owners`).
+- **T5.** `sa_kind` takes `RD_DRAW_FAR_Z` for program 0x000's records only.
+- **T6 with T4.** The table in states and captures is T4's now: record "SAT2" (the layout is in
+  `gsn_standalone.inc`, "The table in save states and captures"): each block's owners with their nibble covers,
+  the pages' low and high drawn counts, and the CLUT mirror. An owner naming an upload the saver let go gets an
+  id no chunk has ("upload let go"). T6's "SAT1" states and captures do not load (the table is left empty: the
+  GS's textures until the next uploads); nothing outside this branch wrote them.
+
+**Checks after the merges** (`--no-audio`, a fresh data folder, at most 2 games at a time):
+- boot_test, frame_test gs and native PASS; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90.
+- Herb with `--native-draw off` against play-932801f: the same log, PATH1 204e443a9fc49731, VU1 cycles
+  460424273, pictures 1800/1820/1840 byte for byte. Hosted `--native-draw on` against native-e8a89c00: the
+  same log, PATH1 b047e87e19b02bd1, VU1 cycles 48338437, pictures byte for byte.
+- **Modern against hosted, 1x / 4x** (pixels differing): herb 53; 009 195 / 2,047; 016 299 / 3,062; m8w 2,320 /
+  33,985 and m9w 97,208 / 1,477,307 (T3's lighter reflection, as T3 measured); far save 617 / 4,499. On 000 (000,
+  the spells, the fight, far: all on map 000) the counts are T5's sky at the eye against hosted's PS2 dome
+  (000 133,103 / 2.1M, spells 267k / 2.1M, fight 190k / 1.5M; the heat maps show only the sky). With `--sky
+  ps2` on both runs they are T1's to the pixel: 000 1,600 / 22,688, spell 3 3,146 / 22,385, fight 6,337 / 60,701.
+- **The owner's spots** (bugs1022, bugs1024, `blink/door.kf4quick`; `title.pad`, frames 300 and 400) at 1x,
+  against T3's build: with `--sky ps2` every 000 spot is T3's to the pixel (blotch 366, brazier 11,529, brick
+  1,750, far 239, fire 343, lacing 13,859, lava 48, sign 3,042, sky2 0, teeth 242, tower 1,000); the others
+  are T3's without it (pond 23,045, pool 7,626, shop 45, slow2 156, underwater 134,708, door 36). `slow`
+  (099, a far-plane sky) is 83,068 against T3's 736: T5's sky in the scene, half a level brighter (T5's
+  build alone gives 82,807). By default (the sky modern) the 000 spots differ in the sky only.
+- **240** (every picture): far 619 / between 3,727 (T1: 618 / 3,725; 000's sky), fire009 324 / 1,785 and fight 6,424 / 2,991 as
+  T1; water009 181,695 / 1,104,136 as T3; walk000 and spell 3 the sky at the eye. Every 240 run exited 0.
+- **The composite** (GS 1x, scene 4x MSAA 4, against hosted 4x MSAA 4): herb, far and (with `--sky ps2`) the
+  fight are T2's to the pixel; m9w is T2's plus T3's water tint (pixels off by more than 8: 9,897 / 4,137
+  against T2's 6,991 / 3,261), the reflection in place.
+- **States** (T6's `states.py`, 5 scenes, taken hosted and modern, loaded modern with and without the table):
+  0 pixels between the table and `KF4_SA_NO_TABLE=1` in all 40 pictures; "1 tables loaded", 0 not uploaded.
+- **`KF4_SA_VERIFY=1`** on m8w and m9w: textures 47,329 and 91,704 the same, CLUTs 47,327 and 91,702, 0 differ.
+- **Exit codes.** Every modern run in these checks exited 0, the 240 runs included (T1-T3 saw 127 or
+  0xC0000005/0xC0000374 at exit; T4's `sa.fetched` fix is in).
+
+**Open after the merges** (from the task reports; owners in brackets): the scene's MSAA path costs about 0.7
+ms more than the GS's, so the composite with `--scene-msaa 4` is above hosted's GPU time, and modern still
+falls behind at 240 (T8); the reflection copied back to the GS at every vblank (T8); named targets at the GS's
+scale and single-sampled (A9, T2/T3); the far-plane sky half a level brighter than hosted (Vulkan rounds, the
+GS truncates); map 102's one row 2 levels off from the read-extent cut (T4); `host.h`'s `port_native_sky()`
+comment still says 000 and 004 always get the PS2 dome; T7's review and the owner's sets; T8; Linux and
+lavapipe; the 64-map tour in modern was not re-run on the merged build.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
@@ -428,8 +489,7 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   `KF4_SA_PACK_DUMP=DIR`. `KF4_SA_LOG=3` (T2): the GS's batches the scene draws, and those it draws elsewhere.
 - **The scene at its own scale** (T2): `native_draw_compare.py --mode modern --scale 1 --first-args='--native-scale 4
   --native-msaa 4' --second-args='--scene-scale 4 --scene-msaa 4'`.
-- **The map tour in modern.** `map_tour.py` has no `--renderer modern` yet (T6's); the T4 runs changed its
-  commands on the way (`--renderer modern`, `--no-audio`). A modern run ended in a broken heap at its exit
+- **The map tour in modern.** `map_tour.py --renderer modern` (T6; the T4 runs changed its commands by hand). A modern run ended in a broken heap at its exit
   (0xC0000374 or 0xC0000005, after the last picture, 009 every time from a quick load): `sa_draw_begin`'s
   fetched meshes were a function's static, made on the GS's thread after main's `atexit(print_stats)`, so
   destroyed before it while the GS's thread still drew. They are `sa.fetched` now (T4). Native/draw
