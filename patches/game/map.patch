@@ -1,5 +1,5 @@
 diff --git a/src/game/map/map.c b/src/game/map/map.c
-index 965bb47ba25a27f088dbea3d51766e4139b20161..f68a2df27351ff3db2878d57a6be962ab239bc7c 100644
+index 965bb47ba25a27f088dbea3d51766e4139b20161..c459aca4a8e722cc4cd2c0e620d7bca58aff9d01 100644
 --- a/src/game/map/map.c
 +++ b/src/game/map/map.c
 @@ -17,6 +17,7 @@
@@ -26,7 +26,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..f68a2df27351ff3db2878d57a6be962a
 -void *memset(void *, int, u32);
  void Map_InsertRecordBySize(AreaNode *);
 +void *DrawDistance_SkyFog(void *, void *);
-+int NativeDraw_Posed(ModelInstance *, int, const void *); /* PC: --native-draw (game/native_draw/) */
++int NativeDraw_MapRecord(ModelInstance *, const MapDrawRecord *); /* PC: --native-draw (game/native_draw/) */
 +void FrameInterp_MarkSky(int); /* PC: --frame-rate (game/frame_interp.c) */
  void Model_SetUpPosed(ModelInstance *, char **, char **);
 -void Model_SetUpSkinned(ModelInstance *, int *, int *);
@@ -124,7 +124,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..f68a2df27351ff3db2878d57a6be962a
 +                    Wobble_DrawRippledModel(MAP_RECORD_MODEL(record), header->screen_tint_red, header->screen_tint_green, header->screen_tint_blue, header->screen_tint_alpha);
 +                }
 +                FrameInterp_MarkSky(record->flags < 0); /* PC: --frame-rate: the sky goes with the player (game/frame_interp.c) */
-+                if (!port_native_draw(PORT_ND_MAP) || !NativeDraw_Posed(MAP_RECORD_MODEL(record), 1, record)) { /* PC: --native-draw (game/native_draw/; 1: RD_KIND_MAP_RECORD) */
++                if (!port_native_draw(PORT_ND_MAP | PORT_ND_SKY) || !NativeDraw_MapRecord(MAP_RECORD_MODEL(record), record)) { /* PC: --native-draw (game/native_draw/) */
 +                    MAP_RECORD_MODEL(record)->draw_parts(MAP_RECORD_MODEL(record));
                  }
 -                record->model->draw_parts(record->model);
@@ -176,7 +176,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..f68a2df27351ff3db2878d57a6be962a
 +                    Wobble_DrawRippledModel(MAP_RECORD_MODEL(record), header->screen_tint_red, header->screen_tint_green, header->screen_tint_blue, header->screen_tint_alpha);
 +                }
 +                FrameInterp_MarkSky(record->flags < 0); /* PC: --frame-rate: the sky goes with the player (game/frame_interp.c) */
-+                if (!port_native_draw(PORT_ND_MAP) || !NativeDraw_Posed(MAP_RECORD_MODEL(record), 1, record)) { /* PC: --native-draw (game/native_draw/; 1: RD_KIND_MAP_RECORD) */
++                if (!port_native_draw(PORT_ND_MAP | PORT_ND_SKY) || !NativeDraw_MapRecord(MAP_RECORD_MODEL(record), record)) { /* PC: --native-draw (game/native_draw/) */
 +                    MAP_RECORD_MODEL(record)->draw_parts(MAP_RECORD_MODEL(record));
                  }
 -                record->model->draw_parts(record->model);

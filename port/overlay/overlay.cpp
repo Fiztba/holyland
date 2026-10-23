@@ -1121,7 +1121,8 @@ void debug_page() {
             const char *what;
         } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."},
                      {"Map records (in work)", PORT_ND_MAP,
-                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords): in work, not yet checked."},
+                      "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords) but the sky: in work, not yet checked."},
+                     {"Sky", PORT_ND_SKY, "The sky's dome (the map record with flag bit 31), at the feet with its real Z (--sky ps2)."},
                      {"Entities (in work)", PORT_ND_SKINNED,
                       "Enemies and NPCs (Entity_DrawAll, the draw list): in work, not yet checked."},
                      {"Map objects (in work)", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha): in work."},
