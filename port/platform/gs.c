@@ -53,6 +53,7 @@ static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
 static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
 static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
+static int gpu_wait_skips(void);
 
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
@@ -1038,6 +1039,9 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
                     (unsigned long long)s->cutout_draws);
         }
+        if (s->silhouettes_whole) {
+            fprintf(stderr, "[stats] native GS: %llu silhouettes drawn whole\n", (unsigned long long)s->silhouettes_whole);
+        }
         if (s->layer_draws) {
             fprintf(stderr, "[stats] native GS: %llu batches with layers (--native-layer-z tolerant)\n",
                     (unsigned long long)s->layer_draws);
@@ -1224,8 +1228,10 @@ void port_gs_run_vsync(void) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
     }
     if (interp_live && interp_count > 0) {
-        /* the pictures between this vblank and the next: for the window, only while this thread and the
-           native GS's keep up with the game (a picture between left out rather than the game held up) */
+        /* the pictures between this vblank and the next: for the window, only while this thread, the
+           native GS's and the GPU keep up with the game (a picture between left out rather than the game held
+           up: where the GPU takes longer than a picture's time for a picture, each picture between held the
+           next frame up behind it, the game at 5 to 15 frames a second where it keeps 30 without them) */
         int i, more = shown || draw_all();
 
         for (i = 0; i < interp_count; i++) {
@@ -1233,7 +1239,8 @@ void port_gs_run_vsync(void) {
                 continue;
             }
             if (!dump && !port_options.fast && shown &&
-                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1)) {
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1 ||
+                 (gpu_wait_skips() && gsn_gpu_behind()))) {
                 interp_behind++;
                 continue;
             }
@@ -1251,6 +1258,17 @@ void port_gs_run_vsync(void) {
         port_stats.vsync_ticks += port_ticks() - start;
     }
     __atomic_store_n(&queue_tail, tail + 1, __ATOMIC_RELEASE);
+}
+
+/* KF4_INTERP_GPU_WAIT=0: pictures between drawn whatever the GPU's backlog (as before) */
+static int gpu_wait_skips(void) {
+    static int on = -1;
+
+    if (on < 0) {
+        const char *v = getenv("KF4_INTERP_GPU_WAIT");
+        on = v == NULL || atoi(v) != 0;
+    }
+    return on;
 }
 
 /* ---- Save states -------------------------------------------------------------------------------

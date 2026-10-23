@@ -2510,6 +2510,29 @@ bool blend_copy_forced() {
     return forced != 0;
 }
 
+// KF4_GSN_SILHOUETTE_RUNS=1: the silhouettes drawn in runs as before (flush_batch, "A silhouette"):
+// with MSAA a pixel half covered by one run's triangle and half by the next's came out a little darker
+// where the next read the first's resolve; drawn whole, it is darkened once, as the GS's pixel is.
+int silhouette_runs_mode() {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *v = getenv("KF4_GSN_SILHOUETTE_RUNS");
+        mode = v && atoi(v) > 0;
+    }
+    return mode;
+}
+
+// KF4_GSN_BLEND16_BY_PASS=1: a multisampled 16-bit target's copies resolved by the passes, as before
+// (flush_batch, "a 16-bit target's samples"), for comparisons
+bool blend_copy_16_by_pass() {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *v = getenv("KF4_GSN_BLEND16_BY_PASS");
+        mode = v && atoi(v) > 0;
+    }
+    return mode != 0;
+}
+
 // KF4_GSN_MSAA_BLEND=fast: a multisampled target's copies made in the render pass too, its samples'
 // mean rounded here (pass_resolve.frag), which is not always the resolve's: a few pixels at edges come
 // out 1 or 2 apart from the default's (about a hundred a picture on map 000). A third less GPU time a
@@ -3471,7 +3494,25 @@ void flush_batch() {
                             : tex_alpha_max;
     }
     bool as_over = bc == 0 && !blend.premul && as_max > 0x80;
-    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || dst16 ||
+    // (Cs - Cd) As + Cd with As 0x80 at every pixel (or FIX 0x80) is Cs: no blending at all, the GS's
+    // ((Cs - Cd) 0x80 >> 7) + Cd being Cs whatever Cd. Into a 16-bit target it is drawn unblended
+    // rather than by the shader, which drew the batch in runs of triangles that do not overlap, each
+    // its own render pass and MSAA resolve: the reflections' walls and models (map 009's poison pond,
+    // 1,600 render passes a picture). The colour, its alpha (FBA, the alpha bit) and the masks come
+    // out the same either way (gs_frag.h). (--native-colour high blends in floats: as before.)
+    bool blend_is_cs = false;
+    if (abe && ba == 0 && bb == 1 && bd == 1 && (bc == 0 || bc == 2) && !blend.premul) {
+        uint32_t c_lo = as_min, c_hi = as_max;
+        if (bc == 2) {
+            c_lo = c_hi = fix;
+        } else if (tme && bits(tex0, 34, 1)) {
+            uint32_t tfx = bits(tex0, 35, 2);
+            c_lo = tfx == 0 ? (as_min * tex_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + tex_lo) : tex_lo;
+            c_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
+        }
+        blend_is_cs = c_lo == 0x80 && c_hi == 0x80 && dst16 && !wide(*color->image);
+    }
+    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || (dst16 && !blend_is_cs) ||
                                          (push.misc & (M_PABE)) || !(push.misc & M_COLCLAMP) ||
                                          (bc == 0 && (push.misc & M_FBA)) || as_over || !fixed))) {
         shader_blend = true;
@@ -3482,6 +3523,7 @@ void flush_batch() {
             push.alpha = (2 << 0) | (2 << 2) | (2 << 4) | (0 << 6); // (0 - 0) * FIX + Cs: no blending
         }
         gsn_stats.shader_blends++;
+    } else if (blend_is_cs) {
     } else if (abe && blend.premul) {
         push.flags |= blend.premul;
     } else if (abe && bc == 0 && !(ba == bb)) {
@@ -3701,6 +3743,8 @@ void flush_batch() {
         gs->tie_tick = gs->tick;
         gs->tie_verts.assign(gs->verts.begin(), gs->verts.end());
     }
+    // (the passes the batch needs whatever the ties: a tie's Z pass and colour pass need no runs, below)
+    int own_passes = npasses;
     if (tie) {
         Pass z_first[4];
         int n = 0;
@@ -3779,8 +3823,32 @@ void flush_batch() {
     // order, as do the others among themselves, with their Z.)
     std::vector<uint32_t> runs(1, 0);
     std::vector<uint32_t> layers_at;
-    if (!reads_own_target && (shader_blend || npasses > 1 || nlayer_passes)) {
-        bool all = shader_blend || npasses > 1;
+    // A tie's two passes (its Z, then its colour within half a Z) need no runs when its colour comes out
+    // the same drawn twice: drawn whole, a pixel's colour is the last of the batch's triangles within half a
+    // Z of the nearest of them all; in runs, the last within half a Z of the nearest of those before it
+    // and itself. A triangle the batch leaves out that runs keep has a nearer one after it, which both
+    // keep: the same last. (A repeat's colour is blended: in runs, as before.) Cut into runs, a tie's
+    // triangle strips were drawn a few triangles a draw: ten times the draws, the native GS's thread the
+    // limit at 240 where many models are in view.
+    bool tie_runs = tie && !same_twice;
+    // A silhouette (the shadows of VU1 program 0x5A0: DATE with DATM 0 and FBA, so the first triangle over
+    // a pixel sets the alpha bit the test then turns the others away with) of one colour, untextured,
+    // unfogged, writing no Z, makes the same pixel whichever of its triangles draws it: drawn whole, each
+    // reads the target as it was before the batch, which is what the first over the pixel reads in runs,
+    // and writes what it would. No runs (a zombie's or a statue's shadow: 1,000 runs a frame on map 009's
+    // poison pond, each a render pass and an MSAA resolve).
+    bool silhouette = shader_blend && date && !bits(test, 15, 1) && (push.misc & M_FBA) && !(push.misc & M_DST24) &&
+                      !(fbmsk & 0x80000000u) && !tme && !fge && !any_zwrite_pass && own_passes == 1 &&
+                      !reads_own_target && !gs->verts.empty() && silhouette_runs_mode() == 0;
+    for (size_t i = 1; silhouette && i < gs->verts.size(); i++) {
+        silhouette = gs->verts[i].rgba == gs->verts[0].rgba;
+    }
+    bool blend_runs = shader_blend && !silhouette;
+    if (silhouette) {
+        gsn_stats.silhouettes_whole++;
+    }
+    if (!reads_own_target && (blend_runs || own_passes > 1 || tie_runs || nlayer_passes)) {
+        bool all = blend_runs || own_passes > 1 || tie_runs;
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
         std::vector<uint8_t> layer(triangles);
         for (uint32_t t = 0; t < triangles; t++) {
@@ -3861,7 +3929,12 @@ void flush_batch() {
     if (reads_own_target) {
         how = COPY_OUTSIDE;
     } else if (shader_blend) {
-        how = blend_copy_forced() ? COPY_OUTSIDE : !ms || msaa_blend_in_pass() ? COPY_IN_PASS : COPY_BY_PASS;
+        // (a 16-bit target's samples are whole multiples of 8, its alpha 0 or 0x80: the mean of 2, 4 or 8
+        // of them is a whole number, which pass_resolve.frag makes as the resolve does, with no half to
+        // round either way. Its runs are copies in one pass, not a pass and a resolve each: map 009's
+        // poison pond reflected, hundreds of runs a frame.)
+        bool exact_mean = ms && dst16 && !wide(*color->image) && !blend_copy_16_by_pass();
+        how = blend_copy_forced() ? COPY_OUTSIDE : !ms || msaa_blend_in_pass() || exact_mean ? COPY_IN_PASS : COPY_BY_PASS;
         if (how == COPY_BY_PASS && wide(*color->image)) {
             how = COPY_OUTSIDE; // (--native-colour high: a pass's resolve of 16-bit samples is not always vkCmdResolveImage's)
         }
@@ -3962,7 +4035,7 @@ void flush_batch() {
             c.set_depth_test(false, false);
         }
         // blending
-        if (abe && !shader_blend) {
+        if (abe && !shader_blend && !blend_is_cs) {
             float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
             c.set_blend_enable(true);
             c.set_blend_constants(constants);
@@ -6047,7 +6120,14 @@ int interp_cannot_replay() {
     replay_images.clear();
     for (const Recording::TargetImage &ti : recording_ops.target_images) {
         Target *t = find_target(ti.bp, ti.bw, ti.psm);
-        const Image *now = !t ? nullptr : ti.ms ? t->ms.get() : t->image.get();
+        if (!t) {
+            // A target the recording made and dropped (a scrolling texture's, made, grown up a page row
+            // and dropped each picture: map 063's sky). The GS has the targets it had before the recording
+            // (above), so none was this buffer then: the image is the recording's own, made and filled by
+            // its calls, and they are made again on it.
+            continue;
+        }
+        const Image *now = ti.ms ? t->ms.get() : t->image.get();
         if (!now || now->get_width() != ti.image->get_width() || now->get_height() != ti.image->get_height() ||
             now->get_format() != ti.image->get_format()) {
             GSN_LOG(1, "interp: target bp %#x%s is not as recorded\n", ti.bp, ti.ms ? " (multisampled)" : "");
@@ -6131,6 +6211,9 @@ struct Ring {
 };
 
 Ring *ring; // (none: no thread)
+
+// When the GS's thread last waited for the GPU at a vblank's end (steady_clock nanoseconds; gsn_gpu_behind)
+std::atomic<int64_t> gpu_waited_at{0};
 
 int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 
@@ -6672,7 +6755,15 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     }
     gpu_mark(GPU_SCANOUT);
     submit(false);
-    gs->device->next_frame_context();
+    {
+        // (the GPU behind: gsn_gpu_behind)
+        auto before = std::chrono::steady_clock::now();
+        gs->device->next_frame_context();
+        auto after = std::chrono::steady_clock::now();
+        if (after - before > std::chrono::microseconds(500)) {
+            gpu_waited_at.store(std::chrono::duration_cast<std::chrono::nanoseconds>(after.time_since_epoch()).count());
+        }
+    }
     if (ok & GSN_WANT_IMAGE) {
         scanout_published(tag);
     }
@@ -6769,6 +6860,12 @@ extern "C" int gsn_picture(const uint64_t *privileged, int field, int want_pixel
     }
     ring_idle();
     return vsync_now(privileged, field, want_pixels, frame, tag);
+}
+
+extern "C" int gsn_gpu_behind(void) {
+    int64_t at = gpu_waited_at.load();
+    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return at != 0 && now - at < 16683000; // (a vblank)
 }
 
 extern "C" int gsn_backlog(void) {
