@@ -3758,6 +3758,14 @@ void flush_batch() {
         a_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
     }
     bool same_twice = !abe || (ba == 0 && bb == 1 && bd == 1 && (bc == 0 ? a_lo == 0x80 && a_hi == 0x80 : bc == 2 && fix == 0x80));
+    // (the same for a layer batch's other triangles, whose corners' alphas are all 0x80: the As they make)
+    uint32_t o_lo = 0x80, o_hi = 0x80;
+    if (tme && bits(tex0, 34, 1)) {
+        uint32_t tfx = bits(tex0, 35, 2);
+        o_lo = tfx == 0 ? (0x80 * tex_lo) >> 7 : tfx == 2 ? std::min(255u, 0x80 + tex_lo) : tex_lo;
+        o_hi = tfx == 0 ? std::min(255u, (0x80 * tex_hi) >> 7) : tfx == 2 ? std::min(255u, 0x80 + tex_hi) : tex_hi;
+    }
+    bool others_same_twice = o_lo == 0x80 && o_hi == 0x80;
     // the alpha test passes every pixel the batch can make: its Z pass needs no texture (gs_zonly.frag)
     uint32_t aref = bits(test, 4, 8);
     bool atest_always = !ate || atst == 1 ||
@@ -3783,9 +3791,42 @@ void flush_batch() {
         gs->tie_tick = gs->tick;
         gs->tie_verts.assign(gs->verts.begin(), gs->verts.end());
     }
-    // (the passes the batch needs whatever the ties: a tie's Z pass and colour pass need no runs, below)
+    Pass layer_passes[4];
+    int nlayer_passes = 0;
+    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
+        !reads_own_target) {
+        for (int i = 0; i < npasses; i++) {
+            if (passes[i].mask) {
+                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
+            }
+            if (passes[i].zwrite) {
+                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
+            }
+        }
+    }
+    // A layer batch's other triangles (every corner's alpha 0x80: the wall's overlay where it does not
+    // fade, the brick over the end wall of a corridor on map 1D) are ties too when their colour comes out
+    // the same drawn twice: they lie on their surface as the layer does, and with no slack they lost to
+    // it where its Z came out a hair nearer, the surface's own texture showing through the overlay in
+    // flat patches that came and went as the camera moved.
+    // A tie drawn in one pass (no alpha test's second pass, no layers) whose colour comes out the same
+    // drawn twice: its colour within half a Z of what was there before the batch, no Z written, then the
+    // batch again as the GS draws it, Z tested and written exactly (with the fraction). So it wins over
+    // what was there within half a Z, and among its own triangles the nearer wins, as it should: with its
+    // Z first and then its colour within half a Z of that, a batch's later triangles won over its earlier
+    // ones within half a Z of them, and on map 3's rope bridge, far off, the planks' faces (a log of
+    // strips a Z apart, one batch) came out as light and dark blocks that moved with the distance where
+    // the GS hatches them. (Its second pass, repeat, keeps the Z first: drawn twice it would blend twice.)
+    // (the passes the batch needs whatever the ties: a tie's passes need no runs, below)
     int own_passes = npasses;
-    if (tie) {
+    bool two_phase = tie && same_twice && npasses == 1 && !nlayer_passes;
+    if (two_phase) {
+        Pass p0 = passes[0];
+        passes[0] = {p0.select, p0.mask, false, 0.5f * zstep, 0.0f};
+        passes[1] = p0;
+        npasses = 2;
+    } else if (tie || (nlayer_passes && others_same_twice && fine_z && any_zwrite_pass && ztst == 2 &&
+                       !reads_own_target && !(push.flags & F_DATE))) {
         Pass z_first[4];
         int n = 0;
         for (int i = 0; i < npasses; i++) {
@@ -3801,19 +3842,6 @@ void flush_batch() {
         npasses = n;
         for (int i = 0; i < n; i++) {
             passes[i] = z_first[i];
-        }
-    }
-    Pass layer_passes[4];
-    int nlayer_passes = 0;
-    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
-        !reads_own_target) {
-        for (int i = 0; i < npasses; i++) {
-            if (passes[i].mask) {
-                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
-            }
-            if (passes[i].zwrite) {
-                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
-            }
         }
     }
     auto is_layer = [&](uint32_t t) {
@@ -3863,8 +3891,9 @@ void flush_batch() {
     // order, as do the others among themselves, with their Z.)
     std::vector<uint32_t> runs(1, 0);
     std::vector<uint32_t> layers_at;
-    // A tie's two passes (its Z, then its colour within half a Z) need no runs when its colour comes out
-    // the same drawn twice: drawn whole, a pixel's colour is the last of the batch's triangles within half a
+    // A tie's passes need no runs when its colour comes out the same drawn twice. Drawn in two phases
+    // (above), each pass is the whole batch's in order. Its Z first, then its colour within half a Z (a
+    // layer batch's other triangles): drawn whole, a pixel's colour is the last of the batch's triangles within half a
     // Z of the nearest of them all; in runs, the last within half a Z of the nearest of those before it
     // and itself. A triangle the batch leaves out that runs keep has a nearer one after it, which both
     // keep: the same last. (A repeat's colour is blended: in runs, as before.) Cut into runs, a tie's
