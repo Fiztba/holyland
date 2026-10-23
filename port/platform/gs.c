@@ -104,6 +104,7 @@ static void open_backend(void *unused) {
             port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
             gsn_set_cutout_aa(port_options.native_cutout_aa);
             gsn_set_colour(port_options.native_colour);
+            gsn_set_layer_z(port_options.native_layer_z);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -297,6 +298,10 @@ int port_widescreen(void) {
 
 int port_whole_frame(void) {
     return port_options.whole_frame;
+}
+
+int port_seamless_scroll(void) {
+    return port_options.seamless_scroll;
 }
 
 int port_flicker_filter(void) {
@@ -939,6 +944,15 @@ void port_gs_set_native_colour(int mode) {
 #endif
 }
 
+void port_gs_set_native_layer_z(int mode) {
+    port_options.native_layer_z = mode;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_layer_z(mode);
+    }
+#endif
+}
+
 int port_gs_set_native_msaa(int samples) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
@@ -991,6 +1005,18 @@ void port_gs_print_stats(void) {
             fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu\n",
                     (unsigned long long)interp_behind);
         }
+        if (s->interp_records || s->interp_replays || s->interp_misses) {
+            fprintf(stderr,
+                    "[stats] native GS pictures between on the GPU: %llu drawn from the packets (%.3f s, %.1f us each), "
+                    "%llu from the recording (%.3f s, %.1f us each), %llu of no frame; drawn from the packets again as "
+                    "the GS was not as recorded: %llu (targets), %llu (registers)\n",
+                    (unsigned long long)s->interp_records, s->ns_interp_record / 1e9,
+                    s->interp_records ? s->ns_interp_record / 1e3 / (double)s->interp_records : 0.0,
+                    (unsigned long long)s->interp_replays, s->ns_interp_replay / 1e9,
+                    s->interp_replays ? s->ns_interp_replay / 1e3 / (double)s->interp_replays : 0.0,
+                    (unsigned long long)s->interp_misses, (unsigned long long)s->interp_rerecord[1],
+                    (unsigned long long)s->interp_rerecord[2]);
+        }
         if (s->replay_uploads || s->replay_misses) {
             fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",
                     (unsigned long long)s->replay_uploads, (unsigned long long)s->replay_misses);
@@ -1001,6 +1027,38 @@ void port_gs_print_stats(void) {
                     "draws shaded at every sample\n",
                     (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
                     (unsigned long long)s->cutout_draws);
+        }
+        if (s->layer_draws) {
+            fprintf(stderr, "[stats] native GS: %llu batches with layers (--native-layer-z tolerant)\n",
+                    (unsigned long long)s->layer_draws);
+        }
+        {
+            int w;
+            double pictures = s->pictures ? (double)s->pictures : 1.0;
+
+            fprintf(stderr, "[stats] native GS: %llu pictures; a picture: %.1f render passes, %.1f resolves, "
+                            "%.1f MB loaded and %.1f MB stored by passes, %.1f MB resolved, %.1f MB copied for blending\n",
+                    (unsigned long long)s->pictures, (double)s->passes / pictures, (double)s->ms_resolves / pictures,
+                    (double)s->pass_load_bytes / pictures / 1048576.0, (double)s->pass_store_bytes / pictures / 1048576.0,
+                    (double)s->resolve_bytes / pictures / 1048576.0, (double)s->copy_bytes / pictures / 1048576.0);
+            if (s->blend_copies_in_pass) {
+                fprintf(stderr, "[stats] native GS: %llu copies for shader blending made in the render pass\n",
+                        (unsigned long long)s->blend_copies_in_pass);
+            }
+            fprintf(stderr, "[stats] native GS render passes ended by:");
+            for (w = 0; w < GSN_WHY_COUNT; w++) {
+                if (s->pass_ends[w]) {
+                    fprintf(stderr, " %s %llu;", gsn_why_name(w), (unsigned long long)s->pass_ends[w]);
+                }
+            }
+            fprintf(stderr, "\n[stats] native GS resolves for:");
+            for (w = 0; w < GSN_WHY_COUNT; w++) {
+                if (s->resolves_by[w]) {
+                    fprintf(stderr, " %s %llu;", gsn_why_name(w), (unsigned long long)s->resolves_by[w]);
+                }
+            }
+            fprintf(stderr, "\n");
+            gsn_print_gpu_times();
         }
         fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
                 (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,
@@ -1030,6 +1088,26 @@ void port_gs_finish(void) {
 
 int port_gs_replay_uploads(void) {
     return have_native && !have_gs && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
+}
+
+int port_gs_interp_gpu(void) {
+    return port_gs_replay_uploads();
+}
+
+void port_gs_interp_frame(void *frame) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    gsn_interp_frame((GsnInterpFrame *)frame);
+#else
+    (void)frame;
+#endif
+}
+
+void port_gs_interp_picture(const void *picture) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    gsn_interp_picture((const GsnInterpPicture *)picture);
+#else
+    (void)picture;
+#endif
 }
 
 int port_gs_vsync_pending(void) {

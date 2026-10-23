@@ -48,6 +48,11 @@
                          bits a channel, rounded as the GS rounds) or high (16 bits a channel, the
                          colours' arithmetic in floats, the picture dithered to 8 bits: smooth
                          gradients in the dark instead of steps)
+       --native-layer-z MODE
+                         how the native GS keeps and tests the 3D's Z: tolerant (the default: Z's
+                         fraction kept, straight seams where surfaces meet, and the layers the game
+                         blends over its surfaces Z tested within one Z: no hatching, teeth or lace)
+                         or ps2 (the GS's whole numbers)
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -55,6 +60,9 @@
                          and counted by --stats)
        --no-deinterlace, --no-progressive, --no-anti-blur, --no-adapt-width, --no-whole-frame
                          turn off one of the ways the PC picture differs from the GS's raw output
+       --no-seamless-scroll
+                         the scrolling textures (the sky's clouds, the lava, the water) as on the PS2,
+                         with a seam where they repeat (port_seamless_scroll())
        --ps2-scanout     turn them all off (and --flicker-filter on)
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
        --widescreen-hud-centred
@@ -81,6 +89,7 @@
                          fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
+       --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
                          or all), as the Debug page's buttons do; spells1, spells2 or spells3 for the
@@ -175,12 +184,13 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-colour exact|high]\n"
+            "          [--native-layer-z tolerant|ps2]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
@@ -206,6 +216,7 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.whole_frame = 1;
+    port_options.seamless_scroll = 1;
     port_options.native_scale = 0; /* auto: port_gs_native_scale() */
     port_options.frame_rate = 30;
     port_options.present_scaling = -1;
@@ -214,6 +225,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
     port_options.native_cutout_aa = 1; /* GSN_CUTOUT_AA_SSAA */
+    port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
@@ -240,6 +252,7 @@ static void parse_options(int argc, char **argv) {
         if (strcmp(option, "--ps2-scanout") == 0) {
             port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 0;
             port_options.whole_frame = 0;
+            port_options.seamless_scroll = 0;
             port_options.flicker_filter = port_options.flicker_filter_forced = 1;
             continue;
         }
@@ -267,6 +280,10 @@ static void parse_options(int argc, char **argv) {
             port_options.whole_frame = 0;
             continue;
         }
+        if (strcmp(option, "--no-seamless-scroll") == 0) {
+            port_options.seamless_scroll = 0;
+            continue;
+        }
         if (strcmp(option, "--widescreen") == 0 || strcmp(option, "--widescreen-hud-centred") == 0) {
             port_options.widescreen = port_options.widescreen_forced = 1;
             if (strcmp(option, "--widescreen-hud-centred") == 0) {
@@ -289,6 +306,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--separate-run") == 0) {
             port_options.separate_run = port_options.separate_run_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--show-fps") == 0) {
+            port_options.show_fps = port_options.show_fps_forced = 1;
             continue;
         }
         if (strcmp(option, "--stats") == 0) {
@@ -432,6 +453,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_colour_forced = 1;
+        } else if (strcmp(option, "--native-layer-z") == 0) {
+            if (strcmp(value, "ps2") == 0) {
+                port_options.native_layer_z = 0;
+            } else if (strcmp(value, "tolerant") == 0) {
+                port_options.native_layer_z = 1;
+            } else {
+                fprintf(stderr, "--native-layer-z wants tolerant or ps2, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_layer_z_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;

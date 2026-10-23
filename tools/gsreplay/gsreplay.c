@@ -49,6 +49,7 @@
      --cutout-aa MODE   with --msaa, the alpha test's cut-outs: off (the default) or ssaa, shaded at
                         every sample (--native-cutout-aa)
      --colour MODE      the native GS's colour precision: exact (the default) or high (--native-colour)
+     --layer-z MODE     the native GS's Z: ps2 (the default) or tolerant (--native-layer-z)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -1428,7 +1429,7 @@ static void usage(void) {
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
             "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
-            "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa]\n"
+            "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa] [--layer-z ps2|tolerant]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1441,6 +1442,7 @@ int main(int argc, char **argv) {
     long vertices = -1;
     int renderer = RENDER_GS;
     int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1, cutout_aa = GSN_CUTOUT_AA_OFF, colour = GSN_COLOUR_EXACT;
+    int layer_z = GSN_LAYER_Z_PS2;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1483,6 +1485,10 @@ int main(int argc, char **argv) {
             i++;
         } else if (strcmp(a, "--cutout-aa") == 0) {
             cutout_aa = strcmp(v, "ssaa") == 0 ? GSN_CUTOUT_AA_SSAA : GSN_CUTOUT_AA_OFF;
+            i++;
+        } else if (strcmp(a, "--layer-z") == 0) {
+            layer_z = strcmp(v, "tolerant") == 0 ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
+            i++;
         } else if (strcmp(a, "--colour") == 0) {
             colour = strcmp(v, "high") == 0 ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
             i++;
@@ -1595,6 +1601,7 @@ int main(int argc, char **argv) {
             gsn_set_lod(lod);
             gsn_set_cutout_aa(cutout_aa);
             gsn_set_colour(colour);
+            gsn_set_layer_z(layer_z);
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);

@@ -72,12 +72,10 @@ struct Rates {
     double wall;
     uint64_t vblanks;
     unsigned frames;
-    unsigned pictures;
     PortStats stats;
 };
 Rates last_sample;
-unsigned pictures;
-double pictures_per_second, vblanks_per_second, frames_per_second;
+double vblanks_per_second, frames_per_second;
 double vu1_ms, gif_ms, vsync_ms, vu1_runs, vu1_insns;
 
 // KF4_OVERLAY_SHOT
@@ -392,6 +390,11 @@ void display_page() {
          "instead of as two fields (from the next movie), and the menus, drawn a field at a time, as one\n"
          "moment each picture. Off: as on the PS2. (--no-whole-frame)",
          &s.whole_frame, &port_options.whole_frame},
+        {"Scrolling textures without a seam",
+         "On: the sky's clouds, the lava and the water repeat evenly. Off: as on the PS2, the game draws\n"
+         "each with its last row and column half a texel short, which shows as a line where the clouds\n"
+         "or the lava warp, clearer at a higher native resolution. (--no-seamless-scroll)",
+         &s.seamless_scroll, &port_options.seamless_scroll},
         {"No flicker filter (no up-and-down blur)",
          "On (the default): the rows as the game drew them. Off: as on the PS2, every frame the game\n"
          "blends each row of the picture half with the row above, so that thin lines do not flicker\n"
@@ -726,7 +729,6 @@ void sample_rates() {
     PortStats stats = port_stats;
     if (last_sample.wall > 0.0) {
         double per_second = port_ticks_per_second();
-        pictures_per_second = (pictures - last_sample.pictures) / span;
         vblanks_per_second = (double)(vblanks - last_sample.vblanks) / span;
         frames_per_second = (double)(game.frame - last_sample.frames) / span;
         vu1_ms = (double)(stats.vu1_ticks - last_sample.stats.vu1_ticks) / per_second * 1000.0 / span;
@@ -738,7 +740,6 @@ void sample_rates() {
     last_sample.wall = now;
     last_sample.vblanks = vblanks;
     last_sample.frames = game.frame;
-    last_sample.pictures = pictures;
     last_sample.stats = stats;
 }
 
@@ -747,7 +748,7 @@ std::string bug_report() {
     std::string text = "holyland (King's Field IV PC port)\n";
 
     std::snprintf(line, sizeof(line), "vblank %llu, %.1f pictures/s, %.2f vblanks/s, %.1f game frames/s\n",
-                  (unsigned long long)port_vblank_count(), pictures_per_second, vblanks_per_second, frames_per_second);
+                  (unsigned long long)port_vblank_count(), port_video_pictures_per_second(), vblanks_per_second, frames_per_second);
     text += line;
     kf4_game_state(line, sizeof(line));
     text += line;
@@ -870,6 +871,20 @@ void renderer_section() {
                 "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
                 "screen's 8 bits, so the gradients are smooth. Alpha, and what the game reads back, stay the\n"
                 "PS2's. (--native-colour)");
+        static const char *const layer_z_names[] = {"PS2's (whole numbers)", "Tolerant (clean layers and seams, the default)"};
+        int layer_z = port_options.native_layer_z;
+        if (ImGui::Combo("Native GS depth", &layer_z, layer_z_names, 2)) {
+            port_gs_set_native_layer_z(layer_z);
+            port_settings.native_layer_z = layer_z;
+            port_settings_changed();
+        }
+        tooltip("How the native GS keeps the 3D's depth. Much of a map is drawn twice, a surface and then a\n"
+                "layer blended over it (a second texture, the darkness in the arches), and on the PS2 the\n"
+                "layer fails the depth test in places: dark hatching, combs of teeth, a lace of light lines,\n"
+                "very visible at a higher resolution. Where two surfaces meet at a shallow angle the PS2's\n"
+                "whole-number depth makes a sawtooth. Tolerant keeps depth's fraction and lets a layer pass\n"
+                "within a hair of the surface under it: clean layers and straight seams. PS2's is the PS2's\n"
+                "picture. (--native-layer-z)");
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();
@@ -1058,7 +1073,9 @@ void debug_page() {
     kf4_game_readout(&game);
 
     ImGui::SeparatorText("Speed");
-    ImGui::Text("Pictures shown: %.1f a second", pictures_per_second);
+    ImGui::Text("Pictures shown: %.1f a second", port_video_pictures_per_second());
+    tooltip("The new pictures the window presented, whichever thread showed them (the game's, or the\n"
+            "pictures between's own at --frame-rate above 60).");
     ImGui::Text("Vblanks: %.2f a second (%.0f%% of the PS2's 59.94)", vblanks_per_second,
                 vblanks_per_second * 100.0 / 59.94);
     ImGui::Text("Game frames: %.1f a second", frames_per_second);
@@ -1142,12 +1159,20 @@ void interface_page() {
         changed();
     }
     tooltip("Off: the game runs on behind the overlay, as it does now.");
-    bool fps = s.show_fps != 0;
-    if (ImGui::Checkbox("Show the frame rate", &fps)) {
-        s.show_fps = fps;
+    bool fps = port_options.show_fps != 0;
+    char fps_key[64];
+    port_controls_binding_label(port_controls_binding(port_controls_layout(), ACTION_SHOW_FPS, 0), fps_key,
+                                sizeof(fps_key));
+    if (ImGui::Checkbox("Frame-rate counter", &fps)) {
+        s.show_fps = port_options.show_fps = fps;
         changed();
     }
-    tooltip("Pictures shown a second, in the window's bottom left corner.");
+    tooltip("The pictures the window shows a second, in the picture's top right corner, with the\n"
+            "overlay closed too; below it the game's own frames a second when they differ (the game\n"
+            "runs at 30, the pictures between are the PC's). The key (Controls page) shows and hides\n"
+            "it in play. (--show-fps)");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", fps_key);
     static float scale = -1.0f;
     if (!ImGui::IsAnyItemActive() || scale < 0.0f)
         scale = s.ui_scale;
@@ -1428,7 +1453,7 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 }
 
 extern "C" int port_overlay_visible(void) {
-    return ready && (overlay_open || port_settings.show_fps || shot_pending() ||
+    return ready && (overlay_open || shot_pending() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) ||
                      (renderer == nullptr && port_controls_indicator_shown()));
 }
@@ -1468,7 +1493,6 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     drawn = false;
     if (!ready)
         return;
-    pictures++;
     sample_rates();
     port_settings_poll();
     shot_open();
@@ -1503,13 +1527,6 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         for (int key = ImGuiKey_GamepadStart; key <= ImGuiKey_GamepadRStickDown; key++)
             held |= ImGui::IsKeyDown((ImGuiKey)key);
         pad_quiet = held;
-    }
-    if (port_settings.show_fps) {
-        char text[32];
-        std::snprintf(text, sizeof(text), "%.0f fps", pictures_per_second);
-        // the bottom left corner, clear of the game's HUD and the menu bar
-        ImGui::GetForegroundDrawList()->AddText(ImVec2(8, ImGui::GetMainViewport()->Size.y - ImGui::GetFontSize() - 6),
-                                                IM_COL32(255, 255, 120, 255), text);
     }
     draw_toast();
     if (overlay_open) {

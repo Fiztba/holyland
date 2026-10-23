@@ -4,12 +4,12 @@
        "version":  3,
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "whole_frame": true, "flicker_filter": false,
+                    "whole_frame": true, "seamless_scroll": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa",
-                    "native_colour": "exact",
+                    "native_colour": "exact", "native_layer_z": "tolerant",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -63,6 +63,7 @@ PortSettings port_settings = {
     .anti_blur = 1,
     .adapt_width = 1,
     .whole_frame = 1,
+    .seamless_scroll = 1,
     .frame_rate = 30,
     .volume = 100,
     .layout = "ps2",
@@ -74,6 +75,7 @@ PortSettings port_settings = {
     .native_widescreen = 1,
     .native_aniso = 1,
     .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
+    .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
 };
 
 static int active;
@@ -308,6 +310,7 @@ void port_settings_load(void) {
     s->anti_blur = read_bool(display, "anti_blur", s->anti_blur);
     s->adapt_width = read_bool(display, "adapt_width", s->adapt_width);
     s->whole_frame = read_bool(display, "whole_frame", s->whole_frame);
+    s->seamless_scroll = read_bool(display, "seamless_scroll", s->seamless_scroll);
     s->flicker_filter = read_bool(display, "flicker_filter", s->flicker_filter);
     s->widescreen = read_bool(display, "widescreen", s->widescreen);
     {
@@ -391,6 +394,13 @@ void port_settings_load(void) {
         }
     }
     {
+        const char *layer_z = read_string(display, "native_layer_z");
+
+        if (layer_z != NULL) {
+            s->native_layer_z = strcmp(layer_z, "ps2") == 0 ? 0 : 1;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -428,6 +438,9 @@ void port_settings_load(void) {
     if (port_options.whole_frame) {
         port_options.whole_frame = s->whole_frame;
     }
+    if (port_options.seamless_scroll) {
+        port_options.seamless_scroll = s->seamless_scroll;
+    }
     if (!port_options.flicker_filter_forced) {
         port_options.flicker_filter = s->flicker_filter;
     }
@@ -440,6 +453,9 @@ void port_settings_load(void) {
     }
     if (!port_options.separate_run_forced) {
         port_options.separate_run = s->separate_run;
+    }
+    if (!port_options.show_fps_forced) {
+        port_options.show_fps = s->show_fps;
     }
     if (!port_options.frame_rate_forced) {
         port_options.frame_rate = s->frame_rate;
@@ -473,6 +489,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_colour_forced) {
         port_options.native_colour = s->native_colour;
+    }
+    if (!port_options.native_layer_z_forced) {
+        port_options.native_layer_z = s->native_layer_z;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -592,6 +611,7 @@ void port_settings_save(void) {
     put(display, "anti_blur", cJSON_CreateBool(s->anti_blur));
     put(display, "adapt_width", cJSON_CreateBool(s->adapt_width));
     put(display, "whole_frame", cJSON_CreateBool(s->whole_frame));
+    put(display, "seamless_scroll", cJSON_CreateBool(s->seamless_scroll));
     put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
@@ -606,6 +626,7 @@ void port_settings_save(void) {
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
     put(display, "native_cutout_aa", cJSON_CreateString(s->native_cutout_aa == 0 ? "off" : "ssaa"));
     put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
+    put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));

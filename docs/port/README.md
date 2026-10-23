@@ -134,7 +134,8 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--no-anti-blur` | keep the blur of a game that blends its two read circuits |
 | `--no-adapt-width` | scan out at the TV's width, not the game's |
 | `--no-whole-frame` | let the game draw its picture between over every other line while the view turns (`Game_ShiftScreenByViewTurn`, for the other field of an interlaced TV): the picture is then read a field at a time and deinterlaced; and show the movies as two fields, woven with a comb wherever the picture changes; and weave each picture of the menus (drawn a field a vblank) with the one before; as on the PS2 (docs/port/PLAN.md) |
-| `--ps2-scanout` | all five of the above, and `--flicker-filter`: the GS's raw output, for comparing with the PS2 or PCSX2 |
+| `--no-seamless-scroll` | draw the scrolling textures (the sky's clouds on map 000, the lava, the water) as the PS2 does, with a sprite that stops half a pixel short of its 128x128 target: the texture then does not repeat evenly, a line where the clouds or the lava warp, clearer at a larger `--native-scale` (`port_seamless_scroll()`, PLAN.md) |
+| `--ps2-scanout` | all six of the above, and `--flicker-filter`: the GS's raw output, for comparing with the PS2 or PCSX2 |
 | `--dump-frames N,N,...` | write the picture shown at these vblanks as `frame_NNNNNN.png` |
 | `--dump-dir DIR` | where `--dump-frames` writes (the current directory by default) |
 | `--frames N` | stop after N vblanks |
@@ -163,6 +164,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--draw-distance-sky ps2\|push` | with `--draw-distance`, the sky keeps the PS2's fog (the default) or has it pushed out too |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
+| `--show-fps` | the frame-rate counter on for this run (F3, or the overlay's Interface page; off by default; see "The frame-rate counter (F3)") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
 
@@ -181,8 +183,8 @@ The Verdite layout (`--controls verdite`, or the overlay's Controls page) is tha
 W A S D walk and side-step, the mouse turns and looks once captured (Escape), Space attacks
 (`port/sdk/controls.c` lists it). In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
-loads it (exact, for debugging, same build only), F9, F10 and F12 are the debugging tools (see
-"Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
+loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F9, F10 and
+F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
 rebound.
 
 ### The settings overlay (F1)
@@ -194,15 +196,29 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 
 | Page | What |
 |---|---|
-| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, pictures a second in play (30 to 240, or the screen's rate), live, the draw distance and the sky's fog, live, the scaling to the window (sharp, smooth or best) and sharpening, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames), live, for comparing with the GS's raw output |
+| Display | window size (common heights: 720, 900, 1080, 1440, 2160, or the PS2's 448 and 896 lines, with the width following 4:3 or 16:9; or a monitor's own size: 2560x1440, 2560x1600, 3440x1440, 3840x2160 or 3840x2400, with the picture fitted inside; sizes bigger than the screen are left out), full screen (borderless at the monitor's own resolution; F11), picture shape (4:3 or stretched), widescreen (16:9) and where its HUD goes, live, pictures a second in play (30 to 240, or the screen's rate), live, the draw distance and the sky's fog, live, the scaling to the window (sharp, smooth or best) and sharpening, vsync, and the five switches of the PC picture (deinterlace, progressive, anti-blur, adapt width, whole frames, seamless scrolling textures), live, for comparing with the GS's raw output |
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y and the mouse buttons in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
 | Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
-| Debug | pictures, vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
-| Interface | pause while open, a frame-rate counter, the overlay's size, and where `settings.json` is |
+| Debug | pictures shown (the window's presents of a new picture, by either thread), vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
+| Interface | pause while open, the frame-rate counter (F3), the overlay's size, and where `settings.json` is |
 
 Every way the PC differs from the PS2 is a switch that starts as the port has it.
+
+### The frame-rate counter (F3)
+
+F3 (rebindable on the Controls page: "Show / hide the frame rate"), the Interface page's
+"Frame-rate counter" or `--show-fps` shows the pictures the window presents a second in the picture's
+top right corner, with the overlay closed, on a dark square sized to the picture (about 28 pixels high
+at 1440); below it, when they differ, the game's own frames a second (`144 FPS` over `30 GAME` at
+`--frame-rate 144`: the game runs at 30, the pictures between are the PC's). Both are sampled twice a
+second (`port_video_pictures_per_second`, `port_video_frames_per_second` in `port/platform/video.c`):
+the pictures counted are the new ones the window presented, by the game's thread or the pictures
+between's own, so it reads true at 144 and 240. The presenters draw it themselves as plain squares
+(the Vulkan presenter clears them into the swapchain's image), not with ImGui, so turning it on
+leaves the pictures between on their own thread and their pacing as it was. It is kept in
+`settings.json`'s `overlay.show_fps`; the mouse indicator moves below it while it is shown.
 
 **settings.json** keeps the settings, in the user's data folder: `%APPDATA%\holyland` on Windows,
 `$XDG_CONFIG_HOME/holyland` (or `~/.config/holyland`) elsewhere; `KF4_DATA_DIR` names another folder.
@@ -221,7 +237,7 @@ old defaults written out, and the new ones are used (the file is written again a
 scales, and native widescreen on, are kept.
 
 Options on the command line override it for that run, and are not written back: `--no-deinterlace`,
-`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame` and `--ps2-scanout` keep their switches off
+`--no-progressive`, `--no-anti-blur`, `--no-adapt-width`, `--no-whole-frame`, `--no-seamless-scroll` and `--ps2-scanout` keep their switches off
 (and `--flicker-filter` and `--ps2-scanout` the flicker filter on),
 `--widescreen` keeps widescreen on, `--frame-rate` sets the frame rate, `--draw-distance` and `--draw-distance-sky` set those, `--myus-necklace` and `--separate-run` keep
 those mods on, and `--controls` picks the layout.

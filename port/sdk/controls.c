@@ -23,8 +23,8 @@
    uses things. Off, Run is not used and the action button runs, as on the PS2.
 
    In both, a controller's buttons are as the PS2 pad's (A cross, B circle, X square, Y triangle, the
-   shoulders and triggers L1 R1 L2 R2), F2 / F4 take and load a quick save (port/platform/quicksave.c), and
-   F5 / F7 save and load the quick slot's save state.
+   shoulders and triggers L1 R1 L2 R2), F2 / F4 take and load a quick save (port/platform/quicksave.c),
+   F5 / F7 save and load the quick slot's save state, and F3 shows or hides the frame-rate counter.
 
    Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look):
    each movement is applied once, so it neither coasts nor builds speed. Capture is manual (Escape),
@@ -40,6 +40,7 @@
 #include "port/platform.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
+#include "port/settings.h"
 
 #ifdef KF4_HAVE_SDL
 #include <SDL.h>
@@ -115,6 +116,7 @@ static const struct {
     [ACTION_GS_CAPTURE] = {"gs_capture", "GS frame capture (debug)", 0},
     [ACTION_STATE_DUMP] = {"state_dump", "Game state dump (debug)", 0},
     [ACTION_AUDIO_TAIL] = {"audio_tail", "Last 20 s of sound (debug)", 0},
+    [ACTION_SHOW_FPS] = {"show_fps", "Show / hide the frame rate", 0},
 };
 
 const char *port_controls_action_label(int action) {
@@ -182,6 +184,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_GS_CAPTURE] = {KEY(F9)},
         [ACTION_STATE_DUMP] = {KEY(F10)},
         [ACTION_AUDIO_TAIL] = {KEY(F12)},
+        [ACTION_SHOW_FPS] = {KEY(F3)},
     },
     [CONTROLS_VERDITE] = {
         [ACTION_UP] = {KEY(W), KEY(UP), PAD(DPAD_UP)},
@@ -209,6 +212,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_GS_CAPTURE] = {KEY(F9)},
         [ACTION_STATE_DUMP] = {KEY(F10)},
         [ACTION_AUDIO_TAIL] = {KEY(F12)},
+        [ACTION_SHOW_FPS] = {KEY(F3)},
     },
 };
 /* Verdite's mouse outside play: left cross, right circle, middle cross */
@@ -848,6 +852,11 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_AUDIO_TAIL & 1u) {
         port_debug_write_audio_tail();
     }
+    if (edges >> ACTION_SHOW_FPS & 1u) {
+        port_options.show_fps = !port_options.show_fps;
+        port_settings.show_fps = port_options.show_fps;
+        port_settings_changed();
+    }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
         set_captured(!pc.captured);
     }
@@ -929,7 +938,11 @@ void port_controls_draw(PortFillRect fill, void *context, int x, int y, int widt
     cell = height / 180 > 2 ? height / 180 : 2;
     margin = height * 3 / 100 > cell * 2 ? height * 3 / 100 : cell * 2;
     origin_x = x + width - margin - cell * 9;
-    origin_y = y + margin;
+    /* below the frame-rate counter when it is shown (port/platform/video.c) */
+    origin_y = y + margin + port_video_counter_height(height);
+    if (origin_y != y + margin) {
+        origin_y += cell * 2;
+    }
     for (pass = 0; pass < 2; pass++) {
         int offset = pass == 0 ? 1 : 0;
         /* a shadow, then the glyph */

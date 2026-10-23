@@ -145,6 +145,17 @@ int port_whole_frame(void);
    --native-scale (one GS row is N rows of the picture) a double image. Off, the game writes the
    pass's registers but draws none of its strips. */
 int port_flicker_filter(void);
+
+/* port_seamless_scroll(): 1 while the scrolling textures repeat without a seam (port_options.
+   seamless_scroll; on by default, off with --no-seamless-scroll, --ps2-scanout or the overlay's Display
+   page). The game draws each scrolling texture (map 000's clouds, the lava, the water) into a small
+   render target with a sprite from its left edge to half a pixel before its right one, carrying the
+   texture's whole width: 128 texels over 127.5 pixels, so the target's last row and column step by half
+   a texel and the picture does not repeat evenly. The sky and the lava magnify that row: a thin band
+   where the clouds and the lava warp, along a line across the screen, the clearer the larger
+   --native-scale. On, the sprite ends on the target's edge (MapScroll_UpdateDraw,
+   GsDraw_DrawScrollingTexture): the same pixels covered, its texels a whole one apart. */
+int port_seamless_scroll(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 
@@ -162,6 +173,8 @@ int port_frame_interp(void);
 #define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */
 #define PORT_FRAME_INTERP_END 0xFFFF /* the header after the world: what follows stays as it is */
 #define PORT_FRAME_INTERP_ARM 0xFFFE /* the header before the arm: models in the world, moved as they move */
+#define PORT_FRAME_INTERP_SKY 19    /* 1: the world's runs from here are the sky (map records that follow the
+                                       player: flags bit 31), all moved by one move; 0: no longer */
 
 /* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
    default) unless --draw-distance or the overlay's Display page says 1.5, 2, 4 or max

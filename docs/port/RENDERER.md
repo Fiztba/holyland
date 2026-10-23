@@ -21,7 +21,7 @@ draws instead when the native GS cannot start.
 | `port/platform/present_vk.cpp` | the Vulkan presenter: a swapchain on the native GS's device, the overlay through ImGui's Vulkan backend; the picture is scaled to the window by the native GS (`present_scale`, `shaders/present_scale.frag`, `present_sharpen.frag`) and copied a pixel a pixel, or blitted (sharp, smooth) |
 | `port/platform/video.c` | the window, SDL_Renderer, frame pacing and dumps |
 | `port/platform/vu1.c`, `vu1_hle*.c` | the VU1 interpreter and the four programs in C (bit for bit the interpreter's) |
-| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times |
+| `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times. With the native GS alone the pictures are drawn on the GPU: the frame walked once, its draws recorded once, each picture the recorded calls again with its vertices moved by compute (`shaders/gs_replay*.comp`; STEP3.md, "On the GPU") |
 | `tools/gsreplay/` | `kf4-gsreplay`: a GS capture (F9) drawn again by either renderer, compared draw by draw and picture by picture |
 
 ## The rules
@@ -77,20 +77,42 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   and the next field's clear and backdrop were drawn without Z: every other line of the Equipment and
   Journal screens black (October 2026).
 - **Z is a whole number per pixel.** The GS rounds the interpolated Z; keeping the fraction hid the
-  lava's glow behind the lava it is drawn on (with a GEQUAL test).
+  lava's glow behind the lava it is drawn on (with a GEQUAL test). The rounding is also what makes the
+  hatching, teeth and lace on the game's layered walls and the sawtooth where surfaces meet:
+  `--native-layer-z tolerant` (the default) keeps the fraction, lets a layer's triangles (a corner's
+  alpha below 0x80, blended (Cs - Cd) As + Cd, GEQUAL) pass within one Z, Z written after in a pass of
+  its own; other draws that write Z draw their Z first and their colour within half a Z (the GS's ties on average: signs on walls), and a draw without Z writes within half a Z (PLAN.md; `gsn.cpp`, "Z and layers"); `ps2` is
+  the GS's. A test pass with no Z written must not see its own batch's triangles as a pass with Z
+  would: drawn as one, a layer mesh folded over itself was blended twice (flat olive patches).
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a
   rounded lerp; MTBA works out mipmap addresses at TEX0's write.
 - **Blending:** Vulkan's fixed function where the equation maps onto it exactly, the shader (from a
   copy of the target) elsewhere: sprites, draws reading their own target, DATE, 16-bit targets,
-  As above 0x80. Overlapping primitives in such a batch are drawn in runs that don't overlap.
+  As above 0x80. Overlapping primitives in such a batch are drawn in runs that don't overlap, each
+  with its own copy: kept in the render pass (an input attachment), or with MSAA resolved by the run's
+  pass into the copy the next run reads (STEP3.md, "Render passes"). A copy outside the pass costs a
+  pass's end and beginning: the shadows' silhouettes are ~240 runs a picture.
+- **NVIDIA's MSAA resolve is not a function of the samples.** Its mean of two 8-bit samples rounds a
+  half up or down depending on more than the two values, so no shader reproduces `vkCmdResolveImage`;
+  a render pass's resolve attachment does (8-bit; not 16-bit). Exactness at MSAA means resolving.
+- **Barriers are merged** (`full_barrier`): a full barrier right after another is left out, which
+  `cmd()` tracks. Anything that records into the native GS's command buffer must go through `cmd()`,
+  or a barrier it needs can be left out.
+- **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
+  of work, and `--stats` says why render passes ended and what resolves were for. Another program on
+  the GPU (a second run of the game) shows up in those times: run alone.
 - **A larger `--native-scale` is not just more pixels.** A GS pixel is drawn when its integer point
   is inside; a target pixel at scale N samples the middle of its own area, half of which is left of
   that point for the GS pixel's first pixels. So 2D (sprites from 0, or ending at 127.5) loses or gains
   a column, and nearest reads with coordinates on texel edges take the texel before: `flat_2d` and
   `sample_level`'s scaled path put both back on the GS's integer points. `kf4-gsreplay --scale X[,Y]`
-  draws a capture at a scale (`--draws` then writes the targets at their own pixels).
+  draws a capture at a scale (`--draws` then writes the targets at their own pixels). `flat_2d` knows
+  the 2D by its triangles (one Z and colour, corners on their bounding box) and leaves out batches
+  textured in perspective (ST with a Q not 1: `perspective_batch`): a far billboard of program 0x700
+  (a brazier's glow) is such a triangle pair once its Z rounds the same at its corners, and its halves,
+  each moved out to whole GS pixels, overlapped along the diagonal: a bright line across the glow.
 - **Granite:** `update_image` with row length 0 means the image's width; there is no SPIRV-Cross,
   so resource layouts are written by hand; its render pass cache ignores the sample count (MSAA
   passes name their subpass).
@@ -105,9 +127,11 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 - **paraLLEl-GS's licence before release builds**: the native GS and paraLLEl-GS are one library
   (`kf4_gs`) on paraLLEl-GS's copy of Granite; a release without paraLLEl-GS needs them split.
 - **Higher frame rates:** flipbook animations and pictures the CPU makes anew (the HUD orb) change
-  once a frame; two look-alike models crossing can swap for a few pictures; the renderer's cost is one
-  frame's draw a picture (1.1 to 1.5 ms here), so 240 skips a few pictures in the heaviest places: a
-  draw of the frame again on the GPU from recorded commands would be the next step (STEP3.md).
+  once a frame; two look-alike models crossing can swap for a few pictures. The pictures between are
+  drawn from recorded commands now (STEP3.md, "On the GPU"); what is left of their cost is the GPU's
+  (the shadows' runs of shader blending) and the recorded calls made again through Granite (0.2 to 0.8
+  ms a picture): re-submitting command buffers would take Granite's per-frame descriptors and staging
+  out of them.
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.

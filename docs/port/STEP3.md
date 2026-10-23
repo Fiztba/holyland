@@ -468,7 +468,13 @@ off by default. `port/platform/frame_interp.c`'s top comment has the details.
   so in the pictures between the glows came through the walls before them, and walking toward the
   wall lights of map 000 made them flicker at 30 Hz. Checked on that walk: the pictures between now
   lie between the frames on each side in the glow's bright pixels, where they were 1,000 to 2,000
-  above both, with either renderer, MSAA 1 or 2, widescreen or not.)
+  above both, with either renderer, MSAA 1 or 2, widescreen or not.) The 16 is in Q, not in Z:
+  program 0x700 divides by the w of positions whose own w is 16, so its Q is 1/(16 w) and its Z the
+  world's. Its depth is now Q's divided by the power of two that brings it to the Z's (`vertex_view`,
+  the records marked `RECORD_EFFECTS`), and Q is scaled by the depth's change on the CPU's way as on the
+  GPU's. Taken as 1/w, a fire was put 16 times as far: turning moved it with the room, but strafing past
+  the tower's fire moved it a 16th as much, so it stood still between the game's frames and jumped at
+  each ("a jittery dance").
 - It does not care which program or which matrix made the vertex. It costs no VU1 run.
 - The game tells, by marks in its chain, where the world is and with which camera.
 - The other way, the game drawing twice a pass, would run the draw code's side effects twice (the wobble
@@ -607,6 +613,13 @@ places (XY), colours (RGBAQ: fades) and texture coordinates (ST or UV) t of the 
 are changed in place. The HUD's gauge (the magic gauge after a cast, map 000) grows 3 pixels a picture
 at 240 where it grows 12 a frame; the fade after a teleport steps with every second picture (the GS's
 alpha is 8 bits: 4 a frame, half a step a picture).
+UV is unsigned (14 bits, 1/16 texel), so after a scroll back past the wrap the pictures between are
+counted from this frame's coordinates plus the texture's size (`uv_base`), the same texels a texture
+that repeats. (Counted from this frame's, a sprite's corner at 0 was between -0.25 and 0 in the
+pictures between and went in as 1023.9: map 000's 128 x 128 cloud target, and the lava's, were grey or
+orange streaks for a frame's pictures between each time a layer's scroll came round, every 1,024
+vblanks on the sky quick save (vblanks 1086, 2110, 3134, 4158), at 60 and above, the GPU's way and the
+CPU's, since the 2D was paired.)
 
 **The uploads.** A frame on map 000 uploads about 8 MB of textures (streamed through shared VRAM: the
 same pages hold one texture after another), which every picture between sent again, through the
@@ -678,6 +691,137 @@ Before the uploads were asked for again it was 3.5 ms. What would go further: dr
 on the GPU from its recorded commands with the vertices changed, instead of the native GS working
 through the packets again.
 
+### Render passes (October 2026)
+
+At 240 pictures a second with `--native-scale 4 --native-msaa 2 --widescreen` (3840 x 1792, the owner's
+settings) the GPU was the limit: a 40-second windowed run on map 000 showed 240 render passes and as
+many MSAA resolves a picture, and a picture took 4.4 to 4.9 ms of GPU time where 240 leaves 4.17.
+
+**Measured.** `--stats` now says why each render pass ended and what each resolve was for, and with
+`KF4_GSN_GPU_TIME=1` the GPU's time a picture by kind of work (timestamps between the pieces: the
+render passes, the resolves, the copies, the scanout, and "other", the time between them that is the
+barriers). The owner's far quick save (map 000, the shadows of the gate's statues in view), 600 vblanks
+with `--fast` and every picture between drawn (`KF4_INTERP_DRAW_ALL`), 2,254 pictures:
+- 204 render passes a picture, 198 resolves; 97% of the passes ended for shader blending's copy of the
+  target, and so did 99% of the resolves. Those are the shadows' silhouettes (VU1 program 0x5A0: DATE,
+  FBA, (Cs - Cd) FIX + Cd with FIX 0x20, about 1,200 triangles a batch that overlap one another): drawn
+  in runs of triangles that do not overlap, about 240 a batch, each reading a copy of the target from
+  before it; with MSAA the copy is a resolve. Every run was a pass's end, a resolve of its rectangle,
+  the next pass's beginning, and four full barriers.
+- 4.43 ms of GPU time a picture: 2.39 the passes' draws, 0.89 the resolves, 1.07 between them (the
+  barriers: each waits for the GPU to empty). The passes' load and store operations would move 20 GB a
+  picture if they read and wrote the attachments whole, but on this GPU they cost nothing that shows:
+  a render area the size of the run changed nothing. The cost was the waiting, not the bytes.
+
+**What changed** (`port/gs/native/gsn.cpp`, "Shader blending and the render pass"):
+- **Barriers merged.** A full barrier right after another (a pass's end, a copy's before and after,
+  the next pass's beginning) is left out (`full_barrier`; anything recorded goes through `cmd()`, which
+  says something was). 4.43 to 3.52 ms.
+- **A single-sampled target's copy in the pass.** The pass gets a second colour attachment (an image
+  the target's size whose contents do not outlive the pass); before each run a draw over the run's
+  rectangle copies the target into it (`pass_copy.frag`, the target read as an input attachment), and
+  the run reads it as an input attachment (`gs_in.frag`, `gs_zclamp_in.frag`). Barriers inside the
+  pass (its subpass's dependency on itself) order them. The copy is exact (8 and 16-bit UNORM through
+  floats), so nothing changes: one pass where there were 240 (without MSAA: 4.3 to 2.1 ms a picture).
+- **A multisampled target's copy resolved by the passes.** The copy must be what `vkCmdResolveImage`
+  gives, and a shader cannot make that: NVIDIA's mean of two 8-bit samples rounds a half up or down by
+  more than the two values (tried exhaustively on every pair: one rule fits a test image, the opposite
+  one the game's pixels, the same pair coming out either way in different places). So each run's pass
+  is begun with a render area of its rectangle and the next run's, and a resolve attachment: at its end
+  the pass resolves the target into the copy the next run reads (two copies in turn; the first run's by
+  a pass that draws nothing). One pass and one barrier a run, and no transfer. The pass's resolve gave
+  the same pixels as `vkCmdResolveImage` at 2, 4 and 8 samples of 8 bits (below); of 16 bits
+  (`--native-colour high`) one pixel came out 1 apart, so those are resolved outside the pass as before.
+  3.52 to 3.18 ms.
+- `KF4_GSN_MSAA_BLEND=fast` copies a multisampled target in the pass too, its samples' mean rounded
+  half up (`pass_resolve.frag`, `gs_*_in_ms.frag`): 12 passes and 1 resolve a picture, 2.23 ms, but not
+  the same pictures (about a hundred pixels at edges a picture, 1 or 2 apart). Not a switch yet: a
+  choice for the owner. `KF4_GSN_BLEND_COPY=1` makes every copy outside the pass, as before.
+- A draw whose texture is its own target reads anywhere in it and still copies the whole target first.
+
+**The numbers** (RTX 5080, Ryzen 9 9900X3D; the owner's settings; before is main 1805c8f):
+
+| | before | after | `fast` |
+|---|---|---|---|
+| render passes a picture (far, 600 vblanks) | 204 | 212 | 12 |
+| resolves a picture | 198 | 198 (by the passes) | 1 |
+| GPU ms a picture, far | 4.43 | 3.18 | 2.23 |
+| GPU ms a picture, sky (no shadows) | 1.27 | 1.21 | 1.21 |
+| 2,000 vblanks `--fast`, every picture drawn (7,854), far | 39.5 s | 28.8 s | 27.7 s |
+| `KF4_PRESENT_SIM=240`, far: pictures left out as the renderer was behind | 1,152 | 0 | 9 |
+| window 2560 x 1440, far: pictures shown in 2,000 vblanks (of 7,801) | 4,061 | 7,797 | |
+| window, far: between new pictures | 8.19 ms | 4.27 ms (sd 1.15) | |
+
+The window ran 2,000 vblanks in real time (33.8 s) in every case; on the sky quick save both builds
+kept up (7,801 and 7,796 pictures shown).
+
+**Checked.** The dumps at the owner's settings, 5 vblanks of 4 pictures on the far and the sky quick
+saves, byte for byte the build before's; so at MSAA 4 and 8, without MSAA, at 1x, and with
+`--native-colour high` with and without MSAA (2 vblanks each); the 64 map tour captures replayed at
+`--msaa 2 --scale 6,4`, every picture byte for byte; the map tour comparison (414,901, worst 106,
+scanouts identical); gsn_draw_test (seeds 1 to 3, 0 failures; seeds 1 and 2 with every case's
+numbers the build before's), gsn_vram_test, vu1_test, boot_test, frame_test (paraLLEl-GS, and the
+native GS, whose pictures are the build before's).
+
+**What is left.** With MSAA a shadow batch is still a pass for each of its ~240 runs (0.6 ms of
+barriers a picture on map 000); `fast` removes them at the cost of exactness. Uploads into targets
+and texture decodes end a pass about four times a picture.
+
+### On the GPU (October 2026)
+
+Each picture between cost a game frame's CPU work: the DMA controller's thread walked the frame's
+packets and moved every vertex (1.5 ms a picture on map 000), and the native GS worked through them
+again (state, uploads asked for again, Vulkan calls: 1.7 to 3.4 ms). With the native GS alone the
+pictures are now drawn on the GPU (`port/platform/frame_interp.c` and `port/gs/native/gsn.cpp`, both
+"On the GPU"; `gsn.h`'s `gsn_interp_frame` and `gsn_interp_picture`):
+- **Once a frame**, at its first picture between, `frame_interp.c` walks the packets as before but
+  leaves the vertices where the game put them, and notes for each vertex kick (every XYZ2, XYZF2, XYZ3,
+  XYZF3, in the GS's order) what a picture does to it: a `GsnInterpMove` (with the camera: its place in
+  the frame's view, depth and Z; with its model: the place at t 0 and the move; a 2D item: its two
+  places, colours and texture coordinates; the previous frame's alpha). The static half of
+  `run_motion` is worked out per run; the half that depends on t (the place between must not come near
+  the eye) is a bit per run per picture.
+- **The first picture** draws those packets as any picture between, but the GS records each kick as it
+  queued it (its registers, and in whose stretch RGBAQ, ST and UV were written: frame_interp.c changes
+  the qwords of the kick they come before), each triangle's corners as the kicks they are made of, and
+  every call into the command buffer (the `Cmd` layer over Granite's: a pass, a barrier, a copy, a draw).
+  Its draws take their vertices from a buffer two compute passes fill: `gs_replay.comp` moves each kick
+  to the picture's time as `move_vertex` and `move_flat_vertex` do (and drops it: its triangle and the
+  next two of its path go), `gs_replay_corners.comp` makes the corners as the GS does (`make_vtx`,
+  sprites, `snap_sprite_uv`, `flat_2d`). The draws are the GS's own, with its own pipelines: a new vertex
+  shader paired with gs.frag cost two seconds a pipeline to compile.
+- **The other pictures** make the recorded calls again (`replay_ops`), with only the picture's buffer
+  new (its cameras, t, the runs' bits). The targets' images are named by what the target is, so a target
+  made anew each picture (map 000's 128 x 128 sky target after its upload) is the one there then;
+  updates of targets from VRAM are copied from a buffer made once. Before that, the GS must be as it was
+  before the recording (its targets and what of theirs is newer, the render pass, its registers, VRAM
+  and the CLUT as the recording left them); else the picture is drawn from the packets again and
+  recorded anew (`--stats`: "drawn from the packets again").
+- **Decided for every time**: what flush_batch decides from the vertices holds for a batch whose
+  vertices move at any t: its triangles are left out at the scissor only when outside at t 0 and t 1
+  (by a margin), its blending's copies cover both ends and a margin, its rows, alphas and texture rows
+  are those of either end, and its Z is never taken to stay at the format's largest.
+- **Precision**: the moves are floats, made from where the vertex is (X plus the move's effect, Z less
+  (Z - cz) dm.z / w'), so no move is no change and the error is the move's.
+- **Not on the GPU** (the CPU's walk as before): with paraLLEl-GS (`--renderer both`),
+  `KF4_INTERP_STILL`, the frame drawn again exact for the buffers it changed, and `KF4_INTERP_CPU=1`.
+
+**Checked** (map 000 from a quick save, turning and walking; map 000's sky; map 009 walking; 4x,
+native widescreen, MSAA 2): the game's own frames byte for byte those at 30 at 60, 144 and 240, the
+GPU's way and the CPU's. The pictures between against the CPU's way: 0.06% of pixels differ on map
+000 (mean 0.0003 a channel, most of them by 1; at most 117 in a few pixels of the torch's fire, its
+Z by one), 0.11% on the sky (at most 4), 0.14% on map 009 (a moire of differences of 1 in a large
+texture, the floats' texture coordinates; at most 149 at the fire). gsn_draw_test, gsn_vram_test,
+vu1_test, boot_test, frame_test (gs and native).
+
+**Speed** (RTX 5080, 4x, native widescreen, MSAA 2, 240; with the render passes of the same month):
+the DMA controller's thread 1.5 ms a picture before, now a walk a frame (about 1 ms) and a few
+microseconds a picture; the native GS's thread a recording a frame (5 to 9 ms, the frame's draw and its
+recording) and 0.2 to 0.8 ms a picture made again. Walking on map 009, 2,400 vblanks at 240: 3,428
+pictures left out before (KF4_PRESENT_SIM=240; 2,535 in a window with the render passes alone), 402 now
+(186 in a window); map 000 standing, none.
+Headless with `--fast` the GPU is what is left: 2,000 vblanks of map 009 in 34.8 s (40.5 s before).
+
 ### What moves by itself
 
 The world's matrices for models are `world_screen_matrix` times the model (the bones for the skinned
@@ -697,7 +841,19 @@ itself"):
   sky's dome on map 000), is drawn half way between its two places, from the camera half way. (By the
   500th alone, the dome's nearer strips moved with it and the farther ones stayed in the world: thin
   dark lines along their shared edges in the pictures between when walking forward, bright ones walking
-  back.) A run that did not
+  back.) Going with the camera is its whole move or its move along the ground.
+- **The sky moves as one.** Decided strip by strip, the dome still came apart: the eye rises and falls
+  with the step while the dome goes along the ground, and the far strips' places are less sure, so
+  some strips passed the test and others did not, above all walking and turning at once (a frame of
+  thin bright and dark lines along the strips' edges, a wedge or a polyline across the sky, at 144 and
+  240, the GPU's way and the CPU's). The game now marks the map records that follow the player (flags
+  bit 31, `FrameInterp_MarkSky` in `Map_DrawRecords` and `Map_DrawLateRecords`;
+  `PORT_FRAME_INTERP_SKY`), and every run of the sky is drawn at its place less the sky's move times
+  1 - t: one move for all of it, the median of its paired runs' mean moves (`objects_sky_move`), paired
+  or not. Checked on map 000's sky quick saves (quick_sky2, quick_sky, quick0) at 240, scale 3, MSAA 2:
+  walking forward and back, turning while walking, strafing, running, looking up and down, and turns up
+  to 0.6 radians a frame while walking and running (a test hook, not kept): no lines, where the build
+  before had them in dozens of pictures; the game's own frames the same as at 30. A run that did not
   move, or has no pair, moves with the camera as before (in the world), or stays as it is (the arm,
   before the eye).
 - **The arm** is marked by the game (`FrameInterp_BeginArm` before `Player_DrawArm`): it is in the

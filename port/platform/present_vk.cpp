@@ -81,6 +81,7 @@ namespace {
     X(vkCmdPipelineBarrier)                                                                                \
     X(vkCmdClearColorImage)                                                                                \
     X(vkCmdBlitImage)                                                                                      \
+    X(vkCmdClearAttachments)                                                                               \
     X(vkCmdCopyBufferToImage)                                                                              \
     X(vkCmdCopyImageToBuffer)                                                                              \
     X(vkCreateBuffer)                                                                                      \
@@ -552,6 +553,39 @@ bool imgui_textures_pending(ImDrawData *data) {
     return false;
 }
 
+// The frame-rate counter's squares (port_video_counter_draw), to be cleared into the swapchain's image
+// in the render pass: opaque, and no pipeline of its own, so the pictures' own thread draws it too
+struct Squares {
+    VkClearAttachment clears[256];
+    VkClearRect rects[256];
+    uint32_t count;
+};
+
+void add_square(void *context, int x, int y, int width, int height, unsigned int rgba) {
+    Squares *s = static_cast<Squares *>(context);
+    int right = x + width, bottom = y + height;
+    x = x < 0 ? 0 : x;
+    y = y < 0 ? 0 : y;
+    right = right > int(pr.extent.width) ? int(pr.extent.width) : right;
+    bottom = bottom > int(pr.extent.height) ? int(pr.extent.height) : bottom;
+    if (s->count == 256 || right <= x || bottom <= y) {
+        return;
+    }
+    VkClearAttachment &c = s->clears[s->count];
+    c.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    c.colorAttachment = 0;
+    c.clearValue.color.float32[0] = float(rgba & 0xFF) / 255.0f;
+    c.clearValue.color.float32[1] = float(rgba >> 8 & 0xFF) / 255.0f;
+    c.clearValue.color.float32[2] = float(rgba >> 16 & 0xFF) / 255.0f;
+    c.clearValue.color.float32[3] = 1.0f;
+    VkClearRect &r = s->rects[s->count];
+    r.rect.offset = {x, y};
+    r.rect.extent = {uint32_t(right - x), uint32_t(bottom - y)};
+    r.baseArrayLayer = 0;
+    r.layerCount = 1;
+    s->count++;
+}
+
 // The window read back after the frame (KF4_OVERLAY_SHOT), as RGBA
 void read_window(Frame &f) {
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
@@ -821,19 +855,28 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                   VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-    if (draw != nullptr) {
+    // the frame-rate counter (either thread), then the overlay over it (the game's thread)
+    static Squares squares; // (under the window's present lock, port/platform/video.c)
+    squares.count = 0;
+    port_video_counter_draw(add_square, &squares, x, y, w, h);
+    if (draw != nullptr || squares.count > 0) {
         VkRenderPassBeginInfo pass = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = pr.pass;
         pass.framebuffer = target.framebuffer;
         pass.renderArea.extent = pr.extent;
         vk.vkCmdBeginRenderPass(cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
-        bool textures = imgui_textures_pending(draw);
-        if (textures) {
-            gsn_queue_lock();
+        for (uint32_t i = 0; i < squares.count; i++) {
+            vk.vkCmdClearAttachments(cmd, 1, &squares.clears[i], 1, &squares.rects[i]);
         }
-        ImGui_ImplVulkan_RenderDrawData(draw, cmd);
-        if (textures) {
-            gsn_queue_unlock();
+        if (draw != nullptr) {
+            bool textures = imgui_textures_pending(draw);
+            if (textures) {
+                gsn_queue_lock();
+            }
+            ImGui_ImplVulkan_RenderDrawData(draw, cmd);
+            if (textures) {
+                gsn_queue_unlock();
+            }
         }
         vk.vkCmdEndRenderPass(cmd);
     }

@@ -72,6 +72,12 @@ typedef struct {
        colours' arithmetic in floats, dithered to 8 bits on the way out). Live from the overlay. */
     int native_colour;
     int native_colour_forced;
+    /* --native-layer-z: how the native GS keeps and tests the 3D's Z (GSN_LAYER_Z_*, port/gs/native/gsn.h:
+       0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
+       surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
+       within one Z, clean layers and seams). Live from the overlay. */
+    int native_layer_z;
+    int native_layer_z_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;
        port/platform/vu1.c, vu1_hle*.c). PORT_VU1_HLE, the default, computes them directly, with
        the same results as the interpreter to the bit; PORT_VU1_INTERP is the cycle-accurate
@@ -87,7 +93,9 @@ typedef struct {
     int whole_frame;         /* the game draws whole pictures, not fields for an interlaced TV
                                 (port_whole_frame(): Game_ShiftScreenByViewTurn is left out, movies
                                 are shown in frame mode) */
-    int flicker_filter;      /* the game's flicker filter is drawn (port_flicker_filter(): each row half
+    int seamless_scroll;     /* the scrolling textures' sprites end on their targets' edges, so the
+                                textures repeat without a seam (port_seamless_scroll(); on by default) */
+    int flicker_filter;    /* the game's flicker filter is drawn (port_flicker_filter(): each row half
                                 the row above, for an interlaced TV); off by default, on with
                                 --flicker-filter or --ps2-scanout */
     int flicker_filter_forced;
@@ -122,6 +130,10 @@ typedef struct {
     int myus_necklace_forced; /* --myus-necklace: on for this run whatever settings.json says */
     int separate_run;        /* running on a key of its own, not the action button (port_controls_run_held()) */
     int separate_run_forced; /* --separate-run: on for this run whatever settings.json says */
+    /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
+       default, turned on by --show-fps or settings.json, F3 or the overlay's Interface page */
+    int show_fps;
+    int show_fps_forced;     /* --show-fps: on for this run whatever settings.json says */
     int invincible;          /* --invincible, or the Debug page: no HP lost (port_invincible()); never saved */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
@@ -345,6 +357,8 @@ void port_gs_set_native_aniso(int taps);
 void port_gs_set_native_cutout_aa(int mode);
 /* The native GS's colour precision (port_options.native_colour), from the next vblank */
 void port_gs_set_native_colour(int mode);
+/* The native GS's Z (port_options.native_layer_z), from the next draw */
+void port_gs_set_native_layer_z(int mode);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {
@@ -358,6 +372,12 @@ int port_gs_enabled(void);
 /* 1 when the native GS draws alone: --frame-rate's pictures between ask it for the frame's uploads
    again instead of sending them (port/platform/frame_interp.c) */
 int port_gs_replay_uploads(void);
+/* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"): 1 when
+   the native GS draws them (alone, and not KF4_INTERP_CPU); the frame (a GsnInterpFrame, handed over:
+   the native GS frees it) and each picture (a GsnInterpPicture) of port/gs/native/gsn.h */
+int port_gs_interp_gpu(void);
+void port_gs_interp_frame(void *frame);
+void port_gs_interp_picture(const void *picture);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
 /* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */
@@ -454,6 +474,17 @@ int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint3
 void port_video_present(void);
 /* --stats: how the pictures reached the window */
 void port_video_print_stats(void);
+/* The new pictures presented to the window a second (by the game's thread or the pictures' own), and
+   the game's own frames a second, sampled twice a second; 0 with no window */
+double port_video_pictures_per_second(void);
+double port_video_frames_per_second(void);
+/* The frame-rate counter (port_options.show_fps), drawn by the presenters over the picture at x, y,
+   width x height in the window's pixels, as squares (fill: as port_controls_draw's PortFillRect);
+   port_video_counter_height: how far down from the picture's top margin it reaches (0: not shown) */
+int port_video_counter_shown(void);
+int port_video_counter_height(int height);
+void port_video_counter_draw(void (*fill)(void *context, int x, int y, int width, int height, unsigned int rgba),
+                             void *context, int x, int y, int width, int height);
 
 /* ---- The disc (port/platform/disc.c) --------------------------------------------------------
    The user's own disc, as an ISO 9660 image or as the folder it was extracted to, read by sector

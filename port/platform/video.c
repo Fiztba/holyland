@@ -158,6 +158,10 @@ static double time_wall[TIMES];
 static uint64_t times_newest;
 static int times_set;
 
+#ifdef KF4_HAVE_SDL
+static void sample_rates(void);
+#endif
+
 void port_video_vblank(uint64_t vblank, double wall) {
     LOCK();
     time_vblank[vblank % TIMES] = vblank;
@@ -165,6 +169,9 @@ void port_video_vblank(uint64_t vblank, double wall) {
     times_newest = vblank;
     times_set = 1;
     UNLOCK();
+#ifdef KF4_HAVE_SDL
+    sample_rates();
+#endif
 }
 
 /* A picture's wall time: its vblank's, and its phase of a vblank after it */
@@ -417,6 +424,167 @@ static void fill_rect(void *context, int x, int y, int width, int height, unsign
 #endif
 
 #ifdef KF4_HAVE_SDL
+/* ---- The frame-rate counter (F3, --show-fps, the overlay's Interface page) --------------------- */
+/* The new pictures presented to the window, by either thread (draw_window, under PRESENT_LOCK; the
+   last one drawn again for the overlay is not counted), and the rates sampled from them and from the
+   game's frame counter twice a second on the game's thread (port_video_vblank). The counter is drawn
+   by the presenters with plain squares, as the mouse indicator is (port_controls_draw): not with
+   ImGui, whose frame is the game thread's, so it never takes the pictures between from their own
+   thread (thread_shows). */
+static uint64_t pictures_presented;
+static double rate_wall;
+static uint64_t rate_pictures;
+static unsigned rate_frames;
+static double pictures_rate, frames_rate; /* (read by both threads: __atomic_load) */
+
+static void sample_rates(void) {
+    double now = port_wall_seconds(), span = now - rate_wall, rate;
+    uint64_t pictures = __atomic_load_n(&pictures_presented, __ATOMIC_ACQUIRE);
+    PortGameReadout game;
+
+    if (rate_wall > 0 && span < 0.5) {
+        return;
+    }
+    kf4_game_readout(&game);
+    if (rate_wall > 0) {
+        rate = (double)(pictures - rate_pictures) / span;
+        __atomic_store(&pictures_rate, &rate, __ATOMIC_RELEASE);
+        rate = (double)(game.frame - rate_frames) / span;
+        __atomic_store(&frames_rate, &rate, __ATOMIC_RELEASE);
+    }
+    rate_wall = now;
+    rate_pictures = pictures;
+    rate_frames = game.frame;
+}
+#endif
+
+double port_video_pictures_per_second(void) {
+    double rate = 0;
+#ifdef KF4_HAVE_SDL
+    __atomic_load(&pictures_rate, &rate, __ATOMIC_ACQUIRE);
+#endif
+    return rate;
+}
+
+double port_video_frames_per_second(void) {
+    double rate = 0;
+#ifdef KF4_HAVE_SDL
+    __atomic_load(&frames_rate, &rate, __ATOMIC_ACQUIRE);
+#endif
+    return rate;
+}
+
+int port_video_counter_shown(void) {
+#ifdef KF4_HAVE_SDL
+    return __atomic_load_n(&port_options.show_fps, __ATOMIC_RELAXED) && (window != NULL || sim);
+#else
+    return 0;
+#endif
+}
+
+#ifdef KF4_HAVE_SDL
+/* 5 x 7 glyphs, a row a byte (bit 4 the left column), for what the counter says */
+static const char counter_chars[] = "0123456789FPSGAME ";
+static const uint8_t counter_glyphs[][7] = {
+    {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
+    {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}, {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E},
+    {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}, {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
+    {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}, {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
+    {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}, {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}, {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10},
+    {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}, {0x0F, 0x10, 0x10, 0x17, 0x11, 0x11, 0x0F},
+    {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11},
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}, {0, 0, 0, 0, 0, 0, 0},
+};
+
+/* The counter's size in a picture `height` pixels high: a glyph's pixel, and the margin to the
+   picture's edges (the mouse indicator's, port_controls_draw) */
+static void counter_metrics(int height, int *cell, int *margin) {
+    *cell = height / 360 > 2 ? height / 360 : 2;
+    *margin = height * 3 / 100 > *cell * 2 ? height * 3 / 100 : *cell * 2;
+}
+
+/* A line of the counter's text, its right edge at `right`: each row's runs of cells as one square */
+static void counter_line(void (*fill)(void *, int, int, int, int, unsigned int), void *context, const char *text,
+                         int right, int top, int cell, unsigned int rgba) {
+    int n = (int)strlen(text), i;
+    int left = right - (n * 6 - 1) * cell;
+
+    for (i = 0; i < n; i++) {
+        const char *at = strchr(counter_chars, text[i]);
+        const uint8_t *glyph = counter_glyphs[at != NULL && *at != 0 ? at - counter_chars : (int)sizeof(counter_chars) - 2];
+        int row, column;
+
+        for (row = 0; row < 7; row++) {
+            for (column = 0; column < 5;) {
+                int run = 0;
+
+                while (column + run < 5 && (glyph[row] >> (4 - column - run) & 1)) {
+                    run++;
+                }
+                if (run > 0) {
+                    fill(context, left + (i * 6 + column) * cell, top + row * cell, run * cell, cell, rgba);
+                    column += run;
+                } else {
+                    column++;
+                }
+            }
+        }
+    }
+}
+
+/* The counter's lines: the pictures shown a second; and the game's own frames a second when they
+   differ (the pictures between of --frame-rate, or a vblank's picture shown twice) */
+static int counter_text(char lines[2][24]) {
+    double pictures = port_video_pictures_per_second(), frames = port_video_frames_per_second();
+
+    snprintf(lines[0], sizeof(lines[0]), "%.0f FPS", pictures);
+    if (fabs(pictures - frames) >= 1.5) {
+        snprintf(lines[1], sizeof(lines[1]), "%.0f GAME", frames);
+        return 2;
+    }
+    return 1;
+}
+
+int port_video_counter_height(int height) {
+    char lines[2][24];
+    int cell, margin;
+
+    if (!port_video_counter_shown()) {
+        return 0;
+    }
+    counter_metrics(height, &cell, &margin);
+    return (counter_text(lines) * 9 + 2) * cell;
+}
+
+void port_video_counter_draw(void (*fill)(void *, int, int, int, int, unsigned int), void *context, int x, int y,
+                             int width, int height) {
+    char lines[2][24];
+    int cell, margin, count, widest = 0, i, right, top;
+
+    if (!port_video_counter_shown() || width < 64 || height < 64) {
+        return;
+    }
+    counter_metrics(height, &cell, &margin);
+    count = counter_text(lines);
+    for (i = 0; i < count; i++) {
+        int w = ((int)strlen(lines[i]) * 6 - 1) * cell;
+
+        widest = w > widest ? w : widest;
+    }
+    /* the picture's top right corner (the widescreen HUD goes top left), on a dark square: opaque, as
+       the Vulkan presenter draws squares by clearing them */
+    right = x + width - margin;
+    top = y + margin;
+    fill(context, right - widest - cell * 4, top, widest + cell * 4, (count * 9 + 2) * cell, 0xFF100C0Cu);
+    for (i = 0; i < count; i++) {
+        counter_line(fill, context, lines[i], right - cell * 2, top + cell * 2 + i * 9 * cell, cell,
+                     i == 0 ? 0xFF8CEBFFu : 0xFFB4B4B4u);
+    }
+}
+#endif
+
+#ifdef KF4_HAVE_SDL
 /* Takes the picture to show: the newest whose time is no later than `until` (with --fast, the newest),
    those before it left out. 1 if there is one: its pixels into shown (or image: the native GS's, by
    its tag). */
@@ -455,6 +623,9 @@ static int take_picture(double until, int *image, uint64_t *tag) {
 static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
     uint32_t width = shown_width, height = shown_height;
 
+    if (fresh) {
+        __atomic_add_fetch(&pictures_presented, 1, __ATOMIC_RELEASE);
+    }
     if (port_options.stats && fresh) {
         /* the wall time between new pictures */
         double now = port_wall_seconds();
@@ -530,6 +701,7 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
         SDL_RenderCopy(renderer, texture, NULL, &dst);
         SDL_GetRenderDrawBlendMode(renderer, &blend);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        port_video_counter_draw(fill_rect, NULL, dst.x, dst.y, dst.w, dst.h);
         port_controls_draw(fill_rect, NULL, dst.x, dst.y, dst.w, dst.h);
         SDL_SetRenderDrawBlendMode(renderer, blend);
         port_overlay_draw(dst.x, dst.y, dst.w, dst.h);
@@ -610,7 +782,7 @@ void port_video_present(void) {
    presenter a thread of their own shows them, so that the game's own work between two vblanks (a few
    milliseconds, often without a call into the kernel) does not hold them up; it leaves them to the
    game's thread while the overlay or the mouse indicator is drawn (their ImGui frame is the game
-   thread's), and with SDL_Renderer (which is the game thread's) they are the game thread's always:
+   thread's; the frame-rate counter is not ImGui's and stays on the thread), and with SDL_Renderer (which is the game thread's) they are the game thread's always:
    shown while it waits for the next vblank (port_video_wait) and whenever it is in the kernel meanwhile
    (port_video_poll). (At 60 and below every picture is a vblank's own, shown by port_video_present.) */
 static int between_thread_up;
@@ -905,6 +1077,8 @@ void port_video_print_stats(void) {
             (unsigned long long)(stat_gaps[1] + stat_gaps[2] + stat_gaps[3]), (unsigned long long)stat_gaps[1],
             (unsigned long long)stat_gaps[2], (unsigned long long)stat_gaps[3], (unsigned long long)stat_stale,
             (unsigned long long)stat_between, mean * 1e3, sd * 1e3, stat_max * 1e3, (unsigned long long)stat_late);
+    fprintf(stderr, "[stats] window: the last half second, %.1f pictures a second, %.1f game frames a second\n",
+            port_video_pictures_per_second(), port_video_frames_per_second());
 #endif
 }
 

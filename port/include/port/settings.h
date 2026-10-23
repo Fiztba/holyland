@@ -25,11 +25,12 @@ typedef struct {
     int smooth;            /* scale the picture with bilinear filtering (else nearest) */
     int scaling;           /* PORT_SCALING_: sharp (nearest), smooth (bilinear) or best (port_video_scaling) */
     float sharpen;         /* the sharpening after the scaling, 0 (none) to 1 */
-    int deinterlace;       /* the five ways the PC picture differs from the GS's (port_options) */
+    int deinterlace;       /* the ways the PC picture differs from the GS's (port_options) */
     int progressive;
     int anti_blur;
     int adapt_width;
     int whole_frame;
+    int seamless_scroll;   /* the scrolling textures without a seam (port_options.seamless_scroll; on) */
     int flicker_filter;    /* the game's flicker filter, as on the PS2 (port_options.flicker_filter; off) */
     int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
     int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
@@ -45,6 +46,7 @@ typedef struct {
     int native_aniso;      /* the native GS's anisotropic filtering: 1 off, 2 to 16 (port_options.native_aniso) */
     int native_cutout_aa;  /* with MSAA, the native GS's cut-outs: 0 off, 1 ssaa (port_options.native_cutout_aa) */
     int native_colour;     /* the native GS's colour precision: 0 exact, 1 high (port_options.native_colour) */
+    int native_layer_z;    /* the native GS's Z: 0 ps2, 1 tolerant (port_options.native_layer_z) */
     int presenter;         /* how the picture reaches the window, from the next start: PORT_PRESENTER_ */
     /* Audio */
     int volume;            /* 0 to 100 */

@@ -24,6 +24,7 @@ extern f32 world_view_matrix[0x10];  /* world to view */
 extern f32 view_screen_matrix[0x10]; /* view to screen */
 
 static int marking; /* between FrameInterp_BeginFrame and FrameInterp_EndWorld */
+static int sky;     /* FrameInterp_MarkSky's last */
 
 static void add_field(int index, u32 bits) {
     Packet_AddGsRegister(PORT_GS_REG_FRAME_INTERP, (s64)(((u64)index << 32) | bits));
@@ -38,6 +39,21 @@ static void add_float(int index, f32 value) {
 
 void FrameInterp_BeginFrame(void) {
     marking = port_frame_interp();
+    sky = 0;
+}
+
+/* Around each map record Map_DrawRecords and Map_DrawLateRecords draw: whether it is the sky (flags bit
+   31: a dome or backdrop that follows the player), marked when that changes. The GS front end moves all
+   of the sky by one move in the pictures between, so its strips cannot come apart. */
+void FrameInterp_MarkSky(int on) {
+    on = on != 0;
+    if (!marking || on == sky || !port_frame_interp()) {
+        return;
+    }
+    sky = on;
+    Packet_BeginGsRegisters();
+    add_field(PORT_FRAME_INTERP_SKY, (u32)on);
+    Packet_EndGsRegisters();
 }
 
 /* After GameLoop_SetCameraMatrices(projection, mode) has built world_screen_matrix: in modes 0 and 1

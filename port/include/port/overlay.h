@@ -31,7 +31,8 @@ void kf4_game_readout(PortGameReadout *out);
 void port_overlay_init(void *sdl_window, void *sdl_renderer);
 /* (port/sdk/libpad.c) each SDL event: 1 when the overlay took it, and the game must not see it */
 int port_overlay_event(const void *sdl_event);
-/* 1 when the overlay draws something this vblank (open, a message, the frame rate, a test picture) */
+/* 1 when the overlay draws something this vblank (open, a message, a test picture; not the frame-rate
+   counter, which the presenters draw themselves: port_video_counter_draw) */
 int port_overlay_visible(void);
 /* (port/platform/video.c) draws it over the picture, before the window is presented; the picture is
    at x, y, width x height in the window's pixels. On the Vulkan presenter it only makes the draw
