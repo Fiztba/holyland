@@ -835,7 +835,7 @@ index c44b5a78c545a33d19d04a8c6a0c28b694f80594..7facba7eb11ae694d2bfae44786799e9
  void Entity_ResetAllLists(void);
  void Entity_FreeAllInGroup(int group_id);
 diff --git a/src/game/entity/entity_ai.c b/src/game/entity/entity_ai.c
-index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef02d503589 100644
+index 26e563eb1b3443ffb1440f955b1e647836ac1320..820a6cd9735f226215a7cd95110f3a894ff98c07 100644
 --- a/src/game/entity/entity_ai.c
 +++ b/src/game/entity/entity_ai.c
 @@ -8,15 +8,17 @@
@@ -867,7 +867,15 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
  extern PlayerState player_state;
  #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->spawn_flags)
  extern EntitySpawnInfo *map_spawn_infos[2];
-@@ -84,8 +86,8 @@ static s32 EntityAi_CheckMeleeAilment(Entity *entity, EntityParamsUnk240 *record
+@@ -75,6 +77,7 @@ void Packet_AddGsRegister(int, s64);
+ void Packet_EndGsRegisters(void);
+ void GsDraw_QueueFlush(void);
+ void GsDraw_SetScreenAlpha(int);
++int NativeDraw_Shadow(ModelInstance *, const void *); /* PC: --native-draw (game/native_draw/) */
+ void Matrix_Multiply(void *, void *, void *);
+ extern Entity *active_entities_head;
+ extern ModelInstance entity_models[];
+@@ -84,8 +87,8 @@ static s32 EntityAi_CheckMeleeAilment(Entity *entity, EntityParamsUnk240 *record
  static void EntityAi_Kill(Entity *entity);
  static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b, f32 *limit);
  static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits);
@@ -878,7 +886,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
  static int EntityAi_IsPlayerNear(Entity *entity);
  static void EntityAi_SensePlayerInArc(Entity *actor);
  static void EntityAi_RollNoticePlayer(Entity *actor);
-@@ -112,8 +114,8 @@ float EntityAi_RandomAngle(void) {
+@@ -112,8 +115,8 @@ float EntityAi_RandomAngle(void) {
  /* Starts the second camera shake (GameLoop_UpdateCameraShake plays it): its reach (CameraState.entity_shake_reach) and its frames
     (unk7C). The Giant Beetle's ranged attack uses it. */
  void EntityAi_ShakeCamera(int float_value, int int_value) {
@@ -889,7 +897,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
  }
  
  /* Sets Entity.state and keeps the old value in prev_state. */
-@@ -127,7 +129,7 @@ void EntityAi_SetState(Entity *entity, u8 state) {
+@@ -127,7 +130,7 @@ void EntityAi_SetState(Entity *entity, u8 state) {
  
  /* Installs the entity's per-frame update (Entity.update_func; the type table entity_type_handlers gives it) and puts
     action_step back to 0. */
@@ -898,7 +906,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
      entity->update_func = update;
      entity->action_step = 0;
  }
-@@ -315,14 +317,14 @@ static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b
+@@ -315,14 +318,14 @@ static int EntityAi_TurnLookPart(Entity *actor, f32 *out_a, int mode, f32 *out_b
  
  /* Turns the model part at EntityModel.look_at_part to look at target (Bone_TurnPartToLook) while params flag 0x2000 is
     set; FALSE without it. */
@@ -917,7 +925,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
  }
  
  /* As EntityAi_LookAtPoint, at the player's position 220 above his feet. */
-@@ -335,7 +337,7 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
+@@ -335,7 +338,7 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
      if (entity->model->look_at_part == NULL || !(entity->params->flags & ENTITY_PARAMS_FLAG_LOOK_AT_PART_TURNS)) {
          result = 0;
      } else {
@@ -926,7 +934,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
      }
      return result;
  }
-@@ -343,23 +345,23 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
+@@ -343,23 +346,23 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
  /* Bone_TurnPart for the model part at EntityModel.aim_part (the one the model file marks with ModelFilePart.unk06
     2); FALSE without it. Nothing calls it, and no code that runs uses that part, so its role is not known. */
  static int func_001961D0(Entity *entity, f32 *angles, int mode, f32 *goal, f32 *limits) {
@@ -955,7 +963,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
          return 0;
      }
      return Bone_TurnPartToLook(model, model->aim_part, value_a, value_b, value_c, value_d, scale);
-@@ -367,14 +369,14 @@ static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c
+@@ -367,14 +370,14 @@ static int func_00196200(Entity *entity, int value_a, int value_b, void *value_c
  
  /* As func_00196200, at the player's position 115 above his feet; FALSE without the part.
     Nothing calls it. */
@@ -973,7 +981,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
          return 0;
      }
      return Bone_TurnPartToLook(model, model->aim_part, angles, mode, position, limits, rate);
-@@ -385,7 +387,7 @@ static int func_00196248(Entity *entity, int angles, int mode, int limits, float
+@@ -385,7 +388,7 @@ static int func_00196248(Entity *entity, int angles, int mode, int limits, float
  s32 EntityAi_RemoveIfFallen(Entity *entity) {
      u16 ctrl_flags;
  
@@ -982,7 +990,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
          ctrl_flags = ENTITY_CONTROLLER(entity)->respawn_effect_id;
          if (ctrl_flags != 0 && ctrl_flags != 0xFFFF) {
              Effect_FreeForOwner(entity);
-@@ -418,27 +420,18 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
+@@ -418,27 +421,18 @@ s32 EntityAi_ShouldRespawn(Entity *entity) {
      if (!ENTITY_FLAG_BITS(entity)->bit7) {
          return FALSE;
      }
@@ -1015,7 +1023,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
              return TRUE;
          }
          if (ENTITY_FLAG_BITS(entity)->pad8) {
-@@ -647,18 +640,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
+@@ -647,18 +641,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
      f32 magnitude;
  
      if (max_distance != 0.0f) {
@@ -1036,7 +1044,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
          if (max_distance < distance[0]) {
              return 0;
          }
-@@ -686,17 +669,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
+@@ -686,17 +670,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
          }
      }
      if (pitch_range != 0.0f) {
@@ -1056,7 +1064,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
          diff = atan2f(target[1] - entity->model->position[1], distance[0]);
          diff -= entity->model->rotation[0];
          diff = diff - (f32)(s32)(diff / 6.2831855f) * 6.2831855f;
-@@ -1834,7 +1808,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
+@@ -1834,7 +1809,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
      entity->reaction_step = 0;
      if (run_now != 0) {
          if (reaction != NULL) {
@@ -1065,7 +1073,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
          }
      }
      return 1;
-@@ -1874,8 +1848,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
+@@ -1874,8 +1849,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
  u16 Motion_FrameCount(ModelInstance *model, int index) {
      ModelPartLevels *levels;
  
@@ -1075,6 +1083,18 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c958e2ef63d94a039eb82af007d71ef0
      return *(u16 *)((char *)levels - 4);
  }
  
+@@ -1994,7 +1968,10 @@ void Entity_DrawPoolModels(void) {
+         Packet_BeginGsRegisters();
+         Packet_AddGsRegister(GS_REG_ALPHA_2, ((s64)(s32)(ENTITY_MODEL(entity)->alpha * 32.0f * 0.0078125f) << 32) | 0x64);
+         Packet_EndGsRegisters();
+-        model->draw_parts(model);
++        /* PC: --native-draw (game/native_draw/) */
++        if (!port_native_draw(PORT_ND_SHADOWS) || !NativeDraw_Shadow(model, ENTITY_MODEL(entity))) {
++            model->draw_parts(model);
++        }
+         GsDraw_QueueFlush();
+     }
+     Packet_BeginGsRegisters();
 diff --git a/src/game/entity/entity_ai.h b/src/game/entity/entity_ai.h
 index 94806291e6060684310b2af73d4896051d5a8563..e681dedc472aa684c42325c2647422826d5bfccd 100644
 --- a/src/game/entity/entity_ai.h

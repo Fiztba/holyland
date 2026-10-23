@@ -41,9 +41,12 @@ typedef enum {
     RD_VF_PACKED16 = 1,  /* program 0x000's: 4 qwords a vertex (V4-16 position, normal, ST, colour) */
     RD_VF_FLOAT_SKIN = 2, /* program 0x280's: 4 qwords a vertex of floats (position, normal, ST: its w the
                             matrix set, colour); every MSCAL in the block must be 0x280's */
-    RD_VF_GS_STRIP = 3   /* no VU1 program: the block is a PATH2 GIF packet, one PACKED tag (PRE, a triangle
+    RD_VF_GS_STRIP = 3,  /* no VU1 program: the block is a PATH2 GIF packet, one PACKED tag (PRE, a triangle
                             strip) of RGBAQ and XYZ2 per vertex (the weapon's trail); drawn by a draw of
                             program RD_PROGRAM_GS_STRIP */
+    RD_VF_SILHOUETTE = 4 /* program 0x5A0's (the shadows: Entity_DrawPoolModels): program 0x000's blocks run by
+                            0x5A0, which kicks no A+D packet and gives every vertex colour 0 and ST's z 1 but the
+                            last two (render.cpp, take_batch); every MSCAL in the block must be 0x5A0's */
 } RdVertexFormat;
 
 /* gen RD_GEN_HASH: the block's bytes are hashed each call, so a block the game rewrote (Model_Set*,
@@ -96,8 +99,9 @@ typedef struct {
     uint32_t kind;            /* RD_KIND_* */
     uint32_t id[3];           /* the rest of its identity, stable from frame to frame: (instance key, part,
                                  slot or record): what pictures between pair draws by (3.5) */
-    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000 or 0x280 (skinned); or
-                                 RD_PROGRAM_GS_STRIP (meshes of RD_VF_GS_STRIP, written to the GS as they are) */
+    uint32_t program;         /* the VU1 program whose maths it is drawn with: 0x000, 0x280 (skinned) or 0x5A0 (the
+                                 shadows, meshes of RD_VF_SILHOUETTE); or RD_PROGRAM_GS_STRIP (meshes of
+                                 RD_VF_GS_STRIP, written to the GS as they are) */
     uint32_t flags;           /* (none yet) */
     uint32_t camera;          /* rd_camera's index */
     uint32_t mesh_count;      /* (filled by rd_draw) */

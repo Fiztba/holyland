@@ -52,6 +52,8 @@ inline uint32_t rd_vertex_words(uint32_t format) {
 // makes it, appended to mesh; and a block parsed as rd_mesh_from_block does. false: refused (rd_mesh_why)
 bool rd_batch_280_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh);
 bool rd_parse_block(const void *block, uint32_t qwords, RdVertexFormat fmt, RdMeshData &mesh);
+// (the same for a run of program 0x5A0: take_batch's silhouette, RD_VF_SILHOUETTE)
+bool rd_batch_5a0_from_vu(const uint32_t (*mem)[4], uint32_t top, uint32_t start, RdMeshData &mesh);
 
 // The draw a PORT_GS_REG_NATIVE_DRAW value names, its camera and meshes, if its frame's slot still
 // holds it (any thread)

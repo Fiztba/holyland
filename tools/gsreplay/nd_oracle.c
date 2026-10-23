@@ -20,7 +20,13 @@
      set-up (MSCALs): the vertex matrix (VU1 0x14-0x17), the light directions (vf05-07) and the point
             lights (0x4A-0x4D) as the CPU's set-up made them, against VU1's after the run
    A vertex that VU1's strip does not draw (every triangle it is in has ADC: clipped, or the data's
-   restarts) cannot change the picture: its differences are counted apart ("not drawn"). */
+   restarts) cannot change the picture: its differences are counted apart ("not drawn").
+
+   Program 0x5A0 (the shadows' silhouettes, port/platform/vu1_hle_5a0.c) is drawn by the same shader from
+   the parser's batch (render.cpp, take_batch's silhouette) and a record without lights or fog
+   (gsn_nd_5a0.inc): its runs go through the same comparison, the vertices as the parser makes them of
+   VU1 memory, the set-up's vertex matrix against VU1's vf01-vf04 after the run (0x5A0 does not store it),
+   and are tallied apart too. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +52,7 @@ typedef struct {
     uint32_t draw;     /* in the GPU batch */
     uint32_t k, n;     /* the vertex in its strip, the strip's vertices */
     uint64_t run;      /* the VU1 run (from the capture's start) */
+    uint32_t program;  /* 0x000 or 0x5A0 */
     int clipped;       /* VU1's strip does not draw it (every triangle it is in has ADC) */
 } Expect;
 
@@ -77,6 +84,10 @@ static struct {
     uint64_t not_matched; /* runs whose strip was not met */
     uint64_t undrawn_differ, undrawn_differ_w0; /* vertices not drawn that differ; of them, VU1 overflowed */
     int shown, shown_undrawn;
+    /* program 0x5A0's own tallies (its lanes are in the ones above too) */
+    uint64_t batches_5a0, mscals_5a0, vertices_5a0, clipped_5a0, differ_5a0, differ_5a0_undrawn, refused_5a0;
+    uint64_t setup_differ_5a0;
+    const char *why_5a0;
 } o;
 
 void nd_oracle_begin(const uint8_t *vu_data, int limit) {
@@ -129,6 +140,13 @@ static void show(const char *what, const Expect *e, const GsnNdOracleVertex *v, 
 static void lane(const Expect *e, const GsnNdOracleVertex *v, int l, uint32_t want, uint32_t got) {
     if (want == got) {
         return;
+    }
+    if (e->program == 0x5A0) {
+        if (e->clipped) {
+            o.differ_5a0_undrawn++;
+        } else {
+            o.differ_5a0++;
+        }
     }
     if (e->clipped) {
         o.lane_differ_clipped[l]++;
@@ -183,12 +201,13 @@ static void flush(void) {
             continue;
         }
         o.setup_compared++;
-        /* the vertex matrix, the light directions, the point lights */
-        for (part = 0; part < 3; part++) {
+        /* the vertex matrix, the light directions, the point lights (0x5A0: the vertex matrix only) */
+        for (part = 0; part < (o.draws[i].program == 0x5A0 ? 1 : 3); part++) {
             static const int from[3] = {0, 16, 28}, count[3] = {16, 12, 16};
 
             if (memcmp(mine + from[part], o.setup_vu[i] + from[part], (size_t)count[part] * 4) != 0) {
                 o.setup_differ[part]++;
+                o.setup_differ_5a0 += o.draws[i].program == 0x5A0;
                 if (o.shown < o.limit) {
                     static const char *names[3] = {"vertex matrix", "light directions", "point lights"};
                     int j;
@@ -260,6 +279,7 @@ static void flush(void) {
             uint64_t after = 0;
 
             o.clipped_vertices++;
+            o.clipped_5a0 += e->program == 0x5A0;
             for (l = 0; l < L_COUNT; l++) {
                 after += o.lane_differ_clipped[l];
             }
@@ -288,23 +308,35 @@ void nd_oracle_vu1_run(uint32_t program, int mscal, uint32_t top) {
     }
     o.runs++;
     nd280_oracle_vu1_run(program, mscal, top);
-    if (program != 0) {
+    if (program != 0 && program != 0x5A0) {
         return;
     }
     top &= 0x3FF;
     n = qw(top)[0] & 0x7FFF;
-    if (n < 3 || n > N_MAX || top < 0x80 || top + 0xD1 + 3 * n > 0x400) {
+    if (n < 3 || n > N_MAX || top < 0x80 || top + (program == 0x5A0 ? 0xC9 : 0xD1) + 3 * n > 0x400) {
         return; /* (the interpreter's, not the HLE's: none in the game) */
+    }
+    if (program == 0x5A0) {
+        /* (the vertices as the parser stores them: the colour 0, ST's z 1 but the last two's) */
+        const char *why;
+
+        if (gsn_nd_oracle_5a0_vertices(o.vu_data, top, (uint32_t)mscal, o.verts, N_MAX, &why) != (int)n) {
+            o.refused_5a0++;
+            o.why_5a0 = why;
+            return;
+        }
+    } else {
+        for (k = 0; k < n; k++) {
+            memcpy(o.verts[k], qw(top + 1 + 4 * k), 64);
+        }
     }
     port_vu1_debug_regs(&regs, 0);
     memset(&o.draw, 0, sizeof(o.draw));
     o.draw.mscal = (uint32_t)mscal;
+    o.draw.program = program;
     memcpy(o.draw.mem, o.vu_data, sizeof(o.draw.mem));
     memcpy(o.draw.vf, regs.vf, sizeof(o.draw.vf));
     memcpy(o.tag, qw(top), 16);
-    for (k = 0; k < n; k++) {
-        memcpy(o.verts[k], qw(top + 1 + 4 * k), 64);
-    }
     o.top = top;
     o.n = n;
     o.pending = 1;
@@ -326,13 +358,24 @@ void nd_oracle_gif(int path, const void *data, size_t bytes) {
     d = o.draw_count++;
     o.draws[d] = o.draw;
     o.batches++;
+    if (o.draw.program == 0x5A0) {
+        o.batches_5a0++;
+        o.mscals_5a0 += o.draw.mscal != 0;
+        o.vertices_5a0 += o.n;
+    }
     if (o.draw.mscal) {
         Kf4GsVu1Regs regs;
 
-        /* VU1's set-up as it left it */
+        /* VU1's set-up as it left it (0x5A0 keeps its vertex matrix in vf01-vf04 only) */
         o.mscals++;
         port_vu1_debug_regs(&regs, 0);
-        memcpy(o.setup_vu[d], qw(0x14), 64);
+        if (o.draw.program == 0x5A0) {
+            for (k = 0; k < 4; k++) {
+                memcpy(o.setup_vu[d] + 4 * k, regs.vf[1 + k], 16);
+            }
+        } else {
+            memcpy(o.setup_vu[d], qw(0x14), 64);
+        }
         for (k = 0; k < 3; k++) {
             memcpy(o.setup_vu[d] + 16 + 4 * k, regs.vf[5 + k], 16);
         }
@@ -360,6 +403,7 @@ void nd_oracle_gif(int path, const void *data, size_t bytes) {
         e->k = k;
         e->n = o.n;
         e->run = o.runs;
+        e->program = o.draw.program;
         e->clipped = 0;
     }
     /* whether VU1's strip draws the vertex: a triangle with it in is kicked without ADC (strips: the
@@ -418,5 +462,12 @@ void nd_oracle_end(void) {
            "overflowed)\n",
            (unsigned long long)total, (unsigned long long)total_clipped, (unsigned long long)o.undrawn_differ,
            (unsigned long long)o.undrawn_differ_w0);
+    printf("nd-oracle: of them program 0x5A0 (the shadows): %llu batches (%llu MSCALs), %llu vertices (%llu not drawn); "
+           "%llu lane differences on drawn vertices (%llu on vertices not drawn), %llu set-ups differing; %llu runs "
+           "the parser refused%s%s\n",
+           (unsigned long long)o.batches_5a0, (unsigned long long)o.mscals_5a0, (unsigned long long)o.vertices_5a0,
+           (unsigned long long)o.clipped_5a0, (unsigned long long)o.differ_5a0, (unsigned long long)o.differ_5a0_undrawn,
+           (unsigned long long)o.setup_differ_5a0, (unsigned long long)o.refused_5a0, o.why_5a0 ? ": " : "",
+           o.why_5a0 ? o.why_5a0 : "");
     nd280_oracle_end();
 }
