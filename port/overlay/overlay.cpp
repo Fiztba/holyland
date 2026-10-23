@@ -1125,6 +1125,7 @@ void debug_page() {
                      {"Sky", PORT_ND_SKY, "The sky's dome (the map record with flag bit 31), at the feet with its real Z (--sky ps2)."},
                      {"Entities (in work)", PORT_ND_SKINNED,
                       "Enemies and NPCs (Entity_DrawAll, the draw list): in work, not yet checked."},
+                     {"Arm (in work)", PORT_ND_ARM, "The arm, the held weapon and its trail (Player_DrawArm): in work."},
                      {"Map objects (in work)", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha): in work."},
                      {"Picked item (in work)", PORT_ND_PICKED, "The item being picked up, after its depth clear: in work."}};
         int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;

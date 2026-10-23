@@ -21,7 +21,7 @@
 // the run when every vertex is clipped), are the CPU's (nd280_plan).
 // The arena (set 2, binding 0) holds a vertex in eight qwords (render.cpp, take_batch_280): position,
 // normal, ST, colour as VU1 memory had them (floats), then (k, the point lights' set, what XYZF2's w is
-// ORed with, n). A corner's fog input is its vertex's first qword / 4 in the arena; its colour's RGB the
+// ORed with, n). A corner's fog input is -1 less its vertex's first qword / 4 in the arena; its colour's RGB the
 // kick's number less its own, in vertices (bits 0-5), IIP (bit 6), the draw's record (bits 7-21), the
 // context whose XYOFFSET (bit 22) and the pass (bit 23).
 // Not here yet: pictures between (P2-5); with nothing moving the Picture (set 1) is not read.
@@ -188,7 +188,7 @@ uvec4 lit_colour(uint slot) {
 }
 
 void main() {
-    uint slot = uint(a_vertex);
+    uint slot = uint(-a_vertex) - 1u; // (-1 less it: nd_corner_vertex)
     uint corner = a_corner.r | a_corner.g << 8 | a_corner.b << 16;
     uint kick = slot + 2u * (corner & 0x3Fu);
     bool sphere = (corner & 0x800000u) != 0u;

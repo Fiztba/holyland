@@ -13,11 +13,12 @@
 // - the second, sphere-mapped pass (the "phong" shine) when the batch has one: the A+D packet at
 //   TOP+0xA3 is kicked, then the same XYZF2s again under the tag at TOP+1 with ST from the sphere
 //   matrices and the normals, white with vertex 1's alpha (blended as its ALPHA says, Cs + Cd As).
-// Corners are nd_000.vert's (a corner's fog the vertex's place in the arena, its RGB the kick and the
-// draw's record) but for the arena's eight qwords a vertex and the corner's bits 7-21 (the record),
-// 22 (the context whose XYOFFSET) and 23 (the second pass). Their records are a buffer of their own, so
-// a batch of 0x280 corners is never one of 0x000's: the GS draws them in two calls (the PS2 path's
-// batch would hold both: "Mixed batches" in NATIVE_DRAW_TASKS.md).
+// Corners are nd_000.vert's (a corner's fog -1 less the vertex's place in the arena: nd_corner_vertex,
+// so that a batch holds them and the PS2 path's corners together, drawn a call a kind by nd_draw_range;
+// its RGB the kick and the draw's record) but for the arena's eight qwords a vertex and the corner's bits
+// 7-21 (the record), 22 (the context whose XYOFFSET) and 23 (the second pass). Their records are a buffer
+// of their own, so a batch of 0x280 corners is never one of 0x000's: the GS draws them in two batches
+// (the PS2 path's would hold both: "Mixed batches" in NATIVE_DRAW_TASKS.md).
 // Pictures between are not handled yet (P2-5): 0x280 draws are drawn where they are in the frame.
 
 // nd_280.vert's Draw (std430, a record a draw): matrices VU layout, a qword a column; [0] set A, [1] set B
@@ -194,7 +195,7 @@ void nd280_corners(const RdBatch &b, const Nd280Plan &p, bool sphere, uint32_t p
             w.s = sphere ? p.sphere[t[j]][0] : p.stq[t[j]][0];
             w.t = sphere ? p.sphere[t[j]][1] : p.stq[t[j]][1];
             w.q = sphere ? 1.0f : p.stq[t[j]][2];
-            w.fog = float(base + ND280_SLOTS * (b.first + t[j]));
+            w.fog = nd_corner_vertex(base + ND280_SLOTS * (b.first + t[j]));
             w.rgba |= (kick - t[j]) | gouraud | flags;
             gs->verts.push_back(w);
             if (interp.active) {
@@ -270,8 +271,13 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                     }
                 }
                 gs_write(R_PRIM, uint32_t(((pass ? b.tag2[0] : b.tag[0]) >> 47) & 0x7FF));
-                if (!gs->verts.empty() && (!nd.pending || !nd280.pending || nd.batch_arena != nd.arena.buffer.get() ||
-                                           nd.batch_draws != nd280.draws.buffer.get())) {
+                // (as nd_draw's: the strip joins the batch, the PS2 path's corners in it too; a batch of
+                // 0x000's or of other buffers is drawn first, and in a picture between a batch of the PS2
+                // path's: nd_kick)
+                if (!gs->verts.empty() &&
+                    ((interp.active && !nd.pending) ||
+                     (nd.pending && (!nd280.pending || nd.batch_arena != nd.arena.buffer.get() ||
+                                     nd.batch_draws != nd280.draws.buffer.get())))) {
                     flush_batch();
                 }
                 uint32_t eprim = effective_prim();
@@ -279,8 +285,11 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                     gs->batch_prim = eprim;
                     gs->batch_sprites = false;
                 }
+                size_t before = gs->verts.size();
                 nd280_corners(b, p, pass != 0, eprim, base, record);
-                nd.pending = nd280.pending = !gs->verts.empty();
+                if (gs->verts.size() > before) {
+                    nd.pending = nd280.pending = true;
+                }
                 nd.batch_arena = nd.arena.buffer.get();
                 nd.batch_draws = nd280.draws.buffer.get();
             }
@@ -470,7 +479,7 @@ extern "C" int gsn_nd280_oracle_run(const GsnNd280OracleDraw *draws, uint32_t dr
                     continue;
                 }
                 corners.push_back({ND_CORNER_GOURAUD | i << ND_CORNER_DRAW_SHIFT | (pass ? ND280_CORNER_SPHERE : 0),
-                                   float(slot + ND280_SLOTS * k)});
+                                   nd_corner_vertex(slot + ND280_SLOTS * k)});
                 corner_out.push_back(out_at + 2 * k + pass);
             }
         }
