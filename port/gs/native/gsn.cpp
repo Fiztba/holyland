@@ -402,11 +402,24 @@ struct Interp {
     // the recording, and the GS as it was before and after it
     bool recorded = false;
     bool tried = false; // (a recording of this frame was made: not recorded then, it could not be made again)
+    bool still = false;          // the picture's camera is the frame's (its move none: gsn_standalone.inc's sat_kept)
+    bool recorded_still = false; // (the recording's)
     InterpState start, end;
     std::vector<uint64_t> end_regs;
     uint64_t risky_runs = 0; // (stats: moving batches drawn in runs that do not overlap, cut where they are at t 1)
 };
 Interp interp;
+
+// KF4_SA_REFLECTION_KEEP (gsn_scene_targets.inc, sat_kept): 0 the reflection drawn in every picture between, 1 kept
+// from the frame while the camera is still, 2 always
+int reflection_keep() {
+    static int keep = -1;
+    if (keep < 0) {
+        const char *v = getenv("KF4_SA_REFLECTION_KEEP");
+        keep = v && *v ? atoi(v) : 0;
+    }
+    return keep;
+}
 
 // --native-scale: the render targets' size, in pixels a GS pixel across (sx) and down (sy); 1 and 1
 // are the PS2's. sx is larger than sy for --native-widescreen. Changed at a vblank (gsn_set_scale),
@@ -509,10 +522,25 @@ struct Why {
 int gpu_time = -1;
 QueryPoolHandle gpu_last;
 uint64_t gpu_cmd_serial, gpu_last_serial;
-const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa load/depth", "copy", "scanout"};
-enum { GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_KINDS };
+// KF4_GSN_GPU_TIME=2 also splits the render passes' time by what is drawn in them (gpu_enter: the time from there to the
+// next mark is that kind's), in the pictures between's replays too (OP_GPU_MARK). Each mark waits for the GPU's work
+// before it, so the times add up to more than without them: read them as shares.
+const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa load/depth", "copy", "scanout",
+                                 "pass: untagged", "pass: end", "scene draws", "scene cut-outs per sample",
+                                 "scene blend copies", "scene blend draws", "scene shadows", "scene skinned groups",
+                                 "refl draws", "refl cut-outs per sample", "refl blend copies", "refl blend draws",
+                                 "refl shadows", "refl skinned groups", "GS batches", "scene ops", "refl Z-first", "scene Z-first", "scene blend copies between", "refl blend copies between", "scene Z-first atest", "refl Z-first atest"};
+enum {
+    GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_UNTAGGED, GPU_PASS_END,
+    GPU_SA_DRAW, GPU_SA_SAMPLE, GPU_SA_BLEND_COPY, GPU_SA_BLEND_DRAW, GPU_SA_SHADOW, GPU_SA_GROUP,
+    GPU_SA_REFL, // (the same six into a named target: + GPU_SA_REFL - GPU_SA_DRAW)
+    GPU_GS_BATCH = GPU_SA_REFL + 6, GPU_SA_OP, GPU_REFL_ZFIRST, GPU_SA_ZFIRST, GPU_SA_COPY_BETWEEN, GPU_REFL_COPY_BETWEEN, GPU_SA_ZFIRST_ATEST, GPU_REFL_ZFIRST_ATEST, GPU_KINDS
+};
 uint64_t gpu_marks[GPU_KINDS];
+uint64_t gpu_draws[GPU_KINDS], gpu_tris[GPU_KINDS]; // (KF4_GSN_GPU_TIME=2: the draws made in each kind's time, and their triangles)
+int gpu_cur = -1; // (KF4_GSN_GPU_TIME=2: what is being drawn since the last mark)
 void gpu_mark(int kind);
+void gpu_enter(int kind);
 
 // ---- Vulkan helpers ----------------------------------------------------------------------------
 // The command buffer: Granite's, through Cmd, which hands each call on and, while a picture between is
@@ -524,7 +552,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL,
+    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -733,6 +761,22 @@ struct DataPlace {
 DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBufferUsageFlags usage, VkDeviceSize chunk_size);
 void data_flush(DataChunk &ch);
 VkDeviceSize ubo_align();
+VkDeviceSize ssbo_align();
+
+// The CLUTs bound as storage data (Cmd::set_storage_data): those in the constant chunk now, by what they hold, so that
+// a batch with the same CLUT as one before binds it where that one is (Granite makes a descriptor set for each
+// storage buffer place: the same place, a set it has already)
+struct StorageSeen {
+    const Buffer *buffer = nullptr;
+    struct Entry {
+        uint64_t hash;
+        VkDeviceSize offset;
+        std::vector<uint8_t> bytes;
+    };
+    std::vector<Entry> entries; // (the latest last)
+};
+StorageSeen storage_seen;
+std::vector<uint32_t> clut_scratch; // (flush_batch's CLUT and rectangles, before they are bound)
 
 // Vulkan's dynamic state for the draws (cmake/granite_dynamic_state.cmake): depth, stencil, culling, topology and
 // blend constants where the device has Vulkan 1.3; blending and the colour write mask too where it has
@@ -926,6 +970,14 @@ public:
             c.set_stencil_reference(0xFF, uint8_t(ref_mask >> 8), uint8_t(ref_mask));
         }
     }
+    // conservative rasterization (overestimated: every pixel a triangle touches, all its samples covered); pipeline
+    // state, cleared by set_opaque_state
+    void set_conservative(bool on_) {
+        if (on()) {
+            rec().add(OP_CONSERVATIVE, ArgValues{{uint32_t(on_)}, {}});
+        }
+        raw().set_conservative_rasterization(on_);
+    }
     void set_depth_compare(VkCompareOp op) {
         if (on()) {
             rec().add(OP_DEPTH_COMPARE, ArgValues{{uint32_t(op)}, {}});
@@ -956,7 +1008,8 @@ public:
     }
     void *allocate_constant_data(unsigned set, unsigned binding, VkDeviceSize size) {
         VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
-        DataPlace d = data_place(constant_chunk, range, ubo_align(), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 2u << 20);
+        DataPlace d = data_place(constant_chunk, range, ubo_align(),
+                                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 2u << 20);
         raw().set_uniform_buffer(set, binding, *d.buffer, d.offset, range);
         if (on()) {
             rec().hold_chunk(*d.buffer);
@@ -965,6 +1018,53 @@ public:
             return rec().arena.data() + at;
         }
         return d.host;
+    }
+    // Storage data (the CLUT, gs_frag.h's Clut): written now, into the constant chunk, and bound there; the same bytes
+    // as a recent one in the chunk bound where they are. The chunk keeps them (a recording holds it): the calls made
+    // again bind the same place.
+    void set_storage_data(unsigned set, unsigned binding, const void *data, VkDeviceSize size) {
+        uint64_t h = size;
+        const uint8_t *bytes = static_cast<const uint8_t *>(data);
+        for (VkDeviceSize k = 0; k + 8 <= size; k += 8) {
+            uint64_t w;
+            memcpy(&w, bytes + k, 8);
+            h = (h ^ w) * 0x100000001B3ull;
+            h ^= h >> 29;
+        }
+        const Buffer *buffer = nullptr;
+        VkDeviceSize offset = 0;
+        if (storage_seen.buffer == constant_chunk.buffer.get() && constant_chunk.buffer) {
+            for (size_t i = storage_seen.entries.size(); i-- > 0;) {
+                const StorageSeen::Entry &e = storage_seen.entries[i];
+                if (e.hash == h && e.bytes.size() == size && memcmp(e.bytes.data(), bytes, size_t(size)) == 0) {
+                    buffer = storage_seen.buffer;
+                    offset = e.offset;
+                    break;
+                }
+            }
+        }
+        if (!buffer) {
+            VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+            DataPlace d = data_place(constant_chunk, range, std::max(ubo_align(), ssbo_align()),
+                                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 2u << 20);
+            memcpy(d.host, bytes, size_t(size));
+            buffer = d.buffer;
+            offset = d.offset;
+            if (storage_seen.buffer != d.buffer) {
+                storage_seen.buffer = d.buffer;
+                storage_seen.entries.clear();
+            }
+            if (storage_seen.entries.size() >= 64) {
+                storage_seen.entries.erase(storage_seen.entries.begin());
+            }
+            storage_seen.entries.push_back({h, offset, std::vector<uint8_t>(bytes, bytes + size)});
+        }
+        VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+        if (on()) {
+            rec().hold_chunk(*buffer);
+            rec().add(OP_STORAGE_DATA, ArgPlaced{set, binding, uint32_t(range), buffer, offset});
+        }
+        raw().set_storage_buffer(set, binding, *buffer, offset, range);
     }
     void set_blend_enable(bool enable) {
         if (on()) {
@@ -1030,6 +1130,10 @@ public:
         if (on()) {
             rec().add(OP_DRAW, ArgDraw{count, 1, first, 0});
             rec().draws++;
+        }
+        if (gpu_time >= 2) {
+            gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
+            gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += count / 3;
         }
         raw().draw(count, 1, first, 0);
     }
@@ -1369,6 +1473,10 @@ void replay_ops(const Recording &r) {
         }
         case OP_DRAW: {
             const ArgDraw &a = r.args<ArgDraw>(op);
+            if (gpu_time >= 2) {
+                gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
+                gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += a.count / 3;
+            }
             c.draw(a.count, a.instances, a.first, a.first_instance);
             break;
         }
@@ -1420,6 +1528,28 @@ void replay_ops(const Recording &r) {
             }
             break;
         }
+        case OP_STORAGE_DATA: {
+            const ArgPlaced &a = r.args<ArgPlaced>(op);
+            if (!same(a.a, a.b, a.buffer, a.offset)) {
+                c.set_storage_buffer(a.a, a.b, *a.buffer, a.offset, a.size);
+            }
+            break;
+        }
+        case OP_CONSERVATIVE:
+            c.set_conservative_rasterization(r.args<ArgValues>(op).v[0] != 0);
+            break;
+        case OP_GPU_MARK: {
+            const ArgValues &a = r.args<ArgValues>(op);
+            bool was = recording_ops.on;
+            recording_ops.on = false;
+            if (a.v[1]) {
+                gpu_enter(int(a.v[0]));
+            } else {
+                gpu_mark(int(a.v[0]));
+            }
+            recording_ops.on = was;
+            break;
+        }
         }
     }
     cmd().forget_bindings();
@@ -1440,10 +1570,17 @@ void full_barrier() {
 
 void gpu_mark(int kind) {
     if (gpu_time < 0) {
-        gpu_time = getenv("KF4_GSN_GPU_TIME") && atoi(getenv("KF4_GSN_GPU_TIME")) > 0;
+        gpu_time = getenv("KF4_GSN_GPU_TIME") ? std::max(atoi(getenv("KF4_GSN_GPU_TIME")), 0) : 0;
     }
     if (!gpu_time || !gs->cmd) {
         return;
+    }
+    if (gpu_time >= 2 && recording_ops.on) {
+        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 0}, {}});
+    }
+    if (gpu_time >= 2 && gpu_cur >= 0) {
+        kind = gpu_cur;
+        gpu_cur = -1;
     }
     QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
@@ -1454,9 +1591,29 @@ void gpu_mark(int kind) {
     gpu_last_serial = gpu_cmd_serial;
 }
 
+// (KF4_GSN_GPU_TIME=2) the GPU's time from here to the next mark is `kind`'s; the time before it, what was entered last
+void gpu_enter(int kind) {
+    if (gpu_time < 2 || !gs->cmd) {
+        return;
+    }
+    if (recording_ops.on) {
+        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 1}, {}});
+    }
+    int before = gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED;
+    QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
+        gs->device->register_time_interval("gsn", gpu_last, ts, std::string("gsn ") + gpu_kinds[before]);
+        gpu_marks[before]++;
+    }
+    gpu_last = ts;
+    gpu_last_serial = gpu_cmd_serial;
+    gpu_cur = kind;
+}
+
 void end_pass() {
     if (gs->in_pass) {
         gsn_stats.pass_ends[why_now]++;
+        gpu_enter(GPU_PASS_END); // (KF4_GSN_GPU_TIME=2: the stores)
         cmd().end_render_pass();
         gpu_mark(gs->pass_ms ? GPU_PASS_MS : GPU_PASS);
         gs->in_pass = false;
@@ -1501,6 +1658,14 @@ VkDeviceSize ubo_align() {
     static VkDeviceSize align = 0;
     if (!align) {
         align = std::max<VkDeviceSize>(16, gs->device->get_gpu_properties().limits.minUniformBufferOffsetAlignment);
+    }
+    return align;
+}
+
+VkDeviceSize ssbo_align() {
+    static VkDeviceSize align = 0;
+    if (!align) {
+        align = std::max<VkDeviceSize>(16, gs->device->get_gpu_properties().limits.minStorageBufferOffsetAlignment);
     }
     return align;
 }
@@ -3764,6 +3929,7 @@ void flush_batch() {
     if (sa_flush()) {
         return; // (standalone: the scene's batch, drawn into the scene's targets: gsn_standalone.inc)
     }
+    gpu_enter(GPU_GS_BATCH);
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
     // largest alpha, the rows they reach
@@ -4803,18 +4969,15 @@ void flush_batch() {
         // the 64 KiB of a uniform buffer: gs_frag.h's Clut)
         uint32_t tris = count / 3;
         bool rects = rect_2d && tris <= (VULKAN_MAX_UBO_SIZE - 1024) / 8;
-        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, rects ? 256 + 4 * ((tris + 1) / 2) : 256);
+        std::vector<uint32_t> &clut_data = clut_scratch; // (kept from batch to batch: its room)
+        clut_data.assign(rects ? 256 + 4 * ((tris + 1) / 2) : 256, 0u);
         if (want_clut) {
-            memcpy(clut_data, clut, sizeof(clut));
-        } else {
-            memset(clut_data, 0, 1024);
+            memcpy(clut_data.data(), clut, sizeof(clut));
         }
         if (rects) {
-            memcpy(clut_data + 256, &gs->rects_2d[first / 3 * 2], tris * 8);
-            if (tris & 1) {
-                clut_data[256 + tris * 2] = clut_data[257 + tris * 2] = 0;
-            }
+            memcpy(clut_data.data() + 256, &gs->rects_2d[first / 3 * 2], tris * 8);
         }
+        c.set_storage_data(0, 2, clut_data.data(), clut_data.size() * sizeof(uint32_t));
 
         // depth
         if (depth) {
@@ -6080,7 +6243,7 @@ void make_program() {
     frag.output_mask = 1;
     frag.push_constant_size = sizeof(Push);
     frag.sets[0].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3);
-    frag.sets[0].uniform_buffer_mask = 1u << 2;
+    frag.sets[0].storage_buffer_mask = 1u << 2; // (the CLUT: gs_frag.h)
     frag.sets[0].fp_mask = (1u << 1) | (1u << 3);
     for (int b : {0, 1, 2, 3}) {
         frag.sets[0].meta[b].array_size = 1;
@@ -6929,6 +7092,7 @@ void interp_record() {
     interp.kick_list.resize(f->kicks);
     interp.corner_map = static_cast<uint32_t(*)[4]>(gs->device->map_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT));
     end_pass(); // (the recording starts outside a render pass: its kicks moved first)
+    interp.recorded_still = interp.still;
     interp_capture(interp.start);
     recording_ops.clear();
     recording_ops.on = true;
@@ -6986,6 +7150,9 @@ void interp_record() {
 int interp_cannot_replay() {
     if (!interp.recorded) {
         return interp.tried ? 4 : 3;
+    }
+    if (reflection_keep() == 1 && interp.recorded_still != interp.still) {
+        return 6; // (the recording left the reflection out, or drew it: sat_kept)
     }
     flush_batch();
     // (the targets as before the recording; VRAM and the CLUT as after it: its uploads and CLUT loads leave
@@ -7074,6 +7241,10 @@ void interp_picture_now(const uint8_t *data, size_t size) {
         h->zt[i] = interp.frame->screen[i][4];
     }
     h->kicks = interp.frame->kicks;
+    interp.still = true;
+    for (float m : h->move) {
+        interp.still = interp.still && fabsf(m) <= 1e-6f; // (the rounding of a camera that did not move)
+    }
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();
     end_pass(); // (a picture between starts outside a render pass: its kicks moved first)
@@ -7528,6 +7699,15 @@ extern "C" void gsn_print_gpu_times(void) {
         fprintf(stderr, " %s %.3f", k.first.c_str(), k.second / pictures);
     }
     fprintf(stderr, "\n");
+    if (gpu_time >= 2) {
+        fprintf(stderr, "[stats] native GS draws a picture by kind (draws/triangles):");
+        for (int k = 0; k < GPU_KINDS; k++) {
+            if (gpu_draws[k]) {
+                fprintf(stderr, " %s %.0f/%.0f", gpu_kinds[k], double(gpu_draws[k]) / pictures, double(gpu_tris[k]) / pictures);
+            }
+        }
+        fprintf(stderr, "\n");
+    }
 }
 
 namespace {

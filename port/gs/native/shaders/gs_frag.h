@@ -31,12 +31,15 @@ layout(location = 3) GSN_IN float v_z;
 
 layout(set = 0, binding = 0) uniform usampler2D u_raw;
 layout(set = 0, binding = 1) uniform sampler2D u_target;
-layout(set = 0, binding = 2, std140) uniform Clut {
+// (a storage buffer, not a uniform one: a texel's CLUT entry is read at an index of its own, and a uniform
+// buffer read at indices that differ across the pixels shaded together is read once for each, one after
+// another: about 1.4 ms of the GPU's 5 a picture at the owner's settings, gsn_standalone.inc's "The CLUT")
+layout(set = 0, binding = 2, std430) readonly buffer Clut {
     uvec4 entries[64];
     // GSN_M_RECT_2D (--native-2d smooth): after the CLUT, each triangle's texels (gsn.cpp, texel_rect_2d),
     // two a uvec4, the first and last across and down (bits 0-15 and 16-31), the triangle's number in
     // v_fog (gs.vert); only as many as the draw has are bound (the 64 KiB of a uniform buffer at most)
-    uvec4 rects[(65536 - 1024) / 16];
+    uvec4 rects[];
 } u_clut;
 // The destination, for the draws that blend here: a copy of the target taken before the draw (binding
 // 3), or (GSN_DEST_INPUT, the gs_*_in*.frag shaders) the copy kept in the render pass, an input

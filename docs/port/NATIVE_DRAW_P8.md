@@ -1222,6 +1222,110 @@ the pictures a second there: these spots are bound by the GPU. The pond is still
 What is left: the GPU's work a picture, the programs' binds (rc/dynstate), and the recording's walk of the packets
 (rc/own's open item).
 
+### GPU cost at the owner's spots (branch `p8/gpu-cost`, from `native/draw` e1f8da20)
+
+After rc/own and rc/dynstate the pond, the fortress and the canyon were bound by the GPU: 8.4, 5.1 and 5.0 ms a
+picture where 240 needs about 4.1.
+
+**Where the time went** (`KF4_GSN_GPU_TIME=2`, new: a timestamp at each change of what a render pass draws, kept in
+the recording so that the replays are split too; ms of GPU a picture, e1f8da20, headless 240, the owner's settings;
+the marks wait for the GPU's work before them, so read the figures as shares):
+
+| | pond | fortress | canyon | under water |
+|---|---|---|---|---|
+| in all | 8.49 | 5.20 | 5.14 | 2.02 |
+| shader blending's in-pass copies, pictures between (scene + reflection) | 3.18 + 0.46 | 0.19 | 0.02 | 0 |
+| ... in the game's frames | 0.06 + 0.03 | 0.03 | 0 | 0 |
+| shader blending's runs (scene + reflection) | 0.24 + 0.12 | 0.19 | 0 | 0 |
+| the scene's draws (colour) | 1.48 | 1.80 | 3.01 | 0.54 |
+| the ties' Z-first draws (all alpha-tested) | 0.95 | 1.99 | 0.71 | 0.27 |
+| the reflection's draws + Z-first | 0.42 + 0.41 | | | |
+| skinned groups (first passes, marks, shines; scene + reflection) | 0.18 + 0.06 | 0.25 | 0.30 | 0 |
+| render passes begun, and draws not tagged | 0.24 | 0.29 | 0.42 | 0.40 |
+| the turns' MSAA loads and depth | 0.13 | 0.09 | 0.10 | 0.14 |
+| target copies, resolves, pass ends, other | 0.18 + 0.12 + 0.01 + 0.06 | 0.14 + 0.03 + 0.01 + 0.04 | 0.20 + 0.03 + 0.03 + 0.02 | 0.29 + 0.04 + 0.07 + 0.02 |
+| the GS's own batches, the scene's ops (clears, alpha) | 0.05, 0.09 | 0.10, 0.04 | 0.20, 0.06 | 0.07, 0.17 |
+| cut-outs shaded at every sample | 0 | 0.01 (63 draws) | 0.02 (103 draws) | 0 |
+| the shadows (stencil) | 0.01 | 0.002 | 0.005 | 0 |
+| the scanout | 0.02 | 0.02 | 0.02 | 0.02 |
+
+Not costs: MSAA resolves (0.005-0.03 ms a picture: the scanout's and the turns'; shader blending resolves in the pass);
+the composite (no picture composited: the scene is at the GS's scale here); the shadows' stencil; the cut-outs' shading
+at every sample. Windowed at the owner's settings (fullscreen 2560 x 1440, best scaling) the scanout with the
+presenter's scaling is 0.17 ms a picture, and the flash recorder costs nothing measurable (4,313 pictures with it,
+4,294 without, the same run). **A recording does not draw the frame again**: it is the frame's first picture between
+(`interp_record` draws that picture and keeps its calls); every picture the GPU draws is shown. What made each picture
+between cost more than the frame was the copies below.
+
+**What changed** (pictures byte for byte e1f8da20's):
+- **The copy a run blends from, by the run's own triangles** (`gsn_standalone.inc`, `sa_copy_run.frag`). Shader
+  blending copies the scene's colour into the pass's scratch before each run, over the run's box. In a picture between
+  that box is the whole scene for a skinned model's run (the GPU moves its corners: `nd_box_at_0` cannot say where), so
+  each run of the pond's blended zombies (ALPHA `0x44` with As up to 0x88, in the scene and in the reflection) copied
+  and resolved the whole 3x MSAA scene: about 230 a picture, 1.1 GB. The copy is now drawn with the run's own vertex
+  shader and triangles, rasterized conservatively (overestimated: every pixel a triangle touches, all its samples), the
+  target's pixels as `pass_copy.frag` / `pass_resolve.frag` make them. The run's draws read the copy only at pixels its
+  triangles cover, all inside it. `KF4_SA_RUN_COPY=0`: the box (to compare). Pond 8.49 -> 5.7 ms.
+- **The CLUT a storage buffer** (`gs_frag.h`'s `Clut`, every program of the native GS: the scene's, the PS2 path's,
+  hosted). A texel's CLUT entry is read at an index of its own; a uniform buffer read at indices that differ across the
+  pixels shaded together is read once for each, one after another. As a storage buffer the same reads go through the
+  cache: fortress 5.04 -> 3.73 ms, canyon 5.08 -> 3.73, pond 5.7 -> 4.27. A CLUT the same as one of the last 64 in
+  the constant chunk is bound where that one is (`Cmd::set_storage_data`: Granite makes a descriptor set for each
+  storage buffer place; the same place, a set it has). The replays bind what the recording bound (`OP_STORAGE_DATA`).
+- **`KF4_SA_REFLECTION_KEEP`** (off by default: it can change pixels). 1: while the picture's camera is the frame's
+  (its move within 1e-6: a camera that did not move comes with that much rounding), a picture between leaves the
+  reflection as the frame drew it: its clear and every batch into it left out (`sat_kept`, from `sa_flush`). The
+  reflection's draws move with the camera only (`nd_model_flags`), so with no move they would land on the frame's
+  pixels; the rounding's move leaves X and Y as the frame's but can move an unrounded depth or S, T, Q by a last bit,
+  which can turn a tie, hence the switch. A recording made with the other choice is made again (reason 6). 2: always
+  (the reflection then moves 30 times a second). At the pond standing still, 1 leaves out about 70,000 batches in 400
+  vblanks and no pixel of 40 pictures differs; turning (`turn.pad`), 1 keeps only the still pictures (none differ),
+  2 differs in up to 51,000 pixels a picture (worst 25 levels) on the water.
+- `KF4_GSN_GPU_TIME=2` (above), and the draws and triangles a picture by the same kinds.
+
+**What is left** (the pond at 1x without MSAA still takes 2.75 ms: most of a picture's GPU time does not scale with
+the pixels). About 3,800 Vulkan draws a picture at the pond and 4,300 at the fortress. The ties' alpha-tested Z-first
+draws are the costly ones: left out (a test, wrong pictures) the pond at 1x takes 0.6 ms less; drawn twice, 0.09 more;
+their texture is not it (read without it, 0.06 less). Toggling the colour mask, depth write, compare or push constants
+between two draws costs 0.03-0.14 ms in all. So it is the colour draw after its Z-first draw that waits: an
+alpha-tested draw that writes Z tests late (after the shader's discard), and the next draw's early test over the same
+pixels waits for it. Drawing the colour first and the Z after (exact for a run of triangles that do not overlap) was
+slower (pond 4.25 -> 4.62 ms). Left: an alpha-test-free Z pass where the texture cannot fail it (T8's try: few such
+at the far save), or fewer, larger batches.
+
+**Numbers** (real time, `KF4_PRESENT_SIM=240`, headless, 1,400 vblanks, 760 under water; one game at a time, the GPU
+otherwise idle, base and new alternating, two runs each, the pipeline cache warm for both; pictures handed over a second
+of wall time, loading included, so about 215 is all of 240):
+
+| spot | pictures a second | GPU a picture | replays (in all) |
+|---|---|---|---|
+| pond | 101.2, 101.2 -> 192.5, 192.9 | 8.33 -> 4.26 ms | 1,031 -> 3,230 (7 cuts -> none) |
+| pond, `KF4_SA_REFLECTION_KEEP=1` | -> 217.0, 217.0 | -> 2.93 ms | |
+| fortress | 168.7, 169.0 -> 217.0, 217.2 | 5.07 -> 3.70 ms | 2,655 -> 3,813 |
+| canyon | 170.8, 170.7 -> 217.2, 226.6 | 5.03 -> 3.69 ms | 2,700 -> 3,815 |
+| under water | 204.2, 204.2 -> 204.2, 204.0 | 2.01 -> 1.51 ms | 1,898 -> 1,897 |
+
+Windowed (the owner's settings-4: fullscreen 2560 x 1440, best scaling, flash recorder on, 1,400 vblanks):
+
+| spot | pictures a second | GPU a picture |
+|---|---|---|
+| pond | 94, 101 -> 183, 177 | 7.9-8.3 -> 4.40-4.42 ms |
+| pond, `KF4_SA_REFLECTION_KEEP=1` | -> 217 | -> 3.11 ms |
+| fortress | 174, 200 -> 213, 202 | 4.27-4.71 -> 3.98-4.00 ms |
+| canyon | 183, 184 -> 217, 208 | 4.68-4.69 -> 3.51-3.52 ms |
+
+The fortress and the canyon now keep up at 240 (the game's 30 frames and every picture between); the pond standing
+still with `KF4_SA_REFLECTION_KEEP=1` too. The pond by default is still bound by the GPU (4.3-4.4 ms a picture: the
+draws above).
+
+**Pictures:** byte for byte e1f8da20's: the four spots (`--fast`, 240, the owner's settings, vblanks 200-207, 301, 399;
+under water 400-407, 600: 156 pictures, 0 differ, with `KF4_SA_RUN_COPY` and the CLUT both on), the pond turning
+(`turn.pad`, 40 pictures), hosted at the pond (`--renderer native --native-draw on`, 40 pictures), the herb run in
+modern at the owner's settings at 240 (the same `--log`, PATH1 hash 561c91020b2908ee, pictures 1800, 1820, 1840). The off check passes:
+boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with
+`--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures
+1800, 1820 and 1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
@@ -1274,7 +1378,9 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack; the pixel's Z and q interpolated, the Z's
   change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule), `KF4_SA_SKIN=EPS` (a skinned
   model's parts' tie in world units; 0, the default: exact), `KF4_GSN_DYNAMIC=0|1` (no dynamic state, or none for blending: "Pipeline binds"), `KF4_SA_GROUP=0` (a skinned model's parts drawn as they come,
-  not kept: "A skinned model's parts drawn together"), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
+  not kept: "A skinned model's parts drawn together"), `KF4_SA_RUN_COPY=0` (shader blending's copy over the run's box, not by its
+  triangles), `KF4_SA_REFLECTION_KEEP=1|2` (the frame's reflection kept by its pictures between: "GPU cost at the owner's
+  spots"), `KF4_GSN_GPU_TIME=2` (the GPU's time a picture by what is drawn), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
   that differ counted in `[stats] native draw 0x280 plans`),
   `KF4_SA_NO_TABLE=1`; the table's (read once): `KF4_SA_VERIFY=1..4`, `KF4_SA_PACK=DIR`,
   `KF4_SA_PACK_DUMP=DIR`. `KF4_SA_LOG=3` (T2): the GS's batches the scene draws, and those it draws elsewhere.
