@@ -1,0 +1,199 @@
+/* automap_guide.c: PC-only. What the automap (game/automap.c, docs/port/AUTOMAP.md) says that the game's data
+   does not: the creatures' names, and hand-written guide notes for locks, puzzles and odd objects. The map's
+   cheats stand in for an online guide, so these tables grow as the game is played through; everything else
+   the map shows comes from the player's disc and the game's memory as it runs.
+
+   - Creatures: the game names no monster anywhere in its data. These are the names of Prima's official
+     strategy guide (2004) as the community's creature list has them (cleanhit.wiki, KF4:Creatures), placed on
+     the chr.prm records by hit points, experience, resistances and drops (decomp/docs/GAME_DATA.md,
+     "Monsters"; the decomp's enemy/*.c files carry the same names). A record not listed shows as
+     "Creature (#record)".
+   - Hints: by map and map object (its index in the map's object list, the map file's order: the same every
+     visit; the full map's hover label shows it with the hints cheat, e.g. "#45"), or by map and entity spawn
+     (the spawn record's index, "spawn #8"). Shown with the hints cheat. Write what the player needs to know,
+     not the game's text. */
+#include <stddef.h>
+
+#include "port/automap.h"
+
+typedef struct {
+    int record;
+    const char *name;
+} CreatureName;
+
+static const CreatureName creature_names[] = {
+    {0, "Maneater"},
+    {2, "Green Slime"},
+    {3, "Poison Slime"},
+    {5, "Scorpion"},
+    {6, "Spider"},
+    {7, "Giant Spider"},
+    {8, "Acid Crawler (large)"},
+    {9, "Dragon Fly"},
+    {10, "Blood Bat"},
+    {11, "Beetle (small)"},
+    {12, "Critter"},
+    {13, "Snake"},
+    {14, "Lava Lizard"},
+    {15, "Fire Lord"},
+    {16, "Salamander"},
+    {17, "Widdacona"},
+    {18, "Phagos"},
+    {19, "Beetle (very large)"},
+    {20, "Giant Beetle"},
+    {21, "Living Statue"},
+    {22, "Stone Guardian"},
+    {23, "Sentinel"},
+    {24, "Living Armor"},
+    {25, "Golden Statue"},
+    {27, "Sol"},
+    {30, "Watcher"},
+    {31, "Slasher"},
+    {32, "Giant"},
+    {33, "Malformed Giant"},
+    {34, "Earth King"},
+    {35, "Genan"},
+    {36, "Fadin"},
+    {37, "Master Fadin"},
+    {38, "Lava Face"},
+    {39, "Beetle (white)"},
+    {40, "Makara"},
+    {41, "Aqualizard"},
+    {42, "Beetle (medium)"},
+    {43, "Seafang"},
+    {44, "Widda (large)"},
+    {45, "Widda Queen"},
+    {46, "Widda Archer (large)"},
+    {47, "Skull"},
+    {49, "Dark Flower"},
+    {50, "Skeleton Soldier (round shield)"},
+    {51, "Skeleton Soldier (square shield)"},
+    {52, "Skeleton Soldier (axe)"},
+    {53, "Skeleton Archer (small)"},
+    {54, "Skeleton"},
+    {55, "Zombie"},
+    {56, "Living Dead"},
+    {57, "Ancient King"},
+    {58, "High Skeleton (small)"},
+    {59, "Minion"},
+    {60, "Bell"},
+    {61, "Mummy"},
+    {62, "Ancient Mummy"},
+    {64, "Giant Leader"},
+    {66, "Malice"},
+    {67, "Fire Elemental"},
+    {68, "Earth Elemental"},
+    {69, "Wind Elemental"},
+    {70, "Water Elemental"},
+    {71, "Dark Succubus"},
+    {72, "Dark Knight"},
+    {73, "Dark Soldier"},
+    {74, "Fire Genie"},
+    {75, "Greater Demon"},
+    {76, "Dark Archer"},
+    {78, "Dark Sorcerer"},
+    {80, "Ice Golem"},
+    {81, "Larva"},
+    {82, "Dark Puppet"},
+    {83, "Dark Bird"},
+    {84, "Para Stool"},
+    {85, "Reaper"},
+    {86, "Crow"},
+    {87, "Stool"},
+    {91, "Eye pedestal"},
+    {92, "Expedition Archer"},
+    {93, "Expedition Soldier"},
+    {97, "Lee Maynor"},
+    {98, "Widda (armored)"},
+    {99, "The Dark One"},
+    {150, "Skeleton Soldier"},
+    {151, "Blue Spider"},
+    {152, "Beetle"},
+    {154, "Skeleton with a hammer"},
+    {155, "Mutant Wall"},
+    {156, "Mutant Floor"},
+    {157, "Mutant Ceiling"},
+    {158, "Lava Bird"},
+    {159, "Onyx"},
+    {160, "Widda"},
+    {161, "Widda Archer (small)"},
+    {164, "High Skeleton (large)"},
+    {165, "Acid Crawler (small)"},
+    {167, "High Skeleton Soldier"},
+    {168, "Skeleton Archer (large)"},
+    {171, "Widda Archer"},
+};
+
+const char *Automap_CreatureName(int record) {
+    size_t i;
+
+    for (i = 0; i < sizeof(creature_names) / sizeof(creature_names[0]); i++) {
+        if (creature_names[i].record == record) {
+            return creature_names[i].name;
+        }
+    }
+    return NULL;
+}
+
+/* ---- What a hazard is -----------------------------------------------------------------------------
+   Hazard effect 4 (Collision_GetSurfaceEffect; Player_UpdateStatus takes 10 HP a frame) is lava in the Forge,
+   the Cavern of Lava and the Fire Lord's Domain, and the sea in these maps (seen in the game): */
+static const int sea_maps[] = {
+    0,  /* Village Ruins: the sea north of the village */
+    99, /* Palace of Oath Exterior: the inlets beside the path from the shore */
+};
+
+int Automap_HazardIsWater(int map) {
+    size_t i;
+
+    for (i = 0; i < sizeof(sea_maps) / sizeof(sea_maps[0]); i++) {
+        if (sea_maps[i] == map) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ---- Hints ------------------------------------------------------------------------------------------
+   AUTOMAP_OBJECT: a map object (map, object index); AUTOMAP_SPAWN: an entity (map, spawn index). */
+enum { AUTOMAP_OBJECT, AUTOMAP_SPAWN };
+
+typedef struct {
+    int what;
+    int map;
+    int index; /* -1: every one of its kind on the map (the spawns: every spawn of that chr record, see below) */
+    int record; /* AUTOMAP_SPAWN with index -1: the chr.prm record */
+    const char *hint;
+} AutomapHint;
+
+static const AutomapHint hints[] = {
+    /* The King's Throne, Upper (006): the eight eye pedestals before the room whose ceiling drops (Prima's
+       walkthrough). The pedestal spawned in mode 1 is the one that does not follow the player. */
+    {AUTOMAP_SPAWN, 6, -1, 91, "Find the eye that does not follow you and strike it: that closes all the eyes "
+                               "(the pressure plate past them drops the ceiling of the room beyond)"},
+    /* The King's Throne, Lower (007): the bell (record 60) */
+    {AUTOMAP_SPAWN, 7, -1, 60, "Strike or shoot the bell to bring down the skeletons around it"},
+};
+
+const char *Automap_ObjectHint(int map, int object) {
+    size_t i;
+
+    for (i = 0; i < sizeof(hints) / sizeof(hints[0]); i++) {
+        if (hints[i].what == AUTOMAP_OBJECT && hints[i].map == map && hints[i].index == object) {
+            return hints[i].hint;
+        }
+    }
+    return NULL;
+}
+
+const char *Automap_SpawnHint(int map, int spawn, int record) {
+    size_t i;
+
+    for (i = 0; i < sizeof(hints) / sizeof(hints[0]); i++) {
+        if (hints[i].what == AUTOMAP_SPAWN && hints[i].map == map &&
+            (hints[i].index == spawn || (hints[i].index < 0 && hints[i].record == record))) {
+            return hints[i].hint;
+        }
+    }
+    return NULL;
+}

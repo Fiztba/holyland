@@ -48,6 +48,7 @@
 
 #include "cJSON.h"
 #include "port/audio.h"
+#include "port/automap.h"
 #include "port/controls.h"
 #include "port/host.h"
 #include "port/platform.h"
@@ -440,6 +441,7 @@ void port_settings_load(void) {
     read_controls(cJSON_GetObjectItemCaseSensitive(document, "controls"));
     s->myus_necklace = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "myus_necklace", s->myus_necklace);
     s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
+    port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     overlay = cJSON_GetObjectItemCaseSensitive(document, "overlay");
     s->pause_when_open = read_bool(overlay, "pause_when_open", s->pause_when_open);
     s->show_fps = read_bool(overlay, "show_fps", s->show_fps);
@@ -675,6 +677,7 @@ void port_settings_save(void) {
     write_controls(section("controls"));
     put(section("mods"), "myus_necklace", cJSON_CreateBool(s->myus_necklace));
     put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
+    port_automap_settings_write(section("mods")); /* the automap mod */
     overlay = section("overlay");
     put(overlay, "pause_when_open", cJSON_CreateBool(s->pause_when_open));
     put(overlay, "show_fps", cJSON_CreateBool(s->show_fps));

@@ -34,6 +34,7 @@
 #endif
 
 #include "libmc.h"
+#include "port/automap.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
@@ -367,6 +368,7 @@ int sceMcOpen(int port, int slot, const char *name, int mode) {
         return start_call(MC_FUNC_OPEN, MC_NO_ENTRY);
     }
     files[fd].writable = (mode & MC_RDWR) != MC_RDONLY;
+    port_automap_card_file(name, files[fd].writable); /* the automap mod: its state kept per save */
     return start_call(MC_FUNC_OPEN, fd);
 }
 

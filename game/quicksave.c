@@ -26,6 +26,7 @@
 #include "ui/message.h"
 #include "collision/collision.h"
 #include "port/platform.h"
+#include "port/automap.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
 
@@ -460,11 +461,13 @@ static void teleport(void) {
 }
 
 void Cheat_Poll(void);
+void Automap_Poll(void);
 
 void Quick_PollGame(void) {
     int wanted = port_quick_wanted();
 
     Cheat_Poll(); /* the debug cheats (game/cheats.c) */
+    Automap_Poll(); /* the automap mod (game/automap.c) */
 
     if (wanted == PORT_QUICK_SAVE) {
         quick_save();
@@ -488,6 +491,7 @@ void Quick_PollGame(void) {
 int Quick_PollTitle(void) {
     int wanted = port_quick_wanted();
 
+    port_automap_title(); /* the automap mod: the next game may be a new one (game/automap.c) */
     if (wanted == PORT_QUICK_SAVE || wanted == PORT_QUICK_TELEPORT) {
         port_quick_refuse("no game is being played");
     } else if (wanted == PORT_QUICK_LOAD) {

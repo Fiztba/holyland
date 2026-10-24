@@ -164,6 +164,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--draw-distance-sky ps2\|push` | with `--draw-distance`, the sky keeps the PS2's fog (the default) or has it pushed out too |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
+| `--automap`, `--automap-cheats` | the opt-in automap mod (also on the overlay's Mods page; off by default): a map of where you have been, M opens it; `--automap-cheats` with all its cheats on (see "Mods", [AUTOMAP.md](AUTOMAP.md)) |
 | `--show-fps` | the frame-rate counter on for this run (F3, or the overlay's Interface page; off by default; see "The frame-rate counter (F3)") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--flash-recorder off\|on\|SECONDS[,HEIGHT]` | the flash recorder (F8; on by default: the last 2 seconds of pictures shown, at 540 rows; also on the overlay's Debug page, not saved; see "Debugging") |
@@ -207,7 +208,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y, the mouse buttons in menus and A / D in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
-| Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
+| Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it, and the automap's "Map" section (see "Mods") |
 | Debug | pictures shown (the window's presents of a new picture, by either thread), vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, the frame-rate counter (F3), the overlay's size, and where `settings.json` is |
 
@@ -307,6 +308,15 @@ it does without it.
   shown there only with the mod on), so the action button only uses things. Pressed buttons are
   untouched, and everything that stops running (weight, item use, death) still does. A pad script
   (`--input`, `--record-input`) keeps the pad as it is.
+- **Automap** (`--automap`, the Mods page's "Map" section; [AUTOMAP.md](AUTOMAP.md)). A map of the map you
+  are in, made from its collision meshes, that fills in as you explore and is kept with each save (quick
+  saves and memory card saves; a new game starts blank), in the look of the KF3 port's automap: floors
+  shaded by height, walls, water, lava, poison and deadly drops, the ways into other maps, doors (locked or
+  not), chests (opened or not), barrels and bones, save points and people, named from the game's own text.
+  M (the Controls page's Map) opens the full map, which holds the game (wheel: zoom, drag: move, hover: a
+  label); a minimap shows in a corner while playing. Its cheats, off by default, stand in for a guide:
+  the whole map, items and what containers hold, live enemies, secrets and traps, and what each lock needs
+  with hand-written hints (`game/automap_guide.c`). Only reads the game; with it off nothing of it runs.
 
 ## Widescreen
 
