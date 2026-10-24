@@ -192,7 +192,7 @@ enum : uint32_t {
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
     M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000, M_ZFINE = 0x40000,
-    M_SMOOTH_2D = 0x80000,
+    M_SMOOTH_2D = 0x80000, M_RECT_2D = 0x100000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -317,6 +317,7 @@ struct Gs {
 
     // ---- the batch being gathered: triangles since the last register write
     std::vector<Vtx> verts;
+    std::vector<uint32_t> rects_2d; // (--native-2d smooth: each triangle's texels, flush_batch)
     uint32_t batch_prim = 0; // PRIM's attributes (PRMODE's when PRMODECONT says)
     bool batch_sprites = false; // the batch is sprites
 
@@ -1789,6 +1790,29 @@ bool flat_2d(std::vector<Vtx> &verts, bool *all = nullptr) {
         *all = moved && count == verts.size() / 3;
     }
     return moved;
+}
+
+// --native-2d smooth: the texels a triangle of the 2D covers as the game gave its corners (before flat_2d
+// moves them out to the edges of the GS pixels): the first and last across (out[0], bits 0-15 and 16-31)
+// and down (out[1]), within the texture. The cubic's taps are kept inside them (gs_frag.h, sample_level).
+// A letter of the font is a sprite over its own cell of a sheet of letters (10 x 20 texels, drawn 7 or 8
+// GS pixels across); taps past the cell read the letters beside it and below it, and made faint marks at
+// the letters' edges (a tick left of the I of "Idol", dots by f and S, specks under letters). (Not the
+// texels the PS2 reads: a cell's last column, which the PS2 skips, can hold the letter's edge.)
+void texel_rect_2d(const Vtx *v, bool fst, uint32_t tex_size, uint32_t out[2]) {
+    double size[2] = {double(tex_size & 0xFFFF), double(tex_size >> 16)};
+    for (int a = 0; a < 2; a++) {
+        double lo = INFINITY, hi = -INFINITY;
+        for (int k = 0; k < 3; k++) {
+            double c = a ? v[k].t : v[k].s;
+            c = fst ? c : c / v[k].q * size[a];
+            lo = std::min(lo, c), hi = std::max(hi, c);
+        }
+        // (the GS's texel coordinates have 4 bits of fraction: within a sixteenth of a whole number, on it)
+        double first = std::min(std::max(floor(lo + 1.0 / 32.0), 0.0), size[a] - 1.0);
+        double last = std::min(std::max(ceil(hi - 1.0 / 32.0) - 1.0, first), size[a] - 1.0);
+        out[a] = uint32_t(first) | uint32_t(last) << 16;
+    }
 }
 
 // ---- The CPU's VRAM ----------------------------------------------------------------------------
@@ -4495,6 +4519,16 @@ void flush_batch() {
     bool ms = target_samples > 1 && (depth || (color->ms_newer && !reads_own_target));
     bool perspective = perspective_batch(gs->verts);
     bool all_flat = false; // (every triangle of the batch the 2D: flat_2d)
+    // --native-2d smooth: each triangle's own texels (texel_rect_2d), of its corners as the game gave them,
+    // before flat_2d moves them; after the CLUT for the shaders (below: gs_frag.h's Clut), gs.vert putting
+    // the triangle's number in v_fog (so not with fog, nor with the native draw's vertex shaders)
+    bool rect_2d = tme && !reads_target && smooth_2d_mode && !fge && !nd.active && !perspective && (scale_x > 1 || scale_y > 1);
+    if (rect_2d) {
+        gs->rects_2d.resize(gs->verts.size() / 3 * 2);
+        for (size_t t = 0; t < gs->verts.size() / 3; t++) {
+            texel_rect_2d(&gs->verts[t * 3], fst, push.tex_size, &gs->rects_2d[t * 2]);
+        }
+    }
     if (ms) {
         msaa_ready(*color);
         if (depth) {
@@ -4519,6 +4553,7 @@ void flush_batch() {
     if (all_flat && tme && !reads_target && smooth_2d_mode) {
         push.misc |= M_SMOOTH_2D; // (--native-2d smooth: gs_frag.h, sample_level)
     }
+    rect_2d = rect_2d && (push.misc & M_SMOOTH_2D);
 
     // (Z and layers: within a run its other triangles are drawn first, then its layer's, layers_at
     // where they begin. So a run is cut where a triangle overlaps a layer's before it in the run. A
@@ -4605,6 +4640,7 @@ void flush_batch() {
             }
             runs.pop_back();
             gs->verts.swap(verts);
+            rect_2d = false; // (--native-2d smooth: rects_2d in the order before; layers are the 3D's)
             if (interp.active) {
                 interp.vsrc.swap(vsrc);
             }
@@ -4729,11 +4765,21 @@ void flush_batch() {
         c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
         c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
         c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
+        // (--native-2d smooth: the run's triangles' texels after the CLUT, two a uvec4, as many as fit in
+        // the 64 KiB of a uniform buffer: gs_frag.h's Clut)
+        uint32_t tris = count / 3;
+        bool rects = rect_2d && tris <= (VULKAN_MAX_UBO_SIZE - 1024) / 8;
+        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, rects ? 256 + 4 * ((tris + 1) / 2) : 256);
         if (want_clut) {
             memcpy(clut_data, clut, sizeof(clut));
         } else {
             memset(clut_data, 0, 1024);
+        }
+        if (rects) {
+            memcpy(clut_data + 256, &gs->rects_2d[first / 3 * 2], tris * 8);
+            if (tris & 1) {
+                clut_data[256 + tris * 2] = clut_data[257 + tris * 2] = 0;
+            }
         }
 
         // depth
@@ -4785,6 +4831,7 @@ void flush_batch() {
             uint32_t from = l ? others : 0, n = l ? count - others : others;
             for (int i = 0; i < nrp && n; i++) {
                 Push p = push;
+                p.misc |= rects ? M_RECT_2D : 0;
                 p.flags |= rp[i].select << F_PASS_SHIFT;
                 p.zbias = rp[i].zbias;
                 p.zslope = rp[i].zslope;
