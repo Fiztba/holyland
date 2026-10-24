@@ -25,5 +25,7 @@ void main() {
     v_z = float(a_z);
     v_color = vec4(a_color);
     v_stq = a_stq;
-    v_fog = a_fog;
+    // (--native-2d smooth, GSN_M_RECT_2D: a draw without fog, the triangle's number in the run, whose
+    // texels gs_frag.h keeps the cubic's taps inside; the same at its three corners)
+    v_fog = (pc.misc & GSN_M_RECT_2D) != 0u ? float(gl_VertexIndex / 3) : a_fog;
 }

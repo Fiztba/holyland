@@ -153,6 +153,11 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   cubic at the pixel's own place, moved half a GS pixel on (a filter centres a texel where nearest at the
   GS pixel's integer point has its left edge: unmoved, the letters sat half a GS pixel right). Read
   nearest at the integer point, each texel was a block and the letters differed from scale to scale.
+  The cubic's 4 x 4 taps are kept inside the texels the game gave each sprite (texel_rect_2d, before
+  flat_2d moves the corners): the font is a sheet of 10 x 20 cells, and taps past a letter's cell read the
+  letters beside and below it, faint ticks, dots and specks at the letters' edges (the owner's "Idol of
+  Sorrow"). Not the texels the PS2 reads at its integer points: a cell's last column, which the PS2 skips
+  at 1.33 texels a pixel, can hold the letter's edge.
 - **A picture between recorded on the GPU must not be submitted half drawn without its moves.** Its
   compute passes (the kicks moved, the corners made) are recorded at its start and read what the stream
   writes into mapped buffers as it goes, the corners' count last. A write-back in the middle (an upload
