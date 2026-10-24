@@ -84,6 +84,7 @@ struct SaStats {
     // texture packs (KF4_SA_PACK, KF4_SA_PACK_DUMP)
     uint64_t packed_chunks, dumped_chunks;
     uint64_t tables_loaded; // (a save state's or a capture's table)
+    uint64_t kept_reflection; // (batches into the reflection left out by pictures between that keep the frame's: sat_kept)
 };
 SaStats sa_stats;
 
@@ -293,6 +294,7 @@ Program *sat_water_program(bool sample);
 bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h);
 bool sat_release();
 bool sat_bound(); // (a named target is the scene's frame now)
+bool sat_kept(uint32_t bp, uint32_t bw, uint32_t psm); // (a picture between leaves the reflection as the frame drew it)
 bool sat_stencil_number(uint32_t *gen);
 bool sat_flush();
 bool sat_fill();
@@ -3629,6 +3631,18 @@ void sa_note_gs_batch();
 bool sa_flush() {
     if (!sa.on) {
         return false;
+    }
+    if (interp.active) {
+        // a batch into the reflection in a picture between that leaves it as the frame drew it (sat_kept): not drawn
+        uint32_t ctxt = (gs->batch_prim >> 9) & 1;
+        uint64_t frame = gs->reg[R_FRAME_1 + ctxt];
+        if (sat_kept(bits(frame, 0, 9) * 32, bits(frame, 16, 6), bits(frame, 24, 6))) {
+            sa_group_draw(); // (as a batch of another target draws the parts kept)
+            gs->verts.clear();
+            gs->batch_sprites = false;
+            sa_stats.kept_reflection++;
+            return true;
+        }
     }
     sa.fcopy.fresh = false; // (the copy of the frame made: what writes there from now on lets it go)
     // (the batch of a draw of the scene's: its corners, or the trail's, the PS2 path's made by the draw; not a

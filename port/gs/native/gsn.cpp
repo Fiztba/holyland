@@ -402,11 +402,24 @@ struct Interp {
     // the recording, and the GS as it was before and after it
     bool recorded = false;
     bool tried = false; // (a recording of this frame was made: not recorded then, it could not be made again)
+    bool still = false;          // the picture's camera is the frame's (its move none: gsn_standalone.inc's sat_kept)
+    bool recorded_still = false; // (the recording's)
     InterpState start, end;
     std::vector<uint64_t> end_regs;
     uint64_t risky_runs = 0; // (stats: moving batches drawn in runs that do not overlap, cut where they are at t 1)
 };
 Interp interp;
+
+// KF4_SA_REFLECTION_KEEP (gsn_scene_targets.inc, sat_kept): 0 the reflection drawn in every picture between, 1 kept
+// from the frame while the camera is still, 2 always
+int reflection_keep() {
+    static int keep = -1;
+    if (keep < 0) {
+        const char *v = getenv("KF4_SA_REFLECTION_KEEP");
+        keep = v && *v ? atoi(v) : 0;
+    }
+    return keep;
+}
 
 // --native-scale: the render targets' size, in pixels a GS pixel across (sx) and down (sy); 1 and 1
 // are the PS2's. sx is larger than sy for --native-widescreen. Changed at a vblank (gsn_set_scale),
@@ -7079,6 +7092,7 @@ void interp_record() {
     interp.kick_list.resize(f->kicks);
     interp.corner_map = static_cast<uint32_t(*)[4]>(gs->device->map_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT));
     end_pass(); // (the recording starts outside a render pass: its kicks moved first)
+    interp.recorded_still = interp.still;
     interp_capture(interp.start);
     recording_ops.clear();
     recording_ops.on = true;
@@ -7136,6 +7150,9 @@ void interp_record() {
 int interp_cannot_replay() {
     if (!interp.recorded) {
         return interp.tried ? 4 : 3;
+    }
+    if (reflection_keep() == 1 && interp.recorded_still != interp.still) {
+        return 6; // (the recording left the reflection out, or drew it: sat_kept)
     }
     flush_batch();
     // (the targets as before the recording; VRAM and the CLUT as after it: its uploads and CLUT loads leave
@@ -7224,6 +7241,10 @@ void interp_picture_now(const uint8_t *data, size_t size) {
         h->zt[i] = interp.frame->screen[i][4];
     }
     h->kicks = interp.frame->kicks;
+    interp.still = true;
+    for (float m : h->move) {
+        interp.still = interp.still && fabsf(m) <= 1e-6f; // (the rounding of a camera that did not move)
+    }
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();
     end_pass(); // (a picture between starts outside a render pass: its kicks moved first)

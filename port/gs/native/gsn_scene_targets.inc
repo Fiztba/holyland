@@ -629,6 +629,25 @@ bool sat_flush() {
     return true;
 }
 
+// The reflection kept for the pictures between (sa_flush, in a picture between; KF4_SA_REFLECTION_KEEP, not the default:
+// it can change pixels). A named target the scene draws into (n->depth: the reflection; not a scrolling texture's, which
+// the GS draws) is left as the frame drew it, its clear and every batch into it left out:
+//   1: when the picture's camera is the frame's (interp.still: the move from the frame's view within 1e-6, the rounding
+//      a camera that did not move comes with). The reflection's draws move with the camera only (gsn_native_draw.inc,
+//      nd_model_flags: not its models by themselves), and with no move a corner is where the frame has it (nd_000.vert's
+//      moved: no move, no change); with the rounding's move its X and Y still round to the frame's, but its unrounded
+//      depth and S, T and Q can differ in their last bit, which can turn a tie. At the pond standing still: 0 pixels of
+//      40 pictures differ, and about a quarter of the GPU's work a picture is left out (NATIVE_DRAW_P8.md, "GPU cost");
+//   2: whatever the camera does: the reflection then moves 30 times a second, the rest of the picture at the frame rate.
+bool sat_kept(uint32_t bp, uint32_t bw, uint32_t psm) {
+    int keep = reflection_keep();
+    if (snt.off || !keep || !sat_narrow(bw, psm) || (keep == 1 && !interp.still)) {
+        return false;
+    }
+    SatTarget *n = sat_find(bp, bw, psm);
+    return n && n->depth && !n->gs_newer;
+}
+
 // (sa_texture) A texture on a named target's pages, all drawn into by it since their uploads: read from its
 // image (as flush_batch reads a render target: SRC_TARGET_*, at the offset of its first page). False: not one.
 bool sat_texture(SaTexture &st, uint32_t tbp, uint32_t tbw, uint32_t tpsm, uint32_t cols, uint32_t rows, uint32_t levels) {
@@ -766,10 +785,11 @@ void sat_print_stats() {
     fprintf(stderr,
             "[stats] standalone targets: %llu named (%llu bound for the scene's draws, %llu cleared by the scene), %llu textures "
             "read from them; %llu made from the GS's, %llu given back to it; %llu copies made from the table (%.1f MB), %llu "
-            "not; %llu fills drawn by the scene\n",
+            "not; %llu fills drawn by the scene; %llu batches into the reflection left out by pictures between keeping the "
+            "frame's\n",
             (unsigned long long)s.made, (unsigned long long)s.binds, (unsigned long long)s.clears, (unsigned long long)s.textures,
             (unsigned long long)s.refreshes, (unsigned long long)s.give_backs, (unsigned long long)s.copies, s.copy_bytes / 1048576.0,
-            (unsigned long long)s.copies_not, (unsigned long long)s.fills);
+            (unsigned long long)s.copies_not, (unsigned long long)s.fills, (unsigned long long)sa_stats.kept_reflection);
 }
 
 // (sa_draw_range) The reflection's water in the scene: nd_water.vert built with ND_STANDALONE (sa_water.vert),
