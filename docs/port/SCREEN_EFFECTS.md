@@ -60,7 +60,8 @@ frame" the other buffer.
   under water at once, two copies and two wobbles.
 - **PC:** as under water. **At 240 in modern it dropped the game to 14 frames a second** (the exact restore drew
   the whole frame again for the scrolling textures, and the wobble read the copy from VRAM: fixed on
-  `p8/queen`, see "Fixes").
+  `p8/queen`, NATIVE_DRAW_P8.md "The Queen's Palace: the MP drain at 240"); at a reflecting pool, a read-back a
+  frame more ("Fixes" 2-4 below).
 
 ### 3. Player_DrawScreenFade, the haze, the debug depth sprite
 
@@ -172,3 +173,98 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
   each picture between from the same packets and `port_interp_end_vblank` restores them exactly. The wave UVs
   (`Wobble_ApplyWaveUvs`, the flesh cavern 039/040/042) move texture coordinates only.
 - Debug only: `ScreenDump_*` (local-to-host transfers of a buffer), `debug.c`'s fills.
+
+## Tests
+
+`tools/screen_fx_test.py` runs each effect as a case (`--cases list`): the forced ones from a quick save in play
+(`--save`; without it a new game) with `KF4_FX` (`game/screen_fx.c`: the passes' state set for the draw only and
+put back after, so the game goes on as without it), some after a `--teleport` (035 for the poisoned water, 029 for
+the King's Map) or with pad presses (START: the pause; CIRCLE: the menu; TRIANGLE every 120 vblanks with
+`KF4_FX=spell=N` and `--cheats spells,magic`), and the real scenes from quick saves in `--spots`
+(`quick_underwater`, `quick_deathwater`, `quick_palace`). Each at the owner's settings (240, 3x, native
+widescreen, MSAA 2, aniso 2, cut-out AA ssaa, `--renderer modern`), always `--no-audio` and headless:
+
+- `--perf`: real time (`KF4_PRESENT_SIM=240`, `KF4_GSN_GPU_TIME=2`, `KF4_HITCH_MS=50`): pictures and game frames a
+  second over the case's vblanks (`KF4_PRESENT_LOG`), write-backs and decodes a picture, pictures between drawn
+  from the packets, the fallback's cuts, hitches, GPU time a picture. Only meaningful on an idle PC.
+- `--cost`: `--fast` with every picture between drawn (`KF4_INTERP_DRAW_ALL=1`): the GS thread's time a game
+  frame, a picture between from the packets and from the recording, write-backs and decodes in all. CPU work
+  only, so it holds up with the GPU shared (the owner playing).
+- `--pictures`: every picture of 12 vblanks dumped (`--fast`) and checked with `flash_find.py --frames` (a
+  picture between not between its game frames is flagged: the death-water and under-water bugs were of this
+  kind).
+
+`KF4_FX` names: water, drain, drainramp, prev, aim, haze, depth, down, updown, shift (with `--no-whole-frame`),
+fill, fade, tint, dim, bright40, brightff, copytex (the Dark Succubus' screen copy, drawn after the world),
+succubus (the player put before it, map 038, once the story has woken it), mapview=N, spell=N; `KF4_FX_LOG=1`.
+
+## Results (2026-10-24, from the pond save `bugs1024/quick_pond`: the reflection's 0x2BC0 under the copy)
+
+Real time at 240, before the fixes below (native/draw 6234768a, the PC idle; the base reached 239.5 pictures a
+second). The fills, tints and passes that do not read the frame came out between 60 and 240 in that run
+because another game started on the PC part way through it; re-run back to back (base, fade, base, fade) they
+were the same as the base (140/139, 166/172), and `--cost` finds nothing in them.
+
+| effect | pictures/s | game fps | write-backs a picture | decodes a picture | verdict then |
+|---|---|---|---|---|---|
+| base (the pond) | 239.5 | 29.9 | 0 | 0 | OK |
+| under water, forced (`water`) | 59.7 | 30.0 | 0.77 | 0.01 | slow |
+| MP drain, forced (`drain`, `drainramp`) | 58.6-59.1 | 30.0 | 0.77 | 0.01 | slow |
+| both (`water+drain`) | 38.6 | 30.0 | 0.78 | 0.37 | slow |
+| the frame before (`prev`), the knock-back (`aim`) | 15.0 | **11.5-11.8** | 0.98 | 0.41 | slow |
+| the Dark Succubus' screen copy (`copytex`) | 34.8 | 27.0 | 0.82 | 0.14 | slow (the case's own TEX0 bug; fixed: OK) |
+| the death screen in deadly water (`deathwater`, real) | 147.4 | **23.6** | 0.05 | 0.05 | slow (2 frame decodes a frame, 60 ms) |
+| under water (real, map 029) | 137-202 | 29.9 | 0.11 | 0.03 | OK |
+| the Queen's Palace (real) | 56.5 | 29.8 | 0.29 | 0.06 | fixed by p8/queen (8fe70d12) |
+| haze, depth sprite, one-row blends, view-turn shift | 167-234 | 29.9 | 0 | 0 | OK |
+| fills, fades, tints, dim, pause, brightness 0x40 / 0xFF | | 30 | 0 | 0 | OK (see above) |
+| King's Map, menu, pause, poisoned water (035) | | 30 | 0-0.18 | 0-0.05 | OK (menus and the map viewer have no pictures between: 60) |
+| 14 spells (3 ... 81) | 89-186 | 30 | 0 | 0 | OK (the pond is GPU-heavy; spells 3 and 81 flagged, below) |
+
+The GS thread a game frame (`--cost`, every picture between drawn; ms), native/draw 8fe70d12 (the Queen's fix in)
+against the fixes below:
+
+| effect | GS a frame | a picture between from the packets | write-backs (in all) | decodes (in all) |
+|---|---|---|---|---|
+| base | 22.7 -> 20.8 | 7.4 -> 6.5 | 0 -> 0 | 14 -> 11 |
+| under water, forced | 32.4 -> 26.5 | **39.0 -> 10.0** | **438 -> 0** | 14 -> 11 |
+| MP drain, forced | 43.3 -> 25.3 | **49.6 -> 9.5** | **438 -> 0** | 14 -> 11 |
+| both | 42.3 -> 27.2 | 48.2 -> 10.3 | 438 -> 0 | 14 -> 11 |
+| the frame before | **55.0 -> 21.2** | 7.2 -> 6.6 | **1,095 -> 0** | **452 -> 11** |
+| the knock-back | **44.5 -> 20.9** | 6.9 -> 6.5 | 1,095 -> 0 | 452 -> 11 |
+| Dark Succubus copy | 22.3 -> 22.1 | 8.3 -> 8.3 | 0 | 14 -> 11 |
+| under water (real) | 8.1 -> 9.1 | 3.8 -> 4.3 | 0 | 16 |
+| death water (real) | 6.7 -> 7.7 | 2.7 -> 3.0 | 0 | 19 |
+| Queen's Palace (real) | 20.3 -> 22.8 | 8.4 -> 9.5 | 0 | 15 |
+
+(The small rises in the real scenes are noise: the owner was playing on the same PC.) Every case's pictures
+between: 0 flagged, but spells 3 and 81 (12 and 25 of 48, at most 1.9% of the picture): the bursts' own
+animation (wisps and flames redrawn each frame, decision 5 of NATIVE_DRAW_TASKS.md), not broken pictures.
+Haze (`haze`) costs 13.6 ms a picture between from the packets against 6.6: no code of the game turns it on.
+
+## Fixes (branch `p8/screen-fx`)
+
+1. **The frame before read from its target** (`gsn_standalone.inc`, `sa_texture`'s `read_extent`):
+   `Game_BlendPreviousFrame`'s sprite has its corners half a texel above the top; the scene took that as reading
+   all 512 rows, missed the shown frame's 640 x 448 target and decoded the frame from VRAM (written back first)
+   every frame. Rows now as `flush_batch`'s `rows_read` counts them. The knock-back of every hit and the death
+   screen's: 12 -> 30 game frames a second.
+2. **A named target a transfer writes whole is not given back first** (`gsn_scene_targets.inc`, `sat_transfer`):
+   the copy of the frame to 0x2BC0 covers the reflection's 256 x 256; given back each frame, the GS's target was
+   made from VRAM, which first took the last copy back from the GPU.
+3. **A batch wholly outside its scissor makes no target** (`gsn.cpp`, `flush_batch`): the reflection's map strips
+   below its 256 x 256 view made the GS's target at 0x2BC0 from VRAM each frame, with the same read-back.
+4. **A picture between's own target is kept over an upload only while a picture between is drawn** (`gsn.cpp`,
+   `prepare_write`): the copy of a picture's frame left at 0x2BC0 had every upload of the game's frame over it
+   loaded into it again, page by page (about 540 pages a frame under water at the pond).
+
+All four keep the pictures byte for byte: the four spots (pond, fortress, the canyon, under water: 156 pictures
+at 240, every phase), the herb run in modern at the owner's settings (the same `--log`, PATH1 hash
+561c91020b2908ee), and the forced water, drain and screen copy at the pond (40 pictures each). The off check
+passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0
+of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1
+cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
+
+**Left:** the map change (no headless way through a door yet); the haze's cost (unreachable); the Dark Succubus
+in its real fight (no save that far: `copytex` stands in); real-time numbers after the fixes on an idle PC
+(`python tools/screen_fx_test.py --perf --save .../quick_pond.kf4quick --spots ...`).

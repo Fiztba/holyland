@@ -206,6 +206,7 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the --pictures dumps")
     ap.add_argument("extra", nargs="*", help="more kf4 options (after --)")
     a = ap.parse_args()
+    a.exe = os.path.abspath(a.exe)
     a.pipelines = os.path.join(a.out, "pipelines.bin")
     all_cases = cases()
     if a.cases == "list":
