@@ -1313,9 +1313,12 @@ void port_gs_run_vsync(void) {
             port_interp_picture(0, replay_gif);
         }
         interp_on = 1;
-    } else if (interp_on) {
-        port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
-        interp_on = 0;
+    } else {
+        __atomic_store_n(&interp_cut_now, 0, __ATOMIC_RELAXED);
+        if (interp_on) {
+            port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
+            interp_on = 0;
+        }
     }
     if (port_whole_frame()) {
         /* a screen drawn as fields (the menus): the picture just drawn drawn again into the buffer shown,
