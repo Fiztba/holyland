@@ -9,6 +9,7 @@
 // it. Everything here runs on the game's thread, inside the overlay's ImGui frame.
 #include <SDL.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -69,15 +70,35 @@ bool test_hover_read;
 bool test_hover;
 float test_hover_x, test_hover_z;
 
+// The levels. Passages at different heights overlap on a plan seen from above; the level shown (the
+// player's, his slice) is drawn in full, the others greyed and darkened the further they are from its
+// height, and the slice's edges cast a dark shadow onto the levels beside and under it, so that a passage
+// running under another does not look joined to it. A slice is the floor connected to the player's: from
+// the layers under his feet to the layers of the cells beside them within a step of CLIMB (as the reveal's
+// rays walk the floor), staying within SLICE_BAND of his height; walls bound it. On the full map PgUp and
+// PgDn (or Shift with the wheel) show the levels above and below, Home his own again.
+const int CLIMB = 150;      // the most the floor rises or falls from cell to cell within a level
+const int SLICE_BAND = 700; // and at most this far from the level's height
+
+int view_level;      // the full map's level: 0 the player's, n levels above (+) or below (-) it
+int view_level_y;    // its height, worked out when view_level changes
+long long view_level_seed; // and the cell its slice grows from
+bool view_level_set; // view_level_y is worked out
+bool test_level_read;
+int test_level;      // KF4_AUTOMAP_LEVEL: the level the test picture of the full map shows
+
 // the colours of the cells, kept while nothing they depend on changes
 struct Cache {
     unsigned version = ~0u;
     int map = -1;
     int band = 0x7FFFFFFF;
     int reveal = -1;
+    long long seed = -2;        // the player's cell the slice grew from (-1: from the height alone)
     std::vector<ImU32> colours; // 0: nothing drawn
     std::vector<uint8_t> chasm; // cells hatched as the void
     std::vector<uint8_t> open;  // cells drawn as floor (for the edges)
+    std::vector<uint8_t> level; // 1: what the cell shows is of the slice
+    std::vector<int16_t> shown_y; // the height of what the cell shows (NO_Y: nothing)
     int x0, z0, x1, z1;         // what is drawn, in cells (x1 < x0: nothing)
 } cache;
 
@@ -109,25 +130,107 @@ ImU32 floor_colour(int y, int py) {
     return col(clamp(78 + k, 20, 150), clamp(70 + k, 18, 140), clamp(56 + k, 14, 120), 0.9f);
 }
 
-void rebuild_cache(const PortAutomapPlan *p, int py) {
+// a colour of another level than the one shown: greyed and darkened, the more the further it is; a hazard
+// (water, lava, poison) keeps more of its colour, to be told apart still
+ImU32 other_level(ImU32 c, int dy, bool hazard) {
+    float k = dy < 700 ? 0.62f : dy < 1400 ? 0.5f : 0.4f, keep = hazard ? 0.75f : 0.45f;
+    if (hazard)
+        k = k + (1.0f - k) * 0.35f;
+    float r = (float)(c & 0xFF), g = (float)((c >> 8) & 0xFF), b = (float)((c >> 16) & 0xFF);
+    float grey = (r + g + b) / 3.0f;
+    r = (grey + (r - grey) * keep) * k;
+    g = (grey + (g - grey) * keep) * k;
+    b = (grey + (b - grey) * keep) * k;
+    return IM_COL32((int)r, (int)g, (int)b, (int)(c >> 24));
+}
+
+// the slice at height y: the layers connected to the seeds (the layers within CLIMB of y in the seed cell
+// and the cells around it; with no seed cell, or none there, every such layer of the map) without climbing
+// more than CLIMB from cell to cell or leaving SLICE_BAND of y; a wall or the void is reached, not crossed
+std::vector<uint8_t> slice_of(const PortAutomapPlan *p, long long seed_cell, int y) {
+    size_t cells = (size_t)p->width * p->height;
+    std::vector<uint8_t> in(cells * PORT_AUTOMAP_LAYERS, 0);
+    std::vector<uint32_t> todo;
+    auto passable = [](const PortAutomapLayer &l) { return !(l.flags & PORT_AUTOMAP_WALL) && l.kind != PORT_AUTOMAP_DEATH; };
+    auto seed = [&](size_t cell) {
+        const PortAutomapLayer *l = &p->layers[cell * PORT_AUTOMAP_LAYERS];
+        for (int n = 0; n < PORT_AUTOMAP_LAYERS && l[n].y != PORT_AUTOMAP_NO_Y; n++)
+            if (!(l[n].flags & PORT_AUTOMAP_FAR) && passable(l[n]) && std::abs(l[n].y - y) <= CLIMB) {
+                in[cell * PORT_AUTOMAP_LAYERS + n] = 1;
+                todo.push_back((uint32_t)(cell * PORT_AUTOMAP_LAYERS + n));
+            }
+    };
+    if (seed_cell >= 0) {
+        int si = (int)(seed_cell % p->width), sj = (int)(seed_cell / p->width);
+        for (int dj = -1; dj <= 1; dj++)
+            for (int di = -1; di <= 1; di++)
+                if (si + di >= 0 && sj + dj >= 0 && si + di < p->width && sj + dj < p->height)
+                    seed((size_t)(sj + dj) * p->width + si + di);
+    }
+    if (todo.empty())
+        for (size_t cell = 0; cell < cells; cell++)
+            seed(cell);
+    const int di[4] = {1, -1, 0, 0}, dj[4] = {0, 0, 1, -1};
+    while (!todo.empty()) {
+        uint32_t node = todo.back();
+        todo.pop_back();
+        const PortAutomapLayer &l = p->layers[node];
+        if (!passable(l))
+            continue;
+        size_t cell = node / PORT_AUTOMAP_LAYERS;
+        int i = (int)(cell % p->width), j = (int)(cell / p->width);
+        for (int k = 0; k < 4; k++) {
+            int ii = i + di[k], jj = j + dj[k];
+            if (ii < 0 || jj < 0 || ii >= p->width || jj >= p->height)
+                continue;
+            size_t o = (size_t)jj * p->width + ii;
+            const PortAutomapLayer *m = &p->layers[o * PORT_AUTOMAP_LAYERS];
+            for (int n = 0; n < PORT_AUTOMAP_LAYERS && m[n].y != PORT_AUTOMAP_NO_Y; n++) {
+                size_t to = o * PORT_AUTOMAP_LAYERS + n;
+                if (in[to] || (m[n].flags & PORT_AUTOMAP_FAR) || std::abs(m[n].y - l.y) > CLIMB || std::abs(m[n].y - y) > SLICE_BAND)
+                    continue;
+                in[to] = 1;
+                todo.push_back((uint32_t)to);
+            }
+        }
+    }
+    return in;
+}
+
+void rebuild_cache(const PortAutomapPlan *p, int py, long long seed_cell) {
     size_t cells = (size_t)p->width * p->height;
     cache.colours.assign(cells, 0);
     cache.chasm.assign(cells, 0);
     cache.open.assign(cells, 0);
+    cache.level.assign(cells, 0);
+    cache.shown_y.assign(cells, PORT_AUTOMAP_NO_Y);
     cache.x0 = p->width;
     cache.z0 = p->height;
     cache.x1 = cache.z1 = -1;
+    std::vector<uint8_t> slice = slice_of(p, seed_cell, py);
     std::vector<int8_t> shown(cells, -1);
     for (int j = 0; j < p->height; j++) {
         for (int i = 0; i < p->width; i++) {
             size_t cell = (size_t)j * p->width + i;
-            int n = chosen_layer(p, i, j, py);
+            const PortAutomapLayer *l = &p->layers[cell * PORT_AUTOMAP_LAYERS];
+            // the cell's layer of the slice, if it has one that has been seen
+            int n = -1, best_d = 0x7FFFFFFF;
+            for (int m = 0; m < PORT_AUTOMAP_LAYERS && l[m].y != PORT_AUTOMAP_NO_Y; m++)
+                if (slice[cell * PORT_AUTOMAP_LAYERS + m] && layer_visible(p, cell, m) && std::abs(l[m].y - py) < best_d) {
+                    n = m;
+                    best_d = std::abs(l[m].y - py);
+                }
+            if (n >= 0) {
+                shown[cell] = (int8_t)n;
+                cache.level[cell] = 1;
+                continue;
+            }
+            n = chosen_layer(p, i, j, py);
             if (n < 0)
                 continue;
             if (!layer_visible(p, cell, n)) {
-                // another layer of the cell that has been seen, nearest the player's height
-                const PortAutomapLayer *l = &p->layers[cell * PORT_AUTOMAP_LAYERS];
-                int best = -1, best_d = 0x7FFFFFFF;
+                // another layer of the cell that has been seen, nearest the height shown
+                int best = -1;
                 for (int m = 0; m < PORT_AUTOMAP_LAYERS && l[m].y != PORT_AUTOMAP_NO_Y; m++) {
                     if ((l[m].flags & PORT_AUTOMAP_FAR) || !layer_visible(p, cell, m))
                         continue;
@@ -147,8 +250,12 @@ void rebuild_cache(const PortAutomapPlan *p, int py) {
         for (int i = 0; i < p->width; i++) {
             size_t cell = (size_t)j * p->width + i;
             ImU32 c = 0;
+            int ly = PORT_AUTOMAP_NO_Y;
+            bool hazard = false;
             if (shown[cell] >= 0) {
                 const PortAutomapLayer &l = p->layers[cell * PORT_AUTOMAP_LAYERS + shown[cell]];
+                ly = l.y;
+                hazard = l.kind != PORT_AUTOMAP_FLOOR && l.kind != PORT_AUTOMAP_DEATH && !(l.flags & PORT_AUTOMAP_WALL);
                 switch (l.kind) {
                 case PORT_AUTOMAP_WATER: c = palette.water; break;
                 case PORT_AUTOMAP_POISON: c = palette.poison; break;
@@ -163,24 +270,36 @@ void rebuild_cache(const PortAutomapPlan *p, int py) {
                 else
                     cache.open[cell] = 1;
             } else if (p->solid_top[cell] != PORT_AUTOMAP_NO_Y) {
-                // rock with no floor: a wall beside a floor that is shown
-                bool near = false;
-                for (int dj = -1; dj <= 1 && !near; dj++)
-                    for (int di = -1; di <= 1 && !near; di++) {
+                // rock with no floor: a wall beside a floor that is shown (of the slice, when one is)
+                bool near = false, near_slice = false;
+                for (int dj = -1; dj <= 1; dj++)
+                    for (int di = -1; di <= 1; di++) {
                         int ii = i + di, jj = j + dj;
                         if (ii < 0 || jj < 0 || ii >= p->width || jj >= p->height)
                             continue;
                         size_t o = (size_t)jj * p->width + ii;
-                        if (shown[o] >= 0) {
-                            const PortAutomapLayer &l = p->layers[o * PORT_AUTOMAP_LAYERS + shown[o]];
-                            near = l.kind != PORT_AUTOMAP_DEATH && p->solid_top[cell] < l.y - 40 &&
-                                   p->solid_bottom[cell] > l.y - 1500;
+                        if (shown[o] < 0)
+                            continue;
+                        const PortAutomapLayer &l = p->layers[o * PORT_AUTOMAP_LAYERS + shown[o]];
+                        if (l.kind != PORT_AUTOMAP_DEATH && p->solid_top[cell] < l.y - 40 && p->solid_bottom[cell] > l.y - 1500) {
+                            near = true;
+                            if (cache.level[o] && !near_slice) {
+                                near_slice = true;
+                                ly = l.y;
+                            } else if (!near_slice) {
+                                ly = l.y;
+                            }
                         }
                     }
-                if (near)
+                if (near) {
                     c = palette.wall;
+                    cache.level[cell] = near_slice ? 1 : 0;
+                }
             }
+            if (c != 0 && !cache.level[cell])
+                c = other_level(c, ly == PORT_AUTOMAP_NO_Y ? 1000 : std::abs(ly - py), hazard);
             cache.colours[cell] = c;
+            cache.shown_y[cell] = (int16_t)ly;
             if (c != 0) {
                 cache.x0 = i < cache.x0 ? i : cache.x0;
                 cache.x1 = i > cache.x1 ? i : cache.x1;
@@ -191,17 +310,89 @@ void rebuild_cache(const PortAutomapPlan *p, int py) {
     }
 }
 
-const PortAutomapPlan *current_plan(const PortAutomapPlayer &player) {
+// the level n steps up (n > 0) or down (n < 0) from the slice at y grown from seed_cell: each step the
+// nearest floor seen in that direction, not of the slice before, whose own slice is more than a scrap
+// (LEVEL_CELLS layers not shown before), and its cell, the next slice's seed; where there is none, as far
+// as it got
+const int LEVEL_CELLS = 60;
+
+int level_height(const PortAutomapPlan *p, int y, long long &seed_cell, int n) {
+    size_t cells = (size_t)p->width * p->height;
+    while (n != 0) {
+        std::vector<uint8_t> shown = slice_of(p, seed_cell, y);
+        // the floors in that direction, nearest first
+        std::vector<std::pair<int, uint32_t>> candidates;
+        for (size_t cell = 0; cell < cells; cell++) {
+            const PortAutomapLayer *l = &p->layers[cell * PORT_AUTOMAP_LAYERS];
+            for (int m = 0; m < PORT_AUTOMAP_LAYERS && l[m].y != PORT_AUTOMAP_NO_Y; m++) {
+                if ((l[m].flags & (PORT_AUTOMAP_FAR | PORT_AUTOMAP_WALL)) || l[m].kind == PORT_AUTOMAP_DEATH ||
+                    shown[cell * PORT_AUTOMAP_LAYERS + m] || !layer_visible(p, cell, m))
+                    continue;
+                int d = n > 0 ? y - l[m].y : l[m].y - y; // up is a smaller y
+                if (d > CLIMB)
+                    candidates.push_back(std::make_pair(d, (uint32_t)(cell * PORT_AUTOMAP_LAYERS + m)));
+            }
+        }
+        std::sort(candidates.begin(), candidates.end());
+        std::vector<uint8_t> tried(shown.size(), 0);
+        bool found = false;
+        for (const auto &c : candidates) {
+            if (tried[c.second])
+                continue;
+            long long cell = c.second / PORT_AUTOMAP_LAYERS;
+            int cy = p->layers[c.second].y;
+            std::vector<uint8_t> next = slice_of(p, cell, cy);
+            int fresh = 0;
+            for (size_t k = 0; k < next.size(); k++)
+                if (next[k]) {
+                    tried[k] = 1;
+                    fresh += !shown[k];
+                }
+            if (fresh >= LEVEL_CELLS) {
+                y = cy;
+                seed_cell = cell;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            break;
+        n += n > 0 ? -1 : 1;
+    }
+    return y;
+}
+
+// the plan, with the cells' colours made again when what they depend on has changed: the minimap always
+// shows the player's level, the full map the level picked (view_level)
+const PortAutomapPlan *current_plan(const PortAutomapPlayer &player, bool full) {
     const PortAutomapPlan *p = port_automap_plan();
     if (p == nullptr)
         return nullptr;
-    int band = (int)std::floor(player.y / 100.0f);
-    if (cache.version != p->version || cache.map != p->map || cache.band != band || cache.reveal != port_automap.reveal) {
-        rebuild_cache(p, (int)player.y);
+    int py = (int)player.y;
+    long long seed = -1;
+    int pi = (int)std::floor((player.x - p->x0) / PORT_AUTOMAP_CELL), pj = (int)std::floor((player.z - p->z0) / PORT_AUTOMAP_CELL);
+    if (pi >= 0 && pj >= 0 && pi < p->width && pj < p->height)
+        seed = (long long)pj * p->width + pi;
+    if (full && view_level != 0) {
+        if (!view_level_set) {
+            view_level_seed = seed;
+            view_level_y = level_height(p, py, view_level_seed, view_level);
+            view_level_set = true;
+        }
+        py = view_level_y;
+        seed = view_level_seed;
+    }
+    int band = (int)std::floor((float)py / 100.0f);
+    // a move to another cell of the slice shown, at the same height, keeps the slice
+    bool same_slice = cache.seed == seed || (seed >= 0 && cache.seed >= 0 && (size_t)seed < cache.level.size() && cache.level[seed]);
+    if (cache.version != p->version || cache.map != p->map || cache.band != band || cache.reveal != port_automap.reveal ||
+        !same_slice) {
+        rebuild_cache(p, py, seed);
         cache.version = p->version;
         cache.map = p->map;
         cache.band = band;
         cache.reveal = port_automap.reveal;
+        cache.seed = seed;
     }
     return p;
 }
@@ -219,7 +410,8 @@ ImVec2 cell_corner(const View &v, const PortAutomapPlan *p, int i, int j) {
     return v.at(p->x0 + (float)i * PORT_AUTOMAP_CELL, p->z0 + (float)j * PORT_AUTOMAP_CELL);
 }
 
-void draw_cells(ImDrawList *dl, const PortAutomapPlan *p, const View &v, ImVec2 c0, ImVec2 c1, float alpha) {
+// shadow: how far (in pixels) the slice's edges darken the other levels beside them
+void draw_cells(ImDrawList *dl, const PortAutomapPlan *p, const View &v, ImVec2 c0, ImVec2 c1, float alpha, float shadow) {
     // the cells in the clip rectangle
     float wx0 = v.world_x(c0.x), wx1 = v.world_x(c1.x);
     float wz0 = v.world_z(c0.y), wz1 = v.world_z(c1.y);
@@ -255,18 +447,59 @@ void draw_cells(ImDrawList *dl, const PortAutomapPlan *p, const View &v, ImVec2 
             for (int i = i0; i <= i1; i++)
                 if (cache.chasm[row + i] && ((i + j) & 3) == 0) {
                     ImVec2 a = cell_corner(v, p, i, j), b = cell_corner(v, p, i + 1, j + 1);
-                    dl->AddLine(a, b, fade(palette.hatch, alpha), std::fmax(1.0f, px * 0.25f));
+                    dl->AddLine(a, b, fade(palette.hatch, alpha * (cache.level[row + i] ? 1.0f : 0.45f)), std::fmax(1.0f, px * 0.25f));
                 }
     }
-    // edges of the floor against nothing at all (no floor, no wall): a line, as runs
+    auto inside = [&](int i, int j) { return i >= 0 && j >= 0 && i < p->width && j < p->height; };
+    auto drawn = [&](int i, int j) { return inside(i, j) && cache.colours[(size_t)j * p->width + i] != 0; };
+    auto in_slice = [&](int i, int j) { return drawn(i, j) && cache.level[(size_t)j * p->width + i]; };
+    // a step between the levels: not where a slope merely leaves the slice's band
+    auto step = [&](int ai, int aj, int bi, int bj) {
+        int ya = cache.shown_y[(size_t)aj * p->width + ai], yb = cache.shown_y[(size_t)bj * p->width + bi];
+        return ya == PORT_AUTOMAP_NO_Y || yb == PORT_AUTOMAP_NO_Y || std::abs(ya - yb) > CLIMB;
+    };
+    const int di[4] = {1, -1, 0, 0}, dj[4] = {0, 0, 1, -1};
+    // the slice's shadow on the other levels: a dark band out from each edge where a cell of the slice
+    // meets a cell of another level
+    if (shadow > 0.0f) {
+        ImU32 dark = col(0, 0, 0, 0.85f * alpha), clear = col(0, 0, 0, 0.0f);
+        for (int j = j0; j <= j1; j++)
+            for (int i = i0; i <= i1; i++) {
+                if (!in_slice(i, j))
+                    continue;
+                for (int k = 0; k < 4; k++) {
+                    int ii = i + di[k], jj = j + dj[k];
+                    if (!drawn(ii, jj) || in_slice(ii, jj) || !step(i, j, ii, jj))
+                        continue;
+                    ImVec2 q0 = cell_corner(v, p, i, j), q1 = cell_corner(v, p, i + 1, j + 1);
+                    ImVec2 lo(std::fmin(q0.x, q1.x), std::fmin(q0.y, q1.y)), hi(std::fmax(q0.x, q1.x), std::fmax(q0.y, q1.y));
+                    // the other cell's side of this one on the screen (screen y runs against z)
+                    float sx = (float)di[k], sy = (float)dj[k] * ZSIGN;
+                    if (sx > 0)
+                        dl->AddRectFilledMultiColor(ImVec2(hi.x, lo.y), ImVec2(hi.x + shadow, hi.y), dark, clear, clear, dark);
+                    else if (sx < 0)
+                        dl->AddRectFilledMultiColor(ImVec2(lo.x - shadow, lo.y), ImVec2(lo.x, hi.y), clear, dark, dark, clear);
+                    else if (sy > 0)
+                        dl->AddRectFilledMultiColor(ImVec2(lo.x, hi.y), ImVec2(hi.x, hi.y + shadow), dark, dark, clear, clear);
+                    else
+                        dl->AddRectFilledMultiColor(ImVec2(lo.x, lo.y - shadow), ImVec2(hi.x, lo.y), clear, clear, dark, dark);
+                }
+            }
+    }
+    // the edges of the floor against nothing at all (no floor, no wall), and of the slice's floor against
+    // another level's: a line, as runs
     float lw = std::fmax(1.0f, px * 0.3f);
-    auto open = [&](int i, int j) { return i >= 0 && j >= 0 && i < p->width && j < p->height && cache.open[(size_t)j * p->width + i]; };
-    auto empty = [&](int i, int j) { return i < 0 || j < 0 || i >= p->width || j >= p->height || cache.colours[(size_t)j * p->width + i] == 0; };
+    auto open = [&](int i, int j) { return inside(i, j) && cache.open[(size_t)j * p->width + i]; };
+    auto edge_between = [&](int ai, int aj, int bi, int bj) {
+        return (open(ai, aj) && !drawn(bi, bj)) || (open(bi, bj) && !drawn(ai, aj)) ||
+               (open(ai, aj) && in_slice(ai, aj) && drawn(bi, bj) && !in_slice(bi, bj) && step(ai, aj, bi, bj)) ||
+               (open(bi, bj) && in_slice(bi, bj) && drawn(ai, aj) && !in_slice(ai, aj) && step(ai, aj, bi, bj));
+    };
     ImU32 wall = fade(palette.wall, alpha);
     for (int j = j0; j <= j1 + 1; j++) {
         int start = -1;
         for (int i = i0; i <= i1 + 1; i++) {
-            bool edge = i <= i1 && ((open(i, j) && empty(i, j - 1)) || (open(i, j - 1) && empty(i, j)));
+            bool edge = i <= i1 && edge_between(i, j, i, j - 1);
             if (edge && start < 0)
                 start = i;
             if (!edge && start >= 0) {
@@ -278,7 +511,7 @@ void draw_cells(ImDrawList *dl, const PortAutomapPlan *p, const View &v, ImVec2 
     for (int i = i0; i <= i1 + 1; i++) {
         int start = -1;
         for (int j = j0; j <= j1 + 1; j++) {
-            bool edge = j <= j1 && ((open(i, j) && empty(i - 1, j)) || (open(i - 1, j) && empty(i, j)));
+            bool edge = j <= j1 && edge_between(i, j, i - 1, j);
             if (edge && start < 0)
                 start = j;
             if (!edge && start >= 0) {
@@ -316,16 +549,29 @@ void draw_exit(ImDrawList *dl, const PortAutomapPlan *p, const View &v, const Po
     int j0 = (int)std::floor((m.z - p->z0) / PORT_AUTOMAP_CELL), j1 = (int)std::ceil((m.z + m.depth - p->z0) / PORT_AUTOMAP_CELL);
     float lw = std::fmax(1.0f, v.s * PORT_AUTOMAP_CELL * 0.3f);
     bool any = false;
+    // the cells of the floor at the join's height (not a passage above or under it), or, when none of
+    // them shows that floor, every floor cell of the join
+    bool at_height = false;
+    for (int j = j0 < 0 ? 0 : j0; j < j1 && j < p->height && !at_height; j++)
+        for (int i = i0 < 0 ? 0 : i0; i < i1 && i < p->width; i++) {
+            size_t cell = (size_t)j * p->width + i;
+            if (cache.open[cell] && std::abs(cache.shown_y[cell] - (int)m.y) <= 400) {
+                at_height = true;
+                break;
+            }
+        }
     for (int j = j0 < 0 ? 0 : j0; j < j1 && j < p->height; j++)
         for (int i = i0 < 0 ? 0 : i0; i < i1 && i < p->width; i++) {
-            if (!cache.open[(size_t)j * p->width + i])
+            size_t cell = (size_t)j * p->width + i;
+            if (!cache.open[cell] || (at_height && std::abs(cache.shown_y[cell] - (int)m.y) > 400))
                 continue;
             any = true;
+            float k = cache.level[cell] ? 1.0f : 0.4f;
             ImVec2 q0 = cell_corner(v, p, i, j), q1 = cell_corner(v, p, i + 1, j + 1);
             dl->AddRectFilled(ImVec2(std::fmin(q0.x, q1.x), std::fmin(q0.y, q1.y)), ImVec2(std::fmax(q0.x, q1.x), std::fmax(q0.y, q1.y)),
-                              palette.exit & 0x50FFFFFF);
+                              fade(palette.exit & 0x50FFFFFF, k));
             if (((i + j) % 3) == 0)
-                dl->AddLine(ImVec2(q0.x, q1.y), ImVec2(q1.x, q0.y), palette.exit & 0xB0FFFFFF, lw);
+                dl->AddLine(ImVec2(q0.x, q1.y), ImVec2(q1.x, q0.y), fade(palette.exit & 0xB0FFFFFF, k), lw);
         }
     if (!any)
         return;
@@ -399,6 +645,12 @@ void draw_icon(ImDrawList *dl, const View &v, const PortAutomapMarker &m, float 
         break;
     }
     case PORT_AUTOMAP_MARK_PERSON:
+        if (m.flags & PORT_AUTOMAP_MARK_ABSENT) {
+            // not here now (the secrets cheat): a faint ring, the person's colour
+            dl->AddCircleFilled(p, r * 0.8f, fade(palette.person, 0.18f), 16);
+            dl->AddCircle(p, r * 0.8f, fade(palette.person, 0.6f), 16, std::fmax(1.0f, r * 0.15f));
+            break;
+        }
         dl->AddCircleFilled(p, r * 0.95f, palette.person, 16);
         dl->AddCircle(p, r * 0.95f, col(255, 255, 255), 16, std::fmax(1.5f, r * 0.2f));
         dl->AddCircle(p, r * 0.95f + std::fmax(1.5f, r * 0.2f) * 0.5f + 0.5f, palette.outline, 16, 1.0f);
@@ -408,6 +660,12 @@ void draw_icon(ImDrawList *dl, const View &v, const PortAutomapMarker &m, float 
         dl->AddCircle(p, r * 0.65f, palette.outline, 12, 1.0f);
         break;
     case PORT_AUTOMAP_MARK_ITEM:
+        if (m.flags & PORT_AUTOMAP_MARK_GIVEN) {
+            // out of sight until the story hands it over: a faint ring, the item's colour
+            dl->AddCircleFilled(p, r * 0.5f, fade(palette.item, 0.2f), 10);
+            dl->AddCircle(p, r * 0.5f, fade(palette.item, 0.7f), 10, std::fmax(1.0f, r * 0.12f));
+            break;
+        }
         dl->AddCircleFilled(p, r * 0.5f, palette.item, 10);
         dl->AddCircle(p, r * 0.5f, palette.outline, 10, 1.0f);
         break;
@@ -488,6 +746,17 @@ void draw_icon(ImDrawList *dl, const View &v, const PortAutomapMarker &m, float 
     }
 }
 
+// whether a marker is on the level shown: its cell shows the slice, at about the marker's height
+bool on_level_shown(const PortAutomapPlan *p, const PortAutomapMarker &m) {
+    int i = (int)std::floor((m.x - p->x0) / PORT_AUTOMAP_CELL), j = (int)std::floor((m.z - p->z0) / PORT_AUTOMAP_CELL);
+    if (i < 0 || j < 0 || i >= p->width || j >= p->height)
+        return true;
+    size_t cell = (size_t)j * p->width + i;
+    if (cache.colours[cell] == 0)
+        return true; // nothing drawn there: no level to tell
+    return cache.level[cell] && std::abs(cache.shown_y[cell] - (int)m.y) <= 400;
+}
+
 void draw_markers(ImDrawList *dl, const PortAutomapPlan *p, const View &v, ImVec2 c0, ImVec2 c1, bool full, float r, float ts) {
     const PortAutomapMarker *list;
     int count = port_automap_markers(&list);
@@ -515,7 +784,13 @@ void draw_markers(ImDrawList *dl, const PortAutomapPlan *p, const View &v, ImVec
             float pad = 4.0f * r + m.length * v.s;
             if (q.x < c0.x - pad || q.y < c0.y - pad || q.x > c1.x + pad || q.y > c1.y + pad)
                 continue;
+            int start = dl->VtxBuffer.Size;
             draw_icon(dl, v, m, r);
+            if (!on_level_shown(p, m))
+                for (int k = start; k < dl->VtxBuffer.Size; k++) {
+                    ImU32 &c = dl->VtxBuffer[k].col;
+                    c = (c & 0x00FFFFFFu) | ((ImU32)((float)(c >> 24) * 0.4f) << 24);
+                }
         }
 }
 
@@ -576,11 +851,11 @@ void draw_hover(ImDrawList *dl, const View &v, ImVec2 mouse, ImVec2 g0, ImVec2 g
     dl->AddText(font, ts, at, palette.text, label, nullptr, ts * 26.0f);
 }
 
-bool any_marker(int kind) {
+bool any_marker(int kind, int flags = 0) {
     const PortAutomapMarker *list;
     int count = port_automap_markers(&list);
     for (int i = 0; i < count; i++)
-        if (list[i].kind == kind)
+        if (list[i].kind == kind && (list[i].flags & flags) == flags)
             return true;
     return false;
 }
@@ -606,6 +881,10 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
             dl->AddRect(ImVec2(cc.x - ts * 0.35f, cc.y - ts * 0.3f), ImVec2(cc.x + ts * 0.35f, cc.y + ts * 0.3f), c, 0.0f, 0, std::fmax(1.5f, ts * 0.12f));
         else if (shape == 3)
             dl->AddCircleFilled(cc, ts * 0.3f, c, 12);
+        else if (shape == 4) { // faint: not there now
+            dl->AddCircleFilled(cc, ts * 0.3f, fade(c, 0.2f), 12);
+            dl->AddCircle(cc, ts * 0.3f, fade(c, 0.65f), 12, std::fmax(1.0f, ts * 0.08f));
+        }
         else
             dl->AddRectFilled(ImVec2(cc.x - ts * 0.35f, cc.y - ts * 0.3f), ImVec2(cc.x + ts * 0.35f, cc.y + ts * 0.3f), c);
         text(dl, ImVec2(at.x + ts * 1.3f, at.y), ts, col(230, 220, 200), label);
@@ -646,8 +925,12 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
     if (any_marker(PORT_AUTOMAP_MARK_EXAMINE))
         entry(palette.stone, "Something to look at", 3);
     entry(palette.person, "Person", 3);
+    if (any_marker(PORT_AUTOMAP_MARK_PERSON, PORT_AUTOMAP_MARK_ABSENT))
+        entry(palette.person, "Person, not here now", 4);
     if (port_automap.items)
         entry(palette.item, "Item", 3);
+    if (any_marker(PORT_AUTOMAP_MARK_ITEM, PORT_AUTOMAP_MARK_GIVEN))
+        entry(palette.item, "Item the story gives", 4);
     if (port_automap.enemies)
         entry(palette.enemy, "Enemy", 3);
     if (port_automap.secrets) {
@@ -664,7 +947,7 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
     if (binding != 0)
         port_controls_binding_label(binding, key, sizeof(key));
     char help[256];
-    std::snprintf(help, sizeof(help), "Scroll: zoom\nDrag: move\nRight click: fit\nPoint at a marker for details\n%s or Escape closes the map", key);
+    std::snprintf(help, sizeof(help), "Scroll: zoom\nDrag: move\nRight click: fit\nPgUp/PgDn, Shift+scroll: other levels\nPoint at a marker for details\n%s or Escape closes the map", key);
     text(dl, at, ts * 0.85f, col(170, 160, 140), help);
 }
 
@@ -682,7 +965,7 @@ void picture(int x, int y, int width, int height, ImVec2 &p0, ImVec2 &p1) {
 }
 
 void draw_minimap(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
-    const PortAutomapPlan *p = current_plan(player);
+    const PortAutomapPlan *p = current_plan(player, false);
     if (p == nullptr)
         return;
     float gh = g1.y - g0.y;
@@ -701,7 +984,7 @@ void draw_minimap(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
     v.cx = player.x;
     v.cz = player.z;
     v.s = side / (2.0f * (float)port_automap.minimap_zoom * 100.0f);
-    draw_cells(dl, p, v, lo, hi, alpha);
+    draw_cells(dl, p, v, lo, hi, alpha, std::fmax(4.0f, side * 0.03f));
     float r = std::fmax(3.5f, side * 0.022f);
     draw_markers(dl, p, v, lo, hi, false, r, 0.0f);
     draw_player(dl, v, player, std::fmax(5.0f, side * 0.045f));
@@ -710,7 +993,16 @@ void draw_minimap(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
 }
 
 void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
-    const PortAutomapPlan *p = current_plan(player);
+    if (!test_level_read) {
+        test_level_read = true;
+        if (const char *t = std::getenv("KF4_AUTOMAP_LEVEL"))
+            test_level = std::atoi(t);
+    }
+    if (shot_open && test_level != 0 && view_level != test_level) {
+        view_level = test_level;
+        view_level_set = false;
+    }
+    const PortAutomapPlan *p = current_plan(player, true);
     if (p == nullptr)
         return;
     float gw = g1.x - g0.x, gh = g1.y - g0.y;
@@ -749,6 +1041,12 @@ void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
     bool inside = mouse.x >= area_x && mouse.x < area_x + area_w && mouse.y >= area_y && mouse.y < area_y + area_h;
     if (!shot_open) {
         float wheel = io.MouseWheel;
+        if (wheel != 0.0f && io.KeyShift) {
+            // Shift with the wheel: the level above or below
+            view_level += wheel > 0.0f ? 1 : -1;
+            view_level_set = false;
+            wheel = 0.0f;
+        }
         if (wheel != 0.0f) {
             ImVec2 zp = inside ? mouse : v.o;
             float wx = v.world_x(zp.x), wz = v.world_z(zp.y);
@@ -781,7 +1079,7 @@ void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
     ImVec2 c0(area_x, area_y), c1(area_x + area_w, area_y + area_h);
     float ts = text_size_for(gh);
     dl->PushClipRect(c0, c1, true);
-    draw_cells(dl, p, v, c0, c1, 1.0f);
+    draw_cells(dl, p, v, c0, c1, 1.0f, std::fmax(10.0f, std::fmin(20.0f, v.s * PORT_AUTOMAP_CELL * 0.8f)));
     float r = std::fmax(7.0f, v.s * 110.0f);
     r = r > gh / 40.0f ? gh / 40.0f : r;
     r = r < 7.0f ? 7.0f : r;
@@ -802,7 +1100,11 @@ void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
 
     text(dl, ImVec2(g0.x + gh * 0.04f, g0.y + gh * 0.02f), ts * 1.4f, col(240, 220, 170), player.title);
     char sub[64];
-    std::snprintf(sub, sizeof(sub), "map %03d", player.map);
+    if (view_level != 0)
+        std::snprintf(sub, sizeof(sub), "map %03d   %d level%s %s yours (Home: yours)", player.map, std::abs(view_level),
+                      std::abs(view_level) == 1 ? "" : "s", view_level > 0 ? "above" : "below");
+    else
+        std::snprintf(sub, sizeof(sub), "map %03d", player.map);
     ImVec2 ext = ImGui::GetFont()->CalcTextSizeA(ts * 1.4f, FLT_MAX, 0.0f, player.title);
     text(dl, ImVec2(g0.x + gh * 0.04f + ext.x + ts, g0.y + gh * 0.02f + ts * 0.35f), ts * 0.9f, col(170, 160, 140), sub);
     draw_legend(dl, p, ImVec2(g1.x - legend_w, g0.y + gh * 0.1f), ts);
@@ -838,6 +1140,14 @@ bool automap_view_visible() {
 bool automap_view_event(const SDL_Event *event) {
     if (!port_automap_full_open())
         return false;
+    if (event->type == SDL_KEYDOWN) {
+        SDL_Scancode key = event->key.keysym.scancode;
+        if (key == SDL_SCANCODE_PAGEUP || key == SDL_SCANCODE_PAGEDOWN || key == SDL_SCANCODE_HOME) {
+            view_level = key == SDL_SCANCODE_HOME ? 0 : view_level + (key == SDL_SCANCODE_PAGEUP ? 1 : -1);
+            view_level_set = false;
+            return true;
+        }
+    }
     bool repeat = event->type == SDL_KEYDOWN && event->key.repeat;
     if (!repeat && (map_key(event) || (event->type == SDL_KEYDOWN && event->key.keysym.scancode == SDL_SCANCODE_ESCAPE) ||
                     (event->type == SDL_CONTROLLERBUTTONDOWN && event->cbutton.button == SDL_CONTROLLER_BUTTON_B))) {
@@ -862,6 +1172,8 @@ void automap_view_draw(int x, int y, int width, int height) {
         if (full) {
             zoom = 1.0f;
             centred = false;
+            view_level = 0;
+            view_level_set = false;
         }
         full_was_open = full;
     }

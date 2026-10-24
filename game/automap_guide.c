@@ -135,6 +135,26 @@ const char *Automap_CreatureName(int record) {
     return NULL;
 }
 
+/* ---- Whose page a person's variant record is -------------------------------------------------------
+   A person's name is read from his Recollection page (record 100 + page), or his model's; a variant record
+   with neither is listed here with the record whose page is his. */
+static const struct {
+    int record, page_record;
+} person_pages[] = {
+    {162, 104}, /* Lynn Genne later in the story (map 004, by her father's grave) */
+};
+
+int Automap_PersonPage(int record) {
+    size_t i;
+
+    for (i = 0; i < sizeof(person_pages) / sizeof(person_pages[0]); i++) {
+        if (person_pages[i].record == record) {
+            return person_pages[i].page_record;
+        }
+    }
+    return -1;
+}
+
 /* ---- What a hazard is -----------------------------------------------------------------------------
    Hazard effect 4 (Collision_GetSurfaceEffect; Player_UpdateStatus takes 10 HP a frame) is lava in the Forge,
    the Cavern of Lava and the Fire Lord's Domain, and the sea in these maps (seen in the game): */

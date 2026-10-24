@@ -1,39 +1,152 @@
 # Extended stats (mod)
 
-An opt-in mod, off by default: a panel of what King's Field IV keeps about the player and never shows,
-and the real numbers of every hit. It only **reads** the game's state: on or off, the game runs exactly
-as without it (no patch in `patches/` belongs to it).
+An opt-in mod, off by default: what King's Field IV keeps about the player and never shows, written
+into the game's own menus, and the real numbers of every hit. It only **reads** the game's state: on or
+off, the game runs exactly as without it (no patch in `patches/` belongs to it).
 
-- **Turning it on:** the overlay's Mods page ("Extended stats"), `settings.json`'s `"mods"`, or
-  `--extended-stats` for one run.
-- **The stats panel:** F6 shows and hides it (rebindable on the Controls page: "Show / hide the stats
-  panel (mod)", listed while the mod is on). It also opens by itself while the game's Status screen
-  is up, and closes with it. With the overlay open (F1) it can be moved; its place is kept in
+- **Turning it on:** the overlay's Mods page, "Extended stats in the game's menus" (the first switch of
+  its "Extended stats" section), `settings.json`'s `"mods"`, or `--extended-stats` for one run. That is
+  all: from then on the menus show it whenever they are open.
+- **In the game's menus** (on with the mod): lines in the empty places of the menu screens, in a serif
+  and the grey of the game's own text, fading in and out with the screen (below).
+- **The stats panel** (optional): F6 shows and hides a free-floating panel with all of it and more
+  (spell levels, gauges, recovery). It is rebindable on the Controls page ("Show / hide the stats panel
+  (mod)", listed while the mod is on). With the overlay open (F1) it can be moved; its place is kept in
   `overlay.ini`.
-- **The hit log:** at the bottom left, each hit the player deals and takes, with the real damage and
-  the HP left, for five seconds. At the top, the health bar of the creature last hit, for six seconds.
+- **The hit log** (optional): at the bottom left, each hit the player deals and takes, with the real
+  damage and the HP left, for five seconds. At the top, the health bar of the creature last hit, for six
+  seconds.
 
 | `settings.json` `"mods"` key | default | |
 |---|---|---|
 | `extended_stats` | `false` | the mod |
-| `extended_stats_panel` | `true` | the stats panel (its key, and the Status screen) |
-| `extended_stats_status_screen` | `true` | the panel opens with the game's Status screen |
+| `extended_stats_menus` | `true` | its lines in the game's menus |
+| `extended_stats_panel` | `true` | the stats panel, on its key |
 | `extended_stats_damage` | `true` | the hit log and the target's health bar |
-| `extended_stats_durability` | `true` | the equipment's wear in the panel |
+| `extended_stats_durability` | `true` | the equipment's durability (the menus and the panel) |
 
-The parts count only while `extended_stats` is on.
+The parts count only while `extended_stats` is on. `extended_stats_status_screen` (the panel opening
+with the Status screen, which the menus' lines replaced) is no longer read, and is dropped from the file
+when it is written.
+
+## In the game's menus
+
+| Screen | Where | What |
+|---|---|---|
+| Main menu | under Condition, in the box of Exp ... Gold | Next level (the experience to it, x2 with the Fortune), Next Physical (weapon hits to the next point), Next Magical (spells to the next point), Weapon level N (hits to the next level), each with a thin bar of its progress; the ailments running, with their time left |
+| Status | under Condition, in the left box | the same |
+| Equipment | in the box of the figure, around it | above: the weapon's level (hits / 180 or 480) and the ailments; the defences against them when any; left: each worn piece's durability; right: the hidden effects of what is worn, and recovery or drain |
+| Item, Arrange | at the foot of the box of the item's model | what the item under the cursor does (below) |
+
+Nothing is drawn over the game's text: the places are the menus' own empty ones, and on Main and Status
+the ailment icons beside Condition (one for each ailment running) are kept clear of, line by line. The
+lines hide while the game's detail panel (Triangle) or the equipped list (Square) is over the place. The
+text is fitted to its place: the largest size (up to about the game's row height) at which every row
+fits, else smaller, down to a floor; at 1080 rows the text is 17 to 34 pixels high, at 1440 rows 23 to 45.
+
+### Where the places are
+
+The menu screens are made of parts, `menu/*_para.dat` (`Menu_LoadAllParts`, in game RAM as `main_parts`,
+`status_parts`, `equip_parts`, `item_parts`, `recol_parts`): sprites with their corners in GS
+coordinates. `MenuSprite_Draw` draws them where they say, so a part at (X, Y) is at (X - 1728,
+(Y - 1936) * 2) of the menus' 640 x 448 picture (their XYOFFSET, and the field's rows doubled; the
+window's pictures confirm it). The places (`port/overlay/stats_menus.cpp` names the parts each comes from):
+
+| Screen | Place (640 x 448) | from |
+|---|---|---|
+| Main | x 352-574, y 309-364 | the labels' column (part 38), the values' right edge (30), Condition (31), the bottom border (39); the ailment icons, parts 0-5 |
+| Status | x 82-302, y 321-372 | the same in `status_para.dat` (69, 51, 62, 8); icons 10-15 |
+| Equipment | above x 334-608, y 44-78; left x 334-404, right x 552-608, y 88-330 | the box (part 0) inside its borders (21, 3, 2), the weight's band (9); the figure stands in the middle (about x 448-525, its hands with a weapon and a shield at x 409-547) |
+| Item, Arrange | x 395-617, at most y 180-250 | the model's box (`item_para.dat` part 1, `recol_para.dat` 23) |
+
+The window shows the 640 x 448 picture whole at 4:3 (or stretched), and with widescreen squeezed into
+the middle three quarters of its width (the GS front end, README "Widescreen"); the same places then
+land on the same parts with the native GS, `--native-draw`, `--renderer modern` and paraLLEl-GS, at
+either presenter (checked at 1440 x 1080, 1920 x 1080 and 2560 x 1440).
+
+### Which screen is up
+
+The game's menu (`Menu_Run(0)`, `menu_mode` 0, `menu_step` not 0) runs one screen handler at a time,
+`menu_screen_handler`. The handlers are the game's own static functions, which cannot be named from the
+port, so `track_menu` (`game/stats.c`) tells them apart by what they do (`ui/menu_screens.c`):
+
+- only `Menu_UpdateMain` moves `main_menu_state` off 0 (1 while it takes input, 2 and 3 while it fades
+  out), and a screen it opens finds it back at 0: the handler while it is not 0 is the main menu's;
+- the menu opens on the main menu (`Menu_Start`: `Menu_OpenMain`, then `Menu_UpdateMain` fading in with
+  `main_menu_state` 0), and nothing else runs before it has taken input: until then the screen is the main
+  menu, the very first time too, before its handler is learned. Every way back to it (Circle in a screen,
+  a screen's own end) goes through `Menu_OpenMain` to the same handler, however the screen was reached;
+- another handler is the screen of the line chosen (`main_menu_screens`: 0 Item, 2 Equipment, 3 Status,
+  5 Arrange), `main_menu_line` staying on that line until the menu closes (`Menu_CutModelChain`);
+- the Item screen's sub-screen of the keys (`Menu_UpdateKeyItems`) is told from it by `use_item_frames`,
+  which `Menu_UpdateUseItem` alone steps each time it runs: the handler that stepped it and is still the
+  handler a vblank later is the Item screen's, learned.
+
+Each vblank's answer is read from that vblank's state, not from changes. It is worked out once a vblank
+on the game's thread (`port_overlay_vblank`, called by `port/platform/kernel.c` before the window is
+presented), whether or not the overlay draws: the overlay draws because of it. (It was once worked out
+in `port_overlay_draw`, which runs only while the overlay draws: at more than 60 pictures a second with
+the Vulkan presenter the pictures' thread shows them and the game's thread draws no overlay at all, so
+once nothing of the mod was drawn it was never asked again, and the menus stayed bare until something
+else, a hit's line or a quick save's message, put the overlay up. A `KF4_OVERLAY_SHOT` picture puts it
+up too, which hid this from the tests.) The lines' fade steps once a vblank as well, the same at any
+frame rate.
+
+A screen's parts fade in and out together, by a tenth of their alpha a frame, so `screen_part_alphas[0]`
+against its part's alpha is how far it has faded in; the lines follow it. The item under the cursor is
+`item_list_cursor[0]` (Item) or `owned_list_current[0]` (Arrange); `detail_panel_open` and
+`equipped_list_open` say the game's panels are up.
+
+### What an item does
+
+Everything comes from the code that uses the item (`Player_UseItem`, `Player_ApplyItem`) and its row of
+`param/item_cmn.prm` (`item_common_defs`, read in game RAM); names (the item a vial leaves, the spell a
+crystal teaches, the weapon that shoots an arrow) are the game's own text, read at runtime.
+
+- **Type 0** (used up, `use_mode` 0): `hp_now += hp_heal`, `mp_now += mp_heal`, each capped at the most;
+  999 or more is shown as "all" (`Player_RecomputeStats` caps `hp_max` and `mp_max` at 999). Each bit n of
+  `timed_flags` clears `timed_flags[n]`, curing that ailment ("Cures every ailment but poison" for
+  0x3E). `use_mode` 2 gives one of `item` back ("Leaves a ..."). On the US disc this gives: the Herb 50
+  HP, Herbal Liquid 180, Forest Fruit all HP, Antidote 5 HP and poison, Forest Root every ailment but
+  poison, Dried Amphibia every ailment, Mushroom 80 MP, Dragon Flower all HP and MP and every ailment,
+  the three Healing Waters 500 HP / 160 MP / 500 HP and 150 MP, each leaving the Crystal Vial.
+- **Its own code** (`Player_ApplyItem`): `ITEM_POWER_SEED` and `ITEM_WIDDA_NEEDLE` start a timer of 1800
+  frames (60 s) in which Physical or Magic Power is a tenth more (`Player_RecomputeStats`); the fruits
+  (`ITEM_WISE_MANS_FRUIT`, `ITEM_FOOLS_FRUIT`) raise Magic or Physical Power by 1 for good, up to 999;
+  `ITEM_MAGIC_CRYSTAL` raises the most MP by 1 (and restores its 50 MP by its row); the crystals of the
+  six schools teach the school's next spell not yet known (`Player_LearnSpellInRow`; its name, effect
+  `(school * 5 + slot) * 3 + 1`) and raise the most MP by 1 (71-76, restoring 50) or 5 (77-82, restoring
+  all); the Poison Water (item 18) poisons for 1800 frames whatever the defence
+  (`Player_ApplyPoisonWater`).
+- **Arrows** (145-147): the menu never uses them (`Menu_UpdateUseItem`); a weapon shoots while there is
+  one of its `PlayerItemDef.ammo_item_index` (`Player_UpdateActions`): "Shot by" that weapon.
+- **Types 1, 4, 5**: used on the map object in front (`MapObject_UseItem`), used up with `use_mode` 0;
+  **type 2** (the wands): used standing on a symbol of passage (`MapChange_StartPassage`); **type 6**:
+  opens its map (`MapViewer_OpenForItem`); **type 3** (keys) are never listed.
+- **Type 8**: "Nothing happened". The Earth Stone pays the smith for each upgrade
+  (`Smith_UpdateListWithConfirm` takes one); bones, scales and claws pay for the trades whose items
+  have `upgrade_material_kind` 1 to 3 (`Trade_UpdateTakeAmount`). The rest (the Crystal Vial, the
+  Icons of Healing and Ice, the Rock of Life, the Forest Dew, the Strange Egg) show "Nothing happens when
+  used": what they are for is a script of the person or object they are used on (`item_script_id`,
+  `item_use_script`), not the item's own.
+- **Weapons and worn items** (Arrange): the weapon's level and hits, its durability (bows and rings,
+  bracelets, amulets do not wear), the ailments the piece guards against (`worn_ailment_defence`), its
+  two data bonuses and its effect in the code (the tables below).
+
+Every item the Item screen lists is covered; none was left to a guess.
 
 ## Where the code is
 
 | File | |
 |---|---|
-| `game/stats.c` | built with the game code: reads the game's state into a snapshot (`port_stats_sample`) and watches the hits once a vblank (`port_stats_track`) |
+| `game/stats.c` | built with the game code: reads the game's state into a snapshot (`port_stats_sample`: with the menu screen up and what the item under its cursor does), and watches the hits and the menu once a vblank (`port_stats_track`) |
+| `port/overlay/stats_menus.cpp` | the lines in the game's menus: their places, fitting and drawing (Dear ImGui, no window) |
 | `port/overlay/stats_panel.cpp` | draws the panel, the hit log, the health bar and the Mods page's section (Dear ImGui) |
 | `port/overlay/stats_mod.c` | the switches and their `settings.json` keys |
 | `port/include/port/stats.h` | the interface between them |
 
-The hooks into shared files are one line each: `overlay.cpp` (the Mods page, the vblank's tracking and
-drawing, and whether the overlay draws this vblank), `settings.c` (read and write the keys),
+The hooks into shared files are one line each: `overlay.cpp` (the Mods page, the menus' font, the
+vblank's tracking (`port_overlay_vblank`, from `kernel.c`) and drawing, whether the overlay draws this vblank, and the `menu@V` test picture), `settings.c` (read and write the keys),
 `main_host.c` (`--extended-stats`), and `controls` (the panel's key).
 
 Names of items and spells are read from the game's own tables in game RAM (`item_name_defs`,
@@ -42,8 +155,19 @@ game's text is in the source.
 
 `KF4_STATS_LOG=1` prints, on stderr, every change of the counters the panel shows (`[stats]
 weapon_use_count=... power_base=...`), every hit, and every creature as it is first seen (its record,
-HP and place): what the checks below were read from. `KF4_STATS_PANEL_AT=VBLANK` opens the panel at
+HP and place): what the checks below were read from. It also prints each change of the menu screen
+detected (`[stats] vblank N: menu screen main (menu_mode 0, menu_step 1, main_menu_state 1, line 0)`;
+none, main, status, equipment, item, arrange) and whether the mod has the overlay drawn (`[stats] vblank
+N: the mod draws (the overlay is up)` / `draws nothing`). `KF4_STATS_PANEL_AT=VBLANK` opens the panel at
 that vblank, so that `KF4_OVERLAY_SHOT=closed@N` takes its picture.
+
+The menus' lines are checked with pictures: `KF4_OVERLAY_SHOT=menu@V,...` writes the window (overlay
+closed) at each vblank V as `overlay_menu_V.png`, and a pad script opens the screens. From a quick save
+loaded on the title screen (`--quick-load`, the memory card notice passed with `100 CROSS 4`), Circle at
+500 opens the menu; Cross opens the Item screen and Down walks its list; Down, Down, Cross opens
+Equipment (Right picks a piece, Cross wears it, Down goes to the next slot); Down x3, Cross opens
+Status. `--cheats all` before a quick save gives every item to look at; using the Poison Water from the
+Item screen gives an ailment to see beside Condition.
 
 ## The stats, and how each was proved
 

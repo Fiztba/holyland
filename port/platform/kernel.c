@@ -379,6 +379,7 @@ static void vblank_start(void) {
     /* the pad (mouse look), the window and the overlay are the host's: its float mode */
     mode = port_host_float_begin();
     port_pad_poll();
+    port_overlay_vblank();
     port_video_present();
     port_host_float_end(mode);
     port_teleport_vblank();

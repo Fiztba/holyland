@@ -9,7 +9,8 @@ it runs.
 
 - **Full map**: the Map key (M in both layouts; rebind it on the Controls page, "Map") opens it in play.
   The game waits while it is open. The wheel zooms toward the cursor, a left drag moves, a right click
-  fits the map again; M or Escape closes it.
+  fits the map again; PgUp and PgDn (or Shift with the wheel) show the levels above and below the
+  player's, Home his own; M or Escape closes it.
 - **Minimap**: a corner of the picture while playing (hidden in menus): corner, size, reach and opacity
   on the Mods page.
 - **Cheats** (off by default, they stand in for an online guide): reveal the whole map; items (on the
@@ -58,10 +59,21 @@ current map always lies in its own file's frame) and drawn from above into cells
   not walls. A cell with no floor keeps the wall's top and bottom, and is drawn as wall beside a floor.
 - **The void**: a deadly layer more than 14 cells from any floor is not drawn.
 
-The view picks, in each cell, the layer the player would see at his height: the highest that is not more
-than 400 above his feet (else the lowest), and shades floors in steps of 350 against his height. Screen up
-is the world's +z, as on the game's own picture maps (`MapViewer_LocateOnCaretakersMap`); the game's
-King's Map turns with the player instead.
+**Levels.** Passages at different heights overlap on a plan seen from above (the Upper Mines, map 008,
+have three). The view draws the player's level, his slice, in full and the others greyed and darkened the
+further they are from his height (a hazard keeps more of its colour), and the slice's edges where it
+meets another level a step lower or higher cast a dark band (10-20 pixels on the full map, a few on the
+minimap) onto it, with a wall-coloured line along the edge, so that a passage running under another does
+not look joined to it. The slice is the floor connected to the player's: from the layers under his feet
+to the layers of the cells beside them within a step of 150 (as the reveal's rays walk), staying within
+700 of his height, walls and the void bounding it. In each cell the view draws the slice's layer when the
+cell has one that has been seen; else the layer he would see at his height (the highest that is not more
+than 400 above his feet, else the lowest). Floors are shaded in steps of 350 against his height. On the
+full map PgUp/PgDn step to the nearest level above or below that is not part of the slice shown and is
+more than a scrap (60 layers), grown from that floor; the minimap always shows his own. Markers on
+another level are drawn faint, and a way into another map is hatched only on the cells at the join's
+height (all of its cells when none is drawn at that height). Screen up is the world's +z, as on the game's
+own picture maps (`MapViewer_LocateOnCaretakersMap`); the game's King's Map turns with the player instead.
 
 ### What has been seen
 
@@ -87,7 +99,8 @@ loads: its cells count as seen at every height.
 
 ### Markers
 
-- **Map objects** (`map_slot_objects`, kind from `param/obj.prm`, `MapObjectUnk04.kind`): doors (1, 2, 6,
+- **Map objects** (`map_slot_objects`, kind from `param/obj.prm`, `MapObjectUnk04.kind`; only those in use,
+  `MAP_OBJECT_IN_USE`, which the map's set-up and scripts turn on and off with the story): doors (1, 2, 6,
   0x11; locked while `kind_param_0` names a key not yet used; the leaf drawn from the door's collision mesh,
   so an open door shows open), chests (4; key `kind_param_1`, item `kind_param_0`, gold `kind_param_2`),
   bones and graves (3) and barrels, pots and boxes (21) with their item, things to look at (11: a sign, or
@@ -96,10 +109,27 @@ loads: its cells count as seen at every height.
   shooters and pitfalls (16, 18) and fading objects (31). Names are the game's own (the definition's
   message, `Message_GetText`; items from `item_name_defs`).
 - **People** (entity type 15, and 81 the dog, with a talk script): the name is the last line of their page
-  of the Recollection screen (message 3000 + 50 × (record − 100) + 49).
+  of the Recollection screen (message 3000 + 50 × (record − 100) + 49). A map's spawn records hold every
+  place a person stands at any time in the story (Sharyl Genne has two on map 004, Lynn Genne a third by
+  her father's grave), so only the ones present now are shown, by the game's own test: a person in the
+  world (live, not dying, on the active list) where he stands; one out of reach where he will appear only
+  if `EntityAi_ShouldRespawn` would bring him back when the player comes near (flag bit 7, which the
+  spawn record and the map's scripts set as the story moves on, command 253; not taken away for good;
+  deaths under the spawn's limit). With the secrets cheat, the others are a faint ring, "not here now".
+  Markers are made again every game frame, so someone who walks off or leaves after a talk moves or goes.
 - **Enemies** (the enemies cheat): live entities, their HP, and with the items cheat what they may drop
   (`EntityParams.drop_item`, `drop_chance`).
-- **Items** (the items cheat): `lying_items` of the current map, not inside a container.
+- **Items** (the items cheat): `lying_items` of the current map, not inside a container. Some of a map's
+  fixed items lie out of sight until a script gives them: script command 101 (`MapItem_StartPickupById`)
+  takes a fixed item by its id (`MapItemDef.slot_id`) and flies it to the player's eyes. The map's script
+  is read as the map is built. An item is shown as handed over (a faint ring, "not on the ground") when a
+  script gives it that way, but not the script the game runs when the player takes it where it lies
+  (`MapItemDef.pickup_script`: the crystals on altars, Lord Myu's armour, which stay ordinary items), and it
+  lies under the floor (more than 60 below the plan's nearest floor, or with none near). The label names the
+  person whose talk script (or the script run when an item is used on him) reaches the command, directly or
+  through command 2, else "given by an event": the Fire Crystal on map 004 is Lynn Genne's, after her mother
+  is healed; the Craftsman's Key on map 020 Harmurah Forgefist's; the Icon of Fire on map 026 Joshua
+  Griffin's; the smith's work on maps 017-019 lies 10,000 below the world.
 - **Ways into other maps**: the records at a join (`MapRecordInfo.needs_neighbour_map`) have the
   neighbouring map set up. Until the player has been near, the way is labelled with the map of the origin
   named by the nearest record that names one (the map the game loads while he walks up to it,
@@ -113,11 +143,14 @@ Everything hand-written is in `game/automap_guide.c`; no other file needs to cha
 - **Hints**: add a line to `hints[]`: `{AUTOMAP_OBJECT, map, object, 0, "text"}` for a map object, or
   `{AUTOMAP_SPAWN, map, spawn, 0, "text"}` for an entity (or `{AUTOMAP_SPAWN, map, -1, record, "text"}`
   for every spawn of a chr.prm record on that map). With the hints cheat on, the full map's hover label
-  of every object ends with its number ("(object #45)"), so: turn the cheat on, point at the thing, note
+  of every object ends with its number ("(object #45)"), and a person's with his spawn and chr.prm record
+  ("(spawn #2, chr 105)"), so: turn the cheat on, point at the thing, note
   the map number (beside the title) and the object number. Write what the player needs to know in your own
   words, not the game's text.
 - **Creature names**: `creature_names[]`, by chr.prm record (the full map shows "Creature (#n)" for one
   not listed).
+- **People's names**: `person_pages[]`, for a person's variant record that has neither a Recollection page
+  of its own nor its model's (the full map shows "Person"): the record whose page is his.
 - **Map names**: the full map's title is the Teleport's name of the map (`port/platform/teleport.c`,
   `map_names`, from the decomp's `docs/GAME_DATA.md`).
 - **Hazards**: `sea_maps[]` lists the maps where hazard effect 4 is the sea rather than lava.
@@ -128,7 +161,9 @@ The overlay's test pictures take the map too: `KF4_OVERLAY_SHOT=map@V` opens the
 (overlay closed) and writes `overlay_map_V.png`; `mini@V` writes the picture with the minimap,
 `overlay_mini_V.png`. `KF4_AUTOMAP_HOVER=x,z` puts the mouse over that world point on the full map (for
 the hover label), and `KF4_AUTOMAP_DUMP=DIR` writes each map's markers' labels to
-`DIR/automap_NNN.txt` a second after it is built. `--automap-cheats` turns the mod and every cheat on for
+`DIR/automap_NNN.txt` a second after it is built (and `KF4_AUTOMAP_LEVEL=n` makes the test picture of the
+full map show the level n above or below the player's), then every spawn with what decides whether it is
+shown, the script commands that give items, and the fixed items lying about. `--automap-cheats` turns the mod and every cheat on for
 a run. With `tools/map_tour.py`'s made-up quick saves:
 
 ```sh
