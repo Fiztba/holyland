@@ -9,7 +9,8 @@ it runs.
 
 - **Full map**: the Map key (M in both layouts; rebind it on the Controls page, "Map") opens it in play.
   The game waits while it is open. The wheel zooms toward the cursor, a left drag moves, a right click
-  fits the map again; M or Escape closes it.
+  fits the map again; PgUp and PgDn (or Shift with the wheel) show the levels above and below the
+  player's, Home his own; M or Escape closes it.
 - **Minimap**: a corner of the picture while playing (hidden in menus): corner, size, reach and opacity
   on the Mods page.
 - **Cheats** (off by default, they stand in for an online guide): reveal the whole map; items (on the
@@ -58,10 +59,21 @@ current map always lies in its own file's frame) and drawn from above into cells
   not walls. A cell with no floor keeps the wall's top and bottom, and is drawn as wall beside a floor.
 - **The void**: a deadly layer more than 14 cells from any floor is not drawn.
 
-The view picks, in each cell, the layer the player would see at his height: the highest that is not more
-than 400 above his feet (else the lowest), and shades floors in steps of 350 against his height. Screen up
-is the world's +z, as on the game's own picture maps (`MapViewer_LocateOnCaretakersMap`); the game's
-King's Map turns with the player instead.
+**Levels.** Passages at different heights overlap on a plan seen from above (the Upper Mines, map 008,
+have three). The view draws the player's level, his slice, in full and the others greyed and darkened the
+further they are from his height (a hazard keeps more of its colour), and the slice's edges where it
+meets another level a step lower or higher cast a dark band (10-20 pixels on the full map, a few on the
+minimap) onto it, with a wall-coloured line along the edge, so that a passage running under another does
+not look joined to it. The slice is the floor connected to the player's: from the layers under his feet
+to the layers of the cells beside them within a step of 150 (as the reveal's rays walk), staying within
+700 of his height, walls and the void bounding it. In each cell the view draws the slice's layer when the
+cell has one that has been seen; else the layer he would see at his height (the highest that is not more
+than 400 above his feet, else the lowest). Floors are shaded in steps of 350 against his height. On the
+full map PgUp/PgDn step to the nearest level above or below that is not part of the slice shown and is
+more than a scrap (60 layers), grown from that floor; the minimap always shows his own. Markers on
+another level are drawn faint, and a way into another map is hatched only on the cells at the join's
+height (all of its cells when none is drawn at that height). Screen up is the world's +z, as on the game's
+own picture maps (`MapViewer_LocateOnCaretakersMap`); the game's King's Map turns with the player instead.
 
 ### What has been seen
 
@@ -149,7 +161,8 @@ The overlay's test pictures take the map too: `KF4_OVERLAY_SHOT=map@V` opens the
 (overlay closed) and writes `overlay_map_V.png`; `mini@V` writes the picture with the minimap,
 `overlay_mini_V.png`. `KF4_AUTOMAP_HOVER=x,z` puts the mouse over that world point on the full map (for
 the hover label), and `KF4_AUTOMAP_DUMP=DIR` writes each map's markers' labels to
-`DIR/automap_NNN.txt` a second after it is built, then every spawn with what decides whether it is
+`DIR/automap_NNN.txt` a second after it is built (and `KF4_AUTOMAP_LEVEL=n` makes the test picture of the
+full map show the level n above or below the player's), then every spawn with what decides whether it is
 shown, the script commands that give items, and the fixed items lying about. `--automap-cheats` turns the mod and every cheat on for
 a run. With `tools/map_tour.py`'s made-up quick saves:
 
