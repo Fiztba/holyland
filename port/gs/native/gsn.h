@@ -301,7 +301,11 @@ typedef struct {
        of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */
     uint64_t interp_records, interp_replays, interp_misses, ns_interp_record, ns_interp_replay;
     uint64_t interp_mid_submits; /* submits while a picture between is recorded (write-backs in it) */
-    uint64_t interp_rerecord[4]; /* why drawn from the packets again: the GS changed, the recording could not be */
+    /* why drawn from the packets (gsn.cpp, interp_cannot_replay): [1] the GS's targets changed, [2] its registers, [3] the
+       frame's first picture between, [4] the recording could not be made again (a read-back in it), [5] VRAM or the
+       CLUT written since; replays that named a target the recording made and kept, or made and dropped (its own) */
+    uint64_t interp_rerecord[8];
+    uint64_t interp_kept_targets, interp_own_targets;
     /* Why render passes ended, and why multisampled images were resolved (GSN_WHY_*); the bytes the
        passes loaded and stored (their attachments, whole), resolves and copies moved; pictures made */
     uint64_t pass_ends[16], resolves_by[16];

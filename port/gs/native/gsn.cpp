@@ -397,6 +397,7 @@ struct Interp {
     std::vector<std::array<uint32_t, 4>> vsrc;   // each of gs->verts as a corner
     // the recording, and the GS as it was before and after it
     bool recorded = false;
+    bool tried = false; // (a recording of this frame was made: not recorded then, it could not be made again)
     InterpState start, end;
     std::vector<uint64_t> end_regs;
     uint64_t risky_runs = 0; // (stats: moving batches drawn in runs that do not overlap, cut where they are at t 1)
@@ -553,6 +554,7 @@ struct Recording {
         bool ms;
     };
     std::vector<TargetImage> target_images;
+    const Buffer *held_chunk[2] = {}; // (the data chunks held last: hold_chunk)
 
     void clear() {
         ops.clear();
@@ -561,6 +563,7 @@ struct Recording {
         buffers.clear();
         later.clear();
         target_images.clear();
+        held_chunk[0] = held_chunk[1] = nullptr;
         ok = true;
         draws = 0;
     }
@@ -595,6 +598,14 @@ struct Recording {
             }
         }
     }
+    // (a data chunk the calls name: held once, not for every call)
+    void hold_chunk(const Buffer &buffer) {
+        if (held_chunk[0] != &buffer && held_chunk[1] != &buffer) {
+            held_chunk[1] = held_chunk[0];
+            held_chunk[0] = &buffer;
+            hold(buffer);
+        }
+    }
     void hold(const Buffer &buffer) {
         Buffer &b = const_cast<Buffer &>(buffer);
         b.add_reference();
@@ -621,9 +632,17 @@ struct ArgTexture {
     const ImageView *view;
     StockSampler sampler;
 };
-struct ArgData { // constant data (set, binding), vertex data (binding, stride, rate), push constants (offset)
+struct ArgData { // push constants (offset)
     uint32_t a, b, c;
     uint32_t size;
+};
+// Constant data (set, binding; its bytes follow, kept to find the same again: finish_recording) and vertex data
+// (binding, stride), where they are on the GPU (DataChunk)
+struct ArgPlaced {
+    uint32_t a, b;
+    uint32_t size;
+    const Buffer *buffer;
+    VkDeviceSize offset;
 };
 struct ArgBinding {
     uint32_t binding;
@@ -690,16 +709,45 @@ uint32_t texel_bytes(VkFormat format) {
 // gs->cmd some other way must clear it too.
 bool barrier_fresh = false;
 
+// The vertex and constant data the draws read, written by the CPU into buffers of our own, one after another
+// and never written over (a full one let go: Granite keeps it until the GPU is done with it). Granite's own
+// (allocate_vertex_data) has 4 KB blocks: a batch's vertices of more were a buffer made for them alone, a
+// Vulkan buffer and its memory each batch. And a recording (--frame-rate's pictures between) keeps the chunks
+// it wrote into, so its calls made again bind the data where it is, not copied anew for each picture.
+struct DataChunk {
+    BufferHandle buffer;
+    uint8_t *map = nullptr;
+    VkDeviceSize used = 0, flushed = 0, size = 0;
+};
+DataChunk vertex_chunk, constant_chunk;
+struct DataPlace {
+    const Buffer *buffer;
+    VkDeviceSize offset;
+    uint8_t *host;
+};
+DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBufferUsageFlags usage, VkDeviceSize chunk_size);
+void data_flush(DataChunk &ch);
+VkDeviceSize ubo_align();
+
 class Cmd {
 public:
     CommandBuffer &raw() {
         if (!gs->cmd) {
             gs->cmd = gs->device->request_command_buffer();
             gpu_cmd_serial++;
+            forget_bindings();
             gpu_mark(GPU_OTHER);
         }
         barrier_fresh = false;
         return *gs->cmd;
+    }
+    // The storage buffers Granite has bound (their cookies), so that the same bound again is not: Granite writes the
+    // set's descriptors again for any buffer bound, the same or not (native draw's arena and records, bound for each
+    // batch). Forgotten where Granite forgets them (a render pass's beginning and end, a new command buffer), where
+    // they are bound past Cmd (the kicks' pass, replay_ops), and where a recording begins and ends (its calls must
+    // bind what they draw with themselves).
+    void forget_bindings() {
+        memset(storage_bound, 0, sizeof(storage_bound));
     }
     // (a barrier of its own: one memory barrier)
     void memory_barrier(const VkMemoryBarrier2 &b, VkDependencyFlags flags) {
@@ -722,6 +770,12 @@ public:
     }
     // (native draw's mesh, and its pictures between's Picture: gsn_native_draw.inc)
     void set_storage_buffer(unsigned set, unsigned binding, const Buffer &buffer) {
+        if (set < 3 && binding < 8) {
+            if (storage_bound[set][binding] == buffer.get_cookie()) {
+                return;
+            }
+            storage_bound[set][binding] = buffer.get_cookie();
+        }
         if (on()) {
             rec().hold(buffer);
             rec().add(OP_STORAGE, ArgBinding{set | binding << 8, &buffer, 0, 0, VK_VERTEX_INPUT_RATE_VERTEX});
@@ -761,12 +815,16 @@ public:
             }
             rec().add(OP_BEGIN_PASS, a);
         }
+        program_pending = false;
+        forget_bindings();
         raw().begin_render_pass(info);
     }
     void end_render_pass() {
         if (on()) {
             rec().add(OP_END_PASS, ArgValues{});
         }
+        program_pending = false;
+        forget_bindings();
         raw().end_render_pass();
     }
     void set_opaque_state() {
@@ -775,11 +833,14 @@ public:
         }
         raw().set_opaque_state();
     }
+    // A program is set when a draw first needs it: one set and set over again before any draw (each batch of the
+    // scene's sets the map's program, then its kind's: sa_draw_range) never reaches Granite, which makes a program
+    // set anew bind its pipeline again at the next draw, the same pipeline or not (a vkCmdBindPipeline a batch more
+    // in the frame, the recording and each replay). A render pass's beginning and end forget the program (Granite's
+    // too).
     void set_program(Program *program) {
-        if (on()) {
-            rec().add(OP_PROGRAM, program);
-        }
-        raw().set_program(program);
+        pending_program = program;
+        program_pending = true;
     }
     void set_primitive_topology(VkPrimitiveTopology topology) {
         if (on()) {
@@ -857,13 +918,16 @@ public:
         return static_cast<T *>(allocate_constant_data(set, binding, count * sizeof(T)));
     }
     void *allocate_constant_data(unsigned set, unsigned binding, VkDeviceSize size) {
-        void *p = raw().allocate_constant_data(set, binding, size);
+        VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+        DataPlace d = data_place(constant_chunk, range, ubo_align(), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 2u << 20);
+        raw().set_uniform_buffer(set, binding, *d.buffer, d.offset, range);
         if (on()) {
-            uint32_t at = rec().add(OP_CONSTANT, ArgData{set, binding, 0, uint32_t(size)}, size_t(size));
-            rec().later.push_back({at, p, uint32_t(size)});
+            rec().hold_chunk(*d.buffer);
+            uint32_t at = rec().add(OP_CONSTANT, ArgPlaced{set, binding, uint32_t(size), d.buffer, d.offset}, size_t(size));
+            rec().later.push_back({at, d.host, uint32_t(size)});
             return rec().arena.data() + at;
         }
-        return p;
+        return d.host;
     }
     void set_blend_enable(bool enable) {
         if (on()) {
@@ -890,13 +954,13 @@ public:
         raw().set_blend_op(colour, alpha);
     }
     void *allocate_vertex_data(unsigned binding, VkDeviceSize size, VkDeviceSize stride) {
-        void *p = raw().allocate_vertex_data(binding, size, stride);
+        DataPlace d = data_place(vertex_chunk, size, 16, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 8u << 20);
+        raw().set_vertex_binding(binding, *d.buffer, d.offset, stride);
         if (on()) {
-            uint32_t at = rec().add(OP_VERTEX_DATA, ArgData{binding, uint32_t(stride), 0, uint32_t(size)}, size_t(size));
-            rec().later.push_back({at, p, uint32_t(size)});
-            return rec().arena.data() + at;
+            rec().hold_chunk(*d.buffer);
+            rec().add(OP_VERTEX_DATA, ArgPlaced{binding, uint32_t(stride), uint32_t(size), d.buffer, d.offset});
         }
-        return p;
+        return d.host;
     }
     void set_vertex_binding(uint32_t binding, const Buffer &buffer, VkDeviceSize offset, VkDeviceSize stride) {
         if (on()) {
@@ -925,6 +989,7 @@ public:
         raw().push_constants(data, offset, range);
     }
     void draw(uint32_t count, uint32_t first = 0) {
+        apply_program();
         if (on()) {
             rec().add(OP_DRAW, ArgDraw{count, 1, first, 0});
             rec().draws++;
@@ -992,6 +1057,18 @@ public:
     }
 
 private:
+    uint64_t storage_bound[3][8] = {};
+    Program *pending_program = nullptr;
+    bool program_pending = false;
+    void apply_program() {
+        if (program_pending) {
+            program_pending = false;
+            if (on()) {
+                rec().add(OP_PROGRAM, pending_program);
+            }
+            raw().set_program(pending_program);
+        }
+    }
     static bool on() {
         return recording_ops.on;
     }
@@ -1003,6 +1080,42 @@ Cmd cmd_layer;
 
 Cmd &cmd() {
     return cmd_layer;
+}
+
+// The recording's constant data (the CLUTs: most batches' the same as another's, or none: zeros): each the same as
+// one before it bound where that one is, so that the calls made again find it bound already (replay_ops) and do not
+// bind it again (Granite writes the set's descriptors again for any buffer bound, the same or not)
+void same_constants(Recording &r) {
+    std::unordered_map<uint64_t, std::vector<uint32_t>> seen; // (a content hash: the calls whose bytes those are)
+    for (size_t i = 0; i < r.ops.size(); i++) {
+        const Recording::Op &op = r.ops[i];
+        if (op.kind != OP_CONSTANT) {
+            continue;
+        }
+        ArgPlaced &a = *reinterpret_cast<ArgPlaced *>(r.arena.data() + op.at);
+        const uint8_t *data = r.arena.data() + op.at + sizeof(ArgPlaced);
+        uint64_t h = a.size;
+        for (uint32_t k = 0; k + 8 <= a.size; k += 8) {
+            uint64_t w;
+            memcpy(&w, data + k, 8);
+            h = (h ^ w) * 0x100000001B3ull;
+            h ^= h >> 29;
+        }
+        std::vector<uint32_t> &same = seen[h];
+        bool found = false;
+        for (uint32_t j : same) {
+            const ArgPlaced &b = r.args<ArgPlaced>(r.ops[j]);
+            if (b.size == a.size && memcmp(r.arena.data() + r.ops[j].at + sizeof(ArgPlaced), data, a.size) == 0) {
+                a.buffer = b.buffer;
+                a.offset = b.offset;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            same.push_back(uint32_t(i));
+        }
+    }
 }
 
 // A recording made ready to be made again: barriers one after another made one (each is of all
@@ -1025,6 +1138,7 @@ void finish_recording(Recording &r) {
         ops.push_back(op);
     }
     r.ops.swap(ops);
+    same_constants(r);
     VkDeviceSize bytes = 0;
     for (const Recording::Op &op : r.ops) {
         if (op.kind == OP_UPDATE_IMAGE) {
@@ -1089,6 +1203,27 @@ const ImageView &now_view(const ImageView *view) {
 // The recorded calls made again into the command buffer
 void replay_ops(const Recording &r) {
     CommandBuffer &c = cmd().raw();
+    // What the calls made again have bound (set, binding: buffer and offset), as Granite has it: a binding the same as
+    // the one there is not made again (Granite writes the set's descriptors again for any buffer bound, the same or
+    // not). Granite forgets its bindings at a render pass's beginning and end; the kicks' pass binds its own.
+    struct Bound {
+        uint64_t cookie;
+        VkDeviceSize offset;
+    };
+    Bound bound[3][8] = {};
+    auto forget = [&] { memset(bound, 0, sizeof(bound)); };
+    auto same = [&](uint32_t set, uint32_t binding, const Buffer *buffer, VkDeviceSize offset) {
+        if (set >= 3 || binding >= 8) {
+            return false;
+        }
+        Bound &b = bound[set][binding];
+        if (b.cookie == buffer->get_cookie() && b.offset == offset) {
+            return true;
+        }
+        b = {buffer->get_cookie(), offset};
+        return false;
+    };
+    cmd().forget_bindings(); // (bound here past Cmd)
     for (const Recording::Op &op : r.ops) {
         switch (op.kind) {
         case OP_BARRIER: {
@@ -1108,10 +1243,12 @@ void replay_ops(const Recording &r) {
                 a.info.depth_stencil = &now_view(a.info.depth_stencil);
             }
             c.begin_render_pass(a.info);
+            forget();
             break;
         }
         case OP_END_PASS:
             c.end_render_pass();
+            forget();
             break;
         case OP_OPAQUE:
             c.set_opaque_state();
@@ -1150,8 +1287,10 @@ void replay_ops(const Recording &r) {
             break;
         }
         case OP_CONSTANT: {
-            const ArgData &a = r.args<ArgData>(op);
-            memcpy(c.allocate_constant_data(a.a, a.b, a.size), r.arena.data() + op.at + sizeof(ArgData), a.size);
+            const ArgPlaced &a = r.args<ArgPlaced>(op);
+            if (!same(a.a, a.b, a.buffer, a.offset)) {
+                c.set_uniform_buffer(a.a, a.b, *a.buffer, a.offset, (a.size + 15) & ~15u);
+            }
             break;
         }
         case OP_BLEND_ENABLE:
@@ -1169,8 +1308,8 @@ void replay_ops(const Recording &r) {
             c.set_blend_op(VkBlendOp(r.args<ArgValues>(op).v[0]), VkBlendOp(r.args<ArgValues>(op).v[1]));
             break;
         case OP_VERTEX_DATA: {
-            const ArgData &a = r.args<ArgData>(op);
-            memcpy(c.allocate_vertex_data(a.a, a.size, a.b), r.arena.data() + op.at + sizeof(ArgData), a.size);
+            const ArgPlaced &a = r.args<ArgPlaced>(op);
+            c.set_vertex_binding(a.a, *a.buffer, a.offset, a.b);
             break;
         }
         case OP_VERTEX_BINDING: {
@@ -1223,6 +1362,7 @@ void replay_ops(const Recording &r) {
         }
         case OP_INTERP_KICKS:
             interp_kicks_pass(c);
+            forget();
             break;
         case OP_MEMORY_BARRIER: {
             struct A {
@@ -1238,11 +1378,14 @@ void replay_ops(const Recording &r) {
             break;
         case OP_STORAGE: {
             const ArgBinding &a = r.args<ArgBinding>(op);
-            c.set_storage_buffer(a.binding & 0xFF, a.binding >> 8, *a.buffer);
+            if (!same(a.binding & 0xFF, a.binding >> 8, a.buffer, 0)) {
+                c.set_storage_buffer(a.binding & 0xFF, a.binding >> 8, *a.buffer);
+            }
             break;
         }
         }
     }
+    cmd().forget_bindings();
 
 }
 
@@ -1290,6 +1433,41 @@ void end_pass() {
     }
 }
 
+// Room for size bytes of vertex or constant data in the chunk, a new chunk when it is full
+DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBufferUsageFlags usage, VkDeviceSize chunk_size) {
+    VkDeviceSize at = (ch.used + align - 1) & ~(align - 1);
+    if (!ch.buffer || at + size > ch.size) {
+        data_flush(ch);
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::LinkedDeviceHost;
+        info.size = std::max(chunk_size, size);
+        info.usage = usage;
+        ch.buffer = gs->device->create_buffer(info, nullptr);
+        ch.map = static_cast<uint8_t *>(gs->device->map_host_buffer(*ch.buffer, MEMORY_ACCESS_WRITE_BIT));
+        ch.size = info.size;
+        ch.used = ch.flushed = at = 0;
+    }
+    ch.used = at + size;
+    return {ch.buffer.get(), at, ch.map + at};
+}
+
+// What the CPU wrote into the chunk since the last time, made the GPU's (before a submit)
+void data_flush(DataChunk &ch) {
+    recording_ops.settle(); // (a recording's constant data is copied in at its next call: before the flush)
+    if (ch.buffer && ch.used > ch.flushed) {
+        gs->device->unmap_host_buffer(*ch.buffer, MEMORY_ACCESS_WRITE_BIT, ch.flushed, ch.used - ch.flushed);
+        ch.flushed = ch.used;
+    }
+}
+
+VkDeviceSize ubo_align() {
+    static VkDeviceSize align = 0;
+    if (!align) {
+        align = std::max<VkDeviceSize>(16, gs->device->get_gpu_properties().limits.minUniformBufferOffsetAlignment);
+    }
+    return align;
+}
+
 // Everything recorded so far, sent; with wait, finished too
 void submit(bool wait) {
     {
@@ -1315,6 +1493,8 @@ void submit(bool wait) {
         gs->device->unmap_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT);
         gs->device->unmap_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT);
     }
+    data_flush(vertex_chunk);
+    data_flush(constant_chunk);
     if (wait) {
         Fence fence;
         gs->device->submit(gs->cmd, &fence);
@@ -6459,7 +6639,7 @@ void interp_forget() {
     interp.resolved.reset();
     interp.vertices.reset();
     interp.picture.reset();
-    interp.recorded = false;
+    interp.recorded = interp.tried = false;
     recording_ops.clear();
 }
 
@@ -6479,6 +6659,7 @@ void interp_kicks_pass(CommandBuffer &c) {
     if (!interp.frame || !interp.frame->kicks) {
         return;
     }
+    cmd().forget_bindings(); // (set 1 bound here past Cmd)
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     c.set_program(gs->program_replay_kicks);
@@ -6633,6 +6814,7 @@ void interp_record() {
     interp_capture(interp.start);
     recording_ops.clear();
     recording_ops.on = true;
+    cmd().forget_bindings();
     cmd().interp_kicks();
     interp.active = true;
     interp.broken = false;
@@ -6651,6 +6833,7 @@ void interp_record() {
     flush_batch(); // (the last batch is the picture's)
     recording_ops.settle();
     recording_ops.on = false;
+    cmd().forget_bindings();
     interp.active = false;
     finish_recording(recording_ops);
     uint32_t count[4] = {interp.corner, 0, 0, 0}; // (the corners' count, before them)
@@ -6670,16 +6853,19 @@ void interp_record() {
     interp_capture(interp.end);
     interp.end_regs.assign(gs->reg, gs->reg + 256);
     interp.recorded = !interp.broken && recording_ops.ok && gs->field_scan_vblanks == field_scan;
+    interp.tried = true;
     gsn_stats.interp_records++;
     GSN_LOG(2, "interp: %llu recorded, %llu batches moving drawn in runs, %zu calls\n",
             (unsigned long long)gsn_stats.interp_records, (unsigned long long)interp.risky_runs, recording_ops.ops.size());
 }
 
-// Why the recording cannot be made again for this picture: 0 it can; 1 the GS is not as it was before it
-// (targets, their state, the render pass, VRAM, the CLUT); 2 its registers differ; 3 nothing recorded
+// Why the recording cannot be made again for this picture (GsnStats' interp_rerecord): 0 it can; 1 the GS's targets are
+// not as they were before it (their state, the render pass); 2 its registers differ; 3 nothing recorded yet (the frame's
+// first picture between); 4 what was recorded cannot be made again (a read-back in it, its kicks miscounted, the field
+// scan changed); 5 VRAM or the CLUT written since
 int interp_cannot_replay() {
     if (!interp.recorded) {
-        return 3;
+        return interp.tried ? 4 : 3;
     }
     flush_batch();
     // (the targets as before the recording; VRAM and the CLUT as after it: its uploads and CLUT loads leave
@@ -6688,7 +6874,7 @@ int interp_cannot_replay() {
     interp_capture(now);
     if (now.vram_writes != interp.end.vram_writes || now.clut_version != interp.end.clut_version) {
         GSN_LOG(1, "interp: VRAM or the CLUT written since the recording\n");
-        return 1;
+        return 5;
     }
     now.vram_writes = interp.start.vram_writes;
     now.clut_version = interp.start.clut_version;
@@ -6700,6 +6886,7 @@ int interp_cannot_replay() {
     auto shape_same = [](const InterpTargetState &x, const InterpTargetState &y) {
         return x.has_ms == y.has_ms && x.width == y.width && x.height == y.height && x.sx == y.sx && x.sy == y.sy;
     };
+    size_t had = now.targets.size();
     now.targets.erase(std::remove_if(now.targets.begin(), now.targets.end(), [&](const InterpTargetState &x) {
         for (const InterpTargetState &s : interp.start.targets) {
             if (key_of(s) == key_of(x)) {
@@ -6713,6 +6900,7 @@ int interp_cannot_replay() {
         }
         return false;
     }), now.targets.end());
+    bool kept = now.targets.size() != had;
     if (!interp_same(now, interp.start)) {
         return 1;
     }
@@ -6721,6 +6909,7 @@ int interp_cannot_replay() {
     }
     // the targets' images the recording names, as those targets have them now
     replay_images.clear();
+    bool own = false;
     for (const Recording::TargetImage &ti : recording_ops.target_images) {
         Target *t = find_target(ti.bp, ti.bw, ti.psm);
         if (!t) {
@@ -6728,6 +6917,7 @@ int interp_cannot_replay() {
             // and dropped each picture: map 063's sky). The GS has the targets it had before the recording
             // (above), so none was this buffer then: the image is the recording's own, made and filled by
             // its calls, and they are made again on it.
+            own = true;
             continue;
         }
         const Image *now = ti.ms ? t->ms.get() : t->image.get();
@@ -6740,6 +6930,8 @@ int interp_cannot_replay() {
             replay_images.push_back({ti.image, now});
         }
     }
+    gsn_stats.interp_kept_targets += kept;
+    gsn_stats.interp_own_targets += own;
     return 0;
 }
 
