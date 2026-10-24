@@ -112,10 +112,13 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   go without a write-back when dropped (VRAM keeps the game's), and stay over a transfer into them, the
   pages under it taken from VRAM after it. A write-back of a target at a scale reads only the middle
   pixel of each GS pixel back, taken on the GPU (a blit): at 4x a 640 x 448 target was 27 MB.
-- **The pictures between give way when the native GS falls behind**: a native GS thread a vblank behind at
-  two vblanks' starts in a row takes them away for half a second (longer, to 4 s, when it falls behind
-  again at once), the game's own pictures shown: under water each picture between costs more than a
-  vblank (the wobble's copies and their write-backs), and the game ran at 13 frames a second.
+- **The pictures between are cut when the native GS falls behind**: a native GS thread a vblank behind at
+  two vblanks' starts in a row takes one picture between a vblank away (at 240: 3, 2, 1, none), the ones kept
+  spread over the vblank; it gives one back after half a second without falling behind (longer, to 8 s, when it
+  falls behind again at once). So a place that costs more than the thread has keeps the game's own frames and as
+  many pictures as fit, not a cliff to 60 (gs.c; `--stats`: "cut to fewer a vblank"; the F3 counter: "CUT N").
+  Under water each picture between once cost more than a vblank (the wobble's copies and their write-backs) and
+  the game ran at 13 frames a second; that is fixed at the source (NATIVE_DRAW_P8.md, "240 at the owner's spots").
 - **The near cut's pieces are paired by nearest, both ways** (`frame_interp.c`, `objects_pair`). A map
   record that crosses the guard band is sent again by the CPU as 16 smaller triangles a triangle
   (`ModelScreen_CutClippedTriangles`), new batches every frame, so they are paired with the frame before's
