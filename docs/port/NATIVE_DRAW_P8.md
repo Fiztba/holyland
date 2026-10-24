@@ -599,6 +599,29 @@ hosted (`--native-draw on`) and the PS2 path.
   gsn_draw_test 0 of 300 (seeds 1, 7, 1234), vu1_test 0 of 90; herb with `--native-draw off` against
   play-932801f: the same log, PATH1 204e443a9fc49731, VU1 cycles 460424273, pictures 1800/1820/1840 byte for byte.
 
+### The doorway's shards, and the flash recorder (branch `p8/recorder`)
+
+- **The owner's F9 captures** (8, walking through the doorway to the shop and back, modern at his settings)
+  replayed with `kf4-gsreplay --renderer modern --scale 6,4 --msaa 2 --cutout-aa ssaa --layer-z tolerant`
+  (`--frames`, and `--draws` for the targets at 4x): no shards in any game frame. A capture holds the game's
+  packets, not the pictures between (frame_interp.c's moves are not in it), so it cannot show them.
+- **Reproduced headless** from `quick_doorway` walking forward, every picture of vblanks 410-480 at 240
+  (`--dump-frames` with `--dump-present 1280x720`): the shards fill the pictures between of one game frame
+  (436_250 to 437_750) at the top and side edges, and the top-left goes the sky's grey, as in the owner's
+  screenshot. Hosted shows the same; the PS2 path does not; `KF4_INTERP_STILL=1` and `--native-draw models`
+  do not; the native corners not moved at all still do. The cause was frame_interp.c's pairing of the PS2
+  path's runs: the map records' near-cut pieces (36-vertex strips, new batches each frame) were paired by
+  order with the first look-alike of the frame before, its neighbour 120-380 units away when a piece came or
+  went (RENDERER.md, "The near cut's pieces are paired by nearest, both ways"). Fixed there: 12 flagged
+  pictures before, 0 after on the walk in, and on the stairs and wade walks the same as hosted.
+- **Left (open):** walking backward out of the doorway, and turning on the stairs, a game frame's pictures
+  between show the clear colour at a screen edge, the PS2 path too (RENDERER.md, "What the frame did not draw").
+  Not modern's.
+- **The flash recorder** (F8; README.md, "Debugging"): the last 2 seconds of presented pictures, a GS capture,
+  a quick save and a save state into `captures/flash_*`; `tools/flash_find.py` finds the odd pictures. 5.4 us
+  of GPU a picture at 240 at 4x; windowed A/B on the doorway walk, 4,853 pictures shown with it and 4,880
+  without (nothing else running).
+
 ## Distance: layers by their real depth (branch `p8/distance`, from `native/draw` a1900776)
 
 The owner played `native-a190077` with `--renderer modern` (4x, native widescreen, MSAA 2, 30 and 240) and met two
@@ -658,7 +681,6 @@ tower 1,296 -> 3,931 with `--sky ps2` (the rock now covering the patch hosted le
 
 **GPU time** (240, `KF4_PRESENT_SIM=240`, 1,500 vblanks, 4x MSAA 2, ms a picture, base -> after): far 3.54 -> 3.69,
 the tower 2.70 -> 2.71, the fire 3.14 -> 3.18; every run kept up (5,730 pictures), turns 0.24 a picture as before.
-
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

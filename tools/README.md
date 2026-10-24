@@ -9,6 +9,7 @@
 | `vu1_disasm.py` | the game's VU1 programs as text |
 | `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
 | `gsreplay/` | `kf4-gsreplay` (below) |
+| `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
 

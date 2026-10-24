@@ -60,6 +60,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "port/host.h"
 #include "port/platform.h"
@@ -1059,7 +1060,23 @@ static void objects_sky_move(Objects *o, const Objects *prev) {
                 INTERP_MAX_MOVE * INTERP_MAX_MOVE;
 }
 
-static void objects_pair(Objects *o, const Objects *prev) {
+/* (objects_pair's second way) a run of the frame before that may be r: drawn alike, in the same section */
+static int run_alike(const Run *a, const Run *r) {
+    return a->placed && !a->native && !r->native && a->section == r->section && a->count == r->count && a->prim == r->prim &&
+           a->tex == r->tex;
+}
+
+static double middle_d2(const Run *a, const Run *r) {
+    double d2 = 0;
+    int c;
+
+    for (c = 0; c < 3; c++) {
+        d2 += (a->middle[c] - r->middle[c]) * (a->middle[c] - r->middle[c]);
+    }
+    return d2;
+}
+
+static void objects_pair(Objects *o, const Objects *prev, const double eye[3]) {
     size_t i, at = 0, k;
     uint8_t *taken;
 
@@ -1094,25 +1111,66 @@ static void objects_pair(Objects *o, const Objects *prev) {
         if (r->pair >= 0 || !r->placed || r->native || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
             continue;
         }
-        for (k = at; k < prev->nruns && k < at + 32; k++) {
-            const Run *a = &prev->runs[k];
-            double d2 = 0;
-            int c;
+        /* the nearest look-alike within the window, and this run the nearest to it in turn among this
+           frame's look-alikes around it, paired or not. The near cut's pieces of a map record
+           (ModelScreen_CutClippedTriangles: 16 smaller triangles for each with a corner out of the GS's
+           range, made anew each frame, so their batches are new and they pair here; many alike side by
+           side) were each taken for the first look-alike, its neighbour a hundred or more units away
+           when one of them came or went, and the pictures between drew them flying in from the screen's
+           edges: the dark shards in the doorway to the shop on map 000, hosted and modern alike (2026-10) */
+        {
+            size_t best = SIZE_MAX, first = SIZE_MAX, j;
+            double best_d2 = INTERP_MAX_MOVE * INTERP_MAX_MOVE;
 
-            if (taken[k] || !a->placed || a->native || a->section != r->section || a->count != r->count || a->prim != r->prim ||
-                a->tex != r->tex) {
+            for (k = at; k < prev->nruns && k < at + 32; k++) {
+                const Run *a = &prev->runs[k];
+                double d2;
+
+                if (taken[k] || !run_alike(a, r)) {
+                    continue;
+                }
+                if (first == SIZE_MAX) {
+                    first = k;
+                }
+                d2 = middle_d2(a, r);
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best = k;
+                }
+            }
+            if (best == SIZE_MAX) {
                 continue;
             }
-            for (c = 0; c < 3; c++) {
-                d2 += (a->middle[c] - r->middle[c]) * (a->middle[c] - r->middle[c]);
+            if (r->section == SECTION_WORLD) {
+                /* in the world, not more than a quarter of its distance from the eye: the cut's pieces are a
+                   hundred or more apart at two hundred from the eye, and a pair that far is a neighbour whose
+                   own pair is gone (no look-alike nearer to it is left to tell) */
+                double e2 = 0;
+                int c;
+
+                for (c = 0; c < 3; c++) {
+                    e2 += (r->middle[c] - eye[c]) * (r->middle[c] - eye[c]);
+                }
+                if (best_d2 > e2 / 16) {
+                    continue;
+                }
             }
-            if (d2 < INTERP_MAX_MOVE * INTERP_MAX_MOVE) {
-                r->pair = (int32_t)k;
-                taken[k] = 1;
-                at = k + 1;
-                stat_runs_order++;
+            for (j = i > 32 ? i - 32 : 0; j < o->nruns && j < i + 33; j++) {
+                const Run *s = &o->runs[j];
+
+                if (j != i && s->placed && run_alike(&prev->runs[best], s) && middle_d2(&prev->runs[best], s) < best_d2) {
+                    break;
+                }
             }
-            break;
+            if (j < o->nruns && j < i + 33) {
+                continue; /* (another run of this frame is nearer to it, paired or not: it is that one's) */
+            }
+            r->pair = (int32_t)best;
+            taken[best] = 1;
+            if (best == first) {
+                at = best + 1;
+            }
+            stat_runs_order++;
         }
     }
     free(taken);
@@ -2920,7 +2978,7 @@ void port_interp_vsync(const uint64_t *privileged) {
         pending.flat = flat_last;
         pending.flat_before = objects_before_set ? flat_before : NULL;
         pending.dirty = 0;
-        objects_pair(objects_last, pending.objects_before ? objects_before : NULL);
+        objects_pair(objects_last, pending.objects_before ? objects_before : NULL, w.camera.eye);
         pending.reads_prev = 0;
         pending.snapshot_sent = 0;
         pending.gpu = 0;

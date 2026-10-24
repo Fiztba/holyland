@@ -161,6 +161,10 @@
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
+       --flash-recorder off|on|SECONDS[,HEIGHT]
+                         the flash recorder (F8, docs/port/README.md "Debugging"): the last SECONDS of
+                         presented pictures (2 for on, the default) kept on the GPU at HEIGHT rows (540),
+                         written out as PNGs by the key; Vulkan presenter only
        --fpu-round zero|nearest
                          how the game's float maths rounds: as the EE's FPU (zero, the default:
                          toward zero, no denormals) or as the PC's IEEE floats (nearest), to compare
@@ -222,7 +226,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
@@ -249,6 +253,35 @@ static void parse_clock(const char *text) {
 
 static const char *gs_capture_at; /* --gs-capture-at (port/debug/gs_capture.c) */
 
+/* --flash-recorder off|on|SECONDS[,HEIGHT] */
+static int parse_flash_recorder(const char *value) {
+    char *end;
+    double seconds;
+
+    if (strcmp(value, "off") == 0) {
+        port_options.flash_seconds = 0;
+        return 1;
+    }
+    if (strcmp(value, "on") == 0) {
+        port_options.flash_seconds = 2;
+        return 1;
+    }
+    seconds = strtod(value, &end);
+    if (end == value || !(seconds >= 0 && seconds <= 30)) {
+        return 0;
+    }
+    port_options.flash_seconds = (float)seconds;
+    if (*end == ',') {
+        long height = strtol(end + 1, &end, 10);
+
+        if (height < 90 || height > 2160) {
+            return 0;
+        }
+        port_options.flash_height = (int)height;
+    }
+    return *end == 0;
+}
+
 int port_native_draw_parse(const char *value); /* (below) */
 
 static void parse_options(int argc, char **argv) {
@@ -260,6 +293,8 @@ static void parse_options(int argc, char **argv) {
     port_options.seamless_scroll = 1;
     port_options.native_scale = 0; /* auto: port_gs_native_scale() */
     port_options.frame_rate = 30;
+    port_options.flash_seconds = 2; /* the flash recorder (F8): on */
+    port_options.flash_height = 540;
     port_options.present_scaling = -1;
     port_options.present_sharpen = -1;
     port_options.native_msaa = 1;
@@ -629,6 +664,10 @@ static void parse_options(int argc, char **argv) {
             port_options.teleport = value;
         } else if (strcmp(option, "--gs-capture-at") == 0) {
             gs_capture_at = value;
+        } else if (strcmp(option, "--flash-recorder") == 0) {
+            if (!parse_flash_recorder(value)) {
+                usage(argv[0]);
+            }
         } else if (strcmp(option, "--fpu-round") == 0) {
             if (strcmp(value, "zero") != 0 && strcmp(value, "nearest") != 0) {
                 usage(argv[0]);

@@ -108,6 +108,16 @@ int port_gs_capture_init(const char *list) {
     return capture_at_count;
 }
 
+static char capture_folder[1100]; /* (port_debug_request_gs_capture_into) the next capture's folder */
+
+void port_debug_request_gs_capture_into(const char *folder) {
+    if (port_debug_gs_capture_busy()) {
+        return; /* (one is coming already: it goes where it was asked for) */
+    }
+    snprintf(capture_folder, sizeof(capture_folder), "%s", folder);
+    port_debug_request_gs_capture();
+}
+
 void port_debug_request_gs_capture(void) {
     if (!port_gs_enabled()) {
         port_debug_set_message("no GS capture: nothing is drawn in this run (no renderer)");
@@ -341,7 +351,12 @@ static void finish(void) {
 
     put(KF4GS_END, NULL, 0);
     port_gs_capture_recording = 0;
-    port_debug_capture_path("gs", start_vblank + 1, "kf4gs", path, sizeof(path));
+    if (capture_folder[0]) {
+        snprintf(path, sizeof(path), "%s/gs_%06llu.kf4gs", capture_folder, (unsigned long long)start_vblank + 1);
+        capture_folder[0] = 0;
+    } else {
+        port_debug_capture_path("gs", start_vblank + 1, "kf4gs", path, sizeof(path));
+    }
     if (write_file(path)) {
         port_debug_set_message("GS capture of vblanks %llu to %llu written: %s (%.1f MB in memory, %llu records)",
                                (unsigned long long)start_vblank + 1,

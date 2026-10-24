@@ -348,6 +348,13 @@ void port_quick_request_load(int slot) {
     ask(PORT_QUICK_LOAD, slot, NULL, 0);
 }
 
+void port_quick_request_save_file(const char *path) {
+    static char kept[1100];
+
+    snprintf(kept, sizeof(kept), "%s", path);
+    ask(PORT_QUICK_SAVE, -1, kept, 0);
+}
+
 void port_quick_request_teleport(int map, const float position[3], float heading, const char *label, int patient) {
     request.map = map;
     memcpy(request.position, position, sizeof(request.position));

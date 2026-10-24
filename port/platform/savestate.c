@@ -128,6 +128,14 @@ void port_state_request_save(int slot) {
     __atomic_store_n(&request, REQUEST_SAVE, __ATOMIC_RELEASE);
 }
 
+static char request_path[1100]; /* (a save to a file: port_state_request_save_file) */
+
+void port_state_request_save_file(const char *path) {
+    snprintf(request_path, sizeof(request_path), "%s", path);
+    __atomic_store_n(&request_slot, -1, __ATOMIC_RELAXED);
+    __atomic_store_n(&request, REQUEST_SAVE, __ATOMIC_RELEASE);
+}
+
 void port_state_request_load(int slot) {
     __atomic_store_n(&request_slot, slot, __ATOMIC_RELAXED);
     __atomic_store_n(&request, REQUEST_LOAD, __ATOMIC_RELEASE);
@@ -697,7 +705,9 @@ void port_state_host(void) {
         __atomic_store_n(&request, REQUEST_NONE, __ATOMIC_RELEASE);
         load(__atomic_load_n(&request_slot, __ATOMIC_RELAXED), NULL);
     } else if (kind == REQUEST_SAVE) {
-        if (save(__atomic_load_n(&request_slot, __ATOMIC_RELAXED), NULL)) {
+        int slot = __atomic_load_n(&request_slot, __ATOMIC_RELAXED);
+
+        if (save(slot, slot < 0 ? request_path : NULL)) {
             __atomic_compare_exchange_n(&request, &kind, REQUEST_NONE, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
         }
     }

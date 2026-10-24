@@ -52,6 +52,8 @@ int port_overlay_paused(void);
 void port_overlay_notify_state(void);
 /* (port/sdk/controls.c) a quick save or load was asked for by its key: shows port_quick_message() a while */
 void port_overlay_notify_quick(void);
+/* (port/debug/debug.c) the flash recorder's key: shows port_debug_message() a while (any thread) */
+void port_overlay_notify_debug(void);
 #else
 static inline int port_overlay_open(void) {
     return 0;
@@ -62,6 +64,8 @@ static inline int port_overlay_paused(void) {
 static inline void port_overlay_notify_state(void) {
 }
 static inline void port_overlay_notify_quick(void) {
+}
+static inline void port_overlay_notify_debug(void) {
 }
 #endif
 
