@@ -301,6 +301,7 @@ typedef struct {
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
     uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
     uint64_t shadows, shadows_gone, shadows_resolved; /* write-backs put off, never owed, made later (gsn.cpp, shadows) */
+    uint64_t shadow_reads_covered;  /* textures read over pages owed, all of what they read written since (shadow_covers) */
     uint64_t writebacks_overwritten; /* write-backs not made: the target under a GPU copy's whole pages (begin_transfer) */
     uint64_t silhouettes_whole;     /* silhouettes drawn whole, not in runs (flush_batch, "A silhouette") */
     uint64_t layer_draws;           /* --native-layer-z tolerant: batches with layers (flush_batch, "Z and layers") */
