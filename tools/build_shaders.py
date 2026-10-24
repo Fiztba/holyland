@@ -56,10 +56,12 @@ def main():
         "/* The native GS's shaders as SPIR-V, made by tools/build_shaders.py from port/gs/native/shaders/.",
         "   Generated: edit the shaders and run the script again. */",
         "#pragma once",
+        "#include <stddef.h>",
         "#include <stdint.h>",
         "",
     ]
     builds = [(name, name, []) for name in sources] + [v for v in VARIANTS if v[0] in sources]
+    idents = []
     with tempfile.TemporaryDirectory() as tmp:
         for source, name, defines in builds:
             out = os.path.join(tmp, name + ".spv")
@@ -76,6 +78,14 @@ def main():
                 lines.append("    " + ", ".join("0x%08x" % w for w in words[i:i + 8]) + ",")
             lines.append("};")
             lines.append("")
+            idents.append(ident)
+    # every shader in one table, for the pipeline list (port/gs/native/gsn_pipeline_warm.inc)
+    lines.append("/* every shader above (the pipeline list finds a shader by its SPIR-V: gsn_pipeline_warm.inc) */")
+    lines.append("static const struct { const uint32_t *code; size_t size; } gsn_spv_all[] = {")
+    for ident in idents:
+        lines.append("    {%s, sizeof(%s)}," % (ident, ident))
+    lines.append("};")
+    lines.append("")
     with open(OUT, "w", newline="\n") as f:
         f.write("\n".join(lines))
     print("wrote %s (%d shaders)" % (os.path.relpath(OUT, ROOT), len(builds)))

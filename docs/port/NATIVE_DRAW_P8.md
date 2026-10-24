@@ -1412,6 +1412,46 @@ check passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 
 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
+### The first visit's freeze: pipelines made ahead (branch `p8/warmup`, from `native/draw` 341eb444)
+
+The owner (341eb444, `--renderer modern` at 240, just rebooted): the first time he walks into an area the screen stands
+still for 1-2 seconds; afterwards that area is fine. **What it was:** Vulkan pipelines made when a draw first needed
+them, each a second or more. Measured with `KF4_HITCH_MS` (RENDERER.md, "Finding hitches"; headless, `KF4_PRESENT_SIM=240`,
+the owner's settings, a fresh data folder): walking in the canyon (map 99) the GS's thread stood 3.3 s at the boot
+picture, 13.6 s and 4.6 s at the first frames after the load (8 and 4 pipelines; one pipeline alone 2.8 s), and 0.85 s
+in the middle of the walk (two pipelines of the pictures between, first needed there). The game's thread waited on it
+the same. Nothing else came near: the meshes of a newly loaded map put on the GPU (732-1,226 at once), texture decodes
+and the disc reads are 20-45 ms together, at the load's first frame only; walking, no vblank's work went over about 22 ms
+(the steady 18-22 ms of a vblank at 240) once the pipelines were made. So no mesh work moved to `map_load`.
+- **Why seconds, and why again:** NVIDIA's compiler takes 2-4 s for the GS's big fragment shader with a state it has not
+  seen. Its disk cache (`%LOCALAPPDATA%\NVIDIA\GLCache`) is kept over a reboot, but per program (a renamed kf4.exe starts
+  empty) and this PC's was at its 1 GB limit (1,017 MB), evicting; each new build changes some shaders too. Ours
+  (`native_gs_pipelines.bin`) was written only every ten seconds when it had grown, never at exit: a crash or a quit soon
+  after an area's first visit lost them.
+- **The fix** (RENDERER.md, "Pipelines made ahead"): every pipeline written down, a list of them shipped in the program
+  (59 at the owner's settings from a tour of the 64 maps turning, the pond, the canyon walk and the menus, and the default
+  settings' tours), the data folder's list for the rest; at the start they are made on threads of their own, those the
+  cache has at once, the rest with "Building shaders... N/M" in the window's corner; play waits for them where it starts.
+  The cache and the list are written two seconds after pipelines are made, and at exit.
+
+**Numbers** (the canyon walk, 1,500 vblanks, the owner's settings, headless real time; spikes over 20 ms of the GS's
+thread):
+
+| | before | after |
+|---|---|---|
+| a new driver cache (a renamed kf4.exe) and a fresh data folder | 3.3 s (boot), 13.6 s and 4.6 s (the load), 0.85 s walking | 59 pipelines built in 13.2 s behind the title (8 threads); play waited 7.0 s with the note; 4.1 s at the boot picture (its first pipeline, needed at once); after: none walking, 26 ms at the load's first frame |
+| the same again (warm) | none walking; 21-32 ms at the load's first frame | 59 ready from the cache at once; the same |
+
+The pond (39 pipelines of its own): before, a fresh data folder 2.8 s at the boot picture, 6.4 s and 2.9 s at the load; with the list and the
+cache, nothing over 40 ms (the load's first frame, its 1,226 meshes put on the GPU, 32-42 ms). The data folder's list catches
+what the shipped one lacks (the log says so; `--stats`: "pipelines made ahead").
+
+**Pictures:** byte for byte 341eb444's at the four spots (`--fast`, 240, the owner's settings, every picture of vblanks
+200-207, 301, 399; under water 400-407, 600: 156 pictures), the herb run in modern at the owner's settings (the same
+`--log`, PATH1 hash 561c91020b2908ee, pictures 1800, 1820, 1840). The off check passes: boot_test; frame_test `--renderer
+gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off` against
+play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

@@ -1132,6 +1132,7 @@ void port_gs_print_stats(void) {
         if (port_options.renderer_modern || port_options.native_draw) {
             gsn_print_standalone_stats(); /* (P8; and native draw's for the pictures between) */
         }
+        gsn_print_pipeline_stats();
         {
             int w;
             double pictures = s->pictures ? (double)s->pictures : 1.0;
@@ -1207,6 +1208,24 @@ void port_gs_interp_picture(const void *picture) {
     gsn_interp_picture((const GsnInterpPicture *)picture);
 #else
     (void)picture;
+#endif
+}
+
+int port_gs_shaders_building(int *done, int *total) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        return gsn_pipelines_building(done, total);
+    }
+#endif
+    *done = *total = 0;
+    return 0;
+}
+
+int port_gs_shaders_running(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    return have_native && gsn_pipelines_running();
+#else
+    return 0;
 #endif
 }
 
