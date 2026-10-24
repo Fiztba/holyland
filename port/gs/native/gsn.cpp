@@ -35,6 +35,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -59,6 +60,9 @@ extern "C" {
 }
 namespace Vulkan {
 extern std::atomic<uint64_t> holyland_pipeline_binds; // (Granite's pipelines bound: cmake/granite_dynamic_state.inc)
+extern void (*holyland_on_compile)(Device *device, const DeferredPipelineCompile &compile, bool compute, int64_t ns, bool sync,
+                                   bool ok); // (cmake/granite_pipeline_warm.inc)
+extern void (*holyland_on_render_pass)(Util::Hash hash, const RenderPassInfo &info);
 }
 #include "gsn_shaders.h"
 #include "../../render/render_internal.hpp" // (native draw: gsn_native_draw.inc)
@@ -7324,6 +7328,58 @@ void ring_work(const RingRecord &r, const uint8_t *data) {
     }
 }
 
+// ---- KF4_HITCH_MS=N (measure): a vblank whose work on this thread took over N ms, and what it was ----
+std::atomic<uint64_t> hitch_compiles{0}, hitch_compile_ns{0}; // (pipelines made by draws that waited: gsn_pipeline_warm.inc)
+struct Hitch {
+    int ms = -1;
+    std::chrono::steady_clock::time_point t0;
+    double type_ms[8] = {};
+    uint64_t compile_ns0 = 0, compiles0 = 0;
+    GsnStats s0 = {};
+    uint64_t vblank = 0;
+} hitch;
+void hitch_begin() {
+    if (hitch.ms < 0) {
+        const char *e = getenv("KF4_HITCH_MS");
+        hitch.ms = e ? atoi(e) : 0;
+    }
+    if (hitch.ms) {
+        hitch.t0 = std::chrono::steady_clock::now();
+    }
+}
+void hitch_end(uint32_t type, bool vblank) {
+    if (!hitch.ms) {
+        return;
+    }
+    hitch.type_ms[type & 7] +=
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - hitch.t0).count();
+    if (!vblank) {
+        return;
+    }
+    hitch.vblank++;
+    double total = 0;
+    for (double v : hitch.type_ms) {
+        total += v;
+    }
+    if (total > hitch.ms) {
+        const GsnStats &s = gsn_stats, &o = hitch.s0;
+        fprintf(stderr,
+                "[hitch] gs vblank %llu: %.1f ms (gif %.1f vsync %.1f interp %.1f+%.1f) compiles %u %.1f ms; decodes %llu "
+                "%.1f ms, uploads %llu %.1f ms, nd meshes %llu arenas %llu, targets %llu, flush %.1f ms, sync %.1f ms\n",
+                (unsigned long long)hitch.vblank, total, hitch.type_ms[RING_GIF], hitch.type_ms[RING_VSYNC],
+                hitch.type_ms[RING_INTERP_FRAME], hitch.type_ms[RING_INTERP_PICTURE], (unsigned)(hitch_compiles - hitch.compiles0),
+                double(hitch_compile_ns - hitch.compile_ns0) / 1e6, (unsigned long long)(s.texture_decodes - o.texture_decodes),
+                (s.ns_decode - o.ns_decode) / 1e6, (unsigned long long)(s.uploads - o.uploads),
+                (s.ns_upload - o.ns_upload) / 1e6, (unsigned long long)(s.nd_mesh_uploads - o.nd_mesh_uploads),
+                (unsigned long long)(s.nd_arenas - o.nd_arenas), (unsigned long long)s.targets,
+                (s.ns_flush - o.ns_flush) / 1e6, (s.ns_sync - o.ns_sync) / 1e6);
+    }
+    memset(hitch.type_ms, 0, sizeof(hitch.type_ms));
+    hitch.compile_ns0 = hitch_compile_ns;
+    hitch.compiles0 = hitch_compiles;
+    hitch.s0 = gsn_stats;
+}
+
 void ring_thread() {
     Util::register_thread_index(0); // (Granite's command pools: the sender's when it does the work)
     Ring &q = *ring;
@@ -7359,7 +7415,9 @@ void ring_thread() {
         const uint8_t *at = q.bytes.data() + (tail & (ring_bytes - 1));
         RingRecord r;
         memcpy(&r, at, sizeof(r));
+        hitch_begin();
         ring_work(r, at + sizeof(r));
+        hitch_end(r.type, r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA));
         if (r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA)) {
             q.vsyncs_done.fetch_add(1);
         }
@@ -7505,11 +7563,14 @@ void save_pipeline_cache() {
 
 #include "gsn_standalone.inc" // (P8: the scene drawn into its own targets)
 #include "gsn_composite.inc"  // (P8 T2: the scene at a scale of its own, and the composite)
+#include "gsn_pipeline_warm.inc" // (pipelines made ahead: the lists, and the start's work)
 
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
 extern "C" int gsn_open(void *shared_context) {
+    holyland_on_compile = pw_on_compile; // (gsn_pipeline_warm.inc: every pipeline Granite makes, written down)
+    holyland_on_render_pass = pw_on_render_pass;
     gs = new Gs();
     gs->vram.assign(GSN_VRAM_BYTES, 0);
     memset(gs->page_written, 0, sizeof(gs->page_written));
@@ -7654,6 +7715,34 @@ extern "C" void gsn_pipeline_cache(const char *path) {
     gs->device->init_pipeline_cache(data.empty() ? nullptr : data.data(), data.size());
     cache_path = path;
     cache_saved_size = gs->device->get_pipeline_cache_size();
+    // the pipelines of the lists made ahead, on threads of their own (gsn_pipeline_warm.inc); the data folder's list
+    // and the cache written at the end too (not only while it runs: what the last seconds made is kept)
+    std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\") + 1);
+    pw_start(folder + "native_gs_pipeline_list.txt");
+    atexit([] {
+        pw.stop = true;
+        save_pipeline_cache();
+        pw_save();
+    });
+}
+
+extern "C" int gsn_pipelines_building(int *done, int *total) {
+    *done = pw.done.load();
+    *total = pw.total.load();
+    return pw.building.load();
+}
+
+extern "C" int gsn_pipelines_running(void) {
+    return pw.running.load();
+}
+
+extern "C" void gsn_print_pipeline_stats(void) {
+    fprintf(stderr,
+            "[stats] pipelines made ahead: %zu on the lists (%zu not shipped), %d ready from the cache in %.2f s, %d built in "
+            "%.1f s, %d stale; made by draws that waited: %llu (%.1f ms), %llu not on a list\n",
+            pw.entries.size(), pw.unshipped, pw.ready.load(), pw.seconds_check, pw.done.load(), pw.seconds_build,
+            pw.stale.load(), (unsigned long long)pw.play_made.load(), double(pw.play_ns.load()) / 1e6,
+            (unsigned long long)pw.play_new.load());
 }
 
 extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
@@ -7880,9 +7969,12 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         }
         return ok;
     }
-    // the pipeline cache, written when it has grown (looked at every ten seconds)
-    if (!cache_path.empty() && ++cache_vsyncs % 600 == 0) {
+    // the pipeline cache and the data folder's pipeline list, written when pipelines have been made (looked at
+    // every two seconds)
+    if (!cache_path.empty() && ++cache_vsyncs % 120 == 0 && pw.made.load() != pw.made_saved) {
+        pw.made_saved = pw.made.load();
         save_pipeline_cache();
+        pw_save();
     }
     gsn_stats.targets = gs->targets.size();
     gsn_stats.textures = gs->textures.size();

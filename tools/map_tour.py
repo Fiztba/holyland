@@ -3,6 +3,7 @@
 
     tools/map_tour.py --out DIR [--disc ISO] [--exe PATH] [--maps 0,99,...] [--positions N]
                       [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|native|modern]
+                      [--extra "ARGS"] [--turn]
 
 A quick save is the game's own save image with the map and the player's place in it, loaded through the
 game's card-load path (docs/port/README.md, "Quick saves"). This makes one for any map and any place:
@@ -441,11 +442,13 @@ def run_map(args, base, number, name, places, folder):
     pad = os.path.join(folder, "title.pad")
     with open(pad, "w") as f:
         f.write("100 CROSS 4     # the memory card notice; the first view loads on the title screen\n")
+        if args.turn:
+            f.write("%d RIGHT %d     # (--turn) turning all along\n" % (FIRST_LOAD, last))
     log = os.path.join(folder, "log.txt")
     cmd = [args.exe, "--disc", args.disc, "--no-audio", "--fast", "--headless", "--frames", str(last), "--clock", CLOCK,
            "--memcard", "none", "--input", pad, "--quick-load", loads, "--stats", "--log", log,
            "--dump-frames", ",".join(str(v["picture_at"]) for v in views), "--dump-dir", pictures,
-           "--renderer", args.renderer]
+           "--renderer", args.renderer] + (args.extra.split() if args.extra else [])
     if not args.no_capture:
         cmd += ["--gs-capture-at", str(views[0]["picture_at"])]
     env = dict(os.environ, KF4_DATA_DIR=data_dir)
@@ -533,6 +536,9 @@ def run_map(args, base, number, name, places, folder):
             out["vif_replay"] = {"same": int(m.group(1)), "differ": int(m.group(2)), "missing": int(m.group(3)),
                                  "extra": int(m.group(4))}
     shutil.rmtree(saves, ignore_errors=True)  # game state; made again each run
+    kept = os.path.join(data_dir, "native_gs_pipeline_list.txt")  # (the native GS's pipelines: tools/pipeline_list.py)
+    if os.path.exists(kept):
+        shutil.copy(kept, folder)
     shutil.rmtree(data_dir, ignore_errors=True)
     return out
 
@@ -631,6 +637,11 @@ def main():
     parser.add_argument("--renderer", default="gs", choices=("gs", "native", "modern"),
                         help="who draws the pictures (default gs, paraLLEl-GS; modern: the native GS with the scene "
                              "in its own targets, P8, whose captures carry the page-ownership table)")
+    parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --native-msaa 2\" (each "
+                             "map's NNN/native_gs_pipeline_list.txt then has the native GS's pipelines at those settings: "
+                             "tools/pipeline_list.py)")
+    parser.add_argument("--turn", action="store_true", help="turn right all along (the views are then not the same "
+                             "each tour: for the native GS's pipeline lists, the pictures between drawn moving)")
     args = parser.parse_args()
     if not args.disc:
         sys.exit("map_tour: pass --disc or set KF4_DISC")

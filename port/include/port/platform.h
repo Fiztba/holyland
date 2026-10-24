@@ -433,6 +433,10 @@ void port_gs_post_vsync(void);
 void port_gs_finish(void);
 /* The controller's side: a vblank is queued; scan it out. */
 int port_gs_vsync_pending(void);
+/* The native GS's pipelines made ahead at the start (docs/port/RENDERER.md, "Pipelines made ahead"): 1 while they
+   are made (running), and while those not in the pipeline cache are (building: how many of how many); any thread */
+int port_gs_shaders_running(void);
+int port_gs_shaders_building(int *done, int *total);
 void port_gs_run_vsync(void);
 
 /* --frame-rate (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to the

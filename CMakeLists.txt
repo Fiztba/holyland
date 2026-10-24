@@ -203,6 +203,9 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # and with dynamic state for the native GS's draws (cmake/granite_dynamic_state.cmake, after the above)
     include(cmake/granite_dynamic_state.cmake)
     kf4_granite_dynamic_state(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with the hooks of the native GS's pipeline list (cmake/granite_pipeline_warm.cmake, after the above)
+    include(cmake/granite_pipeline_warm.cmake)
+    kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # and the native GS (port/gs/native/), on the same Vulkan layer
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp port/gs/native/gsn.cpp port/gs/native/gsn_vram.c)

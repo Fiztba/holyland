@@ -209,7 +209,33 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   the GS's own batches...), the replays too (the marks are recorded), with the draws and triangles a
   picture of each; each mark waits for the work before it, so read them as shares. A fresh data
   folder has no pipeline cache: a timing run that compiles pipelines (`Stalled compile` lines, seconds
-  each) is not a timing run.
+  each) is not a timing run (the pipelines made ahead take most of them out: below).
+- **Pipelines made ahead** (`gsn_pipeline_warm.inc`, `cmake/granite_pipeline_warm.cmake`, branch `p8/warmup`). A
+  Vulkan pipeline is made when a draw first needs it. Made from nothing, one of the GS's big fragment shaders takes
+  NVIDIA's compiler 2-4 seconds, and the GS's thread waits: that was the owner's "frozen 1-2 seconds the first time I
+  walk into an area". The driver's own disk cache (`%LOCALAPPDATA%\NVIDIA\GLCache`, kept over a reboot) cannot be
+  counted on: it is kept per program (a renamed kf4.exe starts empty) and this machine's was at its 1 GB limit,
+  evicting; ours (`native_gs_pipelines.bin`) has only what was made before. So every pipeline Granite makes is written down (a hook
+  in `build_graphics_pipeline`/`build_compute_pipeline`: its shaders by SPIR-V hash and resource layout, its
+  compatible render pass by the attachments' formats and samples, its state words), into a list shipped in the
+  program (`gsn_pipeline_list.h`, made by `tools/pipeline_list.py` from map tours: `map_tour.py --renderer modern
+  --turn --extra "..."`) and, for pipelines that list lacks, the data folder's `native_gs_pipeline_list.txt` (the
+  log says `a pipeline not on the list was made in play`). At the start (`gsn_pipeline_cache`) the lines tagged with
+  the settings in use (`pw_tag`: MSAA, cut-out AA, colour, the scene and its samples) are made again on threads of
+  their own, each checked against the hash Granite would look it up by (a line from another build that no longer
+  makes the same pipeline is skipped, `stale`): first with `FAIL_ON_PIPELINE_COMPILE_REQUIRED` (those in the
+  pipeline cache: about a millisecond each), then the rest, "Building shaders... N/M" in the window's corner. They go
+  into Granite's own table, so a draw finds them made. Play waits for the rest when it starts (the first native draw,
+  `kernel.c`), with the note shown; a draw that needs one not made yet still makes it then (as before). The
+  pipeline cache file and the list are written two seconds after pipelines are made, and at exit (before, the cache
+  only every ten seconds, never at exit). `KF4_GSN_WARM=0` makes nothing ahead, `KF4_GSN_WARM_THREADS=N`; `--stats`
+  prints `pipelines made ahead`. Make the shipped list again after a shader or Granite change (its lines then come
+  out stale, and the data folder's list fills in).
+- **Finding hitches:** `KF4_HITCH_MS=N` prints each vblank whose work on the GS's thread took over N ms (`[hitch] gs
+  vblank`: by record kind, with the pipelines made by draws that waited, texture decodes, uploads, native draw's
+  meshes put on the GPU), and each vblank the game's thread reached over N ms after the one before (`[hitch] game
+  vblank`: disc reads, meshes parsed and hashed). With `KF4_PRESENT_SIM` and `KF4_PRESENT_LOG` for the gaps in what
+  would be shown.
 - **A uniform buffer read at an index each pixel works out is slow.** The pixels a GPU shades together
   read a uniform buffer one distinct index after another; the CLUT (each texel's own entry, four a
   bilinear read, more with mipmaps and anisotropy) cost about 1.4 ms of 5 a picture at the owner's

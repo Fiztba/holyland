@@ -383,12 +383,18 @@ static pthread_mutex_t read_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
 
+double port_hitch_disc_ms; /* (KF4_HITCH_MS, measure) */
+uint64_t port_hitch_disc_bytes;
+
 int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
     int result;
+    double t0 = port_wall_seconds();
 
     READ_LOCK();
     result = disc_read(lsn, sectors, buffer);
     READ_UNLOCK();
+    port_hitch_disc_ms += (port_wall_seconds() - t0) * 1e3;
+    port_hitch_disc_bytes += (uint64_t)sectors * 2048;
     return result;
 }
 
