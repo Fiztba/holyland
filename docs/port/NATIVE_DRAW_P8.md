@@ -554,6 +554,50 @@ shaded and blended, which the GS draws too: before, early Z threw them away.
 
 **Finding 2** (009's water much lighter under `--scene-scale`) is not looked at yet.
 
+## The owner's bugs at 78dd789c (branch `p8/owner-bugs`)
+
+The owner played `native-78dd789` with `--renderer modern` at his settings (4x, native widescreen, MSAA 2,
+cut-out AA, 240). Each was run headless at those settings (his `settings.json` in a fresh data folder), against
+hosted (`--native-draw on`) and the PS2 path.
+
+- **The rope bridge's light blocks are back** (`bugs1024/quick_bridge`, walking up to it). The scene's tie rule
+  drew an opaque one-pass tie's Z first and then its colour within half a Z of that, so among a batch's own
+  triangles a later one won within half a Z: a plank's lighter top faces over the faces in front of them, far
+  off. Fixed as hosted fixed it (669bee0, `flush_batch`'s two_phase): such a tie (one pass, Z written, the same
+  drawn twice; not a skinned model's second pass, not the shadows) draws its colour within the slack of what was
+  there before the batch with no Z written, then the batch again Z tested and written exactly. Walking to the
+  bridge, pixels off from hosted at 4x: about 2,300-3,000 a frame before, 950-1,700 after; the planks as hosted's.
+- **Opening a menu or a shop flashed black** (any save; CIRCLE opens the menu). As the menu opens,
+  `GameLoop_DrawFrameWithoutHud` draws the frame without the HUD and a brightness pass over it that reads the
+  frame (`RD_PASS_SCALE`, colour 0xA0). The scene drew that pass from its copy of its colour; the scene's
+  picture was right (read back), but the pictures between of that frame came out black, and so did the next
+  scanout, which weaves them (406.25-407 at 240: 286,720 of 286,720 pixels off at 1x). A pass that reads its own
+  frame is now the GS's when the frame is kept for pictures between (`interp.active`: declined, "reads its
+  frame"), as hosted draws it. After: the open, the close and the shop's dialogue match hosted to the edges (the
+  open's pictures between: about 4,400 pixels off by more than 32 at 4x, along silhouettes). Closing the menu
+  showed nothing headless that hosted does not.
+- **The campfire is missing in the tower** (`quick_campfire`) and **the locked chest by the pouch**
+  (`slot0_chest`): not the renderer. Both are missing from the same saves in hosted, in the PS2 path and with
+  `--renderer gs`. They are map objects their map has switched off: in the quick save's map flags
+  (`map_entry_flags`, row 000) objects 37, 39 and 41 are inactive (an older quick save of the same room, bugs1022
+  `quick_fire`, has them active and shows the fire in modern too); setting them active again in a copy of the
+  save brings the campfire back, drawn by modern. The chest is a breakable container (`MapObject_Break`, definition
+  bit 0x800): broken, it drops the item it held (`MapObject_UpdateBreakingItemHolder`), the pouch on the ground.
+- **Not reproduced headless:** the walls that vanish at the screen's edges on the stairs (`quick_stairs`, turning
+  both ways at lx 60 and 196), the shards in the doorway to the shop (`quick_doorway`, walking straight and
+  weaving, at 240 and at 210 for other phases), the bug's noisy shell on map 63 (`quick_bug`, 1,400-1,800 with the
+  bug in view, also with `KF4_PRESENT_SIM=240`, no `--fast`, every picture between drawn and `KF4_SA_VERIFY=2`:
+  223,164 textures and CLUTs the same, 0 differ) and the shards on the shallow water (`quick_wade`, walking). In
+  each, modern and hosted differ only along edges. On the stairs the one region off (about 16,000 pixels by more
+  than 8 at 4x) is the torch light's edge on the right-hand wall, 10-20 levels, the same with the vertex depth
+  left unclamped: not a missing wall. What is left to look at: an F9 capture (`.kf4gs`, which carries the table)
+  or an F5 state taken while it shows, replayed with `kf4-gsreplay --renderer modern`.
+- **Checks.** The review's sets again (its 19 spots, 4 water views and the menus, the owner's settings): every one
+  the same or fewer pixels off hosted than after finding 1 (the far plane's sky, slow, 730 to 620 by more than 8 in
+  game frames; the others within a few dozen). The off check: boot_test, frame_test gs and native PASS,
+  gsn_draw_test 0 of 300 (seeds 1, 7, 1234), vu1_test 0 of 90; herb with `--native-draw off` against
+  play-932801f: the same log, PATH1 204e443a9fc49731, VU1 cycles 460424273, pictures 1800/1820/1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
