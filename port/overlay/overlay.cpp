@@ -996,6 +996,34 @@ void debug_tools() {
     tooltip("The sound as the game made it (before the volume), as a WAV.");
     ImGui::SameLine();
     ImGui::TextDisabled("%s", keys[2]);
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+    // the flash recorder (port/include/port/present_vk.h): the last pictures shown, kept on the GPU
+    {
+        char key[64];
+        port_controls_binding_label(port_controls_binding(port_controls_layout(), ACTION_FLASH_RECORD, 0), key, sizeof(key));
+        bool on = port_options.flash_seconds > 0;
+        if (ImGui::Checkbox("Flash recorder", &on))
+            port_options.flash_seconds = on ? 2.0f : 0.0f;
+        tooltip("Keeps the last 2 seconds of pictures shown (each scaled to 540 rows) on the GPU. Its key\n"
+                "writes them as numbered PNGs into a folder of their own in the captures folder, with a GS\n"
+                "capture of the next vblanks, a quick save and a save state: press it right after seeing a\n"
+                "picture flash wrong. tools/flash_find.py finds the pictures that differ from both\n"
+                "neighbours. Costs one small copy a picture (--flash-recorder SECONDS,HEIGHT). Not saved.");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!on);
+        if (ImGui::Button("Write the last pictures"))
+            port_debug_flash_record();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", key);
+        int pictures, width, height;
+        double megabytes;
+        bool writing = port_vk_flash_info(&pictures, &width, &height, &megabytes) != 0;
+        if (on && width > 0)
+            ImGui::TextDisabled("%s%d pictures of %d x %d kept (%.0f MB of GPU memory)", writing ? "writing; " : "", pictures,
+                                width, height, megabytes);
+    }
+#endif
     ImGui::TextWrapped("Folder: %s", port_debug_folder());
     ImGui::TextWrapped("%s", port_debug_message());
 }
@@ -1597,6 +1625,11 @@ extern "C" void port_overlay_notify_state(void) {
 extern "C" void port_overlay_notify_quick(void) {
     toast_text = port_quick_message;
     toast_until = SDL_GetTicks() + 3000;
+}
+
+extern "C" void port_overlay_notify_debug(void) {
+    toast_text = port_debug_message;
+    toast_until = SDL_GetTicks() + 4000;
 }
 
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {

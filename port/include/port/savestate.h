@@ -11,6 +11,8 @@
    point. Safe from any thread (the window's events, the settings overlay). */
 void port_state_request_save(int slot);
 void port_state_request_load(int slot);
+/* A save to a file (the flash recorder's folder: port/debug/debug.c); path is copied */
+void port_state_request_save_file(const char *path);
 
 /* Whether `slot` has a state, and when it was written (seconds since 1970, 0 if none). */
 int port_state_exists(int slot);

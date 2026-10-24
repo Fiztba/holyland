@@ -116,6 +116,31 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   two vblanks' starts in a row takes them away for half a second (longer, to 4 s, when it falls behind
   again at once), the game's own pictures shown: under water each picture between costs more than a
   vblank (the wobble's copies and their write-backs), and the game ran at 13 frames a second.
+- **The near cut's pieces are paired by nearest, both ways** (`frame_interp.c`, `objects_pair`). A map
+  record that crosses the guard band is sent again by the CPU as 16 smaller triangles a triangle
+  (`ModelScreen_CutClippedTriangles`), new batches every frame, so they are paired with the frame before's
+  by their shape and place, not their batch. Many look alike side by side; taken as the first look-alike in
+  the window, each paired with its neighbour a hundred or more units away when one came or went, and the
+  pictures between drew them flying in from the screen's edges: dark shards in the doorway to the shop on
+  map 000, a game frame's pictures between at a time, hosted and modern alike (the owner's F9 captures could
+  not show it: they hold the game's packets, not the pictures between). Now the nearest, only when it is the
+  nearest to this run in turn, and in the world within a quarter of the run's distance from the eye.
+- **What the frame did not draw, a picture between cannot show** (open). Walking backward out of the doorway
+  on 000, and turning on the stairs (`bugs_modern`'s `quick_stairs`: the owner's vanishing walls), a game
+  frame's pictures between show the clear colour in a wedge or strip at a screen edge. The PS2 path's
+  pictures between do the same, hosted too; on the stairs only with `--native-widescreen` (the wider view
+  brings the walls beside the eye into the picture). Most likely the near cut's pieces still out of the GS's
+  range, dropped by VU1 (ADC) in the frame, which the picture's camera would see (not proven piece by piece). Native draw could clip those triangles on the GPU instead of the CPU's cut (NATIVE_DRAW_TASKS.md,
+  P1-4's `--clip gpu` design, the owner's decision).
+- **Finding a picture that is wrong for a moment**: the flash recorder (F8, `--flash-recorder`; README.md,
+  "Debugging") keeps the last 2 seconds of presented pictures on the GPU (`present_vk.cpp`, `flash_take`:
+  one blit a picture into a ring of 540-row layers, 5.4 us at 240 at 4x) and writes them out with a GS
+  capture and saves; `tools/flash_find.py` flags the pictures that differ from both neighbours, up to 8
+  pictures away (a flash lasting a game frame's pictures between), counting only solid 3 x 3 areas off so
+  that the edges a turn moves do not count. Headless, the same on `--dump-frames` pictures: every vblank of a
+  range with `--frame-rate 240` writes `frame_V.png` and `frame_V_250.png`... (`--dump-present 1280x720` keeps
+  them small); `KF4_INTERP_CPU=1` takes the pictures between off the GPU (the CPU's walk, where
+  `objects_pair`'s decisions can be printed).
 - **Meshes the CPU projects itself** (PATH2 triangles with Z varying and S, T near one projective map of
   the screen's X, Y, Q 1: the pools' reflecting surfaces) are moved with the camera as the world is, S and
   T with their place on the screen (`item_mesh`, `StPlane`; GSN_IM_SCREEN_ST on the GPU). Paired as 2D

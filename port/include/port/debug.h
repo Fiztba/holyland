@@ -3,7 +3,8 @@
    any build:
    - F9: a GS frame capture (.kf4gs) of the next whole frame, for tools/gsreplay (kf4-gsreplay);
    - F10: the game's state as JSON (.json);
-   - F12: the last 20 seconds of the sound as a WAV (.wav).
+   - F12: the last 20 seconds of the sound as a WAV (.wav);
+   - F8: the flash recorder's folder (port_debug_flash_record).
    Unused, none of them changes what the game does or costs anything but a test of a flag. */
 #ifndef PORT_DEBUG_H
 #define PORT_DEBUG_H
@@ -21,6 +22,16 @@ extern "C" {
 
 /* ---- Requests (any thread: the keys, the overlay's buttons) ----------------------------------- */
 void port_debug_request_gs_capture(void);
+void port_debug_request_gs_capture_into(const char *folder); /* the capture written into that folder */
+/* F8, the flash recorder: a folder captures/flash_<vblank>_<time> with the pictures the presenter kept
+   (port_vk_flash_write: NNNN.png, pictures.txt), a GS capture of the next vblanks, a quick save and a save
+   state. The game's thread (the keys, the overlay). */
+void port_debug_flash_record(void);
+void port_debug_set_message(const char *fmt, ...)
+#ifdef __GNUC__
+    __attribute__((format(printf, 1, 2)))
+#endif
+    ;
 void port_debug_write_state_dump(void); /* the game's thread, at a vblank */
 void port_debug_write_audio_tail(void);
 /* The captures folder, and what the last request did (for the overlay and stderr) */

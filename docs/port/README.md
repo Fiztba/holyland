@@ -166,6 +166,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
 | `--show-fps` | the frame-rate counter on for this run (F3, or the overlay's Interface page; off by default; see "The frame-rate counter (F3)") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
+| `--flash-recorder off\|on\|SECONDS[,HEIGHT]` | the flash recorder (F8; on by default: the last 2 seconds of pictures shown, at 540 rows; also on the overlay's Debug page, not saved; see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
 
 The window shows the game at 4:3 (16:9 with widescreen). A game controller is the pad; so is the keyboard (the PS2 layout,
@@ -189,8 +190,8 @@ King's Map); "A / D move left / right in menus" on the Controls page (`controls.
 it off. It follows the bindings (the keys of L1 / R1 and of d-pad left / right) and leaves the
 controller alone. In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
-loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F9, F10 and
-F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
+loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F8, F9, F10
+and F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
 rebound.
 
 ### The settings overlay (F1)
@@ -611,6 +612,31 @@ build that saved it, these do not.
 | F9 | `gs_<vblank>_<time>.kf4gs`: a GS frame capture, for `kf4-gsreplay` (below) |
 | F10 | `state_<vblank>_<time>.json`: the game's state for a bug report: the map, the player (position, heading, HP, MP, stats, equipment, ailments and their timers, status bits), the game's status, the live entities (type, spawn, position, HP, AI state, flags), the map objects within 6000 units (kind, state, position), the story's flags that are set (story, visited maps, map script flags, recollections) and the port's last 32 events (files read, the memory card) |
 | F12 | `audio_<vblank>_<time>.wav`: the last 20 seconds of the sound, as the game made it (before the volume) |
+| F8 | `flash_<vblank>_<time>/`: the flash recorder's folder: the last 2 seconds of pictures shown (below), a GS capture of the next two vblanks, a quick save and a save state |
+
+**The flash recorder (F8)** is for a picture that is wrong for a moment, a flash that a screenshot or
+F9 misses because it is gone by the time the key is pressed. The Vulkan presenter keeps every picture it
+shows, scaled to 540 rows (960 x 540 in 16:9), in a ring on the GPU: the last 2 seconds, 480 pictures at
+240 (about 1.1 GB of GPU memory at 240; 60 pictures a second at least). Press F8 right after seeing the
+flash: the folder `captures/flash_<vblank>_<time>` gets the ring's pictures, oldest first, as
+`0000.png`, `0001.png` ... (`pictures.txt` says each one's vblank, its phase, 0 for the vblank's own
+picture and above for a picture between, and how long before the last it was shown), with
+`gs_<vblank>.kf4gs` (the next two vblanks, as F9), `quick.kf4quick` (load it with F4's slot or
+`--quick-load`, any build) and `state.kf4state` (`--state-load`, this build). The pictures are written on a
+thread of their own in a few seconds (about 700 MB at 540 rows: uncompressed PNGs); the ring takes no
+pictures meanwhile, and the toast says "recorded N pictures" when they are all there. Then
+
+```sh
+python tools/flash_find.py captures/flash_001500_20261023-210057
+```
+
+lists the pictures that differ from both their neighbours (a flash, also one that lasts all the pictures
+between of a game frame) and writes `flashes.png`, a contact sheet of each with the pictures before and
+after it and where it differs (it reads `--dump-frames` folders too: `frame_000436_250.png`...). The cost
+while playing is one small copy a picture: 5.4 us of GPU time at 240 at 4x (0.13% of the GPU), the
+same pictures a second as without it. `--flash-recorder 1,360` keeps 1 second at 360 rows, `off` none;
+the Debug page turns it on and off for the run. Only the Vulkan presenter has it (the default with the
+native GS); with SDL_Renderer the key writes the GS capture and the saves alone.
 
 **A GS frame capture** holds, at the start of a frame, the GS (its 4 MB of VRAM, its registers and
 the scanout's last fields), VU1 (micro and data memory, registers and flags) and VIF1, then
@@ -670,7 +696,7 @@ draws compare against (TEX0's CLD 4 or 5) is loaded again from VRAM; with `--wid
 `--mode vif` makes the packets as the game sent them, before the GS front end squeezed the 2D, so
 those differ from the recorded ones.
 
-`KF4_DEBUG_AT=state@2290,audio@2290,gs@2295` presses F10, F12 and F9 at those vblanks, for checking the
+`KF4_DEBUG_AT=state@2290,audio@2290,gs@2295,flash@2300` presses F10, F12, F9 and F8 at those vblanks, for checking the
 tools without anyone at the keyboard (in a run that draws; with `KF4_DATA_DIR`, as they write into its
 `captures` folder).
 
@@ -743,7 +769,7 @@ STEP3.md's "What could come next" and PLAN.md.
 | `port/gs/` | the GS backends behind one small C interface: `native/`, our own GS on Vulkan (the default; RENDERER.md), and `gs_parallel.cpp`, paraLLEl-GS |
 | `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc, libsdr, libmpeg on the port's MPEG-2 decoder (`mpeg2.c`), and the PS2's math library (`libm_ps2.c`: newlib's, from the decomp's sources) |
 | `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |
-| `port/debug/` | the debugging tools: the GS frame capture (`gs_capture.c`, F9), the game's state as JSON (`game_dump.c`, F10), the sound's last 20 seconds and the captures folder (`debug.c`, F12) |
+| `port/debug/` | the debugging tools: the GS frame capture (`gs_capture.c`, F9), the game's state as JSON (`game_dump.c`, F10), the sound's last 20 seconds, the flash recorder's folder and the captures folder (`debug.c`, F12, F8; the flash recorder's ring is `port/platform/present_vk.cpp`'s) |
 | `port/math/` | libvu0 in C, computing what the SDK's VU0 code does, bit for bit (VU arithmetic from `port/include/port/vu_float.h`) |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
 | `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |
