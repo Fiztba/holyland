@@ -1030,6 +1030,66 @@ the frame again on the GPU. What is left at the pond is the frame (about 14 ms) 
 GS's thread, and the GPU: the recording made from the frame's own draws (pf/record's two routes above) would take
 both.
 
+### Pipeline binds: dynamic state (branch `rc/dynstate`, from `native/draw` d715daed)
+
+The replay's cost from pf/record: a pipeline bound for almost every draw, as the tie rule's Z-first and colour draws
+(and pf/skin's marks and shines) differ in depth write, compare, colour mask, blending and stencil, which Granite
+bakes into the pipeline.
+
+**What changed** (`cmake/granite_dynamic_state.cmake` and `.inc`; RENDERER.md, "And with dynamic state"):
+- **Granite with Vulkan's dynamic state**, for the native GS's command buffers only (two state bits `Cmd::raw` sets):
+  depth test, write and compare, the depth bounds test, stencil test and ops, culling, front face, topology within
+  its class and blend constants (Vulkan 1.3), and blend enable, equation and the colour write mask where the device
+  has VK_EXT_extended_dynamic_state3 (the RTX 5080 does; lavapipe lists it too, not tried here). A pipeline is looked
+  up without that state; before each draw Granite sets what differs from what it set last, as it would have baked it.
+  The recording needs nothing new: its calls set Granite's state as before, and the replay's draws set Vulkan's.
+- **The same pipeline not bound again** (after a render pass begins Granite bound whatever pipeline it found).
+- `--stats`: "native GS pipelines bound: N for M draws; pictures between: B a recording, B a replay (for D draws)".
+  `KF4_GSN_DYNAMIC=0` is the old pipelines (to compare), `1` without the blending (no extended dynamic state 3).
+
+**What is left is programs.** Of the binds left (the pond, sampled), 98% change the program: the map's (sa_000),
+the skinned models' (sa_280), the effects' (sa_700) and the GS's own alternate batch by batch. Joining them is
+the shaders' work, not state's.
+
+**Binds** (`--stats`, the four spots; `--fast` 600 vblanks unless said; before = `KF4_GSN_DYNAMIC=0`):
+
+| spot | all binds / draws | a recording | a replay (real time, 240) |
+|---|---|---|---|
+| pond | 1,617,104 -> 411,637 / 1,432,552 | 3,567 -> 953 | 4,190 of 4,199 (fast) -> 890 of 3,411 |
+| fortress | 2,106,325 -> 120,507 / 2,059,958 | 4,508 -> 256 | 4,652 of 4,668 (fast) -> 257 of 4,600 |
+| canyon | 1,106,277 -> 19,187 / 1,106,784 | 1,558 -> 36 | 1,612 of 1,615 (fast) -> 36 of 1,594 |
+| under water | 74,354 -> 12,635 / 74,217 | 158 -> 30 | 152 of 157 (fast) -> 31 of 162 |
+
+**Time.** The GS's thread a game frame (`--fast`, 240, the owner's settings, 600 vblanks, two runs each, base
+d715daed -> new; the owner was playing another game on the GPU): pond 24.2-24.4 -> 22.8-23.6 ms (a recording
+11.0-11.1 -> 10.6-11.0), fortress 18.2-21.0 -> 16.8-18.0 (9.7-11.2 -> 9.2-9.9), canyon 19.4-23.6 -> 18.2-20.2
+(8.2-9.5 -> 8.0-8.4); under water within its noise (13.6-23.4 against 12.3-27.4: the loading). A frame and its
+recording bind far less but still work out each batch's state; the replay is where the binds were most of the
+time. Real time (`KF4_PRESENT_SIM=240`, 1,400 vblanks, 760 under water, the GPU otherwise idle, two runs each,
+alternating):
+
+| spot | a replay | pictures a second |
+|---|---|---|
+| pond | 1.69-1.83 -> 1.59-1.61 ms | 83, 95 -> 97, 98 |
+| fortress | 1.62-1.66 -> 0.96-0.98 ms | 150, 95 -> 126, 163 |
+| canyon | 0.62-0.64 -> 0.37-0.38 ms | 66, 157 -> 166, 155 |
+| under water | 0.18-0.19 -> 0.16-0.18 ms | 201, 105 -> 201, 192 |
+
+The pictures a second move with the fallback's cuts and whatever else ran on the PC (a run's start found the GPU
+at 98-99% twice); the replays' times are the steady figure.
+
+**A first run compiles.** The pipelines are new to the driver's cache: the first run at the pond compiled six or so
+of them at about 4 s each (the scene's large fragment shaders; the old ones took as long once, 2 s each in older
+logs), then none again. Fewer pipelines in all (one for what were several), so less to compile later.
+
+**Pictures:** every picture the same as d715daed's, game frames and pictures between (the four spots, `--fast`,
+vblanks 200-207, 301, 399; under water 400-407, 600: 156 pictures, 27-30 of each spot's from the recording), also with
+`KF4_GSN_DYNAMIC=1`; the pond hosted (`--renderer native --native-draw on`, 40 pictures); the herb in modern at the
+owner's settings at 240 (the same `--log`, PATH1 hash 561c91020b2908ee, pictures 1800, 1820, 1840). The off check
+passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0
+of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
+460424273, pictures 1800, 1820 and 1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
@@ -1081,7 +1141,7 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   batch's FRAME, ZBUF, TEST, ALPHA and Z range, and why one is declined), `KF4_SA_PIXEL=X,Y` (the scene's
   batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack; the pixel's Z and q interpolated, the Z's
   change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule), `KF4_SA_SKIN=EPS` (a skinned
-  model's parts' tie in world units; 0, the default: exact), `KF4_SA_GROUP=0` (a skinned model's parts drawn as they come,
+  model's parts' tie in world units; 0, the default: exact), `KF4_GSN_DYNAMIC=0|1` (no dynamic state, or none for blending: "Pipeline binds"), `KF4_SA_GROUP=0` (a skinned model's parts drawn as they come,
   not kept: "A skinned model's parts drawn together"), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
   that differ counted in `[stats] native draw 0x280 plans`),
   `KF4_SA_NO_TABLE=1`; the table's (read once): `KF4_SA_VERIFY=1..4`, `KF4_SA_PACK=DIR`,

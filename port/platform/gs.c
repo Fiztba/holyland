@@ -1080,6 +1080,13 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->interp_rerecord[4], (unsigned long long)s->interp_mid_submits,
                     (unsigned long long)s->interp_kept_targets, (unsigned long long)s->interp_own_targets);
         }
+        if (s->pipeline_binds) {
+            fprintf(stderr, "[stats] native GS pipelines bound: %llu for %llu draws; pictures between: %.1f a recording, "
+                    "%.1f a replay (for %.1f draws)\n", (unsigned long long)s->pipeline_binds, (unsigned long long)s->draws,
+                    s->interp_records ? s->interp_record_binds / (double)s->interp_records : 0.0,
+                    s->interp_replays ? s->interp_replay_binds / (double)s->interp_replays : 0.0,
+                    s->interp_replays ? s->interp_replay_draws / (double)s->interp_replays : 0.0);
+        }
         if (s->replay_uploads || s->replay_misses) {
             fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",
                     (unsigned long long)s->replay_uploads, (unsigned long long)s->replay_misses);

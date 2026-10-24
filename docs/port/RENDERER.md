@@ -221,6 +221,19 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   anchor line is gone, configure stops and says so. Used by the ties' first phase (STEP3.md, "Hot spots at
   240"); without the GPU feature, or with `KF4_GSN_DEPTH_BOUNDS=0`, the test is not used. Not yet tried on a
   Linux (gcc) build.
+- **And with dynamic state** (`cmake/granite_dynamic_state.cmake`, run after the above; the code is
+  `cmake/granite_dynamic_state.inc`, included into `command_buffer.cpp`): two more state bits, `dynamic_ds` and
+  `dynamic_blend`, which the native GS's command buffers set (`Cmd::raw`) and Granite keeps through
+  `set_opaque_state`. With them a pipeline is made with depth test, write and compare, the depth bounds test,
+  stencil test and ops, culling, front face, topology (within its class) and blend constants dynamic (Vulkan 1.3),
+  and with `dynamic_blend` (VK_EXT_extended_dynamic_state3, turned on where the device has it) blend enable,
+  equation and the colour write mask too; it is looked up by a hash without that state, and before each draw
+  Granite sets what differs from what it set last (`holyland_flush_dynamic`, as `build_graphics_pipeline` would
+  have baked it: depth only with a depth attachment, a colour attachment's blending and mask only where the
+  program writes it). Such a command buffer also does not bind the graphics pipeline it has bound already (after
+  a render pass begins). Other command buffers (paraLLEl-GS, the presenters) are as before. `KF4_GSN_DYNAMIC=0`
+  turns it off, `1` leaves out blending and the mask (a device without extended dynamic state 3); `--stats`
+  counts the pipelines bound (NATIVE_DRAW_P8.md, "Pipeline binds").
 - **Granite:** `update_image` with row length 0 means the image's width; there is no SPIRV-Cross,
   so resource layouts are written by hand; its render pass cache ignores the sample count (MSAA
   passes name their subpass).

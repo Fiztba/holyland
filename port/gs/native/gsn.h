@@ -306,6 +306,9 @@ typedef struct {
        CLUT written since; replays that named a target the recording made and kept, or made and dropped (its own) */
     uint64_t interp_rerecord[8];
     uint64_t interp_kept_targets, interp_own_targets;
+    /* graphics pipelines bound (Granite's vkCmdBindPipeline, all of the GS's thread's and the presenter's), and those of
+       the pictures between drawn from the packets and from the recording; the draws of those from the recording */
+    uint64_t pipeline_binds, interp_record_binds, interp_replay_binds, interp_replay_draws;
     /* Why render passes ended, and why multisampled images were resolved (GSN_WHY_*); the bytes the
        passes loaded and stored (their attachments, whole), resolves and copies moved; pictures made */
     uint64_t pass_ends[16], resolves_by[16];

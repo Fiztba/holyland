@@ -57,6 +57,9 @@ extern "C" {
 #include "gsn.h"
 #include "gsn_vram.h"
 }
+namespace Vulkan {
+extern std::atomic<uint64_t> holyland_pipeline_binds; // (Granite's pipelines bound: cmake/granite_dynamic_state.inc)
+}
 #include "gsn_shaders.h"
 #include "../../render/render_internal.hpp" // (native draw: gsn_native_draw.inc)
 
@@ -731,6 +734,35 @@ DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBuf
 void data_flush(DataChunk &ch);
 VkDeviceSize ubo_align();
 
+// Vulkan's dynamic state for the draws (cmake/granite_dynamic_state.cmake): depth, stencil, culling, topology and
+// blend constants where the device has Vulkan 1.3; blending and the colour write mask too where it has
+// VK_EXT_extended_dynamic_state3's. Draws that differ only there (the tie rule's Z-first and colour draws, a skinned
+// group's marks and shines) then share a pipeline instead of each binding one of its own. The recording needs no
+// calls of its own for it: its calls (OP_DEPTH_TEST, OP_WRITE_MASK ...) set Granite's state as before, and Granite
+// sets Vulkan's before each draw it makes again. KF4_GSN_DYNAMIC=0: none (the pipelines as before, to compare);
+// 1: not the blending and the write mask (as on a device without extended dynamic state 3).
+struct DynamicState {
+    bool ds = false, blend = false;
+};
+DynamicState dynamic_state_choice() {
+    static DynamicState d;
+    static bool chosen;
+    if (!chosen) {
+        chosen = true;
+        const char *v = getenv("KF4_GSN_DYNAMIC");
+        int want = v ? atoi(v) : 2;
+        const auto &f = gs->device->get_device_features();
+        d.ds = want >= 1 && f.device_api_core_version >= VK_API_VERSION_1_3;
+        d.blend = d.ds && want >= 2 && f.eds3_features.extendedDynamicState3ColorBlendEnable &&
+                  f.eds3_features.extendedDynamicState3ColorBlendEquation && f.eds3_features.extendedDynamicState3ColorWriteMask;
+        GSN_LOG(1, "dynamic state: depth and stencil %s, blending %s\n", d.ds ? "on" : "off", d.blend ? "on" : "off");
+    }
+    return d;
+}
+uint64_t pipeline_binds() {
+    return Vulkan::holyland_pipeline_binds.load(std::memory_order_relaxed);
+}
+
 class Cmd {
 public:
     CommandBuffer &raw() {
@@ -738,6 +770,8 @@ public:
             gs->cmd = gs->device->request_command_buffer();
             gpu_cmd_serial++;
             forget_bindings();
+            DynamicState d = dynamic_state_choice();
+            gs->cmd->set_dynamic_state(d.ds, d.blend); // (kept through set_opaque_state: the command buffer's own)
             gpu_mark(GPU_OTHER);
         }
         barrier_fresh = false;
@@ -6897,6 +6931,7 @@ void interp_record() {
     interp_capture(interp.start);
     recording_ops.clear();
     recording_ops.on = true;
+    uint64_t binds0 = pipeline_binds();
     cmd().forget_bindings();
     cmd().interp_kicks();
     interp.active = true;
@@ -6914,6 +6949,7 @@ void interp_record() {
         at += 8 + head[1];
     }
     flush_batch(); // (the last batch is the picture's)
+    gsn_stats.interp_record_binds += pipeline_binds() - binds0;
     recording_ops.settle();
     recording_ops.on = false;
     cmd().forget_bindings();
@@ -7043,7 +7079,10 @@ void interp_picture_now(const uint8_t *data, size_t size) {
     int why = interp_cannot_replay();
     if (why == 0) {
         Timer timer(gsn_stats.ns_interp_replay);
+        uint64_t binds0 = pipeline_binds();
         replay_ops(recording_ops);
+        gsn_stats.interp_replay_binds += pipeline_binds() - binds0;
+        gsn_stats.interp_replay_draws += recording_ops.draws;
         interp_restore(interp.end);
         gsn_stats.draws += recording_ops.draws;
         gsn_stats.interp_replays++;
@@ -7524,6 +7563,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     sa_switch(sa_mode != 0);
     sa_vblank(extra);
     gsn_stats.pictures++;
+    gsn_stats.pipeline_binds = pipeline_binds();
     Why why_scanout(GSN_WHY_SCANOUT);
     end_pass();
     gpu_mark(GPU_OTHER);
