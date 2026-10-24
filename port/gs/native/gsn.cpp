@@ -516,14 +516,15 @@ const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa 
                                  "pass: untagged", "pass: end", "scene draws", "scene cut-outs per sample",
                                  "scene blend copies", "scene blend draws", "scene shadows", "scene skinned groups",
                                  "refl draws", "refl cut-outs per sample", "refl blend copies", "refl blend draws",
-                                 "refl shadows", "refl skinned groups", "GS batches", "scene ops", "refl Z-first", "scene Z-first", "scene blend copies between", "refl blend copies between"};
+                                 "refl shadows", "refl skinned groups", "GS batches", "scene ops", "refl Z-first", "scene Z-first", "scene blend copies between", "refl blend copies between", "scene Z-first atest", "refl Z-first atest"};
 enum {
     GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_UNTAGGED, GPU_PASS_END,
     GPU_SA_DRAW, GPU_SA_SAMPLE, GPU_SA_BLEND_COPY, GPU_SA_BLEND_DRAW, GPU_SA_SHADOW, GPU_SA_GROUP,
     GPU_SA_REFL, // (the same six into a named target: + GPU_SA_REFL - GPU_SA_DRAW)
-    GPU_GS_BATCH = GPU_SA_REFL + 6, GPU_SA_OP, GPU_REFL_ZFIRST, GPU_SA_ZFIRST, GPU_SA_COPY_BETWEEN, GPU_REFL_COPY_BETWEEN, GPU_KINDS
+    GPU_GS_BATCH = GPU_SA_REFL + 6, GPU_SA_OP, GPU_REFL_ZFIRST, GPU_SA_ZFIRST, GPU_SA_COPY_BETWEEN, GPU_REFL_COPY_BETWEEN, GPU_SA_ZFIRST_ATEST, GPU_REFL_ZFIRST_ATEST, GPU_KINDS
 };
 uint64_t gpu_marks[GPU_KINDS];
+uint64_t gpu_draws[GPU_KINDS], gpu_tris[GPU_KINDS]; // (KF4_GSN_GPU_TIME=2: the draws made in each kind's time, and their triangles)
 int gpu_cur = -1; // (KF4_GSN_GPU_TIME=2: what is being drawn since the last mark)
 void gpu_mark(int kind);
 void gpu_enter(int kind);
@@ -538,7 +539,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE,
+    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -747,6 +748,22 @@ struct DataPlace {
 DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBufferUsageFlags usage, VkDeviceSize chunk_size);
 void data_flush(DataChunk &ch);
 VkDeviceSize ubo_align();
+VkDeviceSize ssbo_align();
+
+// The CLUTs bound as storage data (Cmd::set_storage_data): those in the constant chunk now, by what they hold, so that
+// a batch with the same CLUT as one before binds it where that one is (Granite makes a descriptor set for each
+// storage buffer place: the same place, a set it has already)
+struct StorageSeen {
+    const Buffer *buffer = nullptr;
+    struct Entry {
+        uint64_t hash;
+        VkDeviceSize offset;
+        std::vector<uint8_t> bytes;
+    };
+    std::vector<Entry> entries; // (the latest last)
+};
+StorageSeen storage_seen;
+std::vector<uint32_t> clut_scratch; // (flush_batch's CLUT and rectangles, before they are bound)
 
 // Vulkan's dynamic state for the draws (cmake/granite_dynamic_state.cmake): depth, stencil, culling, topology and
 // blend constants where the device has Vulkan 1.3; blending and the colour write mask too where it has
@@ -978,7 +995,8 @@ public:
     }
     void *allocate_constant_data(unsigned set, unsigned binding, VkDeviceSize size) {
         VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
-        DataPlace d = data_place(constant_chunk, range, ubo_align(), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 2u << 20);
+        DataPlace d = data_place(constant_chunk, range, ubo_align(),
+                                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 2u << 20);
         raw().set_uniform_buffer(set, binding, *d.buffer, d.offset, range);
         if (on()) {
             rec().hold_chunk(*d.buffer);
@@ -987,6 +1005,53 @@ public:
             return rec().arena.data() + at;
         }
         return d.host;
+    }
+    // Storage data (the CLUT, gs_frag.h's Clut): written now, into the constant chunk, and bound there; the same bytes
+    // as a recent one in the chunk bound where they are. The chunk keeps them (a recording holds it): the calls made
+    // again bind the same place.
+    void set_storage_data(unsigned set, unsigned binding, const void *data, VkDeviceSize size) {
+        uint64_t h = size;
+        const uint8_t *bytes = static_cast<const uint8_t *>(data);
+        for (VkDeviceSize k = 0; k + 8 <= size; k += 8) {
+            uint64_t w;
+            memcpy(&w, bytes + k, 8);
+            h = (h ^ w) * 0x100000001B3ull;
+            h ^= h >> 29;
+        }
+        const Buffer *buffer = nullptr;
+        VkDeviceSize offset = 0;
+        if (storage_seen.buffer == constant_chunk.buffer.get() && constant_chunk.buffer) {
+            for (size_t i = storage_seen.entries.size(); i-- > 0;) {
+                const StorageSeen::Entry &e = storage_seen.entries[i];
+                if (e.hash == h && e.bytes.size() == size && memcmp(e.bytes.data(), bytes, size_t(size)) == 0) {
+                    buffer = storage_seen.buffer;
+                    offset = e.offset;
+                    break;
+                }
+            }
+        }
+        if (!buffer) {
+            VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+            DataPlace d = data_place(constant_chunk, range, std::max(ubo_align(), ssbo_align()),
+                                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 2u << 20);
+            memcpy(d.host, bytes, size_t(size));
+            buffer = d.buffer;
+            offset = d.offset;
+            if (storage_seen.buffer != d.buffer) {
+                storage_seen.buffer = d.buffer;
+                storage_seen.entries.clear();
+            }
+            if (storage_seen.entries.size() >= 64) {
+                storage_seen.entries.erase(storage_seen.entries.begin());
+            }
+            storage_seen.entries.push_back({h, offset, std::vector<uint8_t>(bytes, bytes + size)});
+        }
+        VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+        if (on()) {
+            rec().hold_chunk(*buffer);
+            rec().add(OP_STORAGE_DATA, ArgPlaced{set, binding, uint32_t(range), buffer, offset});
+        }
+        raw().set_storage_buffer(set, binding, *buffer, offset, range);
     }
     void set_blend_enable(bool enable) {
         if (on()) {
@@ -1052,6 +1117,10 @@ public:
         if (on()) {
             rec().add(OP_DRAW, ArgDraw{count, 1, first, 0});
             rec().draws++;
+        }
+        if (gpu_time >= 2) {
+            gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
+            gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += count / 3;
         }
         raw().draw(count, 1, first, 0);
     }
@@ -1391,6 +1460,10 @@ void replay_ops(const Recording &r) {
         }
         case OP_DRAW: {
             const ArgDraw &a = r.args<ArgDraw>(op);
+            if (gpu_time >= 2) {
+                gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
+                gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += a.count / 3;
+            }
             c.draw(a.count, a.instances, a.first, a.first_instance);
             break;
         }
@@ -1439,6 +1512,13 @@ void replay_ops(const Recording &r) {
             const ArgBinding &a = r.args<ArgBinding>(op);
             if (!same(a.binding & 0xFF, a.binding >> 8, a.buffer, 0)) {
                 c.set_storage_buffer(a.binding & 0xFF, a.binding >> 8, *a.buffer);
+            }
+            break;
+        }
+        case OP_STORAGE_DATA: {
+            const ArgPlaced &a = r.args<ArgPlaced>(op);
+            if (!same(a.a, a.b, a.buffer, a.offset)) {
+                c.set_storage_buffer(a.a, a.b, *a.buffer, a.offset, a.size);
             }
             break;
         }
@@ -1565,6 +1645,14 @@ VkDeviceSize ubo_align() {
     static VkDeviceSize align = 0;
     if (!align) {
         align = std::max<VkDeviceSize>(16, gs->device->get_gpu_properties().limits.minUniformBufferOffsetAlignment);
+    }
+    return align;
+}
+
+VkDeviceSize ssbo_align() {
+    static VkDeviceSize align = 0;
+    if (!align) {
+        align = std::max<VkDeviceSize>(16, gs->device->get_gpu_properties().limits.minStorageBufferOffsetAlignment);
     }
     return align;
 }
@@ -4868,18 +4956,15 @@ void flush_batch() {
         // the 64 KiB of a uniform buffer: gs_frag.h's Clut)
         uint32_t tris = count / 3;
         bool rects = rect_2d && tris <= (VULKAN_MAX_UBO_SIZE - 1024) / 8;
-        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, rects ? 256 + 4 * ((tris + 1) / 2) : 256);
+        std::vector<uint32_t> &clut_data = clut_scratch; // (kept from batch to batch: its room)
+        clut_data.assign(rects ? 256 + 4 * ((tris + 1) / 2) : 256, 0u);
         if (want_clut) {
-            memcpy(clut_data, clut, sizeof(clut));
-        } else {
-            memset(clut_data, 0, 1024);
+            memcpy(clut_data.data(), clut, sizeof(clut));
         }
         if (rects) {
-            memcpy(clut_data + 256, &gs->rects_2d[first / 3 * 2], tris * 8);
-            if (tris & 1) {
-                clut_data[256 + tris * 2] = clut_data[257 + tris * 2] = 0;
-            }
+            memcpy(clut_data.data() + 256, &gs->rects_2d[first / 3 * 2], tris * 8);
         }
+        c.set_storage_data(0, 2, clut_data.data(), clut_data.size() * sizeof(uint32_t));
 
         // depth
         if (depth) {
@@ -6145,7 +6230,7 @@ void make_program() {
     frag.output_mask = 1;
     frag.push_constant_size = sizeof(Push);
     frag.sets[0].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3);
-    frag.sets[0].uniform_buffer_mask = 1u << 2;
+    frag.sets[0].storage_buffer_mask = 1u << 2; // (the CLUT: gs_frag.h)
     frag.sets[0].fp_mask = (1u << 1) | (1u << 3);
     for (int b : {0, 1, 2, 3}) {
         frag.sets[0].meta[b].array_size = 1;
@@ -7593,6 +7678,15 @@ extern "C" void gsn_print_gpu_times(void) {
         fprintf(stderr, " %s %.3f", k.first.c_str(), k.second / pictures);
     }
     fprintf(stderr, "\n");
+    if (gpu_time >= 2) {
+        fprintf(stderr, "[stats] native GS draws a picture by kind (draws/triangles):");
+        for (int k = 0; k < GPU_KINDS; k++) {
+            if (gpu_draws[k]) {
+                fprintf(stderr, " %s %.0f/%.0f", gpu_kinds[k], double(gpu_draws[k]) / pictures, double(gpu_tris[k]) / pictures);
+            }
+        }
+        fprintf(stderr, "\n");
+    }
 }
 
 namespace {

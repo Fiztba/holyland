@@ -1479,7 +1479,7 @@ void sa_programs() {
     frag.output_mask = 1;
     frag.push_constant_size = sizeof(Push);
     frag.sets[0].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3);
-    frag.sets[0].uniform_buffer_mask = 1u << 2;
+    frag.sets[0].storage_buffer_mask = 1u << 2; // (the CLUT: gs_frag.h)
     frag.sets[0].fp_mask = (1u << 1) | (1u << 3);
     for (int b : {0, 1, 2, 3}) {
         frag.sets[0].meta[b].array_size = 1;
@@ -2293,12 +2293,8 @@ void sa_group_state(Cmd &c, const SaGroupKey &k) {
     c.set_texture(0, 0, *k.raw, StockSampler::NearestClamp);
     c.set_texture(0, 1, *k.target, StockSampler::NearestClamp);
     c.set_texture(0, 3, gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-    uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
-    if (k.want_clut) {
-        memcpy(clut_data, k.clut, sizeof(k.clut));
-    } else {
-        memset(clut_data, 0, 1024);
-    }
+    static const uint32_t no_clut[256] = {};
+    c.set_storage_data(0, 2, k.want_clut ? k.clut : no_clut, 1024);
     c.set_depth_compare(k.ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : k.ztst == 3 ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS);
     if (k.blend_on) {
         float constants[4] = {float(k.fix) / 128.0f, float(k.fix) / 128.0f, float(k.fix) / 128.0f, 128.0f / 255.0f};
@@ -3435,12 +3431,8 @@ bool sa_draw_batch(int *why) {
         } else {
             c.set_texture(0, 3, shader_blend ? sa.copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
         }
-        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
-        if (st.want_clut) {
-            memcpy(clut_data, st.clut, sizeof(st.clut));
-        } else {
-            memset(clut_data, 0, 1024);
-        }
+        static const uint32_t no_clut[256] = {};
+        c.set_storage_data(0, 2, st.want_clut ? st.clut : no_clut, 1024);
         if (gpu_corners) {
             c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at) * sizeof(Vtx), sizeof(Vtx));
         } else {
@@ -3582,7 +3574,9 @@ bool sa_draw_batch(int *why) {
                 p.zbias = 0.0f; // (by its real depth: sa_slack's world units, no Z)
                 p.zslope = -layer_eps; // (0: exact)
             }
-            gpu_enter(draws[i].mask == 0 && gpu_kind != GPU_SA_OP && !shadow ? (gpu_refl ? GPU_REFL_ZFIRST : GPU_SA_ZFIRST) : gpu_kind);
+            gpu_enter(draws[i].mask == 0 && gpu_kind != GPU_SA_OP && !shadow
+                          ? (draws[i].select ? (gpu_refl ? GPU_REFL_ZFIRST_ATEST : GPU_SA_ZFIRST_ATEST) : (gpu_refl ? GPU_REFL_ZFIRST : GPU_SA_ZFIRST))
+                          : gpu_kind);
             c.set_color_write_mask(draws[i].mask);
             c.set_depth_test(true, draws[i].zwrite);
             if (shadow) {
