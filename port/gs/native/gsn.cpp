@@ -2120,6 +2120,20 @@ bool shares_pages(const Target &a, const Target &b);
 
 // (sharer: targets that share pages with it (shares_pages) are left alone: take_pages moves pages
 // between them)
+// Pages a GPU copy of the frame is about to write whole (begin_transfer: every bit of each, from a target): a
+// target lying wholly in them is dropped without going back to VRAM first, and a target made over them is not
+// loaded from VRAM (the copy covers it). count 0: none.
+uint32_t overwrite_lo = 0, overwrite_count = 0;
+
+bool pages_within(uint32_t lo, uint32_t count, uint32_t outer_lo, uint32_t outer_count) {
+    for (uint32_t k = 0; k < count; k++) {
+        if (((lo + k - outer_lo) % vram_pages) >= outer_count) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer = nullptr) {
     shadow_resolve(lo, count);
     for (size_t i = 0; i < gs->targets.size();) {
@@ -2128,8 +2142,12 @@ void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, con
         target_pages(*t, &tlo, &tcount);
         if (t != keep && pages_overlap(lo, count, tlo, tcount) && !(sharer && shares_pages(*sharer, *t))) {
             if (drop) {
-                if (!t->replay_only) { // (a picture between's own: VRAM keeps the game's, prepare_write)
+                // (a picture between's own: VRAM keeps the game's, prepare_write; one under a copy's whole pages:
+                // all of it written over)
+                if (!t->replay_only && !(overwrite_count && !t->depth && pages_within(tlo, tcount, overwrite_lo, overwrite_count))) {
                     write_back(*t);
+                } else if (!t->replay_only) {
+                    gsn_stats.writebacks_overwritten++;
                 }
                 drop_target(t);
                 continue;
@@ -2383,7 +2401,9 @@ Target *get_target_made(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, 
     // whatever else was drawn over these pages goes back to VRAM first, and stops being a target
     // (but for a Z buffer sharing its pages, which hands them over)
     claim_pages(lo, count, nullptr, true, made.get());
-    load_target_rect(*made, 0, 0, width, height);
+    if (!(overwrite_count && !made->depth && pages_within(lo, count, overwrite_lo, overwrite_count))) {
+        load_target_rect(*made, 0, 0, width, height);
+    }
     gs->targets.push_back(std::move(made));
     take_pages(*gs->targets.back(), false);
     return gs->targets.back().get();
@@ -2589,6 +2609,28 @@ Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint
 
 // ---- The CLUT ----------------------------------------------------------------------------------
 // TEX0's CLD: whether the CLUT buffer is loaded now, and from where
+// The entries a CLUT load reads from a VRAM, as its format has them (CSM1: the 16 x 16 or 8 x 2 rectangle,
+// entries 8-15 and 16-23 of each 32 swapped; CSM2: a line of TEXCLUT's buffer): read a row at a time
+void clut_read_entries(const uint8_t *vram, uint64_t tex0, uint64_t texclut, uint32_t *values) {
+    uint32_t psm = bits(tex0, 20, 6), cbp = bits(tex0, 37, 14), cpsm = bits(tex0, 51, 4), csm = bits(tex0, 55, 1);
+    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
+    uint32_t entries = eight ? 256 : 16;
+    uint32_t gpsm = cpsm == 0 ? GSN_PSMCT32 : cpsm == 2 ? GSN_PSMCT16 : GSN_PSMCT16S;
+    if (csm != 0) {
+        gsn_vram_read_row(vram, gpsm, cbp, bits(texclut, 0, 6), bits(texclut, 6, 6) * 16, bits(texclut, 12, 10), entries,
+                          values);
+        return;
+    }
+    uint32_t rect[256];
+    uint32_t w = eight ? 16 : 8, h = eight ? 16 : 2;
+    for (uint32_t y = 0; y < h; y++) {
+        gsn_vram_read_row(vram, gpsm, cbp, 1, 0, y, w, rect + y * w);
+    }
+    for (uint32_t i = 0; i < entries; i++) {
+        values[i] = rect[eight ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i];
+    }
+}
+
 void clut_load(uint64_t tex0) {
     uint32_t psm = bits(tex0, 20, 6);
     uint32_t cbp = bits(tex0, 37, 14);
@@ -2631,33 +2673,38 @@ void clut_load(uint64_t tex0) {
     uint32_t lo, count;
     buffer_pages(cbp, 1, cpsm == 0 ? GSN_PSMCT32 : GSN_PSMCT16, 16, 16, &lo, &count);
     claim_pages(lo, count, nullptr, false);
+    // The same load as the last, its pages not written since and the buffer as it left it, loads the same
+    // (a model's batches each write the TEX0 they share)
+    struct ClutMemo {
+        const void *owner = nullptr;
+        uint64_t key = 0, texclut = 0, stamp = 0;
+        uint16_t clut[512];
+    };
+    static ClutMemo memo;
+    const uint64_t key_bits = (uint64_t(0x3F) << 20) | (~uint64_t(0) << 37 & ~(uint64_t(7) << 61));
+    uint64_t key = tex0 & key_bits, texclut = csm ? gs->reg[R_TEXCLUT] : 0;
+    uint64_t newest = 0;
+    for (uint32_t k = 0; k < count && k < vram_pages; k++) {
+        newest = std::max(newest, gs->page_written[(lo + k) % vram_pages]);
+    }
+    if (memo.owner == gs && memo.key == key && memo.texclut == texclut && newest <= memo.stamp &&
+        memcmp(memo.clut, gs->clut, sizeof(memo.clut)) == 0) {
+        return;
+    }
 
     uint16_t loaded[512];
     memcpy(loaded, gs->clut, sizeof(loaded));
     bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
     uint32_t entries = eight ? 256 : 16;
-    const uint8_t *vram = gs->vram.data();
+    uint32_t values[256];
+    clut_read_entries(gs->vram.data(), tex0, gs->reg[R_TEXCLUT], values);
     for (uint32_t i = 0; i < entries; i++) {
-        uint32_t x, y;
-        if (csm == 0) {
-            // CSM1: the entries as a 16 x 16 (or 8 x 2) rectangle, entries 8-15 and 16-23 of each 32 swapped
-            uint32_t e = eight ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
-            x = eight ? e % 16 : e % 8;
-            y = eight ? e / 16 : e / 8;
-        } else {
-            // CSM2: a line of TEXCLUT's buffer
-            uint64_t texclut = gs->reg[R_TEXCLUT];
-            x = bits(texclut, 6, 6) * 16 + i;
-            y = bits(texclut, 12, 10);
-        }
+        uint32_t v = values[i];
         if (cpsm == 0) { // PSMCT32
-            uint32_t v = gsn_vram_read(vram, GSN_PSMCT32, cbp, csm == 0 ? 1 : bits(gs->reg[R_TEXCLUT], 0, 6), x, y);
             uint32_t at = eight ? i : (csa * 16 + i) & 0xFF;
             loaded[at] = uint16_t(v);
             loaded[256 + at] = uint16_t(v >> 16);
         } else { // PSMCT16, PSMCT16S
-            uint32_t v = gsn_vram_read(vram, cpsm == 2 ? GSN_PSMCT16 : GSN_PSMCT16S, cbp,
-                                       csm == 0 ? 1 : bits(gs->reg[R_TEXCLUT], 0, 6), x, y);
             uint32_t at = eight ? i : (csa * 16 + i) & 0x1FF;
             loaded[at] = uint16_t(v);
         }
@@ -2666,6 +2713,11 @@ void clut_load(uint64_t tex0) {
         memcpy(gs->clut, loaded, sizeof(loaded));
         gs->clut_version++;
     }
+    memo.owner = gs;
+    memo.key = key;
+    memo.texclut = texclut;
+    memo.stamp = gs->vram_writes;
+    memcpy(memo.clut, gs->clut, sizeof(memo.clut));
 }
 
 // The 256 colours (or 16) a palette texture's indices look up, as RGBA, for the CLUT's format
@@ -3643,7 +3695,10 @@ void flush_batch() {
                     vmax = std::max(vmax, tv);
                 }
             }
-            if (vmin >= 0.0f && vmax < float(rows)) {
+            // (a V less than a row above the top reads no row above its first: a pass over the frame moved up
+            // half a line for the other field, as under water. Taken as reading above, the frame and its Z
+            // buffer went back to VRAM and the pass read the frame decoded at 1x, every field picture)
+            if (vmin > -1.0f && vmax < float(rows)) {
                 rows = std::max(1u, uint32_t(ceilf(vmax)));
             }
             return rows;
@@ -5249,12 +5304,25 @@ void begin_transfer(uint32_t dir) {
             sy + h <= src->height && d.x == sx && d.y == sy && d.bw == sbw) {
             uint32_t lo, count;
             rect_pages(d, &lo, &count);
+            // Whole pages of a 32-bit buffer from its start, which the source's pages do not share: every bit
+            // of them is the copy's, so what was there need not go back to VRAM, nor come from it (under
+            // water and in the MP drain, the wobble's copy of the frame each picture: three write-backs a
+            // picture before)
+            uint32_t slo, scount;
+            target_pages(*src, &slo, &scount);
+            if (d.psm == GSN_PSMCT32 && d.x == 0 && d.y == 0 && d.bp % 32 == 0 && d.bw > 0 && w == d.bw * 64 &&
+                h % page_height(d.psm) == 0 && !pages_overlap(lo, count, slo, scount)) {
+                shadow_written(bitbltbuf, trxpos, trxreg); // (the shadows' pages under it let go)
+                overwrite_lo = lo;
+                overwrite_count = count;
+            }
             Target *dst = find_target(d.bp, d.bw, d.psm);
             if (!dst || dst->width < src->width || dst->height < d.y + h) {
                 // the destination becomes a target of its own, its pixels from VRAM first
                 dst = get_target(d.bp, d.bw, d.psm, src->width, std::max(d.y + h, dst ? dst->height : 0u));
             }
             claim_pages(lo, count, dst, true);
+            overwrite_count = 0;
             // claim_pages may have dropped and re-made nothing of src: find it again
             src = find_target(sbp, sbw, spsm);
             dst = find_target(d.bp, d.bw, d.psm);

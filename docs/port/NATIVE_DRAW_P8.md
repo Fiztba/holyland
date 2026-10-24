@@ -754,6 +754,79 @@ world there (the outside check below logs none).
   leaves their boxes at t 0 and t 1; it does not see native draws, which is why it found nothing here) and
   `KF4_GSN_SLOW_US` (a window behind, on purpose).
 
+## 240 at the owner's spots (branch `p8/perf240`, from `native/draw` 5111e87d)
+
+The owner, `--renderer modern` at 240 (3x, native widescreen, MSAA 2, aniso 2, cut-out AA ssaa, Vulkan presenter,
+2560 x 1440, RTX 5080): even at 30, but an almost solid 60 while looking at the pond (`bugs1024/quick_pond`), the
+fortress entrance with the two braziers (`bugs_modern/quick_fortress`), the canyon with the beetles
+(`bugs1024/quick_slow`), and under water (`bugs1024/quick_underwater`, walking forward 60 vblanks).
+
+**Why exactly 60.** It was fix/underwater's rest: with the native GS's thread a vblank behind at two vblanks in a row,
+gs.c took every picture between away for half a second, then 1, 2 and 4 s while it kept falling behind. Then only the
+vblanks' own pictures were left: 60. At these spots the rest was on for 1,000-1,230 of 1,400 vblanks.
+
+**What still costs the GS's thread** (the pond, a game frame, measured with scoped timers): the frame's packets about
+20 ms, the picture between drawn from the packets (the recording) 13-16 ms more, each replay 1-4 ms. At 240 that is
+more than the 33 ms of a game frame. In the frame:
+- the skinned models' draws (program 0x280: the zombies, miners and the bugs) about 10 ms with their batches. Each part's
+  batch writes its own TEX0 and A+D registers, so each is a batch of its own: about 800 batches and 3,500 Vulkan draws a
+  game frame (Granite records each one: about 3 ms);
+- `sa_draw_batch`'s own work about 4.7 ms: culling, the runs for shader blending and ties, the corners' slopes;
+- the CPU plan of the skinned vertices (VU1's float arithmetic, `nd280_plan`) about 2 ms;
+- uploads about 2.6 ms (6 MB a game frame, each hashed and its blocks owned in the table);
+- the CLUT loads (the GS's and the table's mirror, at every TEX0) about 2 ms;
+- the draws' set-up (`nd_const`) about 1 ms.
+The recording does all of that again, for the GPU's replays. Under water the picture between also wrote the frame, its
+Z buffer and the wobble's copy back to VRAM (three read-backs a picture, each waiting for the GPU) and decoded the frame
+at 1x. The canyon is GPU-bound as T8 found (5.3 ms of GPU a picture at 3x).
+
+Not costs: the mesh hashing (`RD_GEN_HASH`, 3,129 MB on a 1,400-vblank pond run) is on the game's thread, about 0.5 ms a
+game frame of a thread busy about 25%. `sa_draw_begin`'s second `rd_fetch` copies one draw (under 1 us). The flash
+recorder is one blit a picture on the GPU. `KF4_SA_VERIFY`, the logs and `KF4_GSN_GPU_TIME` are off by default. The DMA
+controller's thread shows 30-45% of a core, most of it spinning while it waits (`nap`, `lock_queue`, `claim_starts`).
+
+**What changed:**
+- **The fallback cuts, it does not snap.** A vblank behind takes one picture between a vblank away (3 to 2 to 1 to
+  none at 240), not all of them. It waits up to half a second for the thread to catch up before cutting again, and
+  gives one back after half a second without falling behind (after twice as long when that falls behind again at once,
+  up to 8 s). The pictures kept are spread over the vblank. `--stats` says how often it cut and how many vblanks were
+  drawn with fewer and with none. The F3 counter's second line reads `30 GAME CUT 2` while it is on.
+- **Under water: no write-backs a picture.** A GPU copy of the frame over whole pages of a 32-bit buffer (the wobble's
+  copy to 0x2BC0) drops the targets wholly under it without writing them back, makes its target without loading VRAM,
+  and lets go of the shadows' pages under it (`overwrite_lo`/`overwrite_count` in gsn.cpp; `--stats`: "write-backs not
+  made"). A texture whose V is less than a row above its top reads the target (`rows_read`): the other field's tint
+  pass (moved up half a line) took the whole 1024 x 512 frame as read, sent the frame and its Z buffer back to VRAM, and
+  drew the frame decoded from VRAM at 1x. That was also every field picture under water at 30 (blurred at 1x): these
+  game frames now differ from before, sharp at the scale.
+- **Kept instead of worked out again:** the table's owners of a rectangle while the table is unchanged (`sa_owners`,
+  `sat.gen`: 94% found again on the pond); a skinned batch's plan for the same matrices (the recording, the parts
+  standing still); `nd_const`'s VU arithmetic by its inputs; a CLUT load the same as the last with its pages unwritten.
+  The CLUT is read a row at a time (`clut_read_entries`).
+
+**Numbers** (headless, `KF4_PRESENT_SIM=240`, 1,400 vblanks, 760 under water; pictures shown a second, two runs;
+windowed at the owner's settings, 1280 x 720, the same within a few):
+
+| spot | before | after | after: the cut | GPU a picture |
+|---|---|---|---|---|
+| pond | 67 (rest 1,183 vblanks) | 68-69 | 9 cuts, none in 1,080 vblanks | 3.0 ms |
+| fortress | 61 (rest 1,226) | 72-76 | 10-17 cuts, fewer in 1,150, none in 240-630 | 3.7-4.5 ms |
+| canyon | 64-70 (rest 1,000) | 119-128 | 7-8 cuts, fewer in 190-350, none in 0 | 5.3 ms |
+| under water | 93 (rest 470) | 202 | 1 cut (30 vblanks) | 1.9 ms |
+
+The GS's thread (CPU, % of a core, the same runs with a sampler): pond 81% before, 69% after (both mostly without
+pictures between); fortress 54/56%; canyon 40/86% (drawing three times the pictures); under water 44/60%.
+Under water now keeps up (about 240 once submerged). The canyon is GPU-bound. The pond and the fortress still fall
+back, now to as many pictures as fit (the fortress 1-2 a vblank, the pond none: its frame and recording are about
+35 ms of the GS's thread a game frame). What would move them: the skinned models' batches drawn as one (a texture
+array or bindless textures, so a part's TEX0 is not a batch of its own), their plan on the GPU (the clip and ADC
+decisions in a compute pass), and the recording not drawn from the packets again (recording the frame's own draws).
+
+**Pictures:** game frames byte for byte at the pond, the fortress and the canyon (vblanks 200, 301 and 399 at 240,
+`--fast`, every picture); under water the game frames at vblanks 400 and 600 the same, and the field pictures (501)
+sharp where they were blurred (above). The off check passes: boot_test; frame_test `--renderer gs` and `native`;
+gsn_draw_test 0 of 300; vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1
+hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
