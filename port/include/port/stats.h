@@ -7,8 +7,8 @@
    - game/stats.c (built with the game code) reads the game's state into a PortStatsSnapshot and
      watches the hits (port_stats_track, once a vblank, on the game's thread);
    - port/overlay/stats_mod.c keeps the switches and their settings.json keys;
-   - port/overlay/stats_panel.cpp draws the panel, the hit log and the target's health bar with
-     Dear ImGui, and the section of the Mods page. */
+   - port/overlay/stats_panel.cpp draws the lines it adds to the game's own menus, the panel, the hit
+     log and the target's health bar with Dear ImGui, and the section of the Mods page. */
 #ifndef PORT_STATS_H
 #define PORT_STATS_H
 
@@ -20,8 +20,8 @@ extern "C" {
 typedef struct {
     int on;            /* the mod as a whole ("extended_stats") */
     int forced;        /* --extended-stats: on for this run whatever settings.json says */
+    int menus;         /* its lines in the game's own menus ("extended_stats_menus") */
     int panel;         /* the stats panel, on its key ("extended_stats_panel") */
-    int status_screen; /* the panel opens by itself with the game's Status screen ("extended_stats_status_screen") */
     int damage;        /* the hit log and the target's health bar ("extended_stats_damage") */
     int durability;    /* the equipment's wear in the panel ("extended_stats_durability") */
 } PortStatsOptions;
@@ -40,7 +40,9 @@ void port_stats_settings_write(void *mods);
 /* ---- The overlay's side (port/overlay/stats_panel.cpp, called by port/overlay/overlay.cpp) ---- */
 void port_stats_overlay_update(void);            /* once a vblank, the game's thread: tracks and reads */
 int port_stats_overlay_wants(void);              /* something of it is drawn this vblank (any thread) */
-void port_stats_overlay_draw(int overlay_open);  /* draws it, inside the overlay's ImGui frame */
+/* draws it, inside the overlay's ImGui frame; x, y, width, height: the game's picture in the window */
+void port_stats_overlay_draw(int overlay_open, int x, int y, int width, int height);
+void port_stats_overlay_fonts(void);             /* adds its font to the overlay's, once at start */
 void port_stats_overlay_mods(void);              /* its section of the Mods page */
 
 /* ---- The game's side (game/stats.c) ---------------------------------------------------------- */
@@ -79,10 +81,32 @@ typedef struct {
     int frames;                /* game frames left */
 } PortStatsTimer;
 
+/* The screens of the game's menu (Menu_Run(0)) that the mod adds lines to */
+#define PORT_STATS_MENU_NONE 0
+#define PORT_STATS_MENU_MAIN 1     /* the main menu: Exp ... Condition on the right */
+#define PORT_STATS_MENU_STATUS 2   /* Status */
+#define PORT_STATS_MENU_EQUIP 3    /* Equipment */
+#define PORT_STATS_MENU_ITEMS 4    /* Item (use one) */
+#define PORT_STATS_MENU_ARRANGE 5  /* Arrange (everything owned) */
+#define PORT_STATS_MENU_LINES 6
+#define PORT_STATS_MENU_LINE 96
+
+typedef struct {
+    int screen;                /* PORT_STATS_MENU_ */
+    float shown;               /* 0 to 1: how far the screen has faded in (its parts' alpha) */
+    int covered;               /* a panel of the game's is over the place (the detail panel, the equipped list) */
+    float icons[6][4];         /* main and Status: the ailment icons shown beside Condition, x0 y0 x1 y1 in
+                                  the 640 x 448 picture of the menus */
+    int icon_count;
+    int item;                  /* Item and Arrange: the item the cursor is on, -1: none */
+    char item_lines[PORT_STATS_MENU_LINES][PORT_STATS_MENU_LINE]; /* what it does, from the game's tables */
+    int item_line_count;
+} PortStatsMenu;
+
 typedef struct {
     int valid;                 /* a game is being played */
-    int status_screen;         /* the game's Status screen is up */
     int in_menu;               /* the game's own menu is up */
+    PortStatsMenu menu;        /* which screen of it, and the item under the cursor */
     /* level */
     int level, experience, level_from, level_to; /* level_to 0: the last level */
     int next_hp, next_mp, next_power, next_magic; /* what the next level adds */
@@ -118,8 +142,6 @@ typedef struct {
 
 /* Reads the game's state (0 when no game is being played) */
 int port_stats_sample(PortStatsSnapshot *out);
-/* 1 while the game's Status screen is up (learned by port_stats_track) */
-int port_stats_status_screen(void);
 
 /* The hits, watched once a vblank (port_stats_track) by the entities' HP and the player's */
 #define PORT_STATS_HIT_DEALT 0  /* the player's side hit a creature (or something hit it) */

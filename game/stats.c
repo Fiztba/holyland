@@ -16,6 +16,8 @@
 #include "player/player.h"
 #include "entity/entity.h"
 #include "effect/effect.h"
+#include "gfx/packet.h"
+#include "ui/menu.h"
 #include "port/platform.h"
 #include "port/stats.h"
 
@@ -36,10 +38,20 @@ extern LevelRecordDef worn_defs[];
 extern FxTableEntry fx_table[];
 extern Entity *active_entities_head;
 extern int recent_damage_frames;
+extern ItemCommonDef item_common_defs[];
+/* the game's menu (ui/menu_screens.c) */
 extern void *menu_screen_handler;
 extern s8 main_menu_line;
+extern s8 main_menu_state;
 extern s8 menu_mode;
 extern s32 menu_step;
+extern s32 use_item_frames;
+extern DetailPanelFlags detail_panel_flags; /* detail_panel_open and equipped_list_open (ui/menu.h) */
+extern f32 screen_part_alphas[0x100];
+extern MenuItem *item_list_cursor[4];
+extern MenuItem *owned_list_current[];
+extern u32 main_part_count, status_part_count, equip_part_count, item_part_count, recol_part_count;
+extern SpritePacket *main_parts, *status_parts, *equip_parts, *item_parts, *recol_parts;
 
 /* ---- Names, from the game's own tables ---------------------------------------------------------- */
 
@@ -160,119 +172,126 @@ static void bonus_effects(PortStatsSnapshot *s, int item, const u8 *kinds, const
     }
 }
 
-/* The effects the game code ties to particular items (docs/port/EXTENDED_STATS.md lists each site) */
-static void fixed_effects(PortStatsSnapshot *s) {
-    const PlayerState *p = &player_state;
-    const u8 *eq = p->equipment;
-    char text[96];
-    int ancient_set = PLAYER_WEARS_ANCIENT_SET(p);
+/* What the game code does for a particular item while it is held or worn (docs/port/EXTENDED_STATS.md lists
+   each site): its text, or 0 when nothing. The Ancient set's is in ancient_effect (it takes the whole set). */
+static int item_code_effect(int item, char *text, size_t size) {
+    char school[PORT_STATS_NAME];
 
-    /* Player_AddExperience */
-    if (eq[EQUIP_BRACELET] == ITEM_WORN_INDEX(ITEM_FORTUNE)) {
-        add_effect(s, ITEM_FORTUNE, "Experience gained x2");
-    }
-    /* Attack_HitEntity */
-    if (p->weapon == 0x11) {
-        add_effect(s, ITEM_WEAPON_FIRST + 0x11, "Double damage against some creatures (most of them undead)");
-    }
-    /* Player_UpdateStatus */
-    if (p->weapon == 0x24) {
-        add_effect(s, ITEM_WEAPON_FIRST + 0x24, "Every 20 s: 70% chance to poison you (no defence)");
-    }
-    /* Attack_HitPlayer */
-    if ((u8)(eq[EQUIP_SHIELD] - 1) <= 1) {
-        add_effect(s, ITEM_WORN_FIRST + eq[EQUIP_SHIELD], "Fire damage taken +20%");
-    }
-    if ((u8)(eq[EQUIP_BOOT] - 0x6A) <= 1) {
-        add_effect(s, ITEM_WORN_FIRST + eq[EQUIP_BOOT], "Fire damage taken +20%");
-    }
-    /* Player_UpdateStatus: the ailments' wear */
-    if (eq[EQUIP_ARMOR] == ITEM_WORN_INDEX(ITEM_DEMON_ARMOR)) {
-        add_effect(s, ITEM_DEMON_ARMOR, "Ailments last 1.5x as long");
-    }
-    if (eq[EQUIP_AMULET] == ITEM_WORN_INDEX(ITEM_PURITY_AMULET)) {
-        add_effect(s, ITEM_PURITY_AMULET, "Ailments last 0.75x as long");
-    }
-    /* Player_RecomputeStats */
-    if (ancient_set) {
-        add_effect(s, ITEM_ANCIENT_SWORD, "Whole Ancient set: its weight counts a third");
-    } else if (eq[EQUIP_SHIELD] == ITEM_WORN_INDEX(ITEM_ANCIENT_SHIELD)) {
-        add_effect(s, ITEM_ANCIENT_SHIELD, "Cannot run without the whole set"); /* Player_Update */
-    }
-    if (eq[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_SACRED_GLOVES)) {
-        add_effect(s, ITEM_SACRED_GLOVES, "The weapon's weight counts 3/4");
-    }
-    if (eq[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_LORD_MYUS_GLOVES)) {
-        add_effect(s, ITEM_LORD_MYUS_GLOVES, "The weapon's weight counts 3/4");
-    }
-    if (eq[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_BONE_HANDS)) {
-        add_effect(s, ITEM_BONE_HANDS, "The weapon's weight counts twice");
-    }
-    if (eq[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_SILVERY_GLOVES)) {
-        add_effect(s, ITEM_SILVERY_GLOVES, "Slash, strike and stab attack +10%");
-    }
-    if (eq[EQUIP_GAUNTLET] == ITEM_WORN_INDEX(ITEM_VENOM_GLOVES)) {
-        add_effect(s, ITEM_VENOM_GLOVES, "Weapon's poison chance +70%");
-    }
-    if (eq[EQUIP_RING] == ITEM_WORN_INDEX(ITEM_WIDDAS_RING)) {
-        add_effect(s, ITEM_WIDDAS_RING, "Most HP +20%");
-    }
-    if (eq[EQUIP_RING] >= ITEM_WORN_INDEX(ITEM_RING_OF_FIRE) && eq[EQUIP_RING] <= ITEM_WORN_INDEX(ITEM_RING_OF_WATER)) {
+    text[0] = 0;
+    switch (item) {
+    case ITEM_FORTUNE: /* Player_AddExperience */
+        snprintf(text, size, "Experience gained x2");
+        break;
+    case ITEM_WEAPON_FIRST + 0x11: /* Attack_HitEntity */
+        snprintf(text, size, "Double damage against some creatures (most of them undead)");
+        break;
+    case ITEM_WEAPON_FIRST + 0x24: /* Player_UpdateStatus */
+        snprintf(text, size, "Every 20 s: 70%% chance to poison you (no defence)");
+        break;
+    case ITEM_WEAPON_FIRST + 0x2E: /* Attack_HitMapObject */
+        snprintf(text, size, "Breaks what other weapons bounce off");
+        break;
+    case ITEM_WORN_FIRST + 1: /* Attack_HitPlayer: shields 1-2, boots 0x6A-0x6B */
+    case ITEM_WORN_FIRST + 2:
+    case ITEM_WORN_FIRST + 0x6A:
+    case ITEM_WORN_FIRST + 0x6B:
+        snprintf(text, size, "Fire damage taken +20%%");
+        break;
+    case ITEM_DEMON_ARMOR: /* Player_UpdateStatus: the ailments' wear */
+        snprintf(text, size, "Ailments last 1.5x as long");
+        break;
+    case ITEM_PURITY_AMULET:
+        snprintf(text, size, "Ailments last 0.75x as long");
+        break;
+    case ITEM_SACRED_GLOVES: /* Player_RecomputeStats */
+    case ITEM_LORD_MYUS_GLOVES:
+        snprintf(text, size, "The weapon's weight counts 3/4");
+        break;
+    case ITEM_BONE_HANDS:
+        snprintf(text, size, "The weapon's weight counts twice");
+        break;
+    case ITEM_SILVERY_GLOVES:
+    case ITEM_POWER_BRACELET:
+        snprintf(text, size, "Slash, strike and stab attack +10%%");
+        break;
+    case ITEM_VENOM_GLOVES:
+        snprintf(text, size, "Weapon's poison chance +70%%");
+        break;
+    case ITEM_WIDDAS_RING:
+        snprintf(text, size, "Most HP +20%%");
+        break;
+    case ITEM_RING_OF_FIRE:
+    case ITEM_RING_OF_EARTH:
+    case ITEM_RING_OF_WIND:
+    case ITEM_RING_OF_WATER: {
         static const char *const element[4] = {"Fire", "Earth", "Wind", "Water"};
 
-        snprintf(text, sizeof(text), "%s attack +20", element[eq[EQUIP_RING] - ITEM_WORN_INDEX(ITEM_RING_OF_FIRE)]);
-        add_effect(s, ITEM_WORN_FIRST + eq[EQUIP_RING], text);
+        snprintf(text, size, "%s attack +20", element[item - ITEM_RING_OF_FIRE]);
+        break;
     }
-    if (eq[EQUIP_BRACELET] == ITEM_WORN_INDEX(ITEM_POWER_BRACELET)) {
-        add_effect(s, ITEM_POWER_BRACELET, "Slash, strike and stab attack +10%");
-    }
-    if (eq[EQUIP_BRACELET] == ITEM_WORN_INDEX(ITEM_FEATHER_BRACELET)) {
-        add_effect(s, ITEM_FEATHER_BRACELET, "Weight carried x3/4");
-    }
-    if (eq[EQUIP_HELM] == ITEM_WORN_INDEX(ITEM_ANGELIC_CROWN)) {
-        add_effect(s, ITEM_ANGELIC_CROWN, "Most MP +20%");
-    }
-    if (eq[EQUIP_BRACELET] == ITEM_WORN_INDEX(ITEM_CLARITY_BRACELET)) {
-        add_effect(s, ITEM_CLARITY_BRACELET, "Most MP x5 (up to 999)");
-    }
-    /* Player_CastMagic, Player_HoldMagic: the first school of spells (ids 1 to 15) */
-    if (eq[EQUIP_ARMOR] == ITEM_WORN_INDEX(ITEM_ICE_ARMOR)) {
-        char school[PORT_STATS_NAME];
-
+    case ITEM_FEATHER_BRACELET:
+        snprintf(text, size, "Weight carried x3/4");
+        break;
+    case ITEM_ANGELIC_CROWN:
+        snprintf(text, size, "Most MP +20%%");
+        break;
+    case ITEM_CLARITY_BRACELET:
+        snprintf(text, size, "Most MP x5 (up to 999)");
+        break;
+    case ITEM_ICE_ARMOR: /* Player_CastMagic, Player_HoldMagic: the first school of spells (ids 1 to 15) */
         spell_name(1, school, sizeof(school));
-        snprintf(text, sizeof(text), "Cannot cast the school of %s", school);
-        add_effect(s, ITEM_ICE_ARMOR, text);
+        snprintf(text, size, "Cannot cast the school of %s", school);
+        break;
+    case ITEM_THIEVES_NECKLACE: /* the enemies' senses and reach (entity/entity_ai.c, entity_ai_choice.c) */
+        snprintf(text, size, "Enemies notice and reach you from half as far");
+        break;
+    case ITEM_ABSORPTION_BOOTS: /* Player_TakeFallDamage: the landing's slowdown (landing_slow_timer) */
+        snprintf(text, size, "No slowdown after a hard landing");
+        break;
+    case ITEM_DEMON_LEGS: /* Player_AddItemBonuses: movement_halved */
+        snprintf(text, size, "Half speed, cannot run");
+        break;
+    case ITEM_RING_OF_SIGHT: /* Player_AddItemBonuses: ring_of_sight_active */
+        snprintf(text, size, "Lights the dark as the Light spell does");
+        break;
+    case ITEM_WORN_FIRST + 0x9A: /* Player_UpdateBreath: the amulet 374 */
+        snprintf(text, size, "Breath under water lasts twice as long");
+        break;
+    case ITEM_SACRIFICIAL_MASK: /* Player_Update */
+        snprintf(text, size, "Now and then casts a magic of its own (1 in 451 a frame)");
+        break;
+    case ITEM_MYUS_NECKLACE: /* MapObject_DrawAll */
+        snprintf(text, size, "Some objects glow");
+        break;
     }
-    /* the enemies' senses and reach (entity/entity_ai.c, entity_ai_choice.c) */
-    if (eq[EQUIP_AMULET] == ITEM_WORN_INDEX(ITEM_THIEVES_NECKLACE)) {
-        add_effect(s, ITEM_THIEVES_NECKLACE, "Enemies notice and reach you from half as far");
+    return text[0] != 0;
+}
+
+/* The six pieces of the Ancient set (PLAYER_WEARS_ANCIENT_SET) */
+static int ancient_piece(int item) {
+    return item == ITEM_ANCIENT_SWORD || item == ITEM_ANCIENT_SHIELD || item == ITEM_ANCIENT_HELMET ||
+           item == ITEM_ANCIENT_ARMOR || item == ITEM_ANCIENT_GLOVES || item == ITEM_ANCIENT_GREAVES;
+}
+
+/* The effects the game code ties to what is held and worn now */
+static void fixed_effects(PortStatsSnapshot *s) {
+    const PlayerState *p = &player_state;
+    char text[96];
+    int slot;
+
+    if (item_code_effect(ITEM_WEAPON_FIRST + p->weapon, text, sizeof(text))) {
+        add_effect(s, ITEM_WEAPON_FIRST + p->weapon, text);
     }
-    /* Player_TakeFallDamage: the landing's slowdown (landing_slow_timer) */
-    if (eq[EQUIP_BOOT] == ITEM_WORN_INDEX(ITEM_ABSORPTION_BOOTS)) {
-        add_effect(s, ITEM_ABSORPTION_BOOTS, "No slowdown after a hard landing");
+    for (slot = 0; slot < 8; slot++) {
+        if (item_code_effect(ITEM_WORN_FIRST + p->equipment[slot], text, sizeof(text))) {
+            add_effect(s, ITEM_WORN_FIRST + p->equipment[slot], text);
+        }
     }
-    /* Player_AddItemBonuses' own items */
-    if (p->movement_halved) {
-        add_effect(s, ITEM_DEMON_LEGS, "Half speed, cannot run");
-    }
-    if (p->ring_of_sight_active) {
-        add_effect(s, ITEM_RING_OF_SIGHT, "Lights the dark as the Light spell does");
-    }
-    /* Player_UpdateBreath: the amulet 374 */
-    if (eq[EQUIP_AMULET] == 0x9A) {
-        add_effect(s, ITEM_WORN_FIRST + 0x9A, "Breath under water lasts twice as long");
-    }
-    /* Player_Update */
-    if (eq[EQUIP_HELM] == ITEM_WORN_INDEX(ITEM_SACRIFICIAL_MASK)) {
-        add_effect(s, ITEM_SACRIFICIAL_MASK, "Now and then casts a magic of its own (1 in 451 a frame)");
-    }
-    /* Attack_HitMapObject */
-    if (p->weapon == 0x2E) {
-        add_effect(s, ITEM_WEAPON_FIRST + 0x2E, "Breaks what other weapons bounce off");
-    }
-    /* MapObject_DrawAll */
-    if (eq[EQUIP_AMULET] == ITEM_WORN_INDEX(ITEM_MYUS_NECKLACE)) {
-        add_effect(s, ITEM_MYUS_NECKLACE, "Some objects glow");
+    /* Player_RecomputeStats; Player_Update */
+    if (PLAYER_WEARS_ANCIENT_SET(p)) {
+        add_effect(s, ITEM_ANCIENT_SWORD, "Whole Ancient set: its weight counts a third");
+    } else if (p->equipment[EQUIP_SHIELD] == ITEM_WORN_INDEX(ITEM_ANCIENT_SHIELD)) {
+        add_effect(s, ITEM_ANCIENT_SHIELD, "Cannot run without the whole set");
     }
 }
 
@@ -321,6 +340,8 @@ static void timers(PortStatsSnapshot *s) {
     add_timer(s, p->intimidate_timer, "Enemies attack from half as far");
 }
 
+static void sample_menu(PortStatsMenu *m);
+
 int port_stats_sample(PortStatsSnapshot *out) {
     const PlayerState *p = &player_state;
     int i, slot, rate, step, wear_frames;
@@ -331,6 +352,7 @@ int port_stats_sample(PortStatsSnapshot *out) {
     }
     out->valid = 1;
     out->in_menu = menu_mode == 0 && menu_step != 0;
+    sample_menu(&out->menu);
 
     /* Player_AddExperience: level L is reached at player_level_steps[L].experience */
     out->level = p->level;
@@ -471,10 +493,11 @@ static int hit_count; /* how many were ever logged; the last LOG_SIZE are kept *
 static PortStatsHit target;
 static int player_hp = -1, player_recent;
 static int was_in_game;
-/* the Status screen: the handler of the main menu, learned when its cursor moves */
-static void *main_handler, *last_handler;
-static int last_line = -1;
-static int status_screen;
+/* the game's menu: the main menu's handler, learned while it is up (track_menu) */
+static void *main_handler;
+static s32 last_use_frames = -1;
+static unsigned long long use_item_at;
+static int menu_screen;
 static int log_on = -1;
 
 static void log_hit(const PortStatsHit *hit) {
@@ -576,26 +599,379 @@ static void track_player(unsigned long long vblank) {
     player_recent = recent;
 }
 
-/* The game's Status screen (main menu line 3, Menu_UpdateStatus): the main menu's handler is learned
-   as its cursor moves (main_menu_line changes only there); a different handler with line 3 chosen is
-   the screen line 3 opened */
+/* Which screen of the game's menu is up (ui/menu_screens.c). The screens are handlers in
+   menu_screen_handler, functions of the game's own that cannot be named from here, so they are told
+   apart by what they do:
+   - only Menu_UpdateMain moves main_menu_state off 0 (1 while it takes input, 2 and 3 while it fades out),
+     and a screen it opens finds it back at 0: the handler while it is not 0 is the main menu's;
+   - another handler is the screen of the main menu's line (main_menu_screens: 0 Item, 2 Equipment,
+     3 Status, 5 Arrange), main_menu_line staying on the line chosen until the menu closes;
+   - the Item screen's own sub-screen (the keys, Menu_UpdateKeyItems) is told from it by use_item_frames,
+     which Menu_UpdateUseItem alone steps every time it runs.
+   The one-frame handlers between (Menu_OpenMain, Menu_OpenChosenScreen) count as the screen of the line,
+   whose parts are faded out then. */
 static void track_menu(void) {
     void *handler = menu_screen_handler;
-    int line = main_menu_line;
-    int in_menu = menu_mode == 0 && menu_step != 0;
+    unsigned long long now = port_vblank_count();
 
-    if (!in_menu) {
-        status_screen = 0;
-        last_line = line;
-        last_handler = handler;
+    if (use_item_frames != last_use_frames) {
+        last_use_frames = use_item_frames;
+        use_item_at = now;
+    }
+    menu_screen = PORT_STATS_MENU_NONE;
+    if (menu_mode != 0 || menu_step == 0 || handler == NULL) {
         return;
     }
-    if (line != last_line && handler == last_handler && handler != NULL) {
+    if (main_menu_state != 0) {
         main_handler = handler;
     }
-    status_screen = line == 3 && main_handler != NULL && handler != main_handler && handler != NULL;
-    last_line = line;
-    last_handler = handler;
+    if (handler == main_handler) {
+        menu_screen = PORT_STATS_MENU_MAIN;
+        return;
+    }
+    switch (main_menu_line) {
+    case 0:
+        menu_screen = now - use_item_at <= 4 ? PORT_STATS_MENU_ITEMS : PORT_STATS_MENU_NONE;
+        break;
+    case 2:
+        menu_screen = PORT_STATS_MENU_EQUIP;
+        break;
+    case 3:
+        menu_screen = PORT_STATS_MENU_STATUS;
+        break;
+    case 5:
+        menu_screen = PORT_STATS_MENU_ARRANGE;
+        break;
+    }
+}
+
+/* ---- The item under the menu's cursor: what it does ----------------------------------------------- */
+static const char *const ailment_words[6] = {"poison", "paralysis", "darkness", "curse", "slow", "magic seal"};
+
+static void item_line(PortStatsMenu *m, const char *text) {
+    if (text[0] != 0 && m->item_line_count < PORT_STATS_MENU_LINES) {
+        snprintf(m->item_lines[m->item_line_count++], PORT_STATS_MENU_LINE, "%s", text);
+    }
+}
+
+/* The ailments of a mask (bit n: timed_flags[n]) as words: "poison", "poison and curse", ... */
+static void ailment_list(int mask, char *out, size_t size) {
+    int i, count = 0, done = 0;
+    size_t at = 0;
+
+    out[0] = 0;
+    for (i = 0; i < 6; i++) {
+        count += (mask >> i) & 1;
+    }
+    for (i = 0; i < 6 && at < size; i++) {
+        if (!((mask >> i) & 1)) {
+            continue;
+        }
+        at += snprintf(out + at, size - at, "%s%s", done == 0 ? "" : done == count - 1 ? " and " : ", ", ailment_words[i]);
+        done++;
+    }
+}
+
+/* Player_UseItem, type 0: timed_flags[n] is cleared for each bit n of ItemCommonDef.timed_flags */
+static void cure_text(int mask, char *out, size_t size) {
+    char list[96];
+    int count = 0, i;
+
+    for (i = 0; i < 6; i++) {
+        count += (mask >> i) & 1;
+    }
+    if (count == 6) {
+        snprintf(out, size, "Cures every ailment");
+    } else if (count >= 4) {
+        ailment_list(~mask & 0x3F, list, sizeof(list));
+        snprintf(out, size, "Cures every ailment but %s", list);
+    } else {
+        ailment_list(mask, list, sizeof(list));
+        snprintf(out, size, "Cures %s", list);
+    }
+}
+
+/* The HP and MP a type 0 item gives back; 999 or more is all of it (Player_RecomputeStats caps hp_max and
+   mp_max at 999) */
+static void restore_text(int hp, int mp, char *out, size_t size) {
+    out[0] = 0;
+    if (hp >= 999 && mp >= 999) {
+        snprintf(out, size, "Restores all HP and MP");
+    } else if (hp > 0 && mp > 0) {
+        snprintf(out, size, "Restores %d HP and %d MP", hp, mp);
+    } else if (hp >= 999 || mp >= 999) {
+        snprintf(out, size, "Restores all %s", hp ? "HP" : "MP");
+    } else if (hp > 0 || mp > 0) {
+        snprintf(out, size, "Restores %d %s", hp ? hp : mp, hp ? "HP" : "MP");
+    }
+}
+
+/* The crystals (Player_ApplyItem): Player_LearnSpellInRow teaches the first spell of the school not yet
+   known, and mp_base rises */
+static void crystal_text(int school, int mp_gain, char *out, size_t size) {
+    char name[PORT_STATS_NAME];
+    int slot;
+
+    for (slot = 0; slot < 5 && spell_levels[school][slot] != 0; slot++) {
+    }
+    if (slot < 5) {
+        /* the spell of school r, slot c at level 1 is effect (r * 5 + c) * 3 + 1 (Player_CountMagicUse) */
+        spell_name((school * 5 + slot) * 3 + 1, name, sizeof(name));
+        snprintf(out, size, "Teaches %s; most MP +%d", name, mp_gain);
+    } else {
+        snprintf(out, size, "Most MP +%d (its spells are all known)", mp_gain);
+    }
+}
+
+/* A carried item (below ITEM_WEAPON_FIRST): Player_UseItem and Player_ApplyItem, by its row of
+   param/item_cmn.prm (item_common_defs) */
+static void describe_carried(PortStatsMenu *m, int item) {
+    const ItemCommonDef *d = &item_common_defs[item];
+    char text[PORT_STATS_MENU_LINE], name[PORT_STATS_NAME];
+    int i, shooters = 0;
+
+    switch (d->type) {
+    case 0:
+        if (item >= ITEM_ARROW && item <= ITEM_WIDDAS_ARROW) {
+            /* the menu does not use them (Menu_UpdateUseItem); a weapon shoots while there is one of its
+               PlayerItemDef.ammo_item_index (Player_UpdateActions) */
+            name[0] = 0;
+            for (i = 0; i < ITEM_WORN_FIRST - ITEM_WEAPON_FIRST; i++) {
+                if (weapon_defs[i].ammo_item_index == item && shooters++ == 0) {
+                    item_name(ITEM_WEAPON_FIRST + i, name, sizeof(name));
+                }
+            }
+            if (shooters > 1) {
+                snprintf(text, sizeof(text), "Shot by %s and %d more", name, shooters - 1);
+            } else if (shooters == 1) {
+                snprintf(text, sizeof(text), "Shot by %s", name);
+            } else {
+                snprintf(text, sizeof(text), "Ammunition");
+            }
+            item_line(m, text);
+            return;
+        }
+        text[0] = 0;
+        switch (item) {
+        case ITEM_POWER_SEED: /* power_seed_timer 1800 frames: Physical Power + a tenth (Player_RecomputeStats) */
+            snprintf(text, sizeof(text), "Physical Power +10%% for 60 s");
+            break;
+        case ITEM_WIDDA_NEEDLE: /* widda_needle_timer, the same for Magic Power */
+            snprintf(text, sizeof(text), "Magic Power +10%% for 60 s");
+            break;
+        case ITEM_WISE_MANS_FRUIT: /* magic_base + 1, up to 999 */
+            snprintf(text, sizeof(text), "%s",
+                     player_state.magic_base < 999 ? "Magic Power +1 for good" : "Magic Power is at its most (999)");
+            break;
+        case ITEM_FOOLS_FRUIT: /* power_base + 1, up to 999 */
+            snprintf(text, sizeof(text), "%s",
+                     player_state.power_base < 999 ? "Physical Power +1 for good" : "Physical Power is at its most (999)");
+            break;
+        case ITEM_MAGIC_CRYSTAL: /* mp_base + 1 */
+            snprintf(text, sizeof(text), "Most MP +1");
+            break;
+        default:
+            if (item >= ITEM_FIRE_CRYSTAL && item <= ITEM_DARK_CRYSTAL) { /* mp_base + 1 */
+                crystal_text(item - ITEM_FIRE_CRYSTAL, 1, text, sizeof(text));
+            } else if (item >= ITEM_FIRE_CRYSTAL_2 && item <= ITEM_DARK_CRYSTAL_2) { /* mp_base + 5 */
+                crystal_text(item - ITEM_FIRE_CRYSTAL_2, 5, text, sizeof(text));
+            }
+            break;
+        }
+        item_line(m, text);
+        restore_text(d->hp_heal, d->mp_heal, text, sizeof(text));
+        item_line(m, text);
+        if (d->timed_flags & 0x3F) {
+            cure_text(d->timed_flags & 0x3F, text, sizeof(text));
+            item_line(m, text);
+        }
+        if (item == 0x12) { /* Player_ApplyPoisonWater: timed_flags[0] 1800, whatever the defence */
+            item_line(m, "Poisons you for 60 s");
+        }
+        if (d->use_mode == 2) { /* one of ItemCommonDef.item is given back */
+            item_name(d->item, name, sizeof(name));
+            snprintf(text, sizeof(text), "Leaves a %s", name);
+            item_line(m, text);
+        }
+        if (m->item_line_count == 0) {
+            item_line(m, "No effect when used");
+        }
+        return;
+    case 1:
+    case 4:
+    case 5: /* MapObject_UseItem, on the object in front of the player */
+        item_line(m, d->use_mode == 0 ? "Use it facing what it is for (used up)" : "Use it facing what it is for");
+        return;
+    case 2: /* MapChange_StartPassage, standing on a symbol of passage */
+        item_line(m, "Use it standing on a symbol of passage");
+        return;
+    case 6: /* MapViewer_OpenForItem */
+        item_line(m, "Shows its map");
+        return;
+    case 8: /* "Nothing happened" */
+        if (item == ITEM_EARTH_STONE) { /* Smith_UpdateListWithConfirm takes one for each upgrade */
+            item_line(m, "The smith takes one for each upgrade");
+        } else if (item == ITEM_BONE || item == ITEM_SCALE || item == ITEM_CLAW) {
+            /* the trades paid in them (Trade_UpdateTakeAmount: LevelDef.upgrade_material_kind 1 to 3) */
+            item_line(m, "Some trades are paid with these");
+        } else {
+            item_line(m, "Nothing happens when used");
+        }
+        return;
+    }
+}
+
+/* A weapon or a worn item: its level and wear, the ailments it guards against, its data bonuses and what
+   the code does for it */
+static void describe_equipment(PortStatsMenu *m, int item) {
+    PortStatsSnapshot *bonuses;
+    const LevelRecord *record;
+    char text[PORT_STATS_MENU_LINE], list[96];
+    int i, mask = 0, defence = 0, wears;
+    static PortStatsSnapshot scratch; /* only its effects are used */
+
+    bonuses = &scratch;
+    bonuses->effect_count = 0;
+    if (item >= ITEM_WORN_FIRST) {
+        int index = ITEM_WORN_INDEX(item);
+
+        if (item == ITEM_SHIELD_NONE || item == ITEM_HELM_NONE || item == ITEM_ARMOR_NONE || item == ITEM_GAUNTLET_NONE ||
+            item == ITEM_BOOT_NONE || item == ITEM_RING_NONE || item == ITEM_BRACELET_NONE || item == ITEM_AMULET_NONE) {
+            return;
+        }
+        record = &worn_item_level_records[index];
+        wears = item < ITEM_RING_NONE; /* Attack_WearArmorFromHit: shield, helm, armour, gloves, boots */
+        for (i = 0; i < 6; i++) {
+            int rate = worn_defs[index].worn_ailment_defence[i];
+
+            if (rate > 0) {
+                mask |= 1 << i;
+                defence = defence == 0 || defence == rate ? rate : -1;
+            }
+        }
+        bonus_effects(bonuses, item, worn_defs[index].bonus_kinds, worn_defs[index].bonus_amounts);
+    } else {
+        int index = ITEM_WEAPON_INDEX(item);
+
+        if (index == 0) {
+            return;
+        }
+        record = &weapon_level_records[index];
+        wears = weapon_defs[index].action_handler_index < 2; /* Attack_WearWeapon: not the bows */
+        /* Player_CountWeaponUse: level 2 at 180 hits, 3 at 480 */
+        if (record->level_index >= 2) {
+            snprintf(text, sizeof(text), "Weapon level 3");
+        } else {
+            snprintf(text, sizeof(text), "Weapon level %d: %d / %d hits", record->level_index + 1, (u16)record->use_count,
+                     record->level_index == 0 ? 180 : 480);
+        }
+        item_line(m, text);
+        bonus_effects(bonuses, item, weapon_defs[index].bonus_kinds, weapon_defs[index].bonus_amounts);
+    }
+    if (wears && port_stats_options.durability) {
+        /* LevelRecord.level: the percent its values count at, worn down to 50 */
+        snprintf(text, sizeof(text), "Durability %d%%", record->level);
+        item_line(m, text);
+    }
+    if (mask != 0) {
+        /* Player_AddItemBonuses: worn_ailment_defence, the sum capped at 100 (Player_RecomputeStats) */
+        ailment_list(mask, list, sizeof(list));
+        if (defence > 0) {
+            snprintf(text, sizeof(text), "Guards against %s %d%%", list, defence > 100 ? 100 : defence);
+        } else {
+            snprintf(text, sizeof(text), "Guards against %s", list);
+        }
+        item_line(m, text);
+    }
+    for (i = 0; i < bonuses->effect_count; i++) {
+        item_line(m, bonuses->effects[i].text);
+    }
+    if (item_code_effect(item, text, sizeof(text))) {
+        item_line(m, text);
+    }
+    if (ancient_piece(item)) { /* Player_RecomputeStats, Player_Update */
+        item_line(m, item == ITEM_ANCIENT_SHIELD ? "Whole Ancient set: its weight counts a third; without it, no running"
+                                                 : "Whole Ancient set: its weight counts a third");
+    }
+}
+
+/* How far a screen has faded in: its parts all come and go together, by a tenth of their alpha a frame,
+   so screen_part_alphas[0] against its part's alpha is it */
+static float screen_fade(const SpritePacket *parts, u32 count) {
+    float fade;
+
+    if (parts == NULL || count == 0 || parts[0].alpha == 0) {
+        return 1.0f;
+    }
+    fade = screen_part_alphas[0] / (float)parts[0].alpha;
+    return fade < 0.0f ? 0.0f : fade > 1.0f ? 1.0f : fade;
+}
+
+/* The ailment icons beside Condition: the parts of MenuSprite_ShowIfFlagSet (handler 23), each shown while
+   the ailment of its slot runs; MenuSprite_Draw puts a part at X - 1728, (Y - 1936) * 2 of the menus'
+   640 x 448 picture (their XYOFFSET, the field's rows doubled) */
+static void ailment_icons(PortStatsMenu *m, const SpritePacket *parts, u32 count) {
+    static const int ailment_of_slot[6] = {2, 1, 3, 0, 4, 5};
+    u32 i;
+
+    for (i = 0; parts != NULL && i < count && m->icon_count < 6; i++) {
+        const SpritePacket *p = &parts[i];
+        float x0 = (float)p->xyz0.X / 16.0f - 1728.0f, x1 = (float)p->xyz1.X / 16.0f - 1728.0f;
+        float y0 = ((float)p->xyz0.Y / 16.0f - 1936.0f) * 2.0f, y1 = ((float)p->xyz1.Y / 16.0f - 1936.0f) * 2.0f;
+        float *icon;
+
+        if (p->handler_index != 23 || p->slot < 0 || p->slot >= 6 ||
+            (u16)player_state.timed_flags[ailment_of_slot[(int)p->slot]] == 0) {
+            continue;
+        }
+        icon = m->icons[m->icon_count++];
+        icon[0] = x0 < x1 ? x0 : x1;
+        icon[1] = y0 < y1 ? y0 : y1;
+        icon[2] = x0 < x1 ? x1 : x0;
+        icon[3] = y0 < y1 ? y1 : y0;
+    }
+}
+
+static void sample_menu(PortStatsMenu *m) {
+    const MenuItem *cursor = NULL;
+    int i;
+
+    m->screen = menu_screen;
+    m->item = -1;
+    switch (menu_screen) {
+    case PORT_STATS_MENU_MAIN:
+        m->shown = screen_fade(main_parts, main_part_count);
+        break;
+    case PORT_STATS_MENU_STATUS:
+        m->shown = screen_fade(status_parts, status_part_count);
+        break;
+    case PORT_STATS_MENU_EQUIP:
+        m->shown = screen_fade(equip_parts, equip_part_count);
+        m->covered = detail_panel_flags.bytes.detail_panel_open != 0 || detail_panel_flags.bytes.equipped_list_open != 0;
+        break;
+    case PORT_STATS_MENU_ITEMS:
+        m->shown = screen_fade(item_parts, item_part_count);
+        cursor = item_list_cursor[0];
+        break;
+    case PORT_STATS_MENU_ARRANGE:
+        m->shown = screen_fade(recol_parts, recol_part_count);
+        m->covered = detail_panel_flags.bytes.detail_panel_open != 0;
+        cursor = owned_list_current[0];
+        break;
+    }
+    if (menu_screen == PORT_STATS_MENU_MAIN) {
+        ailment_icons(m, main_parts, main_part_count);
+    } else if (menu_screen == PORT_STATS_MENU_STATUS) {
+        ailment_icons(m, status_parts, status_part_count);
+    }
+    if (cursor != NULL && cursor->item_number >= 0 && cursor->item_number < ITEM_COUNT) {
+        m->item = cursor->item_number;
+        if (m->item < ITEM_WEAPON_FIRST) {
+            describe_carried(m, m->item);
+        } else {
+            describe_equipment(m, m->item);
+        }
+    }
 }
 
 static void log_progress(void) {
@@ -655,10 +1031,6 @@ void port_stats_track(void) {
     }
     track_entities(vblank);
     track_player(vblank);
-}
-
-int port_stats_status_screen(void) {
-    return status_screen;
 }
 
 int port_stats_hits(PortStatsHit *out, int most, unsigned long long since) {
