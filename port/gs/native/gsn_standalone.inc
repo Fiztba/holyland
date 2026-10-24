@@ -85,6 +85,7 @@ struct SaStats {
     uint64_t packed_chunks, dumped_chunks;
     uint64_t tables_loaded; // (a save state's or a capture's table)
     uint64_t kept_reflection; // (batches into the reflection left out by pictures between that keep the frame's: sat_kept)
+    uint64_t zfirst_alone;    // (ties' Z-first draws by depth alone: sa_zfirst.frag)
 };
 SaStats sa_stats;
 
@@ -251,6 +252,7 @@ struct Sa {
     Program *programs[3][2] = {};
     Program *programs_in[3][2] = {}; // (T8) [SA_VS_*][multisampled]: blending from the pass's scratch (gs_in*.frag)
     Program *programs_copy[3][2] = {}; // [SA_VS_*][multisampled]: a run's copy into the scratch by its own triangles
+    Program *programs_z[3] = {};       // [SA_VS_*]: a tie's Z-first draw that no pixel can fail (sa_zfirst.frag)
     Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
     // (T2) the scene's scale (its pixels a GS pixel is, across and down) and samples as its targets have them now,
@@ -1492,6 +1494,13 @@ void sa_programs() {
             sa.programs_in[k][1] = gs->device->request_program(vss[k], gs->program_in_ms->get_shader(ShaderStage::Fragment));
         }
     }
+    {
+        ResourceLayout zf = {};
+        Shader *fs = gs->device->request_shader(gsn_spv_sa_zfirst_frag, sizeof(gsn_spv_sa_zfirst_frag), &zf);
+        for (int k = 0; k < 3; k++) {
+            sa.programs_z[k] = gs->device->request_program(vss[k], fs);
+        }
+    }
     // (a run's copy by its own triangles: the target, an input attachment, into the scratch, colour attachment 1)
     if (gs->device->get_device_features().supports_conservative_rasterization) {
         for (int ms = 0; ms < 2; ms++) {
@@ -2106,7 +2115,7 @@ bool sa_shadow_batch() {
 // batch's corners are one vertex buffer).
 void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end); // (gsn_nd_pass.inc)
 // (in_pass, T8: the scene's own corners blend from the render pass's scratch, gs_in.frag / gs_in_ms.frag)
-void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass = false, bool copy = false) {
+void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass = false, bool copy = false, bool zonly = false) {
     const Vtx *v = gs->verts.data();
     const Buffer *bound = nullptr;
     for (uint32_t end = first + n; first < end;) {
@@ -2133,6 +2142,7 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass
             } else {
                 int vs = kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000;
                 c.set_program(ndw_batch() ? sat_water_program(sample) // (T3: the reflection's water, sa_water.vert)
+                              : zonly     ? sa.programs_z[vs] // (a tie's Z-first draw by depth alone)
                               : copy      ? sa.programs_copy[vs][sa.samples > 1 ? 1 : 0]
                               : in_pass   ? sa.programs_in[vs][sa.samples > 1 ? 1 : 0]
                                           : sa.programs[vs][sample ? 1 : 0]);
@@ -3201,14 +3211,11 @@ bool sa_draw_batch(int *why) {
         const char *v = getenv("KF4_SA_GROUP");
         sa_group.enabled = v && *v ? atoi(v) : 1;
     }
-    int role = 0; // 1: a first pass kept, 2: a second pass kept
-    if (sa_group.enabled && sa.in_draw && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only && !gpu_corners &&
-        !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && runs.size() == 2 && !shader_blend &&
-        !shadow && st.table && !st.reads_target && ndraws == 2 && nd280_batch_draws() == nd280.draws.buffer.get() &&
-        nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena) {
-        // a first pass that covers every pixel of its triangles: no pixel fails the alpha test
+    // no pixel of the batch fails the alpha test: its alpha (the texture's alpha range, as the table has it, with the
+    // corners' As) within what the test passes
+    bool covers = !ate || atst == 1;
+    {
         uint32_t aref = bits(test, 4, 8);
-        bool covers = !ate || atst == 1;
         switch (ate ? atst : 1) {
         case 2:
             covers = a_hi < aref;
@@ -3229,6 +3236,13 @@ bool sa_draw_batch(int *why) {
             covers = aref < a_lo || aref > a_hi;
             break;
         }
+    }
+    int role = 0; // 1: a first pass kept, 2: a second pass kept
+    if (sa_group.enabled && sa.in_draw && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only && !gpu_corners &&
+        !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && runs.size() == 2 && !shader_blend &&
+        !shadow && st.table && !st.reads_target && ndraws == 2 && nd280_batch_draws() == nd280.draws.buffer.get() &&
+        nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena) {
+        // a first pass that covers every pixel of its triangles: no pixel fails the alpha test (covers)
         if (skinned && two_phase && ztst == 2 && skin_eps == 0.0f && covers && passes[0].mask && sa.stencil) {
             role = 1;
         } else if (second_pass && sa_group.pass[0].on && sa_group.expect_second && corners.size() == sa_group.last_n &&
@@ -3424,6 +3438,21 @@ bool sa_draw_batch(int *why) {
         run_copy_on = v && *v ? atoi(v) : 1;
     }
     bool run_copy = in_pass && run_copy_on && sa.programs_copy[0][sa.samples > 1 ? 1 : 0];
+    // The Z-first draws by depth alone. A tie's Z-first draw (no colour, Z written) of a pass that no pixel can fail
+    // (no alpha test, or covers: the texture's alpha range, from the table, within what the test passes), with no DATE
+    // and no SCANMSK, is drawn with sa_zfirst.frag: the same vertex shader, so the same pixels and depth, and nothing
+    // the fragment shader could discard. gs.frag's discard (never taken there) made such a draw test and write its
+    // depth late, after the shader, and the colour draw after it over the same pixels wait for it (pond, 3x MSAA 2:
+    // NATIVE_DRAW_P8.md). Not the scene's ops, the PS2 path's corners (gs.vert's stretches keep gs.frag), the water,
+    // the screen passes, the shadows. KF4_SA_ZFIRST=0: gs.frag's (to compare).
+    static int zfirst_on = -1;
+    if (zfirst_on < 0) {
+        const char *v = getenv("KF4_SA_ZFIRST");
+        zfirst_on = v && *v ? atoi(v) : 1;
+    }
+    bool zfirst_alone = zfirst_on && sa.programs_z[0] && !shadow && !(push.flags & F_DATE) &&
+                        bits(push.misc, M_SCANMSK_SHIFT, 2) < 2 && gpu_kind != GPU_SA_OP && !nd.pass_active &&
+                        !nd.strip_active && !sa.gs3d && !sa.gs_water && !ndw_batch();
     // the run's bindings (textures, the CLUT, the corners, the buffers): for the render pass under way
     auto bind_run = [&](Cmd &c) {
         c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
@@ -3576,8 +3605,10 @@ bool sa_draw_batch(int *why) {
                 p.zbias = 0.0f; // (by its real depth: sa_slack's world units, no Z)
                 p.zslope = -layer_eps; // (0: exact)
             }
+            bool zonly = zfirst_alone && draws[i].mask == 0 && draws[i].zwrite && (draws[i].select == 0 || (draws[i].select == 1 && covers));
+            sa_stats.zfirst_alone += zonly;
             gpu_enter(draws[i].mask == 0 && gpu_kind != GPU_SA_OP && !shadow
-                          ? (draws[i].select ? (gpu_refl ? GPU_REFL_ZFIRST_ATEST : GPU_SA_ZFIRST_ATEST) : (gpu_refl ? GPU_REFL_ZFIRST : GPU_SA_ZFIRST))
+                          ? (draws[i].select && !zonly ? (gpu_refl ? GPU_REFL_ZFIRST_ATEST : GPU_SA_ZFIRST_ATEST) : (gpu_refl ? GPU_REFL_ZFIRST : GPU_SA_ZFIRST))
                           : gpu_kind);
             c.set_color_write_mask(draws[i].mask);
             c.set_depth_test(true, draws[i].zwrite);
@@ -3601,7 +3632,7 @@ bool sa_draw_batch(int *why) {
                 c.set_stencil(true, VK_COMPARE_OP_NOT_EQUAL, VK_STENCIL_OP_KEEP, sa.stencil_gen, 0xFF);
             }
             c.push_constants(&p, 0, sizeof(p));
-            sa_draw_range(c, per_sample, count, first, in_pass);
+            sa_draw_range(c, per_sample, count, first, in_pass, false, zonly);
             sa_stats.draws++;
             gsn_stats.draws++;
         }
@@ -4289,9 +4320,9 @@ void sa_print_stats() {
         fprintf(stderr, "%s%llu %s", i ? ", " : "", (unsigned long long)s.textures[i], sa_tex_names[i]);
     }
     fprintf(stderr, "; %llu depth clears and %llu alpha sets drawn by the scene, %llu shadow batches by the stencil, %llu layers "
-                    "exact over their own triangles",
+                    "exact over their own triangles, %llu Z-first draws by depth alone",
             (unsigned long long)s.depth_clears, (unsigned long long)s.alpha_sets, (unsigned long long)s.shadow_batches,
-            (unsigned long long)s.own_layers);
+            (unsigned long long)s.own_layers, (unsigned long long)s.zfirst_alone);
     fprintf(stderr, "; %.2f turns a picture", gsn_stats.pictures ? double(s.acquires) / double(gsn_stats.pictures) : 0.0);
     fprintf(stderr,
             " (T2: %llu taken from the GS's clear, %llu resampled copies; the GS's drawn by the scene: %llu 3D, %llu screen "

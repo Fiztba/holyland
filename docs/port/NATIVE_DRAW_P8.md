@@ -1272,7 +1272,7 @@ between cost more than the frame was the copies below.
   cache: fortress 5.04 -> 3.73 ms, canyon 5.08 -> 3.73, pond 5.7 -> 4.27. A CLUT the same as one of the last 64 in
   the constant chunk is bound where that one is (`Cmd::set_storage_data`: Granite makes a descriptor set for each
   storage buffer place; the same place, a set it has). The replays bind what the recording bound (`OP_STORAGE_DATA`).
-- **`KF4_SA_REFLECTION_KEEP`** (off by default: it can change pixels). 1: while the picture's camera is the frame's
+- **`KF4_SA_REFLECTION_KEEP`** (off by default here: it could change pixels; exact and on by default since `p8/pond240`, below). 1: while the picture's camera is the frame's
   (its move within 1e-6: a camera that did not move comes with that much rounding), a picture between leaves the
   reflection as the frame drew it: its clear and every batch into it left out (`sat_kept`, from `sa_flush`). The
   reflection's draws move with the camera only (`nd_model_flags`), so with no move they would land on the frame's
@@ -1325,6 +1325,66 @@ modern at the owner's settings at 240 (the same `--log`, PATH1 hash 561c91020b29
 boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with
 `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures
 1800, 1820 and 1840 byte for byte.
+
+### The pond at 240 (branch `p8/pond240`, from `native/draw` 96e22814)
+
+**The reflection kept, exact, by default.** `KF4_SA_REFLECTION_KEEP` is 1 by default, and 1 now means the camera of the
+frame shown is the frame's *bit for bit*: `frame_interp.c` compares the two frames' view fields (the rotation and the
+translation the game wrote) and hands the answer over with the frame (`GsnInterpFrame`'s `still`), so it holds for all of
+the frame's pictures between and a recording never disagrees with its replays. Every camera between two equal cameras is
+that camera, and the reflection's draws move with the camera only (`nd_model_flags`; no run of the reflection is paired
+with its model), so the frame's reflection *is* each picture's: no tolerance to prove. The old test (the move's floats
+within 1e-6) was of the camera `camera_between` rebuilds through a quaternion, a rounding off the frame's; drawn from it,
+the reflection could differ in a last bit of depth. Seen once: a frame after looking around (the right stick) and
+stopping, 7 pictures between in which 96e22814 differs from its own frame in 11 pixels (worst 5 levels) of the water; kept,
+they are the frame's to the bit. 0: drawn in every picture between; 2: always kept (moves at 30). A camera that moves
+draws the reflection in every picture, as before.
+
+**The Z-first draws by depth alone** (`sa_zfirst.frag`, `KF4_SA_ZFIRST=0` to compare). A tie's Z-first draw (no colour, Z
+written) of a pass no pixel can fail (no alpha test, or the batch's alpha range, the table's texture alpha with the
+corners' As, inside what the test passes; no DATE, no SCANMSK) is drawn with an empty fragment shader that declares early
+tests: the same vertex shader, so the same pixels, depth and stencil, nothing to discard. Exact, but it hardly applies:
+at the pond about 1 in 40 of the alpha-tested Z-first draws qualify (2,708 draws in 400 vblanks); the others are layers
+whose corners fade to As 0 under ATST GREATER 0 (the texture's alpha is 0x80 or not read at all), so pixels near those
+corners do fail the test and their Z must not be written. Pond 2.96 -> 2.94 ms a picture. An upper bound, every alpha-tested
+Z-first draw drawn so (wrong pictures): 3.12 -> 2.85 ms (`KF4_GSN_GPU_TIME=2`), "Z-first atest" 0.78 -> 0.11 and the
+draws after them 0.96 -> 0.84: about 0.27 ms at stake. Taking it exactly needs the draw split by triangle (the triangles
+whose three corners pass, by depth alone; the rest with the test; the Z-first draw's order does not matter, as it keeps
+the nearest), which needs each corner's As where the batch is planned (the vertex shaders light the corners): left.
+- **Tried, not kept:** `layout(early_fragment_tests)` on the colour draws that write no depth or stencil (a `gs.frag`
+  variant): slower, 2.94 -> 3.01-3.03 ms at the pond (the driver already tests those early; forcing it only lost what it
+  does around the discard).
+
+**Numbers** (real time, `KF4_PRESENT_SIM=240`, headless, 1,400 vblanks, 760 under water; 96e22814 and new alternating, two
+runs each, the pipeline cache warm; about 215 a second is all of 240):
+
+| spot | pictures a second | GPU a picture |
+|---|---|---|
+| pond | 192.4, 193.3 -> 217.0, 217.0 | 4.25 -> 2.93 ms |
+| pond turning (left held from vblank 200) | 200.4, 209.5 -> 201.0, 209.5 | 2.62 -> 2.58 ms |
+| fortress | 217.0, 217.0 -> 215.8 (a cut), 217.0 | 3.69 -> 3.69 ms |
+| canyon | 217.0, 217.0 -> 217.2, 217.2 | 3.69 -> 3.69 ms |
+| under water | 204.2, 204.2 -> 204.2, 204.2 | 1.51 -> 1.51 ms |
+
+Windowed (the owner's settings-4: fullscreen 2560 x 1440, best scaling, flash recorder on, 1,400 vblanks):
+
+| spot | pictures a second | GPU a picture |
+|---|---|---|
+| pond | 185.8, 179.0 -> 208.4, 217.0 | 4.43 -> 3.09 ms |
+| fortress | 216.4, 213.3 -> 209.2, 214.6 (cuts both) | 3.94-3.97 -> 3.93-4.02 ms |
+| canyon | 208.5, 217.2 -> 217.2, 208.5 | 3.51 -> 3.51 ms |
+
+The pond now keeps up at 240 by default where the owner stands; turning (the reflection drawn in every picture) it is
+not bound by the GPU (2.6 ms a picture).
+
+**Pictures:** byte for byte 96e22814's: the four spots (`--fast`, 240, the owner's settings, vblanks 200-207, 301, 399;
+under water 400-407, 600: 156 pictures), the pond turning, walking, walking and turning, and the d-pad's right (each held
+from vblank 195; every picture of vblanks 200-207 and 220-223: 192), and turning or walking for 12 vblanks then stopping
+(every picture of vblanks 200-231: 256, the stops' pictures kept); hosted at the pond (`--native-draw on`, 40 pictures);
+the herb run in modern at the owner's settings (the same `--log`, PATH1 hash 561c91020b2908ee, pictures 1800, 1820 and
+1840). The off check passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7,
+1234); vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash
+204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
 ## The numbers (first round)
 
@@ -1379,8 +1439,9 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule), `KF4_SA_SKIN=EPS` (a skinned
   model's parts' tie in world units; 0, the default: exact), `KF4_GSN_DYNAMIC=0|1` (no dynamic state, or none for blending: "Pipeline binds"), `KF4_SA_GROUP=0` (a skinned model's parts drawn as they come,
   not kept: "A skinned model's parts drawn together"), `KF4_SA_RUN_COPY=0` (shader blending's copy over the run's box, not by its
-  triangles), `KF4_SA_REFLECTION_KEEP=1|2` (the frame's reflection kept by its pictures between: "GPU cost at the owner's
-  spots"), `KF4_GSN_GPU_TIME=2` (the GPU's time a picture by what is drawn), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
+  triangles), `KF4_SA_REFLECTION_KEEP=0|2` (the frame's reflection drawn in every picture between, or always kept; 1, the
+  default: kept while the camera is the frame's bit for bit: "The pond at 240"), `KF4_SA_ZFIRST=0` (no Z-first draw by depth
+  alone), `KF4_GSN_GPU_TIME=2` (the GPU's time a picture by what is drawn), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
   that differ counted in `[stats] native draw 0x280 plans`),
   `KF4_SA_NO_TABLE=1`; the table's (read once): `KF4_SA_VERIFY=1..4`, `KF4_SA_PACK=DIR`,
   `KF4_SA_PACK_DUMP=DIR`. `KF4_SA_LOG=3` (T2): the GS's batches the scene draws, and those it draws elsewhere.

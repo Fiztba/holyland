@@ -3116,6 +3116,9 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
     }
     f->kicks = gpu_kicks;
     f->runs = o != NULL ? (uint32_t)o->nruns : 0;
+    /* (the camera did not move: the same fields the game wrote, so every camera between is this one) */
+    f->still = memcmp(pending.before.r, pending.scan.camera.r, sizeof(pending.before.r)) == 0 &&
+               memcmp(pending.before.t, pending.scan.camera.t, sizeof(pending.before.t)) == 0;
     /* (the native GS frees what it is handed: these start again) */
     f->moves = gpu_moves;
     f->stream = gpu_stream;
