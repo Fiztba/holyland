@@ -164,6 +164,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--draw-distance-sky ps2\|push` | with `--draw-distance`, the sky keeps the PS2's fog (the default) or has it pushed out too |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
+| `--extended-stats` | the opt-in mod (also on the overlay's Mods page; off by default): the stats panel (F6) and the hit log (see "Mods", [EXTENDED_STATS.md](EXTENDED_STATS.md)) |
 | `--automap`, `--automap-cheats` | the opt-in automap mod (also on the overlay's Mods page; off by default): a map of where you have been, M opens it; `--automap-cheats` with all its cheats on (see "Mods", [AUTOMAP.md](AUTOMAP.md)) |
 | `--show-fps` | the frame-rate counter on for this run (F3, or the overlay's Interface page; off by default; see "The frame-rate counter (F3)") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
@@ -308,6 +309,19 @@ it does without it.
   shown there only with the mod on), so the action button only uses things. Pressed buttons are
   untouched, and everything that stops running (weight, item use, death) still does. A pad script
   (`--input`, `--record-input`) keeps the pad as it is.
+- **Extended stats** (`--extended-stats`, `port_stats_options`; [EXTENDED_STATS.md](EXTENDED_STATS.md)).
+  A panel of what the game keeps and never shows, and the real damage of every hit; it only reads the
+  game, so on or off the game runs the same. The panel (F6, rebindable: "Show / hide the stats panel
+  (mod)"; it also opens with the game's Status screen) has the experience to the next level and what
+  it gives, the weapon hits and spells toward the next point of Physical and Magic Power (every 100th
+  that deals damage), the weapon's level (180 and 480 hits) and each spell's (50 and 150 uses), the
+  gauges' fill times, the wear of the weapon and the armour (the percent their values count at, 100
+  down to 50, and the wear to the next point), the ailments' defences and time left, recovery and
+  drain, and the hidden effects of what is worn and of the spells in effect. The hit log (bottom left)
+  lists each hit dealt and taken with the HP left; the creature last hit gets a health bar (top).
+  Its parts are switches of their own on the Mods page (`settings.json` `"mods"`: `extended_stats`,
+  `extended_stats_panel`, `extended_stats_status_screen`, `extended_stats_damage`,
+  `extended_stats_durability`).
 - **Automap** (`--automap`, the Mods page's "Map" section; [AUTOMAP.md](AUTOMAP.md)). A map of the map you
   are in, made from its collision meshes, that fills in as you explore and is kept with each save (quick
   saves and memory card saves; a new game starts blank), in the look of the KF3 port's automap: floors

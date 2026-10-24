@@ -338,6 +338,12 @@ file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
 add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/cheats.c game/automap.c game/automap_guide.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
+# the extended stats mod (port/include/port/stats.h, docs/port/EXTENDED_STATS.md)
+target_sources(game_data PRIVATE game/stats.c)
+target_sources(kf4_port PRIVATE port/overlay/stats_mod.c)
+if(TARGET imgui)
+    target_sources(kf4_port PRIVATE port/overlay/stats_panel.cpp)
+endif()
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")
