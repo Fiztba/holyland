@@ -827,6 +827,92 @@ sharp where they were blurred (above). The off check passes: boot_test; frame_te
 gsn_draw_test 0 of 300; vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1
 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
+### A skinned model's parts drawn together (branch `pf/skin`, from `native/draw` 5abdb02a)
+
+The skinned models' cost at the pond and the fortress, from "240 at the owner's spots" above.
+
+**What separated the parts was not their texture.** Program 0x280 kicks a model a part at a time (an RdBatch, at most
+40 vertices): its first pass (opaque, Z written, GEQUAL, the part's TEX0), then its sphere-mapped second pass, the shine
+(another TEX0, ALPHA `Cs + Cd As`). The shine's TEX0 and ALPHA end the first pass's batch, and the next part's ALPHA
+ends the shine's, so every part was two batches of its own. The first passes mostly share their state: of each first
+pass, the one before had the same TEX0 81% of the time at the pond (the zombies), 97% at the fortress. A texture
+index would not have joined them; the shine between them would still.
+
+**What changed** (`gsn_standalone.inc`, "A skinned model's parts drawn together"):
+- **The parts kept and drawn together.** Each batch is still worked out as before (`sa_draw_batch`: the texture, the
+  alpha range, the ties, the runs, so the decisions stay each part's own). A part whose draws are the simple ones (a
+  first pass two-phase in one run, exact, no pixel of it failing the alpha test; its shine in one run) is kept, from
+  draw to draw of the model, and drawn when anything else comes (`sa_group_draw`: another batch or draw, the scene's
+  turn ending, a picture between's mark, a save state): the first passes in one draw for each of their two draws,
+  then the shines, last part first. The same picture, exactly:
+  - the first passes together: the colour within no slack, then Z tested and written, over all of them, leaves what
+    each part's two draws one after another leave (the second draw writes, last, every pixel the first did);
+  - a part's shine stays, drawn in turn, only where its own first pass was the last to draw (a later part over it
+    overwrote it), on that first pass's colour. So each shine is drawn where its first pass is at the front (its Z,
+    exactly) and no later part's is: after its shine a part marks its front pixels in the stencil with the group's
+    number (a number of its own, as the shadows' runs and the layers have), and a shine is not drawn where the
+    stencil has it. Only a part whose screen box meets that of an earlier part with a shine needs its mark (in a
+    picture between, every one: the corners move on the GPU), and the shines between needed marks are one draw.
+    Without the marks, 13 pixels of a frame at the pond were a few levels off: a later part's pixel at exactly an earlier
+    part's depth (the edge two parts' triangles share where they fold) took the earlier part's shine too. The
+    shines' own Z pass is left out: it writes the Z its first pass wrote there.
+  - A named target's turns (the pond's reflection, where 45% of the zombies' batches are) start the stencil's numbers
+    at 0 again without clearing it; a group there takes a number above those of its earlier turns
+    (`sat_stencil_number`, `SatTarget::stencil_used`).
+- **The plan with the host's floats** (`gsn_nd_280.inc`, `nd280_plan_fast`). VU1's arithmetic is IEEE's rounded
+  toward zero with denormals read and written as zero (vu_float.h), so SSE with MXCSR set so (round toward zero,
+  DAZ, FTZ) gives VU1's bits, four lanes at a time. Where VU1's rules differ (a value with exponent 255, its largest
+  float, a divisor with exponent 0, FTOI past the integers) any value with exponent 254 or more, read or made, sends
+  the batch to `nd280_plan` (1.2% of them at the pond). `KF4_ND280_PLAN_CHECK=1` plans every batch both ways: 0 of
+  388,000 differed at the pond and the fortress. Clang on x86-64 only (`#pragma STDC FENV_ACCESS ON`); elsewhere the
+  old plan. 0.92 s to 0.09 s of a 600-vblank pond run.
+- **The CLUT loads** (`clut_load`, `sa_clut_load`): the parts load the first pass's CLUT and the shine's in turn, so
+  "the same load as the last" never held. An 8-bit CLUT of 32-bit colours loads the whole buffer, whatever it held:
+  the last four such loads are kept (their pages not written since; the table's while it is unchanged, `sat.gen`), and
+  the mirror's whole load is written at once. 1.6 s to 0.3 s of a 1,400-vblank pond run.
+- `sa_draw_batch`'s corners and runs keep their room from batch to batch (globals: a function's static made on the
+  GS's thread is gone at the exit while it draws); a run after its in-pass copy keeps the textures, CLUT, corners and
+  buffers the run before bound (`pass_serial`: a binding lasts to its render pass's end).
+
+**Numbers.** `--fast`, 240, the owner's settings, 600 vblanks (150 game frames, each drawn, recorded and replayed
+three times); the GS's thread ("GIF"), two runs each:
+
+| spot | GS thread a game frame | Vulkan draws | 0x280 batches drawn on their own, a pass |
+|---|---|---|---|
+| pond | 55.5 -> 37.7 ms | 1,701,432 -> 1,412,559 | 1,351 -> 388 (83% kept, 7 a group) |
+| fortress | 41.1 -> 31.2 ms | 2,185,064 -> 2,035,241 | 747 -> 249 (75% kept, 9 a group) |
+
+A kept batch drew 2 draws before, 1.14 now (the first passes' two a group, a shine and a mark a part). What is
+not kept at the pond is the blended parts (their alpha from 0 to 0x80, drawn in runs blending in the shader, 7% of the
+0x280 batches, about 3 ms a pass) and their shines.
+
+Real time (`KF4_PRESENT_SIM=240`, 1,400 vblanks, 760 under water; one game at a time, two runs; pictures shown a
+second):
+
+| spot | before | after |
+|---|---|---|
+| pond | 67.6, 68.7 (none in 1,038-1,073 vblanks) | 97.2, 81.3 (none in 0-360) |
+| fortress | 112.0, 118.4 | 158.9, 136.5 |
+| canyon | 151.7, 149.6 | 168.3, 166.4 |
+| under water | 202.9, 202.8 | 201.5, 202.6 |
+
+Two games at once halve these (the GPU shared): the pond 63 -> 70, the fortress 62 -> 115 that way. The pond still
+cuts: its frame is about 19 ms of the GS's thread and its recording as much again. The pictures between it now draws
+cost the GPU too: 3.2 -> 8 ms a picture shown, as each recording draws the frame again on the GPU (recording the
+frame's own draws would take both away).
+
+**Pictures:** byte for byte, every picture (3 game frames and their 9 pictures between, vblanks 200, 301, 399 at 240,
+`--fast`; under water 400, 501, 600) at the pond, the fortress, the canyon and under water, and at the shop, the
+bridge, the cave's seated man, the bug and the brazier; the herb in modern at 1x and at the owner's settings. The off
+check passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test
+0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
+460424273, pictures 1800, 1820 and 1840 byte for byte.
+
+**Not done:** a texture index for the first passes (Granite has bindless sets and arrays of textures; the RTX 5080 and
+the AMD iGPU index sampled-image arrays non-uniformly): at least 20,000 of the 47,315 groups of the 600-vblank pond
+run ended on a texture alone, two draws each; not worth a shader of its own yet. The skinned plan on the GPU (the clip and ADC
+decisions in a compute pass): with the host's floats it is 0.3 ms a pass.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
@@ -878,7 +964,9 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   batch's FRAME, ZBUF, TEST, ALPHA and Z range, and why one is declined), `KF4_SA_PIXEL=X,Y` (the scene's
   batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack; the pixel's Z and q interpolated, the Z's
   change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule), `KF4_SA_SKIN=EPS` (a skinned
-  model's parts' tie in world units; 0, the default: exact),
+  model's parts' tie in world units; 0, the default: exact), `KF4_SA_GROUP=0` (a skinned model's parts drawn as they come,
+  not kept: "A skinned model's parts drawn together"), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
+  that differ counted in `[stats] native draw 0x280 plans`),
   `KF4_SA_NO_TABLE=1`; the table's (read once): `KF4_SA_VERIFY=1..4`, `KF4_SA_PACK=DIR`,
   `KF4_SA_PACK_DUMP=DIR`. `KF4_SA_LOG=3` (T2): the GS's batches the scene draws, and those it draws elsewhere.
 - **The scene at its own scale** (T2): `native_draw_compare.py --mode modern --scale 1 --first-args='--native-scale 4

@@ -1058,7 +1058,9 @@ void nd_register(uint64_t value) {
 // the draws after it are. The world (projection 0, mode 0) and the reflection (mode 1) move with the
 // camera in a picture between; the arm moves only as it moves (nd_model_flags); models before the eye and
 // what follows the world stay.
+void sa_group_draw();
 void nd_mark(uint64_t value) {
+    sa_group_draw(); // (standalone, pf/skin: a skinned model's parts kept are drawn before a picture between begins or ends)
     uint32_t index = uint32_t(value >> 32) & 0xFF, v = uint32_t(value);
     if (index != PORT_FRAME_INTERP_HEADER) {
         return;

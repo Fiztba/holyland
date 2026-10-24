@@ -175,6 +175,185 @@ void nd280_plan(const int32_t *q, const RdBatch &b, const Nd280Const &k, Nd280Pl
     p.all_clipped = int16_t(uint16_t(count - p.n)) >= 0;
 }
 
+// (pf/skin) nd280_plan with the host's floats: VU1's arithmetic is IEEE's rounded toward zero, with denormals read and
+// written as zero (vu_float.h), so with the SSE unit set so (MXCSR: round toward zero, DAZ, FTZ) each multiply, add and
+// divide gives VU1's bits, four lanes at a time. Not where VU1's own rules differ: a value with exponent 255 (a number to
+// VU1, an infinity or NaN here), a result that large (VU1's largest is 0x7FFFFFFF, the host's FLT_MAX), a division by
+// zero, an FTOI past the integers: any value with exponent 254 or more, read or made, or a divisor with exponent 0, and
+// the batch is planned by nd280_plan. KF4_ND280_PLAN_CHECK=1 (tests) plans every batch both ways and counts those that
+// differ ([stats] native draw).
+#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64))
+#define ND280_PLAN_FAST 1
+#include <immintrin.h>
+uint64_t nd280_plan_fast_n = 0, nd280_plan_fast_slow = 0, nd280_plan_check_differ = 0;
+
+static inline __m128 nd280_bits(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+    return _mm_castsi128_ps(_mm_set_epi32(int32_t(d), int32_t(c), int32_t(b), int32_t(a)));
+}
+
+// lanes with exponent 254 or 255
+static inline __m128i nd280_big(__m128 v) {
+    __m128i e = _mm_and_si128(_mm_castps_si128(v), _mm_set1_epi32(0x7F800000));
+    return _mm_cmpgt_epi32(e, _mm_set1_epi32(0x7EFFFFFF));
+}
+
+bool nd280_plan_fast(const int32_t *q, const RdBatch &b, const Nd280Const &k, Nd280Plan &p) {
+#pragma STDC FENV_ACCESS ON
+    // the inputs read once: the matrices, the colour's scale and bias
+    __m128i big = _mm_setzero_si128();
+    __m128 col[2][4], sph[2][3];
+    for (int s = 0; s < 2; s++) {
+        for (int c = 0; c < 4; c++) {
+            col[s][c] = _mm_loadu_ps(&k.vertex[s][4 * c]);
+            big = _mm_or_si128(big, nd280_big(col[s][c]));
+        }
+        for (int c = 0; c < 3; c++) {
+            sph[s][c] = _mm_loadu_ps(&k.sphere[s][4 * c]);
+            if (b.sphere) {
+                big = _mm_or_si128(big, nd280_big(sph[s][c]));
+            }
+        }
+    }
+    __m128 sb = _mm_set_ps(0.0f, 0.0f, k.bias[3], k.scale[3]);
+    big = _mm_or_si128(big, nd280_big(sb));
+    if (_mm_movemask_epi8(big)) {
+        return false;
+    }
+    unsigned int csr = _mm_getcsr();
+    _mm_setcsr((csr & ~0x6000u) | 0x6000u | 0x8000u | 0x0040u); // (round toward zero, FTZ, DAZ)
+    const __m128 one = _mm_set1_ps(1.0f), half = _mm_set1_ps(0.5f), m2048 = _mm_set1_ps(2048.0f);
+    const float scale = k.scale[3], bias = k.bias[3];
+    bool ok = true;
+    p.n = b.count;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < p.n && ok; i++) {
+        const int32_t *v = q + size_t(i) * 32;
+        int set = nd280_set(v);
+        __m128 pos = nd280_bits(uint32_t(v[0]), uint32_t(v[1]), uint32_t(v[2]), uint32_t(v[3]));
+        __m128 st_in = nd280_bits(uint32_t(v[8]), uint32_t(v[9]), uint32_t(v[10]), uint32_t(v[15]));
+        __m128i vbig = _mm_or_si128(nd280_big(pos), nd280_big(st_in));
+        // c = M v, as vb_transform4: (((m0 v0 + m1 v1) + m2 v2) + m3 v3), each step rounded
+        __m128 v0 = _mm_shuffle_ps(pos, pos, 0x00), v1 = _mm_shuffle_ps(pos, pos, 0x55);
+        __m128 v2 = _mm_shuffle_ps(pos, pos, 0xAA), v3 = _mm_shuffle_ps(pos, pos, 0xFF);
+        __m128 m0 = _mm_mul_ps(col[set][0], v0), m1 = _mm_mul_ps(col[set][1], v1);
+        __m128 m2 = _mm_mul_ps(col[set][2], v2), m3 = _mm_mul_ps(col[set][3], v3);
+        __m128 acc = _mm_add_ps(m0, m1);
+        __m128 acc2 = _mm_add_ps(acc, m2);
+        __m128 c = _mm_add_ps(acc2, m3);
+        vbig = _mm_or_si128(vbig, _mm_or_si128(_mm_or_si128(nd280_big(m0), nd280_big(m1)),
+                                              _mm_or_si128(nd280_big(m2), nd280_big(m3))));
+        vbig = _mm_or_si128(vbig, _mm_or_si128(_mm_or_si128(nd280_big(acc), nd280_big(acc2)), nd280_big(c)));
+        __m128 cw = _mm_shuffle_ps(c, c, 0xFF);
+        uint32_t cw_bits = uint32_t(_mm_cvtsi128_si32(_mm_castps_si128(cw)));
+        if ((cw_bits & 0x7F800000u) == 0) {
+            ok = false; // (a divisor with exponent 0: VU1's largest float)
+            break;
+        }
+        __m128 qq = _mm_div_ps(one, cw);
+        __m128 xyz = _mm_mul_ps(c, qq);
+        __m128 stq = _mm_mul_ps(st_in, qq); // (lane 3: unused)
+        __m128 r = _mm_sub_ps(xyz, m2048);
+        __m128 u = _mm_add_ps(_mm_mul_ps(_mm_shuffle_ps(st_in, st_in, 0xFF), _mm_set1_ps(scale)), _mm_set1_ps(bias));
+        vbig = _mm_or_si128(vbig, _mm_or_si128(_mm_or_si128(nd280_big(qq), nd280_big(xyz)),
+                                              _mm_or_si128(nd280_big(r), nd280_big(u))));
+        vbig = _mm_or_si128(vbig, nd280_big(_mm_mul_ps(_mm_shuffle_ps(st_in, st_in, 0xFF), _mm_set1_ps(scale))));
+        vbig = _mm_or_si128(vbig, nd280_big(_mm_shuffle_ps(stq, stq, 0xA4))); // (lanes 0-2)
+        if (b.sphere) {
+            __m128 nrm = nd280_bits(uint32_t(v[4]), uint32_t(v[5]), uint32_t(v[6]), 0);
+            vbig = _mm_or_si128(vbig, nd280_big(nrm));
+            __m128 s0 = _mm_mul_ps(sph[set][0], _mm_shuffle_ps(nrm, nrm, 0x00));
+            __m128 s1 = _mm_mul_ps(sph[set][1], _mm_shuffle_ps(nrm, nrm, 0x55));
+            __m128 s2 = _mm_mul_ps(sph[set][2], _mm_shuffle_ps(nrm, nrm, 0xAA));
+            __m128 a0 = _mm_add_ps(s0, s1);
+            __m128 a1 = _mm_add_ps(a0, s2);
+            __m128 a2 = _mm_add_ps(a1, _mm_mul_ps(one, one));
+            __m128 sst = _mm_mul_ps(a2, half);
+            vbig = _mm_or_si128(vbig, _mm_or_si128(_mm_or_si128(nd280_big(s0), nd280_big(s1)), nd280_big(s2)));
+            vbig = _mm_or_si128(vbig, _mm_or_si128(_mm_or_si128(nd280_big(a0), nd280_big(a1)),
+                                                  _mm_or_si128(nd280_big(a2), nd280_big(sst))));
+            float sf[4];
+            _mm_storeu_ps(sf, sst);
+            p.sphere[i][0] = sf[0];
+            p.sphere[i][1] = sf[1];
+        }
+        if (_mm_movemask_epi8(vbig)) {
+            ok = false;
+            break;
+        }
+        uint32_t xb[4], rb[4];
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(xb), _mm_castps_si128(xyz));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(rb), _mm_castps_si128(r));
+        // VU1's judgement and FTOI4 (nd280_plan_vertex's)
+        p.clip[i] = (rb[0] & 0x7FFFFFFFu) > 0x44FFE000u || (rb[1] & 0x7FFFFFFFu) > 0x44FFE000u ||
+                    ((xb[2] & 0x80000000u) && (xb[2] & 0x7FFFFFFFu) > 0x007FFFFFu);
+        for (int j = 0; j < 3; j++) {
+            if (((xb[j] >> 23) & 0xFF) >= 154) {
+                ok = false; // (FTOI4 at the integers' limit)
+            }
+        }
+        __m128i xi = _mm_cvttps_epi32(_mm_mul_ps(xyz, _mm_set1_ps(16.0f)));
+        int32_t xs[4];
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(xs), xi);
+        p.xyz[i][0] = xs[0];
+        p.xyz[i][1] = xs[1];
+        p.xyz[i][2] = xs[2];
+        float sf[4];
+        _mm_storeu_ps(sf, stq);
+        p.stq[i][0] = sf[0];
+        p.stq[i][1] = sf[1];
+        p.stq[i][2] = sf[2];
+        uint32_t ub = uint32_t(_mm_cvtsi128_si32(_mm_castps_si128(u)));
+        uint32_t um = vu_float_mini(ub, 0x437F0000u);
+        if (((um >> 23) & 0xFF) >= 158) {
+            ok = false;
+        }
+        p.alpha[i] = uint32_t(int32_t(vu_float_from_bits(um))) & 0xFF; // (FTOI0: truncated)
+        count += p.clip[i];
+    }
+    _mm_setcsr(csr);
+    if (!ok) {
+        nd280_plan_fast_slow++;
+        return false;
+    }
+    count += p.clip[0];
+    bool adc_tag = (uint16_t(b.tag[1] >> 32) & 1) && p.clip[0];
+    for (uint32_t i = 0; i < p.n; i++) {
+        p.adc[i] = p.clip[i] || (i >= 1 ? p.clip[i - 1] : p.clip[0]) || (i >= 2 && p.clip[i - 2]) || adc_tag;
+    }
+    p.all_clipped = int16_t(uint16_t(count - p.n)) >= 0;
+    nd280_plan_fast_n++;
+    return true;
+}
+#endif
+
+// (nd280_plan_cached) The plan: the host's floats where they give VU1's bits, else VU1's arithmetic
+void nd280_plan_any(const int32_t *q, const RdBatch &b, const Nd280Const &k, Nd280Plan &p) {
+#ifdef ND280_PLAN_FAST
+    static int check = -1;
+    if (check < 0) {
+        check = getenv("KF4_ND280_PLAN_CHECK") && atoi(getenv("KF4_ND280_PLAN_CHECK")) > 0;
+    }
+    if (nd280_plan_fast(q, b, k, p)) {
+        if (check) {
+            static Nd280Plan e;
+            nd280_plan(q, b, k, e);
+            bool same = e.n == p.n && e.all_clipped == p.all_clipped;
+            for (uint32_t i = 0; i < p.n && same; i++) {
+                same = memcmp(e.xyz[i], p.xyz[i], 12) == 0 && memcmp(e.stq[i], p.stq[i], 12) == 0 &&
+                       e.alpha[i] == p.alpha[i] && e.clip[i] == p.clip[i] && e.adc[i] == p.adc[i] &&
+                       (!b.sphere || memcmp(e.sphere[i], p.sphere[i], 8) == 0);
+            }
+            if (!same) {
+                nd280_plan_check_differ++;
+                p = e;
+            }
+        }
+        return;
+    }
+#endif
+    nd280_plan(q, b, k, p);
+}
+
 // A batch's last plans (two: the world's camera and the reflection's), by its mesh and number, with what
 // they were planned from (compared bit for bit): the frame drawn again for a picture between, or a model
 // standing still, takes its plan as it was
@@ -215,7 +394,7 @@ const Nd280Plan &nd280_plan_cached(const RdMeshData &m, const RdBatch &b, const 
         memcpy(e.sphere, k.sphere, sizeof(e.sphere));
         memcpy(&e.scale, &k.scale[3], 4);
         memcpy(&e.bias, &k.bias[3], 4);
-        nd280_plan(q, b, k, e.plan);
+        nd280_plan_any(q, b, k, e.plan);
         gsn_stats.nd_plan_vertices += b.count;
     } else {
         gsn_stats.nd_plan_reused += b.count;

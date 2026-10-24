@@ -689,6 +689,7 @@ uint32_t texel_bytes(VkFormat format) {
 // order nothing more. Anything recorded goes through cmd(), which clears it: whatever records into
 // gs->cmd some other way must clear it too.
 bool barrier_fresh = false;
+uint64_t pass_serial = 0; // (render passes begun: a draw's bindings last no longer than its pass, gsn_standalone.inc)
 
 class Cmd {
 public:
@@ -744,6 +745,7 @@ public:
         raw().barrier(ss, sa, ds, da);
     }
     void begin_render_pass(const RenderPassInfo &info) {
+        pass_serial++;
         if (on()) {
             ArgPass a;
             a.info = info;
@@ -2691,10 +2693,36 @@ void clut_load(uint64_t tex0) {
         memcmp(memo.clut, gs->clut, sizeof(memo.clut)) == 0) {
         return;
     }
+    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
+    // An 8-bit CLUT of 32-bit colours loads the whole buffer, whatever it held: the last few such loads, their pages
+    // not written since, load the same (a skinned model's parts load two in turn: the first pass's, the shine's)
+    struct Whole {
+        const void *owner = nullptr;
+        uint64_t key = 0, texclut = 0, stamp = 0;
+        uint16_t clut[512];
+    };
+    static Whole whole[4];
+    static uint32_t whole_next = 0;
+    bool full = eight && cpsm == 0;
+    if (full) {
+        for (Whole &m : whole) {
+            if (m.owner == gs && m.key == key && m.texclut == texclut && newest <= m.stamp) {
+                if (memcmp(m.clut, gs->clut, sizeof(m.clut)) != 0) {
+                    memcpy(gs->clut, m.clut, sizeof(m.clut));
+                    gs->clut_version++;
+                }
+                memo.owner = gs;
+                memo.key = key;
+                memo.texclut = texclut;
+                memo.stamp = m.stamp;
+                memcpy(memo.clut, gs->clut, sizeof(memo.clut));
+                return;
+            }
+        }
+    }
 
     uint16_t loaded[512];
     memcpy(loaded, gs->clut, sizeof(loaded));
-    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
     uint32_t entries = eight ? 256 : 16;
     uint32_t values[256];
     clut_read_entries(gs->vram.data(), tex0, gs->reg[R_TEXCLUT], values);
@@ -2718,6 +2746,14 @@ void clut_load(uint64_t tex0) {
     memo.texclut = texclut;
     memo.stamp = gs->vram_writes;
     memcpy(memo.clut, gs->clut, sizeof(memo.clut));
+    if (full) {
+        Whole &m = whole[whole_next++ % 4];
+        m.owner = gs;
+        m.key = key;
+        m.texclut = texclut;
+        m.stamp = gs->vram_writes;
+        memcpy(m.clut, gs->clut, sizeof(m.clut));
+    }
 }
 
 // The 256 colours (or 16) a palette texture's indices look up, as RGBA, for the CLUT's format

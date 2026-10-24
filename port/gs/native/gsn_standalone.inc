@@ -200,6 +200,10 @@ struct Sa {
     int log = 0;                      // (KF4_SA_LOG=1: each batch, why one is declined and what ends a turn; 2: only the turns)
     float pixel[2] = {-1.0f, -1.0f};  // (KF4_SA_PIXEL=X,Y: the batches over that GS pixel)
     std::vector<std::shared_ptr<const RdMeshData>> fetched; // (sa_draw_begin's)
+    // (sa_draw_batch's, kept from batch to batch for their room: globals, not a function's statics, which would be
+    // made on the GS's thread and gone at the exit while it still draws)
+    std::vector<uint32_t> runs;
+    std::vector<Vtx> corners;
     // the table
     uint64_t seq = 0, frame = 0;
     std::unordered_map<uint32_t, SaChunk> chunks;
@@ -287,6 +291,7 @@ Program *sat_water_program(bool sample);
 bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h);
 bool sat_release();
 bool sat_bound(); // (a named target is the scene's frame now)
+bool sat_stencil_number(uint32_t *gen);
 bool sat_flush();
 bool sat_fill();
 bool sat_blend_exact();
@@ -818,6 +823,17 @@ void sa_clut_read(const uint8_t *vram, uint64_t tex0, uint32_t *values) {
 }
 
 // (gs_write, TEX0: after clut_load and the GS's flush) A CLUT load, mirrored
+// (sa_clut_load) The last loads from the table, while it is unchanged: a skinned model's parts load two CLUTs in turn
+// (the first pass's, the shine's), each one a load
+struct SaClutMemo {
+    uint64_t gen = 0, key = 0, texclut = 0;
+    std::vector<uint32_t> ids;
+    bool packed = false;
+    uint32_t values[256];
+};
+SaClutMemo sa_clut_memo[4];
+uint32_t sa_clut_memo_next = 0;
+
 void sa_clut_load(uint64_t tex0) {
     if (!sa.on) {
         return;
@@ -851,12 +867,42 @@ void sa_clut_load(uint64_t tex0) {
     uint32_t bw = csm == 0 ? 1 : bits(texclut, 0, 6);
     uint32_t x0 = csm == 0 ? 0 : bits(texclut, 6, 6) * 16, y0 = csm == 0 ? 0 : bits(texclut, 12, 10);
     uint32_t w = csm == 0 ? (eight ? 16 : 8) : entries, h = csm == 0 ? (eight ? 16 : 2) : 1;
+    // (pf/skin) the last loads from the table (SaClutMemo)
+    SaClutMemo *memo = sa_clut_memo;
+    uint32_t &memo_next = sa_clut_memo_next;
+    uint64_t memo_key = tex0 & ((uint64_t(0x3F) << 20) | (uint64_t(0x3FFF) << 37) | (uint64_t(0xF) << 51) | (uint64_t(1) << 55));
+    uint64_t memo_texclut = csm ? texclut : 0;
+    SaClutMemo *hit = nullptr;
+    for (int k = 0; k < 4; k++) {
+        SaClutMemo &m = memo[k];
+        if (m.gen == sat.gen && m.key == memo_key && m.texclut == memo_texclut) {
+            hit = &m;
+        }
+    }
     std::vector<uint32_t> ids;
-    int why = sa_owners(cbp, bw, gpsm, x0, y0, w, h, ids);
+    int why = SA_TEX_TABLE;
+    if (hit) {
+        for (uint32_t id : hit->ids) {
+            if (!sa_chunk(id)) {
+                hit->gen = 0; // (one let go since: worked out again)
+                hit = nullptr;
+                break;
+            }
+        }
+    }
+    if (!hit) {
+        why = sa_owners(cbp, bw, gpsm, x0, y0, w, h, ids);
+    }
     sa_stats.clut_loads[why]++;
     uint32_t values[256];
     bool packed = false;
-    if (why == SA_TEX_TABLE) {
+    if (hit) {
+        for (uint32_t id : hit->ids) {
+            sa_chunk(id)->used = sa.frame;
+        }
+        packed = hit->packed;
+        memcpy(values, hit->values, sizeof(values));
+    } else if (why == SA_TEX_TABLE) {
         std::sort(ids.begin(), ids.end());
         uint64_t key = (tex0 & ((uint64_t(0x3FFF) << 37) | (uint64_t(0xF) << 51) | (uint64_t(1) << 55))) ^
                        (uint64_t(eight) << 63) ^ (csm ? texclut * 0x9E3779B97F4A7C15ull : 0);
@@ -886,8 +932,38 @@ void sa_clut_load(uint64_t tex0) {
             memcpy(slot.data(), values, sizeof(values));
             sa_stats.clut_decodes++;
         }
+        SaClutMemo &m = memo[memo_next++ % 4];
+        m.gen = sat.gen;
+        m.key = memo_key;
+        m.texclut = memo_texclut;
+        m.ids = ids;
+        m.packed = packed;
+        memcpy(m.values, values, sizeof(values));
     } else {
         sa_clut_read(gs->vram.data(), tex0, values); // (as clut_load read it: its pages claimed back to VRAM)
+    }
+    if (eight && cpsm == 0) {
+        // (the whole buffer: halfword i the low half of entry i, 256 + i its high half; as below, at once)
+        uint64_t gs_bits = why == SA_TEX_TABLE ? 0 : ~uint64_t(0), packed_bits = packed ? ~uint64_t(0) : 0;
+        bool changed = false;
+        for (uint32_t k = 0; k < 8; k++) {
+            changed |= sat.clut_packed[k] != packed_bits;
+        }
+        for (uint32_t i = 0; i < 256 && !changed; i++) {
+            changed = sat.clut[i] != (values[i] & 0xFFFF) || sat.clut[256 + i] != (values[i] >> 16);
+        }
+        if (changed && !gs->verts.empty() && (sa.in_draw ? sa.draw_on : sa.pending)) {
+            flush_batch();
+        }
+        for (uint32_t i = 0; i < 256; i++) {
+            sat.clut[i] = uint16_t(values[i]);
+            sat.clut[256 + i] = uint16_t(values[i] >> 16);
+        }
+        for (uint32_t k = 0; k < 8; k++) {
+            sat.clut_gs[k] = gs_bits;
+            sat.clut_packed[k] = packed_bits;
+        }
+        return;
     }
     // (halfword, value) pairs; a scene batch waiting keeps the colours it was made with (the GS flushed before its
     // own load if its buffer changed; the mirror's colours can change alone where a texture pack's upload is in it)
@@ -974,6 +1050,7 @@ struct SaTexture {
     const uint32_t *texels = nullptr; // (the texture's texels by alpha, CLUT index or CT32's alpha, where known)
     bool reads_target = false, reads_own = false;
     bool own_named = false; // (reads_own: the named target bound, T3)
+    ImageHandle table;      // (decoded from the table: its image, kept by a skinned group until it is drawn)
 };
 
 // A texture (TEX0's, its mipmap levels', the part of level 0 the draws read) decoded from the uploads that
@@ -1256,6 +1333,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
     const uint32_t *texels = nullptr;
     if (dec) {
         st.raw_view = &dec->image->get_view();
+        st.table = dec->image;
         texels = dec->texels.data();
     } else {
         // the GS's: a render target (flush_batch's search), else VRAM
@@ -1694,7 +1772,9 @@ bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
 // each GS pixel the mean of the scene's pixels and samples over it, and the scene's picture kept for the
 // composite: gsn_composite.inc, sa_hold.)
 void sa_hold(Target &color);
+void sa_group_draw();
 void sa_give(bool keep) {
+    sa_group_draw(); // (pf/skin: a skinned model's parts kept are drawn before the scene's turn ends)
     if (!sa.bound || sat_release()) {
         return; // (T3: a named target bound: let go, nothing copied)
     }
@@ -2113,6 +2193,227 @@ static bool sa_passing_same_twice(const SaTexture &st, uint64_t tex0, uint64_t t
     return true;
 }
 
+// One of a batch's draws (sa_draw_batch, "the ties"): the alpha test's pass, the colour mask, Z written, the slack
+struct SaDraw {
+    uint32_t select, mask;
+    bool zwrite;
+    float zbias;
+};
+
+// ---- A skinned model's parts drawn together (pf/skin) -------------------------------------------------
+// Program 0x280 kicks a model a part (an RdBatch, at most 40 vertices) at a time: its first pass (opaque, Z written,
+// the part's TEX0), then its sphere-mapped second pass (the shine, Cs + Cd As: another TEX0 and ALPHA). So every part
+// was two batches of its own, and the parts' first passes, whose state is mostly the same (the zombies' parts share one
+// texture), never met: about 800 batches and 3,500 Vulkan draws a game frame at the poison pond. Each batch is still
+// worked out as before (sa_draw_batch: the texture, the alpha range, the ties, the runs), but a part whose draws are the
+// simple ones (a first pass drawn two-phase in one run, exact, every pixel of its triangles passing the alpha test; its
+// second pass in one run) is kept, and drawn with the model's other such parts when something else comes (sa_group_draw):
+// - the first passes of all of them in one draw for each of their two draws. Their colour within no slack, then Z
+//   tested and written, over all of them, leaves what each part's two draws one after another leave: the second draw
+//   writes, last, every pixel the first did, and the Z is only the second's;
+// - then the second passes, last part first. Drawn one after another, a part's shine stays only where that part's
+//   first pass was the last to draw (a later part drawn over it overwrites the shine), on that first pass's colour.
+//   So each part's shine is drawn where its own first pass is at the front (its Z, exactly) and no later part's is:
+//   after its shine each part marks the pixels where its first pass is at the front in the stencil with the group's
+//   number (a number of its own, as the shadows' runs and the layers have, so nothing there has it yet), and a shine
+//   is not drawn where the stencil has it. That keeps a later part's pixel at exactly the same depth (an edge two
+//   parts' triangles share where they fold over each other) the later part's, as it was. The shines' own Z writes are
+//   left out: they write the Z their first passes wrote, which is there.
+// Kept from one 0x280 draw of the scene to the next (a model is a draw a bone); anything else first draws what is kept:
+// another batch or draw, the scene's turn ending, a picture between's mark, a save state. KF4_SA_GROUP=0 (tests) draws
+// each part as it comes.
+struct SaGroupKey {
+    Push pushes[4];
+    uint32_t masks[4], zwrites[4];
+    int32_t ndraws;
+    uint32_t per_sample, ztst, blend_on, alpha_factor, fix;
+    VkBlendFactor src, dst;
+    VkBlendOp op;
+    int32_t scissor[4];
+    uint32_t viewport[2];
+    const ImageView *raw, *target;
+    const Buffer *records, *arena;
+    uint32_t want_clut;
+    uint32_t clut[256];
+};
+struct SaGroupPass {
+    SaGroupKey key;
+    std::vector<Vtx> corners;
+    bool on = false;
+    ImageHandle texture;
+};
+struct SaGroupPart {
+    uint32_t first[2], count[2]; // its passes' corners (count[1] 0: no second pass)
+    float box[4];                // its first pass's place on the screen (GS pixels: x0, y0, x1, y1)
+};
+struct SaGroup {
+    SaGroupPass pass[2]; // the first passes, the second passes
+    std::vector<SaGroupPart> parts;
+    std::vector<uint8_t> needs;
+    BufferHandle records, arena;
+    uint32_t fbp = 0, fbw = 0, fpsm = 0, zbp = 0, zpsm = 0;
+    uint32_t gen = 0;           // the group's number in the stencil
+    bool expect_second = false; // the last batch kept was a first pass: its second pass may follow
+    uint32_t last_n = 0;
+    float last_fog[2] = {};
+    int enabled = -1;
+    uint64_t parts_kept = 0, draws = 0, groups = 0;
+} sa_group;
+
+bool sa_group_pending() {
+    return sa_group.pass[0].on;
+}
+
+// A pass's state (sa_draw_batch's) for the corners in vertex buffer 0
+void sa_group_state(Cmd &c, const SaGroupKey &k) {
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_viewport({0.0f, 0.0f, float(k.viewport[0]), float(k.viewport[1]), 0.0f, 1.0f});
+    c.set_scissor({{k.scissor[0], k.scissor[1]}, {uint32_t(k.scissor[2]), uint32_t(k.scissor[3])}});
+    c.set_texture(0, 0, *k.raw, StockSampler::NearestClamp);
+    c.set_texture(0, 1, *k.target, StockSampler::NearestClamp);
+    c.set_texture(0, 3, gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+    uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
+    if (k.want_clut) {
+        memcpy(clut_data, k.clut, sizeof(k.clut));
+    } else {
+        memset(clut_data, 0, 1024);
+    }
+    c.set_depth_compare(k.ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : k.ztst == 3 ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS);
+    if (k.blend_on) {
+        float constants[4] = {float(k.fix) / 128.0f, float(k.fix) / 128.0f, float(k.fix) / 128.0f, 128.0f / 255.0f};
+        c.set_blend_enable(true);
+        c.set_blend_constants(constants);
+        c.set_blend_factors(k.src, k.alpha_factor ? VK_BLEND_FACTOR_CONSTANT_ALPHA : VK_BLEND_FACTOR_ONE, k.dst, VK_BLEND_FACTOR_ZERO);
+        c.set_blend_op(k.op, VK_BLEND_OP_ADD);
+    } else {
+        c.set_blend_enable(false);
+    }
+    // (sa_draw_range's for a stretch of 0x280's corners)
+    c.set_program(sa.programs[SA_VS_280][k.per_sample ? 1 : 0]);
+    c.set_storage_buffer(2, 1, *k.records);
+}
+
+void sa_group_one(Cmd &c, const Push &p, uint32_t mask, bool zwrite, uint32_t count, uint32_t first) {
+    c.set_color_write_mask(mask);
+    c.set_depth_test(true, zwrite);
+    c.push_constants(&p, 0, sizeof(Push));
+    c.draw(count, first);
+    sa_stats.draws++;
+    gsn_stats.draws++;
+    sa_group.draws++;
+}
+
+// What is kept drawn: the first passes, then the second passes, last part first (above)
+void sa_group_draw() {
+    SaGroup &g = sa_group;
+    if (!g.pass[0].on) {
+        return;
+    }
+    if (sa.bound) {
+        const SaGroupKey &k1 = g.pass[0].key, &k2 = g.pass[1].key;
+        sa_begin_pass(false);
+        Cmd &c = cmd();
+        c.set_opaque_state();
+        // the corners: the first passes', then the second passes'
+        size_t n1 = g.pass[0].corners.size(), n2 = g.pass[1].on ? g.pass[1].corners.size() : 0;
+        Vtx *v = static_cast<Vtx *>(c.allocate_vertex_data(0, (n1 + n2) * sizeof(Vtx), sizeof(Vtx)));
+        memcpy(v, g.pass[0].corners.data(), n1 * sizeof(Vtx));
+        if (n2) {
+            memcpy(v + n1, g.pass[1].corners.data(), n2 * sizeof(Vtx));
+        }
+        c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
+        c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
+        c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
+        c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
+        c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
+        // (nd_bind's, for the arena the parts were made with)
+        c.set_storage_buffer(2, 0, *k1.arena);
+        if (!interp.active) {
+            if (!nd.dummy) {
+                BufferCreateInfo info = {};
+                info.domain = BufferDomain::Device;
+                info.size = 256;
+                info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                std::vector<uint8_t> zeros(256);
+                nd.dummy = gs->device->create_buffer(info, zeros.data());
+            }
+            c.set_storage_buffer(1, 0, *nd.dummy);
+        }
+        sa_group_state(c, k1);
+        for (int i = 0; i < k1.ndraws; i++) {
+            sa_group_one(c, k1.pushes[i], k1.masks[i], k1.zwrites[i] != 0, uint32_t(n1), 0);
+        }
+        if (n2) {
+            sa_group_state(c, k2);
+            // the mark: a first pass's triangles, untextured and no colour, where its Z is at the front
+            Push mark = k1.pushes[k1.ndraws - 1];
+            mark.flags &= ~(F_TME | (3u << F_PASS_SHIFT));
+            // A part's mark is needed only where a shine before it could reach its pixels: a part before it with a
+            // second pass whose place on the screen meets its own (the plan's corners, a pixel wider; in a picture
+            // between the corners move on the GPU: every part). The shines between marks, which no needed mark
+            // separates, are one draw: two of them never reach the same pixel at the same depth.
+            size_t np = g.parts.size();
+            std::vector<uint8_t> &needs = g.needs;
+            needs.assign(np, 0);
+            for (size_t j = 1; j < np; j++) {
+                const SaGroupPart &b = g.parts[j];
+                for (size_t i = 0; i < j && !needs[j]; i++) {
+                    const SaGroupPart &a = g.parts[i];
+                    needs[j] = a.count[1] && (interp.active || (a.box[0] <= b.box[2] + 1.0f && b.box[0] <= a.box[2] + 1.0f &&
+                                                                a.box[1] <= b.box[3] + 1.0f && b.box[1] <= a.box[3] + 1.0f));
+                }
+            }
+            uint32_t shine_lo = 0, shine_hi = 0, mark_lo = 0, mark_hi = 0; // (pending: corners of pass 1, of pass 0)
+            auto shines = [&]() {
+                if (shine_hi > shine_lo) {
+                    c.set_stencil(true, VK_COMPARE_OP_NOT_EQUAL, VK_STENCIL_OP_KEEP, g.gen, 0xFF);
+                    sa_group_one(c, k2.pushes[1], k2.masks[1], false, shine_hi - shine_lo, uint32_t(n1) + shine_lo);
+                }
+                shine_lo = shine_hi = 0;
+            };
+            auto marks = [&]() {
+                if (mark_hi > mark_lo) {
+                    c.set_stencil(true, VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_REPLACE, g.gen, 0xFF);
+                    sa_group_one(c, mark, 0, false, mark_hi - mark_lo, mark_lo);
+                }
+                mark_lo = mark_hi = 0;
+            };
+            for (size_t j = np; j-- > 0;) {
+                const SaGroupPart &part = g.parts[j];
+                if (part.count[1]) {
+                    if (mark_hi > mark_lo) {
+                        shines(); // (the later parts' shines, then their marks, before this one's)
+                        marks();
+                    }
+                    if (shine_hi == shine_lo) {
+                        shine_hi = part.first[1] + part.count[1];
+                    }
+                    shine_lo = part.first[1];
+                }
+                if (needs[j]) {
+                    if (mark_hi == mark_lo) {
+                        mark_hi = part.first[0] + part.count[0];
+                    }
+                    mark_lo = part.first[0]; // (with the parts between that need none: they meet no shine before)
+                }
+            }
+            shines();
+            c.set_stencil(false, VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_KEEP, 0, 0xFF);
+        }
+        g.groups++;
+    }
+    for (SaGroupPass &p : g.pass) {
+        p.on = false;
+        p.corners.clear();
+        p.texture.reset();
+    }
+    g.parts.clear();
+    g.records.reset();
+    g.arena.reset();
+    g.expect_second = false;
+}
+
 // (flush_batch, a batch of the scene's corners) Its GS state as flush_batch works it out, drawn with
 // sa_000.vert into the scene's targets. False: declined (sa_stats.declined[*why]), for the GS to draw.
 bool sa_draw_batch(int *why) {
@@ -2125,6 +2426,10 @@ bool sa_draw_batch(int *why) {
     uint32_t fbp = bits(frame, 0, 9) * 32, fbw = bits(frame, 16, 6), fpsm = bits(frame, 24, 6);
     uint32_t fbmsk = uint32_t(frame >> 32);
     uint32_t zbp = bits(zbuf, 0, 9) * 32, zpsm = bits(zbuf, 24, 4) | 0x30;
+    if (sa_group_pending() && (!sa.in_draw || !nd.active || nd.pass_active || sa_group.fbp != fbp ||
+                               sa_group.fbw != fbw || sa_group.fpsm != fpsm || sa_group.zbp != zbp || sa_group.zpsm != zpsm)) {
+        sa_group_draw(); // (pf/skin: not a part of the model's to keep)
+    }
     bool zmsk = bits(zbuf, 32, 1);
     uint32_t sx0 = bits(scissor, 0, 11), sx1 = bits(scissor, 16, 11), sy0 = bits(scissor, 32, 11), sy1 = bits(scissor, 48, 11);
     bool ate = bits(test, 0, 1);
@@ -2246,6 +2551,7 @@ bool sa_draw_batch(int *why) {
             return false;
         }
         if (st.reads_own) {
+            sa_group_draw(); // (pf/skin: the parts kept are in the frame it reads)
             // (T2) the frame it draws into (a screen pass: the brightness, the flicker filter, haze): read from a
             // copy of the scene's colour taken now (resolved), at the scene's scale
             uint32_t W = sa.color->get_width(), H = sa.color->get_height();
@@ -2507,11 +2813,7 @@ bool sa_draw_batch(int *why) {
         }
     }
     // the ties (above): each pass's Z first, exact, then its colour within the slack
-    struct Draw {
-        uint32_t select, mask;
-        bool zwrite;
-        float zbias;
-    } draws[4];
+    SaDraw draws[4];
     int ndraws = 0;
     // A tie drawn in one pass that writes Z and comes out the same drawn twice (an opaque mesh on its surface): its
     // colour within the slack of what was there before the batch, no Z written, then the batch again Z tested and
@@ -2545,7 +2847,8 @@ bool sa_draw_batch(int *why) {
     // only the nearest gets the shine.)
     bool tie_runs = ties && zwrite && !same_twice && !second_pass &&
                     !sa_passing_same_twice(st, tex0, test, alpha, abe, as_min, as_max, passes[0].select, npasses);
-    std::vector<uint32_t> runs(1, 0);
+    std::vector<uint32_t> &runs = sa.runs; // (kept from batch to batch: their room)
+    runs.assign(1, 0);
     if ((npasses > 1 || shader_blend || tie_runs) && !shadow) {
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
         for (uint32_t t = 1; t < triangles; t++) {
@@ -2560,7 +2863,6 @@ bool sa_draw_batch(int *why) {
         }
     }
     runs.push_back(uint32_t(gs->verts.size()));
-
     size_t bytes = gs->verts.size() * sizeof(Vtx);
     // A layer's colour pass also passes within half its Z's change across a GS pixel more, at most a Z more
     // (--native-layer-z tolerant's slope: at a grazing angle the two meshes, a fraction of a pixel apart, are
@@ -2601,7 +2903,8 @@ bool sa_draw_batch(int *why) {
     for (size_t t = 0; world && t < gs->verts.size(); t++) {
         world = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2; // (gs.vert's corners keep the Z rule)
     }
-    std::vector<Vtx> corners(gs->verts.begin(), gs->verts.end());
+    std::vector<Vtx> &corners = sa.corners; // (kept from batch to batch: their room)
+    corners.assign(gs->verts.begin(), gs->verts.end());
     for (size_t t = 0; t + 2 < corners.size(); t += 3) {
         if (nd_corner_kind(corners[t]) == ND_KIND_PS2 || sa.gs_water) {
             continue; // (the PS2 path's: its alpha is its own, gs.vert takes no slack)
@@ -2626,6 +2929,170 @@ bool sa_draw_batch(int *why) {
         for (int k = 0; k < 3; k++) {
             corners[t + k].rgba = (corners[t + k].rgba & 0xFFFFFFu) | extra << 24;
         }
+    }
+    // (pf/skin) A skinned model's part whose draws are the simple ones is kept, to be drawn with the model's other
+    // parts (sa_group_draw, above); anything else first draws what is kept
+    if (sa_group.enabled < 0) {
+        const char *v = getenv("KF4_SA_GROUP");
+        sa_group.enabled = v && *v ? atoi(v) : 1;
+    }
+    int role = 0; // 1: a first pass kept, 2: a second pass kept
+    if (sa_group.enabled && sa.in_draw && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only && !gpu_corners &&
+        !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && runs.size() == 2 && !shader_blend &&
+        !shadow && st.table && !st.reads_target && ndraws == 2 && nd280_batch_draws() == nd280.draws.buffer.get() &&
+        nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena) {
+        // a first pass that covers every pixel of its triangles: no pixel fails the alpha test
+        uint32_t aref = bits(test, 4, 8);
+        bool covers = !ate || atst == 1;
+        switch (ate ? atst : 1) {
+        case 2:
+            covers = a_hi < aref;
+            break;
+        case 3:
+            covers = a_hi <= aref;
+            break;
+        case 4:
+            covers = a_lo == aref && a_hi == aref;
+            break;
+        case 5:
+            covers = a_lo >= aref;
+            break;
+        case 6:
+            covers = a_lo > aref;
+            break;
+        case 7:
+            covers = aref < a_lo || aref > a_hi;
+            break;
+        }
+        if (skinned && two_phase && ztst == 2 && skin_eps == 0.0f && covers && passes[0].mask && sa.stencil) {
+            role = 1;
+        } else if (second_pass && sa_group.pass[0].on && sa_group.expect_second && corners.size() == sa_group.last_n &&
+                   corners[0].fog == sa_group.last_fog[0] && corners.back().fog == sa_group.last_fog[1] &&
+                   nd280_batch_draws() == sa_group.records.get() && nd.batch_arena == sa_group.arena.get() && ztst == 2 &&
+                   draws[0].mask == 0 && draws[0].zwrite && draws[1].mask && !draws[1].zwrite) {
+            role = 2; // (its own first pass's corners, kept just before: its Z pass, then its colour)
+        }
+    }
+    if (role) {
+        SaGroupKey k;
+        memset(&k, 0, sizeof(k));
+        k.ndraws = ndraws;
+        for (int i = 0; i < ndraws; i++) {
+            Push p = push;
+            p.flags |= draws[i].select << F_PASS_SHIFT;
+            p.zbias = draws[i].zbias + (draws[i].zbias > 0.0f || (ties && !draws[i].zwrite) ? ps2_bias : 0.0f);
+            p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
+            if ((world || (skinned && ties)) && draws[i].zbias > 0.0f) {
+                p.zbias = 0.0f;
+                p.zslope = -layer_eps;
+            }
+            k.pushes[i] = p;
+            k.masks[i] = draws[i].mask;
+            k.zwrites[i] = draws[i].zwrite;
+        }
+        k.per_sample = per_sample;
+        k.ztst = ztst;
+        k.blend_on = abe && !shader_blend;
+        if (k.blend_on) {
+            k.alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
+            k.fix = fix;
+            k.src = blend.src;
+            k.dst = blend.dst;
+            k.op = blend.op;
+        }
+        k.scissor[0] = int32_t(sx0 * scale_x);
+        k.scissor[1] = int32_t(sy0 * scale_y);
+        k.scissor[2] = int32_t((x1 - sx0) * scale_x);
+        k.scissor[3] = int32_t((y1 - sy0) * scale_y);
+        k.viewport[0] = color->width * scale_x;
+        k.viewport[1] = color->height * scale_y;
+        k.raw = st.raw_view ? st.raw_view : &gs->dummy_raw->get_view();
+        k.target = st.target_view ? st.target_view : &gs->dummy_rgba->get_view();
+        k.records = nd280_batch_draws();
+        k.arena = nd.batch_arena;
+        k.want_clut = st.want_clut;
+        if (st.want_clut) {
+            memcpy(k.clut, st.clut, sizeof(k.clut));
+        }
+        SaGroupPass &g = sa_group.pass[role - 1];
+        bool same_frame = sa_group.fbp == fbp && sa_group.fbw == fbw && sa_group.fpsm == fpsm && sa_group.zbp == zbp &&
+                          sa_group.zpsm == zpsm;
+        if (sa_group.pass[0].on && (!same_frame || (g.on && memcmp(&g.key, &k, sizeof(k)) != 0))) {
+            sa_group_draw(); // (not as those kept: they are drawn first; a second pass then goes on as it came)
+            if (role == 2) {
+                role = 0;
+            }
+        }
+        if (role == 1 && !sa_group.pass[0].on) {
+            // a new group: a number of its own in the stencil (after 255, the frame taken again to clear it; a named
+            // target's, one its earlier turns did not use: sat_stencil_number)
+            if (sat_bound()) {
+                if (!sat_stencil_number(&sa_group.gen)) {
+                    role = 0;
+                }
+            } else {
+                if (sa.stencil_gen >= 255) {
+                    sa_release();
+                    if (!sa_acquire(fbp, fbw, fpsm, zbp, zpsm, sy1 + 1) || sa.frame_target != color) {
+                        *why = SA_WHY_TARGET;
+                        return false;
+                    }
+                }
+                sa.stencil_gen++;
+                sa_group.gen = sa.stencil_gen;
+            }
+            sa_group.fbp = fbp;
+            sa_group.fbw = fbw;
+            sa_group.fpsm = fpsm;
+            sa_group.zbp = zbp;
+            sa_group.zpsm = zpsm;
+            sa_group.records = nd280.draws.buffer;
+            sa_group.arena = nd.arena.buffer;
+        }
+        if (role) {
+            if (!g.on) {
+                g.key = k;
+                g.on = true;
+                g.texture = st.table;
+            }
+            if (role == 1) {
+                SaGroupPart part = {{uint32_t(g.corners.size()), 0}, {uint32_t(corners.size()), 0}, {}};
+                part.box[0] = part.box[2] = corners[0].x;
+                part.box[1] = part.box[3] = corners[0].y;
+                for (const Vtx &v : corners) {
+                    part.box[0] = std::min(part.box[0], v.x);
+                    part.box[1] = std::min(part.box[1], v.y);
+                    part.box[2] = std::max(part.box[2], v.x);
+                    part.box[3] = std::max(part.box[3], v.y);
+                }
+                sa_group.parts.push_back(part);
+            } else {
+                sa_group.parts.back().first[1] = uint32_t(g.corners.size());
+                sa_group.parts.back().count[1] = uint32_t(corners.size());
+            }
+            g.corners.insert(g.corners.end(), corners.begin(), corners.end());
+            sa_group.parts_kept++;
+            sa_group.expect_second = role == 1;
+            sa_group.last_n = uint32_t(corners.size());
+            sa_group.last_fog[0] = corners[0].fog;
+            sa_group.last_fog[1] = corners.back().fog;
+            sa.last_shadow = false;
+            sa.z_written |= zwrite;
+            uint32_t d0 = interp.active ? sy0 : uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
+            uint32_t d1 = interp.active ? y1 : uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
+            sa.rows0 = std::min(sa.rows0, d0);
+            sa.rows1 = std::max(sa.rows1, d1);
+            sa.drew = true;
+            sa.scissor_rows = std::max(sa.scissor_rows, y1);
+            sa_stats.batches++;
+            sa_stats.triangles += gs->verts.size() / 3;
+            gsn_stats.primitives += gs->verts.size() / 3;
+            gs->verts.clear();
+            gs->batch_sprites = false;
+            return true;
+        }
+    } else {
+        sa_group_draw();
     }
     // a run of shadow batches: a number of its own in the stencil (cleared when the scene took the frame; after
     // 255 runs the frame taken again, to clear it)
@@ -2677,6 +3144,7 @@ bool sa_draw_batch(int *why) {
         in_pass = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2;
     }
     bool copied_in_pass = false;
+    uint64_t bound_pass = UINT64_MAX; // (the render pass the run's bindings were made in)
     for (size_t r = 0; r + 1 < runs.size(); r++) {
         uint32_t first = runs[r], count = runs[r + 1] - runs[r];
         if (shader_blend) {
@@ -2738,6 +3206,10 @@ bool sa_draw_batch(int *why) {
         sa_begin_pass(in_pass);
         Cmd &c = cmd();
         if (fresh || r == 0) {
+            // (pf/skin) a run after the copy it blends from, in the same render pass: the textures, the CLUT, the
+            // corners and the buffers bound for the run before are still bound (a pass's bindings last to its end):
+            // only the pipeline's state again, which the copy changed
+            bool keep = r > 0 && bound_pass == pass_serial;
             c.set_opaque_state();
             c.set_program(sa.programs[SA_VS_000][0]); // (each stretch's own: sa_draw_range)
             c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -2745,18 +3217,20 @@ bool sa_draw_batch(int *why) {
             VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
             c.set_viewport(vp);
             c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
-            c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
-            c.set_texture(0, 1, st.target_view ? *st.target_view : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-            if (in_pass) {
-                c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
-            } else {
-                c.set_texture(0, 3, shader_blend ? sa.copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-            }
-            uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
-            if (st.want_clut) {
-                memcpy(clut_data, st.clut, sizeof(st.clut));
-            } else {
-                memset(clut_data, 0, 1024);
+            if (!keep) {
+                c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
+                c.set_texture(0, 1, st.target_view ? *st.target_view : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+                if (in_pass) {
+                    c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
+                } else {
+                    c.set_texture(0, 3, shader_blend ? sa.copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+                }
+                uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
+                if (st.want_clut) {
+                    memcpy(clut_data, st.clut, sizeof(st.clut));
+                } else {
+                    memset(clut_data, 0, 1024);
+                }
             }
             c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : ztst == 3 ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS);
             if (abe && !shader_blend) {
@@ -2770,20 +3244,23 @@ bool sa_draw_batch(int *why) {
             } else {
                 c.set_blend_enable(false);
             }
-            if (gpu_corners) {
-                c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at) * sizeof(Vtx), sizeof(Vtx));
-            } else {
-                void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
-                memcpy(vdata, corners.data(), bytes);
+            if (!keep) {
+                if (gpu_corners) {
+                    c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at) * sizeof(Vtx), sizeof(Vtx));
+                } else {
+                    void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
+                    memcpy(vdata, corners.data(), bytes);
+                }
+                c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
+                c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
+                c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
+                c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
+                c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
+                if (nd.active) {
+                    nd_bind(c); // (the arena: not for a batch of the PS2 path's corners only, whose buffers may be gone)
+                }
             }
-            c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
-            c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
-            c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
-            c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
-            c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
-            if (nd.active) {
-                nd_bind(c); // (the arena: not for a batch of the PS2 path's corners only, whose buffers may be gone)
-            }
+            bound_pass = pass_serial;
         }
         for (int i = 0; i < ndraws; i++) {
             Push p = push;
@@ -2852,6 +3329,9 @@ bool sa_flush() {
     // screen pass's)
     bool scene = !nd.pass_active && (sa.in_draw ? sa.draw_on : sa.pending);
     sa.pending = false;
+    if (!scene || !sa.in_draw) {
+        sa_group_draw(); // (pf/skin: kept only from draw to draw)
+    }
     int op = scene ? SA_OP_NONE : sa_scene_op();
     if (!scene && op == SA_OP_NONE && sat_fill()) {
         op = SA_OP_FILL; // (T3: a fill over the frame the scene has, as mode 1's tint between its two views)
@@ -2947,6 +3427,9 @@ void sa_draw_begin(uint64_t value) {
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
     bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
     sa.fetched.clear();
+    if (!scene || d.program != 0x280) {
+        sa_group_draw(); // (pf/skin: a model's parts are kept from one of its draws to the next)
+    }
     if (!gs->verts.empty() && scene != sa.pending) {
         flush_batch();
     }
@@ -3125,6 +3608,7 @@ void sa_switch(bool on) {
 // on yet (a --state-load before the first vblank, kf4-gsreplay's start) the scene starts now, so that
 // the table loaded next is kept.
 void sa_forget() {
+    sa_group_draw();
     if (!sa.on) {
         if (sa_mode) {
             sa_switch(true);
@@ -3508,6 +3992,16 @@ void sa_print_stats() {
         fprintf(stderr, "; %llu tables loaded (save states, captures)", (unsigned long long)s.tables_loaded);
     }
     fprintf(stderr, "\n");
+    fprintf(stderr, "[stats] standalone skinned: %llu parts' passes kept and drawn together, %llu times, in %llu draws\n",
+            (unsigned long long)sa_group.parts_kept, (unsigned long long)sa_group.groups, (unsigned long long)sa_group.draws);
+#ifdef ND280_PLAN_FAST
+    fprintf(stderr, "[stats] native draw 0x280 plans: %llu with the host's floats, %llu VU1's (a value at the limits)%s",
+            (unsigned long long)nd280_plan_fast_n, (unsigned long long)nd280_plan_fast_slow,
+            getenv("KF4_ND280_PLAN_CHECK") ? "" : "\n");
+    if (getenv("KF4_ND280_PLAN_CHECK")) {
+        fprintf(stderr, "; checked: %llu differ\n", (unsigned long long)nd280_plan_check_differ);
+    }
+#endif
     sat_print_stats(); // (T3)
     sa_print_table_stats();
 }

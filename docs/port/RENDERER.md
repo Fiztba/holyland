@@ -181,6 +181,12 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   whole, its triangles all making the same pixel (with MSAA its inner seams go: `KF4_GSN_SILHOUETTE_RUNS=1`
   for the runs), and a multisampled 16-bit target's copies are made in the pass (whole-number means: the
   pond's reflection). A tie's passes are drawn whole too (STEP3.md, "Hot spots at 240").
+- **A skinned model's parts are drawn together** in modern (`sa_group_draw`): each part's first pass and shine
+  were batches of their own; the parts whose draws are simple are kept and drawn as the model's first passes, then
+  its shines last part first, each part marking its front pixels in the stencil so no shine lands on a later part
+  at the same depth: the same pixels (NATIVE_DRAW_P8.md, "A skinned model's parts drawn together"). The 0x280 plan
+  is made with SSE rounded toward zero (VU1's arithmetic, `nd280_plan_fast`), and the two CLUTs a skinned model's
+  parts load in turn are kept.
 - **NVIDIA's MSAA resolve is not a function of the samples.** Its mean of two 8-bit samples rounds a
   half up or down depending on more than the two values, so no shader reproduces `vkCmdResolveImage`;
   a render pass's resolve attachment does (8-bit; not 16-bit). Exactness at MSAA means resolving.
