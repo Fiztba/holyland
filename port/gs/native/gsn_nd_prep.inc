@@ -75,6 +75,7 @@ struct NdPrep {
     int enabled = -1, check = -1;
     NdPrepFrame frames[2]; // the frame kept last and the one before (a picture can come after the next frame began)
     int last = 1;          // the one kept last
+    uint32_t unused = 8;   // frames since a picture between was drawn from the packets (8 or more: none is kept)
     NdPrepFrame *filling = nullptr; // the frame being drawn
     NdPrepFrame *taking = nullptr;  // the frame a picture between is drawing
     uint32_t next = 0;              // (taking) the picture's next draw
@@ -116,7 +117,13 @@ void nd_prep_frame(uint32_t serial) {
             nd_prep.filling = nullptr; // (the same frame drawn again: a field's, or exact: kept as it was)
             return;
         }
-        // a new frame: kept in the older of the two
+        // a new frame: kept in the older of the two, while frames have pictures between drawn from their packets (at 30,
+        // or a CPU's pictures, none is taken: nothing kept)
+        if (nd_prep.unused >= 8) {
+            nd_prep.filling = nullptr;
+            return;
+        }
+        nd_prep.unused++;
         nd_prep.last ^= 1;
         NdPrepFrame *f = &nd_prep.frames[nd_prep.last];
         f->clear();
@@ -127,6 +134,7 @@ void nd_prep_frame(uint32_t serial) {
     }
     // (a picture's draws are not the frame's: nd_prep_draw_begin keeps none while a picture is drawn, and a frame begun
     // before it goes on after it)
+    nd_prep.unused = 0;
     for (NdPrepFrame &f : nd_prep.frames) {
         if (f.whole && f.serial == serial) {
             nd_prep.taking = &f;

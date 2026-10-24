@@ -1122,8 +1122,8 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->nd_plan_vertices, (unsigned long long)s->nd_plan_reused,
                     (unsigned long long)s->nd_moved_models, (unsigned long long)s->nd_moved_strips);
         }
-        if (port_options.renderer_modern) {
-            gsn_print_standalone_stats(); /* (P8) */
+        if (port_options.renderer_modern || port_options.native_draw) {
+            gsn_print_standalone_stats(); /* (P8; and native draw's for the pictures between) */
         }
         {
             int w;

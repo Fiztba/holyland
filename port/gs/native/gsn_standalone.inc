@@ -2431,7 +2431,7 @@ struct SaMemoState {
     SaMemo keep = {};            // (a frame) what is being kept for this batch
     bool keeping = false;
     NdPrepFrame *into = nullptr; // (keeping) the frame's
-    uint64_t taken = 0, missed[4] = {}; // --stats: taken; not: none found, the corners differ, one left out kept, (unused)
+    uint64_t taken = 0, missed[4] = {}; // --stats: taken; not: none kept, another batch, one left out kept, not kept corners alone
     uint64_t check_differ = 0, differ[8] = {};
 } sa_memo;
 
@@ -2466,7 +2466,7 @@ void sa_memo_begin(const uint32_t *scissor) {
     }
     const NdPrepFrame *f = nd_prep.taking;
     if (!nd_prep_run_is(f)) {
-        sa_memo.missed[0]++;
+        sa_memo.missed[3]++;
         return;
     }
     auto it = f->sa_index.find(uint32_t(nd_prep.run_at));
@@ -2494,13 +2494,14 @@ void sa_memo_end() {
 }
 
 void sa_memo_print_stats() {
-    if (!sa_memo.taken && !sa_memo.missed[0] && !sa_memo.missed[1] && !sa_memo.missed[2]) {
+    if (!sa_memo.taken && !sa_memo.missed[0] && !sa_memo.missed[1] && !sa_memo.missed[2] && !sa_memo.missed[3]) {
         return;
     }
     fprintf(stderr, "[stats] standalone, pictures between: %llu batches took the frame's work on their corners; worked out "
-                    "again: %llu none found, %llu another batch of those corners, %llu a triangle left out kept",
-            (unsigned long long)sa_memo.taken, (unsigned long long)sa_memo.missed[0], (unsigned long long)sa_memo.missed[1],
-            (unsigned long long)sa_memo.missed[2]);
+                    "again: %llu not the frame's corners alone, %llu none kept (the frame's left all out), %llu another batch of "
+                    "those corners, %llu a triangle left out kept",
+            (unsigned long long)sa_memo.taken, (unsigned long long)sa_memo.missed[3], (unsigned long long)sa_memo.missed[0],
+            (unsigned long long)sa_memo.missed[1], (unsigned long long)sa_memo.missed[2]);
     if (sa_memo.check) {
         fprintf(stderr, "; checked: %llu differ (", (unsigned long long)sa_memo.check_differ);
         for (int i = 0; i < 8; i++) {
@@ -4246,8 +4247,7 @@ void sa_print_stats() {
         fprintf(stderr, "; checked: %llu differ\n", (unsigned long long)nd280_plan_check_differ);
     }
 #endif
-    nd_prep_print_stats(); // (rc/own)
-    sa_memo_print_stats();
+    sa_memo_print_stats(); // (rc/own)
     sat_print_stats(); // (T3)
     sa_print_table_stats();
 }
