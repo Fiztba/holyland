@@ -1181,6 +1181,47 @@ passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 3
 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
+### rc/own and rc/dynstate merged (`native/draw`, both on d715daed)
+
+They merged without a conflict in the code (only this file's two sections). rc/own's hooks in `gsn.cpp`
+(`forget_uploads`, the stats) and rc/dynstate's (`Cmd::raw`, the bind counters around `interp_record` and the replay)
+are in different places; `gs.c` has both the new bind line and the stats printed hosted too. No shader changed.
+Configure again after pulling: the Granite patch is applied at configure time.
+
+**Pictures:** every picture the same as d715daed's: the four spots (`--fast`, 240, the owner's settings, vblanks
+200-207, 301, 399; under water 400-407, 600: 156 pictures, 0 differ); hosted at the pond (`--renderer native
+--native-draw on`, 40 pictures, 0 differ); the herb in modern at the owner's settings at 240 (the same `--log`, PATH1
+hash 561c91020b2908ee, pictures 1800, 1820, 1840). The off check passes: boot_test; frame_test `--renderer gs` and
+`native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off` against
+play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte
+for byte. In the merged build both are at work: at the pond 62,370 draws' records and 462,285 batches taken from the
+frame, and 194,073 pipelines bound for 769,256 draws.
+
+**The GS's thread a game frame** (`--fast`, 240, the owner's settings, 600 vblanks, 760 under water, two runs each
+alternating, the GPU otherwise idle, d715daed -> merged; the frame's own is the GIF time less the pictures between):
+
+| spot | in all | the frame's own | a recording | a replay |
+|---|---|---|---|---|
+| pond | 18.8 -> 16.4 ms | 10.2 -> 9.9 ms | 8.5-8.6 -> 6.5-6.6 ms | 2.5 -> 2.2-2.3 ms |
+| fortress | 14.7-15.1 -> 12.1 ms | 6.8-7.0 -> 6.3 ms | 7.9-8.1 -> 5.8 ms | 1.8 -> 1.1-1.2 ms |
+| canyon | 14.2-14.4 -> 12.4-12.5 ms | 8.1-8.2 -> 7.4-7.5 ms | 6.2 -> 5.0 ms | 0.8-0.85 -> 0.5-0.55 ms |
+| under water | 10.6 -> 10.3-10.4 ms | 5.9-6.0 -> 5.8 ms | 4.6-4.7 -> 4.5 ms | 0.34 -> 0.30-0.33 ms |
+
+**Real time** (`KF4_PRESENT_SIM=240`, 1,400 vblanks, 760 under water; one game at a time, the GPU otherwise idle, two
+runs each alternating; the two runs agree within 0.3 a second):
+
+| spot | pictures a second | cut to fewer (vblanks with fewer, with none) | a recording | a replay | GPU a picture |
+|---|---|---|---|---|---|
+| pond | 96.6-96.7 -> 100.5-100.6 | 8 (1,207, 0) -> 7 (1,177, 0) | 9.3 -> 7.1 ms | 1.82 -> 1.53 ms | 8.64 -> 8.36 ms |
+| fortress | 155.8-156.0 -> 168.6-168.7 | 1 (30, 0) -> 1 (30, 0) | 8.4 -> 6.0-6.1 ms | 1.59 -> 0.95 ms | 5.44 -> 5.08 ms |
+| canyon | 158.2-158.5 -> 169.4-169.7 | 1 (30, 0) -> 1 (30, 0) | 6.3 -> 5.1 ms | 0.61 -> 0.36 ms | 5.35 -> 5.04 ms |
+| under water | 200.9 -> 204.0 | 1 (30, 0) -> 0 | 5.2-5.3 -> 5.1 ms | 0.17 -> 0.16 ms | 2.04 -> 2.01 ms |
+
+With the binds gone the GPU's time a picture falls too (about 6% at the fortress and the canyon), which is what moves
+the pictures a second there: these spots are bound by the GPU. The pond is still bound by it (8.4 ms a picture).
+What is left: the GPU's work a picture, the programs' binds (rc/dynstate), and the recording's walk of the packets
+(rc/own's open item).
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
