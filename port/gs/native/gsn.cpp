@@ -5537,11 +5537,14 @@ void prepare_write(const TransferRect &r) {
                 i++;
                 continue;
             }
-            if (t->replay_only && regular(*t) && !t->depth) {
+            if (t->replay_only && replaying && regular(*t) && !t->depth) {
                 // A picture between's own target (the water's wobble: its copy of the picture's frame)
                 // stays, and takes the pages under the transfer from VRAM after it (sync_targets): what
                 // the game's frame left there, the transfer's bytes added. Dropped, the picture's draws
-                // after it that read the copy read it from VRAM at 1x, decoded again every picture.
+                // after it that read the copy read it from VRAM at 1x, decoded again every picture. (Only
+                // while a picture between is drawn: in the game's frame such a target is nobody's, and was
+                // kept over every upload, each of its pages under it loaded again: about 540 pages a frame
+                // under water at the pond, the MP drain's and the water's copy of the frame left there.)
                 i++;
                 continue;
             }
