@@ -629,15 +629,17 @@ bool sat_flush() {
     return true;
 }
 
-// The reflection kept for the pictures between (sa_flush, in a picture between; KF4_SA_REFLECTION_KEEP, not the default:
-// it can change pixels). A named target the scene draws into (n->depth: the reflection; not a scrolling texture's, which
-// the GS draws) is left as the frame drew it, its clear and every batch into it left out:
-//   1: when the picture's camera is the frame's (interp.still: the move from the frame's view within 1e-6, the rounding
-//      a camera that did not move comes with). The reflection's draws move with the camera only (gsn_native_draw.inc,
-//      nd_model_flags: not its models by themselves), and with no move a corner is where the frame has it (nd_000.vert's
-//      moved: no move, no change); with the rounding's move its X and Y still round to the frame's, but its unrounded
-//      depth and S, T and Q can differ in their last bit, which can turn a tie. At the pond standing still: 0 pixels of
-//      40 pictures differ, and about a quarter of the GPU's work a picture is left out (NATIVE_DRAW_P8.md, "GPU cost");
+// The reflection kept for the pictures between (sa_flush, in a picture between; KF4_SA_REFLECTION_KEEP). A named target the
+// scene draws into (n->depth: the reflection; not a scrolling texture's, which the GS draws) is left as the frame drew it,
+// its clear and every batch into it left out:
+//   1 (the default): when the camera of the frame shown is the frame's, bit for bit (interp.still: frame_interp.c compares
+//      the two frames' view fields, GsnInterpFrame's still). Every camera between the two is then the frame's, and the
+//      reflection's draws move with the camera only (gsn_native_draw.inc, nd_model_flags; frame_interp.c pairs no run of
+//      the reflection with its model), so the frame's reflection is the picture's exactly. (Drawn again, it came out of
+//      the camera rebuilt by camera_between, a rounding off the frame's: a last bit of depth that could turn a tie, 11
+//      pixels of a picture once, where the kept one is the frame's to the bit.) The pond standing: about a third of the
+//      GPU's work a picture left out (NATIVE_DRAW_P8.md, "The pond at 240");
+//   0: drawn in every picture between;
 //   2: whatever the camera does: the reflection then moves 30 times a second, the rest of the picture at the frame rate.
 bool sat_kept(uint32_t bp, uint32_t bw, uint32_t psm) {
     int keep = reflection_keep();

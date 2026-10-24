@@ -402,7 +402,7 @@ struct Interp {
     // the recording, and the GS as it was before and after it
     bool recorded = false;
     bool tried = false; // (a recording of this frame was made: not recorded then, it could not be made again)
-    bool still = false;          // the picture's camera is the frame's (its move none: gsn_standalone.inc's sat_kept)
+    bool still = false;          // the picture's camera is the frame's (GsnInterpFrame's still: gsn_scene_targets.inc's sat_kept)
     bool recorded_still = false; // (the recording's)
     InterpState start, end;
     std::vector<uint64_t> end_regs;
@@ -410,13 +410,13 @@ struct Interp {
 };
 Interp interp;
 
-// KF4_SA_REFLECTION_KEEP (gsn_scene_targets.inc, sat_kept): 0 the reflection drawn in every picture between, 1 kept
-// from the frame while the camera is still, 2 always
+// KF4_SA_REFLECTION_KEEP (gsn_scene_targets.inc, sat_kept): 0 the reflection drawn in every picture between, 1 (the
+// default) kept from the frame while the camera is the frame's bit for bit, 2 always
 int reflection_keep() {
     static int keep = -1;
     if (keep < 0) {
         const char *v = getenv("KF4_SA_REFLECTION_KEEP");
-        keep = v && *v ? atoi(v) : 0;
+        keep = v && *v ? atoi(v) : 1;
     }
     return keep;
 }
@@ -7241,10 +7241,7 @@ void interp_picture_now(const uint8_t *data, size_t size) {
         h->zt[i] = interp.frame->screen[i][4];
     }
     h->kicks = interp.frame->kicks;
-    interp.still = true;
-    for (float m : h->move) {
-        interp.still = interp.still && fabsf(m) <= 1e-6f; // (the rounding of a camera that did not move)
-    }
+    interp.still = interp.frame->still != 0; // (the camera of the frame shown is the frame's, bit for bit)
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();
     end_pass(); // (a picture between starts outside a render pass: its kicks moved first)

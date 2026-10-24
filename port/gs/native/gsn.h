@@ -265,6 +265,8 @@ typedef struct {
     float move0[12], mid0[12]; /* GsnInterpPicture's move and mid at t 0 (the camera of the frame shown) */
     uint32_t kicks;        /* the vertex kicks in the stream: moves has one for each */
     uint32_t runs;         /* the runs (model parts) the moves name */
+    uint32_t still;        /* 1: the camera of the frame shown is this frame's, bit for bit (every picture between is
+                              then seen from the frame's camera: gsn_scene_targets.inc's sat_kept) */
     GsnInterpMove *moves;  /* (malloc'd) */
     uint8_t *stream;       /* (malloc'd) GIF packets: a uint32_t path, a uint32_t size, then the bytes */
     size_t stream_bytes;
