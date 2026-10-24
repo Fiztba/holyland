@@ -124,6 +124,7 @@ static const struct {
     [ACTION_GS_CAPTURE] = {"gs_capture", "GS frame capture (debug)", 0},
     [ACTION_STATE_DUMP] = {"state_dump", "Game state dump (debug)", 0},
     [ACTION_AUDIO_TAIL] = {"audio_tail", "Last 20 s of sound (debug)", 0},
+    [ACTION_FLASH_RECORD] = {"flash_record", "Flash recorder: the last pictures (debug)", 0},
     [ACTION_SHOW_FPS] = {"show_fps", "Show / hide the frame rate", 0},
 };
 
@@ -192,6 +193,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_GS_CAPTURE] = {KEY(F9)},
         [ACTION_STATE_DUMP] = {KEY(F10)},
         [ACTION_AUDIO_TAIL] = {KEY(F12)},
+        [ACTION_FLASH_RECORD] = {KEY(F8)},
         [ACTION_SHOW_FPS] = {KEY(F3)},
     },
     [CONTROLS_VERDITE] = {
@@ -220,6 +222,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_GS_CAPTURE] = {KEY(F9)},
         [ACTION_STATE_DUMP] = {KEY(F10)},
         [ACTION_AUDIO_TAIL] = {KEY(F12)},
+        [ACTION_FLASH_RECORD] = {KEY(F8)},
         [ACTION_SHOW_FPS] = {KEY(F3)},
     },
 };
@@ -898,6 +901,9 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     }
     if (edges >> ACTION_AUDIO_TAIL & 1u) {
         port_debug_write_audio_tail();
+    }
+    if (edges >> ACTION_FLASH_RECORD & 1u) {
+        port_debug_flash_record();
     }
     if (edges >> ACTION_SHOW_FPS & 1u) {
         port_options.show_fps = !port_options.show_fps;
