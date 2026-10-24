@@ -2209,6 +2209,14 @@ bool sa_draw_batch(int *why) {
             *why = SA_WHY_OWN; // (a named target's draw reading that target: T3, the GS's)
             return false;
         }
+        if (st.reads_own && interp.active) {
+            // A frame kept for the pictures between (--frame-rate above 60): a pass that reads its own frame is the
+            // GS's, after the turn (hosted's path: its own copy of the frame, made again for each picture). Drawn by
+            // the scene, the pictures between of that frame came out black: GameLoop_DrawFrameWithoutHud's
+            // brightness pass as a menu or a shop opens: a black flash, those pictures and the next scanout.
+            *why = SA_WHY_OWN;
+            return false;
+        }
         if (st.reads_own) {
             // (T2) the frame it draws into (a screen pass: the brightness, the flicker filter, haze): read from a
             // copy of the scene's colour taken now (resolved), at the scene's scale
@@ -2464,12 +2472,24 @@ bool sa_draw_batch(int *why) {
         float zbias;
     } draws[4];
     int ndraws = 0;
-    for (int i = 0; i < npasses; i++) {
+    // A tie drawn in one pass that writes Z and comes out the same drawn twice (an opaque mesh on its surface): its
+    // colour within the slack of what was there before the batch, no Z written, then the batch again Z tested and
+    // written exactly, so it still wins over the surface it lies on (a sign, an overlay) and among its own triangles
+    // the nearer wins (flush_batch's two_phase, --native-layer-z tolerant, fix/wall-blink 669bee0). With its Z first
+    // and its colour within the slack of that, a batch's later triangles won over its earlier ones within half a Z:
+    // on map 3's rope bridge, far off, a plank's lighter top faces over the faces in front of them, light blocks
+    // that moved with the distance.
+    bool two_phase = ties && same_twice && npasses == 1 && passes[0].zwrite && passes[0].mask && !second_pass && !shadow;
+    if (two_phase) {
+        draws[ndraws++] = {passes[0].select, passes[0].mask, false, slack};
+        draws[ndraws++] = {passes[0].select, passes[0].mask, true, 0.0f};
+    }
+    for (int i = 0; i < npasses && !two_phase; i++) {
         if (ties && passes[i].zwrite) {
             draws[ndraws++] = {passes[i].select, 0, true, 0.0f};
         }
     }
-    for (int i = 0; i < npasses; i++) {
+    for (int i = 0; i < npasses && !two_phase; i++) {
         if (passes[i].mask || !ties) {
             draws[ndraws++] = {passes[i].select, passes[i].mask, !ties && passes[i].zwrite, ties ? slack : 0.0f};
         }
