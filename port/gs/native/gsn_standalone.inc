@@ -204,6 +204,7 @@ struct Sa {
     // made on the GS's thread and gone at the exit while it still draws)
     std::vector<uint32_t> runs;
     std::vector<Vtx> corners;
+    std::vector<std::array<float, 4>> tri_boxes; // (sa_draw_batch's runs: each triangle's box)
     // the table
     uint64_t seq = 0, frame = 0;
     std::unordered_map<uint32_t, SaChunk> chunks;
@@ -2414,6 +2415,102 @@ void sa_group_draw() {
     g.expect_second = false;
 }
 
+// ---- The frame's batches' work kept for its first picture between (rc/own) ------------------------------
+// A frame's first picture between draws the frame's packets again (gsn.cpp, "Pictures between on the GPU"), and so
+// its scene batches again: the same corners (native draw's: gsn_nd_prep.inc keeps them from the frame's draws), but
+// for the record numbers in them. What sa_draw_batch works out from the corners alone comes out the same: their alphas
+// and rows, which triangles are outside the scissor, where triangles overlap (the runs), each triangle's slope. The
+// frame keeps it (an SaMemo, in the frame's NdPrepFrame), and the picture's batch with the same corners takes it. The
+// picture keeps a triangle outside the scissor that was inside it at t 0 (nd_box_at_0): when one of the frame's left
+// out is kept, the picture works the batch out itself. KF4_SA_MEMO=0 (tests): never taken; KF4_SA_MEMO_CHECK=1:
+// taken and worked out both, the differences counted.
+const uint32_t SA_MEMO_RECORD = 0x3FFF80u; // (a native corner's record: bits 7-21; NdPrepBatch's records under 2^15)
+struct SaMemoState {
+    int enabled = -1, check = 0;
+    const SaMemo *use = nullptr; // (a picture) the frame's for this batch
+    SaMemo keep = {};            // (a frame) what is being kept for this batch
+    bool keeping = false;
+    NdPrepFrame *into = nullptr; // (keeping) the frame's
+    uint64_t taken = 0, missed[4] = {}; // --stats: taken; not: none found, the corners differ, one left out kept, (unused)
+    uint64_t check_differ = 0, differ[8] = {};
+} sa_memo;
+
+bool sa_memo_enabled() {
+    if (sa_memo.enabled < 0) {
+        const char *v = getenv("KF4_SA_MEMO");
+        sa_memo.enabled = v && *v ? atoi(v) != 0 : 1;
+        const char *c = getenv("KF4_SA_MEMO_CHECK");
+        sa_memo.check = c && *c ? atoi(c) != 0 : 0;
+    }
+    return sa_memo.enabled != 0 && nd_prep_on();
+}
+
+// At sa_draw_batch's start, a batch of native corners (scissor: sx0, sy0, x1, y1): in a frame, kept from here on (a batch
+// of its kept corners alone); in a picture, the frame's found
+void sa_memo_begin(const uint32_t *scissor) {
+    sa_memo.use = nullptr;
+    sa_memo.keeping = false;
+    if (!sa_memo_enabled() || gs->verts.empty()) {
+        return;
+    }
+    if (!interp.active) {
+        if (nd_prep.filling && nd_prep_run_is(nd_prep.run_frame) && nd_prep.run_frame != nd_prep.taking) {
+            sa_memo.keeping = true;
+            sa_memo.into = nd_prep.run_frame;
+            sa_memo.keep = {};
+            sa_memo.keep.at = uint32_t(nd_prep.run_at);
+            sa_memo.keep.n = nd_prep.run_n;
+            memcpy(sa_memo.keep.scissor, scissor, sizeof(sa_memo.keep.scissor));
+        }
+        return;
+    }
+    const NdPrepFrame *f = nd_prep.taking;
+    if (!nd_prep_run_is(f)) {
+        sa_memo.missed[0]++;
+        return;
+    }
+    auto it = f->sa_index.find(uint32_t(nd_prep.run_at));
+    if (it == f->sa_index.end()) {
+        sa_memo.missed[0]++;
+        return;
+    }
+    const SaMemo &m = f->sa_memos[it->second];
+    if (m.n != gs->verts.size() || memcmp(m.scissor, scissor, sizeof(m.scissor)) != 0) {
+        sa_memo.missed[1]++;
+        return;
+    }
+    sa_memo.use = &m;
+}
+
+// At the end of the batch's working out (a frame's): what was kept, for its picture
+void sa_memo_end() {
+    if (!sa_memo.keeping) {
+        return;
+    }
+    sa_memo.keeping = false;
+    NdPrepFrame &f = *sa_memo.into;
+    f.sa_index[sa_memo.keep.at] = uint32_t(f.sa_memos.size());
+    f.sa_memos.push_back(sa_memo.keep);
+}
+
+void sa_memo_print_stats() {
+    if (!sa_memo.taken && !sa_memo.missed[0] && !sa_memo.missed[1] && !sa_memo.missed[2]) {
+        return;
+    }
+    fprintf(stderr, "[stats] standalone, pictures between: %llu batches took the frame's work on their corners; worked out "
+                    "again: %llu none found, %llu another batch of those corners, %llu a triangle left out kept",
+            (unsigned long long)sa_memo.taken, (unsigned long long)sa_memo.missed[0], (unsigned long long)sa_memo.missed[1],
+            (unsigned long long)sa_memo.missed[2]);
+    if (sa_memo.check) {
+        fprintf(stderr, "; checked: %llu differ (", (unsigned long long)sa_memo.check_differ);
+        for (int i = 0; i < 8; i++) {
+            fprintf(stderr, "%s%llu", i ? " " : "", (unsigned long long)sa_memo.differ[i]);
+        }
+        fprintf(stderr, ")");
+    }
+    fprintf(stderr, "\n");
+}
+
 // (flush_batch, a batch of the scene's corners) Its GS state as flush_batch works it out, drawn with
 // sa_000.vert into the scene's targets. False: declined (sa_stats.declined[*why]), for the GS to draw.
 bool sa_draw_batch(int *why) {
@@ -2504,14 +2601,38 @@ bool sa_draw_batch(int *why) {
                 (unsigned long long)sa_stats.batches, fbp, zbp, zpsm, ztst, zmsk, abe, (unsigned long long)alpha,
                 (unsigned long long)test, zl, zh, gs->verts.size());
     }
+    // (rc/own) a batch of native corners: the frame's work on them kept, or in its picture between taken (sa_memo_*)
+    uint32_t memo_scissor[4] = {sx0, sy0, std::min(sx1 + 1, color->width), std::min(sy1 + 1, color->height)};
+    sa_memo.use = nullptr;
+    sa_memo.keeping = false;
+    if (nd.active && !nd.pass_active && !gpu_corners) {
+        sa_memo_begin(memo_scissor);
+    }
+    const SaMemo *memo = sa_memo.use;
+    const NdPrepFrame *memo_frame = nd_prep.taking;
+    bool memo_check = memo && sa_memo.check;
     uint32_t as_max = 0, as_min = 255;
     float vy0 = gs->verts[0].y, vy1 = vy0;
-    for (const Vtx &v : gs->verts) {
-        as_max = std::max(as_max, v.rgba >> 24);
-        as_min = std::min(as_min, v.rgba >> 24);
-        vy0 = std::min(vy0, v.y);
-        vy1 = std::max(vy1, v.y);
+    if (memo && !memo_check) {
+        as_max = memo->as_max;
+        as_min = memo->as_min;
+        vy0 = memo->vy0;
+        vy1 = memo->vy1;
+    } else {
+        for (const Vtx &v : gs->verts) {
+            as_max = std::max(as_max, v.rgba >> 24);
+            as_min = std::min(as_min, v.rgba >> 24);
+            vy0 = std::min(vy0, v.y);
+            vy1 = std::max(vy1, v.y);
+        }
+        if (memo_check && (as_max != memo->as_max || as_min != memo->as_min || vy0 != memo->vy0 || vy1 != memo->vy1)) {
+            sa_memo.check_differ++, sa_memo.differ[0]++;
+        }
     }
+    sa_memo.keep.as_max = as_max;
+    sa_memo.keep.as_min = as_min;
+    sa_memo.keep.vy0 = vy0;
+    sa_memo.keep.vy1 = vy1;
     if (interp.active) {
         interp_alpha_range(as_min, as_max);
     }
@@ -2657,21 +2778,33 @@ bool sa_draw_batch(int *why) {
     // corners: the same depth to the bit, so it needs no slack. With one it shone through onto a part a Z or
     // two in front of its own (the seated man's thigh under his coat, far save, 4x: a light band)
     bool second_pass = !gs->verts.empty();
-    for (const Vtx &v : gs->verts) {
-        if (nd_corner_kind(v) != ND_KIND_280 || !((v.rgba & 0xFFFFFFu) & ND280_CORNER_SPHERE)) {
-            second_pass = false;
-            break;
+    if (memo && !memo_check) {
+        second_pass = memo->second_pass;
+    } else {
+        for (const Vtx &v : gs->verts) {
+            if (nd_corner_kind(v) != ND_KIND_280 || !((v.rgba & 0xFFFFFFu) & ND280_CORNER_SPHERE)) {
+                second_pass = false;
+                break;
+            }
         }
+        sa_memo.differ[1] += memo_check && second_pass != memo->second_pass;
     }
+    sa_memo.keep.second_pass = second_pass;
     if (second_pass) {
         slack = 0.0f;
     }
     // A skinned model's own parts (program 0x280's first pass: its armour pieces, its cloth, its hands, separate meshes
     // a fraction of a unit apart) tie by the world, not by Z: see skin_eps below.
     bool skinned = !gs->verts.empty() && !second_pass;
-    for (size_t t = 0; skinned && t < gs->verts.size(); t++) {
-        skinned = nd_corner_kind(gs->verts[t]) == ND_KIND_280;
+    if (memo && !memo_check) {
+        skinned = memo->skinned;
+    } else {
+        for (size_t t = 0; skinned && t < gs->verts.size(); t++) {
+            skinned = nd_corner_kind(gs->verts[t]) == ND_KIND_280;
+        }
+        sa_memo.differ[2] += memo_check && skinned != memo->skinned;
     }
+    sa_memo.keep.skinned = skinned;
     // (T2) the GS's own 3D (the PS2 path's corners: a map record native draw does not take) has VU1's whole Z, the
     // scene's Z less its fraction: its colour passes within half a Z more (shaders/gs_zclamp.frag, its Z kept fine)
     float ps2_bias = 0.0f;
@@ -2690,15 +2823,67 @@ bool sa_draw_batch(int *why) {
         gs->verts.clear();
         return true;
     }
-    if (!interp.active || (nd.active && !nd.pass_active && !gpu_corners)) {
+    if (memo) {
+        // (rc/own) the frame's batch left these out (outside the scissor): the picture keeps one inside it at t 0 (as
+        // below), and then works the batch out itself
+        float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
+        const Vtx *v = gs->verts.data();
+        const uint32_t *out = memo_frame->sa_u32.data() + memo->culled_at;
+        bool keeps = false;
+        for (uint32_t j = 0; j < memo->culled_n && !keeps; j++) {
+            size_t i = size_t(out[j]) * 3;
+            float tx0 = std::min(v[i].x, std::min(v[i + 1].x, v[i + 2].x)), tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
+            float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y)), ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
+            bool native = nd_corner_kind(v[i]) != ND_KIND_PS2 && nd_corner_kind(v[i + 1]) != ND_KIND_PS2 &&
+                          nd_corner_kind(v[i + 2]) != ND_KIND_PS2;
+            int32_t box[4] = {int32_t(floorf(tx0)) - 1, int32_t(floorf(ty0)) - 1, int32_t(ceilf(tx1)) + 2, int32_t(ceilf(ty1)) + 2};
+            if (!native || !nd_box_at_0(uint32_t(i), 3, box) ||
+                !(float(box[2]) < cx0 || float(box[0]) > cx1 || float(box[3]) < cy0 || float(box[1]) > cy1)) {
+                keeps = true;
+            }
+        }
+        if (keeps) {
+            memo = nullptr;
+            sa_memo.missed[2]++;
+        }
+        memo_check = memo && sa_memo.check;
+    }
+    if (memo && !memo_check) {
+        // (rc/own) the frame's triangles left out, left out (every other is inside the scissor: the frame's kept them)
+        const uint32_t *out = memo_frame->sa_u32.data() + memo->culled_at;
+        size_t kept = 0, n = gs->verts.size(), next = 0;
+        Vtx *v = gs->verts.data();
+        for (size_t i = 0; i + 2 < n; i += 3) {
+            if (next < memo->culled_n && out[next] == i / 3) {
+                next++;
+                continue;
+            }
+            if (kept != i) {
+                v[kept] = v[i];
+                v[kept + 1] = v[i + 1];
+                v[kept + 2] = v[i + 2];
+            }
+            kept += 3;
+        }
+        gs->verts.resize(kept);
+        if (!kept) {
+            return true;
+        }
+    } else if (!interp.active || (nd.active && !nd.pass_active && !gpu_corners)) {
         float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
         size_t kept = 0, n = gs->verts.size();
         Vtx *v = gs->verts.data();
+        if (sa_memo.keeping) {
+            sa_memo.keep.culled_at = uint32_t(sa_memo.into->sa_u32.size());
+        }
         for (size_t i = 0; i + 2 < n; i += 3) {
             float tx0 = std::min(v[i].x, std::min(v[i + 1].x, v[i + 2].x)), tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
             float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y)), ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
             if (tx1 < cx0 || tx0 > cx1 || ty1 < cy0 || ty0 > cy1) {
                 if (!interp.active) {
+                    if (sa_memo.keeping) {
+                        sa_memo.into->sa_u32.push_back(uint32_t(i / 3));
+                    }
                     continue;
                 }
                 bool native = nd_corner_kind(v[i]) != ND_KIND_PS2 && nd_corner_kind(v[i + 1]) != ND_KIND_PS2 &&
@@ -2717,6 +2902,12 @@ bool sa_draw_batch(int *why) {
                 v[kept + 2] = v[i + 2];
             }
             kept += 3;
+        }
+        if (sa_memo.keeping) {
+            sa_memo.keep.culled_n = uint32_t(sa_memo.into->sa_u32.size() - sa_memo.keep.culled_at);
+        }
+        if (memo_check && kept != gs->verts.size() - size_t(memo->culled_n) * 3) {
+            sa_memo.check_differ++, sa_memo.differ[3]++;
         }
         gs->verts.resize(kept);
         if (!kept) {
@@ -2849,18 +3040,45 @@ bool sa_draw_batch(int *why) {
                     !sa_passing_same_twice(st, tex0, test, alpha, abe, as_min, as_max, passes[0].select, npasses);
     std::vector<uint32_t> &runs = sa.runs; // (kept from batch to batch: their room)
     runs.assign(1, 0);
-    if ((npasses > 1 || shader_blend || tie_runs) && !shadow) {
+    bool split = (npasses > 1 || shader_blend || tie_runs) && !shadow;
+    if (split && memo && memo->split && !memo_check) {
+        // (rc/own) where the frame's batch's triangles overlap
+        const uint32_t *cuts = memo_frame->sa_u32.data() + memo->runs_at;
+        runs.insert(runs.end(), cuts, cuts + memo->runs_n);
+    } else if (split) {
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
+        // (rc/own) each triangle's box once (triangles_overlap's first test, the same floats), not once a pair
+        std::vector<std::array<float, 4>> &boxes = sa.tri_boxes;
+        boxes.resize(triangles);
+        for (uint32_t t = 0; t < triangles; t++) {
+            const Vtx *a = &gs->verts[t * 3];
+            boxes[t] = {std::min(a[0].x, std::min(a[1].x, a[2].x)), std::max(a[0].x, std::max(a[1].x, a[2].x)),
+                        std::min(a[0].y, std::min(a[1].y, a[2].y)), std::max(a[0].y, std::max(a[1].y, a[2].y))};
+        }
         for (uint32_t t = 1; t < triangles; t++) {
             bool cut = t - start >= 256;
+            const std::array<float, 4> &a = boxes[t];
             for (uint32_t u = start; u < t && !cut; u++) {
-                cut = triangles_overlap(&gs->verts[t * 3], &gs->verts[u * 3]);
+                const std::array<float, 4> &b = boxes[u];
+                cut = !(a[1] <= b[0] || b[1] <= a[0] || a[3] <= b[2] || b[3] <= a[2]) &&
+                      triangles_overlap(&gs->verts[t * 3], &gs->verts[u * 3]);
             }
             if (cut) {
                 runs.push_back(t * 3);
                 start = t;
             }
         }
+        if (memo_check && memo->split &&
+            (runs.size() - 1 != memo->runs_n ||
+             !std::equal(runs.begin() + 1, runs.end(), memo_frame->sa_u32.begin() + memo->runs_at))) {
+            sa_memo.check_differ++, sa_memo.differ[4]++;
+        }
+    }
+    sa_memo.keep.split = split;
+    if (sa_memo.keeping && split) {
+        sa_memo.keep.runs_at = uint32_t(sa_memo.into->sa_u32.size());
+        sa_memo.keep.runs_n = uint32_t(runs.size() - 1);
+        sa_memo.into->sa_u32.insert(sa_memo.into->sa_u32.end(), runs.begin() + 1, runs.end());
     }
     runs.push_back(uint32_t(gs->verts.size()));
     size_t bytes = gs->verts.size() * sizeof(Vtx);
@@ -2900,17 +3118,37 @@ bool sa_draw_batch(int *why) {
     }
     float layer_eps = skinned ? skin_eps : world_eps;
     bool world = sloped && (skinned || world_eps > 0.0f) && !sa.gs3d && !sa.gs_water;
-    for (size_t t = 0; world && t < gs->verts.size(); t++) {
-        world = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2; // (gs.vert's corners keep the Z rule)
+    bool all_native = true;
+    if (memo && !memo_check) {
+        all_native = memo->all_native;
+    } else {
+        for (size_t t = 0; all_native && t < gs->verts.size(); t++) {
+            all_native = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2;
+        }
+        sa_memo.differ[5] += memo_check && all_native != memo->all_native;
     }
+    sa_memo.keep.all_native = all_native;
+    world = world && all_native; // (gs.vert's corners keep the Z rule)
     std::vector<Vtx> &corners = sa.corners; // (kept from batch to batch: their room)
     corners.assign(gs->verts.begin(), gs->verts.end());
+    // (rc/own) each triangle's slope as the frame's batch worked it out
+    int slopes = sloped ? (world ? 2 : 1) : 0;
+    const uint8_t *memo_slopes = memo && !memo_check && slopes && memo->slopes == slopes
+                                     ? memo_frame->sa_bytes.data() + memo->slopes_at
+                                     : nullptr;
+    sa_memo.keep.slopes = slopes;
+    if (sa_memo.keeping && slopes) {
+        sa_memo.keep.slopes_at = uint32_t(sa_memo.into->sa_bytes.size());
+        sa_memo.into->sa_bytes.resize(sa_memo.into->sa_bytes.size() + corners.size() / 3);
+    }
     for (size_t t = 0; t + 2 < corners.size(); t += 3) {
         if (nd_corner_kind(corners[t]) == ND_KIND_PS2 || sa.gs_water) {
             continue; // (the PS2 path's: its alpha is its own, gs.vert takes no slack)
         }
         uint32_t extra = 0;
-        if (sloped) {
+        if (memo_slopes) {
+            extra = memo_slopes[t / 3];
+        } else if (sloped) {
             const Vtx *v = &corners[t];
             float ax = v[1].x - v[0].x, ay = v[1].y - v[0].y, bx = v[2].x - v[0].x, by = v[2].y - v[0].y;
             float az = float(v[1].z) - float(v[0].z), bz = float(v[2].z) - float(v[0].z);
@@ -2929,7 +3167,15 @@ bool sa_draw_batch(int *why) {
         for (int k = 0; k < 3; k++) {
             corners[t + k].rgba = (corners[t + k].rgba & 0xFFFFFFu) | extra << 24;
         }
+        if (sa_memo.keeping && slopes) {
+            sa_memo.into->sa_bytes[sa_memo.keep.slopes_at + t / 3] = uint8_t(extra);
+        }
+        if (memo_check && slopes && memo->slopes == slopes && memo_frame->sa_bytes[memo->slopes_at + t / 3] != uint8_t(extra)) {
+            sa_memo.check_differ++, sa_memo.differ[6]++;
+        }
     }
+    sa_memo_end();
+    sa_memo.taken += memo != nullptr;
     // (pf/skin) A skinned model's part whose draws are the simple ones is kept, to be drawn with the model's other
     // parts (sa_group_draw, above); anything else first draws what is kept
     if (sa_group.enabled < 0) {
@@ -3140,9 +3386,7 @@ bool sa_draw_batch(int *why) {
     bool in_pass = shader_blend && !blend_copy && !per_sample && nd.active && !nd.pass_active && !nd.strip_active &&
                    !sa.gs3d && !sa.gs_water && !ndw_batch() && sa.programs_in[0][sa.samples > 1 ? 1 : 0] &&
                    !wide(*sa.color);
-    for (size_t t = 0; in_pass && t < gs->verts.size(); t++) {
-        in_pass = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2;
-    }
+    in_pass = in_pass && all_native;
     bool copied_in_pass = false;
     uint64_t bound_pass = UINT64_MAX; // (the render pass the run's bindings were made in)
     for (size_t r = 0; r + 1 < runs.size(); r++) {
@@ -4002,6 +4246,8 @@ void sa_print_stats() {
         fprintf(stderr, "; checked: %llu differ\n", (unsigned long long)nd280_plan_check_differ);
     }
 #endif
+    nd_prep_print_stats(); // (rc/own)
+    sa_memo_print_stats();
     sat_print_stats(); // (T3)
     sa_print_table_stats();
 }

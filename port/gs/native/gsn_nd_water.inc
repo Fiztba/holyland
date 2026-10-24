@@ -123,8 +123,17 @@ void ndw_draw(const RdDraw &d, const RdCamera &cam) {
     NdWaterConst k;
     memset(&k, 0, sizeof(k));
     const float *m = &d.model[0][0];
-    for (int col = 0; col < 4; col++) {
-        vu_transform4(&k.vertex[col * 4], &cam.world_screen[0][0], &m[col * 4]);
+    // (rc/own: in the frame's first picture between, the frame's vertex matrix)
+    if (!nd_prep_take_const(RD_PROGRAM_RIPPLE, k.vertex, sizeof(k.vertex)) || nd_prep.check) {
+        float again[16];
+        for (int col = 0; col < 4; col++) {
+            vu_transform4(&again[col * 4], &cam.world_screen[0][0], &m[col * 4]);
+        }
+        if (nd_prep.draw >= 0 && interp.active && memcmp(again, k.vertex, sizeof(again)) != 0) {
+            nd_prep.check_differ[0]++;
+        }
+        memcpy(k.vertex, again, sizeof(again));
+        nd_prep_keep_const(RD_PROGRAM_RIPPLE, k.vertex, sizeof(k.vertex));
     }
     memcpy(k.screen, cam.screen, 64);
     memcpy(k.sines, d.point_pos, 64);
@@ -169,6 +178,31 @@ void ndw_draw(const RdDraw &d, const RdCamera &cam) {
             memcpy(ndw.draws.map + size_t(record) * sizeof(NdWaterConst), &k, sizeof(k));
             written = true;
         }
+        uint32_t gouraud = ((eprim >> 3) & 1) ? ND_CORNER_GOURAUD : 0;
+        uint32_t alpha = uint32_t(gs->reg[R_RGBAQ]) & 0xFF000000u;
+        // (rc/own: in the frame's first picture between, the frame's corners, made with the same alpha and XYOFFSET)
+        uint64_t extra = uint64_t(alpha) | uint64_t(uint32_t(ox) & 0xFFFF) << 32 | uint64_t(uint32_t(oy) & 0xFFFF) << 48;
+        const NdPrepBatch *taken = nd_prep_take_batch(mesh->id, 0, 0, eprim, base, extra);
+        if (taken && !nd_prep.check) {
+            if (!gs->verts.empty() && ((interp.active && !nd.pending) ||
+                                       (nd.pending && (!ndw.pending || nd.batch_arena != nd.arena.buffer.get() ||
+                                                       nd.batch_draws != ndw.draws.buffer.get())))) {
+                flush_batch();
+            }
+            if (gs->verts.empty()) {
+                gs->batch_prim = eprim;
+                gs->batch_sprites = false;
+            }
+            size_t before = gs->verts.size();
+            nd_prep_corners(*taken, record);
+            if (gs->verts.size() > before) {
+                nd.pending = ndw.pending = true;
+            }
+            nd.batch_arena = nd.arena.buffer.get();
+            nd.batch_draws = ndw.draws.buffer.get();
+            gsn_stats.nd_batches++;
+            continue;
+        }
         // the plan: each vertex's place, ADC, S and T, as the EE makes them
         xyz.resize(size_t(n) * 3);
         st.resize(size_t(n) * 2);
@@ -203,9 +237,12 @@ void ndw_draw(const RdDraw &d, const RdCamera &cam) {
             gs->batch_prim = eprim;
             gs->batch_sprites = false;
         }
-        uint32_t gouraud = ((eprim >> 3) & 1) ? ND_CORNER_GOURAUD : 0;
-        uint32_t alpha = uint32_t(gs->reg[R_RGBAQ]) & 0xFF000000u;
         size_t before = gs->verts.size();
+        size_t taken_at = before;
+        if (taken) { // (KF4_ND_PREP_CHECK: the frame's, then worked out again)
+            nd_prep_corners(*taken, record);
+            before = gs->verts.size();
+        }
         for (uint32_t kick = 2; kick < n; kick++) {
             if (adc[kick]) {
                 continue;
@@ -227,6 +264,11 @@ void ndw_draw(const RdDraw &d, const RdCamera &cam) {
                 }
             }
         }
+        if (taken) {
+            nd_prep_check(taken_at, before);
+            before = taken_at;
+        }
+        nd_prep_keep_batch(mesh->id, 0, 0, eprim, base, record, before, false, extra);
         if (gs->verts.size() > before) {
             nd.pending = ndw.pending = true;
         }
