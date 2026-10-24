@@ -6754,6 +6754,12 @@ void ring_work(const RingRecord &r, const uint8_t *data) {
         Timer timer(gsn_stats.ns_gif);
         gif(r.arg, data, r.size);
     } else if (r.type == RING_VSYNC) {
+        // (KF4_GSN_SLOW_US=N, debug: this thread N us late at each vblank, so that a window falls behind the game as a
+        // busy GPU makes it: only the vblanks' own pictures shown, the way the lamp wall's patch was first caught)
+        static int slow_us = getenv("KF4_GSN_SLOW_US") ? atoi(getenv("KF4_GSN_SLOW_US")) : 0;
+        if (slow_us > 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(slow_us));
+        }
         uint64_t privileged[vsync_bytes / 8], tag;
         memcpy(privileged, data, vsync_bytes);
         memcpy(&tag, data + vsync_bytes, 8);

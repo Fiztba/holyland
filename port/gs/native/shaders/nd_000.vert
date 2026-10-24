@@ -288,7 +288,10 @@ Moved moved(uint at, Place p) {
     r.y = int(floor(ny * 16.0 + 0.5));
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
 #ifdef ND_STANDALONE
-    r.zf = nz;
+    // (the scene's depth moved from its own unrounded Z, as the frame has it: from the GS's Z, FTOI4 and the
+    // shift down to whole Z, a picture between's corners lay up to a Z farther than the frame's; at a distance a Z
+    // is many world units, and the layers tied to their surface (the light on a wall) failed there in patches)
+    r.zf = r.zf - (r.zf - d.screen[2].z) * dm.z / mz;
 #endif
     r.f = depth / mz;
     return r;

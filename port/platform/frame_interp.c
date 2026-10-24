@@ -148,6 +148,7 @@ typedef struct {
 } Record;
 #define RECORD_3D 0x100
 #define RECORD_EFFECTS 1
+#define RECORD_SHADOW 2 /* sent by VU1 program 0x5A0 (the shadows: Entity_DrawPoolModels) */
 
 static uint8_t *kept;
 static size_t kept_size, kept_room;
@@ -182,6 +183,7 @@ void port_interp_keep(int path, const void *data, size_t bytes) {
     r.bytes = (uint32_t)bytes;
     r.serial = port_vif1_run_serial;
     r.program = path == 1 && port_vu1_run_pc >= 0x700 && port_vu1_run_pc < 0x7D2 ? RECORD_EFFECTS : 0;
+    r.program |= path == 1 && port_vu1_run_pc >= 0x5A0 && port_vu1_run_pc < 0x642 ? RECORD_SHADOW : 0;
     r.key = port_vif1_run_key;
     memcpy(kept + kept_size, &r, sizeof(r));
     memcpy(kept + kept_size + sizeof(r), data, bytes);
@@ -389,6 +391,7 @@ typedef struct {
     int32_t pair;      /* the run of the frame before that is this one (objects_pair), -1: none */
     int sky;           /* of the sky (PORT_FRAME_INTERP_SKY: a map record that follows the player) */
     int native;        /* the PS2 path's packets of a native draw, which the GS leaves out (Walk's alt) */
+    int shadow;        /* sent by program 0x5A0 (RECORD_SHADOW) */
 } Run;
 
 #define VERTEX_SURE 1  /* a vertex without ADC: never one the VU1 program clipped */
@@ -431,6 +434,7 @@ static void objects_add_run(Objects *o, uint64_t key, int section, int sky, int 
     r->section = section;
     r->sky = sky && section == SECTION_WORLD;
     r->native = native;
+    r->shadow = 0;
     r->prim = 0;
     r->tex = 0;
     r->pair = -1;
@@ -2421,6 +2425,7 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
         w->nseen = 0;
         if (w->mode == SCAN && w->objects != NULL) {
             objects_add_run(w->objects, r->key, w->section, w->sky, w->alt);
+            w->objects->runs[w->objects->nruns - 1].shadow = (r->program & RECORD_SHADOW) != 0;
         } else if (w->mode == REPLAY) {
             const Objects *o = w->objects;
 
@@ -3181,6 +3186,183 @@ static void gpu_picture(const Camera *between, double t) {
     }
 }
 
+/* ---- A check: pictures between moved outside their frames (KF4_INTERP_OUTSIDE) -------------------
+   For each run of the world placed in the pending frame, where its vertices are on the screen at the
+   picture's time t (moved as the replay moves them: with their model, paired and moving, else with the
+   camera), against where they were at t 0 (the frame shown: the pair's own places from the camera
+   before, or this frame's places from it when not paired) and at t 1 (the frame drawn). A run whose box
+   at t is outside both, by more than a margin, is logged (vblank, phase, the run, its pair, the boxes):
+   a picture between drew something where neither frame had it. KF4_INTERP_OUTSIDE=2 also logs every
+   shadow run (program 0x5A0). The log goes to stderr, or to the file KF4_INTERP_OUTSIDE_LOG names. */
+typedef struct {
+    double x0, y0, x1, y1;
+    int n;
+} OutBox;
+
+static void outbox_add(OutBox *b, const Screen *s, const Camera *c, const double p[3]) {
+    double v[3], x, y;
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        v[i] = c->r[i][0] * p[0] + c->r[i][1] * p[1] + c->r[i][2] * p[2] + c->t[i];
+    }
+    if (!(v[2] > 1e-6)) {
+        return;
+    }
+    x = (s->sx * v[0] / v[2] + s->cx) - 2048.0;
+    y = (s->sy * v[1] / v[2] + s->cy) - 2048.0;
+    if (!(fabs(x) <= 2047.0 && fabs(y) <= 2047.0)) {
+        return;
+    }
+    if (b->n == 0) {
+        b->x0 = b->x1 = x;
+        b->y0 = b->y1 = y;
+    } else {
+        b->x0 = x < b->x0 ? x : b->x0;
+        b->x1 = x > b->x1 ? x : b->x1;
+        b->y0 = y < b->y0 ? y : b->y0;
+        b->y1 = y > b->y1 ? y : b->y1;
+    }
+    b->n++;
+}
+
+/* the screen seen, about the centre (X and Y less 2048, GS pixels), and a little more */
+#define VIS_X 360.0
+#define VIS_Y 260.0
+static void outbox_clip(OutBox *b) {
+    b->x0 = b->x0 < -VIS_X ? -VIS_X : b->x0 > VIS_X ? VIS_X : b->x0;
+    b->x1 = b->x1 < -VIS_X ? -VIS_X : b->x1 > VIS_X ? VIS_X : b->x1;
+    b->y0 = b->y0 < -VIS_Y ? -VIS_Y : b->y0 > VIS_Y ? VIS_Y : b->y0;
+    b->y1 = b->y1 < -VIS_Y ? -VIS_Y : b->y1 > VIS_Y ? VIS_Y : b->y1;
+}
+
+static void outside_check(const Camera *between, double t, double phase, int gpu) {
+    static int mode = -1;
+    static FILE *log;
+    static Walk w; /* (run_motion's, gpu_run_static's) */
+    const Objects *o = pending.objects, *before = pending.objects_before;
+    const Screen *s = &pending.scan.screen;
+    size_t r;
+
+    if (mode < 0) {
+        const char *e = getenv("KF4_INTERP_OUTSIDE"), *f = getenv("KF4_INTERP_OUTSIDE_LOG");
+
+        mode = e != NULL ? atoi(e) : 0;
+        log = f != NULL ? fopen(f, "w") : NULL;
+        if (log == NULL) {
+            log = stderr;
+        }
+    }
+    if (mode <= 0 || o == NULL) {
+        return;
+    }
+    memset(&w, 0, sizeof(w));
+    w.objects = (Objects *)o;
+    w.prev = before;
+    w.camera = pending.scan.camera;
+    w.mid = *between;
+    w.t = t;
+    {
+        int i;
+
+        for (i = 0; i < 3; i++) {
+            w.eye_move[i] = pending.scan.camera.eye[i] - pending.before.eye[i];
+        }
+    }
+    for (r = 0; r < o->nruns; r++) {
+        const Run *cur = &o->runs[r], *prev;
+        OutBox b0 = {0}, b1 = {0}, bt = {0};
+        double m = 4.0, d = 0;
+        int moving, flag, i;
+        uint32_t k;
+
+        if (cur->section != SECTION_WORLD || !cur->placed || cur->native) {
+            continue;
+        }
+        w.run = (int)r;
+        w.run_prev = before != NULL && cur->pair >= 0 ? &before->runs[cur->pair] : NULL;
+        if (gpu) {
+            moving = gpu_run_static(&w) && ((cur->sky && o->sky_ok) ||
+                                            (w.run_prev != NULL && gpu_zm_ok(o, before, cur, &w.camera, between, t)));
+        } else {
+            run_motion(&w);
+            moving = w.run_moving && (w.run_prev != NULL || run_is_sky(&w));
+        }
+        prev = w.run_prev;
+        for (k = 0; k < cur->count; k++) {
+            const double *b = o->pos[cur->first + k];
+            double p[3];
+
+            if (!o->valid[cur->first + k]) {
+                continue;
+            }
+            outbox_add(&b1, s, &pending.scan.camera, b);
+            if (prev != NULL && before->valid[prev->first + k]) {
+                outbox_add(&b0, s, &pending.before, before->pos[prev->first + k]);
+            } else if (prev == NULL) {
+                outbox_add(&b0, s, &pending.before, b);
+            }
+            if (moving && cur->sky && o->sky_ok) {
+                for (i = 0; i < 3; i++) {
+                    p[i] = b[i] - o->sky_move[i] * (1.0 - t);
+                }
+            } else if (moving && prev != NULL) {
+                const double *a = before->pos[prev->first + k];
+                int straight = before->valid[prev->first + k] == VERTEX_SURE && o->valid[cur->first + k] == VERTEX_SURE;
+
+                if (!straight) {
+                    double ra = distance(a, prev->middle), rb = distance(b, cur->middle);
+                    double most = ra > rb ? ra : rb;
+
+                    straight = before->valid[prev->first + k] && fabs(ra - rb) <= most * 0.25 + 2.0;
+                }
+                for (i = 0; i < 3; i++) {
+                    p[i] = straight ? a[i] + (b[i] - a[i]) * t : b[i] + (prev->middle[i] - cur->middle[i]) * (1.0 - t);
+                }
+            } else {
+                memcpy(p, b, sizeof(p));
+            }
+            outbox_add(&bt, s, between, p);
+        }
+        if (bt.n == 0 || bt.x1 < -VIS_X || bt.x0 > VIS_X || bt.y1 < -VIS_Y || bt.y0 > VIS_Y) {
+            continue; /* (not on the screen) */
+        }
+        outbox_clip(&bt);
+        outbox_clip(&b0);
+        outbox_clip(&b1);
+        flag = 0;
+        if (b0.n == 0 && b1.n == 0) {
+            flag = 1;
+        } else {
+            double x0 = b1.n ? b1.x0 : b0.x0, x1 = b1.n ? b1.x1 : b0.x1, y0 = b1.n ? b1.y0 : b0.y0, y1 = b1.n ? b1.y1 : b0.y1;
+
+            if (b0.n) {
+                x0 = b0.x0 < x0 ? b0.x0 : x0;
+                x1 = b0.x1 > x1 ? b0.x1 : x1;
+                y0 = b0.y0 < y0 ? b0.y0 : y0;
+                y1 = b0.y1 > y1 ? b0.y1 : y1;
+            }
+            flag = bt.x0 < x0 - m || bt.x1 > x1 + m || bt.y0 < y0 - m || bt.y1 > y1 + m;
+        }
+        if (prev != NULL) {
+            for (i = 0; i < 3; i++) {
+                d += (prev->middle[i] - cur->middle[i]) * (prev->middle[i] - cur->middle[i]);
+            }
+            d = sqrt(d);
+        }
+        if (flag || (mode >= 2 && cur->shadow)) {
+            fprintf(log,
+                    "[outside] %s vblank %llu phase %.3f t %.3f run %zu key %016llx n %u%s%s pair %d (%.1f apart) %s "
+                    "t: %.0f %.0f %.0f %.0f | t0: %.0f %.0f %.0f %.0f | t1: %.0f %.0f %.0f %.0f\n",
+                    flag ? "OUT" : "ok", (unsigned long long)port_vblank_count(), phase, t, r, (unsigned long long)cur->key,
+                    cur->count, cur->shadow ? " shadow" : "", cur->sky ? " sky" : "", cur->pair, d,
+                    moving ? "moving" : "with-camera", bt.x0, bt.y0, bt.x1, bt.y1, b0.x0, b0.y0, b0.x1, b0.y1, b1.x0, b1.y0,
+                    b1.x1, b1.y1);
+        }
+    }
+    fflush(log);
+}
+
 int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes)) {
     Camera between;
     double t;
@@ -3198,6 +3380,7 @@ int port_interp_picture(double phase, void (*send)(int path, const void *data, s
     if (pending.gpu == 0) {
         pending.gpu = gpu_wanted() && gpu_frame(&between, t, send) ? 1 : -1;
     }
+    outside_check(&between, t, phase, pending.gpu > 0);
     if (pending.gpu > 0) {
         gpu_picture(&between, t);
     } else {

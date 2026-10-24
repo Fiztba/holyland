@@ -716,6 +716,44 @@ before | after | hosted). It is not p8/distance's: the build before it (fec275a)
   quick load and the state: 0 differ), the man's own parts (any skinned slack up to 3 Z draws nothing on the wall), and
   the shadows (the shadow mesh drawn by the GS instead changes nothing on the wall). An F8 recording or an F9 capture
   taken while it shows is what is needed next.
+### The lamp wall's patch: a picture between's depth from the GS's Z (branch `p8/lamp-wall2`, from `native/draw` 9ef866f5)
+
+The owner, `native-c6ef727` with `--renderer modern` at 240 (`bugs_modern/quick_lampwall`, the cave with the brazier and
+the seated man, seen small at the right of the screen from the passage): dark patches on the lit wall by the man's head,
+a quarter darker than the wall, only above 30 and only from afar; also by other lights. It was taken for a shadow
+(program 0x5A0) moved wrongly, but it is not one, and not frame_interp.c's pairing: modern has no PS2-path runs of the
+world there (the outside check below logs none).
+
+- **Found** with the flash recorder over a whole windowed run (`--flash-recorder 8,540`, F8 at the run's end via
+  `KF4_DEBUG_AT=flash@V`) and a detector of pictures darker than both neighbours. The patch came in the pictures the
+  window showed when the native GS fell behind (the vblanks' own pictures only: there the neighbours are game frames);
+  at full rate it is in every picture between of the frame alike, so a neighbour test does not see it. Then headless,
+  every vblank: `quick_lampwall`, `100 CROSS 4`, `--frame-rate 240` (or 60), vblanks 218-219: every picture between of the
+  frame drawn at 218 has a wedge on the wall from the brazier down toward the rock (121 pixels at 720 x 540), the game
+  frames not; also at 343, 345, 585, 829 (6-120 pixels). Not with `KF4_INTERP_STILL=1`, not hosted, not with
+  `KF4_INTERP_CPU=1`; the same with `KF4_SA_NO_STENCIL=1` and with the shadows not native.
+- **Cause.** In a picture between the scene's corners (sa_000, sa_280, sa_700, sa_water: `moved` in nd_000.vert and the
+  others, ND_STANDALONE) took their depth from the moved GS Z, `float(r.z)`, which is VU1's Z after FTOI4 and the shift
+  to whole Z: up to a Z farther than the frame's own, unrounded `zf`. Near, a Z is a hair; from afar many world units
+  (p8/distance: depth^2 / az, 8 units at 3,000). The light on the wall is a layer tied to the wall by its real depth,
+  and where its corners lay a Z farther it failed its test: the wall without its light, the patch. The camera need not
+  move at all (here it moved 1e-8).
+- **Fix.** The scene's depth moved from its own unrounded Z: `zf - (zf - cz) dm.z / mz`, as the GS's Z is moved
+  (`gsn_shaders.h` rebuilt: the four sa_ shaders change). The game's frames are unchanged (byte for byte); hosted's
+  pictures between too (its Z is the GS's).
+- **Numbers** (headless 240, 720 x 540, pixels of a picture between more than 15% darker than both its game frames,
+  vblanks 216-222, 340-346, 582-588, 826-832): 448 before, 0 after. Windowed with `KF4_GSN_SLOW_US=12000` (the window
+  behind, about 980 pictures of 1,920 the vblank's own), the patch in 3, 3, 4 and 5 pictures of four runs before; 0, 0
+  after; a run at full rate walking, 0. The doorway walk (`quick_doorway`, 410-480 at 240, 1280 x 720): `flash_find.py`
+  0 flagged before and after, with and without `--frames`; the game frames the same bytes, the pictures between within
+  a few dozen pixels (edges) of before.
+- **Shadows to the GS are slow** in modern (`--native-draw` without `shadows`), as the owner found: each run of shadows
+  then is the GS's, between turns of the scene (the frame given back and taken again), several a frame. Expected; the
+  default draws them in the scene.
+- **Tools** (README.md, "Higher frame rates"): `KF4_INTERP_OUTSIDE` (the PS2 path's runs whose box in a picture between
+  leaves their boxes at t 0 and t 1; it does not see native draws, which is why it found nothing here) and
+  `KF4_GSN_SLOW_US` (a window behind, on purpose).
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

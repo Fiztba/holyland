@@ -422,6 +422,11 @@ it is at that picture's time, t of the way from the frame shown to the one drawn
   draws the pictures between with the frame's own camera (a check of the replay);
   `KF4_INTERP_DRAW_ALL=1` draws every picture between headless (for speed tests); `KF4_PRESENT_SIM=HZ`
   runs the window's pacing headless with nothing drawn (`KF4_PRESENT_LOG=FILE` writes each present).
+  `KF4_INTERP_OUTSIDE=1` logs each run of the PS2 path's world (frame_interp.c's runs; not native
+  draws) whose place on the screen in a picture between leaves the union of its places at t 0 and t 1
+  (the vblank, phase, run, pair and the three boxes; `=2` also every shadow run, program 0x5A0;
+  `KF4_INTERP_OUTSIDE_LOG=FILE` for a file). `KF4_GSN_SLOW_US=N` holds the native GS's thread N us at
+  each vblank, so that a window falls behind as on a busy GPU (only the vblanks' own pictures shown).
 - `--gs-capture-at` and F9 record the GS's packets as the game sent them, without the pictures
   between.
 
