@@ -55,9 +55,18 @@ static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
 static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
 static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
-/* --frame-rate: vblanks with no pictures between, the native GS a vblank behind (port_gs_run_vsync) */
-static uint64_t interp_vblanks_left_out, interp_rest_until, interp_rest = 30;
-static int interp_behind_run;
+/* --frame-rate: the pictures between cut to fewer a vblank while the native GS's thread is behind
+   (port_gs_run_vsync): interp_allow of them a vblank (INTERP_ALL: no cut), one fewer each time it falls
+   behind, one more after interp_rest vblanks; vblanks drawn with fewer and with none; the cuts */
+#define INTERP_ALL 16
+static uint64_t interp_vblanks_left_out, interp_vblanks_fewer, interp_cuts, interp_rest = 30;
+static uint64_t interp_settle_until, interp_next_raise, interp_raised_at, interp_last_cut;
+static int interp_behind_run, interp_allow = INTERP_ALL;
+static volatile int interp_cut_now; /* (the counter: pictures between a vblank left out by the cut, now) */
+
+int port_interp_cut(void) {
+    return __atomic_load_n(&interp_cut_now, __ATOMIC_RELAXED);
+}
 
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
@@ -1049,9 +1058,11 @@ void port_gs_print_stats(void) {
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
-        if (interp_behind || interp_vblanks_left_out) {
-            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu (and all of "
-                    "%llu vblanks')\n", (unsigned long long)interp_behind, (unsigned long long)interp_vblanks_left_out);
+        if (interp_behind || interp_vblanks_fewer) {
+            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
+                    "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
+                    (unsigned long long)interp_cuts, (unsigned long long)interp_vblanks_fewer,
+                    (unsigned long long)interp_vblanks_left_out);
         }
         if (s->interp_records || s->interp_replays || s->interp_misses) {
             fprintf(stderr,
@@ -1079,6 +1090,10 @@ void port_gs_print_stats(void) {
         if (s->shadows) {
             fprintf(stderr, "[stats] native GS: %llu write-backs put off: %llu never owed, %llu pages' made later\n",
                     (unsigned long long)s->shadows, (unsigned long long)s->shadows_gone, (unsigned long long)s->shadows_resolved);
+        }
+        if (s->writebacks_overwritten) {
+            fprintf(stderr, "[stats] native GS: %llu write-backs not made: the targets under a copy of the frame\n",
+                    (unsigned long long)s->writebacks_overwritten);
         }
         if (s->silhouettes_whole) {
             fprintf(stderr, "[stats] native GS: %llu silhouettes drawn whole\n", (unsigned long long)s->silhouettes_whole);
@@ -1202,7 +1217,7 @@ void port_gs_run_vsync(void) {
     /* --frame-rate: the times in this vblank of the pictures shown (port_interp_schedule), whether a game
        frame is being drawn between (interp_live), and whether the vblank's own picture is one */
     double interp_phases[16];
-    int interp_count = 0, interp_live = 0, own_shown = 1;
+    int interp_count = 0, interp_live = 0, own_shown = 1, interp_allow_now = INTERP_ALL, interp_between = 0;
 
     while (dump_next < dump_count && dump_at[dump_next] < request->vblank) {
         dump_next++;
@@ -1246,23 +1261,51 @@ void port_gs_run_vsync(void) {
         interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_native && gsn_backlog() > 1
                                 ? interp_behind_run + 1
                                 : 0;
-        if (interp_behind_run >= 2 && request->vblank >= interp_rest_until) {
-            /* The native GS's thread a vblank behind as this vblank and the one before began: no pictures between
-               for a while (the game's own pictures shown, as at 30), so that a place whose pictures
-               between cost more than a vblank (under water: the wobble's copy of each picture's frame,
-               which goes back to VRAM) keeps the game's rate instead of slowing it. Tried again after
-               half a second; when it is behind again within half a second of trying, after twice as
-               long (up to 4 s). */
-            if (request->vblank > interp_rest_until + 30) {
-                interp_rest = 30;
-            } else if (interp_rest < 240) {
-                interp_rest *= 2;
+        {
+            /* The native GS's thread a vblank behind as this vblank and the one before began: one picture
+               between fewer a vblank (down to none: the game's own pictures, as at 30), so that a place whose
+               pictures between cost more than the thread has keeps the game's rate and as many pictures as fit,
+               not a cliff to 60. Up to half a second to catch up after a cut; one more picture after interp_rest
+               vblanks without one, and when that falls behind again within half a second, after twice as long
+               (up to 8 s). Seen in --stats and on the F3 counter ("CUT"). */
+            int between = 0, i;
+
+            for (i = 0; i < interp_count; i++) {
+                between += interp_phases[i] > 0;
             }
-            interp_rest_until = request->vblank + interp_rest;
-        }
-        if (interp_live && !dump && request->vblank < interp_rest_until) {
-            interp_live = 0;
-            interp_vblanks_left_out++;
+            if (interp_behind_run == 0) {
+                interp_settle_until = 0; /* (caught up since the last cut: the next fall behind is judged at once) */
+            }
+            if (interp_behind_run >= 2 && request->vblank >= interp_settle_until && interp_allow > 0) {
+                interp_allow = (interp_allow < between ? interp_allow : between) - 1;
+                if (interp_allow < 0) {
+                    interp_allow = 0;
+                }
+                if (interp_raised_at && request->vblank < interp_raised_at + 30 && interp_rest < 480) {
+                    interp_rest *= 2;
+                }
+                interp_settle_until = request->vblank + 30; /* (to catch up before judging again: at most half a second) */
+                interp_next_raise = request->vblank + interp_rest;
+                interp_last_cut = request->vblank;
+                interp_cuts++;
+            } else if (interp_allow < INTERP_ALL && request->vblank >= interp_next_raise && interp_behind_run == 0) {
+                if (interp_last_cut < interp_raised_at) {
+                    interp_rest = 30; /* (the raise before held) */
+                }
+                interp_allow = interp_allow + 1 >= between ? INTERP_ALL : interp_allow + 1;
+                interp_raised_at = request->vblank;
+                interp_next_raise = request->vblank + interp_rest;
+            }
+            interp_allow_now = interp_allow < between ? interp_allow : between;
+            __atomic_store_n(&interp_cut_now, interp_live ? between - interp_allow_now : 0, __ATOMIC_RELAXED);
+            if (interp_live && !dump && interp_allow_now < between) {
+                interp_vblanks_fewer++;
+            }
+            if (interp_live && !dump && interp_allow_now == 0 && between > 0) {
+                interp_live = 0;
+                interp_vblanks_left_out++;
+            }
+            interp_between = between;
         }
         /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
         own_shown = interp_phases[0] == 0 || !interp_live;
@@ -1311,11 +1354,23 @@ void port_gs_run_vsync(void) {
     if (interp_live && interp_count > 0) {
         /* the pictures between this vblank and the next: for the window, only while this thread and the
            native GS's keep up with the game (a picture between left out rather than the game held up) */
-        int i, more = shown || draw_all();
+        int i, j = 0, more = shown || draw_all();
 
         for (i = 0; i < interp_count; i++) {
             if (interp_phases[i] <= 0 || !(more || dump)) {
                 continue;
+            }
+            if (!dump && interp_allow_now < interp_between) {
+                /* the cut: interp_allow_now of the vblank's pictures between, spread over it (the k-th at
+                   (k + 0.5) / allowed of the way) */
+                int k = j++, keep = 0, a;
+
+                for (a = 0; a < interp_allow_now; a++) {
+                    keep |= (int)((a + 0.5) * interp_between / interp_allow_now) == k;
+                }
+                if (!keep) {
+                    continue;
+                }
             }
             if (!dump && !port_options.fast && shown &&
                 (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1)) {

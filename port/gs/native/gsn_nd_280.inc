@@ -175,6 +175,54 @@ void nd280_plan(const int32_t *q, const RdBatch &b, const Nd280Const &k, Nd280Pl
     p.all_clipped = int16_t(uint16_t(count - p.n)) >= 0;
 }
 
+// A batch's last plans (two: the world's camera and the reflection's), by its mesh and number, with what
+// they were planned from (compared bit for bit): the frame drawn again for a picture between, or a model
+// standing still, takes its plan as it was
+struct Nd280Planned {
+    const int32_t *data = nullptr;
+    float vertex[2][16], sphere[2][16];
+    float scale, bias;
+    bool sphered = false;
+    Nd280Plan plan;
+};
+struct Nd280PlannedPair {
+    Nd280Planned e[2];
+    uint32_t older = 0;
+};
+std::unordered_map<uint64_t, Nd280PlannedPair> nd280_planned;
+
+const Nd280Plan &nd280_plan_cached(const RdMeshData &m, const RdBatch &b, const Nd280Const &k) {
+    if (nd280_planned.size() >= ND_PLANNED_MAX) {
+        nd280_planned.clear();
+    }
+    const int32_t *q = &m.vertices[size_t(b.first) * 32];
+    Nd280PlannedPair &pair = nd280_planned[uint64_t(m.id) << 20 | uint64_t(&b - m.batches.data())];
+    auto same = [&](const Nd280Planned &e) {
+        return e.data == q && e.sphered == b.sphere && memcmp(e.vertex, k.vertex, sizeof(e.vertex)) == 0 &&
+               (!b.sphere || memcmp(e.sphere, k.sphere, sizeof(e.sphere)) == 0) &&
+               memcmp(&e.scale, &k.scale[3], 4) == 0 && memcmp(&e.bias, &k.bias[3], 4) == 0;
+    };
+    uint32_t which = same(pair.e[0]) ? 0 : same(pair.e[1]) ? 1 : 2;
+    if (which == 2) {
+        which = pair.older;
+    }
+    pair.older = which ^ 1;
+    Nd280Planned &e = pair.e[which];
+    if (!same(e)) {
+        e.data = q;
+        e.sphered = b.sphere;
+        memcpy(e.vertex, k.vertex, sizeof(e.vertex));
+        memcpy(e.sphere, k.sphere, sizeof(e.sphere));
+        memcpy(&e.scale, &k.scale[3], 4);
+        memcpy(&e.bias, &k.bias[3], 4);
+        nd280_plan(q, b, k, e.plan);
+        gsn_stats.nd_plan_vertices += b.count;
+    } else {
+        gsn_stats.nd_plan_reused += b.count;
+    }
+    return e.plan;
+}
+
 // A pass's corners into gs->verts: base the batch's first slot in the arena
 void nd280_corners(const RdBatch &b, const Nd280Plan &p, bool sphere, uint32_t prim, uint32_t base, uint32_t record) {
     uint32_t context = (prim >> 9) & 1;
@@ -254,7 +302,6 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
         k.info[1] = nd_model_flags(key, d, cam, &k.bt[0], &k.bt[1]);
     }
     memcpy(nd280.draws.map + size_t(record) * sizeof(Nd280Const), &k, sizeof(k));
-    Nd280Plan p;
     for (const auto &mesh : nd.fetched) {
         if (mesh->format != RD_VF_FLOAT_SKIN) {
             gsn_stats.nd_unsupported++;
@@ -270,7 +317,7 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
             for (size_t i = 0; i + 1 < b.ad.size(); i += 2) {
                 gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
-            nd280_plan(&mesh->vertices[size_t(b.first) * 32], b, k, p);
+            const Nd280Plan &p = nd280_plan_cached(*mesh, b, k);
             gsn_stats.nd_batches++;
             if (p.all_clipped) {
                 continue;

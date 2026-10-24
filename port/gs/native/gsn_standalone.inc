@@ -163,6 +163,8 @@ struct SaTable {
     // the count when a page was last drawn into or copied over, in its low 24 bits and in its top byte
     uint64_t page_drawn_lo[512] = {}, page_drawn_hi[512] = {};
     size_t owners_most = 0;
+    // bumped at every change of the owners or of the pages drawn (sa_owners' memo is good while it stays)
+    uint64_t gen = 1;
     // the CLUT buffer as the table has it (sa_clut_load): TEX0's CLD loads mirrored, from the uploads
     uint16_t clut[512] = {};
     uint32_t clut_cbp[2] = {UINT32_MAX, UINT32_MAX};
@@ -345,6 +347,7 @@ void sa_table_env();
 void sa_table_reset() {
     sa_table_env();
     sat.blocks.assign(SA_BLOCKS, SaBlock{});
+    sat.gen++;
     memset(sat.page_drawn_lo, 0, sizeof(sat.page_drawn_lo));
     memset(sat.page_drawn_hi, 0, sizeof(sat.page_drawn_hi));
     memset(sat.clut, 0, sizeof(sat.clut));
@@ -395,6 +398,7 @@ void sa_table_env() {
 void sa_pages_drawn(uint32_t lo, uint32_t count, uint32_t psm) {
     uint8_t parts = sa_parts(psm);
     sa.seq++;
+    sat.gen++;
     for (uint32_t k = 0; k < count && k < vram_pages; k++) {
         uint32_t page = (lo + k) % vram_pages;
         if (parts & SA_LO) {
@@ -447,6 +451,7 @@ SaChunk *sa_chunk(uint32_t id) {
 // The upload's nibbles are its own: taken from the uploads before it, which keep the rest
 void sa_own(uint32_t id, SaChunk &c) {
     sa.seq++;
+    sat.gen++;
     c.seq = sa.seq;
     uint64_t bitbltbuf = c.bitbltbuf;
     sa_blocks_of(bits(bitbltbuf, 32, 14), bits(bitbltbuf, 48, 6), bits(bitbltbuf, 56, 6), bits(c.trxpos, 32, 11),
@@ -704,11 +709,19 @@ void sa_upload_replayed(uint32_t k) {
 
 // The uploads a buffer's rectangle comes from, or why not all of it does (SA_TEX_*): every nibble of it
 // an upload's, and that upload's page not drawn into or copied over since in that nibble
-int sa_owners(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
-              std::vector<uint32_t> &ids) {
-    if (!gsn_psm_valid(psm) || w == 0 || h == 0) {
-        return SA_TEX_UNOWNED; // (no format the GS has: what VRAM gives, the GS's)
-    }
+// A rectangle's owners as sa_owners_walk found them (before the evictions), kept while the table is as it was
+// (sat.gen): most batches of a frame ask for textures whose blocks no upload or draw changed since
+struct SaOwnersMemo {
+    uint64_t gen = 0;
+    uint32_t bp, bw, psm, x0, y0, w, h;
+    int why;
+    std::vector<uint32_t> ids; // (the ids met, in the order met)
+};
+SaOwnersMemo sa_owners_memo[1024];
+uint64_t sa_owners_hits = 0, sa_owners_walks = 0;
+
+int sa_owners_walk(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
+                   std::vector<uint32_t> &ids) {
     int why = SA_TEX_TABLE;
     sa_blocks_of(bp, bw, psm, x0, y0, w, h, [&](uint32_t block, const SaCover &need) {
         if (why != SA_TEX_TABLE) {
@@ -740,6 +753,36 @@ int sa_owners(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t y0, 
             why = drawn ? SA_TEX_DRAWN : SA_TEX_UNOWNED;
         }
     });
+    return why;
+}
+
+int sa_owners(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
+              std::vector<uint32_t> &ids) {
+    if (!gsn_psm_valid(psm) || w == 0 || h == 0) {
+        return SA_TEX_UNOWNED; // (no format the GS has: what VRAM gives, the GS's)
+    }
+    uint64_t hk = (uint64_t(bp) * 0x9E3779B1u) ^ (uint64_t(bw) << 7) ^ (uint64_t(psm) << 13) ^ (uint64_t(x0) << 19) ^
+                  (uint64_t(y0) << 29) ^ (uint64_t(w) << 37) ^ (uint64_t(h) << 49);
+    hk ^= hk >> 23;
+    SaOwnersMemo &m = sa_owners_memo[(hk * 0x9E3779B97F4A7C15ull) >> 54];
+    int why;
+    if (m.gen == sat.gen && m.bp == bp && m.bw == bw && m.psm == psm && m.x0 == x0 && m.y0 == y0 && m.w == w && m.h == h) {
+        sa_owners_hits++;
+    } else {
+        sa_owners_walks++;
+        m.ids.clear();
+        m.why = sa_owners_walk(bp, bw, psm, x0, y0, w, h, m.ids);
+        m.gen = sat.gen;
+        m.bp = bp, m.bw = bw, m.psm = psm, m.x0 = x0, m.y0 = y0, m.w = w, m.h = h;
+    }
+    why = m.why;
+    // (as the walk would have added them to ids: those not in it already, in the order met)
+    size_t had = ids.size();
+    for (uint32_t id : m.ids) {
+        if (std::find(ids.begin(), ids.begin() + had, id) == ids.begin() + had) {
+            ids.push_back(id);
+        }
+    }
     for (uint32_t id : ids) {
         if (why == SA_TEX_TABLE && !sa_chunk(id)) {
             why = SA_TEX_EVICTED;
@@ -771,23 +814,7 @@ void sa_scratch_write(std::vector<uint32_t> &ids) {
 // (those halfwords marked, clut_gs: a batch that reads one takes the GS's buffer whole).
 // The entries a load reads from a VRAM (clut_load's addressing), as the CLUT's format has them
 void sa_clut_read(const uint8_t *vram, uint64_t tex0, uint32_t *values) {
-    uint32_t psm = bits(tex0, 20, 6), cbp = bits(tex0, 37, 14), cpsm = bits(tex0, 51, 4), csm = bits(tex0, 55, 1);
-    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
-    uint32_t entries = eight ? 256 : 16;
-    uint64_t texclut = gs->reg[R_TEXCLUT];
-    for (uint32_t i = 0; i < entries; i++) {
-        uint32_t x, y;
-        if (csm == 0) {
-            uint32_t e = eight ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
-            x = eight ? e % 16 : e % 8;
-            y = eight ? e / 16 : e / 8;
-        } else {
-            x = bits(texclut, 6, 6) * 16 + i;
-            y = bits(texclut, 12, 10);
-        }
-        uint32_t bw = csm == 0 ? 1 : bits(texclut, 0, 6);
-        values[i] = gsn_vram_read(vram, cpsm == 0 ? GSN_PSMCT32 : cpsm == 2 ? GSN_PSMCT16 : GSN_PSMCT16S, cbp, bw, x, y);
-    }
+    clut_read_entries(vram, tex0, gs->reg[R_TEXCLUT], values);
 }
 
 // (gs_write, TEX0: after clut_load and the GS's flush) A CLUT load, mirrored
@@ -3136,6 +3163,8 @@ void sa_print_table_stats() {
     fprintf(stderr, " (%llu decoded); the scene's CLUTs: %llu the table's, %llu the GS's; a block's uploads at most %zu",
             (unsigned long long)s.clut_decodes, (unsigned long long)s.clut_table, (unsigned long long)s.clut_gs,
             sat.owners_most);
+    fprintf(stderr, "; owners looked up %llu times (%llu walked)", (unsigned long long)(sa_owners_hits + sa_owners_walks),
+            (unsigned long long)sa_owners_walks);
     if (sat.verify) {
         fprintf(stderr, "; verified: textures %llu same, %llu differ, CLUTs %llu same, %llu differ; not the table's: ",
                 (unsigned long long)s.verify_same, (unsigned long long)s.verify_differ,
@@ -3393,6 +3422,7 @@ bool sa_table_load(const uint8_t *data, size_t size) {
         most = std::max(most, owners.size());
     }
     sat.blocks.swap(blocks);
+    sat.gen++;
     sat.owners_most = std::max(sat.owners_most, most);
     memcpy(sat.page_drawn_lo, drawn_lo.data(), sizeof(sat.page_drawn_lo));
     memcpy(sat.page_drawn_hi, drawn_hi.data(), sizeof(sat.page_drawn_hi));

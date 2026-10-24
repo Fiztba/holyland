@@ -455,6 +455,9 @@ int port_interp_active(void);
    vblank's own, at 0, among them when it is shown) */
 int port_frame_rate_hz(void);
 int port_interp_schedule(uint64_t vblank, double *phases, int max);
+/* (port/platform/gs.c) The pictures between a vblank the renderer leaves out now because it fell behind
+   (0: none; the F3 counter's "CUT") */
+int port_interp_cut(void);
 void port_interp_reset(int whole);
 void port_interp_forget(void);
 void port_interp_print_stats(void);
