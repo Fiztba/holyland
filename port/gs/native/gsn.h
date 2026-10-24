@@ -27,6 +27,11 @@ void gsn_wait(void);
 /* The Vulkan pipeline cache kept in this file: read now (if it is there and this driver's), and
    written again from time to time when pipelines have been made */
 void gsn_pipeline_cache(const char *path);
+/* Pipelines made ahead (gsn_pipeline_warm.inc): begun by gsn_pipeline_cache, on threads of their own. Running: 1 until
+   all are made; building: 1 while those the pipeline cache did not have are made, with how many of how many */
+int gsn_pipelines_running(void);
+int gsn_pipelines_building(int *done, int *total);
+void gsn_print_pipeline_stats(void);
 void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
    into frame when want_pixels (1 if there is one). With GSN_WANT_IMAGE in want_pixels the picture

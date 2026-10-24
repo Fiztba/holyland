@@ -1,6 +1,7 @@
 /* The native GS's shaders as SPIR-V, made by tools/build_shaders.py from port/gs/native/shaders/.
    Generated: edit the shaders and run the script again. */
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 static const uint32_t gsn_spv_deinterlace_frag[1424] = {
@@ -38072,4 +38073,57 @@ static const uint32_t gsn_spv_sa_resample_depth_ms_frag[664] = {
     0x00000015, 0x00000014, 0x0004003d, 0x00000007, 0x00000016, 0x0000000d, 0x0004003d, 0x00000006,
     0x00000017, 0x0000000e, 0x00040064, 0x00000011, 0x00000018, 0x00000015, 0x0007005f, 0x0000000b,
     0x00000019, 0x00000018, 0x00000016, 0x00000040, 0x00000017, 0x000200fe, 0x00000019, 0x00010038,
+};
+
+/* every shader above (the pipeline list finds a shader by its SPIR-V: gsn_pipeline_warm.inc) */
+static const struct { const uint32_t *code; size_t size; } gsn_spv_all[] = {
+    {gsn_spv_deinterlace_frag, sizeof(gsn_spv_deinterlace_frag)},
+    {gsn_spv_gs_frag, sizeof(gsn_spv_gs_frag)},
+    {gsn_spv_gs_vert, sizeof(gsn_spv_gs_vert)},
+    {gsn_spv_gs_in_frag, sizeof(gsn_spv_gs_in_frag)},
+    {gsn_spv_gs_in_ms_frag, sizeof(gsn_spv_gs_in_ms_frag)},
+    {gsn_spv_gs_replay_comp, sizeof(gsn_spv_gs_replay_comp)},
+    {gsn_spv_gs_replay_corners_comp, sizeof(gsn_spv_gs_replay_corners_comp)},
+    {gsn_spv_gs_zclamp_frag, sizeof(gsn_spv_gs_zclamp_frag)},
+    {gsn_spv_gs_zclamp_in_frag, sizeof(gsn_spv_gs_zclamp_in_frag)},
+    {gsn_spv_gs_zclamp_in_ms_frag, sizeof(gsn_spv_gs_zclamp_in_ms_frag)},
+    {gsn_spv_gs_zclamp_sample_frag, sizeof(gsn_spv_gs_zclamp_sample_frag)},
+    {gsn_spv_gs_zclamp_sample_in_ms_frag, sizeof(gsn_spv_gs_zclamp_sample_in_ms_frag)},
+    {gsn_spv_gs_zonly_frag, sizeof(gsn_spv_gs_zonly_frag)},
+    {gsn_spv_gs_zonly_sample_frag, sizeof(gsn_spv_gs_zonly_sample_frag)},
+    {gsn_spv_msaa_vert, sizeof(gsn_spv_msaa_vert)},
+    {gsn_spv_msaa_depth_frag, sizeof(gsn_spv_msaa_depth_frag)},
+    {gsn_spv_msaa_load_frag, sizeof(gsn_spv_msaa_load_frag)},
+    {gsn_spv_msaa_load_depth_frag, sizeof(gsn_spv_msaa_load_depth_frag)},
+    {gsn_spv_narrow_frag, sizeof(gsn_spv_narrow_frag)},
+    {gsn_spv_nd_000_vert, sizeof(gsn_spv_nd_000_vert)},
+    {gsn_spv_nd_280_vert, sizeof(gsn_spv_nd_280_vert)},
+    {gsn_spv_nd_700_vert, sizeof(gsn_spv_nd_700_vert)},
+    {gsn_spv_nd_oracle_frag, sizeof(gsn_spv_nd_oracle_frag)},
+    {gsn_spv_nd_pass_vert, sizeof(gsn_spv_nd_pass_vert)},
+    {gsn_spv_nd_strip_vert, sizeof(gsn_spv_nd_strip_vert)},
+    {gsn_spv_nd_water_vert, sizeof(gsn_spv_nd_water_vert)},
+    {gsn_spv_pass_copy_frag, sizeof(gsn_spv_pass_copy_frag)},
+    {gsn_spv_pass_resolve_frag, sizeof(gsn_spv_pass_resolve_frag)},
+    {gsn_spv_present_scale_frag, sizeof(gsn_spv_present_scale_frag)},
+    {gsn_spv_present_sharpen_frag, sizeof(gsn_spv_present_sharpen_frag)},
+    {gsn_spv_sa_composite_frag, sizeof(gsn_spv_sa_composite_frag)},
+    {gsn_spv_sa_copy_ms_frag, sizeof(gsn_spv_sa_copy_ms_frag)},
+    {gsn_spv_sa_copy_run_frag, sizeof(gsn_spv_sa_copy_run_frag)},
+    {gsn_spv_sa_depth_frag, sizeof(gsn_spv_sa_depth_frag)},
+    {gsn_spv_sa_resample_frag, sizeof(gsn_spv_sa_resample_frag)},
+    {gsn_spv_sa_sample_frag, sizeof(gsn_spv_sa_sample_frag)},
+    {gsn_spv_sa_zfirst_frag, sizeof(gsn_spv_sa_zfirst_frag)},
+    {gsn_spv_nd_000_oracle_vert, sizeof(gsn_spv_nd_000_oracle_vert)},
+    {gsn_spv_nd_280_oracle_vert, sizeof(gsn_spv_nd_280_oracle_vert)},
+    {gsn_spv_nd_700_oracle_vert, sizeof(gsn_spv_nd_700_oracle_vert)},
+    {gsn_spv_sa_000_vert, sizeof(gsn_spv_sa_000_vert)},
+    {gsn_spv_sa_280_vert, sizeof(gsn_spv_sa_280_vert)},
+    {gsn_spv_sa_700_vert, sizeof(gsn_spv_sa_700_vert)},
+    {gsn_spv_sa_water_vert, sizeof(gsn_spv_sa_water_vert)},
+    {gsn_spv_sa_depth_ms_frag, sizeof(gsn_spv_sa_depth_ms_frag)},
+    {gsn_spv_sa_resample_ms_frag, sizeof(gsn_spv_sa_resample_ms_frag)},
+    {gsn_spv_sa_copy_run_ms_frag, sizeof(gsn_spv_sa_copy_run_ms_frag)},
+    {gsn_spv_sa_resample_depth_frag, sizeof(gsn_spv_sa_resample_depth_frag)},
+    {gsn_spv_sa_resample_depth_ms_frag, sizeof(gsn_spv_sa_resample_depth_ms_frag)},
 };
