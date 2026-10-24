@@ -4082,6 +4082,13 @@ void flush_batch() {
         fbmsk = (fbmsk & 0x80F8F8F8u) | 0x7F070707u;
     }
 
+    // A batch wholly outside its scissor draws nothing: no target is made for it (the reflection's map strips
+    // the scene does not take, below the 256 x 256 view: made from VRAM after the MP drain's or the water's copy
+    // of the frame over 0x2BC0, that copy went back from the GPU first, a 640 x 448 read-back a frame)
+    if (!moving.moves && (vy1 < float(sy0) - 1.0f || vy0 > float(sy1) + 1.0f)) {
+        gs->verts.clear();
+        return;
+    }
     // ZTST NEVER draws nothing; ALWAYS without writing needs no Z buffer
     if (ztst == 0) {
         gs->verts.clear();
