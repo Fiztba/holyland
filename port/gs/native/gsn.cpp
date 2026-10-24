@@ -2673,6 +2673,24 @@ void clut_load(uint64_t tex0) {
     uint32_t lo, count;
     buffer_pages(cbp, 1, cpsm == 0 ? GSN_PSMCT32 : GSN_PSMCT16, 16, 16, &lo, &count);
     claim_pages(lo, count, nullptr, false);
+    // The same load as the last, its pages not written since and the buffer as it left it, loads the same
+    // (a model's batches each write the TEX0 they share)
+    struct ClutMemo {
+        const void *owner = nullptr;
+        uint64_t key = 0, texclut = 0, stamp = 0;
+        uint16_t clut[512];
+    };
+    static ClutMemo memo;
+    const uint64_t key_bits = (uint64_t(0x3F) << 20) | (~uint64_t(0) << 37 & ~(uint64_t(7) << 61));
+    uint64_t key = tex0 & key_bits, texclut = csm ? gs->reg[R_TEXCLUT] : 0;
+    uint64_t newest = 0;
+    for (uint32_t k = 0; k < count && k < vram_pages; k++) {
+        newest = std::max(newest, gs->page_written[(lo + k) % vram_pages]);
+    }
+    if (memo.owner == gs && memo.key == key && memo.texclut == texclut && newest <= memo.stamp &&
+        memcmp(memo.clut, gs->clut, sizeof(memo.clut)) == 0) {
+        return;
+    }
 
     uint16_t loaded[512];
     memcpy(loaded, gs->clut, sizeof(loaded));
@@ -2695,6 +2713,11 @@ void clut_load(uint64_t tex0) {
         memcpy(gs->clut, loaded, sizeof(loaded));
         gs->clut_version++;
     }
+    memo.owner = gs;
+    memo.key = key;
+    memo.texclut = texclut;
+    memo.stamp = gs->vram_writes;
+    memcpy(memo.clut, gs->clut, sizeof(memo.clut));
 }
 
 // The 256 colours (or 16) a palette texture's indices look up, as RGBA, for the CLUT's format

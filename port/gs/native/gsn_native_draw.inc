@@ -623,8 +623,45 @@ void nd_plan(const RdMeshData &m, const RdBatch &b, const float *vm, uint32_t pr
 // into the part's space: less its translation, then by its rotation with the off-diagonal signs turned
 // (the set-up's own maths: the transpose only for a turn about one axis, as the game's models are). Of
 // info only the point lights' count: the rest is the GS's
+// (nd_const's VU arithmetic, kept by what it was worked out from, compared bit for bit: the picture drawn from
+// the frame's packets again, and the parts standing still, take it as it was)
+struct NdConstMemo {
+    float in[64]; // the model, the camera's world_screen, the light directions, the point lights
+    float vertex[16], light_dir[16], point_pos[16];
+    bool valid = false;
+};
+NdConstMemo nd_const_memo[2048];
+
 void nd_const(NdConst &k, const RdDraw &d, const RdCamera &cam) {
     const float *m = &d.model[0][0];
+    float in[64];
+    memcpy(in, d.model, 64);
+    memcpy(in + 16, cam.world_screen, 64);
+    memcpy(in + 32, d.light_dir, 64);
+    memcpy(in + 48, d.point_pos, 64);
+    uint64_t h = 0x9E3779B97F4A7C15ull;
+    for (int i = 0; i < 64; i += 2) {
+        uint64_t v;
+        memcpy(&v, in + i, 8);
+        h = (h ^ v) * 0xFF51AFD7ED558CCDull;
+        h ^= h >> 32;
+    }
+    NdConstMemo &memo = nd_const_memo[h & 2047];
+    if (memo.valid && memcmp(memo.in, in, sizeof(in)) == 0) {
+        memcpy(k.vertex, memo.vertex, 64);
+        memcpy(k.light_dir, memo.light_dir, 64);
+        memcpy(k.point_pos, memo.point_pos, 64);
+        memcpy(k.model, d.model, 64);
+        memcpy(k.view, cam.view, 64);
+        memcpy(k.screen, cam.screen, 64);
+        memcpy(k.light_col, d.light_col, 64);
+        memcpy(k.fog, d.fog, 16);
+        for (int l = 0; l < 4; l++) {
+            memcpy(&k.point_col[l * 4], d.point_col[l], 16);
+        }
+        k.info[0] = std::max(0, std::min(4, int32_t(int16_t(d.point_count))));
+        return;
+    }
     for (int col = 0; col < 4; col++) {
         vu_transform4(&k.vertex[col * 4], &cam.world_screen[0][0], &m[col * 4]);
         vu_transform4(&k.light_dir[col * 4], &d.light_dir[0][0], &m[col * 4]);
@@ -651,6 +688,11 @@ void nd_const(NdConst &k, const RdDraw &d, const RdCamera &cam) {
         memcpy(&k.point_col[l * 4], d.point_col[l], 16);
     }
     k.info[0] = lights;
+    memcpy(memo.in, in, sizeof(in));
+    memcpy(memo.vertex, k.vertex, 64);
+    memcpy(memo.light_dir, k.light_dir, 64);
+    memcpy(memo.point_pos, k.point_pos, 64);
+    memo.valid = true;
 }
 
 // ---- Pictures between: the models' own moves (P2-5) ----
