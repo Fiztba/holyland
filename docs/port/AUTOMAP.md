@@ -87,7 +87,8 @@ loads: its cells count as seen at every height.
 
 ### Markers
 
-- **Map objects** (`map_slot_objects`, kind from `param/obj.prm`, `MapObjectUnk04.kind`): doors (1, 2, 6,
+- **Map objects** (`map_slot_objects`, kind from `param/obj.prm`, `MapObjectUnk04.kind`; only those in use,
+  `MAP_OBJECT_IN_USE`, which the map's set-up and scripts turn on and off with the story): doors (1, 2, 6,
   0x11; locked while `kind_param_0` names a key not yet used; the leaf drawn from the door's collision mesh,
   so an open door shows open), chests (4; key `kind_param_1`, item `kind_param_0`, gold `kind_param_2`),
   bones and graves (3) and barrels, pots and boxes (21) with their item, things to look at (11: a sign, or
@@ -96,10 +97,27 @@ loads: its cells count as seen at every height.
   shooters and pitfalls (16, 18) and fading objects (31). Names are the game's own (the definition's
   message, `Message_GetText`; items from `item_name_defs`).
 - **People** (entity type 15, and 81 the dog, with a talk script): the name is the last line of their page
-  of the Recollection screen (message 3000 + 50 × (record − 100) + 49).
+  of the Recollection screen (message 3000 + 50 × (record − 100) + 49). A map's spawn records hold every
+  place a person stands at any time in the story (Sharyl Genne has two on map 004, Lynn Genne a third by
+  her father's grave), so only the ones present now are shown, by the game's own test: a person in the
+  world (live, not dying, on the active list) where he stands; one out of reach where he will appear only
+  if `EntityAi_ShouldRespawn` would bring him back when the player comes near (flag bit 7, which the
+  spawn record and the map's scripts set as the story moves on, command 253; not taken away for good;
+  deaths under the spawn's limit). With the secrets cheat, the others are a faint ring, "not here now".
+  Markers are made again every game frame, so someone who walks off or leaves after a talk moves or goes.
 - **Enemies** (the enemies cheat): live entities, their HP, and with the items cheat what they may drop
   (`EntityParams.drop_item`, `drop_chance`).
-- **Items** (the items cheat): `lying_items` of the current map, not inside a container.
+- **Items** (the items cheat): `lying_items` of the current map, not inside a container. Some of a map's
+  fixed items lie out of sight until a script gives them: script command 101 (`MapItem_StartPickupById`)
+  takes a fixed item by its id (`MapItemDef.slot_id`) and flies it to the player's eyes. The map's script
+  is read as the map is built. An item is shown as handed over (a faint ring, "not on the ground") when a
+  script gives it that way, but not the script the game runs when the player takes it where it lies
+  (`MapItemDef.pickup_script`: the crystals on altars, Lord Myu's armour, which stay ordinary items), and it
+  lies under the floor (more than 60 below the plan's nearest floor, or with none near). The label names the
+  person whose talk script (or the script run when an item is used on him) reaches the command, directly or
+  through command 2, else "given by an event": the Fire Crystal on map 004 is Lynn Genne's, after her mother
+  is healed; the Craftsman's Key on map 020 Harmurah Forgefist's; the Icon of Fire on map 026 Joshua
+  Griffin's; the smith's work on maps 017-019 lies 10,000 below the world.
 - **Ways into other maps**: the records at a join (`MapRecordInfo.needs_neighbour_map`) have the
   neighbouring map set up. Until the player has been near, the way is labelled with the map of the origin
   named by the nearest record that names one (the map the game loads while he walks up to it,
@@ -113,11 +131,14 @@ Everything hand-written is in `game/automap_guide.c`; no other file needs to cha
 - **Hints**: add a line to `hints[]`: `{AUTOMAP_OBJECT, map, object, 0, "text"}` for a map object, or
   `{AUTOMAP_SPAWN, map, spawn, 0, "text"}` for an entity (or `{AUTOMAP_SPAWN, map, -1, record, "text"}`
   for every spawn of a chr.prm record on that map). With the hints cheat on, the full map's hover label
-  of every object ends with its number ("(object #45)"), so: turn the cheat on, point at the thing, note
+  of every object ends with its number ("(object #45)"), and a person's with his spawn and chr.prm record
+  ("(spawn #2, chr 105)"), so: turn the cheat on, point at the thing, note
   the map number (beside the title) and the object number. Write what the player needs to know in your own
   words, not the game's text.
 - **Creature names**: `creature_names[]`, by chr.prm record (the full map shows "Creature (#n)" for one
   not listed).
+- **People's names**: `person_pages[]`, for a person's variant record that has neither a Recollection page
+  of its own nor its model's (the full map shows "Person"): the record whose page is his.
 - **Map names**: the full map's title is the Teleport's name of the map (`port/platform/teleport.c`,
   `map_names`, from the decomp's `docs/GAME_DATA.md`).
 - **Hazards**: `sea_maps[]` lists the maps where hazard effect 4 is the sea rather than lava.
@@ -128,7 +149,8 @@ The overlay's test pictures take the map too: `KF4_OVERLAY_SHOT=map@V` opens the
 (overlay closed) and writes `overlay_map_V.png`; `mini@V` writes the picture with the minimap,
 `overlay_mini_V.png`. `KF4_AUTOMAP_HOVER=x,z` puts the mouse over that world point on the full map (for
 the hover label), and `KF4_AUTOMAP_DUMP=DIR` writes each map's markers' labels to
-`DIR/automap_NNN.txt` a second after it is built. `--automap-cheats` turns the mod and every cheat on for
+`DIR/automap_NNN.txt` a second after it is built, then every spawn with what decides whether it is
+shown, the script commands that give items, and the fixed items lying about. `--automap-cheats` turns the mod and every cheat on for
 a run. With `tools/map_tour.py`'s made-up quick saves:
 
 ```sh

@@ -40,6 +40,7 @@
 #include "model/model.h"
 #include "player/player.h"
 #include "port/automap.h"
+#include "script/script.h"
 #include "port/platform.h"
 #include "port/teleport.h"
 
@@ -57,10 +58,12 @@ extern GameStatus game_status;
 
 sptr Message_GetText(int message_id);
 const char *Quick_WhyNotInPlay(void);
+int Game_GetSpawnDeathCount(int map, int entry);
 u32 Collision_GetSurfaceEffect(u32 first, u32 second, int third);
 const char *Automap_CreatureName(int record);
 const char *Automap_ObjectHint(int map, int object);
 const char *Automap_SpawnHint(int map, int spawn, int record);
+int Automap_PersonPage(int record);
 int Automap_HazardIsWater(int map);
 
 #define CELL PORT_AUTOMAP_CELL
@@ -164,12 +167,13 @@ static void item_name(int item, char *out, size_t size) {
    3000 + 50p onwards: decomp/docs/GAME_DATA.md "Characters"); a variant record that has no page of its own
    borrows its model's (chr.prm's model number) */
 static void person_name(int record, int model, char *out, size_t size) {
-    int tries[2], t;
+    int tries[3], t;
 
     tries[0] = record;
     tries[1] = model;
+    tries[2] = Automap_PersonPage(record); /* game/automap_guide.c */
     out[0] = 0;
-    for (t = 0; t < 2 && out[0] == 0; t++) {
+    for (t = 0; t < 3 && out[0] == 0; t++) {
         if (tries[t] >= 100 && tries[t] < 100 + 99) {
             message_text(3000 + 50 * (tries[t] - 100) + 49, out, size);
         }
@@ -498,6 +502,7 @@ static void mark_far(void) {
 
 static void apply_stored(void);
 static void find_exits(int slot_index);
+static void scan_script(int slot_index);
 
 static void build(int slot_index) {
     MapSlot *slot = &map_slots[slot_index];
@@ -566,6 +571,7 @@ static void build(int slot_index) {
     last_reveal_cell = -1;
     apply_stored();
     find_exits(slot_index);
+    scan_script(slot_index);
 }
 
 /* ---- What has been seen, stored per map ----------------------------------------------------------
@@ -1156,6 +1162,36 @@ static void object_markers(int slot) {
     }
 }
 
+/* Whether the game would put spawn `i` of the map in slot `slot` in the world when the player comes near:
+   EntityAi_ShouldRespawn's test without the distance and the chance roll. Entity_UpdateAll brings an
+   entity on the active list that is not live (Entity_ResetToSpawn clears the live bit when it is given
+   a model) back only through it. The flags it reads are the spawn's own (Entity_InitFromMapSpawns: spawn
+   flags bits 59-60 at 2, set up by a script only) and the ones the map's scripts set as the story moves on
+   (command 253, ScriptCmd_SetEntityFlags: bit 7, may come into the world), with the deaths counted
+   against the spawn's limit (Game_GetSpawnDeathCount). */
+static int spawn_can_appear(int slot, int i, const Entity *e) {
+    u64 spawn_flags = e->spawn_info->spawn_flags;
+    int limit = (s8)(u8)(spawn_flags >> 40);
+
+    if (!(e->flags & ENTITY_FLAG_RESPAWNABLE)) {
+        return 0;
+    }
+    if ((e->flags & ENTITY_FLAG_NO_RESPAWN) && (spawn_flags & (1ULL << 61))) {
+        return 0;
+    }
+    if (limit != 0 && Game_GetSpawnDeathCount(map_slots[slot].tag, i) >= limit) {
+        return 0;
+    }
+    return 1;
+}
+
+/* in the world now: live, not dying, and on the active list (so given a model and put at its place;
+   an entity off it keeps the bits it had, and the model's position means nothing) */
+static int entity_live(const Entity *e) {
+    return (e->flags & ENTITY_FLAG_LIVE) && !(e->flags & ENTITY_FLAG_DYING_MASK) && (e->flags & ENTITY_FLAG_ACTIVE_LIST) &&
+           e->model != NULL;
+}
+
 static void entity_markers(int slot) {
     int count = map_spawn_counts[slot], i;
 
@@ -1163,7 +1199,7 @@ static void entity_markers(int slot) {
         Entity *e = &entity_pool[slot][i];
         EntitySpawnInfo *si = e->spawn_info;
         EntityParams *p = e->params;
-        int type, live, record;
+        int type, live, record, later = 0;
         float x, y, z;
         PortAutomapMarker *m;
         char name[96], line[128];
@@ -1174,14 +1210,23 @@ static void entity_markers(int slot) {
         }
         type = p->entity_type;
         record = si->type_id;
-        live = (e->flags & ENTITY_FLAG_LIVE) && !(e->flags & ENTITY_FLAG_DYING_MASK) && e->model != NULL;
+        live = entity_live(e);
         x = live ? e->model->position[0] : si->spawn_x;
         y = live ? e->model->position[1] : si->spawn_y;
         z = live ? e->model->position[2] : si->spawn_z;
         hint = Automap_SpawnHint(plan.map, i, record);
         if ((type == 15 || type == 81) && si->talk_script_id != 0) {
-            /* not met yet: some people are put in place by a script later */
-            if ((!live && x == 0.0f && y == 0.0f && z == 0.0f) || !seen_near(x, y, z)) {
+            /* a person not in the world now is shown where he will stand only if the game would bring him
+               when the player comes near (he is out of reach, or not brought in yet); one the story has
+               not brought here (or has taken away), or who has died, is not, except as a faint
+               "not here now" with the secrets cheat. Not met yet: some are put in place by a script */
+            if (!live && !spawn_can_appear(slot, i, e)) {
+                if (!port_automap.secrets) {
+                    continue;
+                }
+                later = 1;
+            }
+            if ((!live && x == 0.0f && y == 0.0f && z == 0.0f) || (!later && !seen_near(x, y, z))) {
                 continue;
             }
             m = new_marker(PORT_AUTOMAP_MARK_PERSON, x, y, z);
@@ -1194,6 +1239,14 @@ static void entity_markers(int slot) {
                 person_name(record, p->model_number, name, sizeof(name));
             }
             add_line(m->text, sizeof(m->text), name);
+            if (later) {
+                m->flags |= PORT_AUTOMAP_MARK_CHEAT | PORT_AUTOMAP_MARK_ABSENT;
+                add_line(m->text, sizeof(m->text), "(not here now: at another time in the story)");
+            }
+            if (port_automap.hints) {
+                snprintf(line, sizeof(line), "(spawn #%d, chr %d)", i, record);
+                add_line(m->text, sizeof(m->text), line);
+            }
         } else {
             const char *creature;
 
@@ -1232,6 +1285,172 @@ static void entity_markers(int slot) {
     }
 }
 
+/* ---- The map's script: the items it hands over ------------------------------------------------------
+   Some of a map's fixed items (MapItemDef) are not there to be found: they lie out of sight (under the
+   floor) until a script gives them to the player. Script command 101 (ScriptCmd_StartItemPickup,
+   MapItem_StartPickupById) starts the pickup of a fixed item by its id (MapItemDef.slot_id) as if the
+   player had taken it, flying it from where it lies to his eyes. Who hands it over: the person whose talk
+   script (EntitySpawnInfo.talk_script_id) or whose script run when an item is used on him (item_script_id)
+   reaches the command, itself or through command 2 (ScriptCmd_RunScript). The map's script (MapSlot.script)
+   is read once as the map is built, its words stepped as Script_SkipWord steps them. */
+#define MAX_SCRIPT_RUNS 512
+#define MAX_SCRIPT_GIFTS 64
+
+typedef struct {
+    u16 label, target; /* target: a script run (command 2), or an item id given (command 101) */
+} ScriptLink;
+
+static ScriptLink script_runs[MAX_SCRIPT_RUNS];
+static ScriptLink script_gifts[MAX_SCRIPT_GIFTS];
+static int script_run_count, script_gift_count;
+
+static void scan_script(int slot_index) {
+    const u32 *cursor = (const u32 *)map_slots[slot_index].script;
+    int label = -1, words;
+
+    script_run_count = script_gift_count = 0;
+    if (cursor == NULL) {
+        return;
+    }
+    /* a bound on the walk, in case the words are not what they should be */
+    for (words = 0; words < 0x40000; words++) {
+        u32 word = *cursor;
+        int operand = word & 0xFFFF;
+
+        cursor++;
+        switch (word >> 16) {
+        case SCRIPT_WORD_LABEL:
+            if (operand == SCRIPT_LABEL_END) {
+                return;
+            }
+            label = operand;
+            break;
+        case SCRIPT_WORD_END:
+        case SCRIPT_WORD_BEGIN_NO_WAIT:
+        case SCRIPT_WORD_END_NO_WAIT:
+        case SCRIPT_WORD_JUMP:
+            break;
+        case SCRIPT_WORD_IF: cursor += (operand >> 8) * 5 + 1; break;
+        case SCRIPT_WORD_SET: cursor += operand; break;
+        case SCRIPT_WORD_HALT: cursor += operand + 1; break;
+        default:
+            /* a command: its arguments are two words each, the first a constant when its low byte is 0 */
+            if (label >= 0 && operand >= 1 && (cursor[0] & 0xFF) == 0) {
+                if ((word >> 16) == 2 && script_run_count < MAX_SCRIPT_RUNS) {
+                    script_runs[script_run_count].label = (u16)label;
+                    script_runs[script_run_count++].target = (u16)cursor[1];
+                } else if ((word >> 16) == 101 && script_gift_count < MAX_SCRIPT_GIFTS) {
+                    script_gifts[script_gift_count].label = (u16)label;
+                    script_gifts[script_gift_count++].target = (u16)cursor[1];
+                }
+            }
+            cursor += operand * 2;
+            break;
+        }
+    }
+}
+
+/* how far the point is below the nearest floor of the plan in its cell or the cells beside it (y grows
+   downward: more than 0 is under it; 0x7FFF: no floor) */
+static int floor_gap(float x, float y, float z) {
+    int i, j, di, dj, best = 0x7FFF;
+
+    if (!cell_of(x, z, &i, &j)) {
+        return best;
+    }
+    for (dj = -1; dj <= 1; dj++) {
+        for (di = -1; di <= 1; di++) {
+            const PortAutomapLayer *l;
+            int n;
+
+            if (i + di < 0 || j + dj < 0 || i + di >= plan.width || j + dj >= plan.height) {
+                continue;
+            }
+            l = cell_layers(i + di, j + dj);
+            for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+                int d = (int)y - l[n].y;
+
+                if (l[n].kind != PORT_AUTOMAP_DEATH && abs(d) < abs(best)) {
+                    best = d;
+                }
+            }
+        }
+    }
+    return best;
+}
+
+/* whether the script `label` gives the item with this id, itself or through the scripts it runs */
+static int script_gives(int label, int id, int depth) {
+    int k;
+
+    if (label == 0 || depth > 6) {
+        return 0;
+    }
+    for (k = 0; k < script_gift_count; k++) {
+        if (script_gifts[k].label == label && script_gifts[k].target == id) {
+            return 1;
+        }
+    }
+    for (k = 0; k < script_run_count; k++) {
+        if (script_runs[k].label == label && script_runs[k].target != label && script_gives(script_runs[k].target, id, depth + 1)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int script_gives_anywhere(int id) {
+    int k;
+
+    for (k = 0; k < script_gift_count; k++) {
+        if (script_gifts[k].target == id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* a fixed item that is not there to be found but handed over: a script gives it (command 101), not the one
+   run when the player takes it where it lies (MapItemDef.pickup_script: crystals on altars, Lord Myu's
+   armour), and it lies out of sight, under the floor (more than 60 below the nearest floor of the plan, or
+   with none near: the smith's work lies 10,000 below the world) */
+static int item_handed_over(const ItemNode *n) {
+    int id;
+
+    if (n->def == NULL || n->model == NULL) {
+        return 0;
+    }
+    id = n->def->slot_id;
+    return id != 0 && script_gives_anywhere(id) && !script_gives(n->def->pickup_script, id, 0) &&
+           floor_gap(n->model->position.x, n->model->position.y, n->model->position.z) > 60;
+}
+
+/* the person whose talk (or the item used on him) gives the fixed item with this id: his spawn, or -1 */
+static int item_giver(int slot, int id, int *by_item) {
+    int i;
+
+    for (i = 0; i < map_spawn_counts[slot]; i++) {
+        const Entity *e = &entity_pool[slot][i];
+
+        if (e->spawn_info == NULL || e->params == NULL) {
+            continue;
+        }
+        if (script_gives(e->spawn_info->talk_script_id, id, 0)) {
+            *by_item = 0;
+            return i;
+        }
+    }
+    for (i = 0; i < map_spawn_counts[slot]; i++) {
+        const Entity *e = &entity_pool[slot][i];
+
+        if (e->spawn_info != NULL && e->params != NULL && script_gives(e->spawn_info->item_script_id, id, 0)) {
+            *by_item = 1;
+            return i;
+        }
+    }
+    return -1;
+}
+
 static void item_markers(int slot) {
     ItemNode *n;
     char name[64];
@@ -1252,7 +1471,30 @@ static void item_markers(int slot) {
         m->flags |= PORT_AUTOMAP_MARK_CHEAT;
         item_name(n->item, name, sizeof(name));
         add_line(m->text, sizeof(m->text), name);
-        add_line(m->text, sizeof(m->text), n->def != NULL ? "(lies here)" : "(dropped)");
+        if (item_handed_over(n)) {
+            /* not one to find: out of sight until the story hands it over */
+            int by_item = 0, giver = item_giver(slot, n->def->slot_id, &by_item);
+            char line[160];
+
+            m->flags |= PORT_AUTOMAP_MARK_GIVEN;
+            if (giver >= 0) {
+                const Entity *e = &entity_pool[slot][giver];
+
+                if (e->params->entity_type == 81) {
+                    snprintf(name, sizeof(name), "Dog");
+                } else {
+                    person_name(e->spawn_info->type_id, e->params->model_number, name, sizeof(name));
+                }
+                snprintf(line, sizeof(line), by_item ? "(not on the ground: given when an item is used on %s)"
+                                                     : "(not on the ground: given by %s)",
+                         name);
+                add_line(m->text, sizeof(m->text), line);
+            } else {
+                add_line(m->text, sizeof(m->text), "(not on the ground: given by an event)");
+            }
+        } else {
+            add_line(m->text, sizeof(m->text), n->def != NULL ? "(lies here)" : "(dropped)");
+        }
     }
 }
 
@@ -1387,7 +1629,7 @@ static void build_markers(int slot) {
 
 /* KF4_AUTOMAP_DUMP=DIR: a while after each map is built, its markers' labels into DIR/automap_NNN.txt (for
    checking the names and the hints without a window) */
-static void dump_markers(void) {
+static void dump_markers(int slot) {
     const char *dir = getenv("KF4_AUTOMAP_DUMP");
     char path[1024];
     FILE *f;
@@ -1413,6 +1655,38 @@ static void dump_markers(void) {
         }
         fprintf(f, "%d kind %d flags %d at %d %d %d: %s\n", i, markers[i].kind, markers[i].flags, (int)markers[i].x,
                 (int)markers[i].y, (int)markers[i].z, text);
+    }
+    /* and every spawn, with what entity_markers decides from */
+    for (i = 0; i < map_spawn_counts[slot]; i++) {
+        const Entity *e = &entity_pool[slot][i];
+
+        if (e->spawn_info == NULL || e->params == NULL) {
+            continue;
+        }
+        fprintf(f, "spawn %d chr %d type %d talk %d flags %08x live %d can_appear %d deaths %d at %d %d %d\n", i,
+                e->spawn_info->type_id, e->params->entity_type, e->spawn_info->talk_script_id, (u32)e->flags,
+                entity_live(e), spawn_can_appear(slot, i, e), Game_GetSpawnDeathCount(map_slots[slot].tag, i),
+                (int)e->spawn_info->spawn_x, (int)e->spawn_info->spawn_y, (int)e->spawn_info->spawn_z);
+    }
+    for (i = 0; i < script_gift_count; i++) {
+        fprintf(f, "script %d gives item id %d\n", script_gifts[i].label, script_gifts[i].target);
+    }
+    for (i = 0; i < script_run_count; i++) {
+        fprintf(f, "script %d runs %d\n", script_runs[i].label, script_runs[i].target);
+    }
+    {
+        ItemNode *n;
+
+        for (n = lying_items; n != NULL; n = n->next) {
+            if ((int)(n->flags & 1) != slot || n->model == NULL || n->def == NULL) {
+                continue;
+            }
+            fprintf(f, "item %d gift %d (index %d id %d) chance %d group %d required %d pickup_script %d object %d floor_gap %d at %d %d %d def %d %d %d\n",
+                    n->item, item_handed_over(n), n->index, n->def->slot_id, n->def->chance, n->def->group, n->def->required_flag,
+                    n->def->pickup_script, n->map_object != 0,
+                    floor_gap(n->model->position.x, n->model->position.y, n->model->position.z), (int)n->model->position.x, (int)n->model->position.y,
+                    (int)n->model->position.z, (int)n->def->position.x, (int)n->def->position.y, (int)n->def->position.z);
+        }
     }
     fclose(f);
 }
@@ -1478,7 +1752,7 @@ void Automap_Poll(void) {
     confirm_exits(slot);
     build_markers(slot);
     if (++polls_since_build == 30) {
-        dump_markers();
+        dump_markers(slot);
     }
     port_automap_save_live(0);
 }

@@ -119,6 +119,8 @@ enum {
 #define PORT_AUTOMAP_MARK_CHEAT 4  /* shown through the fog only because of a cheat */
 #define PORT_AUTOMAP_MARK_HINT 8   /* has a hand-written hint (the hints cheat) */
 #define PORT_AUTOMAP_MARK_TRAPPED 16
+#define PORT_AUTOMAP_MARK_ABSENT 32 /* a person the story has not brought here now (the secrets cheat): drawn faint */
+#define PORT_AUTOMAP_MARK_GIVEN 64  /* an item out of sight that the story hands over (a script's pickup): drawn faint */
 
 typedef struct {
     int kind;

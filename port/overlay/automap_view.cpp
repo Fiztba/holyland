@@ -399,6 +399,12 @@ void draw_icon(ImDrawList *dl, const View &v, const PortAutomapMarker &m, float 
         break;
     }
     case PORT_AUTOMAP_MARK_PERSON:
+        if (m.flags & PORT_AUTOMAP_MARK_ABSENT) {
+            // not here now (the secrets cheat): a faint ring, the person's colour
+            dl->AddCircleFilled(p, r * 0.8f, fade(palette.person, 0.18f), 16);
+            dl->AddCircle(p, r * 0.8f, fade(palette.person, 0.6f), 16, std::fmax(1.0f, r * 0.15f));
+            break;
+        }
         dl->AddCircleFilled(p, r * 0.95f, palette.person, 16);
         dl->AddCircle(p, r * 0.95f, col(255, 255, 255), 16, std::fmax(1.5f, r * 0.2f));
         dl->AddCircle(p, r * 0.95f + std::fmax(1.5f, r * 0.2f) * 0.5f + 0.5f, palette.outline, 16, 1.0f);
@@ -408,6 +414,12 @@ void draw_icon(ImDrawList *dl, const View &v, const PortAutomapMarker &m, float 
         dl->AddCircle(p, r * 0.65f, palette.outline, 12, 1.0f);
         break;
     case PORT_AUTOMAP_MARK_ITEM:
+        if (m.flags & PORT_AUTOMAP_MARK_GIVEN) {
+            // out of sight until the story hands it over: a faint ring, the item's colour
+            dl->AddCircleFilled(p, r * 0.5f, fade(palette.item, 0.2f), 10);
+            dl->AddCircle(p, r * 0.5f, fade(palette.item, 0.7f), 10, std::fmax(1.0f, r * 0.12f));
+            break;
+        }
         dl->AddCircleFilled(p, r * 0.5f, palette.item, 10);
         dl->AddCircle(p, r * 0.5f, palette.outline, 10, 1.0f);
         break;
@@ -576,11 +588,11 @@ void draw_hover(ImDrawList *dl, const View &v, ImVec2 mouse, ImVec2 g0, ImVec2 g
     dl->AddText(font, ts, at, palette.text, label, nullptr, ts * 26.0f);
 }
 
-bool any_marker(int kind) {
+bool any_marker(int kind, int flags = 0) {
     const PortAutomapMarker *list;
     int count = port_automap_markers(&list);
     for (int i = 0; i < count; i++)
-        if (list[i].kind == kind)
+        if (list[i].kind == kind && (list[i].flags & flags) == flags)
             return true;
     return false;
 }
@@ -606,6 +618,10 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
             dl->AddRect(ImVec2(cc.x - ts * 0.35f, cc.y - ts * 0.3f), ImVec2(cc.x + ts * 0.35f, cc.y + ts * 0.3f), c, 0.0f, 0, std::fmax(1.5f, ts * 0.12f));
         else if (shape == 3)
             dl->AddCircleFilled(cc, ts * 0.3f, c, 12);
+        else if (shape == 4) { // faint: not there now
+            dl->AddCircleFilled(cc, ts * 0.3f, fade(c, 0.2f), 12);
+            dl->AddCircle(cc, ts * 0.3f, fade(c, 0.65f), 12, std::fmax(1.0f, ts * 0.08f));
+        }
         else
             dl->AddRectFilled(ImVec2(cc.x - ts * 0.35f, cc.y - ts * 0.3f), ImVec2(cc.x + ts * 0.35f, cc.y + ts * 0.3f), c);
         text(dl, ImVec2(at.x + ts * 1.3f, at.y), ts, col(230, 220, 200), label);
@@ -646,8 +662,12 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
     if (any_marker(PORT_AUTOMAP_MARK_EXAMINE))
         entry(palette.stone, "Something to look at", 3);
     entry(palette.person, "Person", 3);
+    if (any_marker(PORT_AUTOMAP_MARK_PERSON, PORT_AUTOMAP_MARK_ABSENT))
+        entry(palette.person, "Person, not here now", 4);
     if (port_automap.items)
         entry(palette.item, "Item", 3);
+    if (any_marker(PORT_AUTOMAP_MARK_ITEM, PORT_AUTOMAP_MARK_GIVEN))
+        entry(palette.item, "Item the story gives", 4);
     if (port_automap.enemies)
         entry(palette.enemy, "Enemy", 3);
     if (port_automap.secrets) {
