@@ -2207,7 +2207,7 @@ struct SaDraw {
 // texture), never met: about 800 batches and 3,500 Vulkan draws a game frame at the poison pond. Each batch is still
 // worked out as before (sa_draw_batch: the texture, the alpha range, the ties, the runs), but a part whose draws are the
 // simple ones (a first pass drawn two-phase in one run, exact, every pixel of its triangles passing the alpha test; its
-// second pass in one run) is kept, and drawn with the model's other such parts when the model is done (sa_group_draw):
+// second pass in one run) is kept, and drawn with the model's other such parts when something else comes (sa_group_draw):
 // - the first passes of all of them in one draw for each of their two draws. Their colour within no slack, then Z
 //   tested and written, over all of them, leaves what each part's two draws one after another leave: the second draw
 //   writes, last, every pixel the first did, and the Z is only the second's;
@@ -2219,8 +2219,9 @@ struct SaDraw {
 //   is not drawn where the stencil has it. That keeps a later part's pixel at exactly the same depth (an edge two
 //   parts' triangles share where they fold over each other) the later part's, as it was. The shines' own Z writes are
 //   left out: they write the Z their first passes wrote, which is there.
-// Kept within one draw (nd280_draw); anything else first draws what is kept: another batch, the scene's turn ending,
-// the draw's end. KF4_SA_GROUP=0 (tests) draws each part as it comes.
+// Kept from one 0x280 draw of the scene to the next (a model is a draw a bone); anything else first draws what is kept:
+// another batch or draw, the scene's turn ending, a picture between's mark, a save state. KF4_SA_GROUP=0 (tests) draws
+// each part as it comes.
 struct SaGroupKey {
     Push pushes[4];
     uint32_t masks[4], zwrites[4];
