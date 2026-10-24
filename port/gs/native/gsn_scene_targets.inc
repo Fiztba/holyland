@@ -36,6 +36,7 @@ struct SatTarget {
     bool scene_newer = false;         // the scene drew into it since the GS's target had its picture
     bool gs_newer = false;            // the GS drew into it (or a transfer wrote it) since the image was made from it
     bool depth_clear = false;         // its depth cleared since it was made
+    uint32_t stencil_used = 0;        // (pf/skin) the largest number in its stencil since it was cleared (sa.stencil_gen's)
     bool z_dirty = false;             // its depth drawn into (or cleared) since the GS's Z buffer had it
     uint32_t zrows0 = UINT32_MAX, zrows1 = 0; // (those rows of it)
     uint32_t zbp = 0, zpsm = 0;       // the Z buffer the scene's draws there name (ZBUF's)
@@ -179,6 +180,7 @@ void sat_images(SatTarget &n, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, 
         cmd().clear_image(*n.depth, clear);
         transfer_barrier();
         n.depth_clear = true;
+        n.stencil_used = 0;
     }
     n.fake.bp = n.bp;
     n.fake.bw = n.bw;
@@ -232,6 +234,7 @@ bool sat_refresh(SatTarget &n) {
         if (sa.stencil) {
             float zpush[2] = {-1.0f, 1.0e30f};
             sa_copy_pass(*n.depth, *z->image, sa.program_depth, true, 0, zh, zpush, sizeof(zpush), true);
+            n.stencil_used = 0;
         } else {
             cmd().copy_image(*n.depth, *z->image, {0, 0, 0}, {0, 0, 0}, {std::min(w, z->image->get_width()), zh, 1},
                              {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1});
@@ -395,6 +398,18 @@ bool sat_bound() {
     return snt.bound != nullptr;
 }
 
+// (pf/skin, sa_draw_batch) A number for a skinned group's marks in the bound named target's stencil that none there has:
+// its turns before this one (since its stencil was cleared) may have used some (a turn starts at 0 again). False: none.
+bool sat_stencil_number(uint32_t *gen) {
+    uint32_t base = std::max(sa.stencil_gen, snt.bound->stencil_used);
+    if (base >= 200) {
+        return false;
+    }
+    sa.stencil_gen = base + 1;
+    *gen = sa.stencil_gen;
+    return true;
+}
+
 bool sat_release() {
     if (!snt.bound) {
         return false;
@@ -405,6 +420,7 @@ bool sat_release() {
     }
     SatTarget &n = *snt.bound;
     snt.bound = nullptr;
+    n.stencil_used = std::max(n.stencil_used, sa.stencil_gen);
     if (sa.rows1 > sa.rows0) {
         n.scene_newer = true;
         n.gs_newer = false;
@@ -598,6 +614,7 @@ bool sat_flush() {
     cmd().clear_image(*n->depth, clear);
     transfer_barrier();
     n->depth_clear = true;
+    n->stencil_used = 0;
     n->z_dirty = true;
     n->zrows0 = 0;
     n->zrows1 = n->height;
