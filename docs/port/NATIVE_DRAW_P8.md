@@ -1452,6 +1452,68 @@ what the shipped one lacks (the log says so; `--stats`: "pipelines made ahead").
 gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off` against
 play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures byte for byte.
 
+### The Queen's Palace: the MP drain at 240 (branch `p8/queen`, from `native/draw` 6234768a)
+
+The owner, `--renderer modern` at 240 (settings-4): teleported to the Queen's Palace (map 022, its start) and walking a few
+feet forward, the picture turns purple and wobbles and the F3 counter reads `27 FPS / 14 GAME CUT 2`: the game's own frames
+at 14 a second. The effect is the MP drain (`GameLoop_DrawFrame`: `mp_drain_tint`, colour 0x46 0x32 0x8C at full drain):
+`GsDraw_CopyFrame(0x2BC0)` and `Game_DrawWobblingScreen`, the under-water wobble tinted, then the effects' textures uploaded
+over the copy (`Effect_UploadTextures`, "if tinted"). The spot: `bugs_modern/quick_queen_start` (the teleport's save) with
+`UP` held from vblank 200 for 150 (the drain starts at vblank 290), or `bugs_modern/quick_queen` (taken at 400, the drain on).
+
+**What it was** (`KF4_HITCH_MS`, a frame's vblank on the GS's thread 80-110 ms; `--stats`, a decode of 0x2BC0 as a 1024 x 512
+texture each game frame, 55-65 ms, and a write-back or two):
+- **The restore drew the whole frame again, every game frame.** While pictures between are drawn, a buffer the next frame reads
+  before it draws it (here the flames' two 128 x 128 scrolling textures, 0x3840 and 0x3A40) is drawn again as the frame left it
+  after the vblank's pictures (`port_interp_end_vblank`: the frame walked once more, "exact"). The wobble keeps the pictures
+  between moving, so that was every game frame here (walking without the drain, only while walking). Its draws into the frame
+  were meant to be left out (they go into the buffer shown, which the next frame clears: no vblank shows them): the 3D's
+  vertices got "ADC", but the bit set was the qword's 127th, not ADC's 111th, so nothing was left out; and native draw's
+  world is not VU1's vertices at all. So each restore drew the world again (about 15 ms on the GS's thread), and its wobble,
+  whose copy of the frame a restore does not make (only copies the pictures between read after them are made again), read
+  0x2BC0 from VRAM: the scene's copy let go by the uploads over it, the GS's target there 448 rows, the texture read as
+  1024 x 512 (the scene's `read_extent` takes U and V slightly below 0 as reading everything), decoded at 1x after the frame
+  and Z buffer went back to VRAM. Now `exact_kick` sets ADC (bit 111) on every vertex kick into the frame, 3D and 2D, A+D
+  kicks become XYZ3, and a native draw into the frame is left out (`exact_frame`); `KF4_INTERP_RESTORE_FRAME=1` draws as
+  before. The PS2 path and hosted gain the same.
+- **A write-back a frame for half a page.** The copy at 0x2BC0 becomes a shadow when the effects' textures go up over it; a
+  64 x 64 PSMT8 one at 0x3780 fills half a page, and its draw decoded it from VRAM each frame after claiming its page: the
+  page went back (a read-back waiting for the GPU, 3-4 ms at 3x). A texture decode now leaves a shadow's page owed when every
+  bit it reads was written since the shadow was made (`claim_texture`, `shadow_covers`; `KF4_GSN_SHADOW_READS=0` to compare).
+- **Each upload over the shadow swizzled again.** `shadow_written` notes an upload's bits in the mask by swizzling a buffer of
+  ones; with the shadow left over the copy, every upload of every picture between did so (27 us each, 67 a picture). An upload
+  of whole pages now sets theirs whole, and only the pages a transfer writes are looked at.
+
+**Numbers** (the GS's thread, `--fast` at 240 so that every picture is drawn, the owner's settings, the palace walk: 900
+vblanks from `quick_queen_start`, the drain from 290; the owner was playing on the same PC, so real time was noisy):
+
+| | 6234768a | new |
+|---|---|---|
+| GIF time (draws, write-backs, decodes) | 34.4-38.8 s (24-29, 3-5.6, 17-19) | 7.1-7.6 s (2.4-2.6, 0, 0.05) |
+| a picture between drawn from the packets (the recording) | 14-17 ms | 7.5-8.2 ms (5.7-7.6 without the drain) |
+| wall | 40-48 s | 12.5-17.8 s |
+| without the drain (`walk.pad`) | 5.7 s, 10.2 s wall | 5.4 s, 9.9 s wall |
+
+The same 601 vblanks by renderer: modern 19.2 -> 4.8 s of GIF, hosted (`--renderer native --native-draw on`) 25.0 -> 10.7 s,
+the PS2 path (`--native-draw off`) 19.3 -> 5.0 s. native-5111e87: 100.7 s (900 vblanks). At 30 it did not drop (a frame 27 ms
+of the GS's thread with its write-back, 29.4 game frames a second). Real time headless (`KF4_PRESENT_SIM=240`, 1,100 vblanks,
+with the owner's game on the GPU): 6234768a 1,159-1,540 pictures handed over (the cut at none: 60 a second), new 1,745-2,943
+(up to 240 a second in the last half second, the game at 30); without the drain 3,700-4,000. GPU 1.8-2.8 ms a picture alone
+(`KF4_GSN_GPU_TIME=2`: not bound by the GPU). No pipeline is made in play here (a fresh data folder, 240 and 30: "0 not on a
+list").
+
+**What is left:** a picture between's own copy at 0x2BC0 (`replay_only`) takes each page an upload writes over it from VRAM at
+once (`sync_targets`), converted on the CPU at the scale (about 1.4 s of the 7 s above): the pages could be taken at 1x and
+scaled on the GPU, or only when the target is next read.
+
+**Pictures:** byte for byte 6234768a's: the four spots (`--fast`, 240, the owner's settings, every picture of vblanks 200-207,
+301, 399; under water 400-407, 600: 156 pictures), the palace (every picture of 280-300, 400-407 and 600: 120), hosted at the
+pond (40) and at the palace (120), the PS2 path at the palace (120); the herb run in modern at the owner's settings
+(the same `--log`, PATH1 hash 561c91020b2908ee, every picture of 1800, 1820 and 1840). The off check passes:
+boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with
+`--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures
+1800, 1820 and 1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

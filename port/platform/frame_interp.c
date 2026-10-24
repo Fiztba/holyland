@@ -1274,6 +1274,38 @@ static int draws_frame(const Walk *w, uint32_t prim) {
     return draws_into(w, prim, w->draw_fbp);
 }
 
+/* The exact restore (port_interp_end_vblank) is for the buffers other than the frame: what it would draw
+   into the frame goes into the buffer shown, which the next frame clears, and is never shown (the vblanks
+   until the next frame show its own buffer, untouched). So nothing is drawn into the frame: a vertex kick
+   of a primitive into it becomes ADC (no drawing kick), 3D and 2D alike, and a native draw into it is left
+   out (exact_frame). Its 3D was meant to be left out before, but the bit set was the qword's 127th, not
+   ADC (bit 111, 47 of the upper half): every restore drew the whole frame again for two 128 x 128 scrolling
+   textures, with native draw the world too (its draws are not VU1's vertices), and the MP drain's and the
+   water's wobble read the copy of the frame the restore does not make, from VRAM (1024 x 512 decoded, the
+   frame written back): 15-60 ms a game frame at 240 (the Queen's Palace with its purple wobble on: the game
+   at 14 frames a second). KF4_INTERP_RESTORE_FRAME=1: the restore draws into the frame as before. */
+static int exact_frame_drawn(void) {
+    static int drawn = -1;
+
+    if (drawn < 0) {
+        const char *v = getenv("KF4_INTERP_RESTORE_FRAME");
+        drawn = v != NULL && atoi(v) == 1;
+    }
+    return drawn;
+}
+
+static void exact_kick(const Walk *w, const GifWalk *p, uint8_t *q) {
+    if (!exact_frame_drawn() && draws_frame(w, p->prim)) {
+        q[13] |= 0x80; /* (ADC: the qword's bit 111) */
+    }
+}
+
+/* (the exact restore) A native draw goes into the frame: the game sets both contexts' FRAME alike
+   (GsDraw_SetDrawTarget), the reflection's view too */
+static int exact_frame(const Walk *w) {
+    return !exact_frame_drawn() && w->frame_set[0] && (w->frame[0] & 0x1FF) == w->draw_fbp && (!w->frame_set[1] || (w->frame[1] & 0x1FF) == w->draw_fbp);
+}
+
 static void mark(Walk *w, uint64_t value) {
     uint32_t index = (uint32_t)(value >> 32) & 0xFF;
     uint32_t bits = (uint32_t)value;
@@ -2552,11 +2584,9 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                             objects_add_vertex(w->objects, none, 0);
                         }
                     } else if (w->mode == REPLAY && w->exact) {
-                        /* (drawing the frame again for the other buffers: its 3D into the frame is not
-                           drawn, every vertex with ADC) */
-                        if ((p->prim & 7) >= 3 && (p->prim & 7) <= 5 && draws_frame(w, p->prim)) {
-                            q[15] |= 0x80;
-                        }
+                        /* (drawing the frame again for the other buffers: nothing into the frame is drawn,
+                           every vertex with ADC: exact_kick) */
+                        exact_kick(w, p, q);
                     } else if (w->mode == REPLAY && moves && w->gpu) {
                         gpu_vertex(w, p, q, d == 0x4, section);
                     } else if (w->mode == REPLAY && moves) {
@@ -2595,6 +2625,8 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                         gpu_move(w);
                     }
                     w->item_vertex++;
+                } else if (w->mode == REPLAY && w->exact) {
+                    exact_kick(w, p, q); /* (the 2D into the frame: not drawn either) */
                 } else if (w->gpu) {
                     gpu_move(w);
                 }
@@ -2638,9 +2670,17 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                         w->alt = 0;
                     } else if (command == RD_ND_READS_SHOWN) {
                         w->native_reads_shown = 1; /* (native draw's screen pass, gsn_nd_pass.inc: no packet says so) */
+                    } else if (command == RD_ND_DRAW && w->mode == REPLAY && w->exact && exact_frame(w)) {
+                        /* (the exact restore: a native draw into the frame is left out, as the PS2 path's
+                           vertices are: exact_kick) */
+                        reg = PORT_GS_REG_FRAME_INTERP;
+                        v[0] = (uint64_t)0xFF << 32;
                     }
                 }
 
+                if ((reg == 0x4 || reg == 0x5) && w->mode == REPLAY && w->exact && draws_frame(w, p->prim) && !exact_frame_drawn()) {
+                    reg += 8; /* (XYZF3, XYZ3: exact_kick) */
+                }
                 if (reg == 0x4 || reg == 0x5 || reg == 0xC || reg == 0xD) {
                     if (w->gpu) {
                         gpu_move(w);

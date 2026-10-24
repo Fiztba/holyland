@@ -1389,7 +1389,8 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
             for (uint32_t l = 0; l < levels; l++) {
                 uint32_t lo, count;
                 buffer_pages(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, cols >> l), std::max(1u, rows >> l), &lo, &count);
-                claim_pages(lo, count, nullptr, false);
+                claim_texture(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, (1u << tw) >> l), std::max(1u, (1u << th) >> l), lo,
+                              count);
             }
             Texture *tex = get_texture(tbp, tbw, tpsm, tw, th, levels, mip_tbp, mip_tbw, cols, rows);
             st.raw_view = &tex->image->get_view();
