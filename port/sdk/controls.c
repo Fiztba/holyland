@@ -47,6 +47,7 @@
 #include "port/savestate.h"
 #include "port/quicksave.h"
 #include "port/settings.h"
+#include "port/stats.h"
 
 #ifdef KF4_HAVE_SDL
 #include <SDL.h>
@@ -126,6 +127,7 @@ static const struct {
     [ACTION_AUDIO_TAIL] = {"audio_tail", "Last 20 s of sound (debug)", 0},
     [ACTION_FLASH_RECORD] = {"flash_record", "Flash recorder: the last pictures (debug)", 0},
     [ACTION_SHOW_FPS] = {"show_fps", "Show / hide the frame rate", 0},
+    [ACTION_STATS_PANEL] = {"stats_panel", "Show / hide the stats panel (mod)", 0},
 };
 
 const char *port_controls_action_label(int action) {
@@ -142,6 +144,9 @@ int port_controls_action_used(int layout, int action) {
     }
     if (action == ACTION_RUN) {
         return port_options.separate_run;
+    }
+    if (action == ACTION_STATS_PANEL) {
+        return port_stats_options.on;
     }
     return action >= 0 && action < ACTION_COUNT;
 }
@@ -195,6 +200,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_AUDIO_TAIL] = {KEY(F12)},
         [ACTION_FLASH_RECORD] = {KEY(F8)},
         [ACTION_SHOW_FPS] = {KEY(F3)},
+        [ACTION_STATS_PANEL] = {KEY(F6)},
     },
     [CONTROLS_VERDITE] = {
         [ACTION_UP] = {KEY(W), KEY(UP), PAD(DPAD_UP)},
@@ -224,6 +230,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_AUDIO_TAIL] = {KEY(F12)},
         [ACTION_FLASH_RECORD] = {KEY(F8)},
         [ACTION_SHOW_FPS] = {KEY(F3)},
+        [ACTION_STATS_PANEL] = {KEY(F6)},
     },
 };
 /* Verdite's mouse outside play: left cross, right circle, middle cross */
@@ -909,6 +916,9 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         port_options.show_fps = !port_options.show_fps;
         port_settings.show_fps = port_options.show_fps;
         port_settings_changed();
+    }
+    if (edges >> ACTION_STATS_PANEL & 1u) {
+        port_stats_toggle_panel();
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
         set_captured(!pc.captured);

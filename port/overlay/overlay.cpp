@@ -43,6 +43,7 @@ extern "C" {
 #include "port/render.h"
 #include "port/savestate.h"
 #include "port/settings.h"
+#include "port/stats.h"
 #include "port/teleport.h"
 }
 
@@ -1133,6 +1134,7 @@ void mods_page() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(on for this run: command line)");
     }
+    port_stats_overlay_mods(); // the extended stats mod (port/overlay/stats_panel.cpp)
 }
 
 void debug_page() {
@@ -1615,7 +1617,7 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 }
 
 extern "C" int port_overlay_visible(void) {
-    return ready && (overlay_open || shot_pending() ||
+    return ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
                      (renderer == nullptr && port_controls_indicator_shown()));
 }
@@ -1663,6 +1665,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     sample_rates();
     port_settings_poll();
     shot_open();
+    port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
     if (!port_overlay_visible())
         return;
     if (port_settings.ui_scale != applied_ui_scale)
@@ -1697,6 +1700,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     }
     draw_toast();
     draw_building();
+    port_stats_overlay_draw(overlay_open); // the extended stats mod (port/overlay/stats_panel.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)

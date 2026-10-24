@@ -127,6 +127,7 @@
                          fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
+       --extended-stats  the opt-in mod: the extended stats panel and hit log (F6; docs/port/EXTENDED_STATS.md)
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
@@ -185,6 +186,7 @@
 #include "port/quicksave.h"
 #include "port/teleport.h"
 #include "port/cheats.h"
+#include "port/stats.h"
 
 static int parse_cheats(const char *list);
 #include "port/sanitize.h"
@@ -226,7 +228,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
@@ -389,6 +391,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--separate-run") == 0) {
             port_options.separate_run = port_options.separate_run_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--extended-stats") == 0) { /* the extended stats mod (port/include/port/stats.h) */
+            port_stats_options.on = port_stats_options.forced = 1;
             continue;
         }
         if (strcmp(option, "--show-fps") == 0) {
