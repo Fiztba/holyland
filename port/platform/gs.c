@@ -1068,13 +1068,17 @@ void port_gs_print_stats(void) {
             fprintf(stderr,
                     "[stats] native GS pictures between on the GPU: %llu drawn from the packets (%.3f s, %.1f us each), "
                     "%llu from the recording (%.3f s, %.1f us each), %llu of no frame; drawn from the packets again as "
-                    "the GS was not as recorded: %llu (targets), %llu (registers); %llu submits while recording\n",
+                    "the GS was not as recorded: %llu (targets), %llu (registers), %llu (VRAM or the CLUT written), %llu (the "
+                    "recording could not be made again); %llu submits while recording; replays with a target the recording "
+                    "made: %llu kept, %llu its own\n",
                     (unsigned long long)s->interp_records, s->ns_interp_record / 1e9,
                     s->interp_records ? s->ns_interp_record / 1e3 / (double)s->interp_records : 0.0,
                     (unsigned long long)s->interp_replays, s->ns_interp_replay / 1e9,
                     s->interp_replays ? s->ns_interp_replay / 1e3 / (double)s->interp_replays : 0.0,
                     (unsigned long long)s->interp_misses, (unsigned long long)s->interp_rerecord[1],
-                    (unsigned long long)s->interp_rerecord[2], (unsigned long long)s->interp_mid_submits);
+                    (unsigned long long)s->interp_rerecord[2], (unsigned long long)s->interp_rerecord[5],
+                    (unsigned long long)s->interp_rerecord[4], (unsigned long long)s->interp_mid_submits,
+                    (unsigned long long)s->interp_kept_targets, (unsigned long long)s->interp_own_targets);
         }
         if (s->replay_uploads || s->replay_misses) {
             fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",

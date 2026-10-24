@@ -913,6 +913,82 @@ the AMD iGPU index sampled-image arrays non-uniformly): at least 20,000 of the 4
 run ended on a texture alone, two draws each; not worth a shader of its own yet. The skinned plan on the GPU (the clip and ADC
 decisions in a compute pass): with the host's floats it is 0.3 ms a pass.
 
+### The recording and the replays (branch `pf/record`, from `native/draw` 5abdb02a)
+
+The task: the first picture between of a game frame walks the frame's packets again to record them (13-16 ms of the
+GS's thread at the pond), and each picture after it makes the recorded calls again (1-4 ms). The aim was a recording
+made by the frame's own draws, so that the first picture is a replay too.
+
+**What the recording costs** (the pond, `--fast`, sampled in `interp_record` only): the native draws 74% (the skinned
+models' `nd280_draw` 45%, their plan 13% of it: `nd280_plan_cached` keeps two plans a batch, the world's and the
+reflection's, so zombies sharing a mesh plan again), `sa_draw_batch` 41% (Granite's calls 15%), the CLUT mirror 12%,
+uploads asked for again 7%, the boxes at t 0 (`nd_box_at_0`) 6%. It is the frame's own batch work over again: what
+pf/skin takes out of the frame comes out of the recording too.
+
+**Why the frame's own draws are not the picture's recording.** They differ in what is drawn and in what was decided:
+- the packets: frame_interp.c's REPLAY walk draws into the buffer shown, leaves out the uploads the GS has (asked for
+  again), marks the frame shown blended in (0xF2, 0xF4, 0xF5) and puts the registers back at its end;
+- the moves: each kick's `GsnInterpMove` and the camera at t 0 (`move0`, `mid0`) are made at the vblank after the
+  frame, by the walk that pairs it with the frame before; the GS has drawn the frame by then;
+- the decisions made for both ends: a triangle outside the scissor left out only when outside at t 0 too
+  (`nd_box_at_0`, from the camera at t 0), shader blending's copies covering both ends (`run_box`), the rows drawn
+  (the whole scissor), the alpha range of both frames (`interp_alpha_range`), the texture read whole (`read_extent`),
+  a pass reading its own frame declined, a native batch never joining a PS2-path batch (`nd_draw`'s flush), the
+  records' moves (`nd_model_flags` against `nd_remember`), the GS's own 3D from `gs_replay_corners.comp`.
+The frame's draws decided at t 1 alone leave out triangles a picture shows at the screen's edges while turning, and
+blend from copies that do not cover where the moved triangles are. Taking the picture's decisions in the frame
+changes the frame's batches (with MSAA, runs split elsewhere change pixels at shared edges: STEP3.md, "Silhouettes
+in runs"), and those decisions are inside the batch drawing pf/skin is changing. Two ways remain, both larger than
+this task: the frame drawn from the recording at t 1 (the walk and its moves before the GS draws the frame, and the
+picture at t 1 the frame byte for byte), or the scene's batches drawn twice as the frame comes, a picture's state of
+the scene kept beside the frame's (its pass, its acquire, its stencil numbers, the records with moves in a buffer
+of their own at the same numbers), the picture's stream then walked only for its uploads, CLUT loads and the GS's
+2D: by the profile above, a third or more of the recording would remain (the uploads, the CLUT loads, the registers).
+
+**What changed** (the command layer, `Cmd`, and `replay_ops`; every draw the same):
+- **The draws' data in chunks of our own.** Vertex and constant data go into append-only buffers (8 MB and 2 MB,
+  `DataChunk`), not Granite's 4 KB vertex blocks, of which a batch of more made a Vulkan buffer of its own each time.
+  A recording keeps its chunks: its calls made again bind the data where it is instead of copying it into Granite's
+  memory each picture. A CLUT the same as one before it in the recording is bound where that one is
+  (`same_constants`), and not bound again when it is bound already.
+- **A program set when a draw needs it.** Each scene batch sets the map's program and then its kind's
+  (`sa_draw_range`); Granite binds the pipeline again for any program set, the same pipeline or not. A recording at
+  the pond had 3,620 program changes, now 1,142.
+- **The same storage buffer not bound again** (native draw's arena and records, each batch): Granite writes the
+  set's descriptors again for any buffer bound. A recording had 6,011 such bindings, now 22. `Cmd` forgets what is
+  bound where Granite does (a render pass's beginning and end, a new command buffer) and where something binds past
+  it (the kicks' pass, `replay_ops`, a recording's beginning and end).
+- **--stats:** why a picture was drawn from the packets again, apart: the targets, the registers, VRAM or the CLUT
+  written, a recording that cannot be made again; and the replays that named a target the recording made (kept, or
+  made and dropped: its own). The canyon's sky copy: every replay names one kept.
+
+**What a replay still costs:** a pipeline bound for almost every draw (the pond: 1,205 binds for 1,213 draws a replay;
+the fortress 4,035 for 4,047): the tie rule's Z-first and colour draws differ in depth write and colour mask, which
+are pipeline state in Granite. `vkCmdBindPipeline` is 37-44% of a replay's CPU. Vulkan's dynamic state for depth
+write, compare, the colour mask, blending and the stencil (extended dynamic state 1 and 3) in Granite would make
+them one pipeline: a Granite patch, for the frame, the recording and the replays alike.
+
+**Numbers** (headless, `KF4_PRESENT_SIM=240`, owner's settings, 1,400 vblanks, 760 under water; two runs each, base
+5abdb02a; another game was running on the PC, so the pictures a second move with the fallback's cuts; GS ms are the
+GS's thread a game frame, from `--stats`):
+
+| spot | pictures a second | frame's own GS ms | recording ms | replay ms | vblanks with none between |
+|---|---|---|---|---|---|
+| pond | 67-68 / 66-68 | 19.3-19.7 / 18.1-19.5 | 14.1-14.3 / 13.8-14.0 | 1.06-1.14 / 0.72-0.75 | 1,092-1,098 / 1,086-1,094 |
+| fortress | 63-65 / 67-78 | 13.5-14.4 / 11.8-12.4 | 15.4-15.6 / 16.2-16.7 | 3.31-3.73 / 2.31-2.38 | 1,022-1,048 / 0-300 |
+| canyon | 88-107 / 115-132 | 14.2-14.5 / 12.5-13.5 | 10.9-11.5 / 9.9-10.7 | 1.60-1.63 / 0.97-1.04 | 0-120 / 0 |
+| under water | 133-202 / 186-201 | 7.2-9.7 / 7.0-7.6 | 7.6-8.2 / 7.5-7.6 | 0.27 / 0.22-0.23 | 0-60 / 0 |
+
+The GS's thread (sampled, % of a core): pond 70/68, fortress 52/76 (drawing 2.3 times the replays), canyon 69/87
+(2.9 times), under water 28/27. The pond is still the frame (about 19 ms) and the recording (about 14 ms) a game
+frame: no room for a replay. With pf/skin's batches both shrink.
+
+**Pictures:** every picture the same as 5abdb02a's, frames and pictures between, at the four spots (`--fast`, vblanks
+200-207, 301, 399; under water 400-407, 600), the pond hosted (`--renderer native`) and walking on map 000 at 240
+(`walk.pad`, 1890-1906). The off check passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test
+0 of 300; vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash
+204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

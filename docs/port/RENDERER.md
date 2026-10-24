@@ -232,9 +232,12 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 - **Higher frame rates:** flipbook animations and pictures the CPU makes anew (the HUD orb) change
   once a frame; two look-alike models crossing can swap for a few pictures. The pictures between are
   drawn from recorded commands now (STEP3.md, "On the GPU"); what is left of their cost is the GPU's
-  (the shadows' runs of shader blending) and the recorded calls made again through Granite (0.2 to 0.8
-  ms a picture): re-submitting command buffers would take Granite's per-frame descriptors and staging
-  out of them.
+  (the shadows' runs of shader blending) and the recorded calls made again through Granite (0.2 to 2.4
+  ms a picture at 3x; their data is bound where the recording left it, NATIVE_DRAW_P8.md, "The recording
+  and the replays"): most of it now is a pipeline bound for nearly every draw, which Vulkan's extended
+  dynamic state in Granite would take out; re-submitting command buffers would take Granite's per-frame
+  descriptors out of them. The first picture of each frame is still drawn from the packets (the frame's
+  own draws decide for t 1 only).
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.
