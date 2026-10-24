@@ -378,6 +378,7 @@ extern "C" void port_stats_overlay_update(void) {
         open_at = ~0ull;
     }
     port_stats_sample(&snap);
+    stats_menus_step(snap);
     int want = panel_shown() || stats_menus_wanted(snap);
     if (!want && port_stats_options.damage && snap.valid) {
         PortStatsHit h;
@@ -385,6 +386,10 @@ extern "C" void port_stats_overlay_update(void) {
         want = port_stats_hits(&h, 1, now > LOG_VBLANKS ? now - LOG_VBLANKS : 0) > 0 ||
                port_stats_target(&h, TARGET_VBLANKS);
     }
+    static const bool log = std::getenv("KF4_STATS_LOG") != nullptr;
+    if (log && want != wanted.load(std::memory_order_relaxed))
+        std::fprintf(stderr, "[stats] vblank %llu: the mod %s\n", port_vblank_count(),
+                     want ? "draws (the overlay is up)" : "draws nothing");
     wanted = want;
 }
 

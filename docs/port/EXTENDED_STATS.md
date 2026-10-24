@@ -72,10 +72,25 @@ port, so `track_menu` (`game/stats.c`) tells them apart by what they do (`ui/men
 
 - only `Menu_UpdateMain` moves `main_menu_state` off 0 (1 while it takes input, 2 and 3 while it fades
   out), and a screen it opens finds it back at 0: the handler while it is not 0 is the main menu's;
+- the menu opens on the main menu (`Menu_Start`: `Menu_OpenMain`, then `Menu_UpdateMain` fading in with
+  `main_menu_state` 0), and nothing else runs before it has taken input: until then the screen is the main
+  menu, the very first time too, before its handler is learned. Every way back to it (Circle in a screen,
+  a screen's own end) goes through `Menu_OpenMain` to the same handler, however the screen was reached;
 - another handler is the screen of the line chosen (`main_menu_screens`: 0 Item, 2 Equipment, 3 Status,
   5 Arrange), `main_menu_line` staying on that line until the menu closes (`Menu_CutModelChain`);
 - the Item screen's sub-screen of the keys (`Menu_UpdateKeyItems`) is told from it by `use_item_frames`,
-  which `Menu_UpdateUseItem` alone steps each time it runs.
+  which `Menu_UpdateUseItem` alone steps each time it runs: the handler that stepped it and is still the
+  handler a vblank later is the Item screen's, learned.
+
+Each vblank's answer is read from that vblank's state, not from changes. It is worked out once a vblank
+on the game's thread (`port_overlay_vblank`, called by `port/platform/kernel.c` before the window is
+presented), whether or not the overlay draws: the overlay draws because of it. (It was once worked out
+in `port_overlay_draw`, which runs only while the overlay draws: at more than 60 pictures a second with
+the Vulkan presenter the pictures' thread shows them and the game's thread draws no overlay at all, so
+once nothing of the mod was drawn it was never asked again, and the menus stayed bare until something
+else, a hit's line or a quick save's message, put the overlay up. A `KF4_OVERLAY_SHOT` picture puts it
+up too, which hid this from the tests.) The lines' fade steps once a vblank as well, the same at any
+frame rate.
 
 A screen's parts fade in and out together, by a tenth of their alpha a frame, so `screen_part_alphas[0]`
 against its part's alpha is how far it has faded in; the lines follow it. The item under the cursor is
@@ -131,7 +146,7 @@ Every item the Item screen lists is covered; none was left to a guess.
 | `port/include/port/stats.h` | the interface between them |
 
 The hooks into shared files are one line each: `overlay.cpp` (the Mods page, the menus' font, the
-vblank's tracking and drawing, whether the overlay draws this vblank, and the `menu@V` test picture), `settings.c` (read and write the keys),
+vblank's tracking (`port_overlay_vblank`, from `kernel.c`) and drawing, whether the overlay draws this vblank, and the `menu@V` test picture), `settings.c` (read and write the keys),
 `main_host.c` (`--extended-stats`), and `controls` (the panel's key).
 
 Names of items and spells are read from the game's own tables in game RAM (`item_name_defs`,
@@ -140,7 +155,10 @@ game's text is in the source.
 
 `KF4_STATS_LOG=1` prints, on stderr, every change of the counters the panel shows (`[stats]
 weapon_use_count=... power_base=...`), every hit, and every creature as it is first seen (its record,
-HP and place): what the checks below were read from. `KF4_STATS_PANEL_AT=VBLANK` opens the panel at
+HP and place): what the checks below were read from. It also prints each change of the menu screen
+detected (`[stats] vblank N: menu screen main (menu_mode 0, menu_step 1, main_menu_state 1, line 0)`;
+none, main, status, equipment, item, arrange) and whether the mod has the overlay drawn (`[stats] vblank
+N: the mod draws (the overlay is up)` / `draws nothing`). `KF4_STATS_PANEL_AT=VBLANK` opens the panel at
 that vblank, so that `KF4_OVERLAY_SHOT=closed@N` takes its picture.
 
 The menus' lines are checked with pictures: `KF4_OVERLAY_SHOT=menu@V,...` writes the window (overlay

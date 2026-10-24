@@ -481,7 +481,7 @@ bool stats_menus_wanted(const PortStatsSnapshot &s) {
     return port_stats_options.menus && s.valid && s.menu.screen != PORT_STATS_MENU_NONE;
 }
 
-void stats_menus_draw(const PortStatsSnapshot &s, int x, int y, int width, int height) {
+void stats_menus_step(const PortStatsSnapshot &s) {
     float target = 0.0f;
     if (stats_menus_wanted(s) && !s.menu.covered)
         target = s.menu.shown;
@@ -489,11 +489,15 @@ void stats_menus_draw(const PortStatsSnapshot &s, int x, int y, int width, int h
         shown_screen = s.menu.screen;
         shown_alpha = std::min(shown_alpha, target);
     }
-    // the game's parts fade by a tenth a frame (a twentieth a vblank): follow them, a little behind
+    // the game's parts fade by a tenth a menu frame: follow them, a vblank at a time (not a picture at a
+    // time, which would be four times as fast at 240 pictures a second)
     if (shown_alpha < target)
         shown_alpha = std::min(target, shown_alpha + 0.1f);
     else
         shown_alpha = std::max(target, shown_alpha - 0.2f);
+}
+
+void stats_menus_draw(const PortStatsSnapshot &s, int x, int y, int width, int height) {
     if (shown_alpha <= 0.01f || !stats_menus_wanted(s))
         return;
     Frame f = frame_of(x, y, width, height);

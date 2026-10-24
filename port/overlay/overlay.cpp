@@ -1683,6 +1683,12 @@ extern "C" void port_overlay_notify_debug(void) {
     toast_until = SDL_GetTicks() + 4000;
 }
 
+extern "C" void port_overlay_vblank(void) {
+    if (!ready)
+        return;
+    port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
+}
+
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     drawn = false;
     if (!ready)
@@ -1690,7 +1696,6 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     sample_rates();
     port_settings_poll();
     shot_open();
-    port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
     if (!port_overlay_visible())
         return;
     if (port_settings.ui_scale != applied_ui_scale)

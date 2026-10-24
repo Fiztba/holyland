@@ -9,6 +9,8 @@ extern "C" {
 
 void stats_menus_fonts();                           // adds the menus' font, once at start
 bool stats_menus_wanted(const PortStatsSnapshot &s); // a screen of the menu is up and its lines are on
+// once a vblank (port_stats_overlay_update): their fade follows the screen's
+void stats_menus_step(const PortStatsSnapshot &s);
 // draws them, inside the overlay's ImGui frame; x, y, width, height: the game's picture in the window
 void stats_menus_draw(const PortStatsSnapshot &s, int x, int y, int width, int height);
 

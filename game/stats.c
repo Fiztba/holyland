@@ -493,8 +493,10 @@ static int hit_count; /* how many were ever logged; the last LOG_SIZE are kept *
 static PortStatsHit target;
 static int player_hp = -1, player_recent;
 static int was_in_game;
-/* the game's menu: the main menu's handler, learned while it is up (track_menu) */
-static void *main_handler;
+/* the game's menu: the handlers of the main menu and of the Item screen, learned while they run
+   (detect_menu), and whether the main menu has taken input since the menu opened */
+static void *main_handler, *item_handler, *last_handler;
+static int main_was_up;
 static s32 last_use_frames = -1;
 static unsigned long long use_item_at;
 static int menu_screen;
@@ -606,32 +608,43 @@ static void track_player(unsigned long long vblank) {
      and a screen it opens finds it back at 0: the handler while it is not 0 is the main menu's;
    - another handler is the screen of the main menu's line (main_menu_screens: 0 Item, 2 Equipment,
      3 Status, 5 Arrange), main_menu_line staying on the line chosen until the menu closes;
+   - the menu opens on the main menu (Menu_Start: Menu_OpenMain, then Menu_UpdateMain fading in with
+     main_menu_state 0), and nothing else can run before it has taken input (state 1): until then the
+     handler is the main menu's, even the first time, before it is learned;
    - the Item screen's own sub-screen (the keys, Menu_UpdateKeyItems) is told from it by use_item_frames,
-     which Menu_UpdateUseItem alone steps every time it runs.
-   The one-frame handlers between (Menu_OpenMain, Menu_OpenChosenScreen) count as the screen of the line,
-   whose parts are faded out then. */
-static void track_menu(void) {
-    void *handler = menu_screen_handler;
-    unsigned long long now = port_vblank_count();
+     which Menu_UpdateUseItem alone steps every time it runs: a handler that stepped it and is still
+     the handler (not one it handed over to on its last run) is the Item screen's.
+   Every way back to the main menu (Circle in a screen, a screen's own end) goes through Menu_OpenMain to
+   Menu_UpdateMain, the same handler however it was reached. The one-frame handlers between (Menu_OpenMain,
+   Menu_OpenChosenScreen) count as the screen of the line, whose parts are faded out then. Nothing here
+   depends on seeing a change: each vblank's answer is read from that vblank's state. */
+static void detect_menu(void *handler, unsigned long long now) {
+    int stepped = use_item_frames != last_use_frames, same = handler == last_handler;
 
-    if (use_item_frames != last_use_frames) {
+    if (stepped) {
         last_use_frames = use_item_frames;
         use_item_at = now;
     }
+    last_handler = handler;
     menu_screen = PORT_STATS_MENU_NONE;
     if (menu_mode != 0 || menu_step == 0 || handler == NULL) {
+        main_was_up = 0;
         return;
     }
     if (main_menu_state != 0) {
         main_handler = handler;
+        main_was_up = 1;
     }
-    if (handler == main_handler) {
+    if (handler == main_handler || !main_was_up) {
         menu_screen = PORT_STATS_MENU_MAIN;
         return;
     }
+    if (stepped && same && main_menu_line == 0) {
+        item_handler = handler;
+    }
     switch (main_menu_line) {
     case 0:
-        menu_screen = now - use_item_at <= 4 ? PORT_STATS_MENU_ITEMS : PORT_STATS_MENU_NONE;
+        menu_screen = handler == item_handler || now - use_item_at <= 4 ? PORT_STATS_MENU_ITEMS : PORT_STATS_MENU_NONE;
         break;
     case 2:
         menu_screen = PORT_STATS_MENU_EQUIP;
@@ -642,6 +655,20 @@ static void track_menu(void) {
     case 5:
         menu_screen = PORT_STATS_MENU_ARRANGE;
         break;
+    }
+}
+
+static void track_menu(void) {
+    static const char *const names[] = {"none", "main", "status", "equipment", "item", "arrange"};
+    static int logged = -1;
+    void *handler = menu_screen_handler;
+    unsigned long long now = port_vblank_count();
+
+    detect_menu(handler, now);
+    if (log_on && menu_screen != logged) {
+        fprintf(stderr, "[stats] vblank %llu: menu screen %s (menu_mode %d, menu_step %d, main_menu_state %d, line %d)\n",
+                now, names[menu_screen], menu_mode, (int)menu_step, main_menu_state, main_menu_line);
+        logged = menu_screen;
     }
 }
 

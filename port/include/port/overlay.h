@@ -40,6 +40,11 @@ int port_overlay_visible(void);
    an ImDrawData *, or NULL when nothing is drawn this time. */
 void port_overlay_draw(int x, int y, int width, int height);
 void *port_overlay_draw_data(void);
+/* (port/platform/kernel.c) once a vblank on the game's thread, before the window is presented: what
+   follows the game's state (the extended stats mod) and so decides whether the overlay draws. Not in
+   port_overlay_draw, which runs only while the overlay draws (and, above 60 pictures a second, as many
+   times a vblank as it shows pictures). */
+void port_overlay_vblank(void);
 /* (the Vulkan presenter) a test picture (KF4_OVERLAY_SHOT) is due: the window, read back after this
    vblank's drawing, goes to port_overlay_shot as RGBA (R in the low byte) */
 int port_overlay_shot_due(void);
@@ -55,6 +60,8 @@ void port_overlay_notify_quick(void);
 /* (port/debug/debug.c) the flash recorder's key: shows port_debug_message() a while (any thread) */
 void port_overlay_notify_debug(void);
 #else
+static inline void port_overlay_vblank(void) {
+}
 static inline int port_overlay_open(void) {
     return 0;
 }
