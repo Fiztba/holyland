@@ -45,7 +45,7 @@ struct SatTarget {
 };
 
 struct SatStats {
-    uint64_t made, binds, clears, refreshes, give_backs, textures, copies, copy_bytes, copies_not, fills;
+    uint64_t made, binds, clears, refreshes, give_backs, textures, copies, copy_bytes, copies_not, fills, overwritten;
 };
 SatStats sat_stats;
 
@@ -526,7 +526,36 @@ bool sat_transfer(uint32_t dir) {
     auto touch = [&](SatTarget &n) {
         sat_give_back(n, "a transfer", true);
     };
+    // (dir 0, 2: the pages the transfer writes whole, every bit: whole_pages)
+    std::vector<uint32_t> whole;
+    bool whole_known = false;
     auto written = [&](SatTarget &n) {
+        // A transfer that writes every page of the scene's colour whole leaves nothing of it: the scene's picture
+        // is not given back first (it would be dropped at once). The MP drain's and the water's copy of the frame
+        // to 0x2BC0 covers the reflection's 256 x 256 there: given back each frame, the GS's target was made for it
+        // from VRAM, which first took the copy of the frame before back from the GPU (a read-back a frame, 640 x
+        // 448, at a reflecting pool)
+        if (n.scene_newer && n.color) {
+            if (!whole_known) {
+                whole = whole_pages(bitbltbuf, trxpos, trxreg);
+                whole_known = true;
+            }
+            uint32_t lo, count;
+            buffer_pages(n.bp, n.bw, n.psm, n.width, n.height, &lo, &count);
+            bool covered = !whole.empty();
+            for (uint32_t k = 0; k < count && covered; k++) {
+                covered = std::find(whole.begin(), whole.end(), (lo + k) % vram_pages) != whole.end();
+            }
+            if (covered) {
+                if (snt.bound == &n) {
+                    sa_release();
+                }
+                n.scene_newer = false;
+                n.rows0 = UINT32_MAX;
+                n.rows1 = 0;
+                sat_stats.overwritten++;
+            }
+        }
         touch(n);
         n.gs_newer = true;
     };
@@ -786,11 +815,11 @@ void sat_print_stats() {
     const SatStats &s = sat_stats;
     fprintf(stderr,
             "[stats] standalone targets: %llu named (%llu bound for the scene's draws, %llu cleared by the scene), %llu textures "
-            "read from them; %llu made from the GS's, %llu given back to it; %llu copies made from the table (%.1f MB), %llu "
+            "read from them; %llu made from the GS's, %llu given back to it (%llu not: a transfer wrote them whole); %llu copies made from the table (%.1f MB), %llu "
             "not; %llu fills drawn by the scene; %llu batches into the reflection left out by pictures between keeping the "
             "frame's\n",
             (unsigned long long)s.made, (unsigned long long)s.binds, (unsigned long long)s.clears, (unsigned long long)s.textures,
-            (unsigned long long)s.refreshes, (unsigned long long)s.give_backs, (unsigned long long)s.copies, s.copy_bytes / 1048576.0,
+            (unsigned long long)s.refreshes, (unsigned long long)s.give_backs, (unsigned long long)s.overwritten, (unsigned long long)s.copies, s.copy_bytes / 1048576.0,
             (unsigned long long)s.copies_not, (unsigned long long)s.fills, (unsigned long long)sa_stats.kept_reflection);
 }
 

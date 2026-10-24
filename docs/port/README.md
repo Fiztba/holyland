@@ -454,6 +454,9 @@ it is at that picture's time, t of the way from the frame shown to the one drawn
   (the vblank, phase, run, pair and the three boxes; `=2` also every shadow run, program 0x5A0;
   `KF4_INTERP_OUTSIDE_LOG=FILE` for a file). `KF4_GSN_SLOW_US=N` holds the native GS's thread N us at
   each vblank, so that a window falls behind as on a busy GPU (only the vblanks' own pictures shown).
+  `KF4_FX=water,drain,prev,...` forces the game's full-screen effects on for the draw only
+  (`game/screen_fx.c`; the list and what each is in docs/port/SCREEN_EFFECTS.md), for
+  `tools/screen_fx_test.py`.
 - `--gs-capture-at` and F9 record the GS's packets as the game sent them, without the pictures
   between.
 

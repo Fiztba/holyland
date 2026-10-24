@@ -4082,6 +4082,13 @@ void flush_batch() {
         fbmsk = (fbmsk & 0x80F8F8F8u) | 0x7F070707u;
     }
 
+    // A batch wholly outside its scissor draws nothing: no target is made for it (the reflection's map strips
+    // the scene does not take, below the 256 x 256 view: made from VRAM after the MP drain's or the water's copy
+    // of the frame over 0x2BC0, that copy went back from the GPU first, a 640 x 448 read-back a frame)
+    if (!moving.moves && (vy1 < float(sy0) - 1.0f || vy0 > float(sy1) + 1.0f)) {
+        gs->verts.clear();
+        return;
+    }
     // ZTST NEVER draws nothing; ALWAYS without writing needs no Z buffer
     if (ztst == 0) {
         gs->verts.clear();
@@ -5530,11 +5537,14 @@ void prepare_write(const TransferRect &r) {
                 i++;
                 continue;
             }
-            if (t->replay_only && regular(*t) && !t->depth) {
+            if (t->replay_only && replaying && regular(*t) && !t->depth) {
                 // A picture between's own target (the water's wobble: its copy of the picture's frame)
                 // stays, and takes the pages under the transfer from VRAM after it (sync_targets): what
                 // the game's frame left there, the transfer's bytes added. Dropped, the picture's draws
-                // after it that read the copy read it from VRAM at 1x, decoded again every picture.
+                // after it that read the copy read it from VRAM at 1x, decoded again every picture. (Only
+                // while a picture between is drawn: in the game's frame such a target is nobody's, and was
+                // kept over every upload, each of its pages under it loaded again: about 540 pages a frame
+                // under water at the pond, the MP drain's and the water's copy of the frame left there.)
                 i++;
                 continue;
             }

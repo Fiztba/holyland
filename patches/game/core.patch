@@ -894,7 +894,7 @@ index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e550
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b2030a77b2a 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..e5a0a84331af14f047c399e32c0af8c60e70d68c 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
 @@ -20,6 +20,12 @@
@@ -976,13 +976,16 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -153,20 +147,36 @@ void GsDraw_QueueTexturedSprite(void *);
+@@ -153,20 +147,39 @@ void GsDraw_QueueTexturedSprite(void *);
  void PlayTime_Update(void);
  void Input_PauseRumble(void);
  void Input_ResumeRumble(void);
 +void Quick_PollGame(void); /* PC: quick saves (game/quicksave.c) */
 +void Quick_RestoreNeighbour(void); /* PC: */
 +void FrameInterp_BeginFrame(void); /* PC: --frame-rate 60 (game/frame_interp.c) */
++void ScreenFx_Frame(void); /* PC: KF4_FX, debugging (game/screen_fx.c) */
++void ScreenFx_Begin(void);
++void ScreenFx_End(void);
 +void FrameInterp_MarkCamera(int, int); /* PC: */
 +void FrameInterp_EndWorld(void); /* PC: */
 +void FrameInterp_BeginArm(void); /* PC: */
@@ -1017,7 +1020,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
  extern MapDrawStateOverlays map_draw_state;
  extern int message_dim_alpha;
  extern int current_map_slot;
-@@ -237,6 +247,7 @@ void GameLoop_Run(int arg) {
+@@ -237,6 +250,7 @@ void GameLoop_Run(int arg) {
          save_loaded = 0;
          PlayTime_Resume(save_play_time[0]);
          Game_StartFadeIn(0, 0, 0, 0x1E);
@@ -1025,7 +1028,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
      }
      map_load_state.flags.raw |= 1;
      Packet_SwapBuffers();
-@@ -250,6 +261,9 @@ void GameLoop_Run(int arg) {
+@@ -250,6 +264,9 @@ void GameLoop_Run(int arg) {
          Timer_Restart();
          if (!(game_status.bit12 && game_status.bit13)) {
              Packet_SendChain();
@@ -1035,7 +1038,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
              Timer_GetTicks();
              Packet_SwapBuffers();
              DrawList_Clear();
-@@ -302,11 +316,12 @@ void GameLoop_Run(int arg) {
+@@ -302,11 +319,12 @@ void GameLoop_Run(int arg) {
          GameLoop_OpenRequestedMenu();
          MapChange_RunToEnd();
          GameLoop_UpdatePause();
@@ -1052,7 +1055,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
      Input_StopRumble();
      Message_CloseBox();
      Message_ClearNotices();
-@@ -332,13 +347,14 @@ void GameLoop_Run(int arg) {
+@@ -332,13 +350,15 @@ void GameLoop_Run(int arg) {
  
  /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
     tints, the overlays MapDrawState asks for, the fades and the pause shade. */
@@ -1064,19 +1067,21 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
      int green;
      int blue;
  
++    ScreenFx_Frame(); /* PC: KF4_FX, debugging (game/screen_fx.c) */
 +    FrameInterp_BeginFrame(); /* PC: --frame-rate 60 (game/frame_interp.c) */
      Wobble_AdvanceSines();
      func_001095D0();
      GsDraw_ResetDrawTarget();
-@@ -457,6 +473,7 @@ int GameLoop_DrawFrame(int arg) {
+@@ -457,6 +477,8 @@ int GameLoop_DrawFrame(int arg) {
      }
      GameLoop_SetCameraMatrices(0, 0);
      GsDraw_QueueVu1Matrix(world_screen_matrix);
 +    FrameInterp_EndWorld(); /* PC */
++    ScreenFx_Begin(); /* PC: KF4_FX, debugging (game/screen_fx.c) */
      if ((s32)(player_state.status_bits >> 39) & 1) {
          GsDraw_CopyFrame(0x2BC0);
          tinted = TRUE;
-@@ -473,24 +490,36 @@ int GameLoop_DrawFrame(int arg) {
+@@ -473,24 +495,36 @@ int GameLoop_DrawFrame(int arg) {
      }
      Player_DrawScreenFade();
      if (map_draw_state.bit44) {
@@ -1119,7 +1124,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
          Game_ShiftScreenByViewTurn();
      }
      GsDraw_ClearDepth();
-@@ -498,20 +527,29 @@ int GameLoop_DrawFrame(int arg) {
+@@ -498,20 +532,29 @@ int GameLoop_DrawFrame(int arg) {
          Effect_UploadTextures();
      }
      DrawList_Draw(3, 0);
@@ -1154,7 +1159,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
      }
      Game_DrawFade();
      Splash_Draw();
-@@ -529,14 +567,20 @@ int GameLoop_DrawFrame(int arg) {
+@@ -529,14 +572,21 @@ int GameLoop_DrawFrame(int arg) {
          }
      }
      if (message_dim_alpha != 0) {
@@ -1175,10 +1180,11 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
 +    if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_Brightness(game_options[10])) { /* PC: --native-draw (game/native_draw/) */
 +        Game_ApplyBrightness(game_options[10]);
 +    }
++    ScreenFx_End(); /* PC: KF4_FX */
      func_001095D8();
  }
  
-@@ -659,11 +703,14 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -659,11 +709,14 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
  
      switch (projection) {
      case 0:
@@ -1195,7 +1201,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
          break;
      }
      translation[0] = -camera_state.position[0];
-@@ -703,6 +750,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -703,6 +756,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
          sceVu0MulMatrix(world_screen_matrix, view_screen_matrix, local);
          break;
      }
@@ -1203,7 +1209,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..49b251bc27c55f859be124efcab36b20
  }
  
  /* Runs the queued sound loads, one at a time. */
-@@ -729,7 +777,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +783,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:

@@ -1267,7 +1267,11 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
             lo = std::min(lo, c);
             hi = std::max(hi, c);
         }
-        return lo >= 0.0f && hi < float(n) ? std::max(1u, uint32_t(ceilf(hi))) : n;
+        // (a V less than a row above the top reads no row above its first, as flush_batch's rows_read: the frame
+        // before blended in, Game_BlendPreviousFrame, has its sprite's corners half a texel out; taken as reading
+        // the whole 1024 x 512, it missed the shown frame's target and decoded it from VRAM, written back first,
+        // every frame: the knock-back of every hit at 12 game frames a second at 240)
+        return (across ? lo >= 0.0f : lo > -1.0f) && hi < float(n) ? std::max(1u, uint32_t(ceilf(hi))) : n;
     };
     uint32_t levels = 1;
     uint32_t mip_tbp[7] = {tbp}, mip_tbw[7] = {tbw};
