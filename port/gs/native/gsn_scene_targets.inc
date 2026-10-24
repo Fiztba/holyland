@@ -391,6 +391,10 @@ bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32
 
 // (sa_release, at its top) A named target bound: let go (nothing copied: its picture is the scene's), the
 // frame's images back. False: none bound.
+bool sat_bound() {
+    return snt.bound != nullptr;
+}
+
 bool sat_release() {
     if (!snt.bound) {
         return false;

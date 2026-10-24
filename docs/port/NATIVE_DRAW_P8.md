@@ -52,7 +52,8 @@ path, and hosted mode (`--renderer native --native-draw KINDS`) is unchanged.
      triangle's Z change across a GS pixel more, at most one Z (the corner's alpha carries it). This is
      `--native-layer-z tolerant`'s rule, without the GS's rounding, so there is no sawtooth where surfaces
      cross and no lace where two meshes' triangles differ. `KF4_SA_SLACK=LAYER[,TIE]` (tests) changes the
-     slacks.
+     slacks. A layer of native draw's own corners is now by its real depth instead: two world units across its
+     surface, exact over its own triangles ("Distance" below).
    - **Blending.** Vulkan's where it can do it. Where it cannot (DATE, a partial mask, PABE, no COLCLAMP,
      FBA with As, As above 1.0, Ad, FIX above 1.0) the shader blends, from a copy of the scene's colour
      (resolved if multisampled) taken before each run of triangles that do not overlap. A texture that is
@@ -598,6 +599,66 @@ hosted (`--native-draw on`) and the PS2 path.
   gsn_draw_test 0 of 300 (seeds 1, 7, 1234), vu1_test 0 of 90; herb with `--native-draw off` against
   play-932801f: the same log, PATH1 204e443a9fc49731, VU1 cycles 460424273, pictures 1800/1820/1840 byte for byte.
 
+## Distance: layers by their real depth (branch `p8/distance`, from `native/draw` a1900776)
+
+The owner played `native-a190077` with `--renderer modern` (4x, native widescreen, MSAA 2, 30 and 240) and met two
+things that changed with the distance, both at 30 (the game's own frames):
+
+- **The tower's top** (`bugs_modern/quick_tower2`, walking up to it): the rock over the top of the bricks changed shape
+  and flickered as it grew. The rock is a layer (a mesh of its own, blended by its corners' alpha, GEQUAL, Z written)
+  cut apart from the bricks': at its edge it is about 1.1 world units behind them along the view (`KF4_SA_PIXEL`: 9.6 Z
+  at a depth of 350). The tie rule passed a layer within one Z plus the slope term. A Z is a different distance at each
+  depth (Z = cz + az / depth, az about 1.05 million: a Z is depth^2 / az units, 0.04 at 200 and 8 at 3,000), so near
+  the rock failed where it passed from afar, and its edge moved with every step. **The PS2 path and hosted do the
+  same** (the GS's whole Z in a 16-bit buffer: a band of rock that grows and shrinks; the "patch on a tower's top" of
+  `quick_brick` is the same thing).
+- **The chest** (`states/slot0_chest2`, F5 with native-a190077; loaded once in that exe and quick-saved, so other builds
+  load it): from afar half of its right end showed a lighter texture, which went away walking up. That is the chest's
+  far end, a face of the same mesh 3.2 units behind its end panel along the view (1.9 Z at a depth of 1,300): within one
+  Z plus the slope term, so from afar it came through. **Modern only**: hosted and the PS2 path keep it hidden. Not the
+  mipmaps (the chest's TEX1 0x60, MXL 0, MMAG and MMIN both linear: `--native-lod scale`, `ps2` and `full` give the
+  same pictures to the pixel) and not the table (it is the same with the GS's textures).
+
+**The fix** (`gsn_standalone.inc`, "Ties"; `sa_slack` in `shaders/gs_common.h`, used by `sa_000`, `sa_280`, `sa_700`
+and `sa_water`):
+- A layer of native draw's corners passes within **two world units across its surface**, at every distance. The
+  vertex shader has the scene's own depth: with q = 1 / depth, a depth change is (Z - cz) q times as much Z, and a
+  surface whose Z changes g a GS pixel lies at tan t = g sx / (Z - cz) to the view. So e units across is
+  e q sqrt((Z - cz)^2 + (g sx)^2) in Z. The triangle's g goes in its corners' alpha (32 log2(1 + g), the slope term's
+  place); tan t is held to 1 (toward a silhouette e / cos t grows without end: with 3 a seam ran along a tower's top
+  edge against the sky). One unit still left a notch of bricks in a corner of `quick_brick`'s tower; half a unit let the
+  rock shrink walking up.
+- **Exact over its own triangles.** A unit or two lets a model's faces behind its front through at its silhouettes
+  (light seams along the logs of the tower's campfire, `quick_fire`), and the chest's far end is its own mesh. A layer
+  drawn in runs (its triangles over its own) marks the stencil with a number of its own in each run's Z pass, where it
+  wrote; its colour then passes exactly where it is marked (its own triangles) and by the world units elsewhere (the
+  surface it lies on). The number is the shadows' counter (`sa.stencil_gen`; after 255 the frame is taken again to clear
+  it). Not in a named target (the reflection) and not without a stencil: there the world units alone.
+- The GS's own corners in the scene (`sa.gs3d`, the PS2 path's leftover map strips, gs.vert) keep the Z rule.
+  `KF4_SA_WORLD=0` (tests) brings the Z rule back for every layer; `--stats` counts the layers exact over their own
+  triangles.
+
+**Pictures** (4x, MSAA 2, native widescreen, cut-out AA, 30; scratchpad `p8_dist/out/`):
+- The tower walk (`tower_walk.jpg`: PS2 path | hosted | modern before | after, vblanks 500-548): the rock band stays
+  one shape from the first picture to the last. Before, it was as the PS2's, a thin band that came and went. Against
+  `KF4_SA_SLACK=64` (the rock everywhere, as a reference; from afar 64 Z is many units, so it is generous there):
+  91,000 pixels off before at 460, growing to 463,000 at 540 walking up; after 74,000 at 460, falling to 9,000 at 540.
+- The chest walk (`chest_walk.jpg`: hosted | before | after, 510-546): its right end is hosted's. Pixels off hosted
+  around the chest (800 x 450 at 4x, more than 8 apart): 3,000-3,600 before from afar, 510-660 after at every distance
+  (before 720-860 near).
+- At 240 the pictures between follow their frames (24 pictures each from 520: hosted against after, no picture out of
+  line).
+
+**The review's spots** (T7's set: 3x, MSAA 2, native widescreen, cut-out AA, 240; pixels a game frame more than 8
+off hosted, before -> after): far 682 -> 449, teeth 8,652 -> 8,696, pond 612 -> 519, brazier 31,694 -> 31,630, fire
+1,151 -> 1,261, slow2 1,796 -> 1,824, underwater 543 -> 532, the water sets the same within 30; brick 412 -> 957 and
+tower 1,296 -> 3,931 with `--sky ps2` (the rock now covering the patch hosted leaves); lacing 429 -> 617 and sign 474
+-> 616 (the brazier stands' thin legs and a column's edge, a pixel's worth of which overlapping face wins); lava 167 ->
+203; sky2 1 -> 60. At 4x against hosted (`--sky ps2`): fire 1,838 -> 1,978, slow2 2,916 -> 2,855, brick 745 -> 1,810.
+
+**GPU time** (240, `KF4_PRESENT_SIM=240`, 1,500 vblanks, 4x MSAA 2, ms a picture, base -> after): far 3.54 -> 3.69,
+the tower 2.70 -> 2.71, the fire 3.14 -> 3.18; every run kept up (5,730 pictures), turns 0.24 a picture as before.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
@@ -647,7 +708,8 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   as `frame_N_250.png` etc.; the tool compares only the frames.
 - **Debug switches** (read at the vblank that turns modern on): `KF4_SA_KINDS=MASK`, `KF4_SA_LOG=1` (each
   batch's FRAME, ZBUF, TEST, ALPHA and Z range, and why one is declined), `KF4_SA_PIXEL=X,Y` (the scene's
-  batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack), `KF4_SA_SLACK=LAYER[,TIE]`,
+  batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack; the pixel's Z and q interpolated, the Z's
+  change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule),
   `KF4_SA_NO_TABLE=1`; the table's (read once): `KF4_SA_VERIFY=1..4`, `KF4_SA_PACK=DIR`,
   `KF4_SA_PACK_DUMP=DIR`. `KF4_SA_LOG=3` (T2): the GS's batches the scene draws, and those it draws elsewhere.
 - **The scene at its own scale** (T2): `native_draw_compare.py --mode modern --scale 1 --first-args='--native-scale 4

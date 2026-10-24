@@ -304,7 +304,7 @@ void main() {
     vec2 ndc = (xy + 0.5) * pc.inv_size * 2.0 - 1.0;
 #ifdef ND_STANDALONE
     // the scene's own depth, as sa_000.vert's (nd_000.vert, ND_STANDALONE): unrounded, with the tie's slack
-    float depth = clamp((zf + pc.zbias + pc.zslope * float(a_corner.a) / 255.0) * pc.zscale, 0.0, 1.0);
+    float depth = clamp((zf + sa_slack(zf, p.q, d.screen[2].z, d.screen[0].x, a_corner.a)) * pc.zscale, 0.0, 1.0);
 #else
     float depth = (pc.misc & GSN_M_ZCLAMP) != 0u ? 0.0 : float(min(z, pc.zmax)) * pc.zscale;
 #endif

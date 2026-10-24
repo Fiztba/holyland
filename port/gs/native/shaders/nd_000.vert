@@ -365,7 +365,7 @@ void main() {
     // triangle's plane, the lava's far edge behind the hills in teeth; the GS's Z is kept so per pixel, and
     // the scene's when it is given back, gsn_standalone.inc. Within the depth range only.)
     // (pc.zslope: a layer's colour pass, its triangle's slope term in the corner's alpha, 255 a Z: gsn_standalone.inc)
-    float depth = clamp((zf + pc.zbias + pc.zslope * float(a_corner.a) / 255.0) * pc.zscale, 0.0, 1.0);
+    float depth = clamp((zf + sa_slack(zf, p.q, d.screen[2].z, d.screen[0].x, a_corner.a)) * pc.zscale, 0.0, 1.0);
 #else
     float depth = (pc.misc & GSN_M_ZCLAMP) != 0u ? 0.0 : float(min(z, pc.zmax)) * pc.zscale;
 #endif

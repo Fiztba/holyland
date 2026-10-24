@@ -68,7 +68,7 @@ const char *const sa_tex_names[SA_TEX_COUNT] = {"from the table", "a render targ
 // (every field a count: --stats takes them per map as differences, sa_vblank)
 struct SaStats {
     uint64_t batches, draws, triangles, shader_blends, acquires, releases, frames_touched;
-    uint64_t depth_clears, alpha_sets, shadow_batches; // (the scene's ops, and the shadows by the stencil)
+    uint64_t depth_clears, alpha_sets, shadow_batches, own_layers; // (the scene's ops, and the shadows by the stencil)
     // (T2) frames taken from the GS's clear (no copy), the GS's batches drawn into the scene (its 3D, the screen
     // passes, fills), its frame given to the GS and kept (a copy that reads it), pictures made by the composite
     uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops;
@@ -284,6 +284,7 @@ bool sat_scene_frame(uint32_t fbw, uint32_t fpsm);
 Program *sat_water_program(bool sample);
 bool sat_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm, uint32_t need_h);
 bool sat_release();
+bool sat_bound(); // (a named target is the scene's frame now)
 bool sat_flush();
 bool sat_fill();
 bool sat_blend_exact();
@@ -2459,6 +2460,13 @@ bool sa_draw_batch(int *why) {
             float d1 = (v[2].x - v[1].x) * (qy - v[1].y) - (v[2].y - v[1].y) * (qx - v[1].x);
             float d2 = (v[0].x - v[2].x) * (qy - v[2].y) - (v[0].y - v[2].y) * (qx - v[2].x);
             if ((d0 >= 0 && d1 >= 0 && d2 >= 0) || (d0 <= 0 && d1 <= 0 && d2 <= 0)) {
+                float den = d0 + d1 + d2; // (the pixel's Z and q, interpolated: d0 weighs v[2], d1 v[0], d2 v[1])
+                float zi = den != 0.0f ? (d1 * float(v[0].z) + d2 * float(v[1].z) + d0 * float(v[2].z)) / den : 0.0f;
+                float qi = den != 0.0f ? (d1 * v[0].q + d2 * v[1].q + d0 * v[2].q) / den : 0.0f;
+                float ax_ = v[1].x - v[0].x, ay_ = v[1].y - v[0].y, bx_ = v[2].x - v[0].x, by_ = v[2].y - v[0].y;
+                float az_ = float(v[1].z) - float(v[0].z), bz_ = float(v[2].z) - float(v[0].z), det_ = ax_ * by_ - ay_ * bx_;
+                float zx_ = det_ != 0.0f ? (az_ * by_ - bz_ * ay_) / det_ : 0.0f, zy_ = det_ != 0.0f ? (bz_ * ax_ - az_ * bx_) / det_ : 0.0f;
+                fprintf(stderr, "[sa px] at z %.3f q %g dzdx %.3f dzdy %.3f\n", zi, qi, zx_, zy_);
                 fprintf(stderr, "[sa px] batch %llu tri %zu: z %u %u %u tex0 %#llx abe %d alpha %#llx test %#llx zbuf %#llx same %d slack %g a %u-%u\n",
                         (unsigned long long)sa_stats.batches, t / 3, v[0].z, v[1].z, v[2].z, (unsigned long long)tex0, abe,
                         (unsigned long long)alpha, (unsigned long long)test, (unsigned long long)zbuf, same_twice, slack, a_lo, a_hi);
@@ -2526,6 +2534,26 @@ bool sa_draw_batch(int *why) {
     // further apart in Z; a tower's top seen from below). Per triangle, from its corners, in each corner's
     // alpha (which the GPU does not read otherwise): 255 is one Z (sa_000.vert, pc.zslope).
     bool sloped = slack == slack_layer && zwrite_any(zbuf, test) && !same_twice && !second_pass;
+    // A layer of the scene's own corners passes by its real depth: within two world units of the surface it lies on,
+    // across it, whatever the distance (sa_slack in gs_common.h; the corner's alpha carries the triangle's Z slope
+    // instead). In Z (--native-layer-z tolerant's rule above, the GS's units) the same tolerance is a different
+    // distance at each depth, as a Z is (Z = cz + az / depth: a Z is depth^2 / az world units): near, one Z (plus
+    // the slope term) is a fraction of a unit and a layer's mesh a unit off its surface failed; far it is several,
+    // and a model's own faces a few units behind its front came through. So a layer's coverage changed shape with
+    // the distance: the rock over the tower's top on map 000 (a mesh cut apart from the bricks', at its edge 1.1
+    // units behind them along the view) shrank and flickered walking up to it, and a chest's far end (a face 3.2
+    // units behind its end panel along the view) showed through from afar. Two units: the tower's rock holds from
+    // far to near (with 0.5 it still shrank, with 1 a notch of bricks stayed in one corner); the chest's far end is
+    // its own triangles (below). KF4_SA_WORLD=EPS (tests; 0: the Z rule).
+    static float world_eps = -1.0f;
+    if (world_eps < 0.0f) {
+        const char *v = getenv("KF4_SA_WORLD");
+        world_eps = v && *v ? std::max(float(atof(v)), 0.0f) : 2.0f;
+    }
+    bool world = sloped && world_eps > 0.0f && !sa.gs3d && !sa.gs_water;
+    for (size_t t = 0; world && t < gs->verts.size(); t++) {
+        world = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2; // (gs.vert's corners keep the Z rule)
+    }
     std::vector<Vtx> corners(gs->verts.begin(), gs->verts.end());
     for (size_t t = 0; t + 2 < corners.size(); t += 3) {
         if (nd_corner_kind(corners[t]) == ND_KIND_PS2 || sa.gs_water) {
@@ -2541,6 +2569,11 @@ bool sa_draw_batch(int *why) {
                 float dzdx = (az * by - bz * ay) / det, dzdy = (bz * ax - az * bx) / det;
                 float e = std::min(0.5f * std::max(fabsf(dzdx), fabsf(dzdy)), 1.0f);
                 extra = uint32_t(e * 255.0f + 0.5f);
+                if (world) {
+                    // (by its real depth: the Z's change across a GS pixel, g, as 32 log2(1 + g): up to 250 Z a pixel)
+                    float g = sqrtf(dzdx * dzdx + dzdy * dzdy);
+                    extra = uint32_t(std::min(32.0f * log2f(1.0f + g) + 0.5f, 255.0f));
+                }
             }
         }
         for (int k = 0; k < 3; k++) {
@@ -2558,6 +2591,24 @@ bool sa_draw_batch(int *why) {
     }
     if (shadow && !sa.last_shadow) {
         sa.stencil_gen++;
+    }
+    // A layer by its real depth drawn in runs (its triangles over its own) is exact over its own triangles: a unit
+    // lets a model's faces behind its front through at its silhouettes (the logs of the tower's campfire on map 000,
+    // light seams along their edges; the chest's far end), where the GS's Z, rounded near, kept them apart. Each run's Z pass marks the stencil
+    // with the batch's number where it wrote; its colour then passes exactly there (its own triangles: those of the
+    // runs before, and its own Z) and by the world unit elsewhere (the surface it lies on). A number of its own, as
+    // a run of shadow batches has (after 255, the frame taken again to clear it).
+    bool own = world && runs.size() > 2 && sa.stencil && !sat_bound() && !shadow;
+    if (own && sa.stencil_gen >= 255) {
+        sa_release();
+        if (!sa_acquire(fbp, fbw, fpsm, zbp, zpsm, sy1 + 1) || sa.frame_target != color) {
+            *why = SA_WHY_TARGET;
+            return false;
+        }
+    }
+    if (own) {
+        sa.stencil_gen++;
+        sa_stats.own_layers++;
     }
     sa.last_shadow = shadow;
     sa_stats.shadow_batches += shadow;
@@ -2692,6 +2743,10 @@ bool sa_draw_batch(int *why) {
             p.flags |= draws[i].select << F_PASS_SHIFT;
             p.zbias = draws[i].zbias + (draws[i].zbias > 0.0f || (ties && !draws[i].zwrite) ? ps2_bias : 0.0f);
             p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
+            if (world && draws[i].zbias > 0.0f) {
+                p.zbias = 0.0f; // (by its real depth: sa_slack's world units, no Z)
+                p.zslope = -world_eps;
+            }
             c.set_color_write_mask(draws[i].mask);
             c.set_depth_test(true, draws[i].zwrite);
             if (shadow) {
@@ -2699,10 +2754,27 @@ bool sa_draw_batch(int *why) {
                 c.set_stencil(true, VK_COMPARE_OP_NOT_EQUAL, draws[i].mask ? VK_STENCIL_OP_REPLACE : VK_STENCIL_OP_KEEP,
                               sa.stencil_gen, 0xFF);
             }
+            if (own && draws[i].zwrite) {
+                c.set_stencil(true, VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_REPLACE, sa.stencil_gen, 0xFF); // (where it wrote Z)
+            } else if (own) {
+                // its own triangles' pixels exactly, then the others by the world unit
+                Push e = p;
+                e.zbias = 0.0f;
+                e.zslope = 0.0f;
+                c.set_stencil(true, VK_COMPARE_OP_EQUAL, VK_STENCIL_OP_KEEP, sa.stencil_gen, 0xFF);
+                c.push_constants(&e, 0, sizeof(e));
+                sa_draw_range(c, per_sample, count, first, in_pass);
+                sa_stats.draws++;
+                gsn_stats.draws++;
+                c.set_stencil(true, VK_COMPARE_OP_NOT_EQUAL, VK_STENCIL_OP_KEEP, sa.stencil_gen, 0xFF);
+            }
             c.push_constants(&p, 0, sizeof(p));
             sa_draw_range(c, per_sample, count, first, in_pass);
             sa_stats.draws++;
             gsn_stats.draws++;
+        }
+        if (own) {
+            c.set_stencil(false, VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_KEEP, 0, 0xFF);
         }
     }
     sa.z_written |= zwrite;
@@ -3362,8 +3434,10 @@ void sa_print_stats() {
     for (int i = 0; i < SA_TEX_COUNT; i++) {
         fprintf(stderr, "%s%llu %s", i ? ", " : "", (unsigned long long)s.textures[i], sa_tex_names[i]);
     }
-    fprintf(stderr, "; %llu depth clears and %llu alpha sets drawn by the scene, %llu shadow batches by the stencil",
-            (unsigned long long)s.depth_clears, (unsigned long long)s.alpha_sets, (unsigned long long)s.shadow_batches);
+    fprintf(stderr, "; %llu depth clears and %llu alpha sets drawn by the scene, %llu shadow batches by the stencil, %llu layers "
+                    "exact over their own triangles",
+            (unsigned long long)s.depth_clears, (unsigned long long)s.alpha_sets, (unsigned long long)s.shadow_batches,
+            (unsigned long long)s.own_layers);
     fprintf(stderr, "; %.2f turns a picture", gsn_stats.pictures ? double(s.acquires) / double(gsn_stats.pictures) : 0.0);
     fprintf(stderr,
             " (T2: %llu taken from the GS's clear, %llu resampled copies; the GS's drawn by the scene: %llu 3D, %llu screen "

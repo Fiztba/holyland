@@ -24,6 +24,30 @@ layout(push_constant, std430) uniform Push {
     float zslope;     // ... and this times the Z's change across a GS pixel, at most zbias (a layer's colour pass)
 } pc;
 
+#ifdef ND_STANDALONE
+#ifndef SA_GRAZE
+#define SA_GRAZE 1.0
+#endif
+// The scene's slack for a tie's colour pass (gsn_standalone.inc, "Ties"), in Z: pc.zbias, plus
+// - pc.zslope >= 0: that times the corner's alpha / 255 (--native-layer-z tolerant's slope term, 255 a Z), or
+// - pc.zslope < 0 (a layer, by its real depth): -pc.zslope world units across the surface, as Z there. The corner's
+//   alpha is the triangle's Z change across a GS pixel, g = 2^(a / 32) - 1. With Z = cz + az q (q = 1 / the depth),
+//   a depth change is (Z - cz) q times as much Z, and a surface whose Z changes g a GS pixel lies at tan t =
+//   g sx / (Z - cz) to the view (sx: the screen's GS pixels a unit across at depth 1). Two surfaces e apart across
+//   are e / cos t apart in depth: e q sqrt((Z - cz)^2 + (g sx)^2) in Z, the same in the world at every distance.
+//   (tan t at most SA_GRAZE: toward a silhouette e / cos t grows without end, and a layer passed over the faces in
+//   front of it there: a seam along a tower's top edge against the sky with 3; 1: at most 1.4 times e)
+float sa_slack(float zf, float q, float cz, float sx, uint a) {
+    if (pc.zslope >= 0.0) {
+        return pc.zbias + pc.zslope * float(a) / 255.0;
+    }
+    float g = exp2(float(a) / 32.0) - 1.0;
+    float r = abs(zf - cz);
+    float t = min(g * sx, SA_GRAZE * r);
+    return pc.zbias - pc.zslope * abs(q) * sqrt(r * r + t * t);
+}
+#endif
+
 #define GSN_F_TME 0x1u
 #define GSN_F_FST 0x2u
 #define GSN_F_TFX_SHIFT 2u
