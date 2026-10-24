@@ -249,6 +249,7 @@ struct Sa {
     Shader *vs = nullptr, *vs_280 = nullptr, *vs_700 = nullptr;
     Program *programs[3][2] = {};
     Program *programs_in[3][2] = {}; // (T8) [SA_VS_*][multisampled]: blending from the pass's scratch (gs_in*.frag)
+    Program *programs_copy[3][2] = {}; // [SA_VS_*][multisampled]: a run's copy into the scratch by its own triangles
     Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
     // (T2) the scene's scale (its pixels a GS pixel is, across and down) and samples as its targets have them now,
@@ -1489,6 +1490,23 @@ void sa_programs() {
             sa.programs_in[k][1] = gs->device->request_program(vss[k], gs->program_in_ms->get_shader(ShaderStage::Fragment));
         }
     }
+    // (a run's copy by its own triangles: the target, an input attachment, into the scratch, colour attachment 1)
+    if (gs->device->get_device_features().supports_conservative_rasterization) {
+        for (int ms = 0; ms < 2; ms++) {
+            ResourceLayout run_copy = {};
+            run_copy.output_mask = 2;
+            run_copy.push_constant_size = sizeof(Push);
+            uint32_t b = ms ? 5 : 4;
+            run_copy.sets[0].input_attachment_mask = 1u << b;
+            run_copy.sets[0].fp_mask = 1u << b;
+            run_copy.sets[0].meta[b].array_size = 1;
+            Shader *fs = ms ? gs->device->request_shader(gsn_spv_sa_copy_run_ms_frag, sizeof(gsn_spv_sa_copy_run_ms_frag), &run_copy)
+                            : gs->device->request_shader(gsn_spv_sa_copy_run_frag, sizeof(gsn_spv_sa_copy_run_frag), &run_copy);
+            for (int k = 0; k < 3; k++) {
+                sa.programs_copy[k][ms] = gs->device->request_program(vss[k], fs);
+            }
+        }
+    }
     if (sample_shading) {
         Shader *fs = gs->device->request_shader(gsn_spv_sa_sample_frag, sizeof(gsn_spv_sa_sample_frag), &frag);
         for (int k = 0; k < 3; k++) {
@@ -2086,7 +2104,7 @@ bool sa_shadow_batch() {
 // batch's corners are one vertex buffer).
 void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end); // (gsn_nd_pass.inc)
 // (in_pass, T8: the scene's own corners blend from the render pass's scratch, gs_in.frag / gs_in_ms.frag)
-void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass = false) {
+void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass = false, bool copy = false) {
     const Vtx *v = gs->verts.data();
     const Buffer *bound = nullptr;
     for (uint32_t end = first + n; first < end;) {
@@ -2113,6 +2131,7 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass
             } else {
                 int vs = kind == ND_KIND_280 ? SA_VS_280 : effect ? SA_VS_700 : SA_VS_000;
                 c.set_program(ndw_batch() ? sat_water_program(sample) // (T3: the reflection's water, sa_water.vert)
+                              : copy      ? sa.programs_copy[vs][sa.samples > 1 ? 1 : 0]
                               : in_pass   ? sa.programs_in[vs][sa.samples > 1 ? 1 : 0]
                                           : sa.programs[vs][sample ? 1 : 0]);
             }
@@ -2314,6 +2333,7 @@ void sa_group_draw() {
     if (sa.bound) {
         const SaGroupKey &k1 = g.pass[0].key, &k2 = g.pass[1].key;
         sa_begin_pass(false);
+        gpu_enter(GPU_SA_GROUP + (sat_bound() ? GPU_SA_REFL - GPU_SA_DRAW : 0));
         Cmd &c = cmd();
         c.set_opaque_state();
         // the corners: the first passes', then the second passes'
@@ -3390,9 +3410,82 @@ bool sa_draw_batch(int *why) {
     in_pass = in_pass && all_native;
     bool copied_in_pass = false;
     uint64_t bound_pass = UINT64_MAX; // (the render pass the run's bindings were made in)
+    int gpu_refl = sat_bound() ? GPU_SA_REFL - GPU_SA_DRAW : 0; // (KF4_GSN_GPU_TIME=2)
+    int gpu_kind = (ps2_only || sa.gs3d || sa.gs_fill || sa.gs_water) ? GPU_SA_OP
+                   : (shadow ? GPU_SA_SHADOW : shader_blend ? GPU_SA_BLEND_DRAW : per_sample ? GPU_SA_SAMPLE : GPU_SA_DRAW) + gpu_refl;
+    // The copy a run blends from, where the run draws: made by the run's own triangles, with its vertex shader (so in a
+    // picture between where they are moved to), rasterized conservatively: every pixel a triangle of it touches, all its
+    // samples, the target's pixels as pass_copy.frag and pass_resolve.frag make them (sa_copy_run.frag). The run's draws
+    // read the copy only at pixels its triangles cover, all of them within it: the same picture as the copy over the
+    // run's box. In a picture between that box is the whole scene for a skinned model's run (the GPU moves its corners:
+    // nd_box_at_0 cannot say where they are), so each run of the pond's blended zombies copied the whole scene (3.2 ms
+    // of the GPU's 8.4 a picture). KF4_SA_RUN_COPY=0: the box (to compare).
+    static int run_copy_on = -1;
+    if (run_copy_on < 0) {
+        const char *v = getenv("KF4_SA_RUN_COPY");
+        run_copy_on = v && *v ? atoi(v) : 1;
+    }
+    bool run_copy = in_pass && run_copy_on && sa.programs_copy[0][sa.samples > 1 ? 1 : 0];
+    // the run's bindings (textures, the CLUT, the corners, the buffers): for the render pass under way
+    auto bind_run = [&](Cmd &c) {
+        c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
+        c.set_texture(0, 1, st.target_view ? *st.target_view : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+        if (in_pass) {
+            c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
+        } else {
+            c.set_texture(0, 3, shader_blend ? sa.copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+        }
+        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
+        if (st.want_clut) {
+            memcpy(clut_data, st.clut, sizeof(st.clut));
+        } else {
+            memset(clut_data, 0, 1024);
+        }
+        if (gpu_corners) {
+            c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at) * sizeof(Vtx), sizeof(Vtx));
+        } else {
+            void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
+            memcpy(vdata, corners.data(), bytes);
+        }
+        c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
+        c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
+        c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
+        c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
+        c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
+        if (nd.active) {
+            nd_bind(c); // (the arena: not for a batch of the PS2 path's corners only, whose buffers may be gone)
+        }
+    };
     for (size_t r = 0; r + 1 < runs.size(); r++) {
         uint32_t first = runs[r], count = runs[r + 1] - runs[r];
-        if (shader_blend) {
+        if (shader_blend && run_copy) {
+            sa_begin_pass(true);
+            gpu_enter(interp.active ? (gpu_refl ? GPU_REFL_COPY_BETWEEN : GPU_SA_COPY_BETWEEN) : GPU_SA_BLEND_COPY + gpu_refl);
+            Cmd &c = cmd();
+            if (bound_pass != pass_serial) {
+                bind_run(c);
+                bound_pass = pass_serial;
+            }
+            in_pass_barrier();
+            c.set_opaque_state();
+            c.set_conservative(true);
+            c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            c.set_cull_mode(VK_CULL_MODE_NONE);
+            c.set_viewport({0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f});
+            c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
+            c.set_depth_test(false, false);
+            c.set_blend_enable(false);
+            c.set_color_write_mask(0xF0); // (the scratch only)
+            Push p = push;
+            p.flags |= draws[0].select << F_PASS_SHIFT;
+            p.src_offset[0] = int32_t(sa.samples);
+            p.lod_k = 255.0f;
+            c.push_constants(&p, 0, sizeof(p));
+            sa_draw_range(c, false, count, first, in_pass, true);
+            in_pass_barrier();
+            gsn_stats.blend_copies_in_pass++;
+            copied_in_pass = true;
+        } else if (shader_blend) {
             // the run's pixels as they are now, into the copy it blends with
             int32_t box[4] = {0, 0, int32_t(color->width), int32_t(color->height)};
             if (!interp.active || (nd.active && !nd.pass_active && !gpu_corners)) {
@@ -3408,6 +3501,7 @@ bool sa_draw_batch(int *why) {
             if (bx1 > x0 && by1 > y0 && in_pass) {
                 // (T8) in the render pass: the run's pixels into the pass's scratch, as flush_batch's COPY_IN_PASS
                 sa_begin_pass(true);
+                gpu_enter(interp.active ? (gpu_refl ? GPU_REFL_COPY_BETWEEN : GPU_SA_COPY_BETWEEN) : GPU_SA_BLEND_COPY + gpu_refl);
                 Cmd &c = cmd();
                 in_pass_barrier();
                 c.set_opaque_state();
@@ -3454,7 +3548,7 @@ bool sa_draw_batch(int *why) {
             // (pf/skin) a run after the copy it blends from, in the same render pass: the textures, the CLUT, the
             // corners and the buffers bound for the run before are still bound (a pass's bindings last to its end):
             // only the pipeline's state again, which the copy changed
-            bool keep = r > 0 && bound_pass == pass_serial;
+            bool keep = bound_pass == pass_serial;
             c.set_opaque_state();
             c.set_program(sa.programs[SA_VS_000][0]); // (each stretch's own: sa_draw_range)
             c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -3462,21 +3556,6 @@ bool sa_draw_batch(int *why) {
             VkViewport vp = {0.0f, 0.0f, float(color->width * scale_x), float(color->height * scale_y), 0.0f, 1.0f};
             c.set_viewport(vp);
             c.set_scissor({{int32_t(sx0 * scale_x), int32_t(sy0 * scale_y)}, {(x1 - sx0) * scale_x, (y1 - sy0) * scale_y}});
-            if (!keep) {
-                c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
-                c.set_texture(0, 1, st.target_view ? *st.target_view : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-                if (in_pass) {
-                    c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
-                } else {
-                    c.set_texture(0, 3, shader_blend ? sa.copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-                }
-                uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
-                if (st.want_clut) {
-                    memcpy(clut_data, st.clut, sizeof(st.clut));
-                } else {
-                    memset(clut_data, 0, 1024);
-                }
-            }
             c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : ztst == 3 ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS);
             if (abe && !shader_blend) {
                 float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
@@ -3490,20 +3569,7 @@ bool sa_draw_batch(int *why) {
                 c.set_blend_enable(false);
             }
             if (!keep) {
-                if (gpu_corners) {
-                    c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at) * sizeof(Vtx), sizeof(Vtx));
-                } else {
-                    void *vdata = c.allocate_vertex_data(0, bytes, sizeof(Vtx));
-                    memcpy(vdata, corners.data(), bytes);
-                }
-                c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vtx, x));
-                c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vtx, z));
-                c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
-                c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
-                c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
-                if (nd.active) {
-                    nd_bind(c); // (the arena: not for a batch of the PS2 path's corners only, whose buffers may be gone)
-                }
+                bind_run(c);
             }
             bound_pass = pass_serial;
         }
@@ -3516,6 +3582,7 @@ bool sa_draw_batch(int *why) {
                 p.zbias = 0.0f; // (by its real depth: sa_slack's world units, no Z)
                 p.zslope = -layer_eps; // (0: exact)
             }
+            gpu_enter(draws[i].mask == 0 && gpu_kind != GPU_SA_OP && !shadow ? (gpu_refl ? GPU_REFL_ZFIRST : GPU_SA_ZFIRST) : gpu_kind);
             c.set_color_write_mask(draws[i].mask);
             c.set_depth_test(true, draws[i].zwrite);
             if (shadow) {

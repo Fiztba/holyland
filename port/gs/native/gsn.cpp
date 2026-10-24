@@ -509,10 +509,24 @@ struct Why {
 int gpu_time = -1;
 QueryPoolHandle gpu_last;
 uint64_t gpu_cmd_serial, gpu_last_serial;
-const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa load/depth", "copy", "scanout"};
-enum { GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_KINDS };
+// KF4_GSN_GPU_TIME=2 also splits the render passes' time by what is drawn in them (gpu_enter: the time from there to the
+// next mark is that kind's), in the pictures between's replays too (OP_GPU_MARK). Each mark waits for the GPU's work
+// before it, so the times add up to more than without them: read them as shares.
+const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa load/depth", "copy", "scanout",
+                                 "pass: untagged", "pass: end", "scene draws", "scene cut-outs per sample",
+                                 "scene blend copies", "scene blend draws", "scene shadows", "scene skinned groups",
+                                 "refl draws", "refl cut-outs per sample", "refl blend copies", "refl blend draws",
+                                 "refl shadows", "refl skinned groups", "GS batches", "scene ops", "refl Z-first", "scene Z-first", "scene blend copies between", "refl blend copies between"};
+enum {
+    GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_UNTAGGED, GPU_PASS_END,
+    GPU_SA_DRAW, GPU_SA_SAMPLE, GPU_SA_BLEND_COPY, GPU_SA_BLEND_DRAW, GPU_SA_SHADOW, GPU_SA_GROUP,
+    GPU_SA_REFL, // (the same six into a named target: + GPU_SA_REFL - GPU_SA_DRAW)
+    GPU_GS_BATCH = GPU_SA_REFL + 6, GPU_SA_OP, GPU_REFL_ZFIRST, GPU_SA_ZFIRST, GPU_SA_COPY_BETWEEN, GPU_REFL_COPY_BETWEEN, GPU_KINDS
+};
 uint64_t gpu_marks[GPU_KINDS];
+int gpu_cur = -1; // (KF4_GSN_GPU_TIME=2: what is being drawn since the last mark)
 void gpu_mark(int kind);
+void gpu_enter(int kind);
 
 // ---- Vulkan helpers ----------------------------------------------------------------------------
 // The command buffer: Granite's, through Cmd, which hands each call on and, while a picture between is
@@ -524,7 +538,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL,
+    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -925,6 +939,14 @@ public:
             c.set_stencil_back_ops(op, pass, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
             c.set_stencil_reference(0xFF, uint8_t(ref_mask >> 8), uint8_t(ref_mask));
         }
+    }
+    // conservative rasterization (overestimated: every pixel a triangle touches, all its samples covered); pipeline
+    // state, cleared by set_opaque_state
+    void set_conservative(bool on_) {
+        if (on()) {
+            rec().add(OP_CONSERVATIVE, ArgValues{{uint32_t(on_)}, {}});
+        }
+        raw().set_conservative_rasterization(on_);
     }
     void set_depth_compare(VkCompareOp op) {
         if (on()) {
@@ -1420,6 +1442,21 @@ void replay_ops(const Recording &r) {
             }
             break;
         }
+        case OP_CONSERVATIVE:
+            c.set_conservative_rasterization(r.args<ArgValues>(op).v[0] != 0);
+            break;
+        case OP_GPU_MARK: {
+            const ArgValues &a = r.args<ArgValues>(op);
+            bool was = recording_ops.on;
+            recording_ops.on = false;
+            if (a.v[1]) {
+                gpu_enter(int(a.v[0]));
+            } else {
+                gpu_mark(int(a.v[0]));
+            }
+            recording_ops.on = was;
+            break;
+        }
         }
     }
     cmd().forget_bindings();
@@ -1440,10 +1477,17 @@ void full_barrier() {
 
 void gpu_mark(int kind) {
     if (gpu_time < 0) {
-        gpu_time = getenv("KF4_GSN_GPU_TIME") && atoi(getenv("KF4_GSN_GPU_TIME")) > 0;
+        gpu_time = getenv("KF4_GSN_GPU_TIME") ? std::max(atoi(getenv("KF4_GSN_GPU_TIME")), 0) : 0;
     }
     if (!gpu_time || !gs->cmd) {
         return;
+    }
+    if (gpu_time >= 2 && recording_ops.on) {
+        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 0}, {}});
+    }
+    if (gpu_time >= 2 && gpu_cur >= 0) {
+        kind = gpu_cur;
+        gpu_cur = -1;
     }
     QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
@@ -1454,9 +1498,29 @@ void gpu_mark(int kind) {
     gpu_last_serial = gpu_cmd_serial;
 }
 
+// (KF4_GSN_GPU_TIME=2) the GPU's time from here to the next mark is `kind`'s; the time before it, what was entered last
+void gpu_enter(int kind) {
+    if (gpu_time < 2 || !gs->cmd) {
+        return;
+    }
+    if (recording_ops.on) {
+        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 1}, {}});
+    }
+    int before = gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED;
+    QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
+        gs->device->register_time_interval("gsn", gpu_last, ts, std::string("gsn ") + gpu_kinds[before]);
+        gpu_marks[before]++;
+    }
+    gpu_last = ts;
+    gpu_last_serial = gpu_cmd_serial;
+    gpu_cur = kind;
+}
+
 void end_pass() {
     if (gs->in_pass) {
         gsn_stats.pass_ends[why_now]++;
+        gpu_enter(GPU_PASS_END); // (KF4_GSN_GPU_TIME=2: the stores)
         cmd().end_render_pass();
         gpu_mark(gs->pass_ms ? GPU_PASS_MS : GPU_PASS);
         gs->in_pass = false;
@@ -3764,6 +3828,7 @@ void flush_batch() {
     if (sa_flush()) {
         return; // (standalone: the scene's batch, drawn into the scene's targets: gsn_standalone.inc)
     }
+    gpu_enter(GPU_GS_BATCH);
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
     // largest alpha, the rows they reach

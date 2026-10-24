@@ -31,7 +31,8 @@ VARIANTS = [
     ("nd_700.vert", "sa_700.vert", ["-DND_STANDALONE"]),  # ... program 0x700's in the scene
     ("nd_water.vert", "sa_water.vert", ["-DND_STANDALONE"]),  # ... the reflection's water in the scene (T3)
     ("sa_depth.frag", "sa_depth_ms.frag", ["-DSA_MS"]),  # ... the scene's depth into a multisampled Z buffer
-    ("sa_resample.frag", "sa_resample_ms.frag", ["-DSA_MS"]),  # ... T2: from a multisampled image at another scale
+    ("sa_resample.frag", "sa_resample_ms.frag", ["-DSA_MS"]),
+    ("sa_copy_run.frag", "sa_copy_run_ms.frag", ["-DSA_MS"]),  # ... a run's copy by its own triangles, multisampled  # ... T2: from a multisampled image at another scale
     ("sa_resample.frag", "sa_resample_depth.frag", ["-DSA_DEPTH"]),  # ... a depth at another scale
     ("sa_resample.frag", "sa_resample_depth_ms.frag", ["-DSA_DEPTH", "-DSA_MS"]),  # ... from a multisampled one
 ]
