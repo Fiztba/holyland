@@ -1386,6 +1386,32 @@ the herb run in modern at the owner's settings (the same `--log`, PATH1 hash 561
 1234); vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash
 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
+### Death in the deadly water (branch `p8/death-water`, from `native/draw` 341eb444)
+
+The owner, `--renderer modern` at 240: falling into a deadly water spot (`bugs_modern/quick_deathwater`, walking
+forward) showed garbage tiles, noise and light-cyan bands over the screen for a few seconds, the HUD intact. Not native
+draw's, nor the perf work's: the same at 240 on the PS2 path (`--native-draw off`), hosted, 5111e87, 73887b9 and
+play-932801f; never at 30. Headless with `--fast` it is every picture between from the death screen's first frames to
+the fade's end (vblanks 446-468 from the save with `UP` held from 250); real time, whenever the death screen's camera
+shows the texture below.
+
+**The cause** (`frame_interp.c`, `flat_copies`): the pictures between make the wobble's copy of the frame (to 0x2BC0)
+again only when the frame does not read those pages before the copy without writing them first (a read of the copy of
+the frame before). The death screen draws a 256 x 256 PSMT8 texture at 0x37E0 with one mipmap (TEX1's MTBA: the level
+packed after it), early in the frame. A texture with mipmaps was taken as read over twice its first level: 16 pages,
+447-462, where it is 10 (447-456, inside the frame's upload 426-457). Pages 458-462 had not been written yet in the
+frame, so the copy was "read before", not made again, and the pictures between drew the wobble's strips from the
+textures uploaded over 0x2BC0 after the frame's copy. A texture with MTBA and up to 3 levels is now read over its
+levels exactly (as `gsn.cpp`'s `mip_addresses` packs them); others keep twice the first level.
+
+**Checked:** the death at 240 (3x, the owner's settings; `--fast` three walk timings, every picture of vblanks
+350-480; real time `KF4_PRESENT_SIM=240` twice; 1x; hosted; the PS2 path): no picture between differs from its frame by
+more than the fall's own motion; at 30 the same. Byte for byte 341eb444's: the four spots (156 pictures), hosted at the
+pond (40), the herb run in modern at the owner's settings (the same `--log`, PATH1 hash 561c91020b2908ee). The off
+check passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0
+of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
+460424273, pictures 1800, 1820 and 1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

@@ -1761,12 +1761,36 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
             w->record_reads_prev = 1;
         }
         if (w->mode == SCAN && w->uploads != NULL) {
-            /* the texture (twice its first level: its mipmaps after it) and the CLUT are read */
-            uint32_t first, last;
+            /* the texture and the CLUT are read: the first level, and with mipmaps the levels after it (TEX1's
+               MTBA: levels 1 to 3 packed after level 0, each a quarter of the one before, as the GS makes
+               MIPTBP1; otherwise twice the first level). Not more: a read of pages the frame has not
+               written before a copy of the frame over them says the frame reads the copy of the frame
+               before (flat_copies). The twice took the death screen under water's 256 x 256 PSMT8 (10
+               pages with its mipmap) for 16, past the textures uploaded there into the wobble's copy left
+               from the frame before, so the copy was not made again and the pictures between drew the
+               wobble's strips from the textures uploaded over it: noise and bands of light. */
+            uint32_t first, last, levels = (uint32_t)((w->tex1[n] >> 2) & 7);
             uint64_t v = *value;
+            uint32_t tbp = (uint32_t)(v & 0x3FFF), psm = (uint32_t)((v >> 20) & 0x3F);
+            uint32_t tw = 1u << ((v >> 26) & 0xF), th = 1u << ((v >> 30) & 0xF);
 
-            pages_of((uint32_t)(v & 0x3FFF), (uint32_t)((v >> 14) & 0x3F), (uint32_t)((v >> 20) & 0x3F),
-                     (((w->tex1[n] >> 2) & 7) ? 2u : 1u) << ((v >> 30) & 0xF), &first, &last);
+            if (levels > 0 && levels <= 3 && ((w->tex1[n] >> 9) & 1)) {
+                /* (a block of the format, in pixels: gsn.cpp's mip_addresses) */
+                uint32_t bw = psm == 0x14 ? 32 : psm == 0x13 || psm == 0x02 || psm == 0x0A ? 16 : 8;
+                uint32_t bh = psm == 0x13 || psm == 0x14 ? 16 : 8;
+                uint32_t blocks = (tw / bw) * (th / bh), end = tbp + blocks, l;
+
+                pages_of(tbp, (uint32_t)((v >> 14) & 0x3F), psm, th, &first, &last);
+                for (l = 0; l < levels; l++) {
+                    blocks /= 4;
+                    end += blocks;
+                }
+                if (end > tbp + (tw / bw) * (th / bh) && (end - 1) / 32 > last) {
+                    last = (end - 1) / 32;
+                }
+            } else {
+                pages_of(tbp, (uint32_t)((v >> 14) & 0x3F), psm, (levels ? 2u : 1u) * th, &first, &last);
+            }
             uploads_event(w->uploads, EV_READ, first, last);
             pages_of((uint32_t)((v >> 37) & 0x3FFF), 1, 0, 16, &first, &last);
             uploads_event(w->uploads, EV_READ, first, last);
