@@ -121,7 +121,10 @@ def run_case(a, name, case, mode, out):
         env.pop(k, None)
     if case["fx"]:
         env["KF4_FX"] = case["fx"]
-    if mode == "perf":
+    if mode == "cost":
+        env.update(KF4_INTERP_DRAW_ALL="1")
+        cmd += ["--fast", "--stats", "--dump-frames", str(frames - 1), "--dump-dir", d]
+    elif mode == "perf":
         if a.pipelines and os.path.isfile(a.pipelines):
             shutil.copy(a.pipelines, os.path.join(d, "data", "native_gs_pipelines.bin"))
         env.update(KF4_PRESENT_SIM="240", KF4_PRESENT_LOG=os.path.join(d, "present.log"), KF4_GSN_GPU_TIME="2",
@@ -136,7 +139,18 @@ def run_case(a, name, case, mode, out):
     shutil.rmtree(os.path.join(d, "data"), ignore_errors=True)
     text = open(os.path.join(d, "out.txt"), errors="replace").read()
     r = {"rc": rc}
-    if mode == "perf":
+    if mode == "cost":
+        frames_drawn = stat(text, r"pictures between on the GPU: (\d+) drawn from the packets", 1) or 1
+        r["gif_ms"] = stat(text, r"native GS time: GIF ([\d.]+) s") * 1000 / frames_drawn
+        r["pkt_ms"] = stat(text, r"drawn from the packets \([\d.]+ s, ([\d.]+) us each") / 1000
+        r["rec_ms"] = stat(text, r"from the recording \([\d.]+ s, ([\d.]+) us each") / 1000
+        r["c_wb"] = stat(text, r"copies, (\d+) write-backs")
+        r["c_dec"] = stat(text, r"write-backs; (\d+) textures decoded")
+        r["wall"] = stat(text, r"\[stats\] wall ([\d.]+) s")
+        for f in os.listdir(d):
+            if f.endswith(".png"):
+                os.remove(os.path.join(d, f))
+    elif mode == "perf":
         rows = []
         if os.path.isfile(os.path.join(d, "present.log")):
             for line in open(os.path.join(d, "present.log")):
@@ -184,6 +198,9 @@ def main():
     ap.add_argument("--cases", help="comma-separated case names (default: all); 'list' lists them")
     ap.add_argument("--perf", action="store_true")
     ap.add_argument("--pictures", action="store_true")
+    ap.add_argument("--cost", action="store_true", help="--fast with every picture between drawn: the GS thread's time a "
+                    "game frame (GIF), a picture between from the packets and from the recording, write-backs and "
+                    "decodes in all; robust to a GPU shared with other work")
     ap.add_argument("--frames", type=int, default=1000, help="vblanks a forced case runs (1000)")
     ap.add_argument("--renderer", default="modern")
     ap.add_argument("--keep", action="store_true", help="keep the --pictures dumps")
@@ -198,7 +215,7 @@ def main():
     for n in names:
         if n not in all_cases:
             sys.exit("no case %r (--cases list)" % n)
-    modes = [m for m, on in (("perf", a.perf), ("pictures", a.pictures)) if on] or ["perf", "pictures"]
+    modes = [m for m, on in (("perf", a.perf), ("pictures", a.pictures), ("cost", a.cost)) if on] or ["perf", "pictures"]
     os.makedirs(a.out, exist_ok=True)
     results = {}
     for n in names:
@@ -215,8 +232,9 @@ def main():
 
     print()
     print("| case | pictures/s | game fps | write-backs/pic | decodes/pic | re-recordings | cut (left out) | "
-          "hitches | GPU ms/pic | flagged pictures between (worst %) | verdict |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+          "hitches | GPU ms/pic | flagged pictures between (worst %) | GS ms a frame, a picture between "
+          "(packets, recording) | verdict |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for n, r in results.items():
         base = results.get(all_cases[n]["base"] or "", {})
         verdict = "OK"
@@ -224,16 +242,20 @@ def main():
             verdict = "corrupt"
         elif "pps" in r and (r.get("gfps", 30) < 29 or ("pps" in base and r["pps"] < 0.9 * base["pps"])):
             verdict = "slow"
+        elif "gif_ms" in r and "gif_ms" in base and (r["gif_ms"] > 1.5 * base["gif_ms"] + 2 or
+                                                     r["pkt_ms"] > 1.5 * base["pkt_ms"] + 2 or r["c_wb"] > base["c_wb"] + 10):
+            verdict = "slow"
         elif "perf" in modes and "pps" not in r:
             verdict = "no data"
 
         def f(k, fmt):
             return fmt % r[k] if k in r else ""
 
-        print("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+        print("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
             n, f("pps", "%.1f"), f("gfps", "%.1f"), f("wb", "%.2f"), f("dec", "%.2f"), f("rerec", "%d"),
             ("%d (%d)" % (r["cuts"], r["cut"])) if "cuts" in r else "", f("hitch", "%d"), f("gpu", "%.2f"),
-            ("%d of %d (%.2f)" % (r["flagged"], r["pics"], r["worst"])) if "flagged" in r else "", verdict))
+            ("%d of %d (%.2f)" % (r["flagged"], r["pics"], r["worst"])) if "flagged" in r else "",
+            ("%.1f (%.1f, %.1f)" % (r["gif_ms"], r["pkt_ms"], r["rec_ms"])) if "gif_ms" in r else "", verdict))
 
 
 if __name__ == "__main__":

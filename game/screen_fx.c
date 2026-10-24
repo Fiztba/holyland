@@ -286,7 +286,7 @@ void ScreenFx_Begin(void) {
         GsDraw_ResetDrawTarget();
         GsDraw_QueueTexFlush();
         memset(&sprite, 0, sizeof(sprite));
-        sprite.tex0 = 0x220013540L | (1L << 34); /* (the model's TEX0, Model_SetBlockGsWords; TCC) */
+        sprite.tex0 = 0x220013540ULL | (1ULL << 34); /* (the model's TEX0, Model_SetBlockGsWords; TCC) */
         sprite.tex1 = 0x60;
         sprite.prim = 0x156;
         sprite.rgba[0] = sprite.rgba[1] = sprite.rgba[2] = sprite.rgba[3] = 0x80;
