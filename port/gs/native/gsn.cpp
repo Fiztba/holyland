@@ -2413,7 +2413,10 @@ void shadow_make(Target *t) {
 }
 
 // A transfer is about to write its rectangle (DBP, DBW, DPSM; DSAX, DSAY; RRW, RRH): over a shadow, the
-// bits it writes noted, and its pages written over whole let go
+// bits it writes noted, and its pages written over whole let go. (An upload of whole pages sets theirs whole,
+// and only the pages written are looked at: a shadow left over a frame's copy under the MP drain's wobble saw
+// every upload of the pictures between swizzled again into the mask, 27 us each, about 4 ms a game frame.)
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool *rgb_only);
 void shadow_written(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
     if (shadows.empty()) {
         return;
@@ -2430,15 +2433,26 @@ void shadow_written(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
         return;
     }
     // the transfer again, every bit of every pixel set, into the mask
-    size_t bytes = (size_t(u.w) * u.h * size_t(gsn_psm_bits(u.psm)) + 7) / 8;
-    std::vector<uint8_t> ones(bytes + 16, 0xFF);
-    gsn_upload_data(&u, shadow_mask.data(), ones.data(), ones.size(), nullptr, nullptr);
+    std::vector<uint32_t> whole = whole_pages(bitbltbuf, trxpos, trxreg, nullptr);
+    if (!whole.empty()) {
+        for (uint32_t page : whole) {
+            memset(shadow_mask.data() + size_t(page) * 8192, 0xFF, 8192);
+        }
+    } else {
+        size_t bytes = (size_t(u.w) * u.h * size_t(gsn_psm_bits(u.psm)) + 7) / 8;
+        std::vector<uint8_t> ones(bytes + 16, 0xFF);
+        gsn_upload_data(&u, shadow_mask.data(), ones.data(), ones.size(), nullptr, nullptr);
+    }
     for (size_t i = 0; i < shadows.size();) {
         Shadow &sh = shadows[i];
         Target &t = *sh.t;
         bool left = false;
         for (uint32_t k = 0; k < sh.count && k < t.dirty_pages.size(); k++) {
             if (!t.dirty_pages[k]) {
+                continue;
+            }
+            if (!pages_overlap(lo, count, (sh.lo + k) % vram_pages, 1)) {
+                left = true; // (not written now: as it was)
                 continue;
             }
             const uint8_t *m = shadow_mask.data() + size_t((sh.lo + k) % vram_pages) * 8192;
@@ -2543,8 +2557,83 @@ bool pages_within(uint32_t lo, uint32_t count, uint32_t outer_lo, uint32_t outer
     return true;
 }
 
+void claim_targets(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer);
 void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer = nullptr) {
     shadow_resolve(lo, count);
+    claim_targets(lo, count, keep, drop, sharer);
+}
+
+// (shadow_covers' marks, GSN_VRAM_BYTES: kept clear between calls)
+std::vector<uint8_t> shadow_read_marks;
+
+// A texture's level decoded from VRAM (bp, bw, psm: the w x h texels from 0, 0 its decode reads), its pages lo..count
+// claimed: true when every bit of it on those pages that a shadow still owes was written since the shadow was made
+// (shadow_mask). VRAM then holds those bits as they would be had the shadow gone back, and it need not go back. The MP
+// drain's and the water's wobble copy the frame to 0x2BC0; the effects' textures go up over that copy after
+// the wobble (Effect_UploadTextures), covering a page only in part, and one of them (a 64 x 64 PSMT8 at 0x3780,
+// half a page) is read by a draw every frame: its page was written back for it, a read-back waiting for the
+// GPU every frame (3-4 ms at 3x). KF4_GSN_SHADOW_READS=0: such a read takes the pages owed, as before.
+bool shadow_covers(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, uint32_t lo, uint32_t count) {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_SHADOW_READS");
+        on = !(v && atoi(v) == 0);
+    }
+    if (!on || shadows.empty() || shadow_mask.empty() || !gsn_psm_valid(psm)) {
+        return false;
+    }
+    // the pages owed here
+    std::vector<uint32_t> owed;
+    for (const Shadow &sh : shadows) {
+        for (uint32_t k = 0; k < sh.count && k < sh.t->dirty_pages.size(); k++) {
+            uint32_t page = (sh.lo + k) % vram_pages;
+            if (sh.t->dirty_pages[k] && pages_overlap(lo, count, page, 1)) {
+                owed.push_back(page);
+            }
+        }
+    }
+    if (owed.empty()) {
+        return true; // (nothing owed on these pages: shadow_resolve would do nothing)
+    }
+    if (shadow_read_marks.empty()) {
+        shadow_read_marks.assign(GSN_VRAM_BYTES, 0);
+    }
+    // the texels marked as an upload of the rectangle would write them, every bit set
+    GsnUpload u;
+    uint64_t bitbltbuf = uint64_t(bp) << 32 | uint64_t(bw) << 48 | uint64_t(psm) << 56;
+    uint64_t trxreg = uint64_t(w) | uint64_t(h) << 32;
+    gsn_upload_begin(&u, bitbltbuf, 0, trxreg);
+    size_t bytes = (size_t(w) * h * size_t(gsn_psm_bits(psm)) + 7) / 8;
+    std::vector<uint8_t> ones(bytes + 16, 0xFF);
+    uint32_t mlo = 1, mhi = 0;
+    gsn_upload_data(&u, shadow_read_marks.data(), ones.data(), ones.size(), &mlo, &mhi);
+    bool covered = true;
+    for (uint32_t page : owed) {
+        const uint8_t *r = shadow_read_marks.data() + size_t(page) * 8192, *m = shadow_mask.data() + size_t(page) * 8192;
+        for (size_t b = 0; b < 8192 && covered; b += 8) {
+            uint64_t rv, mv;
+            memcpy(&rv, r + b, 8);
+            memcpy(&mv, m + b, 8);
+            covered = (rv & ~mv) == 0;
+        }
+    }
+    if (mlo <= mhi) {
+        memset(shadow_read_marks.data() + size_t(mlo) * 8192, 0, size_t(mhi - mlo + 1) * 8192);
+    }
+    return covered;
+}
+
+// (a texture's level read from VRAM) claim_pages, the shadows left owed where the read needs nothing of them
+void claim_texture(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, uint32_t lo, uint32_t count) {
+    if (shadow_covers(bp, bw, psm, w, h, lo, count)) {
+        gsn_stats.shadow_reads_covered++;
+        claim_targets(lo, count, nullptr, false, nullptr);
+        return;
+    }
+    claim_pages(lo, count, nullptr, false);
+}
+
+void claim_targets(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer) {
     for (size_t i = 0; i < gs->targets.size();) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
@@ -4242,7 +4331,8 @@ void flush_batch() {
                 uint32_t lo, count;
                 buffer_pages(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, cols >> l), std::max(1u, rows >> l), &lo,
                              &count);
-                claim_pages(lo, count, nullptr, false);
+                claim_texture(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, (1u << tw) >> l), std::max(1u, (1u << th) >> l), lo,
+                              count);
             }
             Texture *tex = get_texture(tbp, tbw, tpsm, tw, th, levels, mip_tbp, mip_tbw, cols, rows);
             sa_verify(tex0, levels, mip_tbp, mip_tbw, cols, rows); // (standalone: KF4_SA_VERIFY)

@@ -107,6 +107,7 @@ add_library(kf4_port STATIC
     port/platform/quicksave.c
     port/platform/teleport.c
     port/platform/cheats.c
+    port/platform/automap.c
     port/platform/lz4_block.c
     port/debug/debug.c
     port/debug/gs_capture.c
@@ -180,7 +181,7 @@ if(KF4_USE_SDL AND SDL2_FOUND)
     endif()
     target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
-    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp)
+    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/automap_view.cpp)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
@@ -334,9 +335,15 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/cheats.c game/screen_fx.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/cheats.c game/automap.c game/automap_guide.c game/screen_fx.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
+# the extended stats mod (port/include/port/stats.h, docs/port/EXTENDED_STATS.md)
+target_sources(game_data PRIVATE game/stats.c)
+target_sources(kf4_port PRIVATE port/overlay/stats_mod.c)
+if(TARGET imgui)
+    target_sources(kf4_port PRIVATE port/overlay/stats_panel.cpp)
+endif()
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")

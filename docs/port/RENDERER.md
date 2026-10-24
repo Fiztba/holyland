@@ -172,7 +172,19 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   go, and a page still owed goes back only when its VRAM is wanted (`claim_pages`, `load_target_rect`, another
   write-back, a save state), what was written since put back over it. Anything new that reads the CPU's VRAM
   must go through `claim_pages` (or call `shadow_resolve`) first. Map 060's shop: 251 write-backs to none
-  (`--stats`: "write-backs put off"); `KF4_GSN_SHADOWS=0` brings them back.
+  (`--stats`: "write-backs put off"); `KF4_GSN_SHADOWS=0` brings them back. A texture decoded from VRAM over
+  a page still owed leaves it owed when every bit it reads was written since (`claim_texture`, `shadow_covers`:
+  the MP drain's effect textures over the wobble's copy, a write-back a frame; `KF4_GSN_SHADOW_READS=0` to
+  compare), and an upload of whole pages sets their mask whole without swizzling into it.
+- **The exact restore draws nothing into the frame** (`frame_interp.c`, `exact_kick`). After a vblank's pictures
+  between, a buffer the next frame reads before it draws it (the scrolling textures, the reflection) is drawn
+  again as the frame left it, by walking the frame once more (`port_interp_end_vblank`). What it would draw into
+  the frame goes into the buffer shown, which the next frame clears and no vblank shows, so its vertices into
+  the frame get ADC and native draw's draws into it are left out. The 3D was meant to be left out from the
+  start, but the bit set was the qword's 127th, not ADC (111): every restore drew the frame again, with native
+  draw the whole world, and under the MP drain's wobble (the Queen's Palace) its wobble read a copy of the frame
+  the restore does not make, from VRAM (1024 x 512 decoded, the frame written back): the game at 14 frames a
+  second at 240 (NATIVE_DRAW_P8.md, "The Queen's Palace"). `KF4_INTERP_RESTORE_FRAME=1` draws it as before.
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a

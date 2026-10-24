@@ -1099,8 +1099,10 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->cutout_draws);
         }
         if (s->shadows) {
-            fprintf(stderr, "[stats] native GS: %llu write-backs put off: %llu never owed, %llu pages' made later\n",
-                    (unsigned long long)s->shadows, (unsigned long long)s->shadows_gone, (unsigned long long)s->shadows_resolved);
+            fprintf(stderr, "[stats] native GS: %llu write-backs put off: %llu never owed, %llu pages' made later; %llu textures read "
+                            "over pages owed without them (all they read written since)\n",
+                    (unsigned long long)s->shadows, (unsigned long long)s->shadows_gone, (unsigned long long)s->shadows_resolved,
+                    (unsigned long long)s->shadow_reads_covered);
         }
         if (s->writebacks_overwritten) {
             fprintf(stderr, "[stats] native GS: %llu write-backs not made: the targets under a copy of the frame\n",

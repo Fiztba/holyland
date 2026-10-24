@@ -1,0 +1,1503 @@
+/* automap.c: PC-only. The automap mod's game side (port/include/port/automap.h, docs/port/AUTOMAP.md): once a
+   game frame (Automap_Poll, from Quick_PollGame) it reads the map the player is in from the game's own
+   structures and keeps what the overlay draws (port/overlay/automap_view.cpp). It only reads the game: with
+   the mod off it returns at once, and with it on the game runs as it would without it.
+
+   The floor plan. A map is made of records (MapSlot.records, MapRecordBounds), each with a model and a
+   collision mesh: strips of triangles in six lists (CollisionMesh): walls, floors, more walls, entity
+   barriers, hazards (lava, poison, the void: Collision_GetSurfaceEffect) and water. The game tests the
+   player against exactly these, so they are the cleanest floor plan there is: they are put in the world
+   with the record model's collision_matrix (Map_PlaceRecordModels) and drawn top down into cells of
+   PORT_AUTOMAP_CELL units:
+   - floors, water and hazards: each cell's centre is dropped onto the triangles over it; a cell keeps up to
+     PORT_AUTOMAP_LAYERS heights (a bridge over a river, a balcony over a hall), heights less than
+     MERGE apart being one layer (a lava floor is its hazard);
+   - walls: a steep wall triangle marks the cells its edges cross, a sloped one (a cave's rock) the cells
+     under it at its height there. A floor layer is a wall where such a wall stands on it up to a body's
+     height (WALL_LOW to WALL_HIGH above it); a cell with no floor keeps the wall's top and bottom, so that
+     solid rock beside a floor is drawn as wall.
+   The view picks, in each cell, the layer the player would see at his height (the highest not far above his
+   feet) and shades floors by their height against his.
+
+   The fog of war: rays go out from the player along the floor (a step of at most CLIMB a cell), revealing
+   each layer they cross, stopping at a wall; looking down off a ledge reveals the floor below. The explored
+   layers are kept per map, as runs (Automap_Serialize), and saved per save by port/platform/automap.c.
+
+   The markers come from the map objects (map_slot_objects, their kind from param/obj.prm), the entities
+   (entity_pool) and the items lying in the map (lying_items); their names from the game's own text
+   (Message_GetText, item_name_defs) where it has them, and from game/automap_guide.c where it does not. */
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "common.h"
+#include "collision/collision.h"
+#include "core/game.h"
+#include "entity/entity.h"
+#include "item/item.h"
+#include "map/map.h"
+#include "model/model.h"
+#include "player/player.h"
+#include "port/automap.h"
+#include "port/platform.h"
+#include "port/teleport.h"
+
+extern PlayerState player_state;
+extern MapSlot map_slots[];
+extern int current_map_slot;
+extern MapObject map_slot_objects[][0x200];
+extern s32 map_object_counts[2];
+extern Entity entity_pool[][0x80];
+extern int map_spawn_counts[2];
+extern ItemNode *lying_items;
+extern GameDefinition item_name_defs[];
+extern u8 item_counts[];
+extern GameStatus game_status;
+
+sptr Message_GetText(int message_id);
+const char *Quick_WhyNotInPlay(void);
+u32 Collision_GetSurfaceEffect(u32 first, u32 second, int third);
+const char *Automap_CreatureName(int record);
+const char *Automap_ObjectHint(int map, int object);
+const char *Automap_SpawnHint(int map, int spawn, int record);
+int Automap_HazardIsWater(int map);
+
+#define CELL PORT_AUTOMAP_CELL
+#define LAYERS PORT_AUTOMAP_LAYERS
+#define NO_Y PORT_AUTOMAP_NO_Y
+#define MAX_CELLS 1400       /* a side of the grid at most: 70,000 units */
+#define MARGIN 600.0f        /* room around the floors */
+#define MERGE 150            /* heights closer than this in a cell are one layer */
+#define WALL_LOW 40          /* a wall stands on a floor when it rises above it by this... */
+#define WALL_HIGH 150        /* ...and reaches down to within this of it (a ceiling or a lintel does not) */
+#define STEEP 0.35f          /* a wall triangle whose normal's y is under this is upright */
+#define CLIMB 150            /* the most the floor rises or falls from cell to cell along a ray */
+#define REACH 3400.0f        /* how far the rays reveal */
+#define RAYS 720
+#define AIR_CELLS 24         /* a ray goes this far over a drop or over nothing before it stops */
+#define FAR_CELLS 14         /* a DEATH layer this far from any floor is not drawn */
+#define MAX_MAPS 128
+#define MAX_MARKERS 1024
+
+/* ---- State -------------------------------------------------------------------------------------- */
+static PortAutomapPlan plan = {-1};
+static PortAutomapLayer *layers;
+static int16_t *solid_top, *solid_bottom;
+static uint8_t *seen;
+static uint32_t layout_hash;
+static int built_slot = -1;           /* the slot and records the plan was built from */
+static const char *built_records;
+
+typedef struct {
+    int map;
+    uint8_t *data; /* the map's chunk, as Automap_Serialize writes it */
+    size_t size;
+} StoredMap;
+static StoredMap stored[MAX_MAPS];
+static int stored_count;
+
+static PortAutomapMarker markers[MAX_MARKERS];
+static int marker_count;
+
+static PortAutomapPlayer player;
+static uint64_t polled_vblank;
+static int last_reveal_cell = -1;
+static float last_reveal_heading;
+static int polls;
+static int polls_since_build;
+
+/* ---- Text ---------------------------------------------------------------------------------------- */
+/* The game's text codes (font.txc, item_nam.prm): 0x08xx is the character xx + 0x20, 0x8000 a line break,
+   0xFFFF the end; anything else (the Japanese glyphs, padding) is left out. */
+static void decode(const u16 *codes, int count, char *out, size_t size) {
+    size_t n = 0;
+    int i, space = 0;
+
+    for (i = 0; i < count && codes[i] != 0xFFFF && n + 1 < size; i++) {
+        u16 c = codes[i];
+
+        if ((c & 0xFF00) == 0x0800) {
+            char ch = (char)((c & 0xFF) + 0x20);
+
+            if (ch == ' ' && (n == 0 || space)) {
+                continue;
+            }
+            out[n++] = ch;
+            space = ch == ' ';
+        } else if (c == 0x8000 && n > 0 && !space) {
+            out[n++] = ' ';
+            space = 1;
+        }
+    }
+    while (n > 0 && out[n - 1] == ' ') {
+        n--;
+    }
+    out[n] = 0;
+}
+
+static void message_text(int id, char *out, size_t size) {
+    sptr text;
+
+    out[0] = 0;
+    if (id <= 0 || id >= 0x1FFF) {
+        return;
+    }
+    text = Message_GetText(id);
+    if (text == 0) {
+        return;
+    }
+    decode((const u16 *)text, 160, out, size);
+}
+
+static void item_name(int item, char *out, size_t size) {
+    out[0] = 0;
+    if (item > 0 && item < ITEM_COUNT) {
+        decode((const u16 *)&item_name_defs[item], 0x30 / 2, out, size);
+    }
+    if (out[0] == 0) {
+        snprintf(out, size, "item %d", item);
+    }
+}
+
+/* the person's name: the last line of their page of the Recollection screen (record 100 + p, messages
+   3000 + 50p onwards: decomp/docs/GAME_DATA.md "Characters"); a variant record that has no page of its own
+   borrows its model's (chr.prm's model number) */
+static void person_name(int record, int model, char *out, size_t size) {
+    int tries[2], t;
+
+    tries[0] = record;
+    tries[1] = model;
+    out[0] = 0;
+    for (t = 0; t < 2 && out[0] == 0; t++) {
+        if (tries[t] >= 100 && tries[t] < 100 + 99) {
+            message_text(3000 + 50 * (tries[t] - 100) + 49, out, size);
+        }
+    }
+    if (out[0] == 0) {
+        snprintf(out, size, "Person");
+    }
+}
+
+static void add_line(char *text, size_t size, const char *line) {
+    size_t n = strlen(text);
+
+    if (line == NULL || line[0] == 0) {
+        return;
+    }
+    snprintf(text + n, size - n, "%s%s", n ? "\n" : "", line);
+}
+
+/* ---- The meshes ---------------------------------------------------------------------------------- */
+typedef void (*TriangleFn)(const float a[3], const float b[3], const float c[3], int effect, void *context);
+
+/* every triangle of strip list `list` of a model's collision mesh, in the world */
+static void mesh_triangles(ModelInstance *model, int list, TriangleFn fn, void *context) {
+    CollisionMesh *mesh = (CollisionMesh *)model->strips;
+    const CollisionMeshLists *lists = (const CollisionMeshLists *)mesh;
+    const f32 *m = (const f32 *)model->collision_matrix;
+    const Vector4 *local;
+    CollisionStrip *strip;
+    int s, k;
+
+    if (mesh == NULL || lists->strip_counts[list] == 0 || lists->strip_lists[list] == 0) {
+        return;
+    }
+    local = EE_PTR(const Vector4 *, mesh->points);
+    strip = EE_PTR(CollisionStrip *, lists->strip_lists[list]);
+    for (s = 0; s < lists->strip_counts[list]; s++) {
+        int n = strip->point_count;
+        float p[3][3];
+
+        for (k = 0; k < n; k++) {
+            CollisionStripPoint *sp = &strip->points[k];
+            s64 index = ((char *)EE_PTR(char *, sp->position) - (char *)COLLISION_WORLD_POINTS) / 16;
+            const f32 *v;
+            float *w = p[k % 3];
+
+            if (index < 0 || (u64)index >= mesh->point_count) {
+                index = 0;
+            }
+            v = &local[index].x;
+            w[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8] + m[12];
+            w[1] = v[0] * m[1] + v[1] * m[5] + v[2] * m[9] + m[13];
+            w[2] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10] + m[14];
+            if (k >= 2) {
+                CollisionStripPoint *first = &strip->points[k - 2];
+
+                fn(p[(k - 2) % 3], p[(k - 1) % 3], p[k % 3],
+                   (int)Collision_GetSurfaceEffect((u32)first->material_first, (u32)first->material_second,
+                                                   first->material_third),
+                   context);
+            }
+        }
+        strip = (CollisionStrip *)&strip->points[n];
+    }
+}
+
+/* the records of a slot that have collision meshes, list by list */
+static void map_triangles(MapSlot *slot, int list, TriangleFn fn, void *context) {
+    int count = ((MapSlotUnk08 *)slot->header)->record_count, i;
+
+    for (i = 0; i < count; i++) {
+        MapRecordBounds *record = (MapRecordBounds *)(slot->records + i * 0x80);
+        ModelInstance *model = MAP_RECORD_MODEL(record);
+
+        if (model == NULL || model->strips == NULL || (record->record_flags & 0x40000000)) {
+            continue;
+        }
+        mesh_triangles(model, list, fn, context);
+    }
+}
+
+/* ---- The floor plan ------------------------------------------------------------------------------ */
+typedef struct {
+    float x0, z0, x1, z1;
+    int any;
+} Bounds;
+
+static void grow_bounds(const float a[3], const float b[3], const float c[3], int effect, void *context) {
+    Bounds *bounds = context;
+    const float *p[3] = {a, b, c};
+    int i;
+
+    (void)effect;
+    for (i = 0; i < 3; i++) {
+        if (!bounds->any) {
+            bounds->x0 = bounds->x1 = p[i][0];
+            bounds->z0 = bounds->z1 = p[i][2];
+            bounds->any = 1;
+        }
+        bounds->x0 = p[i][0] < bounds->x0 ? p[i][0] : bounds->x0;
+        bounds->x1 = p[i][0] > bounds->x1 ? p[i][0] : bounds->x1;
+        bounds->z0 = p[i][2] < bounds->z0 ? p[i][2] : bounds->z0;
+        bounds->z1 = p[i][2] > bounds->z1 ? p[i][2] : bounds->z1;
+    }
+}
+
+static PortAutomapLayer *cell_layers(int i, int j) {
+    return &layers[((size_t)j * plan.width + i) * LAYERS];
+}
+
+typedef void (*CellFn)(int i, int j, float y, void *context);
+
+/* calls fn for every cell whose centre the triangle covers (top down), with the triangle's height there */
+static void raster(const float a[3], const float b[3], const float c[3], CellFn fn, void *context) {
+    float det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+    float lo_x = fminf(a[0], fminf(b[0], c[0])), hi_x = fmaxf(a[0], fmaxf(b[0], c[0]));
+    float lo_z = fminf(a[2], fminf(b[2], c[2])), hi_z = fmaxf(a[2], fmaxf(b[2], c[2]));
+    int i0, i1, j0, j1, i, j;
+
+    if (fabsf(det) < 1e-3f) {
+        return;
+    }
+    i0 = (int)floorf((lo_x - plan.x0) / CELL - 0.5f);
+    i1 = (int)ceilf((hi_x - plan.x0) / CELL - 0.5f);
+    j0 = (int)floorf((lo_z - plan.z0) / CELL - 0.5f);
+    j1 = (int)ceilf((hi_z - plan.z0) / CELL - 0.5f);
+    i0 = i0 < 0 ? 0 : i0;
+    j0 = j0 < 0 ? 0 : j0;
+    i1 = i1 >= plan.width ? plan.width - 1 : i1;
+    j1 = j1 >= plan.height ? plan.height - 1 : j1;
+    for (j = j0; j <= j1; j++) {
+        float pz = plan.z0 + ((float)j + 0.5f) * CELL;
+
+        for (i = i0; i <= i1; i++) {
+            float px = plan.x0 + ((float)i + 0.5f) * CELL;
+            float u = ((b[2] - c[2]) * (px - c[0]) + (c[0] - b[0]) * (pz - c[2])) / det;
+            float v = ((c[2] - a[2]) * (px - c[0]) + (a[0] - c[0]) * (pz - c[2])) / det;
+
+            if (u < -1e-3f || v < -1e-3f || u + v > 1.001f) {
+                continue;
+            }
+            fn(i, j, u * a[1] + v * b[1] + (1.0f - u - v) * c[1], context);
+        }
+    }
+}
+
+/* what wins when two surfaces are one layer: the floor is the least of them */
+static int priority(int kind) {
+    switch (kind) {
+    case PORT_AUTOMAP_FLOOR: return 1;
+    case PORT_AUTOMAP_WATER: return 2;
+    case PORT_AUTOMAP_POISON: return 3;
+    case PORT_AUTOMAP_HURT: return 4;
+    case PORT_AUTOMAP_DEEP: return 5;
+    case PORT_AUTOMAP_FIRE: return 5;
+    case PORT_AUTOMAP_DEATH: return 6;
+    default: return 0;
+    }
+}
+
+static void add_layer(int i, int j, float yf, void *context) {
+    PortAutomapLayer *l = cell_layers(i, j);
+    int kind = *(const int *)context, y = (int)yf, n, k;
+
+    if (y <= -32000 || y >= 32000) {
+        return;
+    }
+    for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+        if (abs(l[n].y - y) < MERGE) {
+            if (priority(kind) > priority(l[n].kind)) {
+                l[n].kind = (uint8_t)kind;
+            }
+            if (kind != PORT_AUTOMAP_DEATH && y < l[n].y) {
+                l[n].y = (int16_t)y;
+            }
+            return;
+        }
+    }
+    /* sorted from the highest (the least y); when full, the lowest goes */
+    for (n = 0; n < LAYERS && l[n].y != NO_Y && l[n].y < y; n++) {
+    }
+    if (n == LAYERS) {
+        return;
+    }
+    for (k = LAYERS - 1; k > n; k--) {
+        l[k] = l[k - 1];
+    }
+    l[n].y = (int16_t)y;
+    l[n].kind = (uint8_t)kind;
+    l[n].flags = 0;
+}
+
+static void floor_triangle(const float a[3], const float b[3], const float c[3], int effect, void *context) {
+    int kind = *(const int *)context;
+
+    if (kind == PORT_AUTOMAP_POISON) { /* the hazards: which one by the effect */
+        kind = effect == 0                ? PORT_AUTOMAP_DEATH
+               : effect >= 1 && effect <= 3 ? PORT_AUTOMAP_POISON
+               : effect == 4                ? (Automap_HazardIsWater(plan.map) ? PORT_AUTOMAP_DEEP : PORT_AUTOMAP_FIRE)
+                                            : PORT_AUTOMAP_HURT;
+    }
+    raster(a, b, c, add_layer, &kind);
+}
+
+/* a wall from y lo (its top) to hi (its bottom) in cell (i, j) */
+static void stamp_wall(int i, int j, int lo, int hi) {
+    PortAutomapLayer *l;
+    int n, any = 0;
+    size_t cell;
+
+    if (i < 0 || j < 0 || i >= plan.width || j >= plan.height) {
+        return;
+    }
+    l = cell_layers(i, j);
+    for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+        if (l[n].kind == PORT_AUTOMAP_DEATH) {
+            continue;
+        }
+        any = 1;
+        if (lo < l[n].y - WALL_LOW && hi > l[n].y - WALL_HIGH) {
+            l[n].flags |= PORT_AUTOMAP_WALL;
+        }
+    }
+    if (any) {
+        return;
+    }
+    cell = (size_t)j * plan.width + i;
+    if (solid_top[cell] == NO_Y) {
+        solid_top[cell] = (int16_t)lo;
+        solid_bottom[cell] = (int16_t)hi;
+    } else {
+        solid_top[cell] = (int16_t)(lo < solid_top[cell] ? lo : solid_top[cell]);
+        solid_bottom[cell] = (int16_t)(hi > solid_bottom[cell] ? hi : solid_bottom[cell]);
+    }
+}
+
+static void wall_cell(int i, int j, float y, void *context) {
+    (void)context;
+    stamp_wall(i, j, (int)y, (int)y);
+}
+
+static void wall_triangle(const float a[3], const float b[3], const float c[3], int effect, void *context) {
+    float u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, v[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    float n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+    float length = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    const float *p[3] = {a, b, c};
+    int e;
+
+    (void)effect;
+    (void)context;
+    if (length < 1e-3f) {
+        return;
+    }
+    if (fabsf(n[1]) / length >= STEEP) {
+        raster(a, b, c, wall_cell, NULL);
+        return;
+    }
+    {
+        int lo = (int)fminf(a[1], fminf(b[1], c[1])), hi = (int)fmaxf(a[1], fmaxf(b[1], c[1]));
+
+        for (e = 0; e < 3; e++) {
+            const float *q0 = p[e], *q1 = p[(e + 1) % 3];
+            float dx = q1[0] - q0[0], dz = q1[2] - q0[2];
+            int steps = (int)(fmaxf(fabsf(dx), fabsf(dz)) / (CELL * 0.5f)) + 1, s;
+
+            for (s = 0; s <= steps; s++) {
+                float t = (float)s / (float)steps;
+
+                stamp_wall((int)floorf((q0[0] + dx * t - plan.x0) / CELL), (int)floorf((q0[2] + dz * t - plan.z0) / CELL),
+                           lo, hi);
+            }
+        }
+    }
+}
+
+static uint32_t fnv(uint32_t h, uint32_t v) {
+    return (h ^ v) * 16777619u;
+}
+
+/* DEATH layers more than FAR_CELLS from any other layer are the void around the map: not drawn */
+static void mark_far(void) {
+    int w = plan.width, h = plan.height, i, j, n;
+    uint8_t *d = malloc((size_t)w * h);
+
+    if (d == NULL) {
+        return;
+    }
+    for (j = 0; j < h; j++) {
+        for (i = 0; i < w; i++) {
+            const PortAutomapLayer *l = cell_layers(i, j);
+            int near = 0;
+
+            for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+                near |= l[n].kind != PORT_AUTOMAP_DEATH;
+            }
+            d[(size_t)j * w + i] = near ? 0 : 255;
+        }
+    }
+    /* a chamfer distance, two passes */
+    for (j = 0; j < h; j++) {
+        for (i = 0; i < w; i++) {
+            uint8_t *c = &d[(size_t)j * w + i];
+            if (i > 0 && c[-1] + 1 < *c) *c = (uint8_t)(c[-1] + 1);
+            if (j > 0 && c[-w] + 1 < *c) *c = (uint8_t)(c[-w] + 1);
+        }
+    }
+    for (j = h - 1; j >= 0; j--) {
+        for (i = w - 1; i >= 0; i--) {
+            uint8_t *c = &d[(size_t)j * w + i];
+            if (i < w - 1 && c[1] + 1 < *c) *c = (uint8_t)(c[1] + 1);
+            if (j < h - 1 && c[w] + 1 < *c) *c = (uint8_t)(c[w] + 1);
+        }
+    }
+    for (j = 0; j < h; j++) {
+        for (i = 0; i < w; i++) {
+            PortAutomapLayer *l = cell_layers(i, j);
+
+            if (d[(size_t)j * w + i] > FAR_CELLS) {
+                for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+                    l[n].flags |= PORT_AUTOMAP_FAR;
+                }
+            }
+        }
+    }
+    free(d);
+}
+
+static void apply_stored(void);
+static void find_exits(int slot_index);
+
+static void build(int slot_index) {
+    MapSlot *slot = &map_slots[slot_index];
+    Bounds bounds = {0};
+    size_t cells;
+    int kind, i;
+
+    built_slot = slot_index;
+    built_records = slot->records;
+    plan.map = slot->tag;
+    map_triangles(slot, 1, grow_bounds, &bounds);
+    map_triangles(slot, 5, grow_bounds, &bounds);
+    if (!bounds.any) {
+        bounds.x0 = bounds.x1 = player_state.position.x;
+        bounds.z0 = bounds.z1 = player_state.position.z;
+    }
+    /* the corner on whole cells of the world, so that cells mean the same in every build */
+    plan.x0 = floorf((bounds.x0 - MARGIN) / CELL) * CELL;
+    plan.z0 = floorf((bounds.z0 - MARGIN) / CELL) * CELL;
+    plan.width = (int)ceilf((bounds.x1 + MARGIN - plan.x0) / CELL);
+    plan.height = (int)ceilf((bounds.z1 + MARGIN - plan.z0) / CELL);
+    plan.width = plan.width > MAX_CELLS ? MAX_CELLS : plan.width < 1 ? 1 : plan.width;
+    plan.height = plan.height > MAX_CELLS ? MAX_CELLS : plan.height < 1 ? 1 : plan.height;
+    cells = (size_t)plan.width * plan.height;
+    free(layers);
+    free(solid_top);
+    free(solid_bottom);
+    free(seen);
+    layers = malloc(cells * LAYERS * sizeof(*layers));
+    solid_top = malloc(cells * sizeof(*solid_top));
+    solid_bottom = malloc(cells * sizeof(*solid_bottom));
+    seen = calloc(cells, 1);
+    if (layers == NULL || solid_top == NULL || solid_bottom == NULL || seen == NULL) {
+        plan.map = -1;
+        return;
+    }
+    for (i = 0; i < (int)(cells * LAYERS); i++) {
+        layers[i].y = NO_Y;
+        layers[i].kind = PORT_AUTOMAP_NONE;
+        layers[i].flags = 0;
+    }
+    for (i = 0; i < (int)cells; i++) {
+        solid_top[i] = solid_bottom[i] = NO_Y;
+    }
+    kind = PORT_AUTOMAP_FLOOR;
+    map_triangles(slot, 1, floor_triangle, &kind);
+    kind = PORT_AUTOMAP_WATER;
+    map_triangles(slot, 5, floor_triangle, &kind);
+    kind = PORT_AUTOMAP_POISON; /* the hazards, sorted by effect */
+    map_triangles(slot, 4, floor_triangle, &kind);
+    map_triangles(slot, 0, wall_triangle, NULL);
+    map_triangles(slot, 2, wall_triangle, NULL);
+    mark_far();
+
+    layout_hash = 2166136261u;
+    for (i = 0; i < (int)(cells * LAYERS); i++) {
+        if (layers[i].y != NO_Y) {
+            layout_hash = fnv(fnv(layout_hash, (uint32_t)i), (uint32_t)(layers[i].y / 64) * 8u + layers[i].kind);
+        }
+    }
+    plan.layers = layers;
+    plan.solid_top = solid_top;
+    plan.solid_bottom = solid_bottom;
+    plan.seen = seen;
+    plan.version++;
+    last_reveal_cell = -1;
+    apply_stored();
+    find_exits(slot_index);
+}
+
+/* ---- What has been seen, stored per map ----------------------------------------------------------
+   A map's chunk: map, the corner cell (x0 / CELL, z0 / CELL), width, height, the layout's hash, the number of
+   runs, then the runs: a first cell, a length and the mask of seen layers, for each stretch of cells with the
+   same mask. A chunk read into a plan of another layout (a later build that cuts layers differently) marks
+   every layer of a cell it names as seen. */
+#define CHUNK_HEAD 28
+
+static void put32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static uint32_t get32(const uint8_t *p) {
+    return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static StoredMap *find_stored(int map, int make) {
+    int i;
+
+    for (i = 0; i < stored_count; i++) {
+        if (stored[i].map == map) {
+            return &stored[i];
+        }
+    }
+    if (!make || stored_count == MAX_MAPS) {
+        return NULL;
+    }
+    stored[stored_count].map = map;
+    stored[stored_count].data = NULL;
+    stored[stored_count].size = 0;
+    return &stored[stored_count++];
+}
+
+/* the current plan's seen state into its chunk */
+void Automap_Flush(void) {
+    size_t cells, runs = 0, c;
+    StoredMap *s;
+    uint8_t *data, *p;
+
+    if (plan.map < 0 || seen == NULL) {
+        return;
+    }
+    cells = (size_t)plan.width * plan.height;
+    for (c = 0; c < cells;) {
+        size_t start = c;
+
+        while (c < cells && seen[c] == seen[start] && c - start < 0xFFFF) {
+            c++;
+        }
+        runs += seen[start] != 0;
+    }
+    data = malloc(CHUNK_HEAD + runs * 8);
+    s = find_stored(plan.map, 1);
+    if (data == NULL || s == NULL) {
+        free(data);
+        return;
+    }
+    put32(data, (uint32_t)plan.map);
+    put32(data + 4, (uint32_t)(int32_t)floorf(plan.x0 / CELL + 0.5f));
+    put32(data + 8, (uint32_t)(int32_t)floorf(plan.z0 / CELL + 0.5f));
+    put32(data + 12, (uint32_t)plan.width);
+    put32(data + 16, (uint32_t)plan.height);
+    put32(data + 20, layout_hash);
+    put32(data + 24, (uint32_t)runs);
+    p = data + CHUNK_HEAD;
+    for (c = 0; c < cells;) {
+        size_t start = c;
+
+        while (c < cells && seen[c] == seen[start] && c - start < 0xFFFF) {
+            c++;
+        }
+        if (seen[start] != 0) {
+            put32(p, (uint32_t)start);
+            p[4] = (uint8_t)(c - start);
+            p[5] = (uint8_t)((c - start) >> 8);
+            p[6] = seen[start];
+            p[7] = 0;
+            p += 8;
+        }
+    }
+    free(s->data);
+    s->data = data;
+    s->size = CHUNK_HEAD + runs * 8;
+}
+
+/* the stored chunk of the plan's map into its seen bits */
+static void apply_stored(void) {
+    StoredMap *s = find_stored(plan.map, 0);
+    int32_t cx0, cz0, my_cx0 = (int32_t)floorf(plan.x0 / CELL + 0.5f), my_cz0 = (int32_t)floorf(plan.z0 / CELL + 0.5f);
+    uint32_t w, h, hash, runs, r;
+    int same;
+
+    if (s == NULL || s->size < CHUNK_HEAD) {
+        return;
+    }
+    cx0 = (int32_t)get32(s->data + 4);
+    cz0 = (int32_t)get32(s->data + 8);
+    w = get32(s->data + 12);
+    h = get32(s->data + 16);
+    hash = get32(s->data + 20);
+    runs = get32(s->data + 24);
+    same = cx0 == my_cx0 && cz0 == my_cz0 && w == (uint32_t)plan.width && h == (uint32_t)plan.height && hash == layout_hash;
+    for (r = 0; r < runs && CHUNK_HEAD + (r + 1) * 8 <= s->size; r++) {
+        const uint8_t *p = s->data + CHUNK_HEAD + r * 8;
+        uint32_t start = get32(p), length = p[4] | (uint32_t)p[5] << 8, k;
+        uint8_t mask = same ? p[6] : 0xF;
+
+        for (k = 0; k < length; k++) {
+            uint32_t cell = start + k;
+            int i = (int)(cell % w) + cx0 - my_cx0, j = (int)(cell / w) + cz0 - my_cz0;
+
+            if (w == 0 || i < 0 || j < 0 || i >= plan.width || j >= plan.height) {
+                continue;
+            }
+            seen[(size_t)j * plan.width + i] |= mask;
+        }
+    }
+    plan.version++;
+}
+
+size_t Automap_Serialize(uint8_t **out) {
+    size_t size = 16, at;
+    uint8_t *data;
+    int i;
+
+    for (i = 0; i < stored_count; i++) {
+        size += 4 + stored[i].size;
+    }
+    data = malloc(size);
+    *out = data;
+    if (data == NULL) {
+        return 0;
+    }
+    memcpy(data, "KF4AMAP", 8);
+    put32(data + 8, 1);
+    put32(data + 12, (uint32_t)stored_count);
+    at = 16;
+    for (i = 0; i < stored_count; i++) {
+        put32(data + at, (uint32_t)stored[i].size);
+        memcpy(data + at + 4, stored[i].data, stored[i].size);
+        at += 4 + stored[i].size;
+    }
+    return size;
+}
+
+void Automap_Deserialize(const uint8_t *data, size_t size) {
+    uint32_t count, i;
+    size_t at = 16;
+
+    for (i = 0; i < (uint32_t)stored_count; i++) {
+        free(stored[i].data);
+    }
+    stored_count = 0;
+    if (data != NULL && size >= 16 && memcmp(data, "KF4AMAP", 8) == 0 && get32(data + 8) == 1) {
+        count = get32(data + 12);
+        for (i = 0; i < count && at + 4 <= size; i++) {
+            uint32_t length = get32(data + at);
+            StoredMap *s;
+
+            if (length < CHUNK_HEAD || at + 4 + length > size) {
+                break;
+            }
+            s = find_stored((int)get32(data + at + 4), 1);
+            if (s != NULL) {
+                free(s->data);
+                s->data = malloc(length);
+                if (s->data != NULL) {
+                    memcpy(s->data, data + at + 4, length);
+                    s->size = length;
+                }
+            }
+            at += 4 + length;
+        }
+    }
+    /* the plan is built again, from what was read, without flushing the old state into it */
+    if (plan.map >= 0 && seen != NULL) {
+        memset(seen, 0, (size_t)plan.width * plan.height);
+        apply_stored();
+    }
+}
+
+/* ---- Revealing ------------------------------------------------------------------------------------ */
+static int cell_of(float x, float z, int *i, int *j) {
+    *i = (int)floorf((x - plan.x0) / CELL);
+    *j = (int)floorf((z - plan.z0) / CELL);
+    return *i >= 0 && *j >= 0 && *i < plan.width && *j < plan.height;
+}
+
+/* the layer of cell (i, j) within `reach` of height y, nearest it: -1 none */
+static int layer_near(int i, int j, int y, int reach) {
+    const PortAutomapLayer *l = cell_layers(i, j);
+    int n, best = -1, best_d = reach + 1;
+
+    for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+        int d = abs(l[n].y - y);
+
+        if (d < best_d && l[n].kind != PORT_AUTOMAP_DEATH) {
+            best = n;
+            best_d = d;
+        }
+    }
+    return best;
+}
+
+static int reveal_bit(int i, int j, int n) {
+    uint8_t *s = &seen[(size_t)j * plan.width + i];
+
+    if (*s & (1u << n)) {
+        return 0;
+    }
+    *s |= (uint8_t)(1u << n);
+    return 1;
+}
+
+static int reveal(void) {
+    int pi, pj, start, changed = 0, r, di, dj;
+    int y0;
+
+    if (!cell_of(player_state.position.x, player_state.position.z, &pi, &pj)) {
+        return 0;
+    }
+    start = layer_near(pi, pj, (int)player_state.position.y, 400);
+    if (start < 0) {
+        return 0;
+    }
+    y0 = cell_layers(pi, pj)[start].y;
+    for (dj = -1; dj <= 1; dj++) {
+        for (di = -1; di <= 1; di++) {
+            int i = pi + di, j = pj + dj, n;
+
+            if (i >= 0 && j >= 0 && i < plan.width && j < plan.height && (n = layer_near(i, j, y0, CLIMB)) >= 0) {
+                changed |= reveal_bit(i, j, n);
+            }
+        }
+    }
+    for (r = 0; r < RAYS; r++) {
+        float angle = (float)r * 6.2831853f / RAYS;
+        float dx = cosf(angle), dz = sinf(angle);
+        float ox = (player_state.position.x - plan.x0) / CELL, oz = (player_state.position.z - plan.z0) / CELL;
+        int i = pi, j = pj, step_i = dx >= 0 ? 1 : -1, step_j = dz >= 0 ? 1 : -1;
+        float td_i = fabsf(dx) < 1e-6f ? 1e30f : fabsf(1.0f / dx), td_j = fabsf(dz) < 1e-6f ? 1e30f : fabsf(1.0f / dz);
+        float t_i = fabsf(dx) < 1e-6f ? 1e30f : ((dx > 0 ? (float)(i + 1) - ox : ox - (float)i) * td_i);
+        float t_j = fabsf(dz) < 1e-6f ? 1e30f : ((dz > 0 ? (float)(j + 1) - oz : oz - (float)j) * td_j);
+        float reach = REACH / CELL;
+        int y = y0, air = 0;
+
+        while (fminf(t_i, t_j) < reach) {
+            const PortAutomapLayer *l;
+            int n, below = -1;
+            size_t cell;
+
+            if (t_i < t_j) {
+                i += step_i;
+                t_i += td_i;
+            } else {
+                j += step_j;
+                t_j += td_j;
+            }
+            if (i < 0 || j < 0 || i >= plan.width || j >= plan.height) {
+                break;
+            }
+            l = cell_layers(i, j);
+            cell = (size_t)j * plan.width + i;
+            n = layer_near(i, j, y, CLIMB);
+            if (n >= 0) {
+                /* the floor goes on (or, after a gap, starts again at the height the ray goes) */
+                changed |= reveal_bit(i, j, n);
+                if (l[n].flags & PORT_AUTOMAP_WALL) {
+                    break;
+                }
+                if (air == 0) {
+                    y = l[n].y;
+                }
+                air = 0;
+                continue;
+            }
+            /* a wall with no floor under it, at the height the ray goes */
+            if (solid_top[cell] != NO_Y && solid_top[cell] < y - WALL_LOW && solid_bottom[cell] > y - WALL_HIGH) {
+                break;
+            }
+            /* off a ledge: the floor below is seen; the ray goes on at its height, over it */
+            for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+                if (l[n].y > y && below < 0) {
+                    below = n;
+                }
+            }
+            if (below >= 0) {
+                changed |= reveal_bit(i, j, below);
+            }
+            /* over a drop, or nothing at all (the outside): not far */
+            if (++air > AIR_CELLS) {
+                break;
+            }
+        }
+    }
+    return changed;
+}
+
+/* the cell the player stands on is floor he has walked */
+static void walked(void) {
+    int i, j, n;
+
+    if (!cell_of(player_state.position.x, player_state.position.z, &i, &j)) {
+        return;
+    }
+    n = layer_near(i, j, (int)player_state.position.y, 120);
+    if (n >= 0) {
+        PortAutomapLayer *l = cell_layers(i, j);
+
+        if (!(l[n].flags & PORT_AUTOMAP_WALKED)) {
+            l[n].flags |= PORT_AUTOMAP_WALKED;
+            plan.version++;
+        }
+    }
+}
+
+/* ---- Markers --------------------------------------------------------------------------------------- */
+static int seen_near(float x, float y, float z) {
+    int i, j, di, dj;
+
+    if (port_automap.reveal) {
+        return 1;
+    }
+    if (!cell_of(x, z, &i, &j)) {
+        return 0;
+    }
+    for (dj = -2; dj <= 2; dj++) {
+        for (di = -2; di <= 2; di++) {
+            int ci = i + di, cj = j + dj, n;
+
+            if (ci < 0 || cj < 0 || ci >= plan.width || cj >= plan.height) {
+                continue;
+            }
+            n = layer_near(ci, cj, (int)y, 600);
+            if (n >= 0 && (seen[(size_t)cj * plan.width + ci] & (1u << n))) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static PortAutomapMarker *new_marker(int kind, float x, float y, float z) {
+    PortAutomapMarker *m;
+
+    if (marker_count == MAX_MARKERS) {
+        return NULL;
+    }
+    m = &markers[marker_count++];
+    memset(m, 0, sizeof(*m));
+    m->kind = kind;
+    m->x = x;
+    m->y = y;
+    m->z = z;
+    return m;
+}
+
+static void lock_line(char *text, size_t size, int key) {
+    char name[64], line[128];
+
+    item_name(key, name, sizeof(name));
+    snprintf(line, sizeof(line), "Needs: %s%s", name, item_counts[key] ? " (you have it)" : "");
+    add_line(text, size, line);
+}
+
+static void holds_line(char *text, size_t size, int item, int gold, int done) {
+    char name[64], line[128];
+
+    if (done) {
+        return;
+    }
+    if (item > 0) {
+        item_name(item, name, sizeof(name));
+        snprintf(line, sizeof(line), "Holds: %s", name);
+    } else if (gold > 0) {
+        snprintf(line, sizeof(line), "Holds: %d gold", gold);
+    } else {
+        snprintf(line, sizeof(line), "Empty");
+    }
+    add_line(text, size, line);
+}
+
+/* a door's leaf, top down: the two farthest apart points of its collision mesh, in the world */
+static int door_leaf(ModelInstance *model, float *x0, float *z0, float *x1, float *z1) {
+    CollisionMesh *mesh;
+    const Vector4 *local;
+    const f32 *m;
+    float px[64], pz[64], best = -1.0f;
+    u32 n, a, b;
+
+    if (model == NULL || model->strips == NULL) {
+        return 0;
+    }
+    mesh = (CollisionMesh *)model->strips;
+    local = EE_PTR(const Vector4 *, mesh->points);
+    m = (const f32 *)model->collision_matrix;
+    n = mesh->point_count < 64 ? mesh->point_count : 64;
+    for (a = 0; a < n; a++) {
+        const f32 *v = &local[a].x;
+
+        px[a] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8] + m[12];
+        pz[a] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10] + m[14];
+    }
+    for (a = 0; a < n; a++) {
+        for (b = a + 1; b < n; b++) {
+            float d = (px[a] - px[b]) * (px[a] - px[b]) + (pz[a] - pz[b]) * (pz[a] - pz[b]);
+
+            if (d > best) {
+                best = d;
+                *x0 = px[a];
+                *z0 = pz[a];
+                *x1 = px[b];
+                *z1 = pz[b];
+            }
+        }
+    }
+    return best > 100.0f * 100.0f && best < 3000.0f * 3000.0f;
+}
+
+static void object_markers(int slot) {
+    int count = map_object_counts[slot], i;
+
+    for (i = 0; i < count; i++) {
+        MapObject *o = &map_slot_objects[slot][i];
+        MapObjectUnk04 *def = o->definition;
+        MapObjectUnk08 *src = o->source;
+        const MapObjectUnk08Words *words;
+        PortAutomapMarker *m;
+        int kind, mark, cheat = 0, done, emptied, name_id;
+        char name[64];
+        const char *hint;
+        float x, y, z;
+
+        if (def == NULL || src == NULL || !(o->state_flags & MAP_OBJECT_IN_USE)) {
+            continue;
+        }
+        words = (const MapObjectUnk08Words *)src;
+        kind = def->kind;
+        done = (o->state_flags & MAP_OBJECT_ON) != 0;
+        emptied = (o->state_flags & MAP_OBJECT_EMPTIED) != 0;
+        x = o->model != NULL ? o->model->position.x : src->position.x;
+        y = o->model != NULL ? o->model->position.y : src->position.y;
+        z = o->model != NULL ? o->model->position.z : src->position.z;
+        switch (kind) {
+        case 1: case 2: case 6: case 17:
+            mark = words->kind_param_0 != 0 && !emptied ? PORT_AUTOMAP_MARK_LOCKED_DOOR : PORT_AUTOMAP_MARK_DOOR;
+            break;
+        case 3: mark = PORT_AUTOMAP_MARK_REMAINS; break;
+        case 4: mark = PORT_AUTOMAP_MARK_CHEST; break;
+        case 7: case 8: case 30: mark = PORT_AUTOMAP_MARK_SWITCH; break;
+        case 11: mark = PORT_AUTOMAP_MARK_EXAMINE; break;
+        case 12: mark = PORT_AUTOMAP_MARK_PASSAGE; break;
+        case 13: case 19: mark = PORT_AUTOMAP_MARK_PEDESTAL; break;
+        case 14: mark = PORT_AUTOMAP_MARK_LIFT; break;
+        case 15: mark = PORT_AUTOMAP_MARK_LADDER; break;
+        case 16: case 18: mark = PORT_AUTOMAP_MARK_TRAP; cheat = 1; break;
+        case 20: mark = PORT_AUTOMAP_MARK_SAVE; break;
+        case 21: mark = PORT_AUTOMAP_MARK_CONTAINER; break;
+        case 31: mark = PORT_AUTOMAP_MARK_SECRET; cheat = 1; break;
+        default: continue;
+        }
+        if (cheat && !port_automap.secrets) {
+            continue;
+        }
+        if (!cheat && !seen_near(x, y, z)) {
+            continue;
+        }
+        m = new_marker(mark, x, y, z);
+        if (m == NULL) {
+            return;
+        }
+        if (cheat) {
+            m->flags |= PORT_AUTOMAP_MARK_CHEAT;
+        }
+        name_id = (s16)(def->definition_flags & 0xFFFF);
+        message_text(name_id, name, sizeof(name));
+        switch (mark) {
+        case PORT_AUTOMAP_MARK_DOOR:
+        case PORT_AUTOMAP_MARK_LOCKED_DOOR: {
+            float x0, z0, x1, z1;
+
+            if (door_leaf(o->model, &x0, &z0, &x1, &z1)) {
+                m->x = x0;
+                m->z = z0;
+                m->angle = atan2f(z1 - z0, x1 - x0);
+                m->length = sqrtf((x1 - x0) * (x1 - x0) + (z1 - z0) * (z1 - z0));
+            }
+            add_line(m->text, sizeof(m->text), name[0] ? name : mark == PORT_AUTOMAP_MARK_LOCKED_DOOR ? "Locked door" : "Door");
+            if (done) {
+                m->flags |= PORT_AUTOMAP_MARK_DONE;
+                add_line(m->text, sizeof(m->text), "(open)");
+            }
+            if (mark == PORT_AUTOMAP_MARK_LOCKED_DOOR && port_automap.hints) {
+                lock_line(m->text, sizeof(m->text), words->kind_param_0);
+            }
+            break;
+        }
+        case PORT_AUTOMAP_MARK_CHEST:
+            add_line(m->text, sizeof(m->text), name[0] ? name : "Chest");
+            if (done) {
+                m->flags |= PORT_AUTOMAP_MARK_DONE;
+                add_line(m->text, sizeof(m->text), "(opened)");
+            }
+            if (!emptied && (src->kind_param_0 != 0 || words->kind_param_2 > 0)) {
+                m->flags |= PORT_AUTOMAP_MARK_HOLDS;
+            }
+            if (port_automap.items) {
+                holds_line(m->text, sizeof(m->text), src->kind_param_0, words->kind_param_2, emptied);
+            }
+            if (!done && words->kind_param_1 != 0 && port_automap.hints) {
+                lock_line(m->text, sizeof(m->text), words->kind_param_1);
+            }
+            break;
+        case PORT_AUTOMAP_MARK_REMAINS:
+        case PORT_AUTOMAP_MARK_CONTAINER:
+            add_line(m->text, sizeof(m->text), name[0] ? name : mark == PORT_AUTOMAP_MARK_CONTAINER ? "Container" : "Remains");
+            if (emptied || src->kind_param_0 == 0) {
+                m->flags |= PORT_AUTOMAP_MARK_DONE;
+            } else {
+                m->flags |= PORT_AUTOMAP_MARK_HOLDS;
+            }
+            if (port_automap.items) {
+                holds_line(m->text, sizeof(m->text), src->kind_param_0, 0, 0);
+                if (emptied && src->kind_param_0 != 0) {
+                    add_line(m->text, sizeof(m->text), "(taken)");
+                }
+            }
+            break;
+        case PORT_AUTOMAP_MARK_SAVE:
+            add_line(m->text, sizeof(m->text), "Save point");
+            message_text(src->kind_param_0, name, sizeof(name));
+            add_line(m->text, sizeof(m->text), name);
+            break;
+        case PORT_AUTOMAP_MARK_SWITCH:
+            add_line(m->text, sizeof(m->text), name[0] ? name : "Switch");
+            if (done) {
+                m->flags |= PORT_AUTOMAP_MARK_DONE;
+                add_line(m->text, sizeof(m->text), "(on)");
+            }
+            break;
+        case PORT_AUTOMAP_MARK_TRAP:
+            add_line(m->text, sizeof(m->text), kind == 16 ? "Trap: it shoots" : "Trap: the floor opens");
+            break;
+        case PORT_AUTOMAP_MARK_SECRET:
+            add_line(m->text, sizeof(m->text), "Hidden: a wall or object that appears or fades away");
+            break;
+        case PORT_AUTOMAP_MARK_PASSAGE:
+            add_line(m->text, sizeof(m->text), name[0] ? name : "Symbol of passage");
+            break;
+        case PORT_AUTOMAP_MARK_PEDESTAL:
+            add_line(m->text, sizeof(m->text), name[0] ? name : kind == 19 ? "Marker" : "Pedestal");
+            if (kind == 13 && emptied) {
+                m->flags |= PORT_AUTOMAP_MARK_DONE;
+            }
+            break;
+        case PORT_AUTOMAP_MARK_EXAMINE:
+            /* what examining it shows (MapObject_StartExaminable): a sign picture, or a message */
+            if (words->kind_param_1 != 0) {
+                add_line(m->text, sizeof(m->text), "Sign");
+            } else {
+                char said[160];
+
+                message_text(src->kind_param_0 != 0 ? src->kind_param_0 : name_id, said, sizeof(said));
+                add_line(m->text, sizeof(m->text), said[0] ? said : "Something to look at");
+            }
+            break;
+        case PORT_AUTOMAP_MARK_LADDER: add_line(m->text, sizeof(m->text), name[0] ? name : "Ladder"); break;
+        case PORT_AUTOMAP_MARK_LIFT: add_line(m->text, sizeof(m->text), name[0] ? name : "Moving platform"); break;
+        default: add_line(m->text, sizeof(m->text), name[0] ? name : "Object"); break;
+        }
+        hint = Automap_ObjectHint(plan.map, i);
+        if (hint != NULL) {
+            m->flags |= PORT_AUTOMAP_MARK_HINT;
+            if (port_automap.hints) {
+                add_line(m->text, sizeof(m->text), hint);
+            }
+        }
+        if (port_automap.hints) {
+            char line[32];
+
+            snprintf(line, sizeof(line), "(object #%d)", i);
+            add_line(m->text, sizeof(m->text), line);
+        }
+    }
+}
+
+static void entity_markers(int slot) {
+    int count = map_spawn_counts[slot], i;
+
+    for (i = 0; i < count; i++) {
+        Entity *e = &entity_pool[slot][i];
+        EntitySpawnInfo *si = e->spawn_info;
+        EntityParams *p = e->params;
+        int type, live, record;
+        float x, y, z;
+        PortAutomapMarker *m;
+        char name[96], line[128];
+        const char *hint;
+
+        if (si == NULL || p == NULL) {
+            continue;
+        }
+        type = p->entity_type;
+        record = si->type_id;
+        live = (e->flags & ENTITY_FLAG_LIVE) && !(e->flags & ENTITY_FLAG_DYING_MASK) && e->model != NULL;
+        x = live ? e->model->position[0] : si->spawn_x;
+        y = live ? e->model->position[1] : si->spawn_y;
+        z = live ? e->model->position[2] : si->spawn_z;
+        hint = Automap_SpawnHint(plan.map, i, record);
+        if ((type == 15 || type == 81) && si->talk_script_id != 0) {
+            /* not met yet: some people are put in place by a script later */
+            if ((!live && x == 0.0f && y == 0.0f && z == 0.0f) || !seen_near(x, y, z)) {
+                continue;
+            }
+            m = new_marker(PORT_AUTOMAP_MARK_PERSON, x, y, z);
+            if (m == NULL) {
+                return;
+            }
+            if (type == 81) {
+                snprintf(name, sizeof(name), "Dog");
+            } else {
+                person_name(record, p->model_number, name, sizeof(name));
+            }
+            add_line(m->text, sizeof(m->text), name);
+        } else {
+            const char *creature;
+
+            if (!live || e->hit_points == 0 || type == 15 || type == 81) {
+                continue;
+            }
+            if (!port_automap.enemies && !(hint != NULL && port_automap.hints && seen_near(x, y, z))) {
+                continue;
+            }
+            m = new_marker(PORT_AUTOMAP_MARK_ENEMY, x, y, z);
+            if (m == NULL) {
+                return;
+            }
+            m->flags |= PORT_AUTOMAP_MARK_CHEAT;
+            creature = Automap_CreatureName(record);
+            if (creature != NULL) {
+                add_line(m->text, sizeof(m->text), creature);
+            } else {
+                snprintf(line, sizeof(line), "Creature (#%d)", record);
+                add_line(m->text, sizeof(m->text), line);
+            }
+            snprintf(line, sizeof(line), "HP %d / %d", e->hit_points, p->hit_points);
+            add_line(m->text, sizeof(m->text), line);
+            if (port_automap.items && p->drop_item != 0xFFFF && p->drop_item != 0 && p->drop_chance > 0) {
+                item_name(p->drop_item, name, sizeof(name));
+                snprintf(line, sizeof(line), "May drop: %s (%d%%)", name, p->drop_chance);
+                add_line(m->text, sizeof(m->text), line);
+            }
+        }
+        if (hint != NULL) {
+            m->flags |= PORT_AUTOMAP_MARK_HINT;
+            if (port_automap.hints) {
+                add_line(m->text, sizeof(m->text), hint);
+            }
+        }
+    }
+}
+
+static void item_markers(int slot) {
+    ItemNode *n;
+    char name[64];
+
+    if (!port_automap.items) {
+        return;
+    }
+    for (n = lying_items; n != NULL; n = n->next) {
+        PortAutomapMarker *m;
+
+        if ((int)(n->flags & 1) != slot || n->model == NULL || n->map_object != NULL) {
+            continue;
+        }
+        m = new_marker(PORT_AUTOMAP_MARK_ITEM, n->model->position.x, n->model->position.y, n->model->position.z);
+        if (m == NULL) {
+            return;
+        }
+        m->flags |= PORT_AUTOMAP_MARK_CHEAT;
+        item_name(n->item, name, sizeof(name));
+        add_line(m->text, sizeof(m->text), name);
+        add_line(m->text, sizeof(m->text), n->def != NULL ? "(lies here)" : "(dropped)");
+    }
+}
+
+/* The ways into the neighbouring maps. The records at a join (MapRecordInfo.needs_neighbour_map) have the
+   neighbouring map set up. Which map: once the player has been near, the game has it loaded in its other
+   slot, moved to where it joins (MapLoad_SetUpMap), and its records overlap the join (confirmed); until then
+   (the reveal cheat), the map of the origin named by the nearest record that names one, the one the game
+   loads while the player walks up to it (MapLoad_Update). Worked out as a map is built, confirmed each poll. */
+#define MAX_EXITS 64
+
+typedef struct {
+    float x0, z0, x1, z1, y;
+    int map;
+    int confirmed;
+} Exit;
+
+static Exit exits[MAX_EXITS];
+static int exit_count;
+
+static void find_exits(int slot_index) {
+    MapSlot *slot = &map_slots[slot_index];
+    int count = ((MapSlotUnk08 *)slot->header)->record_count, i, k;
+
+    exit_count = 0;
+    for (i = 0; i < count && exit_count < MAX_EXITS; i++) {
+        MapRecordBounds *r = (MapRecordBounds *)(slot->records + i * 0x80);
+        MapRecordInfo *info = (MapRecordInfo *)r;
+        float cx, cz, best = 1e30f;
+        int origin = -1;
+        Exit *e;
+
+        if (!info->needs_neighbour_map || r->highest[0] <= r->lowest[0] || r->highest[2] <= r->lowest[2]) {
+            continue;
+        }
+        cx = (r->lowest[0] + r->highest[0]) * 0.5f;
+        cz = (r->lowest[2] + r->highest[2]) * 0.5f;
+        for (k = 0; k < count; k++) {
+            MapRecordBounds *o = (MapRecordBounds *)(slot->records + k * 0x80);
+            MapRecordInfo *oi = (MapRecordInfo *)o;
+            float dx, dz, d;
+
+            if (oi->neighbour_origin_index >= 32 || o->highest[0] <= o->lowest[0]) {
+                continue;
+            }
+            dx = fmaxf(0.0f, fmaxf(o->lowest[0] - cx, cx - o->highest[0]));
+            dz = fmaxf(0.0f, fmaxf(o->lowest[2] - cz, cz - o->highest[2]));
+            d = dx * dx + dz * dz;
+            if (d < best) {
+                best = d;
+                origin = oi->neighbour_origin_index;
+            }
+        }
+        e = &exits[exit_count++];
+        e->x0 = r->lowest[0];
+        e->z0 = r->lowest[2];
+        e->x1 = r->highest[0];
+        e->z1 = r->highest[2];
+        e->y = r->highest[1];
+        e->map = origin >= 0 ? ((MapLoadRequest *)&slot->origins[origin])->map : -1;
+        e->confirmed = 0;
+    }
+}
+
+/* the other slot's map, where it is loaded and set up, lies over the joins it is beyond */
+static void confirm_exits(int slot_index) {
+    MapSlot *other = &map_slots[slot_index ^ 1];
+    int count, i, k;
+
+    if (!other->loaded || other->header == NULL || other->records == NULL || other->tag == plan.map) {
+        return;
+    }
+    count = ((MapSlotUnk08 *)other->header)->record_count;
+    for (k = 0; k < exit_count; k++) {
+        Exit *e = &exits[k];
+
+        if (e->confirmed && e->map == other->tag) {
+            continue;
+        }
+        for (i = 0; i < count; i++) {
+            MapRecordBounds *r = (MapRecordBounds *)(other->records + i * 0x80);
+
+            if ((r->record_flags & 0x82000000u) || MAP_RECORD_MODEL(r) == NULL || MAP_RECORD_MODEL(r)->strips == NULL ||
+                r->highest[0] <= r->lowest[0] || r->highest[2] <= r->lowest[2]) {
+                continue;
+            }
+            if (r->lowest[0] < e->x1 && r->highest[0] > e->x0 && r->lowest[2] < e->z1 && r->highest[2] > e->z0) {
+                e->map = other->tag;
+                e->confirmed = 1;
+                break;
+            }
+        }
+    }
+}
+
+static void exit_markers(void) {
+    int k;
+
+    for (k = 0; k < exit_count; k++) {
+        const Exit *e = &exits[k];
+        PortAutomapMarker *m;
+        char line[128];
+        const char *name;
+
+        if (e->map < 0 || e->map == plan.map) {
+            continue;
+        }
+        if (!seen_near((e->x0 + e->x1) * 0.5f, e->y, (e->z0 + e->z1) * 0.5f) &&
+            !seen_near(e->x0, e->y, e->z0) && !seen_near(e->x1, e->y, e->z1)) {
+            continue;
+        }
+        m = new_marker(PORT_AUTOMAP_MARK_EXIT, e->x0, e->y, e->z0);
+        if (m == NULL) {
+            return;
+        }
+        m->length = e->x1 - e->x0;
+        m->depth = e->z1 - e->z0;
+        name = port_teleport_map_name(e->map);
+        snprintf(line, sizeof(line), "To %s", name[0] ? name : "another map");
+        add_line(m->text, sizeof(m->text), line);
+        snprintf(line, sizeof(line), "(map %03d)", e->map);
+        add_line(m->text, sizeof(m->text), line);
+    }
+}
+
+static void build_markers(int slot) {
+    marker_count = 0;
+    exit_markers();
+    object_markers(slot);
+    item_markers(slot);
+    entity_markers(slot);
+}
+
+/* KF4_AUTOMAP_DUMP=DIR: a while after each map is built, its markers' labels into DIR/automap_NNN.txt (for
+   checking the names and the hints without a window) */
+static void dump_markers(void) {
+    const char *dir = getenv("KF4_AUTOMAP_DUMP");
+    char path[1024];
+    FILE *f;
+    int i;
+
+    if (dir == NULL) {
+        return;
+    }
+    snprintf(path, sizeof(path), "%s/automap_%03d.txt", dir, plan.map);
+    f = fopen(path, "w");
+    if (f == NULL) {
+        return;
+    }
+    fprintf(f, "map %d: %dx%d cells from %d,%d\n", plan.map, plan.width, plan.height, (int)plan.x0, (int)plan.z0);
+    for (i = 0; i < marker_count; i++) {
+        char text[256], *c;
+
+        snprintf(text, sizeof(text), "%s", markers[i].text);
+        for (c = text; *c; c++) {
+            if (*c == '\n') {
+                *c = '|';
+            }
+        }
+        fprintf(f, "%d kind %d flags %d at %d %d %d: %s\n", i, markers[i].kind, markers[i].flags, (int)markers[i].x,
+                (int)markers[i].y, (int)markers[i].z, text);
+    }
+    fclose(f);
+}
+
+/* ---- The poll ------------------------------------------------------------------------------------- */
+void Automap_Poll(void) {
+    int slot = current_map_slot & 1, in_play;
+    MapSlot *s = &map_slots[slot];
+
+    if (!port_automap.enabled) {
+        plan.map = -1;
+        player.in_play = player.shown = 0;
+        return;
+    }
+    port_automap_start();
+    if (!s->loaded || s->header == NULL || s->records == NULL) {
+        player.in_play = player.shown = 0;
+        return;
+    }
+    in_play = Quick_WhyNotInPlay() == NULL;
+    if (in_play && port_automap_new_game()) {
+        /* a new game: nothing explored yet */
+        Automap_Deserialize(NULL, 0);
+        port_automap_mark_dirty();
+        port_event("automap: a new game, nothing explored");
+    }
+    if (plan.map != s->tag || built_slot != slot || built_records != s->records) {
+        Automap_Flush();
+        build(slot);
+        port_automap_mark_dirty();
+        polls_since_build = 0;
+    }
+    if (plan.map < 0) {
+        return;
+    }
+    polled_vblank = port_vblank_count();
+    polls++;
+    player.x = player_state.position.x;
+    player.y = player_state.position.y;
+    player.z = player_state.position.z;
+    player.heading = player_state.rotation.y;
+    player.map = plan.map;
+    player.in_play = in_play;
+    player.shown = !game_status.paused;
+    {
+        const char *name = port_teleport_map_name(plan.map);
+
+        snprintf(player.title, sizeof(player.title), "%s", name[0] ? name : "Map");
+    }
+    if (in_play) {
+        int i, j, cell = cell_of(player.x, player.z, &i, &j) ? j * plan.width + i : -1;
+
+        walked();
+        if (cell != last_reveal_cell || fabsf(player.heading - last_reveal_heading) > 0.3f || polls % 15 == 0) {
+            if (reveal()) {
+                plan.version++;
+                port_automap_mark_dirty();
+            }
+            last_reveal_cell = cell;
+            last_reveal_heading = player.heading;
+        }
+    }
+    confirm_exits(slot);
+    build_markers(slot);
+    if (++polls_since_build == 30) {
+        dump_markers();
+    }
+    port_automap_save_live(0);
+}
+
+/* ---- The port's side reads these ------------------------------------------------------------------ */
+const PortAutomapPlan *port_automap_plan(void) {
+    return port_automap.enabled && plan.map >= 0 ? &plan : NULL;
+}
+
+int port_automap_markers(const PortAutomapMarker **list) {
+    *list = markers;
+    return port_automap.enabled && plan.map >= 0 ? marker_count : 0;
+}
+
+void port_automap_player(PortAutomapPlayer *out) {
+    *out = player;
+    /* polled within the last few vblanks (a game frame is two; a menu stops the polls) */
+    if (port_vblank_count() > polled_vblank + 6) {
+        out->in_play = 0;
+        out->shown = 0;
+    }
+}

@@ -30,8 +30,11 @@
 #endif
 #include "imgui.h"
 
+#include "automap_view.h" // the automap mod
+
 extern "C" {
 #include "port/audio.h"
+#include "port/automap.h"
 #include "port/cheats.h"
 #include "port/controls.h"
 #include "port/debug.h"
@@ -43,6 +46,7 @@ extern "C" {
 #include "port/render.h"
 #include "port/savestate.h"
 #include "port/settings.h"
+#include "port/stats.h"
 #include "port/teleport.h"
 }
 
@@ -1133,6 +1137,8 @@ void mods_page() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(on for this run: command line)");
     }
+    port_stats_overlay_mods(); // the extended stats mod (port/overlay/stats_panel.cpp)
+    automap_view_mods_section(); // the automap mod (port/overlay/automap_view.cpp)
 }
 
 void debug_page() {
@@ -1451,9 +1457,13 @@ void parse_shots(const char *text) {
                 shot.page = i;
         if (name == "closed")
             shot.page = PAGE_COUNT;
+        if (name == "map") // the automap mod's full map, the overlay closed
+            shot.page = PAGE_COUNT + 1;
+        if (name == "mini") // the automap mod's minimap: the overlay closed, one picture a vblank
+            shot.page = PAGE_COUNT + 2;
         if (shot.page < 0) {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no page called %s (display, audio, controls, "
-                                 "savestates, mods, debug, interface, closed)\n",
+                                 "savestates, mods, debug, interface, closed, map, mini)\n",
                          name.c_str());
             continue;
         }
@@ -1471,7 +1481,8 @@ void shot_open() {
     const Shot &shot = shots[shot_next];
     if (port_vblank_count() < shot.vblank)
         return;
-    if (shot.page == PAGE_COUNT) {
+    automap_view_open_for_shot(shot.page == PAGE_COUNT + 1);
+    if (shot.page >= PAGE_COUNT) {
         overlay_open = false;
     } else {
         overlay_open = true;
@@ -1491,6 +1502,9 @@ void shot_write(const uint32_t *pixels, int width, int height) {
         char path[4096];
         std::snprintf(path, sizeof(path), "%s/overlay_%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
                       shot.page == PAGE_COUNT ? "closed" : page_ids[shot.page]);
+        if (shot.page > PAGE_COUNT) // the automap's: one a vblank
+            std::snprintf(path, sizeof(path), "%s/overlay_%s_%llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
+                          shot.page == PAGE_COUNT + 1 ? "map" : "mini", (unsigned long long)shot.vblank);
         if (port_png_write(path, pixels, (uint32_t)width, (uint32_t)height))
             std::fprintf(stderr, "[overlay] vblank %llu: %dx%d, %s\n", (unsigned long long)port_vblank_count(), width,
                          height, path);
@@ -1607,6 +1621,13 @@ extern "C" int port_overlay_event(const void *sdl_event) {
     if (event->type == SDL_KEYUP &&
         (event->key.keysym.scancode == SDL_SCANCODE_F1 || event->key.keysym.scancode == SDL_SCANCODE_F11))
         return 1;
+    // the automap mod's full map: its key closes it, and it has the mouse while it is open
+    if (!overlay_open && automap_view_event(event))
+        return 1;
+    if (!overlay_open && port_automap_full_open()) {
+        ImGui_ImplSDL2_ProcessEvent(event);
+        return is_input_event(event->type);
+    }
     // closed, it takes nothing more (and ImGui's queue is only emptied by a frame drawn)
     if (!overlay_open)
         return 0;
@@ -1615,9 +1636,9 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 }
 
 extern "C" int port_overlay_visible(void) {
-    return ready && (overlay_open || shot_pending() ||
+    return ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
-                     (renderer == nullptr && port_controls_indicator_shown()));
+                     (renderer == nullptr && port_controls_indicator_shown()) || automap_view_visible());
 }
 
 extern "C" void *port_overlay_draw_data(void) {
@@ -1638,7 +1659,7 @@ extern "C" int port_overlay_open(void) {
 }
 
 extern "C" int port_overlay_paused(void) {
-    return ready && overlay_open && port_settings.pause_when_open && !shot_mode;
+    return ready && !shot_mode && ((overlay_open && port_settings.pause_when_open) || port_automap_holds_game());
 }
 
 extern "C" void port_overlay_notify_state(void) {
@@ -1663,6 +1684,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     sample_rates();
     port_settings_poll();
     shot_open();
+    port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
     if (!port_overlay_visible())
         return;
     if (port_settings.ui_scale != applied_ui_scale)
@@ -1695,8 +1717,10 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
             held |= ImGui::IsKeyDown((ImGuiKey)key);
         pad_quiet = held;
     }
+    automap_view_draw(x, y, width, height); // the automap mod, under the overlay's windows
     draw_toast();
     draw_building();
+    port_stats_overlay_draw(overlay_open); // the extended stats mod (port/overlay/stats_panel.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)
