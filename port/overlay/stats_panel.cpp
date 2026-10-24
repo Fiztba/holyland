@@ -1,9 +1,9 @@
 // The extended stats mod's drawing (port/include/port/stats.h, docs/port/EXTENDED_STATS.md), with Dear
-// ImGui inside the settings overlay's frame (port/overlay/overlay.cpp calls in at three places):
+// ImGui inside the settings overlay's frame (port/overlay/overlay.cpp calls in at four places):
+//   - its lines in the game's own menus (port/overlay/stats_menus.cpp), shown whenever the menu is up;
 //   - the stats panel: what the game keeps about the player and never shows, with bars toward the next
 //     level, the next point of Physical and Magic Power, the weapon's and the spells' levels, and the
-//     equipment's wear; shown and hidden by its key (F6) and opened by itself with the game's Status
-//     screen;
+//     equipment's wear; shown and hidden by its key (F6);
 //   - the hit log (bottom left: each hit dealt and taken, the real damage) and the health bar of the
 //     creature last hit (top middle);
 //   - its section of the Mods page.
@@ -19,6 +19,8 @@
 #include <cstring>
 
 #include "imgui.h"
+
+#include "stats_menus.h"
 
 extern "C" {
 #include "port/overlay.h"
@@ -352,9 +354,7 @@ void target_bar() {
 }
 
 bool panel_shown() {
-    if (!port_stats_options.on || !port_stats_options.panel || !snap.valid)
-        return false;
-    return port_stats_panel_open() || (port_stats_options.status_screen && port_stats_status_screen());
+    return port_stats_options.on && port_stats_options.panel && snap.valid && port_stats_panel_open();
 }
 
 } // namespace
@@ -378,7 +378,7 @@ extern "C" void port_stats_overlay_update(void) {
         open_at = ~0ull;
     }
     port_stats_sample(&snap);
-    int want = panel_shown();
+    int want = panel_shown() || stats_menus_wanted(snap);
     if (!want && port_stats_options.damage && snap.valid) {
         PortStatsHit h;
         unsigned long long now = port_vblank_count();
@@ -393,10 +393,15 @@ extern "C" int port_stats_overlay_wants(void) {
     return wanted.load(std::memory_order_relaxed);
 }
 
-extern "C" void port_stats_overlay_draw(int overlay_open) {
+extern "C" void port_stats_overlay_fonts(void) {
+    stats_menus_fonts();
+}
+
+extern "C" void port_stats_overlay_draw(int overlay_open, int x, int y, int width, int height) {
     if (!port_stats_options.on || !snap.valid)
         return;
     uint32_t mxcsr = port_host_float_begin(); // the numbers are formatted in the host's rounding
+    stats_menus_draw(snap, x, y, width, height);
     if (port_stats_options.damage && !snap.in_menu) {
         hit_log();
         target_bar();
@@ -410,47 +415,55 @@ extern "C" void port_stats_overlay_mods(void) {
     PortStatsOptions &o = port_stats_options;
     bool on = o.on != 0;
 
-    ImGui::Spacing();
-    if (ImGui::Checkbox("Extended stats", &on)) {
+    ImGui::SeparatorText("Extended stats");
+    if (ImGui::Checkbox("Extended stats in the game's menus", &on)) {
         port_stats_set_on(on);
         port_settings_changed();
     }
-    ImGui::SetItemTooltip("What the game keeps about you and never shows: the progress toward the next level, the next\n"
-                          "point of Physical and Magic Power (weapon hits and spells), the weapon's and spells' levels,\n"
-                          "the equipment's wear, ailment defences, recovery and the hidden effects of what you wear;\n"
-                          "and the real damage of every hit. It only reads the game. (--extended-stats)");
+    ImGui::SetItemTooltip("What the game keeps about you and never shows, in its own menus. It only reads the game.\n"
+                          "(--extended-stats)");
     if (o.forced) {
         ImGui::SameLine();
         ImGui::TextColored(colour_title, "(on for this run: command line)");
     }
+    ImGui::Indent();
+    ImGui::PushStyleColor(ImGuiCol_Text, colour_dim);
+    ImGui::TextWrapped("The main menu and Status: the experience to the next level, the hits and spells to the next "
+                       "Physical and Magical point, the weapon's level, the ailments' time left. Equipment: the durability "
+                       "of each piece, the weapon's level, the hidden effects of what you wear. Item and Arrange: what "
+                       "the item under the cursor does.");
+    ImGui::PopStyleColor();
     ImGui::BeginDisabled(!o.on);
-    ImGui::Indent();
-    bool panel = o.panel != 0, status = o.status_screen != 0, damage = o.damage != 0, durability = o.durability != 0;
-    if (ImGui::Checkbox("Stats panel", &panel)) {
-        o.panel = panel;
+    bool menus = o.menus != 0, panel = o.panel != 0, damage = o.damage != 0, durability = o.durability != 0;
+    if (ImGui::Checkbox("In the menus", &menus)) {
+        o.menus = menus;
         port_settings_changed();
     }
-    ImGui::SetItemTooltip("Shown and hidden by its key (F6, the Controls page: \"Show / hide the stats panel\").");
+    ImGui::SetItemTooltip("The lines in the game's own menu screens (on with the mod).");
     ImGui::SameLine();
-    bool open = port_stats_panel_open() != 0;
-    if (ImGui::Checkbox("Shown now", &open))
-        port_stats_set_panel_open(open);
-    ImGui::Indent();
-    if (ImGui::Checkbox("Open it with the game's Status screen", &status)) {
-        o.status_screen = status;
-        port_settings_changed();
-    }
-    if (ImGui::Checkbox("Equipment wear in the panel", &durability)) {
+    if (ImGui::Checkbox("Equipment durability", &durability)) {
         o.durability = durability;
         port_settings_changed();
     }
-    ImGui::Unindent();
+    ImGui::SetItemTooltip("The percent each piece's values count at, worn down by hits (the smith mends it).");
     if (ImGui::Checkbox("Hit log and the target's health", &damage)) {
         o.damage = damage;
         port_settings_changed();
     }
     ImGui::SetItemTooltip("Each hit you deal or take, with its real damage and the HP left (bottom left), and the\n"
                           "health bar of the creature you last hit (top).");
-    ImGui::Unindent();
+    if (ImGui::Checkbox("Stats panel on its key (F6)", &panel)) {
+        o.panel = panel;
+        port_settings_changed();
+    }
+    ImGui::SetItemTooltip("Everything in one free-floating panel, shown and hidden by its key (F6, the Controls page:\n"
+                          "\"Show / hide the stats panel\"); it can be moved while the overlay is open.");
+    ImGui::SameLine();
+    bool open = port_stats_panel_open() != 0;
+    ImGui::BeginDisabled(!o.panel);
+    if (ImGui::Checkbox("Shown now", &open))
+        port_stats_set_panel_open(open);
     ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    ImGui::Unindent();
 }

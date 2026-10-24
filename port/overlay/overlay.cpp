@@ -1461,6 +1461,8 @@ void parse_shots(const char *text) {
             shot.page = PAGE_COUNT + 1;
         if (name == "mini") // the automap mod's minimap: the overlay closed, one picture a vblank
             shot.page = PAGE_COUNT + 2;
+        if (name == "menu") // the game's menu with the extended stats mod's lines: the overlay closed, one a vblank
+            shot.page = PAGE_COUNT + 3;
         if (shot.page < 0) {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no page called %s (display, audio, controls, "
                                  "savestates, mods, debug, interface, closed, map, mini)\n",
@@ -1502,9 +1504,12 @@ void shot_write(const uint32_t *pixels, int width, int height) {
         char path[4096];
         std::snprintf(path, sizeof(path), "%s/overlay_%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
                       shot.page == PAGE_COUNT ? "closed" : page_ids[shot.page]);
-        if (shot.page > PAGE_COUNT) // the automap's: one a vblank
+        if (shot.page > PAGE_COUNT) // the automap's and the menu's: one a vblank
             std::snprintf(path, sizeof(path), "%s/overlay_%s_%llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
-                          shot.page == PAGE_COUNT + 1 ? "map" : "mini", (unsigned long long)shot.vblank);
+                          shot.page == PAGE_COUNT + 1   ? "map"
+                          : shot.page == PAGE_COUNT + 2 ? "mini"
+                                                        : "menu",
+                          (unsigned long long)shot.vblank);
         if (port_png_write(path, pixels, (uint32_t)width, (uint32_t)height))
             std::fprintf(stderr, "[overlay] vblank %llu: %dx%d, %s\n", (unsigned long long)port_vblank_count(), width,
                          height, path);
@@ -1581,6 +1586,7 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
     io.IniFilename = shot_mode ? nullptr : ini_path.c_str();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     load_font();
+    port_stats_overlay_fonts(); // the extended stats mod's font for its lines in the menus
     apply_style();
     bool started;
     if (renderer != nullptr) {
@@ -1720,7 +1726,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     automap_view_draw(x, y, width, height); // the automap mod, under the overlay's windows
     draw_toast();
     draw_building();
-    port_stats_overlay_draw(overlay_open); // the extended stats mod (port/overlay/stats_panel.cpp)
+    port_stats_overlay_draw(overlay_open, x, y, width, height); // the extended stats mod (port/overlay/stats_panel.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)
