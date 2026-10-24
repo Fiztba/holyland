@@ -681,6 +681,41 @@ tower 1,296 -> 3,931 with `--sky ps2` (the rock now covering the patch hosted le
 
 **GPU time** (240, `KF4_PRESENT_SIM=240`, 1,500 vblanks, 4x MSAA 2, ms a picture, base -> after): far 3.54 -> 3.69,
 the tower 2.70 -> 2.71, the fire 3.14 -> 3.18; every run kept up (5,730 pictures), turns 0.24 a picture as before.
+
+### A skinned model's parts tie exactly (branch `p8/light-npc`, from `native/draw` f0871f86)
+
+The owner played `native-f0871f8` with `--renderer modern` (4x, MSAA 2, native widescreen, 240) and saw, on the seated
+men (`bugs_modern/quick_npc_cave`, by the brazier; `states/slot0_bridge_npc`, by the broken bridge): from afar the armour
+on the arm and leg and the wrist flashing in front of the cloth over them, and a bright spot coming and going on the
+neck and shoulder as the man rocks; close up it was right. Headless at 30 and at 240 it shows as speckles of hand, wrist
+and shine over the cloth that change from frame to frame (`p8_light/out/cave_npc_440.jpg`, `bridge_npc_412.jpg`:
+before | after | hosted). It is not p8/distance's: the build before it (fec275a) gives the same pictures.
+
+- **Cause.** A skinned model's first pass (program 0x280: opaque, Z written, GEQUAL) is a one-pass tie, drawn by the
+  two-phase rule with the tie's slack of half a Z. Its parts (armour, cloth, hands) are separate meshes a fraction of a
+  unit apart, drawn one after another. A Z is depth^2 / az units: at the bridge the whole man is two or three Z deep, so
+  half a Z is a good part of him, and a part drawn after the cloth and lying under it came through. Its second pass (the
+  sphere-mapped shine, exact on its first pass's Z) then lit the spots where it did: the bright spot on the neck.
+- **The fix** (`sa_draw_batch`): a batch of program 0x280's corners other than the second pass ties by its real depth,
+  exactly (`KF4_SA_SKIN=EPS`, tests: within EPS world units along the view; a blended skinned layer the same, across its
+  surface). Exact was nearest hosted at every distance tried. 0.05-0.3 units were a little worse from afar, and close up
+  (the shopkeeper, `quick_shop`) even 0.1 units let his shirt through along his shoulder: pixels more than 8 off hosted
+  at 4x, 730 before, 429 exact, 1,369 at 0.1, 4,158 at 0.5.
+- **Numbers** (4x, MSAA 2, native widescreen, cut-out AA, 30; pixels a frame more than 24 off hosted around the man):
+  the bridge, walking away (`quick_bridge` made from the state), 50.7 before, 14.5 after; the cave, walking up to him
+  (a 1000 x 800 box with the wall), 315 before, 254 after. The review's spots (T7's set, 3x, 240; pixels a game frame
+  more than 8 off hosted, `--sky ps2`): shop 409 -> 267, far 458 -> 402, bridge 1,193 -> 1,120, lacing 617 -> 539,
+  pond 516 -> 476, brazier 476 -> 422, m9w 898 -> 767, door 70 -> 73 (3 pixels along an edge); every other spot and
+  water view to the pixel. The tower (`quick_tower2`) and the chest (`chest2`) are p8/distance's to the pixel.
+- **Not reproduced: the dark patch on the lit wall** (the cave, images 122 and 123: a dark rectangle on the wall by the
+  man's head, and squares flashing over the lit walls walking or turning). Not in any headless run: idle and walking up
+  at 30 and at 240 (every picture, `flash_find.py`), turning both ways at two places, with his `settings.json` read
+  (`KF4_OVERLAY_SHOT` makes a headless run read it), without `--fast` and with `KF4_PRESENT_SIM=240`; modern against
+  hosted shows no dense block in any of them. Ruled out headless: the stencil's wrap (the frame taken again every 3
+  numbers instead of 255 gives the same pictures to the pixel, at 30 and at 240), the table (`KF4_SA_VERIFY=2` after the
+  quick load and the state: 0 differ), the man's own parts (any skinned slack up to 3 Z draws nothing on the wall), and
+  the shadows (the shadow mesh drawn by the GS instead changes nothing on the wall). An F8 recording or an F9 capture
+  taken while it shows is what is needed next.
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
@@ -731,7 +766,8 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
 - **Debug switches** (read at the vblank that turns modern on): `KF4_SA_KINDS=MASK`, `KF4_SA_LOG=1` (each
   batch's FRAME, ZBUF, TEST, ALPHA and Z range, and why one is declined), `KF4_SA_PIXEL=X,Y` (the scene's
   batches over a GS pixel: the triangle's Z, TEX0, the blend, the slack; the pixel's Z and q interpolated, the Z's
-  change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule),
+  change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule), `KF4_SA_SKIN=EPS` (a skinned
+  model's parts' tie in world units; 0, the default: exact),
   `KF4_SA_NO_TABLE=1`; the table's (read once): `KF4_SA_VERIFY=1..4`, `KF4_SA_PACK=DIR`,
   `KF4_SA_PACK_DUMP=DIR`. `KF4_SA_LOG=3` (T2): the GS's batches the scene draws, and those it draws elsewhere.
 - **The scene at its own scale** (T2): `native_draw_compare.py --mode modern --scale 1 --first-args='--native-scale 4
