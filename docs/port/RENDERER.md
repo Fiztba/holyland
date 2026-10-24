@@ -185,7 +185,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   pass's end and beginning. A silhouette (the shadows: DATE, FBA, one colour, no Z written) is drawn
   whole, its triangles all making the same pixel (with MSAA its inner seams go: `KF4_GSN_SILHOUETTE_RUNS=1`
   for the runs), and a multisampled 16-bit target's copies are made in the pass (whole-number means: the
-  pond's reflection). A tie's passes are drawn whole too (STEP3.md, "Hot spots at 240").
+  pond's reflection). A tie's passes are drawn whole too (STEP3.md, "Hot spots at 240"). In modern a run of
+  the scene's own corners is copied by its own triangles (its vertex shader, rasterized conservatively:
+  `sa_copy_run.frag`), not over its box, which in a picture between is the whole scene for a skinned
+  model (NATIVE_DRAW_P8.md, "GPU cost at the owner's spots").
 - **A skinned model's parts are drawn together** in modern (`sa_group_draw`): each part's first pass and shine
   were batches of their own; the parts whose draws are simple are kept and drawn as the model's first passes, then
   its shines last part first, each part marking its front pixels in the stencil so no shine lands on a later part
@@ -200,7 +203,17 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   or a barrier it needs can be left out.
 - **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
   of work, and `--stats` says why render passes ended and what resolves were for. Another program on
-  the GPU (a second run of the game) shows up in those times: run alone.
+  the GPU (a second run of the game) shows up in those times: run alone. `KF4_GSN_GPU_TIME=2` also
+  splits the render passes by what they draw (the scene's colour and Z-first draws, shader blending's
+  copies and runs, in the frames and in the pictures between, the reflection's, the skinned groups,
+  the GS's own batches...), the replays too (the marks are recorded), with the draws and triangles a
+  picture of each; each mark waits for the work before it, so read them as shares. A fresh data
+  folder has no pipeline cache: a timing run that compiles pipelines (`Stalled compile` lines, seconds
+  each) is not a timing run.
+- **A uniform buffer read at an index each pixel works out is slow.** The pixels a GPU shades together
+  read a uniform buffer one distinct index after another; the CLUT (each texel's own entry, four a
+  bilinear read, more with mipmaps and anisotropy) cost about 1.4 ms of 5 a picture at the owner's
+  settings. It is a storage buffer now (`gs_frag.h`'s `Clut`).
 - **A larger `--native-scale` is not just more pixels.** A GS pixel is drawn when its integer point
   is inside; a target pixel at scale N samples the middle of its own area, half of which is left of
   that point for the GS pixel's first pixels. So 2D (sprites from 0, or ending at 127.5) loses or gains
