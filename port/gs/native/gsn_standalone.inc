@@ -2333,6 +2333,12 @@ bool sa_draw_batch(int *why) {
     if (second_pass) {
         slack = 0.0f;
     }
+    // A skinned model's own parts (program 0x280's first pass: its armour pieces, its cloth, its hands, separate meshes
+    // a fraction of a unit apart) tie by the world, not by Z: see skin_eps below.
+    bool skinned = !gs->verts.empty() && !second_pass;
+    for (size_t t = 0; skinned && t < gs->verts.size(); t++) {
+        skinned = nd_corner_kind(gs->verts[t]) == ND_KIND_280;
+    }
     // (T2) the GS's own 3D (the PS2 path's corners: a map record native draw does not take) has VU1's whole Z, the
     // scene's Z less its fraction: its colour passes within half a Z more (shaders/gs_zclamp.frag, its Z kept fine)
     float ps2_bias = 0.0f;
@@ -2550,7 +2556,21 @@ bool sa_draw_batch(int *why) {
         const char *v = getenv("KF4_SA_WORLD");
         world_eps = v && *v ? std::max(float(atof(v)), 0.0f) : 2.0f;
     }
-    bool world = sloped && world_eps > 0.0f && !sa.gs3d && !sa.gs_water;
+    // A skinned model's parts tie exactly, by their real depth (KF4_SA_SKIN=EPS, tests: within EPS world units along the
+    // view), not within the tie's half a Z nor a layer's two units. A Z is depth^2 / az units: far off, half a Z is most
+    // of a unit, and a seated man is two or three Z deep from one end to the other. So from afar a part drawn after
+    // another and lying under it passed over it within the slack: the armour on the arm and leg and the wrist over the
+    // cloth drawn over them, and a bright spot on a hand or the neck where a part's shine came through with it (the
+    // second pass is exact on its first pass's Z), changing as he rocked (the seated men in the cave by the brazier and
+    // by the broken bridge, 4x). Close up the slack is a small fraction of a unit and they looked right. Exact is
+    // nearest hosted at every distance tried: even 0.1 units let the shopkeeper's shirt through along his shoulder.
+    static float skin_eps = -1.0f;
+    if (skin_eps < 0.0f) {
+        const char *v = getenv("KF4_SA_SKIN");
+        skin_eps = v && *v ? std::max(float(atof(v)), 0.0f) : 0.0f;
+    }
+    float layer_eps = skinned ? skin_eps : world_eps;
+    bool world = sloped && (skinned || world_eps > 0.0f) && !sa.gs3d && !sa.gs_water;
     for (size_t t = 0; world && t < gs->verts.size(); t++) {
         world = nd_corner_kind(gs->verts[t]) != ND_KIND_PS2; // (gs.vert's corners keep the Z rule)
     }
@@ -2743,9 +2763,9 @@ bool sa_draw_batch(int *why) {
             p.flags |= draws[i].select << F_PASS_SHIFT;
             p.zbias = draws[i].zbias + (draws[i].zbias > 0.0f || (ties && !draws[i].zwrite) ? ps2_bias : 0.0f);
             p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
-            if (world && draws[i].zbias > 0.0f) {
+            if ((world || (skinned && ties)) && draws[i].zbias > 0.0f) {
                 p.zbias = 0.0f; // (by its real depth: sa_slack's world units, no Z)
-                p.zslope = -world_eps;
+                p.zslope = -layer_eps; // (0: exact)
             }
             c.set_color_write_mask(draws[i].mask);
             c.set_depth_test(true, draws[i].zwrite);
