@@ -989,6 +989,47 @@ frame: no room for a replay. With pf/skin's batches both shrink.
 0 of 300; vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash
 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
+### Both merged (`native/draw`, pf/skin then pf/record on 5abdb02a)
+
+The two merged without a conflict in the code (only this file's two sections). Every draw of pf/skin's groups goes
+through `Cmd`, so pf/record's lazy program and its storage-binding check cover them; the groups' own kept bindings
+(`pass_serial`) are skipped calls, not calls past `Cmd`.
+
+**Pictures:** every picture the same as 5abdb02a's, game frames and pictures between: the four spots (`--fast`, 240,
+the owner's settings, vblanks 200-207, 301, 399; under water 400-407, 600: 156 pictures, 0 differ); the herb run in
+modern at the owner's settings (the same `--log`, PATH1 hash 8b78aa0191adbac9, pictures 1800, 1820, 1840). The off
+check passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test
+0 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
+460424273, pictures 1800, 1820 and 1840 byte for byte.
+
+**The GS's thread a game frame** (`--fast`, 240, the owner's settings, 600 vblanks, two runs, 5abdb02a -> merged; the
+frame's own is the GIF time less the pictures between; each game frame there has one picture between, recorded from
+the packets; under water's figures carry the loading):
+
+| spot | in all | the frame's own | a recording | Vulkan draws |
+|---|---|---|---|---|
+| pond | 40.0 -> 26.6 ms | 20.2 -> 14.3 ms | 19.7 -> 12.3 ms | 1,701,432 -> 1,412,559 |
+| fortress | 30.4 -> 21.4 ms | 13.8 -> 10.0 ms | 16.5 -> 11.4 ms | 2,185,064 -> 2,035,241 |
+| canyon | 26.2 -> 21.7 ms | 16.0 -> 13.0 ms | 10.2 -> 8.7 ms | 1,227,654 -> 1,081,744 |
+| under water | 21.3 -> 21.4 ms | 14.6 -> 14.0 ms | 6.7 -> 7.4 ms | 63,062 -> 63,062 |
+
+**Real time** (`KF4_PRESENT_SIM=240`, 1,400 vblanks, 760 under water; pictures handed over a second of wall time,
+loading included; one game at a time). The owner was playing another game on the GPU (97% busy) during these runs:
+of four rounds only the second had the GPU to itself for most of each run; the others drew about 58 a second at every
+spot, base and merged alike, at 9 ms of GPU a picture. The second round:
+
+| spot | pictures a second | cut to fewer (vblanks with fewer, with none) | a replay | GPU a picture |
+|---|---|---|---|---|
+| pond | 58.8 -> 80.9 | 8 (1,271, 1,184) -> 13 (1,207, 360) | 3.1 -> 1.7 ms | 5.1 -> 8.1 ms |
+| fortress | 103.2 -> 139.5 | 13 (396, 0) -> 3 (97, 0) | 3.7 -> 1.8 ms | 5.8 -> 6.1 ms |
+| canyon | 148.9 -> 165.3 | 4 (180, 0) -> 1 (30, 0) | 1.4 -> 0.7 ms | 5.6 -> 5.2 ms |
+| under water | 202.2 -> 203.0 | 1 (30, 0) -> 1 (30, 0) | 0.22 -> 0.18 ms | 2.0 -> 1.9 ms |
+
+The pond now draws pictures between (520 replays against 13), so its GPU a picture shown rises: each recording draws
+the frame again on the GPU. What is left at the pond is the frame (about 14 ms) and its recording (about 12 ms) on the
+GS's thread, and the GPU: the recording made from the frame's own draws (pf/record's two routes above) would take
+both.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
