@@ -1030,6 +1030,97 @@ the frame again on the GPU. What is left at the pond is the frame (about 14 ms) 
 GS's thread, and the GPU: the recording made from the frame's own draws (pf/record's two routes above) would take
 both.
 
+### The frame's own work kept for its first picture between (branch `rc/own`, from `native/draw` d715daed)
+
+Job 2 of "240 at the owner's spots": the first picture between of a game frame walks the frame's packets again
+(`interp_record`), working out every draw and batch the frame has just worked out.
+
+**Which of pf/record's two routes.** Neither can be made exact as written:
+- (a) the frame drawn from the recording at t 1: the picture's decisions are not the frame's. Its triangles outside the
+  scissor at t 1 but inside at t 0 are kept, and with them the runs cut elsewhere (with MSAA, pixels at shared edges
+  change: STEP3.md, "Silhouettes in runs"); the GS's own 3D and 2D corners are made on the GPU
+  (`gs_replay_corners.comp`, not bit for bit the CPU's: STEP3.md, "On the GPU"); a pass reading its own frame is
+  declined; the rows given back are the whole scissor. The frame at t 1 would not be d715daed's frame.
+- (b) the picture's version of each scene batch recorded as the frame draws it: its culling and copy boxes need the
+  camera at t 0 (`move0`, `mid0`), which frame_interp.c makes only at the vblank; and the calls it makes depend on the
+  picture's state of the scene at that point (its turns with the GS, the render pass, the stencil numbers, the
+  skinned groups kept), which the frame does not have. Recorded ahead, every one would have to be checked against
+  the picture's state anyway.
+
+What is done instead is the part of (b) that is exact by construction: what the picture works out **from the same
+inputs** as the frame is kept by the frame and taken by the picture. The picture still walks the packets (the
+uploads asked for again, the CLUT loads, the registers, the GS's own batches, the scene's turns and its calls into
+`Cmd`), but no longer works the draws and the scene batches out again.
+
+**What is kept** (`gsn_nd_prep.inc`; `sa_memo_*` in `gsn_standalone.inc`):
+- **A draw's record and its batches' corners.** `nd_draw`, `nd280_draw` and the water's `ndw_draw` keep, for each draw
+  (by its place among the frame's native draws, and its value), the record as the set-up made it (VU1's set-up:
+  `nd_const`, `nd280_const`, the water's vertex matrix) and each batch's corners as the plan made them (with the
+  mesh, the batch, the pass, PRIM, the mesh's place in the arena, and the water's alpha and XYOFFSET). The picture
+  takes the record (its moves are its own, worked out as before) and copies the corners, the record number in them
+  changed to the picture's (bits 7-21 of the RGB, which nothing else shares). The plans' own caches keep two a batch,
+  so a mesh drawn more than twice (the zombies) was planned again for the picture.
+- **What a scene batch works out from its corners alone.** For a batch whose corners are a run of the frame's kept
+  corners and nothing else (`nd_prep_run`), `sa_draw_batch` keeps its corners' alphas and rows, whether it is a second
+  pass or a skinned model's, which triangles are outside the scissor, where its triangles overlap (the runs), each
+  triangle's slope, and whether every corner is native. The picture's batch of the same run (and scissor) takes them.
+  The triangles the frame left out are tested at t 0 as before (`nd_box_at_0`): when one is kept there, the picture
+  works the batch out itself. Its texture, blending, ties and calls are worked out as before.
+- **The runs' overlap test** takes each triangle's box once a batch, not once a pair (the same floats and test as
+  `triangles_overlap`'s first one): in the frame too.
+- Kept only while frames have pictures between drawn from the packets (none for 8 frames: nothing kept), so 30 pays
+  nothing; let go with the GS's uploads (`forget_uploads`: a state loaded).
+
+**Every case that works out again is counted** (`--stats`, "native draw, pictures between" and "standalone, pictures
+between"): no frame kept (the first picture after the pictures begin), another draw at the place, another program;
+a batch of another mesh, PRIM or arena place; a scene batch not of kept corners alone, none kept (the frame left all
+of it out: off the screen at t 1), another batch of those corners, a triangle left out kept. The pond's 600 vblanks:
+62,370 draws' records and 462,285 batches (14.4 million corners) taken, 201 draws worked out again; 74,267 scene
+batches took the frame's work, 31,550 found none (the zombies' parts off the screen at t 1, wholly left out in the
+frame), 2,359 kept a triangle the frame left out. `KF4_ND_PREP=0` and `KF4_SA_MEMO=0` turn each off;
+`KF4_ND_PREP_CHECK=1` and `KF4_SA_MEMO_CHECK=1` take them and work them out too, and count what differs: 0 at the four
+spots.
+
+**Numbers.** `--fast`, 240, the owner's settings, 600 vblanks (760 under water), two runs each, d715daed -> rc/own; the
+GS's thread a game frame (GIF time / frames handed over) and a recording:
+
+| spot | GS thread a game frame | a recording |
+|---|---|---|
+| pond | 19.1 -> 17.7 ms | 8.72 -> 7.06 ms |
+| fortress | 15.4 -> 14.4 ms | 8.21 -> 6.83 ms |
+| canyon | 14.8 -> 14.3 ms | 6.36 -> 5.63 ms |
+| under water | 11.7 -> 11.6 ms | 5.27 -> 5.14 ms |
+
+Real time (`KF4_PRESENT_SIM=240`, 1,400 vblanks, 760 under water; one game at a time, the GPU otherwise idle, two runs
+each; pond's first base run an outlier with 517 recordings):
+
+| spot | pictures a second | GS thread a game frame | a recording | GPU a picture |
+|---|---|---|---|---|
+| pond | 91.7, 97.9 -> 97.8, 97.9 | 16.7-17.8 -> 16.5 ms | 9.3 -> 7.5 ms | 8.7 ms |
+| fortress | 158.8, 158.2 -> 158.8, 159.1 | 14.1 -> 13.0 ms | 8.4-8.5 -> 6.9 ms | 5.5 ms |
+| canyon | 161.1, 161.1 -> 160.8, 161.4 | 13.5 -> 12.8 ms | 6.3 -> 5.5 ms | 5.4 ms |
+| under water | 202.3, 202.6 -> 202.6, 202.6 | 10.0 -> 9.9 ms | 5.3 -> 5.2 ms | 2.0 ms |
+
+With the GPU to itself, the pond, the fortress and the canyon are now bound by the GPU, not the GS's thread: 8.7, 5.5
+and 5.4 ms of GPU a picture shown (about 85% of the GPU's time at the pictures a second they reach), so the pictures a
+second do not move; the GS's thread has room (half a game frame at the pond). The GS's time saved shows when the GPU
+is shared (the owner's other game) or on a slower CPU. What would move the pictures a second at these spots is the
+GPU's work a picture (each picture draws the whole scene: the zombies' shader-blended runs, the MSAA resolves).
+
+**What the recording still costs** (the pond, sampled in `interp_record`): Granite's calls and the driver about 40%
+(the pipeline binds: rc/dynstate's), the uploads asked for again about 15% (each written to VRAM again and its blocks
+given back to it in the table), the native draws' walk about 19% (the register writes and CLUT loads, the fetch, the
+moves, the corners copied), the scene batches' textures and the t 0 tests about 15%. The full (b) would move the
+scene's calls into the frame but not the walk of the rest; it would also need the camera at t 0 in the frame
+(frame_interp.c's `move_between` from the marks the GS sees) and the picture's scene state checked at each batch.
+
+**Pictures:** every picture the same as d715daed's: the four spots (`--fast`, 240, the owner's settings, vblanks 200-207,
+301, 399; under water 400-407, 600: 156 pictures, 0 differ); hosted (`--renderer native --native-draw on`) at the pond and
+the fortress (80 pictures, 0 differ); the herb run in modern at the owner's settings and 240 (the same `--log`, PATH1
+hash 561c91020b2908ee, 12 pictures). The off check passes: boot_test; frame_test `--renderer gs` and `native`;
+gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off` against play-932801f: the
+same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

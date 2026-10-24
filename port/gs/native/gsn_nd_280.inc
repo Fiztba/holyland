@@ -466,7 +466,15 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
     }
     uint32_t record = nd280.draws.used++;
     Nd280Const k;
-    nd280_const(k, d, cam);
+    if (!nd_prep_take_const(0x280, &k, sizeof(k)) || nd_prep.check) { // (rc/own: the frame's, in its first picture)
+        Nd280Const again;
+        nd280_const(again, d, cam);
+        if (nd_prep.draw >= 0 && interp.active && memcmp(&again, &k, sizeof(k)) != 0) {
+            nd_prep.check_differ[0]++;
+        }
+        k = again;
+        nd_prep_keep_const(0x280, &k, sizeof(k));
+    }
     for (int c = 0; c < 2; c++) {
         uint64_t offset = gs->reg[R_XYOFFSET_1 + c];
         k.offset[2 * c] = int32_t(bits(offset, 0, 16));
@@ -496,9 +504,19 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
             for (size_t i = 0; i + 1 < b.ad.size(); i += 2) {
                 gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
-            const Nd280Plan &p = nd280_plan_cached(*mesh, b, k);
+            // (rc/own: in the frame's first picture between, the frame's corners: the plan only when one is not the frame's)
+            uint32_t bno = uint32_t(&b - mesh->batches.data());
+            const NdPrepBatch *clipped = nd_prep_take_batch(mesh->id, bno, 2, 0, base);
+            const Nd280Plan *p = nullptr;
+            if (!clipped || nd_prep.check) {
+                p = &nd280_plan_cached(*mesh, b, k);
+                if (clipped && clipped->all_clipped && !p->all_clipped) {
+                    nd_prep.check_differ[2]++;
+                }
+                nd_prep_keep_batch(mesh->id, bno, 2, 0, base, 0, 0, p->all_clipped);
+            }
             gsn_stats.nd_batches++;
-            if (p.all_clipped) {
+            if (p ? p->all_clipped : clipped->all_clipped) {
                 continue;
             }
             for (int pass = 0; pass < 1 + b.sphere; pass++) {
@@ -523,7 +541,21 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                     gs->batch_sprites = false;
                 }
                 size_t before = gs->verts.size();
-                nd280_corners(b, p, pass != 0, eprim, base, record);
+                const NdPrepBatch *taken = nd_prep_take_batch(mesh->id, bno, uint32_t(pass), eprim, base);
+                if (taken) {
+                    nd_prep_corners(*taken, record);
+                }
+                if (!taken || nd_prep.check) {
+                    size_t again = gs->verts.size();
+                    if (!p) {
+                        p = &nd280_plan_cached(*mesh, b, k);
+                    }
+                    nd280_corners(b, *p, pass != 0, eprim, base, record);
+                    if (taken) {
+                        nd_prep_check(before, again);
+                    }
+                    nd_prep_keep_batch(mesh->id, bno, uint32_t(pass), eprim, base, record, before);
+                }
                 if (gs->verts.size() > before) {
                     nd.pending = nd280.pending = true;
                 }

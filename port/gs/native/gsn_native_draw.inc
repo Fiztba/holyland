@@ -234,6 +234,8 @@ struct NdState {
 } nd;
 volatile int nd_mode = GSN_NATIVE_DRAW_NATIVE; // (gsn_set_native_draw)
 
+#include "gsn_nd_prep.inc" // (pictures between: the frame's draws' records and corners kept for its first one)
+
 // (flush_batch: whether its batch is native corners, for the whole of it)
 struct NdFlush {
     NdFlush() {
@@ -916,9 +918,21 @@ void nd_draw(uint64_t value) {
     }
     uint32_t record = nd.draws.used++;
     NdConst k;
-    nd_const(k, d, cam);
+    if (!nd_prep_take_const(d.program, &k, sizeof(k)) || nd_prep.check) { // (rc/own: the frame's, in its first picture)
+        NdConst again;
+        memset(&again, 0, sizeof(again)); // (what nd_const leaves is set below: zero, so that the frame's and the picture's compare)
+        nd_const(again, d, cam);
+        if (d.program == 0x5A0) {
+            nd5a0_const(again);
+        }
+        if (nd_prep.draw >= 0 && interp.active && memcmp(&again, &k, sizeof(k)) != 0) {
+            nd_prep.check_differ[0]++;
+        }
+        k = again;
+        nd_prep_keep_const(d.program, &k, sizeof(k));
+    }
     if (d.program == 0x5A0) {
-        nd5a0_const(k); // (the shadows: 0x000's maths without the lights and the fog, gsn_nd_5a0.inc)
+        // (the shadows: 0x000's maths without the lights and the fog, gsn_nd_5a0.inc: nd5a0_const above)
         if (nd.of5a0.size() <= record) {
             nd.of5a0.resize(record + 1, 0);
         }
@@ -999,7 +1013,19 @@ void nd_draw(uint64_t value) {
             size_t before = gs->verts.size();
             {
                 Timer plan(gsn_stats.ns_nd_plan);
-                nd_plan(*mesh, b, k.vertex, eprim, base, record, wave);
+                // (rc/own: in the frame's first picture between, the frame's corners)
+                const NdPrepBatch *taken = nd_prep_take_batch(mesh->id, uint32_t(&b - mesh->batches.data()), 0, eprim, base);
+                if (taken) {
+                    nd_prep_corners(*taken, record);
+                }
+                if (!taken || nd_prep.check) {
+                    size_t again = gs->verts.size();
+                    nd_plan(*mesh, b, k.vertex, eprim, base, record, wave);
+                    if (taken) {
+                        nd_prep_check(before, again);
+                    }
+                    nd_prep_keep_batch(mesh->id, uint32_t(&b - mesh->batches.data()), 0, eprim, base, record, before);
+                }
             }
             if (k.info[3] & ND_C_FAR) {
                 for (size_t i = before; i < gs->verts.size(); i++) {
@@ -1024,9 +1050,11 @@ void nd_register(uint64_t value) {
     switch (RD_ND_COMMAND(value)) {
     case RD_ND_DRAW:
         if (nd_mode == GSN_NATIVE_DRAW_NATIVE) {
+            nd_prep_draw_begin(value); // (rc/own: the frame's draw kept for its pictures between, or a picture's taken)
             sa_draw_begin(value); // (standalone: a batch holds the scene's corners or none)
             nd_draw(value);
             sa_draw_end();
+            nd_prep_draw_end();
         }
         break;
     case RD_ND_ALT_BEGIN:
@@ -1038,6 +1066,7 @@ void nd_register(uint64_t value) {
         break;
     case RD_ND_FRAME:
         rd_consumer_frame(value);
+        nd_prep_frame(uint32_t(value) & 0xFFFFFF); // (rc/own)
         nd.section = ND_SECTION_NONE;
         nd.seen.clear();
         // (a frame's packets drawn again, for a picture between or exact, are the same frame)

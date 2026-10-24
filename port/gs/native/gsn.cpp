@@ -5506,6 +5506,7 @@ void interp_forget();
 
 void forget_uploads() {
     interp_forget();
+    nd_prep_forget(); // (rc/own: the frames' draws kept for their pictures between)
     pending_upload.active = false;
     pending_upload.data.clear();
     uploads_now.clear();
@@ -7805,6 +7806,7 @@ extern "C" void gsn_set_scene_map(int map) {
 }
 
 extern "C" void gsn_print_standalone_stats(void) {
+    nd_prep_print_stats(); // (rc/own: native draw's work kept for the pictures between, hosted or modern)
     sa_print_stats();
 }
 
