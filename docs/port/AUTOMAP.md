@@ -10,7 +10,9 @@ it runs.
 - **Full map**: the Map key (M in both layouts; rebind it on the Controls page, "Map") opens it in play.
   The game waits while it is open. The wheel zooms toward the cursor, a left drag moves, a right click
   fits the map again; PgUp and PgDn (or Shift with the wheel) show the levels above and below the
-  player's, Home his own; M or Escape closes it.
+  player's, Home his own; M or Escape closes it. Clicking a way into another map shows that map (the map
+  browser, below); Backspace goes back to the map shown before, Home to the player's own map at his own
+  level (Home did only the level before the browser).
 - **Minimap**: a corner of the picture while playing (hidden in menus): corner, size, reach and opacity
   on the Mods page. The extended stats mod's timers (ailments and timed effects) sit above it in a bottom
   corner and below it in a top one (EXTENDED_STATS.md, "The timers on screen").
@@ -162,6 +164,70 @@ loads: its cells count as seen at every height.
   of a record that loads it (a drop). Each connected stretch is one way: its cells hatched, a small white
   diamond in its middle and, on the full map, its name (the Teleport table's, `port_teleport_map_name`).
 
+## Browsing other maps
+
+On the full map, a way into another map (its hatched cells or its diamond) can be clicked: the full map then
+shows that map, titled with its name, its number and "(browsing)", seen from where the way comes in (its level
+there; PgUp and PgDn as on the player's map). Its own ways are clickable in turn, so the world can be walked on
+the map. Back (the button in the top right corner, or Backspace) returns to the map shown before, the last one
+to the player's own; Home (the button, or the Home key) to the player's own map, with his arrow; closing the
+full map does too. A way into the player's own map goes home. The minimap always shows the player's map.
+
+Only a map the player has explored some of can be shown (its explored part is kept in `automap/live.bin`;
+`map_explored`), any with the reveal cheat; the hover label of a way into one says "Click: show this map",
+of one not explored yet "(not visited yet)", and the click does nothing. The fog of war is the map's own
+explored state, kept per map (the chunks of `Automap_Serialize`, by map number; checked: each map's chunk
+holds its cells only, and a browsed map built in the game's float mode has the same layout hash as when the
+player stands in it, so its explored cells are exactly his).
+
+**Strictly read only.** A browsed map is built from its file on the disc (`map_file_read`: KF4.DAT's
+`NNN.map` into memory of its own, through `port_disc_read`, which takes the disc's lock and seeks for every
+read) and the save's tables, which are only read. It is built on the game's thread as the click is drawn,
+while the full map holds the game, so no load of the game's is under way then; nothing of the game's memory,
+streaming or state is touched, and with the mod off none of it runs.
+
+What is shown, and from where (game/automap.c, "The map browser"):
+
+- **Floor plan, walls, water, hazards, levels**: the records' collision meshes from the file
+  (`file_triangles`), as `Map_PlaceRecordModels` places them, with the records the story leaves out or moves
+  as the game would on the way in (below).
+- **People**: whether each is there now is the game's own test (`spawn_flags_can_appear`, as for the
+  player's map) on the flags the spawn would have as the player walks in. Those flags are not kept anywhere
+  while a map is not loaded: `Entity_InitFromMapSpawns` makes them again from the spawn records each time the
+  map is loaded (bit 7 unless the spawn's bits 59-60 are 2; bit 4 cleared by `Entity_ClearFlag10InSlot`), then
+  `MapSetup_RunForMap` and the map's start script (label 0x7FFF, which `Map_MakeCurrent` and the loads run as
+  the map becomes the current one) set them from the story's variables (command 253,
+  `ScriptCmd_SetEntityFlags`). game/automap_script.c runs that start script as the interpreter would, on
+  copies: the game's variables (`script_game_var_blocks`) are read, what the script writes goes into the run's
+  own list, the threads' and shared variables are its own, and only the commands that change or read what is
+  shown are carried out (253 and 254 the spawns' flags, 42 their deaths, 110, 111 and 115 the objects, 100
+  and 102 the fixed items, 150 the records, 123 the items carried, 2 and 5 the threads); a command that never
+  finishes in the game ends its thread there. The deaths are the save's (`Game_GetSpawnDeathCount`). So a
+  person is shown exactly when the game would bring him on the way in, and with the secrets cheat the others
+  are the faint "not here now" ring, as on the player's map.
+- **Objects** (doors, chests, containers, switches, save points...): their state as the map keeps it while it
+  is not loaded (`map_entry_flags`: `Game_GetObjectActive`, `Game_GetObjectState`, `Game_GetObjectFlag`, the
+  trigger items; as `MapObject_StartMap` reads them back, or from the placement for a map never visited), then
+  `MapSetup_RunForMap`'s and the start script's changes; labels, "(stays: ...)", "Gives (by its script)",
+  locks and hints as on the player's map. A door's leaf comes from its collision mesh in the file.
+- **Items** (the items cheat): the fixed items not taken as often as they may be (`map_item_pickup_counts`)
+  that the map has a model for; one that lies there only by `MapItem_RollFixedItems`' rolls is drawn faint,
+  "(there by chance as you walk in: N%)"; one the start script puts out is there for sure; the items dropped
+  there (`dropped_item_records`). "Given by ..." as on the player's map (the map's script is read from the
+  file).
+- **Enemies** (the enemies cheat): not in the world while the player is away; the places their spawns come
+  into the world, as faint rings, for the spawns that would come.
+- **A map the game still holds in its other slot** (the neighbour it streamed in): its live objects' and
+  spawns' flags, records and lying items (moved back into the map's own frame by the slot's offset), with
+  the start script run on them, as the game runs it again when the player walks back in.
+
+Checked against the player's map (`KF4_AUTOMAP_BROWSE`'s `self`, below: the map he stands in built as a
+browsed one, the save's tables holding it as the quick save wrote them) on the maps of seven of the owner's
+saves (012, 013, 017, 096, 097, 104, 105) and, through teleports, on 000, 004, 011, 020, 041 and 100: the
+same people (there, or not here now), objects and their states, labels and floor plan; the differences are
+only the items there by chance (the game rolled them), a door's leaf drawn from its other end (105), and
+the enemies (live ones against spawn places).
+
 ## Adding area names, labels and hints
 
 Everything hand-written is in `game/automap_guide.c`; no other file needs to change.
@@ -185,7 +251,11 @@ Everything hand-written is in `game/automap_guide.c`; no other file needs to cha
 
 The overlay's test pictures take the map too: `KF4_OVERLAY_SHOT=map@V` opens the full map at vblank V
 (overlay closed) and writes `overlay_map_V.png`; `mini@V` writes the picture with the minimap,
-`overlay_mini_V.png`. `KF4_AUTOMAP_HOVER=x,z` puts the mouse over that world point on the full map (for
+`overlay_mini_V.png`. `KF4_AUTOMAP_BROWSE=step,step,...` takes a step of the map browser as each test picture
+of the full map opens: a map's number clicks the way into it on the map shown, `back` and `home` the buttons,
+`self` shows the player's own map built as a browsed map is (to check the two against each other), an empty
+step nothing; `KF4_AUTOMAP_DUMP` then also writes each browsed map's markers, spawns and objects to
+`DIR/automap_browse_NNN.txt`. `KF4_AUTOMAP_HOVER=x,z` puts the mouse over that world point on the full map (for
 the hover label), and `KF4_AUTOMAP_DUMP=DIR` writes each map's markers' labels to
 `DIR/automap_NNN.txt` a second after it is built (and `KF4_AUTOMAP_LEVEL=n` makes the test picture of the
 full map show the level n above or below the player's), then every spawn with what decides whether it is
@@ -201,6 +271,17 @@ KF4_DATA_DIR=/tmp/kf4-data KF4_OVERLAY_SHOT=map@270 \
 With the mod off the game is the same: the poll returns at once, nothing is drawn, and no file is written.
 
 ## Known limits
+
+- The map browser follows the joins of the floors only, as the ways are marked; a browsed map is what the
+  player would find walking in now, so a person a talk sends away until the player leaves, or an object a
+  script moves later, shows as the next visit will have it. The start script is run once, at once: what it
+  does only after waiting for the player (a timer, his position) is not seen. An item made to lie in a map by
+  a script other than its start script, or by `MapSetup_RunForMap` for maps 027-038 (fog, lights), is not
+  modelled.
+- `--teleport` writes the map it leaves's live object flags under the map it goes to (game/quicksave.c's
+  `teleport` sets the slot's tag before `Game_WriteSaveImage`, whose `MapObject_SaveAllFlags` writes them by
+  tag): the objects of the map teleported to start in the wrong state. Not the browser's; seen while checking
+  it.
 
 - The full map and the minimap are drawn with ImGui on the game's thread: while the minimap shows, the
   higher frame rates' pictures between are shown by the game's thread too (as while the overlay is open),

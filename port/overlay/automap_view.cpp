@@ -63,6 +63,14 @@ const float ZSIGN = -1.0f;
 // ---- State --------------------------------------------------------------------------------------------
 bool full_was_open;
 bool shot_open;           // KF4_OVERLAY_SHOT's map
+int shown_browsed = -1;   // the map the full map showed last (port_automap_browsing), to fit it again when it changes
+std::vector<std::string> test_browse; // KF4_AUTOMAP_BROWSE: a step for each test picture of the full map
+size_t test_browse_next;
+bool test_browse_read;
+
+// the markers drawn: the player's map's, or the browsed map's on the full map
+const PortAutomapMarker *shown_list;
+int shown_count;
 float zoom = 1.0f;        // the full map's zoom (1 fits what has been seen)
 float centre_x, centre_z; // its centre, in world units
 bool centred;             // moved by the player from the fitted centre
@@ -364,8 +372,7 @@ int level_height(const PortAutomapPlan *p, int y, long long &seed_cell, int n) {
 
 // the plan, with the cells' colours made again when what they depend on has changed: the minimap always
 // shows the player's level, the full map the level picked (view_level)
-const PortAutomapPlan *current_plan(const PortAutomapPlayer &player, bool full) {
-    const PortAutomapPlan *p = port_automap_plan();
+const PortAutomapPlan *current_plan(const PortAutomapPlan *p, const PortAutomapPlayer &player, bool full) {
     if (p == nullptr)
         return nullptr;
     int py = (int)player.y;
@@ -666,12 +673,18 @@ void draw_icon(ImDrawList *dl, const View &v, const PortAutomapMarker &m, float 
         dl->AddCircle(p, r * 0.95f + std::fmax(1.5f, r * 0.2f) * 0.5f + 0.5f, palette.outline, 16, 1.0f);
         break;
     case PORT_AUTOMAP_MARK_ENEMY:
+        if (m.flags & PORT_AUTOMAP_MARK_ABSENT) {
+            // a browsed map's enemy: where it comes into the world, a faint ring
+            dl->AddCircleFilled(p, r * 0.6f, fade(palette.enemy, 0.15f), 12);
+            dl->AddCircle(p, r * 0.6f, fade(palette.enemy, 0.6f), 12, std::fmax(1.0f, r * 0.12f));
+            break;
+        }
         dl->AddCircleFilled(p, r * 0.65f, palette.enemy, 12);
         dl->AddCircle(p, r * 0.65f, palette.outline, 12, 1.0f);
         break;
     case PORT_AUTOMAP_MARK_ITEM:
-        if (m.flags & PORT_AUTOMAP_MARK_GIVEN) {
-            // out of sight until the story hands it over: a faint ring, the item's colour
+        if (m.flags & (PORT_AUTOMAP_MARK_GIVEN | PORT_AUTOMAP_MARK_MAYBE)) {
+            // out of sight until the story hands it over, or there only by chance: a faint ring, the item's colour
             dl->AddCircleFilled(p, r * 0.5f, fade(palette.item, 0.2f), 10);
             dl->AddCircle(p, r * 0.5f, fade(palette.item, 0.7f), 10, std::fmax(1.0f, r * 0.12f));
             break;
@@ -768,8 +781,8 @@ bool on_level_shown(const PortAutomapPlan *p, const PortAutomapMarker &m) {
 }
 
 void draw_markers(ImDrawList *dl, const PortAutomapPlan *p, const View &v, ImVec2 c0, ImVec2 c1, bool full, float r, float ts) {
-    const PortAutomapMarker *list;
-    int count = port_automap_markers(&list);
+    const PortAutomapMarker *list = shown_list;
+    int count = shown_count;
     for (int i = 0; i < count; i++)
         if (list[i].kind == PORT_AUTOMAP_MARK_EXIT)
         {
@@ -818,10 +831,10 @@ void draw_player(ImDrawList *dl, const View &v, const PortAutomapPlayer &player,
     dl->AddQuad(tip, left, back, right, col(0, 0, 0), 1.5f);
 }
 
-// the marker nearest the mouse, labelled beside it
-void draw_hover(ImDrawList *dl, const View &v, ImVec2 mouse, ImVec2 g0, ImVec2 g1, float ts, float reach) {
-    const PortAutomapMarker *list;
-    int count = port_automap_markers(&list);
+// the marker under the mouse: the nearest within reach (pixels), or a way whose stretch it is over; -1 none
+int pick_marker(const View &v, ImVec2 mouse, float reach) {
+    const PortAutomapMarker *list = shown_list;
+    int count = shown_count;
     float best = reach * reach;
     int bi = -1;
     for (int i = 0; i < count; i++) {
@@ -843,9 +856,15 @@ void draw_hover(ImDrawList *dl, const View &v, ImVec2 mouse, ImVec2 g0, ImVec2 g
             bi = i;
         }
     }
+    return bi;
+}
+
+// the marker under the mouse, labelled beside it
+void draw_hover(ImDrawList *dl, const View &v, ImVec2 mouse, ImVec2 g0, ImVec2 g1, float ts, float reach) {
+    int bi = pick_marker(v, mouse, reach);
     if (bi < 0)
         return;
-    const char *label = list[bi].text;
+    const char *label = shown_list[bi].text;
     ImFont *font = ImGui::GetFont();
     ImVec2 ext = font->CalcTextSizeA(ts, FLT_MAX, ts * 26.0f, label);
     float pad = ts * 0.4f;
@@ -862,8 +881,8 @@ void draw_hover(ImDrawList *dl, const View &v, ImVec2 mouse, ImVec2 g0, ImVec2 g
 }
 
 bool any_marker(int kind, int flags = 0) {
-    const PortAutomapMarker *list;
-    int count = port_automap_markers(&list);
+    const PortAutomapMarker *list = shown_list;
+    int count = shown_count;
     for (int i = 0; i < count; i++)
         if (list[i].kind == kind && (list[i].flags & flags) == flags)
             return true;
@@ -956,8 +975,8 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
     int binding = port_controls_binding(port_controls_layout(), ACTION_MAP, 0);
     if (binding != 0)
         port_controls_binding_label(binding, key, sizeof(key));
-    char help[256];
-    std::snprintf(help, sizeof(help), "Scroll: zoom\nDrag: move\nRight click: fit\nPgUp/PgDn, Shift+scroll: other levels\nPoint at a marker for details\n%s or Escape closes the map", key);
+    char help[384];
+    std::snprintf(help, sizeof(help), "Scroll: zoom\nDrag: move\nRight click: fit\nPgUp/PgDn, Shift+scroll: other levels\nPoint at a marker for details\nClick a way: show that map\nBackspace: back, Home: your map\n%s or Escape closes the map", key);
     text(dl, at, ts * 0.85f, col(170, 160, 140), help);
 }
 
@@ -987,7 +1006,8 @@ void minimap_square(ImVec2 g0, ImVec2 g1, ImVec2 &lo, ImVec2 &hi) {
 }
 
 void draw_minimap(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
-    const PortAutomapPlan *p = current_plan(player, false);
+    shown_count = port_automap_markers(&shown_list);
+    const PortAutomapPlan *p = current_plan(port_automap_plan(), player, false);
     if (p == nullptr)
         return;
     ImVec2 lo, hi;
@@ -1010,7 +1030,85 @@ void draw_minimap(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
     dl->AddRect(lo, hi, col(200, 180, 130, 0.8f), side * 0.04f, 0, 1.5f);
 }
 
-void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
+// the map browser's buttons in the full map's top right corner (shown while another map is browsed): Back and
+// Home, as label and rectangle; the one under a click, -1 none
+struct Button {
+    const char *label;
+    ImVec2 lo, hi;
+};
+
+int browse_buttons(ImDrawList *dl, ImVec2 g0, ImVec2 g1, float ts, ImVec2 mouse, bool click, Button out[2]) {
+    float gh = g1.y - g0.y, pad = ts * 0.45f;
+    const char *labels[2] = {"Back (Backspace)", "Home (Home)"};
+    float x = g1.x - gh * 0.04f;
+    int hit = -1;
+    for (int k = 1; k >= 0; k--) {
+        ImVec2 ext = ImGui::GetFont()->CalcTextSizeA(ts, FLT_MAX, 0.0f, labels[k]);
+        out[k].label = labels[k];
+        out[k].hi = ImVec2(x, g0.y + gh * 0.02f + ext.y + pad * 2.0f);
+        out[k].lo = ImVec2(x - ext.x - pad * 2.0f, g0.y + gh * 0.02f);
+        x = out[k].lo.x - ts * 0.6f;
+        bool over = mouse.x >= out[k].lo.x && mouse.x < out[k].hi.x && mouse.y >= out[k].lo.y && mouse.y < out[k].hi.y;
+        dl->AddRectFilled(out[k].lo, out[k].hi, over ? col(70, 60, 40, 0.95f) : col(30, 26, 20, 0.92f), pad);
+        dl->AddRect(out[k].lo, out[k].hi, palette.frame, pad, 0, 1.5f);
+        text(dl, ImVec2(out[k].lo.x + pad, out[k].lo.y + pad), ts, palette.text, labels[k]);
+        if (over && click)
+            hit = k;
+    }
+    return hit;
+}
+
+// a way's marker clicked (or named by KF4_AUTOMAP_BROWSE): its map is shown, when it can be
+void browse_way(const PortAutomapMarker &m) {
+    if (m.kind != PORT_AUTOMAP_MARK_EXIT || !(m.flags & PORT_AUTOMAP_MARK_BROWSE))
+        return;
+    if (!port_automap_browse(m.map, m.to[0], m.to[1], m.to[2]))
+        std::fprintf(stderr, "[automap] map %03d cannot be shown\n", m.map);
+}
+
+// KF4_AUTOMAP_BROWSE=step,step,...: as each test picture of the full map opens it, the next step: a map's
+// number clicks the way into it on the map shown, "back" and "home" the buttons, "self" shows the player's own
+// map built as a browsed map is (port_automap_browse_self_test), nothing does nothing
+void test_browse_step() {
+    if (!test_browse_read) {
+        test_browse_read = true;
+        if (const char *t = std::getenv("KF4_AUTOMAP_BROWSE")) {
+            std::string spec = t;
+            size_t at = 0;
+            while (at <= spec.size()) {
+                size_t end = spec.find(',', at);
+                test_browse.push_back(spec.substr(at, end == std::string::npos ? std::string::npos : end - at));
+                if (end == std::string::npos)
+                    break;
+                at = end + 1;
+            }
+        }
+    }
+    if (test_browse_next >= test_browse.size())
+        return;
+    std::string step = test_browse[test_browse_next++];
+    if (step == "back") {
+        port_automap_browse_back();
+    } else if (step == "home") {
+        port_automap_browse_home();
+    } else if (step == "self") { // the player's own map built as a browsed one, to check its markers
+        port_automap_browse_self_test();
+    } else if (!step.empty()) {
+        int map = std::atoi(step.c_str());
+        const PortAutomapMarker *list;
+        int count = port_automap_browsing() >= 0 ? port_automap_browse_markers(&list) : port_automap_markers(&list);
+        for (int i = 0; i < count; i++)
+            if (list[i].kind == PORT_AUTOMAP_MARK_EXIT && list[i].map == map) {
+                if (!(list[i].flags & PORT_AUTOMAP_MARK_BROWSE))
+                    std::fprintf(stderr, "[automap] KF4_AUTOMAP_BROWSE: the way into map %03d is not clickable\n", map);
+                browse_way(list[i]);
+                return;
+            }
+        std::fprintf(stderr, "[automap] KF4_AUTOMAP_BROWSE: no way into map %03d on the map shown\n", map);
+    }
+}
+
+void draw_full(const PortAutomapPlayer &own, ImVec2 g0, ImVec2 g1) {
     if (!test_level_read) {
         test_level_read = true;
         if (const char *t = std::getenv("KF4_AUTOMAP_LEVEL"))
@@ -1020,7 +1118,28 @@ void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
         view_level = test_level;
         view_level_set = false;
     }
-    const PortAutomapPlan *p = current_plan(player, true);
+    // the map shown: the player's own, or the one browsed (seen from the way it was reached by)
+    int browsing = port_automap_browsing();
+    PortAutomapPlayer player = own;
+    const PortAutomapPlan *shown = port_automap_plan();
+    if (browsing >= 0) {
+        port_automap_browse_focus(&player);
+        shown = port_automap_browse_plan();
+        shown_count = port_automap_browse_markers(&shown_list);
+    } else {
+        shown_count = port_automap_markers(&shown_list);
+    }
+    if (browsing != shown_browsed) {
+        // another map: fitted again, at the level it is seen from
+        shown_browsed = browsing;
+        zoom = 1.0f;
+        centred = false;
+        if (!shot_open || test_level == 0) {
+            view_level = 0;
+            view_level_set = false;
+        }
+    }
+    const PortAutomapPlan *p = current_plan(shown, player, true);
     if (p == nullptr)
         return;
     float gw = g1.x - g0.x, gh = g1.y - g0.y;
@@ -1057,6 +1176,8 @@ void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
     ImGuiIO &io = ImGui::GetIO();
     ImVec2 mouse = io.MousePos;
     bool inside = mouse.x >= area_x && mouse.x < area_x + area_w && mouse.y >= area_y && mouse.y < area_y + area_h;
+    // a click: the left button let go without dragging the map
+    bool click = !shot_open && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && io.MouseDragMaxDistanceSqr[0] < 36.0f;
     if (!shot_open) {
         float wheel = io.MouseWheel;
         if (wheel != 0.0f && io.KeyShift) {
@@ -1102,7 +1223,8 @@ void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
     r = r > gh / 40.0f ? gh / 40.0f : r;
     r = r < 7.0f ? 7.0f : r;
     draw_markers(dl, p, v, c0, c1, true, r, ts);
-    draw_player(dl, v, player, std::fmax(9.0f, std::fmin(gh / 45.0f, v.s * 160.0f)));
+    if (browsing < 0)
+        draw_player(dl, v, player, std::fmax(9.0f, std::fmin(gh / 45.0f, v.s * 160.0f)));
     dl->PopClipRect();
     if (!test_hover_read) {
         test_hover_read = true;
@@ -1113,19 +1235,40 @@ void draw_full(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
         mouse = v.at(test_hover_x, test_hover_z);
         inside = true;
     }
+    float reach = std::fmax(12.0f, r * 1.4f);
     if (inside)
-        draw_hover(dl, v, mouse, g0, g1, ts, std::fmax(12.0f, r * 1.4f));
+        draw_hover(dl, v, mouse, g0, g1, ts, reach);
 
     text(dl, ImVec2(g0.x + gh * 0.04f, g0.y + gh * 0.02f), ts * 1.4f, col(240, 220, 170), player.title);
-    char sub[64];
+    char sub[96];
+    char level[64] = "";
     if (view_level != 0)
-        std::snprintf(sub, sizeof(sub), "map %03d   %d level%s %s yours (Home: yours)", player.map, std::abs(view_level),
-                      std::abs(view_level) == 1 ? "" : "s", view_level > 0 ? "above" : "below");
-    else
-        std::snprintf(sub, sizeof(sub), "map %03d", player.map);
+        std::snprintf(level, sizeof(level), "   %d level%s %s %s (Home: %s)", std::abs(view_level),
+                      std::abs(view_level) == 1 ? "" : "s", view_level > 0 ? "above" : "below",
+                      browsing >= 0 ? "the way in" : "yours", browsing >= 0 ? "your map" : "yours");
+    std::snprintf(sub, sizeof(sub), "map %03d%s%s", player.map, browsing >= 0 ? " (browsing)" : "", level);
     ImVec2 ext = ImGui::GetFont()->CalcTextSizeA(ts * 1.4f, FLT_MAX, 0.0f, player.title);
     text(dl, ImVec2(g0.x + gh * 0.04f + ext.x + ts, g0.y + gh * 0.02f + ts * 0.35f), ts * 0.9f, col(170, 160, 140), sub);
     draw_legend(dl, p, ImVec2(g1.x - legend_w, g0.y + gh * 0.1f), ts);
+
+    // the map browser: Back and Home, and a click on a way into another map shows it
+    if (browsing >= 0) {
+        Button buttons[2];
+        int hit = browse_buttons(dl, g0, g1, ts * 0.85f, io.MousePos, click, buttons);
+        if (hit == 0) {
+            port_automap_browse_back();
+            return;
+        }
+        if (hit == 1) {
+            port_automap_browse_home();
+            return;
+        }
+    }
+    if (click && inside) {
+        int bi = pick_marker(v, mouse, reach);
+        if (bi >= 0)
+            browse_way(shown_list[bi]);
+    }
 }
 
 bool map_key(const SDL_Event *event) {
@@ -1175,8 +1318,16 @@ bool automap_view_event(const SDL_Event *event) {
     if (event->type == SDL_KEYDOWN) {
         SDL_Scancode key = event->key.keysym.scancode;
         if (key == SDL_SCANCODE_PAGEUP || key == SDL_SCANCODE_PAGEDOWN || key == SDL_SCANCODE_HOME) {
+            // Home: the player's own map (the map browser) at his own level
             view_level = key == SDL_SCANCODE_HOME ? 0 : view_level + (key == SDL_SCANCODE_PAGEUP ? 1 : -1);
             view_level_set = false;
+            if (key == SDL_SCANCODE_HOME)
+                port_automap_browse_home();
+            return true;
+        }
+        if (key == SDL_SCANCODE_BACKSPACE) { // the map browser: the map shown before
+            if (port_automap_browsing() >= 0)
+                port_automap_browse_back();
             return true;
         }
     }
@@ -1194,6 +1345,12 @@ void automap_view_open_for_shot(bool open) {
     zoom = 1.0f;
     centred = false;
     port_automap_set_full_open(open ? 1 : 0);
+    // overlay.cpp opens the map at each vblank until its picture is taken: a step for each picture
+    static uint64_t last_open = 0;
+    uint64_t now = port_vblank_count();
+    if (open && port_automap_full_open() && (last_open == 0 || now > last_open + 1))
+        test_browse_step();
+    last_open = now;
 }
 
 void automap_view_draw(int x, int y, int width, int height) {
