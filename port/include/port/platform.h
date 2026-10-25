@@ -290,6 +290,9 @@ void port_dmac_start(void);
 void port_dmac_wake(void);
 /* Waits until a channel's STR is clear. */
 void port_dmac_wait(int channel);
+/* (the kernel) The game's thread sleeps until a vblank is due (1), or runs again (0): the controller naps
+   while it sleeps, as nothing can start a channel then. */
+void port_dmac_game_sleeps(int sleeps);
 /* (the kernel) The channels among `wanted` started since the last call, once their transfers are done:
    their end interrupts are due. */
 uint32_t port_dmac_ends(uint32_t wanted);

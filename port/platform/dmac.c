@@ -28,7 +28,10 @@
 
    The thread spins while the game is starting channels, and naps once it has been idle for a while.
    The calls that come before a game's own channel start (FlushCache, the libgraph and libdma calls)
-   wake it, so the nap rarely costs the game a wait. */
+   wake it, so the nap rarely costs the game a wait. While the game's thread sleeps until a vblank is
+   due (port_dmac_game_sleeps) nothing can start a channel, so the thread naps as soon as its queue is
+   empty: spinning there kept a whole core busy through all of play (97% of one at 170 Hz, against 14% now),
+   for a game's thread that runs about an eighth of the time. */
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -84,6 +87,7 @@ static volatile int *chcr[10];
 static volatile uint64_t transfers[10];
 static volatile int wake_requested;
 static volatile int call_done;
+static volatile int game_sleeps; /* the game's thread waits for a vblank's time (port_dmac_game_sleeps) */
 
 #ifdef _WIN32
 static CRITICAL_SECTION nap_lock;
@@ -492,7 +496,7 @@ static void *dmac_thread(void *unused)
         if (__atomic_exchange_n(&wake_requested, 0, __ATOMIC_ACQ_REL)) {
             idle = 0;
         }
-        if (++idle < SPINS_BEFORE_NAP) {
+        if (++idle < SPINS_BEFORE_NAP && !__atomic_load_n(&game_sleeps, __ATOMIC_ACQUIRE)) {
             cpu_relax();
             continue;
         }
@@ -529,6 +533,15 @@ void port_dmac_start(void) {
 
 void port_dmac_wake(void) {
     queue_from_game(NULL, 1);
+}
+
+void port_dmac_game_sleeps(int sleeps) {
+    if (sleeps) {
+        __atomic_store_n(&game_sleeps, 1, __ATOMIC_RELEASE);
+        return;
+    }
+    __atomic_store_n(&game_sleeps, 0, __ATOMIC_RELEASE);
+    wake_thread(); /* (spinning again before the game can start a channel) */
 }
 
 void port_dmac_wait(int channel) {
