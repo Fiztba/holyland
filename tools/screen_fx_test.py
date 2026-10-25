@@ -14,8 +14,8 @@ Each case is a run of the game (always --no-audio, --headless, a fresh data fold
 - the real scenes need quick saves from --spots: quick_underwater.kf4quick (walking forward into the water),
   quick_deathwater.kf4quick (falling into deadly water), quick_palace.kf4quick (the Queen's Palace, the MP
   drain), quick_wand.kf4quick (standing on a Symbol of Passage: the Item screen, Up x4 to the Green Wand, used:
-  the map change's fade of its last frame, 0x2BC0), quick_icy.kf4quick (the icy corridor and its creatures). Cases
-  whose save is missing are left out.
+  the map change's fade of its last frame, 0x2BC0), quick_icy.kf4quick (the icy corridor and its creatures: their
+  shine drawn whole, and with --native-shine exact). Cases whose save is missing are left out.
 
 --perf (real time, KF4_PRESENT_SIM=240, KF4_GSN_GPU_TIME=2, KF4_HITCH_MS=50, --stats): over the case's window of
 vblanks, the pictures handed over a second and the game's frames a second (KF4_PRESENT_LOG), and from --stats
@@ -86,8 +86,10 @@ def cases():
     add("wand", spot="quick_wand", pad=[(500, "CIRCLE", 4), (560, "CROSS", 4), (620, "UP", 4), (640, "UP", 4),
                                         (660, "UP", 4), (680, "UP", 4), (720, "CROSS", 4)],
         base=None, window=(700, 800), dump=(738, 749), same30=(740, 749))
-    # the icy corridor (map 017, the ice creatures): standing still where the owner's game fell to 11 frames a second
+    # the icy corridor (map 017, the ice creatures): standing still where the owner's game fell to 11 frames a second.
+    # Their shine drawn whole (the default), and exact, in runs (--native-shine exact: the PS2's fold edges, slower)
     add("icy", spot="quick_icy", base=None, window=(300, 980), dump=(400, 411))
+    add("icy exact", spot="quick_icy", args=["--native-shine", "exact"], base=None, window=(300, 980), dump=(400, 411))
     return c
 
 

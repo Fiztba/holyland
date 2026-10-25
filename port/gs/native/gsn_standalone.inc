@@ -2281,11 +2281,20 @@ struct SaDraw {
 // Kept from one 0x280 draw of the scene to the next (a model is a draw a bone); anything else first draws what is kept:
 // another batch or draw, the scene's turn ending, a picture between's mark, a save state. KF4_SA_GROUP=0 (tests) draws
 // each part as it comes.
+// (perf/shine-whole) A second pass blended in the shader and drawn whole (the ice creatures' shine on map 017, Cs + Cd As
+// with As above 0x80: --native-shine whole, the default) is kept too. Each part's shine blended from a copy of the
+// pixels under it made just before it (in the render pass, by its own triangles: sa_copy_run.frag), so each part's
+// first pass was a group of one and each shine a copy between two barriers: about 700 of each a picture at the icy
+// corridor. Kept, the group's shines blend from one copy made after all its first passes, by all their triangles. That
+// is the same picture: a pixel takes one part's shine at most (the marks above), the part whose first pass is the last
+// to draw there, and the copy has that first pass's colour there, as the copy before that part's shine had. (Exact,
+// --native-shine exact, the shine is drawn in runs, each its own copy, and ends the group, as before.)
 struct SaGroupKey {
     Push pushes[4];
     uint32_t masks[4], zwrites[4];
     int32_t ndraws;
     uint32_t per_sample, ztst, blend_on, alpha_factor, fix;
+    uint32_t shader_blend; // (a second pass blended in the shader, from the render pass's scratch: perf/shine-whole)
     VkBlendFactor src, dst;
     VkBlendOp op;
     int32_t scissor[4];
@@ -2325,6 +2334,9 @@ bool sa_group_pending() {
 
 // A pass's state (sa_draw_batch's) for the corners in vertex buffer 0
 void sa_group_state(Cmd &c, const SaGroupKey &k) {
+    if (k.shader_blend) {
+        c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
+    }
     c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     c.set_cull_mode(VK_CULL_MODE_NONE);
     c.set_viewport({0.0f, 0.0f, float(k.viewport[0]), float(k.viewport[1]), 0.0f, 1.0f});
@@ -2345,7 +2357,7 @@ void sa_group_state(Cmd &c, const SaGroupKey &k) {
         c.set_blend_enable(false);
     }
     // (sa_draw_range's for a stretch of 0x280's corners)
-    c.set_program(sa.programs[SA_VS_280][k.per_sample ? 1 : 0]);
+    c.set_program(k.shader_blend ? sa.programs_in[SA_VS_280][sa.samples > 1 ? 1 : 0] : sa.programs[SA_VS_280][k.per_sample ? 1 : 0]);
     c.set_storage_buffer(2, 1, *k.records);
 }
 
@@ -2367,7 +2379,8 @@ void sa_group_draw() {
     }
     if (sa.bound) {
         const SaGroupKey &k1 = g.pass[0].key, &k2 = g.pass[1].key;
-        sa_begin_pass(false);
+        bool blend_in = g.pass[1].on && k2.shader_blend; // (the shines blend from the render pass's scratch)
+        sa_begin_pass(blend_in);
         gpu_enter(GPU_SA_GROUP + (sat_bound() ? GPU_SA_REFL - GPU_SA_DRAW : 0));
         Cmd &c = cmd();
         c.set_opaque_state();
@@ -2402,6 +2415,30 @@ void sa_group_draw() {
         }
         if (n2) {
             sa_group_state(c, k2);
+            if (blend_in) {
+                // the copy the shines blend from: the pixels under all of them, as all the first passes left them
+                // (sa_draw_batch's run copy: conservative, by the shines' own triangles, into the scratch)
+                gpu_enter(interp.active ? (sat_bound() ? GPU_REFL_COPY_BETWEEN : GPU_SA_COPY_BETWEEN)
+                                        : GPU_SA_BLEND_COPY + (sat_bound() ? GPU_SA_REFL - GPU_SA_DRAW : 0));
+                in_pass_barrier();
+                c.set_program(sa.programs_copy[SA_VS_280][sa.samples > 1 ? 1 : 0]);
+                c.set_conservative(true);
+                c.set_depth_test(false, false);
+                c.set_color_write_mask(0xF0); // (the scratch only)
+                Push p = k2.pushes[k2.ndraws - 1];
+                p.src_offset[0] = int32_t(sa.samples);
+                p.lod_k = 255.0f;
+                c.push_constants(&p, 0, sizeof(p));
+                c.draw(uint32_t(n2), uint32_t(n1));
+                sa_stats.draws++;
+                gsn_stats.draws++;
+                sa_group.draws++;
+                in_pass_barrier();
+                gsn_stats.blend_copies_in_pass++;
+                c.set_conservative(false);
+                c.set_program(sa.programs_in[SA_VS_280][sa.samples > 1 ? 1 : 0]);
+                gpu_enter(GPU_SA_GROUP + (sat_bound() ? GPU_SA_REFL - GPU_SA_DRAW : 0));
+            }
             // the mark: a first pass's triangles, untextured and no colour, where its Z is at the front
             Push mark = k1.pushes[k1.ndraws - 1];
             mark.flags &= ~(F_TME | (3u << F_PASS_SHIFT));
@@ -2424,7 +2461,8 @@ void sa_group_draw() {
             auto shines = [&]() {
                 if (shine_hi > shine_lo) {
                     c.set_stencil(true, VK_COMPARE_OP_NOT_EQUAL, VK_STENCIL_OP_KEEP, g.gen, 0xFF);
-                    sa_group_one(c, k2.pushes[1], k2.masks[1], false, shine_hi - shine_lo, uint32_t(n1) + shine_lo);
+                    sa_group_one(c, k2.pushes[k2.ndraws - 1], k2.masks[k2.ndraws - 1], false, shine_hi - shine_lo,
+                                 uint32_t(n1) + shine_lo);
                 }
                 shine_lo = shine_hi = 0;
             };
@@ -3093,13 +3131,13 @@ bool sa_draw_batch(int *why) {
     // Z equals what is there, the same value. So it is left out: the same Z and colour, a third fewer draws and
     // pipeline binds for the creatures (NATIVE_DRAW_P8.md, "The icy corridor"). (Fixed-function shines keep it: the
     // skinned groups take them with it, role 2 below.)
-    bool shine_z_there = second_pass && shader_blend && ztst == 2 && sa.first_z_before_on &&
-                         sa.first_z_before.size() == gs->verts.size();
-    for (size_t i = 0; shine_z_there && i < gs->verts.size(); i++) {
+    bool after_first = second_pass && shader_blend && sa.first_z_before_on && sa.first_z_before.size() == gs->verts.size();
+    for (size_t i = 0; after_first && i < gs->verts.size(); i++) {
         const Vtx &v = gs->verts[i];
         const std::array<uint32_t, 3> &f = sa.first_z_before[i];
-        shine_z_there = f == sa_place_bits(v);
+        after_first = f == sa_place_bits(v);
     }
+    bool shine_z_there = after_first && ztst == 2;
     sa_stats.shine_z_left += shine_z_there;
     for (int i = 0; i < npasses && !two_phase; i++) {
         if (ties && passes[i].zwrite && !shine_z_there) {
@@ -3123,17 +3161,14 @@ bool sa_draw_batch(int *why) {
                     !sa_passing_same_twice(st, tex0, test, alpha, abe, as_min, as_max, passes[0].select, npasses);
     std::vector<uint32_t> &runs = sa.runs; // (kept from batch to batch: their room)
     runs.assign(1, 0);
-    // (perf/icy) KF4_SA_SHINE_RUNS=0 (a test, not the default): a second pass blended in the shader drawn whole, not
-    // in runs. Where two of its triangles that overlap meet at exactly the same depth (a part folded over its own
+    // (perf/shine-whole) A second pass blended in the shader right after its own first pass (after_first, above) is drawn
+    // whole, not in runs, unless --native-shine exact (shine_exact). Where two of its triangles that overlap meet at exactly the same depth (a part folded over its own
     // edge) the GS blends both there; drawn whole, only one is. About 180 pixels of a 3x picture at the icy corridor
-    // differ, and the creatures' runs (about 2,400 a picture, each a copy and two barriers) are most of its cost:
-    // 140 pictures a second against 237 (NATIVE_DRAW_P8.md, "The icy corridor").
-    static int shine_runs = -1;
-    if (shine_runs < 0) {
-        const char *v = getenv("KF4_SA_SHINE_RUNS");
-        shine_runs = v && *v ? atoi(v) : 1;
-    }
-    bool split = (npasses > 1 || shader_blend || tie_runs) && !shadow && !(second_pass && !shine_runs);
+    // differ (at most 64 levels), and the creatures' runs (about 2,400 a picture, each a copy and two barriers) were
+    // most of its cost: 140 pictures a second against 237 (NATIVE_DRAW_P8.md, "The icy corridor"). Modern by default,
+    // the PS2's picture with the switch (the owner's call).
+    bool shine_whole = after_first && !shine_exact;
+    bool split = (npasses > 1 || shader_blend || tie_runs) && !shadow && !shine_whole;
     if (split && memo && memo->split && !memo_check) {
         // (rc/own) where the frame's batch's triangles overlap
         const uint32_t *cuts = memo_frame->sa_u32.data() + memo->runs_at;
@@ -3301,10 +3336,38 @@ bool sa_draw_batch(int *why) {
             break;
         }
     }
+    // (the switches of blending in the render pass below: KF4_SA_BLEND_COPY=1, KF4_SA_RUN_COPY=0)
+    static int blend_copy = -1;
+    if (blend_copy < 0) {
+        blend_copy = getenv("KF4_SA_BLEND_COPY") && atoi(getenv("KF4_SA_BLEND_COPY")) > 0;
+    }
+    static int run_copy_on = -1;
+    if (run_copy_on < 0) {
+        const char *v = getenv("KF4_SA_RUN_COPY");
+        run_copy_on = v && *v ? atoi(v) : 1;
+    }
+    // (perf/shine-whole) a second pass blended in the shader and drawn whole, whose blend is made in the render pass from
+    // a copy by its triangles (in_pass and run_copy below): kept, its shine blended with the group's (sa_group_draw)
+    // Only single-sampled: with MSAA the copy is each pixel's samples' mean, and drawn part by part a part's copy at a
+    // pixel its triangles share with another part's (a seam) has the parts' before it shined there and not the first
+    // passes of those after it; kept, the group's copy has the first passes alone. About 1,100-2,100 pixels of a 3x
+    // MSAA 2 picture at the icy corridor differ (seam pixels drawn part by part a part's shine brighter, up to 76
+    // levels: NATIVE_DRAW_P8.md, "The ice shine drawn whole"). KF4_SA_SHINE_GROUP=0 (tests): never kept; 2: kept with
+    // MSAA too.
+    static int shine_group = -1;
+    if (shine_group < 0) {
+        const char *v = getenv("KF4_SA_SHINE_GROUP");
+        shine_group = v && *v ? atoi(v) : 2; // (2, kept with MSAA too, by default: the owner's choice, no seam lines)
+    }
+    int ms_in = sa.samples > 1 ? 1 : 0;
+    bool shine_kept = shine_whole && (shine_group == 2 || (shine_group == 1 && !ms_in)) && !blend_copy && run_copy_on && !per_sample && !sa.gs3d && !sa.gs_water && !ndw_batch() &&
+                      sa.programs_in[SA_VS_000][ms_in] && sa.programs_in[SA_VS_280][ms_in] &&
+                      sa.programs_copy[SA_VS_000][ms_in] && sa.programs_copy[SA_VS_280][ms_in] && !wide(*sa.color) && all_native;
     int role = 0; // 1: a first pass kept, 2: a second pass kept
     if (sa_group.enabled && sa.in_draw && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only && !gpu_corners &&
-        !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && runs.size() == 2 && !shader_blend &&
-        !shadow && st.table && !st.reads_target && ndraws == 2 && nd280_batch_draws() == nd280.draws.buffer.get() &&
+        !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && runs.size() == 2 && (!shader_blend || shine_kept) &&
+        !shadow && st.table && !st.reads_target && (ndraws == 2 || (shine_kept && ndraws == 1)) &&
+        nd280_batch_draws() == nd280.draws.buffer.get() &&
         nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena) {
         // a first pass that covers every pixel of its triangles: no pixel fails the alpha test (covers)
         if (skinned && two_phase && ztst == 2 && skin_eps == 0.0f && covers && passes[0].mask && sa.stencil) {
@@ -3312,8 +3375,8 @@ bool sa_draw_batch(int *why) {
         } else if (second_pass && sa_group.pass[0].on && sa_group.expect_second && corners.size() == sa_group.last_n &&
                    corners[0].fog == sa_group.last_fog[0] && corners.back().fog == sa_group.last_fog[1] &&
                    nd280_batch_draws() == sa_group.records.get() && nd.batch_arena == sa_group.arena.get() && ztst == 2 &&
-                   draws[0].mask == 0 && draws[0].zwrite && draws[1].mask && !draws[1].zwrite) {
-            role = 2; // (its own first pass's corners, kept just before: its Z pass, then its colour)
+                   draws[ndraws - 1].mask && !draws[ndraws - 1].zwrite && (ndraws == 1 || (draws[0].mask == 0 && draws[0].zwrite))) {
+            role = 2; // (its own first pass's corners, kept just before: its Z pass, then its colour; or its colour alone)
         }
     }
     if (role) {
@@ -3336,6 +3399,7 @@ bool sa_draw_batch(int *why) {
         k.per_sample = per_sample;
         k.ztst = ztst;
         k.blend_on = abe && !shader_blend;
+        k.shader_blend = shader_blend;
         if (k.blend_on) {
             k.alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
             k.fix = fix;
@@ -3477,10 +3541,6 @@ bool sa_draw_batch(int *why) {
     // (sa_000, sa_280 and sa_700 with gs_in.frag); a multisampled scene's samples are resolved into the scratch by
     // pass_resolve.frag (each channel the mean, half up; NVIDIA's vkCmdResolveImage rounds a half either way: a level,
     // where the two samples differ by an odd amount). KF4_SA_BLEND_COPY=1 (tests): the copies between passes.
-    static int blend_copy = -1;
-    if (blend_copy < 0) {
-        blend_copy = getenv("KF4_SA_BLEND_COPY") && atoi(getenv("KF4_SA_BLEND_COPY")) > 0;
-    }
     bool in_pass = shader_blend && !blend_copy && !per_sample && nd.active && !nd.pass_active && !nd.strip_active &&
                    !sa.gs3d && !sa.gs_water && !ndw_batch() && sa.programs_in[0][sa.samples > 1 ? 1 : 0] &&
                    !wide(*sa.color);
@@ -3497,11 +3557,6 @@ bool sa_draw_batch(int *why) {
     // run's box. In a picture between that box is the whole scene for a skinned model's run (the GPU moves its corners:
     // nd_box_at_0 cannot say where they are), so each run of the pond's blended zombies copied the whole scene (3.2 ms
     // of the GPU's 8.4 a picture). KF4_SA_RUN_COPY=0: the box (to compare).
-    static int run_copy_on = -1;
-    if (run_copy_on < 0) {
-        const char *v = getenv("KF4_SA_RUN_COPY");
-        run_copy_on = v && *v ? atoi(v) : 1;
-    }
     bool run_copy = in_pass && run_copy_on && sa.programs_copy[0][sa.samples > 1 ? 1 : 0];
     // The Z-first draws by depth alone. A tie's Z-first draw (no colour, Z written) of a pass that no pixel can fail
     // (no alpha test, or covers: the texture's alpha range, from the table, within what the test passes), with no DATE

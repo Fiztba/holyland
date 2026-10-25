@@ -408,14 +408,21 @@ Still open:
   Controls page's "Run (hold)" (Left Shift, a controller's left stick press) instead of the action
   button, which then only uses things. `Player_Update` (game patch) passes the held buttons through
   `port_controls_run_held`; off, or with a pad script, they are the pad's (README, "Mods").
-- A retail data bug fixed (`map/map_load.c`, `neighbour_needed_here`): map 104's record 14, which
-  must set up map 102 for the stairs east of it, lies at the corridor floor's own height, so the
-  corridor's record 9 wins the tie in `Player_CollideWithMap` and record 14 never becomes
-  `PlayerState.map_index`. Coming back from Belric Psytar (map 105 asked for, then map 102), map 102
-  was read but never set up: the stairs and the corridor's east door led into black, and the player
-  fell through. Now a record that needs the neighbour also counts while the player stands on its
-  floor. Some other maps have trigger records at their floor's height too (a scan of the records'
-  boxes); only this one is known to break.
+- A retail data bug fixed (`map/map_load.c`, `neighbour_trigger_here`): the records that ask for the
+  neighbouring map (`neighbour_origin_index`) or need it set up (`needs_neighbour_map`) are mostly thin
+  floors laid a little above the room's floor, so that `Player_CollideWithMap` (the first of the highest
+  floors wins) makes them `PlayerState.map_index`. Four lie at the room floor's own height and lose the tie
+  to the room's record (they win only where float rounding favours them), so the neighbour is never asked
+  for or never set up, and a door or stairs lead into a black void and a fall: map 105's stairs up to the
+  Central Tower's door (record 25 asks for map 100 at their foot, record 24 needs it at their top), map
+  102's record 33 (asks for map 100) and map 104's record 14 (needs map 102, coming back from Belric
+  Psytar). Now, where the record the player stands on does not ask for (or need) the neighbour, a flat
+  record that does counts too while the player stands on its floor triangles at its height and on the
+  floor of the record that won. Records that ask themselves keep the game's choice (the alternatives map
+  scripts switch lie on one another), room-sized records are left alone, and nothing changes while a map
+  object carries the player. A sweep of all 64 maps' trigger records (their floors sampled on a grid
+  against the game's floor pick) finds no other record that loses a tie it should win; the herb run's log
+  is unchanged. Same in play-932801f and with every mod off.
 - First run extracts the game from the user's ISO.
 - Builds and releases come from CI. CI builds and tests on Linux (gcc) and on Windows (llvm-mingw
   20260616 and 20261006, SDL2 2.30.9): `.github/workflows/ci.yml`. Releases do not yet.
