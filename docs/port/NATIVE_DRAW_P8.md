@@ -1639,6 +1639,71 @@ loads after the uploads (3.1 ms) and the table's `sa_own` are larger and smaller
 check switch that writes every owed page at once after each upload and compares VRAM, run over the four spots, the
 map tour and save states taken and loaded.
 
+### The icy corridor: the ice creatures' shine (branch `perf/icy`, from `main` fd3956b7)
+
+The owner, at 240 (3x, MSAA 2, aniso 2, cut-out AA ssaa, modern sky, widescreen): in the icy corridor of map 017
+(`bugs1025/quick_icy`) the F3 counter read `56 FPS / 11 GAME`. The grey is the map's fog, not a screen effect
+(SCREEN_EFFECTS.md, 15): nothing reads the frame, nothing is written back or decoded (`--stats`: 0 write-backs, 11
+decodes in 700 vblanks, as anywhere).
+
+**What it is.** The creatures in the corridor are skinned models (program 0x280), each part two passes: the first
+(ALPHA 0x44, As 0x80: opaque, Z written, kept by the skinned groups) and the sphere-mapped shine, Cs + Cd As with As
+up to 146. As above 0x80 is blended in the shader (`sa_draw_batch`'s `as_over`), and a batch blended in the shader is
+drawn in runs of triangles that do not overlap, each run a copy of the pixels it blends over (`sa_copy_run.frag`,
+conservative, in the pass) between two barriers, then its Z-first draw and its colour. A part's shine is 20-26
+triangles folded over each other: 3.5 runs on average. With about 700 parts on screen that is 2,400 runs, 4,900
+barriers, 5,700 draws and as many pipeline binds a picture between (the fortress: 4,500 draws, 256 binds). The skinned
+groups cannot take these parts: a shine blended in the shader ends the group (`role` 0), so each part's first pass
+is a group of one. Measured (`--fast`, every picture between drawn, a8eb108e): the back end played the calls for 15 s
+of a 19.5 s run (the fortress: 2.4 of 18.9), 79% of it in the NVIDIA driver: `vkCmdBindPipeline` 24%, the barriers 16%,
+descriptor sets 16%, dynamic state 10% (`tools/sampler`, `backend_thread`). Hosted is worse: there each run is a
+render pass of its own with an MSAA resolve (`COPY_BY_PASS`): 433 passes and 335 resolves a picture, 5 GB loaded and
+stored, 10.9 ms of GPU a picture.
+
+**Why the runs stay.** Two triangles of a shine that overlap where a part folds over its own edge meet at exactly
+the same depth on the shared edge; the GS blends both there, one after the other. Drawn whole (one copy for the
+batch), only one is: 178 pixels a picture differ (at most 64 levels) at the owner's settings. Telling ahead which
+pairs can tie does not help: 90% of the cuts are such folds (tied only on their shared edge), and the CPU's corners
+(whole Zs) are not the GPU's (a separation test needed a margin of 8 Z to keep the pictures). Fewer runs by
+reordering the triangles into levels would save 18% of them. `KF4_SA_SHINE_RUNS=0` (a test) draws such a shine
+whole: 237 pictures a second against 140, GPU 3.5 ms a picture against 5.2.
+
+**What changed.** A shine right after its own first pass (the same corners, bit for bit, `sa.first_z`, noted by
+`sa_note_first_z` for a two-phase first pass whose alpha test passes every pixel) leaves out its Z-first draws:
+the first pass wrote its Z exactly over every pixel of those triangles, so a GEQUAL Z-first draw writes only the Z
+already there (`shine_z_there`; `--stats`: "shines blended in the shader over their first pass's Z").
+
+**Numbers** (the owner's settings, `quick_icy` standing still; the GPU idle; a8eb108e against perf/icy):
+
+| | a8eb108e | perf/icy |
+|---|---|---|
+| `--fast`, every picture between drawn: GS's thread (GIF) a game frame | 16.1 ms | 16.0 ms |
+| the same: back end, Vulkan draws, pipeline binds (700 vblanks) | 15.1 s, 13.5 M, 12.4 M | 12.9 s, 9.8 M, 8.7 M |
+| the same: wall | 19.5 s | 17.2 s |
+| real time (`KF4_PRESENT_SIM=240`, 1,000 vblanks): pictures a second, game frames | 124, 30.0 | 138-142, 29.9 |
+| real time: GPU a picture (`KF4_GSN_GPU_TIME=1`) | 5.5-5.6 ms | 5.15 ms |
+| every picture asked for (`KF4_INTERP_CUT=0`), 10 s sampled: back end busy, GS's thread busy | 86%, 62% | 76%, 46% |
+| the same: pictures between drawn | 2,162 | 2,840 |
+
+The other renderers at the same spot (real time, a8eb108e): hosted (`--renderer native --native-draw on,passes`) 53
+pictures a second, the game at 26, 10.9 ms of GPU a picture; the PS2 path (`--native-draw off`) 83, the game at 30.
+With the GPU shared with a game the owner played, modern fell to 61-64 pictures a second (the fallback cut to none
+for most vblanks), the game still at 30. The owner's 11 game frames a second was not reproduced in modern; hosted is
+the nearest (its frames at 30 alone cost the GS's thread 46 ms each in `--fast`).
+
+**What is left:** the runs. Each costs a copy, two barriers and two pipeline binds (the copy's program and the
+blend's, whose layouts differ, so the descriptor sets are bound again each time). Options: the copy's program with
+the blend's layout (no descriptor rebinds), fewer runs by levels, or the shine drawn whole (the owner's call: the
+fold-edge pixels above).
+
+**Pictures:** byte for byte a8eb108e's: the four spots and the icy spot (every picture of vblanks 200-207, 301, 399;
+under water 400-407, 600: 196 pictures), the forced water, drain, copytex, prev and haze at the pond (every picture
+of 600-609: 200), the herb run in modern at the owner's settings (the same `--log`, PATH1 hash 561c91020b2908ee with
+`--frames 1841`, pictures 1800, 1820, 1840 with every phase). The off check passes: boot_test; frame_test `--renderer
+gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off` against
+play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820, 1840 byte for
+byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

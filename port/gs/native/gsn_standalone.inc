@@ -86,6 +86,7 @@ struct SaStats {
     uint64_t tables_loaded; // (a save state's or a capture's table)
     uint64_t kept_reflection; // (batches into the reflection left out by pictures between that keep the frame's: sat_kept)
     uint64_t zfirst_alone;    // (ties' Z-first draws by depth alone: sa_zfirst.frag)
+    uint64_t shine_z_left;    // (perf/icy: second passes blended in the shader drawn without their Z-first draws)
 };
 SaStats sa_stats;
 
@@ -188,6 +189,14 @@ struct SaTable {
     bool env_read = false;
 } sat;
 
+// (perf/icy) a corner's place, bit for bit: x and y's bits, z
+std::array<uint32_t, 3> sa_place_bits(const Vtx &v) {
+    uint32_t x, y;
+    memcpy(&x, &v.x, 4);
+    memcpy(&y, &v.y, 4);
+    return {x, y, v.z};
+}
+
 struct Sa {
     bool on = false;
     // the batch's corners, and the draw being met (nd_register): to the scene or not
@@ -247,6 +256,12 @@ struct Sa {
     bool stencil = false;
     uint32_t stencil_gen = 0; // the number of the last run of shadow batches since the stencil was cleared
     bool last_shadow = false; // the scene's last batch was a shadow's
+    // (perf/icy) The scene's last batch, when it was a skinned model's first pass that wrote its Z exactly over every
+    // pixel of its triangles (two-phase, GEQUAL, no pixel failing the alpha test): its corners' places (x, y as
+    // bits, z), so that its second pass over the same corners can leave out its Z-first draw (sa_draw_batch,
+    // "shine_z_there"). Taken into first_z_before and cleared at each batch (sa_flush).
+    std::vector<std::array<uint32_t, 3>> first_z, first_z_before;
+    bool first_z_on = false, first_z_before_on = false;
     // programs: [SA_VS_*][a cut-out shaded at every sample]
     Shader *vs = nullptr, *vs_280 = nullptr, *vs_700 = nullptr;
     Program *programs[3][2] = {};
@@ -2554,6 +2569,18 @@ void sa_memo_print_stats() {
 
 // (flush_batch, a batch of the scene's corners) Its GS state as flush_batch works it out, drawn with
 // sa_000.vert into the scene's targets. False: declined (sa_stats.declined[*why]), for the GS to draw.
+// (perf/icy) after a batch is drawn (or kept by the skinned groups): whether it was a first pass that wrote its Z exactly
+// over every pixel of its triangles, and its corners' places (sa.first_z)
+void sa_note_first_z(bool first) {
+    sa.first_z_on = first;
+    sa.first_z.clear();
+    if (first) {
+        for (const Vtx &v : gs->verts) {
+            sa.first_z.push_back(sa_place_bits(v));
+        }
+    }
+}
+
 bool sa_draw_batch(int *why) {
     uint32_t prim = gs->batch_prim;
     uint32_t ctxt = (prim >> 9) & 1;
@@ -3059,8 +3086,23 @@ bool sa_draw_batch(int *why) {
         draws[ndraws++] = {passes[0].select, passes[0].mask, false, slack};
         draws[ndraws++] = {passes[0].select, passes[0].mask, true, 0.0f};
     }
+    // A skinned model's second pass blended in the shader (the ice creatures' shine on map 017: Cs + Cd As with As above
+    // 0x80), drawn in runs: each run was its Z-first draw, the copy it blends from and its colour. Right after its own
+    // first pass over the same corners, which wrote its Z exactly over every pixel of its triangles (sa.first_z), the
+    // Z there is already at least each of its triangles' own: a Z-first draw (GEQUAL, Z written) writes only where its
+    // Z equals what is there, the same value. So it is left out: the same Z and colour, a third fewer draws and
+    // pipeline binds for the creatures (NATIVE_DRAW_P8.md, "The icy corridor"). (Fixed-function shines keep it: the
+    // skinned groups take them with it, role 2 below.)
+    bool shine_z_there = second_pass && shader_blend && ztst == 2 && sa.first_z_before_on &&
+                         sa.first_z_before.size() == gs->verts.size();
+    for (size_t i = 0; shine_z_there && i < gs->verts.size(); i++) {
+        const Vtx &v = gs->verts[i];
+        const std::array<uint32_t, 3> &f = sa.first_z_before[i];
+        shine_z_there = f == sa_place_bits(v);
+    }
+    sa_stats.shine_z_left += shine_z_there;
     for (int i = 0; i < npasses && !two_phase; i++) {
-        if (ties && passes[i].zwrite) {
+        if (ties && passes[i].zwrite && !shine_z_there) {
             draws[ndraws++] = {passes[i].select, 0, true, 0.0f};
         }
     }
@@ -3081,7 +3123,17 @@ bool sa_draw_batch(int *why) {
                     !sa_passing_same_twice(st, tex0, test, alpha, abe, as_min, as_max, passes[0].select, npasses);
     std::vector<uint32_t> &runs = sa.runs; // (kept from batch to batch: their room)
     runs.assign(1, 0);
-    bool split = (npasses > 1 || shader_blend || tie_runs) && !shadow;
+    // (perf/icy) KF4_SA_SHINE_RUNS=0 (a test, not the default): a second pass blended in the shader drawn whole, not
+    // in runs. Where two of its triangles that overlap meet at exactly the same depth (a part folded over its own
+    // edge) the GS blends both there; drawn whole, only one is. About 180 pixels of a 3x picture at the icy corridor
+    // differ, and the creatures' runs (about 2,400 a picture, each a copy and two barriers) are most of its cost:
+    // 140 pictures a second against 237 (NATIVE_DRAW_P8.md, "The icy corridor").
+    static int shine_runs = -1;
+    if (shine_runs < 0) {
+        const char *v = getenv("KF4_SA_SHINE_RUNS");
+        shine_runs = v && *v ? atoi(v) : 1;
+    }
+    bool split = (npasses > 1 || shader_blend || tie_runs) && !shadow && !(second_pass && !shine_runs);
     if (split && memo && memo->split && !memo_check) {
         // (rc/own) where the frame's batch's triangles overlap
         const uint32_t *cuts = memo_frame->sa_u32.data() + memo->runs_at;
@@ -3375,6 +3427,7 @@ bool sa_draw_batch(int *why) {
             sa.rows1 = std::max(sa.rows1, d1);
             sa.drew = true;
             sa.scissor_rows = std::max(sa.scissor_rows, y1);
+            sa_note_first_z(skinned && two_phase && ztst == 2 && covers && !shadow);
             sa_stats.batches++;
             sa_stats.triangles += gs->verts.size() / 3;
             gsn_stats.primitives += gs->verts.size() / 3;
@@ -3660,6 +3713,7 @@ bool sa_draw_batch(int *why) {
     sa.rows1 = std::max(sa.rows1, d1);
     sa.drew = true;
     sa.scissor_rows = std::max(sa.scissor_rows, y1);
+    sa_note_first_z(skinned && two_phase && ztst == 2 && covers && !shadow);
     sa_stats.batches++;
     sa_stats.triangles += gs->verts.size() / 3;
     gsn_stats.primitives += gs->verts.size() / 3;
@@ -3675,6 +3729,10 @@ bool sa_flush() {
     if (!sa.on) {
         return false;
     }
+    // (perf/icy) the batch before's first pass, for this one only
+    sa.first_z_before.swap(sa.first_z);
+    sa.first_z_before_on = sa.first_z_on;
+    sa.first_z_on = false;
     if (interp.active) {
         // a batch into the reflection in a picture between that leaves it as the frame drew it (sat_kept): not drawn
         uint32_t ctxt = (gs->batch_prim >> 9) & 1;
@@ -4332,9 +4390,9 @@ void sa_print_stats() {
         fprintf(stderr, "%s%llu %s", i ? ", " : "", (unsigned long long)s.textures[i], sa_tex_names[i]);
     }
     fprintf(stderr, "; %llu depth clears and %llu alpha sets drawn by the scene, %llu shadow batches by the stencil, %llu layers "
-                    "exact over their own triangles, %llu Z-first draws by depth alone",
+                    "exact over their own triangles, %llu Z-first draws by depth alone, %llu shines blended in the shader over their first pass's Z",
             (unsigned long long)s.depth_clears, (unsigned long long)s.alpha_sets, (unsigned long long)s.shadow_batches,
-            (unsigned long long)s.own_layers, (unsigned long long)s.zfirst_alone);
+            (unsigned long long)s.own_layers, (unsigned long long)s.zfirst_alone, (unsigned long long)s.shine_z_left);
     fprintf(stderr, "; %.2f turns a picture", gsn_stats.pictures ? double(s.acquires) / double(gsn_stats.pictures) : 0.0);
     fprintf(stderr,
             " (T2: %llu taken from the GS's clear, %llu resampled copies; the GS's drawn by the scene: %llu 3D, %llu screen "
