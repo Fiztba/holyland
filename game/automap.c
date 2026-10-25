@@ -43,6 +43,7 @@
 #include "script/script.h"
 #include "port/platform.h"
 #include "port/teleport.h"
+#include "automap_script.h"
 
 extern PlayerState player_state;
 extern MapSlot map_slots[];
@@ -57,7 +58,6 @@ extern u8 item_counts[];
 extern MapItemDef *map_item_defs[2];
 extern s32 map_fixed_item_counts[2];
 extern u8 map_item_pickup_counts[0x80][0x40];
-void *MapItem_FindModelSource(int slot, int key);
 int MapItem_UniqueNotCarried(int item);
 int MapItem_UniqueNotInTradeStock(int item);
 int MapItem_UniqueNotDropped(int item);
@@ -67,6 +67,18 @@ void sceVu0RotMatrixY(void *dst, void *src, float angle);
 void sceVu0RotMatrixZ(void *dst, void *src, float angle);
 void sceVu0TransMatrix(void *dst, void *src, void *translation);
 extern GameStatus game_status;
+extern EntitySpawnInfo *map_spawn_infos[2];
+extern s16 *map_item_model_kinds[2];
+extern char *entity_params;
+extern char map_object_defs[];
+extern DroppedItemRecord dropped_item_records[0x80][16];
+extern u8 map_script_flags[0x2000];
+extern u8 entity_group_state[0xC80];
+int Game_IsMapVisited(int flag);
+int Game_GetObjectActive(int map, int entry);
+int Game_GetObjectState(int map, int entry);
+int Game_GetObjectFlag(int map, int entry, u32 bit);
+int Game_GetTriggerItem(int map_tag, int trigger_id);
 
 sptr Message_GetText(int message_id);
 const char *Quick_WhyNotInPlay(void);
@@ -112,7 +124,10 @@ typedef struct {
 static StoredMap stored[MAX_MAPS];
 static int stored_count;
 
-static PortAutomapMarker markers[MAX_MARKERS];
+/* the markers of the map in hand: the player's (home_markers), or, while the browser builds one, the browsed
+   map's (view_swap) */
+static PortAutomapMarker home_markers[MAX_MARKERS], browsed_markers[MAX_MARKERS];
+static PortAutomapMarker *markers = home_markers;
 static int marker_count;
 
 static PortAutomapPlayer player;
@@ -175,15 +190,48 @@ static void item_name(int item, char *out, size_t size) {
     }
 }
 
+/* What a map's markers are made from besides its objects and spawns, for the map in a slot (map_tables) or in a
+   file (the browser) */
+typedef struct {
+    int tag;                        /* the map's number */
+    const MapItemDef *items;        /* its fixed items (map_item_defs), item_count of them */
+    int item_count;
+    const s16 *item_kinds;          /* the item models it has (map_item_model_kinds: MapItem_FindModelSource) */
+    const EntitySpawnInfo *spawns;  /* its spawns (map_spawn_infos), spawn_count of them */
+    int spawn_count;
+} MapTables;
+
+static MapTables map_tables(int slot) {
+    MapTables t;
+
+    t.tag = map_slots[slot].tag;
+    t.items = map_item_defs[slot];
+    t.item_count = map_fixed_item_counts[slot];
+    t.item_kinds = map_item_model_kinds[slot];
+    t.spawns = map_spawn_infos[slot];
+    t.spawn_count = map_spawn_counts[slot];
+    return t;
+}
+
+/* a spawn's chr.prm record (Entity_InitFromMapSpawns) */
+static const EntityParams *spawn_params(const EntitySpawnInfo *si) {
+    return (const EntityParams *)(entity_params + si->type_id * sizeof(EntityParams));
+}
+
 /* What MapItem_PutOutForObject does with the item a map object holds (MapObjectUnk08.kind_param_0) in this
    map slot: 1 puts it out to be taken; 0 puts nothing out (not an item, or the map has no model for it:
    MapItem_FindModelSource); below 0, not now, for an item of a kind the player may have only one of: -1 he
    has it, -2 a shop has it in stock, -3 one lies dropped in a map (MapItem_UniqueNot*). */
-static int item_put_out(int slot, int item) {
-    if (item <= 0 || item >= ITEM_COUNT) {
+static int item_put_out(const MapTables *t, int item) {
+    int k;
+
+    if (item <= 0 || item >= ITEM_COUNT || t->item_kinds == NULL) {
         return 0;
     }
-    if (MapItem_FindModelSource(slot, item_name_defs[item].model_file_number) == NULL) {
+    /* MapItem_FindModelSource: the map's item model kinds, up to the first below 0 */
+    for (k = 0; k < 0x20 && t->item_kinds[k] >= 0 && t->item_kinds[k] != item_name_defs[item].model_file_number; k++) {
+    }
+    if (k == 0x20 || t->item_kinds[k] < 0) {
         return 0;
     }
     if (!MapItem_UniqueNotCarried(item)) {
@@ -286,6 +334,220 @@ static void map_triangles(MapSlot *slot, int list, TriangleFn fn, void *context)
             continue;
         }
         mesh_triangles(model, list, fn, context);
+    }
+}
+
+/* ---- A map's file ---------------------------------------------------------------------------------
+   The neighbours' floors (the ways into them) and the maps the browser shows are read from their files on the
+   disc (KF4.DAT's NNN.map), laid out as Map_ParseFile reads them: the header (MapSlotUnk08), the records from
+   0x17C0 (0x80 bytes each, MapRecordBounds), the flag blocks (0x40), the origins (32 of 16 bytes,
+   MapLoadRequest), the map objects (0x80, MapObjectUnk08), the spawns (0x60, EntitySpawnInfo), the fixed items
+   (0x40, MapItemDef), their model kinds (32 s16) and the groups' thresholds (16 bytes); the script at
+   MapSlotUnk08.script_offset; the collision meshes back to back from MapSlotUnk08.record_collision_offset and
+   object_collision_offset, each giving its size at 0x14 (CollisionMesh.mesh_size), its strip lists offsets from
+   it, a strip point naming a point by number (Collision_RelocateMesh). */
+typedef struct {
+    uint8_t *data; /* malloc'd, whole sectors */
+    uint32_t size;
+    const MapSlotUnk08 *header;
+    const uint8_t *records, *origins, *objects, *spawns, *items, *item_kinds, *thresholds;
+    const u32 *script, *end;
+    /* (the browser) the records left out (record_flags 0x40000000) and moved as the game has them now; NULL: as
+       the file has them */
+    u8 *record_hidden;
+    float (*record_move)[3];
+} MapFile;
+
+static float file_f32(const uint8_t *p) {
+    float f;
+
+    memcpy(&f, p, 4);
+    return f;
+}
+
+static uint32_t file_u32(const uint8_t *p) {
+    uint32_t v;
+
+    memcpy(&v, p, 4);
+    return v;
+}
+
+static void map_file_free(MapFile *f) {
+    free(f->data);
+    free(f->record_hidden);
+    free(f->record_move);
+    memset(f, 0, sizeof(*f));
+}
+
+/* a map's file from the disc into *f (port_disc_read takes the disc's lock and seeks for each read, so it can
+   come between the game's own reads); 0 when it is not there or not whole */
+static int map_file_read(int map, MapFile *f) {
+    const MapSlotUnk08 *h;
+    char name[16];
+    uint32_t lsn, at;
+
+    memset(f, 0, sizeof(*f));
+    snprintf(name, sizeof(name), "%03d.map", map);
+    if (!port_disc_find_member(name, &lsn, &f->size) || f->size < 0x17C0 || f->size > 0x1000000) {
+        return 0;
+    }
+    f->data = malloc(((size_t)f->size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE * DISC_SECTOR_SIZE);
+    if (f->data == NULL || !port_disc_read(lsn, (f->size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE, f->data)) {
+        map_file_free(f);
+        return 0;
+    }
+    h = f->header = (const MapSlotUnk08 *)f->data;
+    at = 0x17C0;
+    f->records = f->data + at;
+    at += h->record_count * 0x80u + h->flag_block_count * 0x40u;
+    f->origins = f->data + at;
+    at += 0x200;
+    f->objects = f->data + at;
+    at += h->object_count * 0x80u;
+    f->spawns = f->data + at;
+    at += h->spawn_count * 0x60u;
+    f->items = f->data + at;
+    at += h->item_count * 0x40u;
+    f->item_kinds = f->data + at;
+    f->thresholds = f->data + at + 0x40;
+    if (at + 0x50 > f->size || (uint32_t)h->script_offset >= f->size || (h->script_offset & 3)) {
+        map_file_free(f);
+        return 0;
+    }
+    f->script = (const u32 *)(f->data + h->script_offset);
+    f->end = (const u32 *)(f->data + (f->size & ~3u));
+    return 1;
+}
+
+/* where mesh `index` of the meshes back to back from `first` starts, or 0 */
+static uint32_t file_mesh(const MapFile *f, uint32_t first, int index) {
+    uint32_t at = first;
+
+    while (index-- > 0 && at + 0x50 <= f->size) {
+        uint32_t size = file_u32(f->data + at + 0x14);
+
+        if (size < 0x50) {
+            return 0;
+        }
+        at += size;
+    }
+    return at + 0x50 <= f->size ? at : 0;
+}
+
+/* the matrix of a record (Map_PlaceRecordModels builds collision_matrix so: scale, then turns about x, y and z,
+   then the place) or of a map object (ModelMatrix_Build: scale, turns about z, x and y, the place), from the
+   position, turn and scale at p */
+static void file_matrix(const uint8_t *p, int object, float m[16]) {
+    float position[4], turn[3], scale[3];
+    int k;
+
+    for (k = 0; k < 3; k++) {
+        position[k] = file_f32(p + 0x00 + 4 * k);
+        turn[k] = file_f32(p + 0x10 + 4 * k);
+        scale[k] = file_f32(p + 0x20 + 4 * k);
+    }
+    position[3] = 1.0f;
+    sceVu0UnitMatrix(m);
+    m[0] *= scale[0];
+    m[5] *= scale[1];
+    m[10] *= scale[2];
+    if (object) {
+        sceVu0RotMatrixZ(m, m, turn[2]);
+        sceVu0RotMatrixX(m, m, turn[0]);
+        sceVu0RotMatrixY(m, m, turn[1]);
+    } else {
+        sceVu0RotMatrixX(m, m, turn[0]);
+        sceVu0RotMatrixY(m, m, turn[1]);
+        sceVu0RotMatrixZ(m, m, turn[2]);
+    }
+    sceVu0TransMatrix(m, m, position);
+}
+
+/* every triangle of strip list `list` of the mesh at `at`, placed by m and moved by offset, as mesh_triangles */
+static void file_mesh_triangles(const MapFile *f, uint32_t at, const float m[16], const float offset[3], int list,
+                                TriangleFn fn, void *context) {
+    const uint8_t *d = f->data;
+    uint32_t strip_count = file_u32(d + at), point_count = file_u32(d + at + 0x0C), points, cursor = at + 0x50;
+    int count = d[at + 0x38 + 2 * list] | d[at + 0x39 + 2 * list] << 8, s, k;
+
+    for (k = 0; k < (int)strip_count && cursor + 0x20 <= f->size; k++) {
+        cursor += 0x20 + (uint32_t)(d[cursor] | d[cursor + 1] << 8) * 16;
+    }
+    points = cursor;
+    if ((uint64_t)points + (uint64_t)point_count * 16 > f->size || point_count == 0) {
+        return;
+    }
+    cursor = at + file_u32(d + at + 0x18 + 4 * list);
+    for (s = 0; s < count && cursor + 0x20 <= f->size; s++) {
+        int n = d[cursor] | d[cursor + 1] << 8;
+        float p[3][3];
+
+        if (cursor + 0x20 + (uint32_t)n * 16 > f->size) {
+            break;
+        }
+        for (k = 0; k < n; k++) {
+            const uint8_t *point = d + cursor + 0x20 + 16 * k;
+            uint32_t index = file_u32(point);
+            const uint8_t *v = d + points + 16 * (index < point_count ? index : 0);
+            float x = file_f32(v), y = file_f32(v + 4), z = file_f32(v + 8), *w = p[k % 3];
+
+            w[0] = x * m[0] + y * m[4] + z * m[8] + m[12] + offset[0];
+            w[1] = x * m[1] + y * m[5] + z * m[9] + m[13] + offset[1];
+            w[2] = x * m[2] + y * m[6] + z * m[10] + m[14] + offset[2];
+            if (k >= 2) {
+                const uint8_t *first = point - 32;
+
+                fn(p[(k - 2) % 3], p[(k - 1) % 3], p[k % 3],
+                   (int)Collision_GetSurfaceEffect(file_u32(first + 4), file_u32(first + 8), (int)file_u32(first + 12)), context);
+            }
+        }
+        cursor += 0x20 + (uint32_t)n * 16;
+    }
+}
+
+/* the records of a map file that have collision meshes (as map_triangles), moved by offset: the strip lists
+   whose bits `lists` has, record by record */
+static void file_triangles(const MapFile *f, const float offset[3], int lists, TriangleFn fn, void *context) {
+    int r, list;
+
+    for (r = 0; r < f->header->record_count; r++) {
+        const uint8_t *rec = f->records + r * 0x80;
+        int mesh = rec[0x32] | rec[0x33] << 8;
+        uint32_t at;
+        float m[16];
+
+        if (mesh == 0xFFFF ||
+            (f->record_hidden != NULL ? f->record_hidden[r] : (file_u32(rec + 0x3C) & 0x40000000) != 0) ||
+            (at = file_mesh(f, (uint32_t)f->header->record_collision_offset, mesh)) == 0) {
+            continue;
+        }
+        file_matrix(rec, 0, m);
+        if (f->record_move != NULL) {
+            m[12] += f->record_move[r][0];
+            m[13] += f->record_move[r][1];
+            m[14] += f->record_move[r][2];
+        }
+        for (list = 0; list < 6; list++) {
+            if (lists & (1 << list)) {
+                file_mesh_triangles(f, at, m, offset, list, fn, context);
+            }
+        }
+    }
+}
+
+/* What a plan is built from: a map slot's records (the map the player is in), or a map's file (one browsed) */
+typedef struct {
+    int slot;
+    const MapFile *file;
+} PlanSource;
+
+static void source_triangles(const PlanSource *source, int list, TriangleFn fn, void *context) {
+    static const float none[3] = {0.0f, 0.0f, 0.0f};
+
+    if (source->file != NULL) {
+        file_triangles(source->file, none, 1 << list, fn, context);
+    } else {
+        map_triangles(&map_slots[source->slot], list, fn, context);
     }
 }
 
@@ -536,25 +798,24 @@ static void mark_far(void) {
 }
 
 static void apply_stored(void);
-static void find_exits(int slot_index);
-static void scan_script(int slot_index);
+static void find_exits(const char *records, int count, const char *origins);
+static void scan_script(const u32 *cursor, const u32 *end);
 static int script_gift(int label, int depth);
 static int script_message(int label);
 
-static void build(int slot_index) {
-    MapSlot *slot = &map_slots[slot_index];
+/* the floor plan of map `map` from `source` into the plan in hand, with the seen state stored for it (the
+   ways and the script's links are the caller's) */
+static void build_plan(const PlanSource *source, int map, float x, float z) {
     Bounds bounds = {0};
     size_t cells;
     int kind, i;
 
-    built_slot = slot_index;
-    built_records = slot->records;
-    plan.map = slot->tag;
-    map_triangles(slot, 1, grow_bounds, &bounds);
-    map_triangles(slot, 5, grow_bounds, &bounds);
+    plan.map = map;
+    source_triangles(source, 1, grow_bounds, &bounds);
+    source_triangles(source, 5, grow_bounds, &bounds);
     if (!bounds.any) {
-        bounds.x0 = bounds.x1 = player_state.position.x;
-        bounds.z0 = bounds.z1 = player_state.position.z;
+        bounds.x0 = bounds.x1 = x;
+        bounds.z0 = bounds.z1 = z;
     }
     /* the corner on whole cells of the world, so that cells mean the same in every build */
     plan.x0 = floorf((bounds.x0 - MARGIN) / CELL) * CELL;
@@ -585,13 +846,13 @@ static void build(int slot_index) {
         solid_top[i] = solid_bottom[i] = NO_Y;
     }
     kind = PORT_AUTOMAP_FLOOR;
-    map_triangles(slot, 1, floor_triangle, &kind);
+    source_triangles(source, 1, floor_triangle, &kind);
     kind = PORT_AUTOMAP_WATER;
-    map_triangles(slot, 5, floor_triangle, &kind);
+    source_triangles(source, 5, floor_triangle, &kind);
     kind = PORT_AUTOMAP_POISON; /* the hazards, sorted by effect */
-    map_triangles(slot, 4, floor_triangle, &kind);
-    map_triangles(slot, 0, wall_triangle, NULL);
-    map_triangles(slot, 2, wall_triangle, NULL);
+    source_triangles(source, 4, floor_triangle, &kind);
+    source_triangles(source, 0, wall_triangle, NULL);
+    source_triangles(source, 2, wall_triangle, NULL);
     mark_far();
 
     layout_hash = 2166136261u;
@@ -605,10 +866,22 @@ static void build(int slot_index) {
     plan.solid_bottom = solid_bottom;
     plan.seen = seen;
     plan.version++;
-    last_reveal_cell = -1;
     apply_stored();
-    find_exits(slot_index);
-    scan_script(slot_index);
+}
+
+static void build(int slot_index) {
+    MapSlot *slot = &map_slots[slot_index];
+    PlanSource source = {slot_index, NULL};
+
+    built_slot = slot_index;
+    built_records = slot->records;
+    build_plan(&source, slot->tag, player_state.position.x, player_state.position.z);
+    if (plan.map < 0) {
+        return;
+    }
+    last_reveal_cell = -1;
+    find_exits(slot->records, ((MapSlotUnk08 *)slot->header)->record_count, (const char *)slot->origins);
+    scan_script((const u32 *)slot->script, NULL);
 }
 
 /* ---- What has been seen, stored per map ----------------------------------------------------------
@@ -644,6 +917,13 @@ static StoredMap *find_stored(int map, int make) {
     stored[stored_count].data = NULL;
     stored[stored_count].size = 0;
     return &stored[stored_count++];
+}
+
+/* whether the player has explored some of the map: its chunk is stored (it is written as he leaves the map) */
+static int map_explored(int map) {
+    const StoredMap *s = find_stored(map, 0);
+
+    return s != NULL && s->size >= CHUNK_HEAD && get32(s->data + 24) > 0;
 }
 
 /* the current plan's seen state into its chunk */
@@ -980,15 +1260,15 @@ static void lock_line(char *text, size_t size, int key) {
 
 /* the item of the map's fixed item with this id (MapItemDef.slot_id), or 0; *taken: it has been picked up as
    often as it may be (MapItem_PlaceFixed: map_item_pickup_counts against MapItemDef.required_flag) */
-static int fixed_item(int slot, int id, int *taken) {
+static int fixed_item(const MapTables *t, int id, int *taken) {
     int k;
 
     *taken = 0;
-    for (k = 0; id != 0 && map_item_defs[slot] != NULL && k < map_fixed_item_counts[slot] && k < 0x40; k++) {
-        const MapItemDef *def = &map_item_defs[slot][k];
+    for (k = 0; id != 0 && t->items != NULL && k < t->item_count && k < 0x40; k++) {
+        const MapItemDef *def = &t->items[k];
 
         if (def->slot_id == id) {
-            *taken = def->required_flag != 0 && map_item_pickup_counts[map_slots[slot].tag & 0x7F][k] >= def->required_flag;
+            *taken = def->required_flag != 0 && map_item_pickup_counts[t->tag & 0x7F][k] >= def->required_flag;
             return def->item;
         }
     }
@@ -1055,12 +1335,12 @@ static int door_leaf(ModelInstance *model, float *x0, float *z0, float *x1, floa
    kind_param_0, 1026, is the message that script shows, not an item), and (`say`) the message that script shows.
    A use script (MapObjectUnk08.use_script) takes the player's press before the object's own update sees it
    (Interact_FindTarget runs before MapObject_UpdateAll). Returns whether it holds something to take now. */
-static int contents(PortAutomapMarker *m, int slot, const MapObject *o, const char *name, int item, int put_out, int gold,
-                    int emptied, int say) {
-    int gift_taken, gift = fixed_item(slot, script_gift(o->source->use_script, 0), &gift_taken), gift_left = 0, said_id, holds;
+static int contents(PortAutomapMarker *m, const MapTables *t, const MapObjectUnk08 *src, const char *name, int item,
+                    int put_out, int gold, int emptied, int say) {
+    int gift_taken, gift = fixed_item(t, script_gift(src->use_script, 0), &gift_taken), gift_left = 0, said_id, holds;
     char text[160], line[176];
 
-    said_id = script_message(o->source->use_script);
+    said_id = script_message(src->use_script);
     message_text(said_id, text, sizeof(text));
     if (say && text[0] && strcmp(text, name) != 0) {
         snprintf(line, sizeof(line), "\"%s\"", text);
@@ -1071,7 +1351,7 @@ static int contents(PortAutomapMarker *m, int slot, const MapObject *o, const ch
         /* taken: the player has his one of it (or it is in a shop's stock or lies dropped somewhere). No ring:
            the script gives it only when the story's flags say so (the smith's work in the Earth Folk's chests
            of maps 017-019 once it is made; the Icon of Healing once, and it also lies on the grave) */
-        gift_left = !gift_taken && item_put_out(slot, gift) > 0;
+        gift_left = !gift_taken && item_put_out(t, gift) > 0;
     }
     m->flags |= holds ? PORT_AUTOMAP_MARK_HOLDS : 0;
     if (!port_automap.items) {
@@ -1096,166 +1376,174 @@ static int contents(PortAutomapMarker *m, int slot, const MapObject *o, const ch
     return holds;
 }
 
+/* the marker of map object i: its definition and placement, its state (MapObject.state_flags), where it is, and
+   its door's leaf when it is a door whose leaf is known (x0, z0, x1, z1) */
+static void object_marker(const MapTables *t, int i, const MapObjectUnk04 *def, const MapObjectUnk08 *src, u32 state,
+                          float x, float y, float z, const float *leaf) {
+    const MapObjectUnk08Words *words = (const MapObjectUnk08Words *)src;
+    PortAutomapMarker *m;
+    int kind = def->kind, mark, cheat = 0, done = (state & MAP_OBJECT_ON) != 0, emptied = (state & MAP_OBJECT_EMPTIED) != 0;
+    int name_id, put_out;
+    char name[64];
+    const char *hint;
+
+    switch (kind) {
+    case 1: case 2: case 6: case 17:
+        mark = words->kind_param_0 != 0 && !emptied ? PORT_AUTOMAP_MARK_LOCKED_DOOR : PORT_AUTOMAP_MARK_DOOR;
+        break;
+    case 3: mark = PORT_AUTOMAP_MARK_REMAINS; break;
+    case 4: mark = PORT_AUTOMAP_MARK_CHEST; break;
+    case 7: case 8: case 30: mark = PORT_AUTOMAP_MARK_SWITCH; break;
+    case 11: mark = PORT_AUTOMAP_MARK_EXAMINE; break;
+    case 12: mark = PORT_AUTOMAP_MARK_PASSAGE; break;
+    case 13: case 19: mark = PORT_AUTOMAP_MARK_PEDESTAL; break;
+    case 14: mark = PORT_AUTOMAP_MARK_LIFT; break;
+    case 15: mark = PORT_AUTOMAP_MARK_LADDER; break;
+    case 16: case 18: mark = PORT_AUTOMAP_MARK_TRAP; cheat = 1; break;
+    case 20: mark = PORT_AUTOMAP_MARK_SAVE; break;
+    case 21: mark = PORT_AUTOMAP_MARK_CONTAINER; break;
+    case 31: mark = PORT_AUTOMAP_MARK_SECRET; cheat = 1; break;
+    default: return;
+    }
+    if (cheat && !port_automap.secrets) {
+        return;
+    }
+    if (!cheat && !seen_near(x, y, z)) {
+        return;
+    }
+    m = new_marker(mark, x, y, z);
+    if (m == NULL) {
+        return;
+    }
+    if (cheat) {
+        m->flags |= PORT_AUTOMAP_MARK_CHEAT;
+    }
+    name_id = (s16)(def->definition_flags & 0xFFFF);
+    message_text(name_id, name, sizeof(name));
+    switch (mark) {
+    case PORT_AUTOMAP_MARK_DOOR:
+    case PORT_AUTOMAP_MARK_LOCKED_DOOR: {
+        if (leaf != NULL) {
+            m->x = leaf[0];
+            m->z = leaf[1];
+            m->angle = atan2f(leaf[3] - leaf[1], leaf[2] - leaf[0]);
+            m->length = sqrtf((leaf[2] - leaf[0]) * (leaf[2] - leaf[0]) + (leaf[3] - leaf[1]) * (leaf[3] - leaf[1]));
+        }
+        add_line(m->text, sizeof(m->text), name[0] ? name : mark == PORT_AUTOMAP_MARK_LOCKED_DOOR ? "Locked door" : "Door");
+        if (done) {
+            m->flags |= PORT_AUTOMAP_MARK_DONE;
+            add_line(m->text, sizeof(m->text), "(open)");
+        }
+        if (mark == PORT_AUTOMAP_MARK_LOCKED_DOOR && port_automap.hints) {
+            lock_line(m->text, sizeof(m->text), words->kind_param_0);
+        }
+        break;
+    }
+    case PORT_AUTOMAP_MARK_CHEST:
+        add_line(m->text, sizeof(m->text), name[0] ? name : "Chest");
+        if (done) {
+            m->flags |= PORT_AUTOMAP_MARK_DONE;
+            add_line(m->text, sizeof(m->text), "(opened)");
+        }
+        /* MapObject_UpdateClosedChest: its item when it names one, else its gold */
+        put_out = src->kind_param_0 != 0 ? item_put_out(t, src->kind_param_0) : 0;
+        contents(m, t, src, name, put_out != 0 ? src->kind_param_0 : 0, put_out, src->kind_param_0 != 0 ? 0 : words->kind_param_2,
+                 emptied, 0);
+        if (!done && words->kind_param_1 != 0 && port_automap.hints) {
+            lock_line(m->text, sizeof(m->text), words->kind_param_1);
+        }
+        break;
+    case PORT_AUTOMAP_MARK_REMAINS:
+    case PORT_AUTOMAP_MARK_CONTAINER:
+        add_line(m->text, sizeof(m->text), name[0] ? name : mark == PORT_AUTOMAP_MARK_CONTAINER ? "Container" : "Remains");
+        /* The item it holds comes out when the player uses it (bones and graves, MapObject_UpdateItemHolder,
+           when no use script takes the press; a container only shows its name) or breaks it (definition flag
+           0x800, MapObject_UpdateBreakingItemHolder: the containers; no bones or grave can be broken). */
+        put_out = (mark == PORT_AUTOMAP_MARK_REMAINS && src->use_script == 0) || (*(const u32 *)def & 0x800)
+                      ? item_put_out(t, src->kind_param_0)
+                      : 0;
+        if (!contents(m, t, src, name, put_out != 0 ? src->kind_param_0 : 0, put_out, 0, emptied, 1)) {
+            m->flags |= PORT_AUTOMAP_MARK_DONE;
+        }
+        break;
+    case PORT_AUTOMAP_MARK_SAVE:
+        add_line(m->text, sizeof(m->text), "Save point");
+        message_text(src->kind_param_0, name, sizeof(name));
+        add_line(m->text, sizeof(m->text), name);
+        break;
+    case PORT_AUTOMAP_MARK_SWITCH:
+        add_line(m->text, sizeof(m->text), name[0] ? name : "Switch");
+        if (done) {
+            m->flags |= PORT_AUTOMAP_MARK_DONE;
+            add_line(m->text, sizeof(m->text), "(on)");
+        }
+        break;
+    case PORT_AUTOMAP_MARK_TRAP:
+        add_line(m->text, sizeof(m->text), kind == 16 ? "Trap: it shoots" : "Trap: the floor opens");
+        break;
+    case PORT_AUTOMAP_MARK_SECRET:
+        add_line(m->text, sizeof(m->text), "Hidden: a wall or object that appears or fades away");
+        break;
+    case PORT_AUTOMAP_MARK_PASSAGE:
+        add_line(m->text, sizeof(m->text), name[0] ? name : "Symbol of passage");
+        break;
+    case PORT_AUTOMAP_MARK_PEDESTAL:
+        add_line(m->text, sizeof(m->text), name[0] ? name : kind == 19 ? "Marker" : "Pedestal");
+        if (kind == 13 && emptied) {
+            m->flags |= PORT_AUTOMAP_MARK_DONE;
+        }
+        break;
+    case PORT_AUTOMAP_MARK_EXAMINE:
+        /* what examining it shows (MapObject_StartExaminable): a sign picture, or a message */
+        if (words->kind_param_1 != 0) {
+            add_line(m->text, sizeof(m->text), "Sign");
+        } else {
+            char said[160];
+
+            message_text(src->kind_param_0 != 0 ? src->kind_param_0 : name_id, said, sizeof(said));
+            add_line(m->text, sizeof(m->text), said[0] ? said : "Something to look at");
+        }
+        break;
+    case PORT_AUTOMAP_MARK_LADDER: add_line(m->text, sizeof(m->text), name[0] ? name : "Ladder"); break;
+    case PORT_AUTOMAP_MARK_LIFT: add_line(m->text, sizeof(m->text), name[0] ? name : "Moving platform"); break;
+    default: add_line(m->text, sizeof(m->text), name[0] ? name : "Object"); break;
+    }
+    hint = Automap_ObjectHint(plan.map, i);
+    if (hint != NULL) {
+        m->flags |= PORT_AUTOMAP_MARK_HINT;
+        if (port_automap.hints) {
+            add_line(m->text, sizeof(m->text), hint);
+        }
+    }
+    if (port_automap.hints) {
+        char line[32];
+
+        snprintf(line, sizeof(line), "(object #%d)", i);
+        add_line(m->text, sizeof(m->text), line);
+    }
+}
+
+static int is_door(int kind) {
+    return kind == 1 || kind == 2 || kind == 6 || kind == 17;
+}
+
 static void object_markers(int slot) {
+    MapTables t = map_tables(slot);
     int count = map_object_counts[slot], i;
 
     for (i = 0; i < count; i++) {
         MapObject *o = &map_slot_objects[slot][i];
-        MapObjectUnk04 *def = o->definition;
-        MapObjectUnk08 *src = o->source;
-        const MapObjectUnk08Words *words;
-        PortAutomapMarker *m;
-        int kind, mark, cheat = 0, done, emptied, name_id, put_out;
-        char name[64];
-        const char *hint;
-        float x, y, z;
+        float leaf[4];
+        int has_leaf;
 
-        if (def == NULL || src == NULL || !(o->state_flags & MAP_OBJECT_IN_USE)) {
+        if (o->definition == NULL || o->source == NULL || !(o->state_flags & MAP_OBJECT_IN_USE)) {
             continue;
         }
-        words = (const MapObjectUnk08Words *)src;
-        kind = def->kind;
-        done = (o->state_flags & MAP_OBJECT_ON) != 0;
-        emptied = (o->state_flags & MAP_OBJECT_EMPTIED) != 0;
-        x = o->model != NULL ? o->model->position.x : src->position.x;
-        y = o->model != NULL ? o->model->position.y : src->position.y;
-        z = o->model != NULL ? o->model->position.z : src->position.z;
-        switch (kind) {
-        case 1: case 2: case 6: case 17:
-            mark = words->kind_param_0 != 0 && !emptied ? PORT_AUTOMAP_MARK_LOCKED_DOOR : PORT_AUTOMAP_MARK_DOOR;
-            break;
-        case 3: mark = PORT_AUTOMAP_MARK_REMAINS; break;
-        case 4: mark = PORT_AUTOMAP_MARK_CHEST; break;
-        case 7: case 8: case 30: mark = PORT_AUTOMAP_MARK_SWITCH; break;
-        case 11: mark = PORT_AUTOMAP_MARK_EXAMINE; break;
-        case 12: mark = PORT_AUTOMAP_MARK_PASSAGE; break;
-        case 13: case 19: mark = PORT_AUTOMAP_MARK_PEDESTAL; break;
-        case 14: mark = PORT_AUTOMAP_MARK_LIFT; break;
-        case 15: mark = PORT_AUTOMAP_MARK_LADDER; break;
-        case 16: case 18: mark = PORT_AUTOMAP_MARK_TRAP; cheat = 1; break;
-        case 20: mark = PORT_AUTOMAP_MARK_SAVE; break;
-        case 21: mark = PORT_AUTOMAP_MARK_CONTAINER; break;
-        case 31: mark = PORT_AUTOMAP_MARK_SECRET; cheat = 1; break;
-        default: continue;
-        }
-        if (cheat && !port_automap.secrets) {
-            continue;
-        }
-        if (!cheat && !seen_near(x, y, z)) {
-            continue;
-        }
-        m = new_marker(mark, x, y, z);
-        if (m == NULL) {
-            return;
-        }
-        if (cheat) {
-            m->flags |= PORT_AUTOMAP_MARK_CHEAT;
-        }
-        name_id = (s16)(def->definition_flags & 0xFFFF);
-        message_text(name_id, name, sizeof(name));
-        switch (mark) {
-        case PORT_AUTOMAP_MARK_DOOR:
-        case PORT_AUTOMAP_MARK_LOCKED_DOOR: {
-            float x0, z0, x1, z1;
-
-            if (door_leaf(o->model, &x0, &z0, &x1, &z1)) {
-                m->x = x0;
-                m->z = z0;
-                m->angle = atan2f(z1 - z0, x1 - x0);
-                m->length = sqrtf((x1 - x0) * (x1 - x0) + (z1 - z0) * (z1 - z0));
-            }
-            add_line(m->text, sizeof(m->text), name[0] ? name : mark == PORT_AUTOMAP_MARK_LOCKED_DOOR ? "Locked door" : "Door");
-            if (done) {
-                m->flags |= PORT_AUTOMAP_MARK_DONE;
-                add_line(m->text, sizeof(m->text), "(open)");
-            }
-            if (mark == PORT_AUTOMAP_MARK_LOCKED_DOOR && port_automap.hints) {
-                lock_line(m->text, sizeof(m->text), words->kind_param_0);
-            }
-            break;
-        }
-        case PORT_AUTOMAP_MARK_CHEST:
-            add_line(m->text, sizeof(m->text), name[0] ? name : "Chest");
-            if (done) {
-                m->flags |= PORT_AUTOMAP_MARK_DONE;
-                add_line(m->text, sizeof(m->text), "(opened)");
-            }
-            /* MapObject_UpdateClosedChest: its item when it names one, else its gold */
-            put_out = src->kind_param_0 != 0 ? item_put_out(slot, src->kind_param_0) : 0;
-            contents(m, slot, o, name, put_out != 0 ? src->kind_param_0 : 0, put_out, src->kind_param_0 != 0 ? 0 : words->kind_param_2,
-                     emptied, 0);
-            if (!done && words->kind_param_1 != 0 && port_automap.hints) {
-                lock_line(m->text, sizeof(m->text), words->kind_param_1);
-            }
-            break;
-        case PORT_AUTOMAP_MARK_REMAINS:
-        case PORT_AUTOMAP_MARK_CONTAINER:
-            add_line(m->text, sizeof(m->text), name[0] ? name : mark == PORT_AUTOMAP_MARK_CONTAINER ? "Container" : "Remains");
-            /* The item it holds comes out when the player uses it (bones and graves, MapObject_UpdateItemHolder,
-               when no use script takes the press; a container only shows its name) or breaks it (definition flag
-               0x800, MapObject_UpdateBreakingItemHolder: the containers; no bones or grave can be broken). */
-            put_out = (mark == PORT_AUTOMAP_MARK_REMAINS && src->use_script == 0) || (MAP_OBJECT_DEF_WORD(o) & 0x800)
-                          ? item_put_out(slot, src->kind_param_0)
-                          : 0;
-            if (!contents(m, slot, o, name, put_out != 0 ? src->kind_param_0 : 0, put_out, 0, emptied, 1)) {
-                m->flags |= PORT_AUTOMAP_MARK_DONE;
-            }
-            break;
-        case PORT_AUTOMAP_MARK_SAVE:
-            add_line(m->text, sizeof(m->text), "Save point");
-            message_text(src->kind_param_0, name, sizeof(name));
-            add_line(m->text, sizeof(m->text), name);
-            break;
-        case PORT_AUTOMAP_MARK_SWITCH:
-            add_line(m->text, sizeof(m->text), name[0] ? name : "Switch");
-            if (done) {
-                m->flags |= PORT_AUTOMAP_MARK_DONE;
-                add_line(m->text, sizeof(m->text), "(on)");
-            }
-            break;
-        case PORT_AUTOMAP_MARK_TRAP:
-            add_line(m->text, sizeof(m->text), kind == 16 ? "Trap: it shoots" : "Trap: the floor opens");
-            break;
-        case PORT_AUTOMAP_MARK_SECRET:
-            add_line(m->text, sizeof(m->text), "Hidden: a wall or object that appears or fades away");
-            break;
-        case PORT_AUTOMAP_MARK_PASSAGE:
-            add_line(m->text, sizeof(m->text), name[0] ? name : "Symbol of passage");
-            break;
-        case PORT_AUTOMAP_MARK_PEDESTAL:
-            add_line(m->text, sizeof(m->text), name[0] ? name : kind == 19 ? "Marker" : "Pedestal");
-            if (kind == 13 && emptied) {
-                m->flags |= PORT_AUTOMAP_MARK_DONE;
-            }
-            break;
-        case PORT_AUTOMAP_MARK_EXAMINE:
-            /* what examining it shows (MapObject_StartExaminable): a sign picture, or a message */
-            if (words->kind_param_1 != 0) {
-                add_line(m->text, sizeof(m->text), "Sign");
-            } else {
-                char said[160];
-
-                message_text(src->kind_param_0 != 0 ? src->kind_param_0 : name_id, said, sizeof(said));
-                add_line(m->text, sizeof(m->text), said[0] ? said : "Something to look at");
-            }
-            break;
-        case PORT_AUTOMAP_MARK_LADDER: add_line(m->text, sizeof(m->text), name[0] ? name : "Ladder"); break;
-        case PORT_AUTOMAP_MARK_LIFT: add_line(m->text, sizeof(m->text), name[0] ? name : "Moving platform"); break;
-        default: add_line(m->text, sizeof(m->text), name[0] ? name : "Object"); break;
-        }
-        hint = Automap_ObjectHint(plan.map, i);
-        if (hint != NULL) {
-            m->flags |= PORT_AUTOMAP_MARK_HINT;
-            if (port_automap.hints) {
-                add_line(m->text, sizeof(m->text), hint);
-            }
-        }
-        if (port_automap.hints) {
-            char line[32];
-
-            snprintf(line, sizeof(line), "(object #%d)", i);
-            add_line(m->text, sizeof(m->text), line);
-        }
+        has_leaf = is_door(o->definition->kind) && door_leaf(o->model, &leaf[0], &leaf[1], &leaf[2], &leaf[3]);
+        object_marker(&t, i, o->definition, o->source, (u32)o->state_flags,
+                      o->model != NULL ? o->model->position.x : o->source->position.x,
+                      o->model != NULL ? o->model->position.y : o->source->position.y,
+                      o->model != NULL ? o->model->position.z : o->source->position.z, has_leaf ? leaf : NULL);
     }
 }
 
@@ -1266,20 +1554,24 @@ static void object_markers(int slot) {
    flags bits 59-60 at 2, set up by a script only) and the ones the map's scripts set as the story moves on
    (command 253, ScriptCmd_SetEntityFlags: bit 7, may come into the world), with the deaths counted
    against the spawn's limit (Game_GetSpawnDeathCount). */
-static int spawn_can_appear(int slot, int i, const Entity *e) {
-    u64 spawn_flags = e->spawn_info->spawn_flags;
+static int spawn_flags_can_appear(u32 flags, const EntitySpawnInfo *si, int map, int i) {
+    u64 spawn_flags = si->spawn_flags;
     int limit = (s8)(u8)(spawn_flags >> 40);
 
-    if (!(e->flags & ENTITY_FLAG_RESPAWNABLE)) {
+    if (!(flags & ENTITY_FLAG_RESPAWNABLE)) {
         return 0;
     }
-    if ((e->flags & ENTITY_FLAG_NO_RESPAWN) && (spawn_flags & (1ULL << 61))) {
+    if ((flags & ENTITY_FLAG_NO_RESPAWN) && (spawn_flags & (1ULL << 61))) {
         return 0;
     }
-    if (limit != 0 && Game_GetSpawnDeathCount(map_slots[slot].tag, i) >= limit) {
+    if (limit != 0 && Game_GetSpawnDeathCount(map, i) >= limit) {
         return 0;
     }
     return 1;
+}
+
+static int spawn_can_appear(int slot, int i, const Entity *e) {
+    return spawn_flags_can_appear((u32)e->flags, e->spawn_info, map_slots[slot].tag, i);
 }
 
 /* in the world now: live, not dying, and on the active list (so given a model and put at its place;
@@ -1295,6 +1587,43 @@ static int entity_live(const Entity *e) {
    guardians that hold a pose until woken keep their on_hit handler, and stay enemies. */
 static int entity_prop(const Entity *e) {
     return (e->flags & ENTITY_FLAG_NOT_TARGETABLE) && e->ai_state.on_hit == NULL && e->ai_state.death == NULL;
+}
+
+/* a person's marker (the people of map slots and of browsed maps): his name, and when he is not here now (the
+   secrets cheat), drawn faint */
+static PortAutomapMarker *person_marker(int i, const EntitySpawnInfo *si, const EntityParams *p, float x, float y, float z,
+                                        int later) {
+    PortAutomapMarker *m = new_marker(PORT_AUTOMAP_MARK_PERSON, x, y, z);
+    char name[96], line[128];
+
+    if (m == NULL) {
+        return NULL;
+    }
+    if (p->entity_type == 81) {
+        snprintf(name, sizeof(name), "Dog");
+    } else {
+        person_name(si->type_id, p->model_number, name, sizeof(name));
+    }
+    add_line(m->text, sizeof(m->text), name);
+    if (later) {
+        m->flags |= PORT_AUTOMAP_MARK_CHEAT | PORT_AUTOMAP_MARK_ABSENT;
+        add_line(m->text, sizeof(m->text), "(not here now: at another time in the story)");
+    }
+    if (port_automap.hints) {
+        snprintf(line, sizeof(line), "(spawn #%d, chr %d)", i, si->type_id);
+        add_line(m->text, sizeof(m->text), line);
+    }
+    return m;
+}
+
+/* a hand-written hint of a marker (the hints cheat shows it) */
+static void hint_line(PortAutomapMarker *m, const char *hint) {
+    if (hint != NULL) {
+        m->flags |= PORT_AUTOMAP_MARK_HINT;
+        if (port_automap.hints) {
+            add_line(m->text, sizeof(m->text), hint);
+        }
+    }
 }
 
 static void entity_markers(int slot) {
@@ -1334,23 +1663,9 @@ static void entity_markers(int slot) {
             if ((!live && x == 0.0f && y == 0.0f && z == 0.0f) || (!later && !seen_near(x, y, z))) {
                 continue;
             }
-            m = new_marker(PORT_AUTOMAP_MARK_PERSON, x, y, z);
+            m = person_marker(i, si, p, x, y, z, later);
             if (m == NULL) {
                 return;
-            }
-            if (type == 81) {
-                snprintf(name, sizeof(name), "Dog");
-            } else {
-                person_name(record, p->model_number, name, sizeof(name));
-            }
-            add_line(m->text, sizeof(m->text), name);
-            if (later) {
-                m->flags |= PORT_AUTOMAP_MARK_CHEAT | PORT_AUTOMAP_MARK_ABSENT;
-                add_line(m->text, sizeof(m->text), "(not here now: at another time in the story)");
-            }
-            if (port_automap.hints) {
-                snprintf(line, sizeof(line), "(spawn #%d, chr %d)", i, record);
-                add_line(m->text, sizeof(m->text), line);
             }
         } else {
             const char *creature;
@@ -1381,12 +1696,7 @@ static void entity_markers(int slot) {
                 add_line(m->text, sizeof(m->text), line);
             }
         }
-        if (hint != NULL) {
-            m->flags |= PORT_AUTOMAP_MARK_HINT;
-            if (port_automap.hints) {
-                add_line(m->text, sizeof(m->text), hint);
-            }
-        }
+        hint_line(m, hint);
     }
 }
 
@@ -1410,8 +1720,8 @@ static ScriptLink script_gifts[MAX_SCRIPT_GIFTS];
 static ScriptLink script_messages[MAX_SCRIPT_RUNS]; /* target: the first message a script puts up (command 233) */
 static int script_run_count, script_gift_count, script_message_count;
 
-static void scan_script(int slot_index) {
-    const u32 *cursor = (const u32 *)map_slots[slot_index].script;
+/* the script from `cursor` (to `end`, NULL: no end but the bound) */
+static void scan_script(const u32 *cursor, const u32 *end) {
     int label = -1, words;
 
     script_run_count = script_gift_count = script_message_count = 0;
@@ -1419,7 +1729,7 @@ static void scan_script(int slot_index) {
         return;
     }
     /* a bound on the walk, in case the words are not what they should be */
-    for (words = 0; words < 0x40000; words++) {
+    for (words = 0; words < 0x40000 && (end == NULL || cursor + 3 <= end); words++) {
         u32 word = *cursor;
         int operand = word & 0xFFFF;
 
@@ -1558,36 +1868,32 @@ static int script_gives_anywhere(int id) {
    run when the player takes it where it lies (MapItemDef.pickup_script: crystals on altars, Lord Myu's
    armour), and it lies out of sight, under the floor (more than 60 below the nearest floor of the plan, or
    with none near: the smith's work lies 10,000 below the world) */
-static int item_handed_over(const ItemNode *n) {
+static int item_handed_over_at(const MapItemDef *def, float x, float y, float z) {
     int id;
 
-    if (n->def == NULL || n->model == NULL) {
+    if (def == NULL) {
         return 0;
     }
-    id = n->def->slot_id;
-    return id != 0 && script_gives_anywhere(id) && !script_gives(n->def->pickup_script, id, 0) &&
-           floor_gap(n->model->position.x, n->model->position.y, n->model->position.z) > 60;
+    id = def->slot_id;
+    return id != 0 && script_gives_anywhere(id) && !script_gives(def->pickup_script, id, 0) && floor_gap(x, y, z) > 60;
+}
+
+static int item_handed_over(const ItemNode *n) {
+    return n->model != NULL && item_handed_over_at(n->def, n->model->position.x, n->model->position.y, n->model->position.z);
 }
 
 /* the person whose talk (or the item used on him) gives the fixed item with this id: his spawn, or -1 */
-static int item_giver(int slot, int id, int *by_item) {
+static int item_giver(const MapTables *t, int id, int *by_item) {
     int i;
 
-    for (i = 0; i < map_spawn_counts[slot]; i++) {
-        const Entity *e = &entity_pool[slot][i];
-
-        if (e->spawn_info == NULL || e->params == NULL) {
-            continue;
-        }
-        if (script_gives(e->spawn_info->talk_script_id, id, 0)) {
+    for (i = 0; i < t->spawn_count; i++) {
+        if (script_gives(t->spawns[i].talk_script_id, id, 0)) {
             *by_item = 0;
             return i;
         }
     }
-    for (i = 0; i < map_spawn_counts[slot]; i++) {
-        const Entity *e = &entity_pool[slot][i];
-
-        if (e->spawn_info != NULL && e->params != NULL && script_gives(e->spawn_info->item_script_id, id, 0)) {
+    for (i = 0; i < t->spawn_count; i++) {
+        if (script_gives(t->spawns[i].item_script_id, id, 0)) {
             *by_item = 1;
             return i;
         }
@@ -1595,50 +1901,59 @@ static int item_giver(int slot, int id, int *by_item) {
     return -1;
 }
 
-static void item_markers(int slot) {
-    ItemNode *n;
+/* an item's marker: `def` its fixed item (NULL: one dropped), at x, y, z; `note` a line more (or NULL) */
+static void item_marker(const MapTables *t, int item, const MapItemDef *def, float x, float y, float z, const char *note) {
+    PortAutomapMarker *m = new_marker(PORT_AUTOMAP_MARK_ITEM, x, y, z);
     char name[64];
+
+    if (m == NULL) {
+        return;
+    }
+    m->flags |= PORT_AUTOMAP_MARK_CHEAT;
+    item_name(item, name, sizeof(name));
+    add_line(m->text, sizeof(m->text), name);
+    if (item_handed_over_at(def, x, y, z)) {
+        /* not one to find: out of sight until the story hands it over */
+        int by_item = 0, giver = item_giver(t, def->slot_id, &by_item);
+        char line[160];
+
+        m->flags |= PORT_AUTOMAP_MARK_GIVEN;
+        if (giver >= 0) {
+            const EntitySpawnInfo *si = &t->spawns[giver];
+            const EntityParams *p = spawn_params(si);
+
+            if (p->entity_type == 81) {
+                snprintf(name, sizeof(name), "Dog");
+            } else {
+                person_name(si->type_id, p->model_number, name, sizeof(name));
+            }
+            snprintf(line, sizeof(line), by_item ? "(not on the ground: given when an item is used on %s)"
+                                                 : "(not on the ground: given by %s)",
+                     name);
+            add_line(m->text, sizeof(m->text), line);
+        } else {
+            add_line(m->text, sizeof(m->text), "(not on the ground: given by an event)");
+        }
+    } else {
+        add_line(m->text, sizeof(m->text), def != NULL ? "(lies here)" : "(dropped)");
+    }
+    add_line(m->text, sizeof(m->text), note);
+}
+
+/* the items lying in the map in `slot` (lying_items), not inside a container, moved by minus `offset` */
+static void item_markers(int slot, const float offset[3]) {
+    MapTables t = map_tables(slot);
+    ItemNode *n;
 
     if (!port_automap.items) {
         return;
     }
     for (n = lying_items; n != NULL; n = n->next) {
-        PortAutomapMarker *m;
-
         if ((int)(n->flags & 1) != slot || n->model == NULL || n->map_object != NULL) {
             continue;
         }
-        m = new_marker(PORT_AUTOMAP_MARK_ITEM, n->model->position.x, n->model->position.y, n->model->position.z);
-        if (m == NULL) {
-            return;
-        }
-        m->flags |= PORT_AUTOMAP_MARK_CHEAT;
-        item_name(n->item, name, sizeof(name));
-        add_line(m->text, sizeof(m->text), name);
-        if (item_handed_over(n)) {
-            /* not one to find: out of sight until the story hands it over */
-            int by_item = 0, giver = item_giver(slot, n->def->slot_id, &by_item);
-            char line[160];
-
-            m->flags |= PORT_AUTOMAP_MARK_GIVEN;
-            if (giver >= 0) {
-                const Entity *e = &entity_pool[slot][giver];
-
-                if (e->params->entity_type == 81) {
-                    snprintf(name, sizeof(name), "Dog");
-                } else {
-                    person_name(e->spawn_info->type_id, e->params->model_number, name, sizeof(name));
-                }
-                snprintf(line, sizeof(line), by_item ? "(not on the ground: given when an item is used on %s)"
-                                                     : "(not on the ground: given by %s)",
-                         name);
-                add_line(m->text, sizeof(m->text), line);
-            } else {
-                add_line(m->text, sizeof(m->text), "(not on the ground: given by an event)");
-            }
-        } else {
-            add_line(m->text, sizeof(m->text), n->def != NULL ? "(lies here)" : "(dropped)");
-        }
+        item_marker(&t, n->item, n->def, n->model->position.x - offset[0], n->model->position.y - offset[1],
+                    n->model->position.z - offset[2], NULL);
     }
 }
 
@@ -1660,6 +1975,7 @@ static void item_markers(int slot) {
 typedef struct {
     float x0, z0, x1, z1, y;
     int map;
+    float to[3]; /* add to a point of this map for the same point in the neighbour's own frame (the origin) */
 } Exit;
 
 static Exit exits[MAX_EXITS];
@@ -1688,118 +2004,10 @@ static void neighbour_cell(int i, int j, float yf, void *context) {
     }
 }
 
-static float file_f32(const uint8_t *p) {
-    float f;
-
-    memcpy(&f, p, 4);
-    return f;
-}
-
-static uint32_t file_u32(const uint8_t *p) {
-    uint32_t v;
-
-    memcpy(&v, p, 4);
-    return v;
-}
-
-/* a map's file from the disc (KF4.DAT's member NNN.map), malloc'd, or NULL */
-static uint8_t *read_map_file(int map, uint32_t *size) {
-    char name[16];
-    uint32_t lsn;
-    uint8_t *data;
-
-    snprintf(name, sizeof(name), "%03d.map", map);
-    if (!port_disc_find_member(name, &lsn, size) || *size < 0x17C0 || *size > 0x1000000) {
-        return NULL;
-    }
-    data = malloc(((size_t)*size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE * DISC_SECTOR_SIZE);
-    if (data != NULL && !port_disc_read(lsn, (*size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE, data)) {
-        free(data);
-        data = NULL;
-    }
-    return data;
-}
-
-/* the floor, hazard and water triangles of a map file's records (as Map_ParseFile, Map_BuildModels and
-   Collision_RelocateMesh read it: the records from 0x17C0, 0x80 bytes each; the collision meshes back to back
-   from the word at 0x08, each giving its size at 0x14; a mesh's strip lists are offsets from it, a strip
-   point names a point by number), moved by `offset`, rastered into neighbour_y */
-static void file_floors(const uint8_t *data, uint32_t size, const float offset[3]) {
-    static const int lists[3] = {1, 4, 5};
-    int records = data[0x3C] | data[0x3D] << 8, r, mesh_count = 0;
-    uint32_t mesh_at[1024];
-
-    for (r = 0; r < records && 0x17C0 + (r + 1) * 0x80 <= (int)size; r++) {
-        const uint8_t *rec = data + 0x17C0 + r * 0x80;
-        int mesh = rec[0x32] | rec[0x33] << 8, li, k;
-        uint32_t at, strip_count, point_count, points, cursor;
-        float m[16], position[4], turn[3], scale[3];
-
-        if (mesh == 0xFFFF || mesh >= 1024 || (file_u32(rec + 0x3C) & 0x40000000)) {
-            continue;
-        }
-        while (mesh_count <= mesh) { /* the meshes are back to back */
-            uint32_t next = mesh_count == 0 ? file_u32(data + 0x08)
-                                            : mesh_at[mesh_count - 1] + file_u32(data + mesh_at[mesh_count - 1] + 0x14);
-
-            if (next + 0x50 > size) {
-                return;
-            }
-            mesh_at[mesh_count++] = next;
-        }
-        at = mesh_at[mesh];
-        strip_count = file_u32(data + at);
-        point_count = file_u32(data + at + 0x0C);
-        cursor = at + 0x50;
-        for (k = 0; k < (int)strip_count && cursor + 0x20 <= size; k++) {
-            cursor += 0x20 + (uint32_t)(data[cursor] | data[cursor + 1] << 8) * 16;
-        }
-        points = cursor;
-        if ((uint64_t)points + (uint64_t)point_count * 16 > size || point_count == 0) {
-            continue;
-        }
-        /* the record's matrix, as Map_PlaceRecordModels builds collision_matrix */
-        for (k = 0; k < 3; k++) {
-            position[k] = file_f32(rec + 0x00 + 4 * k);
-            turn[k] = file_f32(rec + 0x10 + 4 * k);
-            scale[k] = file_f32(rec + 0x20 + 4 * k);
-        }
-        position[3] = 1.0f;
-        sceVu0UnitMatrix(m);
-        m[0] *= scale[0];
-        m[5] *= scale[1];
-        m[10] *= scale[2];
-        sceVu0RotMatrixX(m, m, turn[0]);
-        sceVu0RotMatrixY(m, m, turn[1]);
-        sceVu0RotMatrixZ(m, m, turn[2]);
-        sceVu0TransMatrix(m, m, position);
-        for (li = 0; li < 3; li++) {
-            int list = lists[li], count = data[at + 0x38 + 2 * list] | data[at + 0x39 + 2 * list] << 8, s;
-
-            cursor = at + file_u32(data + at + 0x18 + 4 * list);
-            for (s = 0; s < count && cursor + 0x20 <= size; s++) {
-                int n = data[cursor] | data[cursor + 1] << 8;
-                float p[3][3];
-
-                if (cursor + 0x20 + (uint32_t)n * 16 > size) {
-                    break;
-                }
-                for (k = 0; k < n; k++) {
-                    uint32_t index = file_u32(data + cursor + 0x20 + 16 * k);
-                    const uint8_t *v = data + points + 16 * (index < point_count ? index : 0);
-                    float x = file_f32(v), y = file_f32(v + 4), z = file_f32(v + 8), *w = p[k % 3];
-
-                    w[0] = x * m[0] + y * m[4] + z * m[8] + m[12] + offset[0];
-                    w[1] = x * m[1] + y * m[5] + z * m[9] + m[13] + offset[1];
-                    w[2] = x * m[2] + y * m[6] + z * m[10] + m[14] + offset[2];
-                    if (k >= 2) {
-                        raster(p[(k - 2) % 3], p[(k - 1) % 3], p[k % 3], neighbour_cell, NULL);
-                    }
-                }
-                cursor += 0x20 + (uint32_t)n * 16;
-            }
-        }
-    }
+/* a triangle of the neighbour's floor, water or hazards */
+static void neighbour_triangle(const float a[3], const float b[3], const float c[3], int effect, void *context) {
+    (void)effect;
+    raster(a, b, c, neighbour_cell, context);
 }
 
 /* the layer of cell c that has the neighbour's floor in its cell or one beside it, within a step: its
@@ -1851,16 +2059,16 @@ static int meets_neighbour(int c) {
     return NO_Y;
 }
 
-static void find_exits(int slot_index) {
-    MapSlot *slot = &map_slots[slot_index];
-    int count = ((MapSlotUnk08 *)slot->header)->record_count, i, k, o;
+/* the ways of the plan in hand: `records` (count of them) name the origins (32 MapLoadRequest of 16 bytes) */
+static void find_exits(const char *records, int count, const char *origins) {
+    int i, k, o;
     size_t cells = (size_t)plan.width * plan.height;
     uint8_t used[32] = {0}, *way;
     int *stack;
 
     exit_count = 0;
     for (i = 0; i < count; i++) {
-        const MapRecordInfo *info = (const MapRecordInfo *)(slot->records + i * 0x80);
+        const MapRecordInfo *info = (const MapRecordInfo *)(records + i * 0x80);
 
         if (info->neighbour_origin_index < 32) {
             used[info->neighbour_origin_index] = 1;
@@ -1871,22 +2079,21 @@ static void find_exits(int slot_index) {
     way = malloc(cells);
     stack = malloc(cells * sizeof(*stack));
     for (o = 0; o < 32 && neighbour_y != NULL && loads_neighbour != NULL && way != NULL && stack != NULL; o++) {
-        const MapLoadRequest *request = (const MapLoadRequest *)&slot->origins[o];
+        const MapLoadRequest *request = (const MapLoadRequest *)(origins + 16 * o);
         int map = request->map & 0xFF, again = 0;
         float offset[3];
-        uint32_t size;
-        uint8_t *data;
+        MapFile file;
 
         if (!used[o] || map == plan.map) {
             continue;
         }
         for (k = 0; k < o; k++) { /* the same neighbour in the same place through another origin */
-            const MapLoadRequest *before = (const MapLoadRequest *)&slot->origins[k];
+            const MapLoadRequest *before = (const MapLoadRequest *)(origins + 16 * k);
 
             again |= used[k] && (before->map & 0xFF) == map && before->x == request->x && before->y == request->y &&
                      before->z == request->z;
         }
-        if (again || (data = read_map_file(map, &size)) == NULL) {
+        if (again || !map_file_read(map, &file)) {
             continue;
         }
         for (k = 0; k < (int)(cells * LAYERS); k++) {
@@ -1895,11 +2102,11 @@ static void find_exits(int slot_index) {
         offset[0] = -request->x;
         offset[1] = -request->y;
         offset[2] = -request->z;
-        file_floors(data, size, offset);
-        free(data);
+        file_triangles(&file, offset, 1 << 1 | 1 << 4 | 1 << 5, neighbour_triangle, NULL);
+        map_file_free(&file);
         memset(loads_neighbour, 0, cells);
         for (i = 0; i < count; i++) {
-            const MapRecordBounds *r = (const MapRecordBounds *)(slot->records + i * 0x80);
+            const MapRecordBounds *r = (const MapRecordBounds *)(records + i * 0x80);
             const MapRecordInfo *info = (const MapRecordInfo *)r;
             const MapLoadRequest *to;
             int i0, i1, j0, j1, ci, cj;
@@ -1907,7 +2114,7 @@ static void find_exits(int slot_index) {
             if (info->neighbour_origin_index >= 32) {
                 continue;
             }
-            to = (const MapLoadRequest *)&slot->origins[info->neighbour_origin_index];
+            to = (const MapLoadRequest *)(origins + 16 * info->neighbour_origin_index);
             if ((to->map & 0xFF) != map) {
                 continue;
             }
@@ -1937,6 +2144,9 @@ static void find_exits(int slot_index) {
             e->x0 = e->z0 = 1e30f;
             e->x1 = e->z1 = -1e30f;
             e->map = map;
+            e->to[0] = request->x;
+            e->to[1] = request->y;
+            e->to[2] = request->z;
             way[k] = 0;
             stack[top++] = k;
             while (top > 0) {
@@ -1992,19 +2202,32 @@ static void exit_markers(void) {
         }
         m->length = e->x1 - e->x0;
         m->depth = e->z1 - e->z0;
+        m->map = e->map;
+        m->to[0] = (e->x0 + e->x1) * 0.5f + e->to[0];
+        m->to[1] = e->y + e->to[1];
+        m->to[2] = (e->z0 + e->z1) * 0.5f + e->to[2];
         name = port_teleport_map_name(e->map);
         snprintf(line, sizeof(line), "To %s", name[0] ? name : "another map");
         add_line(m->text, sizeof(m->text), line);
         snprintf(line, sizeof(line), "(map %03d)", e->map);
         add_line(m->text, sizeof(m->text), line);
+        /* the browser shows a map the player has been in (its explored part is kept), or any with the reveal cheat */
+        if (port_automap.reveal || e->map == player.map || map_explored(e->map)) {
+            m->flags |= PORT_AUTOMAP_MARK_BROWSE;
+            add_line(m->text, sizeof(m->text), "Click: show this map");
+        } else {
+            add_line(m->text, sizeof(m->text), "(not visited yet)");
+        }
     }
 }
 
 static void build_markers(int slot) {
     marker_count = 0;
+    static const float none[3] = {0.0f, 0.0f, 0.0f};
+
     exit_markers();
     object_markers(slot);
-    item_markers(slot);
+    item_markers(slot, none);
     entity_markers(slot);
 }
 
@@ -2081,6 +2304,7 @@ static void dump_script(FILE *f, int label) {
    checking the names and the hints without a window) */
 static void dump_markers(int slot) {
     const char *dir = getenv("KF4_AUTOMAP_DUMP");
+    MapTables t = map_tables(slot);
     char path[1024];
     FILE *f;
     int i;
@@ -2093,7 +2317,8 @@ static void dump_markers(int slot) {
     if (f == NULL) {
         return;
     }
-    fprintf(f, "map %d: %dx%d cells from %d,%d\n", plan.map, plan.width, plan.height, (int)plan.x0, (int)plan.z0);
+    fprintf(f, "map %d: %dx%d cells from %d,%d, layout %08x\n", plan.map, plan.width, plan.height, (int)plan.x0, (int)plan.z0,
+            layout_hash);
     for (i = 0; i < marker_count; i++) {
         char text[256], *c;
 
@@ -2131,7 +2356,7 @@ static void dump_markers(int slot) {
         fprintf(f, "object %d kind %d state %08x def %08x name %d use_script %d item_use_script %d break_script %d params %d %d %d %d put_out %d\n",
                 i, o->definition->kind, (u32)o->state_flags, MAP_OBJECT_DEF_WORD(o), (s16)(o->definition->definition_flags & 0xFFFF),
                 o->source->use_script, o->source->item_use_script, o->source->break_script, w->kind_param_0, w->kind_param_1,
-                w->kind_param_2, w->kind_param_3, item_put_out(slot, w->kind_param_0));
+                w->kind_param_2, w->kind_param_3, item_put_out(&t, w->kind_param_0));
         dump_script(f, o->source->use_script);
         dump_script(f, o->source->item_use_script);
     }
@@ -2156,6 +2381,702 @@ static void dump_markers(int slot) {
         }
     }
     fclose(f);
+}
+
+/* ---- The map browser ---------------------------------------------------------------------------------
+   On the full map, a way into another map can be clicked to show that map (docs/port/AUTOMAP.md, "Browsing
+   other maps"), and its ways in turn, with Back (a history) and Home (the player's own map). A browsed map is
+   built as the player's is, from its file on the disc instead of a map slot: the floor plan from its records'
+   collision meshes (file_triangles), its ways from its origins, its fog of war from the explored state kept
+   for it (read only), its markers from its objects, spawns and fixed items and from the save's tables: the
+   objects' state as the map keeps it when the player leaves (map_entry_flags: Game_GetObjectActive,
+   Game_GetObjectState, Game_GetObjectFlag, as MapObject_StartMap reads them back), the deaths of its spawns
+   (Game_GetSpawnDeathCount), the items taken (map_item_pickup_counts) and dropped (dropped_item_records).
+   The spawns' and objects' flags are not kept: they are made again as the map is loaded (from the spawn
+   records, Entity_InitFromMapSpawns; MapSetup_RunForMap) and set by the map's start script as it becomes the
+   current one, which game/automap_script.c runs on copies; so a person is shown when he would be there as the
+   player walks in. A map still loaded in the game's other slot gives its live flags and items instead.
+
+   Nothing of the game is written: the file is read into memory of its own (map_file_read), the tables are
+   only read. It all runs on the game's thread while the full map holds the game (the overlay's draw), so no
+   load of the game's can be under way at the same time.
+
+   The browsed map is built in the globals of the map in hand (plan, layers, the ways, the script's links, the
+   markers), swapped in for the time it takes (view_swap), so that every function above works on it. */
+typedef struct {
+    PortAutomapPlan plan;
+    PortAutomapLayer *layers;
+    int16_t *solid_top, *solid_bottom;
+    uint8_t *seen;
+    uint32_t layout_hash;
+    Exit exits[MAX_EXITS];
+    int exit_count;
+    ScriptLink runs[MAX_SCRIPT_RUNS], gifts[MAX_SCRIPT_GIFTS], messages[MAX_SCRIPT_RUNS];
+    int run_count, gift_count, message_count;
+    PortAutomapMarker *markers;
+    int marker_count;
+} MapView;
+
+static MapView browsed = {{-1}};
+static int browse_cold;
+
+#define SWAP(a, b)                                                                                                   \
+    do {                                                                                                             \
+        char swap_[sizeof(a)];                                                                                       \
+        memcpy(swap_, &(a), sizeof(a));                                                                              \
+        memcpy(&(a), &(b), sizeof(a));                                                                               \
+        memcpy(&(b), swap_, sizeof(a));                                                                              \
+    } while (0)
+
+/* the browsed map in (or out of) the globals of the map in hand */
+static void view_swap(MapView *v) {
+    if (v->markers == NULL) {
+        v->markers = browsed_markers;
+    }
+    SWAP(plan, v->plan);
+    SWAP(layers, v->layers);
+    SWAP(solid_top, v->solid_top);
+    SWAP(solid_bottom, v->solid_bottom);
+    SWAP(seen, v->seen);
+    SWAP(layout_hash, v->layout_hash);
+    SWAP(exits, v->exits);
+    SWAP(exit_count, v->exit_count);
+    SWAP(script_runs, v->runs);
+    SWAP(script_gifts, v->gifts);
+    SWAP(script_messages, v->messages);
+    SWAP(script_run_count, v->run_count);
+    SWAP(script_gift_count, v->gift_count);
+    SWAP(script_message_count, v->message_count);
+    SWAP(markers, v->markers);
+    SWAP(marker_count, v->marker_count);
+}
+
+/* the game's slot that holds `map` now (loaded), or -1 */
+static int loaded_slot(int map) {
+    int k;
+
+    for (k = 0; k < 2; k++) {
+        if (map_slots[k].loaded && map_slots[k].tag == map && map_slots[k].header != NULL && map_slots[k].records != NULL) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* What MapSetup_RunForMap does to the objects, spawns and fixed items of the maps it sets up (their records,
+   fog and lights are not on the map), after MapObject_StartMap, Entity_InitFromMapSpawns and
+   MapItem_RollFixedItems, on the copies. Its writes to the story's flags (map 100) are left out. */
+static void setup_for_map(AutomapScriptWorld *w, MapFile *f) {
+    extern u8 story_flags[0x40];
+    extern u8 story_values[0x400];
+    /* the names map/map_setup.c gives these places of the story's flags */
+    const u8 *forge_door_open = story_flags + 0xC, *forge_stage = story_flags + 6;
+    const u8 *craftsmans_room_door_unlocked = map_script_flags + 0x1A08;
+    float map_record_height;
+    int o, e;
+
+#define OBJECT(id) ((o = w->object_by_id[(id)]) >= 0)
+#define SPAWN(id) ((e = w->spawn_by_id[(id)]) >= 0)
+#define RECORD(prop, hidden)                                                                                         \
+    do {                                                                                                             \
+        int r_ = w->record_by_prop[(prop)];                                                                          \
+        if (r_ >= 0 && r_ < w->record_count) {                                                                       \
+            w->record_hidden[r_] = (hidden);                                                                         \
+        }                                                                                                            \
+    } while (0)
+#define PLACE(id)                                                                                                    \
+    do {                                                                                                             \
+        int i_ = w->item_by_id[(id)];                                                                                \
+        if (i_ >= 0 && !w->item_taken[i_]) {                                                                         \
+            w->item_placed[i_] = 1;                                                                                  \
+        }                                                                                                            \
+    } while (0)
+    switch (w->map) {
+    case 11: /* MapSetup_Armory */
+        if (map_script_flags[0x2C5] != 0) {
+            PLACE(0x46);
+        }
+        if (entity_group_state[0x5C6] == 1 && map_script_flags[0x2C5] == 0) {
+            PLACE(0x46);
+            if (entity_group_state[0x5C0] == 0 && SPAWN(0x17)) {
+                w->entity_flags[e] |= ENTITY_FLAG_LIVE | ENTITY_FLAG_RESPAWNABLE;
+            }
+        } else {
+            if (OBJECT(0xA)) {
+                w->object_state[o] |= MAP_OBJECT_ON;
+            }
+            if (OBJECT(0xB)) {
+                w->object_state[o] |= MAP_OBJECT_ON;
+            }
+        }
+        break;
+    case 20: /* MapSetup_EarthFolksVillage: the records of the forge's stage */
+        RECORD(0x33, forge_stage[0] != 0);
+        RECORD(0x6D, forge_stage[0] != 1);
+        RECORD(0x6E, forge_stage[0] < 2);
+        if (forge_stage[0] != 0) {
+            RECORD(2, 1);
+        }
+        break;
+    case 25: /* MapSetup_FireLordsDomain */
+        RECORD(0x42, forge_stage[0] != 2);
+        RECORD(0x43, forge_stage[0] != 2);
+        RECORD(0x44, forge_stage[0] != 2);
+        RECORD(0x3F, forge_stage[0] == 2);
+        RECORD(0x41, forge_stage[0] == 2);
+        break;
+    case 29: /* MapSetup_UndergroundCanal: record 5 (the lift) at the height the story keeps for it */
+        e = w->record_by_prop[5];
+        if (e >= 0 && e < w->record_count && f->record_move != NULL) {
+            memcpy(&map_record_height, story_values + 0xC, 4);
+            f->record_move[e][1] = (map_script_flags[0x740] == 0 ? 590.0f : map_record_height) - 590.0f;
+        }
+        break;
+    case 17: case 18: case 19: /* MapSetup_Forge017 to 019 */
+        if (forge_door_open[0] != 0 && OBJECT(0x65)) {
+            w->object_state[o] |= MAP_OBJECT_ON;
+        }
+        break;
+    case 42: /* MapSetup_SanctuaryOfLight */
+        if (map_script_flags[0xA85] != 0) {
+            if (map_script_flags[0xA86] == 0) {
+                PLACE(0xC9);
+                if (OBJECT(0x67)) {
+                    w->object_state[o] |= MAP_OBJECT_IN_USE;
+                }
+            }
+        } else {
+            if (OBJECT(0x66)) {
+                w->object_state[o] &= ~MAP_OBJECT_IN_USE;
+            }
+            if (OBJECT(0x67)) {
+                w->object_state[o] &= ~MAP_OBJECT_IN_USE;
+            }
+        }
+        break;
+    case 100: /* MapSetup_CentralTowerLevel3 */
+        if (entity_group_state[0x340] == 0 &&
+            (entity_group_state[0x346] == 1 || (entity_group_state[0x345] != 0 && entity_group_state[0x346] == 0))) {
+            break;
+        }
+        if (SPAWN(1)) {
+            w->entity_flags[e] &= ~(ENTITY_FLAG_LIVE | ENTITY_FLAG_RESPAWNABLE);
+        }
+        break;
+    case 104: /* MapSetup_CraftsmansRoom */
+        if (craftsmans_room_door_unlocked[0] == 0) {
+            if (OBJECT(0x77)) {
+                w->object_state[o] &= ~MAP_OBJECT_IN_USE;
+            }
+            if (OBJECT(0x76)) {
+                w->object_state[o] &= ~MAP_OBJECT_IN_USE;
+            }
+        }
+        break;
+    case 107: /* MapSetup_CentralTowerLevel2 */
+        if (map_script_flags[0x1C0A] != 0) {
+            if (OBJECT(0x75)) {
+                w->object_state[o] &= ~MAP_OBJECT_IN_USE;
+            }
+            if (OBJECT(0x76)) {
+                w->object_state[o] |= MAP_OBJECT_IN_USE;
+            }
+        }
+        break;
+    }
+#undef OBJECT
+#undef SPAWN
+#undef PLACE
+#undef RECORD
+}
+
+/* a door's leaf from the file: its collision mesh's two farthest apart points (as door_leaf), placed by the
+   object's matrix */
+static int file_door_leaf(const MapFile *f, const MapObjectUnk08 *src, float leaf[4]) {
+    const uint8_t *d = f->data;
+    uint32_t at, points, point_count, strip_count, cursor, a, b;
+    float m[16], px[64], pz[64], best = -1.0f;
+    int k;
+
+    if (src->collision_mesh_index == 0xFFFF || src->collision_mesh_index >= f->header->object_collision_count ||
+        (at = file_mesh(f, (uint32_t)f->header->object_collision_offset, src->collision_mesh_index)) == 0) {
+        return 0;
+    }
+    strip_count = file_u32(d + at);
+    point_count = file_u32(d + at + 0x0C);
+    cursor = at + 0x50;
+    for (k = 0; k < (int)strip_count && cursor + 0x20 <= f->size; k++) {
+        cursor += 0x20 + (uint32_t)(d[cursor] | d[cursor + 1] << 8) * 16;
+    }
+    points = cursor;
+    point_count = point_count < 64 ? point_count : 64;
+    if ((uint64_t)points + (uint64_t)point_count * 16 > f->size) {
+        return 0;
+    }
+    file_matrix((const uint8_t *)src, 1, m);
+    for (a = 0; a < point_count; a++) {
+        const uint8_t *v = d + points + 16 * a;
+        float x = file_f32(v), y = file_f32(v + 4), z = file_f32(v + 8);
+
+        px[a] = x * m[0] + y * m[4] + z * m[8] + m[12];
+        pz[a] = x * m[2] + y * m[6] + z * m[10] + m[14];
+    }
+    for (a = 0; a < point_count; a++) {
+        for (b = a + 1; b < point_count; b++) {
+            float dd = (px[a] - px[b]) * (px[a] - px[b]) + (pz[a] - pz[b]) * (pz[a] - pz[b]);
+
+            if (dd > best) {
+                best = dd;
+                leaf[0] = px[a];
+                leaf[1] = pz[a];
+                leaf[2] = px[b];
+                leaf[3] = pz[b];
+            }
+        }
+    }
+    return best > 100.0f * 100.0f && best < 3000.0f * 3000.0f;
+}
+
+/* KF4_AUTOMAP_DUMP=DIR: the browsed map's markers into DIR/automap_browse_NNN.txt, as dump_markers writes them,
+   then its objects in use and its spawns with the state they were shown by */
+static void dump_browsed(const AutomapScriptWorld *w, const MapTables *t, int slot, int visited) {
+    const char *dir = getenv("KF4_AUTOMAP_DUMP");
+    char path[1024];
+    FILE *f;
+    int i;
+
+    if (dir == NULL) {
+        return;
+    }
+    snprintf(path, sizeof(path), "%s/automap_browse_%03d.txt", dir, plan.map);
+    f = fopen(path, "w");
+    if (f == NULL) {
+        return;
+    }
+    fprintf(f, "map %d: %dx%d cells from %d,%d, layout %08x, slot %d, visited %d\n", plan.map, plan.width, plan.height,
+            (int)plan.x0, (int)plan.z0, layout_hash, slot, visited);
+    for (i = 0; i < marker_count; i++) {
+        char text[256], *c;
+
+        snprintf(text, sizeof(text), "%s", markers[i].text);
+        for (c = text; *c; c++) {
+            if (*c == '\n') {
+                *c = '|';
+            }
+        }
+        fprintf(f, "%d kind %d flags %d at %d %d %d: %s\n", i, markers[i].kind, markers[i].flags, (int)markers[i].x,
+                (int)markers[i].y, (int)markers[i].z, text);
+    }
+    for (i = 0; i < w->spawn_count; i++) {
+        const EntitySpawnInfo *si = &t->spawns[i];
+
+        fprintf(f, "spawn %d chr %d type %d talk %d flags %08x can_appear %d deaths %d at %d %d %d\n", i, si->type_id,
+                spawn_params(si)->entity_type, si->talk_script_id, w->entity_flags[i],
+                spawn_flags_can_appear(w->entity_flags[i], si, t->tag, i), Game_GetSpawnDeathCount(t->tag, i),
+                (int)si->spawn_x, (int)si->spawn_y, (int)si->spawn_z);
+    }
+    for (i = 0; i < w->object_count; i++) {
+        if (w->object_state[i] & MAP_OBJECT_IN_USE) {
+            fprintf(f, "object %d state %08x\n", i, w->object_state[i]);
+        }
+    }
+    fclose(f);
+}
+
+/* What a browsed map is shown from besides its file: its objects', spawns' and fixed items' state as the player
+   would find them walking in now, and its records' (which the start script makes solid or not: command 150,
+   ScriptCmd_SetPropSolid; MapSetup_RunForMap) */
+static struct {
+    AutomapScriptWorld w;
+    MapTables t;
+    int slot;    /* the game's slot that holds the map, -1 none */
+    int visited; /* Game_IsMapVisited */
+    u32 entity_flags[0x80], object_state[0x200];
+    u8 item_placed[0x40], item_taken[0x40];
+    f32 item_position[0x40][3];
+} bw;
+
+/* the state of the browsed map in `f`: bw, and its records' (f->record_hidden, f->record_move) */
+static void browse_prepare(MapFile *f, int map) {
+    const MapSlotUnk08 *h = f->header;
+    int i;
+
+    bw.slot = browse_cold ? -1 : loaded_slot(map);
+    bw.visited = Game_IsMapVisited(map);
+    bw.t.tag = map;
+    bw.t.items = (const MapItemDef *)f->items;
+    bw.t.item_count = h->item_count < 0x40 ? h->item_count : 0x40;
+    bw.t.item_kinds = (const s16 *)f->item_kinds;
+    bw.t.spawns = (const EntitySpawnInfo *)f->spawns;
+    bw.t.spawn_count = h->spawn_count < 0x80 ? h->spawn_count : 0x80;
+    memset(&bw.w, 0, sizeof(bw.w));
+    memset(bw.item_placed, 0, sizeof(bw.item_placed));
+    memset(bw.w.spawn_by_id, 0xFF, sizeof(bw.w.spawn_by_id));
+    memset(bw.w.object_by_id, 0xFF, sizeof(bw.w.object_by_id));
+    memset(bw.w.item_by_id, 0xFF, sizeof(bw.w.item_by_id));
+    bw.w.script = f->script;
+    bw.w.script_end = f->end;
+    bw.w.map = map;
+    bw.w.entity_flags = bw.entity_flags;
+    bw.w.object_state = bw.object_state;
+    bw.w.item_placed = bw.item_placed;
+    bw.w.item_taken = bw.item_taken;
+    bw.w.item_position = bw.item_position;
+
+    /* the objects: MapObject_StartMap's state, or the live one */
+    bw.w.object_count = h->object_count < 0x200 ? h->object_count : 0x200;
+    for (i = 0; i < bw.w.object_count; i++) {
+        const MapObjectUnk08 *src = (const MapObjectUnk08 *)(f->objects + i * 0x80);
+        const MapObjectUnk04 *def = (const MapObjectUnk04 *)&map_object_defs[src->def_index * 0x80];
+        int id = src->spawn_flags.bytes[2], in_use, on = 0, emptied = 0;
+
+        if (id != 0 && bw.w.object_by_id[id] < 0) {
+            bw.w.object_by_id[id] = (s16)i;
+        }
+        if (bw.slot >= 0) {
+            bw.object_state[i] = (u32)map_slot_objects[bw.slot][i].state_flags;
+            continue;
+        }
+        in_use = !((src->spawn_flags.flags >> 49) & 1);
+        if (bw.visited) {
+            in_use = Game_GetObjectActive(map, i);
+            on = Game_GetObjectState(map, i);
+            emptied = Game_GetObjectFlag(map, i, 0);
+        } else if (def->kind == 8 || def->kind == 4 || def->kind == 0xD || def->kind == 0x10) {
+            on = ((const MapObjectUnk08Words *)src)->kind_param_7 != 0;
+        }
+        if (Game_GetTriggerItem(map, id)) {
+            on = 1;
+        }
+        bw.object_state[i] = (in_use ? MAP_OBJECT_IN_USE : 0) | (on ? MAP_OBJECT_ON : 0) | (emptied ? MAP_OBJECT_EMPTIED : 0);
+    }
+    /* the spawns: Entity_InitFromMapSpawns' flags (bit 7 unless the spawn's bits 59-60 are 2; 5 and 6), or the
+       live ones */
+    bw.w.spawn_count = bw.t.spawn_count;
+    for (i = 0; i < bw.w.spawn_count; i++) {
+        const EntitySpawnInfo *si = &bw.t.spawns[i];
+
+        bw.w.spawn_by_id[(si->spawn_flags >> 32) & 0xFF] = (s16)i;
+        if (bw.slot >= 0) {
+            bw.entity_flags[i] = (u32)entity_pool[bw.slot][i].flags;
+        } else {
+            bw.entity_flags[i] = ENTITY_FLAG_OWN_THINK | ENTITY_FLAG_HANDLER_RUNS |
+                              (((si->spawn_flags >> 59) & 3) == 2 ? 0 : ENTITY_FLAG_RESPAWNABLE);
+        }
+    }
+    /* the fixed items: those the map has a model for (MapItem_InitMap), not taken as often as they may be */
+    bw.w.item_count = bw.t.item_count;
+    for (i = 0; i < bw.w.item_count; i++) {
+        const MapItemDef *def = &bw.t.items[i];
+
+        bw.w.item_by_id[def->slot_id] = (s16)i;
+        bw.item_taken[i] = item_put_out(&bw.t, def->item) == 0 ||
+                        (def->required_flag != 0 && map_item_pickup_counts[map & 0x7F][i] >= def->required_flag);
+        bw.item_position[i][0] = def->position.x;
+        bw.item_position[i][1] = def->position.y;
+        bw.item_position[i][2] = def->position.z;
+    }
+    /* the records: solid or not (record_flags 0x40000000: map_triangles leaves them out), and where (a slot's
+       records are moved by the slot's offset, Map_OffsetRecords, and some by the story: map 029's lift) */
+    bw.w.record_count = h->record_count;
+    bw.w.record_hidden = f->record_hidden = calloc(h->record_count + 1, 1);
+    f->record_move = calloc(h->record_count + 1, sizeof(*f->record_move));
+    memset(bw.w.record_by_prop, 0xFF, sizeof(bw.w.record_by_prop));
+    for (i = 0; i < h->record_count && f->record_hidden != NULL && f->record_move != NULL; i++) {
+        const uint8_t *rec = f->records + i * 0x80;
+        int prop = rec[0x4E];
+
+        if (prop != 0 && bw.w.record_by_prop[prop] < 0) {
+            bw.w.record_by_prop[prop] = (s16)i;
+        }
+        f->record_hidden[i] = (file_u32(rec + 0x3C) & 0x40000000) != 0;
+        if (bw.slot >= 0) {
+            const char *live = map_slots[bw.slot].records;
+            int k;
+
+            f->record_hidden[i] = (((const MapRecordBounds *)(live + i * 0x80))->record_flags & 0x40000000) != 0;
+            for (k = 0; k < 3; k++) {
+                f->record_move[i][k] = (((const float *)(live + i * 0x80))[k] - file_f32(rec + 4 * k)) -
+                                       (((const float *)live)[k] - file_f32(f->records + 4 * k));
+            }
+        }
+    }
+    if (f->record_hidden == NULL || f->record_move == NULL) {
+        bw.w.record_count = 0;
+    }
+    if (bw.slot < 0) {
+        setup_for_map(&bw.w, f);
+    }
+    Automap_RunStartScript(&bw.w);
+
+}
+
+/* the markers of the browsed map in hand, from its file and bw */
+static void browse_markers(const MapFile *f, int map) {
+    int i;
+
+    marker_count = 0;
+    exit_markers();
+    for (i = 0; i < bw.w.object_count; i++) {
+        const MapObjectUnk08 *src = (const MapObjectUnk08 *)(f->objects + i * 0x80);
+        const MapObjectUnk04 *def = (const MapObjectUnk04 *)&map_object_defs[src->def_index * 0x80];
+        float leaf[4];
+        int has_leaf;
+
+        if (!(bw.object_state[i] & MAP_OBJECT_IN_USE)) {
+            continue;
+        }
+        has_leaf = is_door(def->kind) && file_door_leaf(f, src, leaf);
+        object_marker(&bw.t, i, def, src, bw.object_state[i], src->position.x, src->position.y, src->position.z,
+                      has_leaf ? leaf : NULL);
+    }
+    if (port_automap.items) {
+        if (bw.slot >= 0) {
+            /* the items lying in the bw.slot, moved back into the map's own frame (the bw.slot's records are moved by
+               the same offset: Map_OffsetRecords) */
+            const float *live = (const float *)map_slots[bw.slot].records;
+            float offset[3];
+
+            offset[0] = live[0] - file_f32(f->records + 0);
+            offset[1] = live[1] - file_f32(f->records + 4);
+            offset[2] = live[2] - file_f32(f->records + 8);
+            item_markers(bw.slot, offset);
+        } else {
+            /* MapItem_RollFixedItems: a roll per group against the map's threshold, one per item against its
+               chance; an item a script puts out is there whatever the rolls */
+            for (i = 0; i < bw.w.item_count; i++) {
+                const MapItemDef *def = &bw.t.items[i];
+                int threshold = f->thresholds[def->group & 15], chance = def->chance;
+                int percent = (threshold > 100 ? 100 : threshold) * (chance > 100 ? 100 : chance) / 100;
+                char note[96];
+
+                if (bw.item_taken[i] || (!bw.item_placed[i] && percent <= 0)) {
+                    continue;
+                }
+                note[0] = 0;
+                if (!bw.item_placed[i] && percent < 100) {
+                    snprintf(note, sizeof(note), "(there by chance as you walk in: %d%%)", percent);
+                }
+                item_marker(&bw.t, def->item, def, bw.item_position[i][0], bw.item_position[i][1], bw.item_position[i][2],
+                            note[0] ? note : NULL);
+                if (note[0] && marker_count > 0) {
+                    markers[marker_count - 1].flags |= PORT_AUTOMAP_MARK_MAYBE;
+                }
+            }
+            /* the items dropped in the map (MapItem_InitMap drops them again) */
+            for (i = 0; i < 16; i++) {
+                const DroppedItemRecord *r = &dropped_item_records[map & 0x7F][i];
+
+                if (r->used) {
+                    item_marker(&bw.t, r->item, NULL, r->position[0], r->position[1], r->position[2], NULL);
+                }
+            }
+        }
+    }
+    /* the people, by the flags their spawns would have as the player walks in; the enemies' places, faint */
+    for (i = 0; i < bw.w.spawn_count; i++) {
+        const EntitySpawnInfo *si = &bw.t.spawns[i];
+        const EntityParams *p = spawn_params(si);
+        int type = p->entity_type, record = si->type_id, later;
+        float x = si->spawn_x, y = si->spawn_y, z = si->spawn_z;
+        const char *hint = Automap_SpawnHint(map, i, record);
+        u32 flags = bw.entity_flags[i];
+        int there = spawn_flags_can_appear(flags, si, map, i) ||
+                    ((flags & ENTITY_FLAG_LIVE) && !(flags & ENTITY_FLAG_DYING_MASK));
+        PortAutomapMarker *m;
+        char line[128];
+
+        if ((type == 15 || type == 81) && si->talk_script_id != 0) {
+            later = !there;
+            if ((later && !port_automap.secrets) || (x == 0.0f && y == 0.0f && z == 0.0f) ||
+                (!later && !seen_near(x, y, z))) {
+                continue;
+            }
+            m = person_marker(i, si, p, x, y, z, later);
+        } else {
+            const char *creature;
+
+            /* the dead Expedition Soldiers lying as set dressing (entity_prop: chr 93, variants 1 and 2) */
+            if (!there || type == 15 || type == 81 || (record == 93 && (si->variant == 1 || si->variant == 2))) {
+                continue;
+            }
+            if (!port_automap.enemies && !(hint != NULL && port_automap.hints && seen_near(x, y, z))) {
+                continue;
+            }
+            m = new_marker(PORT_AUTOMAP_MARK_ENEMY, x, y, z);
+            if (m == NULL) {
+                return;
+            }
+            m->flags |= PORT_AUTOMAP_MARK_CHEAT | PORT_AUTOMAP_MARK_ABSENT;
+            creature = Automap_CreatureName(record);
+            if (creature != NULL) {
+                add_line(m->text, sizeof(m->text), creature);
+            } else {
+                snprintf(line, sizeof(line), "Creature (#%d)", record);
+                add_line(m->text, sizeof(m->text), line);
+            }
+            add_line(m->text, sizeof(m->text), "(where it comes into the world as you come near)");
+            if (port_automap.items && p->drop_item != 0xFFFF && p->drop_item != 0 && p->drop_chance > 0) {
+                char name[64];
+
+                item_name(p->drop_item, name, sizeof(name));
+                snprintf(line, sizeof(line), "May drop: %s (%d%%)", name, p->drop_chance);
+                add_line(m->text, sizeof(m->text), line);
+            }
+        }
+        if (m == NULL) {
+            break;
+        }
+        hint_line(m, hint);
+    }
+    dump_browsed(&bw.w, &bw.t, bw.slot, bw.visited);
+}
+
+/* sets the SSE unit's mode (MXCSR), returns the one it had */
+static uint32_t port_float_mode(uint32_t mode) {
+#if defined(__x86_64__) || defined(__i386__)
+    uint32_t saved = _mm_getcsr();
+
+    _mm_setcsr(mode);
+    return saved;
+#else
+    (void)mode;
+    return 0;
+#endif
+}
+
+/* the maps browsed, the last the one shown; none: the player's own */
+#define MAX_BROWSED 32
+typedef struct {
+    int map;
+    float x, y, z; /* where it is shown from: the way it was reached by, in its own frame */
+} BrowseStop;
+static BrowseStop browse_history[MAX_BROWSED];
+static int browse_depth;
+static PortAutomapPlayer browse_focus;
+
+
+/* builds the browsed map `stop` (into `browsed`): 0 when its file cannot be read */
+static int browse_build(const BrowseStop *stop) {
+    PlanSource source;
+    MapFile f;
+    const char *name;
+    uint32_t csr;
+
+    if (!map_file_read(stop->map, &f)) {
+        return 0;
+    }
+    /* the game's float arithmetic, as the player's map is built (the overlay draws in the host's): the same
+       plan, cell for cell, so that its explored state matches it (layout_hash) */
+    csr = port_float_mode(port_ee_mxcsr());
+    view_swap(&browsed);
+    browse_prepare(&f, stop->map);
+    source.slot = -1;
+    source.file = &f;
+    build_plan(&source, stop->map, stop->x, stop->z);
+    if (plan.map >= 0) {
+        find_exits((const char *)f.records, f.header->record_count, (const char *)f.origins);
+        scan_script(f.script, f.end);
+        browse_markers(&f, stop->map);
+    }
+    view_swap(&browsed);
+    port_float_mode(csr);
+    map_file_free(&f);
+    if (browsed.plan.map < 0) {
+        return 0;
+    }
+    memset(&browse_focus, 0, sizeof(browse_focus));
+    browse_focus.x = stop->x;
+    browse_focus.y = stop->y;
+    browse_focus.z = stop->z;
+    browse_focus.map = stop->map;
+    browse_focus.in_play = 1;
+    name = port_teleport_map_name(stop->map);
+    snprintf(browse_focus.title, sizeof(browse_focus.title), "%s", name[0] ? name : "Map");
+    port_event("automap: browsing map %03d (%d markers)", stop->map, browsed.marker_count);
+    return 1;
+}
+
+int port_automap_browse(int map, float x, float y, float z) {
+    BrowseStop stop;
+
+    if (!port_automap.enabled || plan.map < 0) {
+        return 0;
+    }
+    if (map == player.map) { /* the way back into the player's own map: home */
+        port_automap_browse_home();
+        return 1;
+    }
+    if (!port_automap.reveal && !map_explored(map)) {
+        return 0;
+    }
+    stop.map = map;
+    stop.x = x;
+    stop.y = y;
+    stop.z = z;
+    if (!browse_build(&stop)) {
+        return 0;
+    }
+    if (browse_depth == MAX_BROWSED) {
+        memmove(browse_history, browse_history + 1, sizeof(browse_history[0]) * (MAX_BROWSED - 1));
+        browse_depth--;
+    }
+    browse_history[browse_depth++] = stop;
+    return 1;
+}
+
+/* KF4_AUTOMAP_BROWSE's "self": the player's own map built as the browser builds a map in no slot, from its file,
+   the save's tables and its start script (the tables hold its state as the last save or quick save wrote them), to
+   check against the markers of the map he stands in */
+int port_automap_browse_self_test(void) {
+    BrowseStop stop;
+    int ok;
+
+    if (!port_automap.enabled || plan.map < 0) {
+        return 0;
+    }
+    stop.map = plan.map;
+    stop.x = player.x;
+    stop.y = player.y;
+    stop.z = player.z;
+    browse_cold = 1;
+    ok = browse_build(&stop);
+    browse_cold = 0;
+    if (ok && browse_depth < MAX_BROWSED) {
+        browse_history[browse_depth++] = stop;
+    }
+    return ok;
+}
+
+void port_automap_browse_back(void) {
+    while (browse_depth > 1) {
+        browse_depth--;
+        if (browse_build(&browse_history[browse_depth - 1])) {
+            return;
+        }
+    }
+    port_automap_browse_home();
+}
+
+void port_automap_browse_home(void) {
+    browse_depth = 0;
+}
+
+int port_automap_browsing(void) {
+    return port_automap.enabled && browse_depth > 0 && browsed.plan.map >= 0 ? browsed.plan.map : -1;
+}
+
+const PortAutomapPlan *port_automap_browse_plan(void) {
+    return port_automap_browsing() >= 0 ? &browsed.plan : NULL;
+}
+
+int port_automap_browse_markers(const PortAutomapMarker **list) {
+    *list = browsed.markers != NULL ? browsed.markers : browsed_markers;
+    return port_automap_browsing() >= 0 ? browsed.marker_count : 0;
+}
+
+void port_automap_browse_focus(PortAutomapPlayer *out) {
+    *out = browse_focus;
 }
 
 /* ---- The poll ------------------------------------------------------------------------------------- */

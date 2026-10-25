@@ -134,6 +134,9 @@ void port_automap_set_full_open(int open) {
     if (full_open && !open) {
         port_automap_save_live(0);
     }
+    if (!open) {
+        port_automap_browse_home(); /* closed, the map shows the player's own when it opens again */
+    }
     full_open = open;
 }
 

@@ -119,8 +119,11 @@ enum {
 #define PORT_AUTOMAP_MARK_CHEAT 4  /* shown through the fog only because of a cheat */
 #define PORT_AUTOMAP_MARK_HINT 8   /* has a hand-written hint (the hints cheat) */
 #define PORT_AUTOMAP_MARK_TRAPPED 16
-#define PORT_AUTOMAP_MARK_ABSENT 32 /* a person the story has not brought here now (the secrets cheat): drawn faint */
+#define PORT_AUTOMAP_MARK_ABSENT 32 /* a person the story has not brought here now (the secrets cheat), or on a
+                                       browsed map an enemy's place: drawn faint */
 #define PORT_AUTOMAP_MARK_GIVEN 64  /* an item out of sight that the story hands over (a script's pickup): drawn faint */
+#define PORT_AUTOMAP_MARK_BROWSE 128 /* a way into a map the full map can show (port_automap_browse): clicked, it does */
+#define PORT_AUTOMAP_MARK_MAYBE 256 /* on a browsed map: there only by a chance roll as the player walks in: drawn faint */
 
 typedef struct {
     int kind;
@@ -129,6 +132,8 @@ typedef struct {
     float angle;          /* a door: the way it spans, radians (0 along +x); others: unused */
     float length;         /* a door: its width; an exit: its strip's width along x */
     float depth;          /* an exit: its strip's depth along z */
+    int map;              /* an exit: the map it leads to */
+    float to[3];          /* an exit: its middle in that map's own frame (where the browser shows that map from) */
     char text[256];       /* the hover label: the first line is what it is, then a line each for more */
 } PortAutomapMarker;
 
@@ -143,6 +148,25 @@ typedef struct {
     char title[96]; /* the map's name */
 } PortAutomapPlayer;
 void port_automap_player(PortAutomapPlayer *out);
+
+/* ---- The map browser (game/automap.c): another map on the full map ---------------------------------
+   Clicking a way into another map (a PORT_AUTOMAP_MARK_EXIT marker with PORT_AUTOMAP_MARK_BROWSE) shows that map,
+   built from its file on the disc and the save's tables, read only; its ways are clickable in turn. The
+   browsed maps are a history: back returns to the one before (the last, to the player's own), home to the
+   player's own; closing the full map goes home. The minimap always shows the player's map. */
+/* shows `map` from the point x, y, z in its own frame (PortAutomapMarker.to): 1 when it is shown (the player's
+   own map goes home); 0 when it cannot be (not explored yet without the reveal cheat, or its file unread) */
+int port_automap_browse(int map, float x, float y, float z);
+void port_automap_browse_back(void);
+void port_automap_browse_home(void);
+/* the map browsed now, -1: the player's own is shown */
+int port_automap_browsing(void);
+const PortAutomapPlan *port_automap_browse_plan(void);
+int port_automap_browse_markers(const PortAutomapMarker **list);
+/* the browsed map as the full map shows it: x, y, z the point it is shown from (its slice's height), map, title */
+void port_automap_browse_focus(PortAutomapPlayer *out);
+/* (KF4_AUTOMAP_BROWSE's "self", for tests) the player's own map browsed as if it were loaded in no slot */
+int port_automap_browse_self_test(void);
 
 /* ---- The files: the fog of war, per save (port/platform/automap.c) ------------------------------
    The explored part of every map is kept in the data folder (automap/live.bin), and copied beside each
