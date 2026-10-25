@@ -139,6 +139,7 @@ static void open_backend(void *unused) {
             gsn_set_2d(port_options.native_2d);
             gsn_set_colour(port_options.native_colour);
             gsn_set_layer_z(port_options.native_layer_z);
+            gsn_set_shine_exact(port_options.native_shine_exact);
             gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
                                                                                         : GSN_NATIVE_DRAW_NATIVE);
             gsn_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
@@ -1025,6 +1026,15 @@ void port_gs_set_native_layer_z(int mode) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
         gsn_set_layer_z(mode);
+    }
+#endif
+}
+
+void port_gs_set_native_shine_exact(int exact) {
+    port_options.native_shine_exact = exact;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        gsn_set_shine_exact(exact);
     }
 #endif
 }

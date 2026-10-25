@@ -124,6 +124,10 @@ void gsn_set_colour(int mode);
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1
 void gsn_set_layer_z(int mode);
+/* --native-shine (--renderer modern): a skinned model's sphere-mapped shine blended in the shader (the ice
+   creatures on map 017) drawn whole (0, the default) or exact, in runs of triangles that do not overlap (1:
+   the GS's picture where a part folds over its own edge; docs/port/NATIVE_DRAW_P8.md, "The icy corridor") */
+void gsn_set_shine_exact(int exact);
 /* --native-draw-compare (docs/port/NATIVE_DRAW.md, gsn_native_draw.inc): which of the two the frame has
    for the draws the game makes natively it draws: the native draws (GSN_NATIVE_DRAW_NATIVE, the
    default; the PS2 path's packets queued for comparison between their marks are left out) or the PS2

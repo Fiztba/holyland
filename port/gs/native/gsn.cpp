@@ -450,6 +450,9 @@ bool sample_shading = false;
 // with a tolerance for the layers (GSN_LAYER_Z_TOLERANT: flush_batch, "Z and layers")
 volatile int layer_z_mode = GSN_LAYER_Z_PS2;
 
+// --native-shine (gsn_set_shine_exact): modern's shines blended in the shader drawn whole (0) or in runs (1)
+volatile int shine_exact = 0;
+
 // --native-colour (gsn_set_colour): the 32-bit colour targets at 8 bits a channel, as the GS has them
 // (GSN_COLOUR_EXACT), or 16 (GSN_COLOUR_HIGH: "--native-colour high" below). Changed at a vblank, as the
 // scale is.
@@ -8229,6 +8232,10 @@ extern "C" void gsn_set_cutout_aa(int mode) {
 
 extern "C" void gsn_set_layer_z(int mode) {
     layer_z_mode = mode == GSN_LAYER_Z_TOLERANT ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
+}
+
+extern "C" void gsn_set_shine_exact(int exact) {
+    shine_exact = exact ? 1 : 0;
 }
 
 extern "C" void gsn_set_native_draw(int mode) {
