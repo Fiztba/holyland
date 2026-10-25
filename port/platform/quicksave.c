@@ -519,6 +519,7 @@ void port_quick_placed(const PortQuickInfo *now) {
     port_event("quick loaded: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d%s", now->map_tag,
                now->position[0], now->position[1], now->position[2], now->rotation[1], now->rotation[0], now->hp,
                now->mp, exact ? " (as saved)" : near ? " (a step from where it was saved)" : " (not where it was saved)");
+    port_gs_interp_cut_reset();
     if (near) {
         set_message("loaded: map %02X, level %d, HP %d/%d", now->map_tag, now->level, now->hp, now->hp_max);
     } else {

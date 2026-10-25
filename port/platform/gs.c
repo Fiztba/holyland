@@ -59,10 +59,18 @@ static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the
    (port_gs_run_vsync): interp_allow of them a vblank (INTERP_ALL: no cut), one fewer each time it falls
    behind, one more after interp_rest vblanks; vblanks drawn with fewer and with none; the cuts */
 #define INTERP_ALL 16
+#define INTERP_REST_MAX 120 /* the longest wait for one more picture: 2 s (it was 8 s, at 60 that long after a load) */
+#define INTERP_LOAD_GRACE 120 /* vblanks after a quick load or teleport, and 30 after the overlay, not judged */
 static uint64_t interp_vblanks_left_out, interp_vblanks_fewer, interp_cuts, interp_rest = 30;
-static uint64_t interp_settle_until, interp_next_raise, interp_raised_at, interp_last_cut;
+static uint64_t interp_settle_until, interp_next_raise, interp_raised_at, interp_last_cut, interp_judge_from;
 static int interp_behind_run, interp_allow = INTERP_ALL;
 static volatile int interp_cut_now; /* (the counter: pictures between a vblank left out by the cut, now) */
+static volatile int interp_cut_reset_asked; /* (port_gs_interp_cut_reset: the game's thread) */
+
+/* After a quick load or teleport: no cut, and the load's falling behind not judged */
+void port_gs_interp_cut_reset(void) {
+    __atomic_store_n(&interp_cut_reset_asked, 1, __ATOMIC_RELEASE);
+}
 
 /* KF4_INTERP_CUT=0 (measure): no cut, every picture between drawn however far behind the native GS falls (the
    game's thread then waits for it): what a place can keep up */
@@ -1313,21 +1321,33 @@ void port_gs_run_vsync(void) {
                pictures between cost more than the thread has keeps the game's rate and as many pictures as fit,
                not a cliff to 60. Up to half a second to catch up after a cut; one more picture after interp_rest
                vblanks without one, and when that falls behind again within half a second, after twice as long
-               (up to 8 s). Seen in --stats and on the F3 counter ("CUT"). */
+               (up to 2 s). A quick load or teleport ends any cut, and falling behind is not judged for 2 s after
+               one, nor while the overlay is on screen (its pictures are shown from the game's thread) and half a
+               second after. Seen in --stats and on the F3 counter ("CUT"). */
             int between = 0, i;
 
             for (i = 0; i < interp_count; i++) {
                 between += interp_phases[i] > 0;
             }
+            if (__atomic_exchange_n(&interp_cut_reset_asked, 0, __ATOMIC_ACQ_REL)) {
+                interp_allow = INTERP_ALL;
+                interp_rest = 30;
+                interp_raised_at = 0;
+                interp_judge_from = request->vblank + INTERP_LOAD_GRACE;
+            }
+            if (port_overlay_visible() && interp_judge_from < request->vblank + 30) {
+                interp_judge_from = request->vblank + 30;
+            }
             if (interp_behind_run == 0) {
                 interp_settle_until = 0; /* (caught up since the last cut: the next fall behind is judged at once) */
             }
-            if (interp_behind_run >= 2 && request->vblank >= interp_settle_until && interp_allow > 0) {
+            if (interp_behind_run >= 2 && request->vblank >= interp_settle_until && request->vblank >= interp_judge_from &&
+                interp_allow > 0) {
                 interp_allow = (interp_allow < between ? interp_allow : between) - 1;
                 if (interp_allow < 0) {
                     interp_allow = 0;
                 }
-                if (interp_raised_at && request->vblank < interp_raised_at + 30 && interp_rest < 480) {
+                if (interp_raised_at && request->vblank < interp_raised_at + 30 && interp_rest < INTERP_REST_MAX) {
                     interp_rest *= 2;
                 }
                 interp_settle_until = request->vblank + 30; /* (to catch up before judging again: at most half a second) */

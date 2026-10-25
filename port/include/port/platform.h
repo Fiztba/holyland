@@ -371,6 +371,8 @@ typedef struct {
 } PortRendererDiff;
 extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
+/* --frame-rate: a quick load or teleport ends any cut of the pictures between (any thread) */
+void port_gs_interp_cut_reset(void);
 /* The native GS's scale (port_options.native_scale: 1 to 4, or 0 for auto), from the next vblank */
 void port_gs_set_native_scale(int scale);
 /* The scale the native GS draws at: port_options.native_scale, or for auto (0) the multiple of 448 lines
