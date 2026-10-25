@@ -5523,10 +5523,21 @@ struct PageImage {
     std::vector<uint32_t> pages;
     std::vector<uint8_t> bytes; // 8 KB a page, in pages' order
     bool rgb_only;              // a 24-bit upload: the pages' words' low three bytes only
+    uint64_t serial;            // (page_holders: which image this is, never one let go before)
 };
 std::unordered_map<uint64_t, std::shared_ptr<PageImage>> page_images;
 std::deque<uint64_t> page_image_order;
 size_t page_image_bytes;
+uint64_t page_image_serial;
+
+// Each page as write_page_image last left it: the same as the image's index-th page (its serial; 0: none), when
+// page_written had it at `written`. While nothing has written the page since, it still is, and the image asked
+// for again need not compare it.
+struct PageHolder {
+    uint64_t serial, written;
+    size_t index;
+};
+PageHolder page_holders[vram_pages];
 
 // --frame-rate's pictures between (port/platform/frame_interp.c) draw the game's frame again from its
 // packets, uploads and all: some 8 MB a frame, which went through the ring, were kept whole, hashed
@@ -5649,6 +5660,7 @@ void complete_upload(const uint8_t *data, size_t size) {
         auto image = std::make_shared<PageImage>();
         image->pages = pages;
         image->rgb_only = rgb_only;
+        image->serial = ++page_image_serial;
         image->bytes.resize(pages.size() * 8192);
         for (size_t i = 0; i < pages.size(); i++) {
             memcpy(image->bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
@@ -5681,6 +5693,11 @@ void write_page_image(const PageImage &image) {
         bool rgb_only = image.rgb_only;
         bool changed = false;
         for (size_t i = 0; i < pages.size(); i++) {
+            PageHolder &holder = page_holders[pages[i]];
+            if (holder.serial == image.serial && holder.index == i && holder.written == gs->page_written[pages[i]]) {
+                gsn_stats.upload_pages_held++;
+                continue;
+            }
             uint8_t *dst = gs->vram.data() + size_t(pages[i]) * 8192;
             const uint8_t *src = image.bytes.data() + i * 8192;
             if (rgb_only) {
@@ -5703,6 +5720,7 @@ void write_page_image(const PageImage &image) {
                 pages_written(pages[i], 1);
                 changed = true;
             }
+            holder = {image.serial, gs->page_written[pages[i]], i};
         }
         gsn_stats.uploads_skipped += !changed;
         gsn_stats.uploads_copied += changed;
@@ -5757,6 +5775,7 @@ void forget_uploads() {
     page_images.clear();
     page_image_order.clear();
     page_image_bytes = 0;
+    memset(page_holders, 0, sizeof(page_holders));
 }
 
 void begin_transfer(uint32_t dir) {

@@ -177,6 +177,11 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   a page still owed leaves it owed when every bit it reads was written since (`claim_texture`, `shadow_covers`:
   the MP drain's effect textures over the wobble's copy, a write-back a frame; `KF4_GSN_SHADOW_READS=0` to
   compare), and an upload of whole pages sets their mask whole without swizzling into it.
+- **An upload found again compares only the pages that may differ** (`write_page_image`, `page_holders`): each
+  page remembers the page image it was last made the same as, and `page_written`'s count then; while nothing
+  has written the page since, it is not compared again (`--stats`: "pages known unchanged"). So anything that
+  writes the CPU's VRAM must call `pages_written` for the pages whose bytes it changes, as the texture and CLUT
+  caches already need; a write without it would now also go unseen by an upload found again.
 - **The exact restore draws nothing into the frame** (`frame_interp.c`, `exact_kick`). After a vblank's pictures
   between, a buffer the next frame reads before it draws it (the scrolling textures, the reflection) is drawn
   again as the frame left it, by walking the frame once more (`port_interp_end_vblank`). What it would draw into
