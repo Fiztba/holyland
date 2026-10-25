@@ -1514,6 +1514,50 @@ boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seed
 `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures
 1800, 1820 and 1840 byte for byte.
 
+### The wand's passage: the map change's fade at 60-240 (branch `fix/wand-teleport`, from main fd3956b7)
+
+The owner, `--renderer modern` at 240 (settings of 10-25): standing on a Symbol of Passage, the menu, Item, Up x4 to the
+Green Wand, Cross: it teleports, but for about a second the screen is corrupt, then clean. The spot:
+`bugs1025/quick_wand` with `title.pad` and CIRCLE 500, CROSS 560, UP 620/640/660/680, CROSS 720 (`screen_fx_test.py`'s
+`wand`). The wand starts the map change (`MapChange_StartPassage`); `MapChange_RunToEnd` draws one frame and copies it
+to 0x2BC0 (`MapChange_CaptureFrame`, `GsDraw_CopyFrame`), then its own loop draws that copy in ten strips
+(`MapChange_FadeOutCapture`, vblanks 742-749 here), black, and the new map's fade in.
+
+**Which renderers:** all of them at 60-240, none at 30. Headless `--fast`: at 240 and 60 the fade's eight frames are
+garbage (the textures of the map, the HUD intact above them) in modern at the owner's settings, `--native-draw
+on,passes`, `--native-draw off` and paraLLEl-GS (`--renderer gs`); at 30 every renderer draws the last frame. So
+not the modern renderer nor native draw: the pictures between (`frame_interp.c`).
+
+**The cause** (`flat_copies`): a copy of the frame is made again in the pictures between only when the frame reads
+it after the copy (the wobble); the map change's is read by the frames after, so it was left "as the game's frame
+made it". But a picture between sends the frame's uploads again (`PORT_GS_REG_REPLAY_UPLOAD`, or the data), and this
+frame uploaded its textures through 0x2BC0-0x3D3F before the copy: after the vblank's pictures between, the copy's
+pages held those textures, and the fade drew them. Nothing restores them: the exact restore
+(`port_interp_end_vblank`) ran only for a buffer the frame reads before it draws it, and left every copy out.
+
+**The fix:** such a copy is `COPY_RESTORE` (not read after, over pages the frame uploaded or drew into before it,
+the frame not drawn into after it, so the frame at its end is what was copied). It sets `restore_copy`, so the exact
+restore runs after the pictures between (whether or not the frame before had 2D to pair); in it the frame's uploads go
+again in their order and then the copy, its BITBLTBUF source left at the game's frame (the restore draws nothing into
+the frame, and a copy made in it is only a `COPY_RESTORE`). A copy read after stays `COPY_BETWEEN`, made from the
+picture between's frame as before; one into a frame drawn after it (none in the game) stays as before. Cost: one exact
+restore at the map change ("1 frames drawn again" in `--stats`).
+
+**Checked** (before, the fade's frames at 240 showed rows of the map's textures over the screen; after, the room):
+- The fade's frames at 240 are the 30 run's byte for byte, vblanks 740-750: modern at the owner's settings, `--native-draw
+  off` (3x widescreen), paraLLEl-GS (1x); `--native-draw on,passes` at 240 and modern at 60 (3x) clean by eye; real time
+  (`KF4_PRESENT_SIM=240`, modern, the owner's settings) clean. (Vblank 739, a picture between of the still camera,
+  differs from 30's by 2 levels at 273 pixels, as before the fix.)
+- `screen_fx_test.py --cases wand --pictures --spots bugs1025`: before 8 of the fade's 10 game frames differ from 30's,
+  after 0 of 10; flash_find 0 of 18 flagged.
+- Byte for byte fd3956b7's: the four spots (`--fast`, 240, the owner's settings, every picture of vblanks 200-207, 301,
+  399; under water 400-407, 600: 156 pictures); the herb run in modern at the owner's settings (the same `--log`,
+  PATH1 hash 561c91020b2908ee with `--frames 1841`, pictures 1800, 1820, 1840 with every phase: 12). The off check
+  passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of
+  90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles
+  460424273 (`--frames 1841`: with 1881, both builds give 197d355532a43933 and 482017306), pictures 1800, 1820 and 1840
+  byte for byte.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
