@@ -14,6 +14,7 @@ draws instead when the native GS cannot start.
 | Path | What |
 |---|---|
 | `port/gs/native/gsn.cpp` | the native GS: the GIF front end, registers, primitives, render targets on the GPU, textures, blending, the scanout, save states, and its own thread (a ring of packets and vblanks) |
+| `port/gs/native/gsn_backend.inc` | the back end: every call the native GS makes into Vulkan, written into a stream by its thread (`Cmd`) and made through Granite on a thread of its own, which submits and hands the pictures to the presenter (below, "The back end") |
 | `port/gs/native/gsn_vram.c` | VRAM on the CPU in the GS's layout, every format's swizzle |
 | `port/gs/native/shaders/` | GLSL; `python tools/build_shaders.py --glslang PATH` writes the committed `gsn_shaders.h` (only needed when a shader changes) |
 | `port/gs/gs_parallel.cpp` | paraLLEl-GS behind the same C interface |
@@ -213,6 +214,34 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 - **Barriers are merged** (`full_barrier`): a full barrier right after another is left out, which
   `cmd()` tracks. Anything that records into the native GS's command buffer must go through `cmd()`,
   or a barrier it needs can be left out.
+- **The back end** (`gsn_backend.inc`, branch `p8/perf`). The GS's thread does not call Granite's command buffer:
+  every `Cmd` call is written into a stream (a `Recording` of every call, holding the images and buffers it names),
+  and the back end's thread makes the streams' calls in the order sent, submits (`OP_SUBMIT`), begins the next frame
+  context (`OP_NEXT_FRAME`), publishes the scanout (`OP_PUBLISH`) and hands it to the presenter (`OP_PRESENT`). A
+  picture between from the recording is one call (`OP_REPLAY`: the recording, shared, and the picture's buffers).
+  Granite's recording and the driver's work under it had been about half of the GS's thread (a replay nearly all of
+  it); at the owner's 170 Hz the thread could not keep up and the pictures between were cut to none (60 a second
+  shown). So: nothing on the GS's thread may call Granite's `CommandBuffer` (there is none: `Cmd::out()`); bytes
+  the GPU reads (vertex, constant and storage data, an image's update) go into the data chunks, the update's into
+  `upload_chunk` (Granite's staging was its command buffer's); a read-back is `submit(true)`, which waits for the
+  back end to submit it, then for the fence; anything that wants all the GPU's work (`ring_idle`) drains the back
+  end too. The back end has Granite's thread index 1 (its command pools, descriptor sets); the GS's thread keeps 0
+  for Granite's own staging. A stream is sent at each submit and every 4,096 calls; the GS's thread waits when six
+  are sent and not made, so that it is never pictures ahead of what is shown (the scanout slots it picks are
+  published later, in order) and the fallback that cuts pictures between sees the back end's lateness.
+  `KF4_GSN_BACKEND=0`, or a Vulkan context of one thread index (paraLLEl-GS's with `--renderer both`): no thread,
+  each stream made at once (the same calls in the same order). `--stats`: "native GS back end: N s playing".
+  On map 000 at the owner's settings (measured with `--renderer native`) the GS's thread went from about 56 ms a game frame to 36 (33 is the budget at
+  30 frames a second), a replay from 2.6 ms of it to about 1 us; the pictures are byte for byte the old build's on
+  maps 000 and 009, the thread on and off.
+- **Targets loaded before the render pass under way** (`load_target_rect`): an upload into a target that is not
+  the pass's, nor read by its draws so far, is made before the pass (`Cmd::before_pass`) instead of ending it.
+  The same pictures; it saves little GPU time. `--stats` counts them on the back end's line.
+- **Measuring the pace:** `tools/pace_test.py` plays `tests/newgame.pad` to a map at the owner's settings
+  headless and prints the pictures a second a window would show (`KF4_PRESENT_SIM`), the vblanks cut to fewer
+  pictures between, the GPU's time a picture, and (`--mode cost`) the GS's and the back end's threads' time a game
+  frame. `KF4_INTERP_CUT=0` turns the cut of pictures between off (what a place keeps up; the game slows where it
+  does not). A headless run draws only when it dumps a frame (`--dump-frames`): the script does.
 - **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
   of work, and `--stats` says why render passes ended and what resolves were for. Another program on
   the GPU (a second run of the game) shows up in those times: run alone. `KF4_GSN_GPU_TIME=2` also
@@ -307,6 +336,18 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   dynamic state in Granite would take out; re-submitting command buffers would take Granite's per-frame
   descriptors out of them. The first picture of each frame is still drawn from the packets (the frame's
   own draws decide for t 1 only).
+- **The pictures between's GPU cost** (measured October 2026, map 000, owner's settings, `KF4_GSN_GPU_TIME`,
+  `--fast`, every picture drawn; `--renderer native`, and `modern` the same within 3%: 3.07 ms a picture of the
+  frames', 22.9 ms a first picture between's): with the back end's thread (above) the GPU is the limit, 94-100% busy. A game
+  frame costs about 11 ms of GPU; at 60 Hz (one picture between a frame) 36 ms, at 120 Hz 54 ms. A picture between
+  has as many draws and render passes as the frame's own picture (11 passes; the runs of shader blending, ties and
+  layers are not the cause). The cost is `port_interp_end_vblank`: the frame reads its reflection before it draws
+  it (`flat_last->restore`, frame_interp.c), so after the pictures between, which drew the reflection from their
+  cameras, the whole frame is drawn again, exact, to put that buffer back: 571 of 767 frames. Without that the
+  first picture between costs 14.2 ms instead of 23.6 (60 Hz: about 25 ms a frame, which fits). The next step: the
+  native GS keeps the buffers the restore is for (a few MB of images) before the frame's pictures between and copies
+  them back after, the frame drawn again only where it cannot. Then the cut (`port_gs_run_vsync`, gs.c) counts
+  pictures between a vblank, so the least it keeps above none is two a game frame; one a game frame would fit.
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.

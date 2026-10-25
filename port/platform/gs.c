@@ -64,6 +64,17 @@ static uint64_t interp_settle_until, interp_next_raise, interp_raised_at, interp
 static int interp_behind_run, interp_allow = INTERP_ALL;
 static volatile int interp_cut_now; /* (the counter: pictures between a vblank left out by the cut, now) */
 
+/* KF4_INTERP_CUT=0 (measure): no cut, every picture between drawn however far behind the native GS falls (the
+   game's thread then waits for it): what a place can keep up */
+static int interp_cut_on(void) {
+    static int on = -1;
+
+    if (on < 0) {
+        on = getenv("KF4_INTERP_CUT") == NULL || atoi(getenv("KF4_INTERP_CUT")) != 0;
+    }
+    return on;
+}
+
 int port_interp_cut(void) {
     return __atomic_load_n(&interp_cut_now, __ATOMIC_RELAXED);
 }
@@ -1058,6 +1069,8 @@ void port_gs_print_stats(void) {
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
+        fprintf(stderr, "[stats] native GS back end: %.3f s playing the calls into Vulkan; %llu targets loaded before "
+                "the render pass under way (not ending it)\n", s->ns_backend / 1e9, (unsigned long long)s->loads_before_pass);
         if (interp_behind || interp_vblanks_fewer) {
             fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
                     "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
@@ -1290,7 +1303,8 @@ void port_gs_run_vsync(void) {
         }
         port_interp_reset(idle);
         interp_live = idle && port_interp_active();
-        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_native && gsn_backlog() > 1
+        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_native && interp_cut_on() &&
+                                    gsn_backlog() > 1
                                 ? interp_behind_run + 1
                                 : 0;
         {

@@ -46,6 +46,9 @@
 #include <sys/stat.h>
 #endif
 
+#ifdef __linux__
+#include <pthread.h>
+#endif
 #include "context.hpp"
 #include "device.hpp"
 #include "thread_id.hpp"
@@ -524,8 +527,7 @@ struct Why {
 // KF4_GSN_GPU_TIME=1: timestamps between the GPU's pieces of work, each interval added to a kind
 // (gpu_mark: the time since the mark before is the kind's), printed by --stats (gsn_print_gpu_times)
 int gpu_time = -1;
-QueryPoolHandle gpu_last;
-uint64_t gpu_cmd_serial, gpu_last_serial;
+uint64_t gpu_cmd_serial; // (command buffers begun: Cmd::out)
 // KF4_GSN_GPU_TIME=2 also splits the render passes' time by what is drawn in them (gpu_enter: the time from there to the
 // next mark is that kind's), in the pictures between's replays too (OP_GPU_MARK). Each mark waits for the GPU's work
 // before it, so the times add up to more than without them: read them as shares.
@@ -540,8 +542,10 @@ enum {
     GPU_SA_REFL, // (the same six into a named target: + GPU_SA_REFL - GPU_SA_DRAW)
     GPU_GS_BATCH = GPU_SA_REFL + 6, GPU_SA_OP, GPU_REFL_ZFIRST, GPU_SA_ZFIRST, GPU_SA_COPY_BETWEEN, GPU_REFL_COPY_BETWEEN, GPU_SA_ZFIRST_ATEST, GPU_REFL_ZFIRST_ATEST, GPU_KINDS
 };
-uint64_t gpu_marks[GPU_KINDS];
-uint64_t gpu_draws[GPU_KINDS], gpu_tris[GPU_KINDS]; // (KF4_GSN_GPU_TIME=2: the draws made in each kind's time, and their triangles)
+uint64_t gpu_marks[GPU_KINDS]; // (the back end's)
+// (KF4_GSN_GPU_TIME=2: the draws made in each kind's time, and their triangles; counted by both threads, the replays' by
+// the back end)
+std::atomic<uint64_t> gpu_draws[GPU_KINDS], gpu_tris[GPU_KINDS];
 int gpu_cur = -1; // (KF4_GSN_GPU_TIME=2: what is being drawn since the last mark)
 void gpu_mark(int kind);
 void gpu_enter(int kind);
@@ -557,10 +561,24 @@ enum OpKind : uint32_t {
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
     OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
+    // (the back end's only, gsn_backend.inc: a stream's calls that are not a recording's)
+    OP_NEW_CMD, OP_SUBMIT, OP_NEXT_FRAME, OP_PUBLISH, OP_PRESENT, OP_BLIT, OP_COPY_TO_BUFFER, OP_TIMESTAMP, OP_KICKS,
+    OP_REPLAY, OP_RECORDING_BINDS,
+};
+
+struct Recording;
+// A picture between made again from a recording (OP_REPLAY, gsn_backend.inc): the recording, the buffers its kicks'
+// passes read for this picture, and the targets' images as they are now in place of those it names
+struct ReplayJob {
+    std::shared_ptr<const Recording> recording;
+    BufferHandle picture, kicks, moves, resolved, corners, vertices;
+    uint32_t kick_count = 0;
+    std::vector<std::pair<const Image *, ImageHandle>> images;
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
-// images and buffers they name, held so they live as long as the recording
+// images and buffers they name, held so they live as long as the recording. The back end's streams
+// (gsn_backend.inc) are kept the same way: every call the native GS makes, until its thread has made it.
 struct Recording {
     bool on = false;
     bool ok = true; // nothing that cannot be made again (a read-back) was recorded
@@ -591,6 +609,7 @@ struct Recording {
     };
     std::vector<TargetImage> target_images;
     const Buffer *held_chunk[2] = {}; // (the data chunks held last: hold_chunk)
+    std::vector<ReplayJob> replays;   // (a stream's OP_REPLAY: its index here)
 
     void clear() {
         ops.clear();
@@ -599,7 +618,10 @@ struct Recording {
         buffers.clear();
         later.clear();
         target_images.clear();
+        replays.clear();
         held_chunk[0] = held_chunk[1] = nullptr;
+        kept_last = nullptr;
+        insert_at = SIZE_MAX;
         ok = true;
         draws = 0;
     }
@@ -615,9 +637,15 @@ struct Recording {
         uint32_t at = uint32_t((arena.size() + 7) & ~size_t(7));
         arena.resize(at + sizeof(T) + extra);
         memcpy(arena.data() + at, &args, sizeof(T));
-        ops.push_back({kind, at});
+        if (insert_at < ops.size()) {
+            ops.insert(ops.begin() + ptrdiff_t(insert_at++), {kind, at});
+        } else {
+            ops.push_back({kind, at});
+        }
         return at + uint32_t(sizeof(T));
     }
+    // (Cmd::before_pass: the calls go in at this place, before the render pass under way began)
+    size_t insert_at = SIZE_MAX;
     void hold(const Image &image) {
         Image &i = const_cast<Image &>(image);
         i.add_reference();
@@ -647,11 +675,24 @@ struct Recording {
         b.add_reference();
         buffers.push_back(BufferHandle(&b));
     }
+    // (a stream's: held, without a recording's note of which target an image is)
+    void keep(const Image &image) {
+        if (kept_last == &image) {
+            return;
+        }
+        kept_last = &image;
+        Image &i = const_cast<Image &>(image);
+        i.add_reference();
+        images.push_back(ImageHandle(&i));
+    }
+    const Image *kept_last = nullptr;
     template <class T> const T &args(const Op &op) const {
         return *reinterpret_cast<const T *>(arena.data() + op.at);
     }
 };
-Recording recording_ops;
+// (the recording under way or made last: shared with the back end's replays of it, which may still be making its calls
+// when the next is begun: interp_record makes a new one then)
+std::shared_ptr<Recording> recording_ops = std::make_shared<Recording>();
 
 struct ArgBarrier {
     VkPipelineStageFlags2 src_stage;
@@ -661,7 +702,7 @@ struct ArgBarrier {
 };
 struct ArgPass {
     RenderPassInfo info;
-    RenderPassInfo::Subpass subpasses[2];
+    RenderPassInfo::Subpass subpasses[4]; // (a recording keeps 2: Cmd::begin_render_pass)
 };
 struct ArgTexture {
     uint32_t set, binding;
@@ -722,9 +763,50 @@ struct ArgValues {
     uint32_t v[4];
     float f[4];
 };
+// (the back end's, gsn_backend.inc)
+// a submit the GS's thread waits for: done once the back end has submitted it, fence then the GPU's
+struct SubmitWait {
+    std::mutex lock;
+    std::condition_variable cv;
+    bool done = false;
+    Fence fence;
+};
+struct ArgSubmit {
+    SubmitWait *wait;
+};
+struct ArgPublish {
+    int slot;
+    uint64_t tag;
+};
+struct ArgBlit {
+    const Image *dst, *src;
+    VkOffset3D dst_offset, dst_extent, src_offset, src_extent;
+    VkFilter filter;
+};
+struct ArgCopyToBuffer {
+    const Buffer *dst;
+    const Image *src;
+    VkDeviceSize buffer_offset;
+    VkOffset3D offset;
+    VkExtent3D extent;
+    uint32_t row_length, slice_height;
+    VkImageSubresourceLayers sub;
+};
+struct ArgKicks { // (the buffers interp_kicks_pass reads; none when the frame has no kicks)
+    const Buffer *picture, *kicks, *moves, *resolved, *corners, *vertices;
+    uint32_t count;
+};
 
-void bind_replay_buffers(CommandBuffer &c); // (the pictures between's own: below)
-void interp_kicks_pass(CommandBuffer &c);    // (and their kicks moved to the picture's time)
+void interp_kicks_pass(CommandBuffer &c, const ArgKicks &a); // (the pictures between's kicks moved to their time: below)
+ArgKicks interp_kicks_now(Recording &s); // (the buffers it reads for the picture under way, held by s)
+Recording &backend_stream();               // (the stream the calls go into: gsn_backend.inc)
+void backend_send();                       // (the calls written so far, to the back end's thread)
+bool backend_stream_long();                // (a stream long enough to send before its submit)
+uint64_t backend_sends();                  // (streams sent so far: which stream a place in one is in)
+void backend_drain();                      // (everything sent, made)
+void backend_stop();                       // (at exit)
+void backend_start();                      // (gsn_open)
+void backend_wait(SubmitWait &w);          // (until a submit sent is made, and the GPU is done with it)
 
 // Bytes a texel of these formats takes (update_image's staging)
 uint32_t texel_bytes(VkFormat format) {
@@ -741,8 +823,8 @@ uint32_t texel_bytes(VkFormat format) {
 }
 
 // Whether the last thing recorded is a full barrier (full_barrier): another one right after it would
-// order nothing more. Anything recorded goes through cmd(), which clears it: whatever records into
-// gs->cmd some other way must clear it too.
+// order nothing more. Anything recorded goes through cmd(), which clears it: whatever writes into the
+// back end's stream some other way must clear it too.
 bool barrier_fresh = false;
 uint64_t pass_serial = 0; // (render passes begun: a draw's bindings last no longer than its pass, gsn_standalone.inc)
 
@@ -755,8 +837,12 @@ struct DataChunk {
     BufferHandle buffer;
     uint8_t *map = nullptr;
     VkDeviceSize used = 0, flushed = 0, size = 0;
+    BufferDomain domain = BufferDomain::LinkedDeviceHost;
 };
 DataChunk vertex_chunk, constant_chunk;
+// and the bytes of the images' updates (Cmd::update_image: Granite's staging was its command buffer's, which only the
+// back end's thread has), read once by a copy: in the host's memory
+DataChunk upload_chunk = {{}, nullptr, 0, 0, 0, BufferDomain::Host};
 struct DataPlace {
     const Buffer *buffer;
     VkDeviceSize offset;
@@ -811,19 +897,33 @@ uint64_t pipeline_binds() {
     return Vulkan::holyland_pipeline_binds.load(std::memory_order_relaxed);
 }
 
+// The calls into the command buffer go through Cmd, which writes each into the back end's stream (gsn_backend.inc:
+// its thread makes them through Granite, in order) and, while a picture between is recorded, keeps it too.
 class Cmd {
 public:
-    CommandBuffer &raw() {
-        if (!gs->cmd) {
-            gs->cmd = gs->device->request_command_buffer();
+    // The stream, with a command buffer begun on it: the first call after a submit begins one (OP_NEW_CMD), as
+    // Granite's request_command_buffer was at the first call
+    Recording &out() {
+        if (!pass_open && backend_stream_long()) {
+            backend_send(); // (between two calls, outside a render pass: before_pass needs its beginning here)
+        }
+        if (!cmd_open) {
+            cmd_open = true;
             gpu_cmd_serial++;
             forget_bindings();
-            DynamicState d = dynamic_state_choice();
-            gs->cmd->set_dynamic_state(d.ds, d.blend); // (kept through set_opaque_state: the command buffer's own)
+            backend_stream().add(OP_NEW_CMD, ArgValues{});
             gpu_mark(GPU_OTHER);
         }
         barrier_fresh = false;
-        return *gs->cmd;
+        return backend_stream();
+    }
+    // whether a command buffer is begun (calls made since the last submit)
+    bool begun() const {
+        return cmd_open;
+    }
+    // (submit: the stream's command buffer sent; the next call begins another)
+    void submitted() {
+        cmd_open = false;
     }
     // The storage buffers Granite has bound (their cookies), so that the same bound again is not: Granite writes the
     // set's descriptors again for any buffer bound, the same or not (native draw's arena and records, bound for each
@@ -835,15 +935,15 @@ public:
     }
     // (a barrier of its own: one memory barrier)
     void memory_barrier(const VkMemoryBarrier2 &b, VkDependencyFlags flags) {
+        struct {
+            VkMemoryBarrier2 b;
+            VkDependencyFlags flags;
+        } a = {b, flags};
+        a.b.pNext = nullptr;
         if (on()) {
-            struct {
-                VkMemoryBarrier2 b;
-                VkDependencyFlags flags;
-            } a = {b, flags};
-            a.b.pNext = nullptr;
             rec().add(OP_MEMORY_BARRIER, a);
         }
-        memory_barrier_raw(raw(), b, flags);
+        out().add(OP_MEMORY_BARRIER, a);
     }
     static void memory_barrier_raw(CommandBuffer &c, VkMemoryBarrier2 b, VkDependencyFlags flags) {
         VkDependencyInfo dep = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -860,35 +960,33 @@ public:
             }
             storage_bound[set][binding] = buffer.get_cookie();
         }
+        ArgBinding a = {set | binding << 8, &buffer, 0, 0, VK_VERTEX_INPUT_RATE_VERTEX};
         if (on()) {
             rec().hold(buffer);
-            rec().add(OP_STORAGE, ArgBinding{set | binding << 8, &buffer, 0, 0, VK_VERTEX_INPUT_RATE_VERTEX});
+            rec().add(OP_STORAGE, a);
         }
-        raw().set_storage_buffer(set, binding, buffer);
+        Recording &s = out();
+        s.hold(buffer);
+        s.add(OP_STORAGE, a);
     }
     void set_input_attachments(unsigned set, unsigned first) {
-        if (on()) {
-            rec().add(OP_INPUT_ATTACHMENTS, ArgValues{{set, first}, {}});
-        }
-        raw().set_input_attachments(set, first);
-    }
-    VkCommandBuffer get_command_buffer() {
-        return raw().get_command_buffer();
+        put(OP_INPUT_ATTACHMENTS, ArgValues{{set, first}, {}});
     }
     void barrier(VkPipelineStageFlags2 ss, VkAccessFlags2 sa, VkPipelineStageFlags2 ds, VkAccessFlags2 da) {
-        if (on()) {
-            rec().add(OP_BARRIER, ArgBarrier{ss, sa, ds, da});
-        }
-        raw().barrier(ss, sa, ds, da);
+        put(OP_BARRIER, ArgBarrier{ss, sa, ds, da});
     }
     void begin_render_pass(const RenderPassInfo &info) {
         pass_serial++;
+        ArgPass a;
+        a.info = info;
+        if (info.num_subpasses > 4) {
+            fprintf(stderr, "[gsn] a render pass of %u subpasses: more than the back end keeps\n", info.num_subpasses);
+            abort();
+        }
+        for (unsigned i = 0; i < info.num_subpasses; i++) {
+            a.subpasses[i] = info.subpasses[i];
+        }
         if (on()) {
-            ArgPass a;
-            a.info = info;
-            for (unsigned i = 0; i < info.num_subpasses && i < 2; i++) {
-                a.subpasses[i] = info.subpasses[i];
-            }
             if (info.num_subpasses > 2) {
                 rec().ok = false;
             }
@@ -900,23 +998,63 @@ public:
             }
             rec().add(OP_BEGIN_PASS, a);
         }
+        Recording &s = out();
+        for (unsigned i = 0; i < info.num_color_attachments; i++) {
+            s.keep(info.color_attachments[i]->get_image());
+        }
+        if (info.depth_stencil) {
+            s.keep(info.depth_stencil->get_image());
+        }
+        s.add(OP_BEGIN_PASS, a);
+        pass_open = true;
+        pass_stream = backend_sends();
+        pass_begin = s.ops.size() - 1;
+        pass_begin_rec = on() ? rec().ops.size() - 1 : SIZE_MAX;
+        pass_reads.clear();
         program_pending = false;
         forget_bindings();
-        raw().begin_render_pass(info);
     }
     void end_render_pass() {
-        if (on()) {
-            rec().add(OP_END_PASS, ArgValues{});
-        }
+        put(OP_END_PASS, ArgValues{});
+        pass_open = false;
         program_pending = false;
         forget_bindings();
-        raw().end_render_pass();
+    }
+    // Calls made before the render pass under way began, not after it ended: a transfer into an image no draw of the
+    // pass has read (load_target_rect: a target loaded from VRAM), which would otherwise end the pass, and with it
+    // store and load its attachments whole (at a scale, megabytes for a few texels). The calls between
+    // before_pass_begin and before_pass_end go in before its OP_BEGIN_PASS, in the stream and in a recording made.
+    bool before_pass_can(const Image *image, const Image *ms) const {
+        if (!pass_open || pass_stream != backend_sends() || (on() && pass_begin_rec >= rec().ops.size())) {
+            return false;
+        }
+        for (const Image *read : pass_reads) {
+            if (read == image || (ms && read == ms)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    void before_pass_begin() {
+        before_fresh = barrier_fresh;
+        barrier_fresh = false; // (what is before the pass's beginning is not known here)
+        backend_stream().insert_at = pass_begin;
+        if (on()) {
+            rec().insert_at = pass_begin_rec;
+        }
+    }
+    void before_pass_end() {
+        Recording &s = backend_stream();
+        pass_begin = s.insert_at;
+        s.insert_at = SIZE_MAX;
+        if (on()) {
+            pass_begin_rec = rec().insert_at;
+            rec().insert_at = SIZE_MAX;
+        }
+        barrier_fresh = before_fresh;
     }
     void set_opaque_state() {
-        if (on()) {
-            rec().add(OP_OPAQUE, ArgValues{});
-        }
-        raw().set_opaque_state();
+        put(OP_OPAQUE, ArgValues{});
     }
     // A program is set when a draw first needs it: one set and set over again before any draw (each batch of the
     // scene's sets the map's program, then its kind's: sa_draw_range) never reaches Granite, which makes a program
@@ -928,29 +1066,17 @@ public:
         program_pending = true;
     }
     void set_primitive_topology(VkPrimitiveTopology topology) {
-        if (on()) {
-            rec().add(OP_TOPOLOGY, ArgValues{{uint32_t(topology)}, {}});
-        }
-        raw().set_primitive_topology(topology);
+        put(OP_TOPOLOGY, ArgValues{{uint32_t(topology)}, {}});
     }
     void set_cull_mode(VkCullModeFlags mode) {
-        if (on()) {
-            rec().add(OP_CULL, ArgValues{{uint32_t(mode)}, {}});
-        }
-        raw().set_cull_mode(mode);
+        put(OP_CULL, ArgValues{{uint32_t(mode)}, {}});
     }
     void set_depth_test(bool test, bool write) {
-        if (on()) {
-            rec().add(OP_DEPTH_TEST, ArgValues{{test, write}, {}});
-        }
-        raw().set_depth_test(test, write);
+        put(OP_DEPTH_TEST, ArgValues{{test, write}, {}});
     }
     // the depth bounds test (Granite as cmake/granite_depth_bounds.cmake makes it): on with its bounds, or off
     void set_depth_bounds(bool on_, float lo, float hi) {
-        if (on()) {
-            rec().add(OP_DEPTH_BOUNDS, ArgValues{{uint32_t(on_)}, {lo, hi}});
-        }
-        depth_bounds_raw(raw(), on_, lo, hi);
+        put(OP_DEPTH_BOUNDS, ArgValues{{uint32_t(on_)}, {lo, hi}});
     }
     static void depth_bounds_raw(CommandBuffer &c, bool on_, float lo, float hi) {
         c.set_depth_bounds_test(on_);
@@ -961,10 +1087,7 @@ public:
     // the stencil test (standalone's shadows, gsn_standalone.inc): on with its compare, the op where it passes
     // (KEEP where it or the depth test fails), the reference and the write mask; or off
     void set_stencil(bool on_, VkCompareOp op, VkStencilOp pass, uint32_t ref, uint32_t write_mask) {
-        if (on()) {
-            rec().add(OP_STENCIL, ArgValues{{uint32_t(on_), uint32_t(op), uint32_t(pass), ref | write_mask << 8}, {}});
-        }
-        stencil_raw(raw(), on_, op, pass, ref | write_mask << 8);
+        put(OP_STENCIL, ArgValues{{uint32_t(on_), uint32_t(op), uint32_t(pass), ref | write_mask << 8}, {}});
     }
     static void stencil_raw(CommandBuffer &c, bool on_, VkCompareOp op, VkStencilOp pass, uint32_t ref_mask) {
         c.set_stencil_test(on_);
@@ -977,35 +1100,29 @@ public:
     // conservative rasterization (overestimated: every pixel a triangle touches, all its samples covered); pipeline
     // state, cleared by set_opaque_state
     void set_conservative(bool on_) {
-        if (on()) {
-            rec().add(OP_CONSERVATIVE, ArgValues{{uint32_t(on_)}, {}});
-        }
-        raw().set_conservative_rasterization(on_);
+        put(OP_CONSERVATIVE, ArgValues{{uint32_t(on_)}, {}});
     }
     void set_depth_compare(VkCompareOp op) {
-        if (on()) {
-            rec().add(OP_DEPTH_COMPARE, ArgValues{{uint32_t(op)}, {}});
-        }
-        raw().set_depth_compare(op);
+        put(OP_DEPTH_COMPARE, ArgValues{{uint32_t(op)}, {}});
     }
     void set_viewport(const VkViewport &vp) {
-        if (on()) {
-            rec().add(OP_VIEWPORT, vp);
-        }
-        raw().set_viewport(vp);
+        put(OP_VIEWPORT, vp);
     }
     void set_scissor(const VkRect2D &rect) {
-        if (on()) {
-            rec().add(OP_SCISSOR, rect);
-        }
-        raw().set_scissor(rect);
+        put(OP_SCISSOR, rect);
     }
     void set_texture(unsigned set, unsigned binding, const ImageView &view, StockSampler sampler) {
+        ArgTexture a = {set, binding, &view, sampler};
         if (on()) {
             rec().hold(view.get_image());
-            rec().add(OP_TEXTURE, ArgTexture{set, binding, &view, sampler});
+            rec().add(OP_TEXTURE, a);
         }
-        raw().set_texture(set, binding, view, sampler);
+        Recording &s = out();
+        s.keep(view.get_image());
+        s.add(OP_TEXTURE, a);
+        if (pass_open && (pass_reads.empty() || pass_reads.back() != &view.get_image())) {
+            pass_reads.push_back(&view.get_image());
+        }
     }
     template <class T> T *allocate_typed_constant_data(unsigned set, unsigned binding, unsigned count) {
         return static_cast<T *>(allocate_constant_data(set, binding, count * sizeof(T)));
@@ -1014,10 +1131,13 @@ public:
         VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
         DataPlace d = data_place(constant_chunk, range, ubo_align(),
                                  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 2u << 20);
-        raw().set_uniform_buffer(set, binding, *d.buffer, d.offset, range);
+        ArgPlaced a = {set, binding, uint32_t(size), d.buffer, d.offset};
+        Recording &s = out();
+        s.hold_chunk(*d.buffer);
+        s.add(OP_CONSTANT, a);
         if (on()) {
             rec().hold_chunk(*d.buffer);
-            uint32_t at = rec().add(OP_CONSTANT, ArgPlaced{set, binding, uint32_t(size), d.buffer, d.offset}, size_t(size));
+            uint32_t at = rec().add(OP_CONSTANT, a, size_t(size));
             rec().later.push_back({at, d.host, uint32_t(size)});
             return rec().arena.data() + at;
         }
@@ -1064,70 +1184,64 @@ public:
             storage_seen.entries.push_back({h, offset, std::vector<uint8_t>(bytes, bytes + size)});
         }
         VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+        ArgPlaced a = {set, binding, uint32_t(range), buffer, offset};
         if (on()) {
             rec().hold_chunk(*buffer);
-            rec().add(OP_STORAGE_DATA, ArgPlaced{set, binding, uint32_t(range), buffer, offset});
+            rec().add(OP_STORAGE_DATA, a);
         }
-        raw().set_storage_buffer(set, binding, *buffer, offset, range);
+        Recording &s = out();
+        s.hold_chunk(*buffer);
+        s.add(OP_STORAGE_DATA, a);
     }
     void set_blend_enable(bool enable) {
-        if (on()) {
-            rec().add(OP_BLEND_ENABLE, ArgValues{{enable}, {}});
-        }
-        raw().set_blend_enable(enable);
+        put(OP_BLEND_ENABLE, ArgValues{{enable}, {}});
     }
     void set_blend_constants(const float constants[4]) {
-        if (on()) {
-            rec().add(OP_BLEND_CONSTANTS, ArgValues{{}, {constants[0], constants[1], constants[2], constants[3]}});
-        }
-        raw().set_blend_constants(constants);
+        put(OP_BLEND_CONSTANTS, ArgValues{{}, {constants[0], constants[1], constants[2], constants[3]}});
     }
     void set_blend_factors(VkBlendFactor sc, VkBlendFactor sa, VkBlendFactor dc, VkBlendFactor da) {
-        if (on()) {
-            rec().add(OP_BLEND_FACTORS, ArgValues{{uint32_t(sc), uint32_t(sa), uint32_t(dc), uint32_t(da)}, {}});
-        }
-        raw().set_blend_factors(sc, sa, dc, da);
+        put(OP_BLEND_FACTORS, ArgValues{{uint32_t(sc), uint32_t(sa), uint32_t(dc), uint32_t(da)}, {}});
     }
     void set_blend_op(VkBlendOp colour, VkBlendOp alpha) {
-        if (on()) {
-            rec().add(OP_BLEND_OP, ArgValues{{uint32_t(colour), uint32_t(alpha)}, {}});
-        }
-        raw().set_blend_op(colour, alpha);
+        put(OP_BLEND_OP, ArgValues{{uint32_t(colour), uint32_t(alpha)}, {}});
     }
     void *allocate_vertex_data(unsigned binding, VkDeviceSize size, VkDeviceSize stride) {
         DataPlace d = data_place(vertex_chunk, size, 16, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 8u << 20);
-        raw().set_vertex_binding(binding, *d.buffer, d.offset, stride);
+        ArgPlaced a = {binding, uint32_t(stride), uint32_t(size), d.buffer, d.offset};
+        Recording &s = out();
+        s.hold_chunk(*d.buffer);
+        s.add(OP_VERTEX_DATA, a);
         if (on()) {
             rec().hold_chunk(*d.buffer);
-            rec().add(OP_VERTEX_DATA, ArgPlaced{binding, uint32_t(stride), uint32_t(size), d.buffer, d.offset});
+            rec().add(OP_VERTEX_DATA, a);
         }
         return d.host;
     }
     void set_vertex_binding(uint32_t binding, const Buffer &buffer, VkDeviceSize offset, VkDeviceSize stride) {
+        ArgBinding a = {binding, &buffer, offset, stride, VK_VERTEX_INPUT_RATE_VERTEX};
         if (on()) {
             rec().hold(buffer);
-            rec().add(OP_VERTEX_BINDING, ArgBinding{binding, &buffer, offset, stride, VK_VERTEX_INPUT_RATE_VERTEX});
+            rec().add(OP_VERTEX_BINDING, a);
         }
-        raw().set_vertex_binding(binding, buffer, offset, stride);
+        Recording &s = out();
+        s.hold(buffer);
+        s.add(OP_VERTEX_BINDING, a);
     }
     void set_vertex_attrib(uint32_t attrib, uint32_t binding, VkFormat format, VkDeviceSize offset) {
-        if (on()) {
-            rec().add(OP_VERTEX_ATTRIB, ArgAttrib{attrib, binding, format, offset});
-        }
-        raw().set_vertex_attrib(attrib, binding, format, offset);
+        put(OP_VERTEX_ATTRIB, ArgAttrib{attrib, binding, format, offset});
     }
     void set_color_write_mask(uint32_t mask) {
-        if (on()) {
-            rec().add(OP_WRITE_MASK, ArgValues{{mask}, {}});
-        }
-        raw().set_color_write_mask(mask);
+        put(OP_WRITE_MASK, ArgValues{{mask}, {}});
     }
     void push_constants(const void *data, VkDeviceSize offset, VkDeviceSize range) {
+        ArgData a = {uint32_t(offset), 0, 0, uint32_t(range)};
         if (on()) {
-            uint32_t at = rec().add(OP_PUSH, ArgData{uint32_t(offset), 0, 0, uint32_t(range)}, size_t(range));
+            uint32_t at = rec().add(OP_PUSH, a, size_t(range));
             memcpy(rec().arena.data() + at, data, size_t(range));
         }
-        raw().push_constants(data, offset, range);
+        Recording &s = out();
+        uint32_t at = s.add(OP_PUSH, a, size_t(range));
+        memcpy(s.arena.data() + at, data, size_t(range));
     }
     void draw(uint32_t count, uint32_t first = 0) {
         apply_program();
@@ -1139,39 +1253,53 @@ public:
             gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
             gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += count / 3;
         }
-        raw().draw(count, 1, first, 0);
+        out().add(OP_DRAW, ArgDraw{count, 1, first, 0});
     }
     void copy_image(const Image &dst, const Image &src, const VkOffset3D &dst_offset, const VkOffset3D &src_offset,
                     const VkExtent3D &extent, const VkImageSubresourceLayers &dst_sub, const VkImageSubresourceLayers &src_sub) {
+        ArgCopy a = {&dst, &src, dst_offset, src_offset, extent, dst_sub, src_sub};
         if (on()) {
             rec().hold(dst);
             rec().hold(src);
-            rec().add(OP_COPY_IMAGE, ArgCopy{&dst, &src, dst_offset, src_offset, extent, dst_sub, src_sub});
+            rec().add(OP_COPY_IMAGE, a);
         }
-        raw().copy_image(dst, src, dst_offset, src_offset, extent, dst_sub, src_sub);
+        Recording &s = out();
+        s.keep(dst);
+        s.keep(src);
+        s.add(OP_COPY_IMAGE, a);
     }
+    // Bytes for the image (Granite's update_image): the caller writes them at the place returned, in the upload chunk
+    // (or, while a picture between is recorded, in the recording, copied there at the next call)
     void *update_image(const Image &image, const VkOffset3D &offset, const VkExtent3D &extent, uint32_t row_length,
                        uint32_t image_height, const VkImageSubresourceLayers &sub) {
-        void *p = raw().update_image(image, offset, extent, row_length, image_height, sub);
+        uint32_t rl = row_length ? row_length : image.get_width(sub.mipLevel);
+        uint32_t ih = image_height ? image_height : image.get_height(sub.mipLevel);
+        uint32_t size = rl * ih * sub.layerCount * texel_bytes(image.get_format());
+        DataPlace d = data_place(upload_chunk, size, 16, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 8u << 20);
+        Recording &s = out();
+        s.keep(image);
+        s.hold_chunk(*d.buffer);
+        s.add(OP_UPDATE_IMAGE, ArgUpdate{&image, offset, extent, row_length, image_height, sub, size, d.buffer, d.offset});
         if (on()) {
-            uint32_t rl = row_length ? row_length : image.get_width(sub.mipLevel);
-            uint32_t ih = image_height ? image_height : image.get_height(sub.mipLevel);
-            uint32_t size = rl * ih * sub.layerCount * texel_bytes(image.get_format());
             rec().hold(image);
             uint32_t at = rec().add(OP_UPDATE_IMAGE,
                                     ArgUpdate{&image, offset, extent, row_length, image_height, sub, size, nullptr, 0}, size);
-            rec().later.push_back({at, p, size});
+            rec().later.push_back({at, d.host, size});
             return rec().arena.data() + at;
         }
-        return p;
+        return d.host;
     }
     void resolve_image(const Image &dst, const Image &src, const VkImageResolve &region) {
+        ArgResolve a = {&dst, &src, region};
         if (on()) {
             rec().hold(dst);
             rec().hold(src);
-            rec().add(OP_RESOLVE, ArgResolve{&dst, &src, region});
+            rec().add(OP_RESOLVE, a);
         }
-        resolve_raw(raw(), dst, src, region);
+        Recording &s = out();
+        s.keep(dst);
+        s.keep(src);
+        s.add(OP_RESOLVE, a);
     }
     static void resolve_raw(CommandBuffer &c, const Image &dst, const Image &src, const VkImageResolve &region) {
         gs->device->get_device_table().vkCmdResolveImage(c.get_command_buffer(), src.get_image(),
@@ -1183,7 +1311,9 @@ public:
             rec().hold(image);
             rec().add(OP_CLEAR_IMAGE, ArgClear{&image, value});
         }
-        raw().clear_image(image, value);
+        Recording &s = out();
+        s.keep(image);
+        s.add(OP_CLEAR_IMAGE, ArgClear{&image, value});
     }
     void copy_image_to_buffer(const Buffer &dst, const Image &src, VkDeviceSize buffer_offset, const VkOffset3D &offset,
                               const VkExtent3D &extent, unsigned row_length, unsigned slice_height,
@@ -1191,34 +1321,72 @@ public:
         if (on()) {
             rec().ok = false; // (a read-back: what it reads is the picture's, and the CPU's work after it too)
         }
-        raw().copy_image_to_buffer(dst, src, buffer_offset, offset, extent, row_length, slice_height, sub);
+        Recording &s = out();
+        s.hold(dst);
+        s.keep(src);
+        s.add(OP_COPY_TO_BUFFER, ArgCopyToBuffer{&dst, &src, buffer_offset, offset, extent, row_length, slice_height, sub});
+    }
+    // (not recorded: a picture's read-back of a target at a scale, read_image after it, is not one to make again)
+    void blit_image(const Image &dst, const Image &src, const VkOffset3D &dst_offset, const VkOffset3D &dst_extent,
+                    const VkOffset3D &src_offset, const VkOffset3D &src_extent, VkFilter filter) {
+        Recording &s = out();
+        s.keep(dst);
+        s.keep(src);
+        s.add(OP_BLIT, ArgBlit{&dst, &src, dst_offset, dst_extent, src_offset, src_extent, filter});
     }
     // (and each picture's kicks moved to its time: gs_replay.comp, before its draws)
     void interp_kicks() {
         if (on()) {
             rec().add(OP_INTERP_KICKS, ArgValues{});
         }
-        interp_kicks_pass(raw());
+        Recording &s = out();
+        ArgKicks a = interp_kicks_now(s);
+        s.add(OP_KICKS, a);
+        if (a.count) {
+            forget_bindings(); // (set 1 bound by the kicks' pass, past Cmd)
+        }
+    }
+    // A picture between made again from the recording (gsn_backend.inc's replay_ops): what it binds is not known here
+    void replay(ReplayJob &&job) {
+        Recording &s = out();
+        s.replays.push_back(std::move(job));
+        s.add(OP_REPLAY, ArgValues{{uint32_t(s.replays.size() - 1)}, {}});
+        forget_bindings();
     }
 
 private:
     uint64_t storage_bound[3][8] = {};
     Program *pending_program = nullptr;
     bool program_pending = false;
+    bool cmd_open = false;
+    // the render pass under way: its OP_BEGIN_PASS in the stream and in a recording made, and the images its draws
+    // have read (before_pass)
+    bool pass_open = false;
+    size_t pass_begin = SIZE_MAX, pass_begin_rec = SIZE_MAX;
+    uint64_t pass_stream = 0; // (backend_sends when it began: its beginning is in the stream being written)
+    std::vector<const Image *> pass_reads;
+    bool before_fresh = false;
     void apply_program() {
         if (program_pending) {
             program_pending = false;
             if (on()) {
                 rec().add(OP_PROGRAM, pending_program);
             }
-            raw().set_program(pending_program);
+            out().add(OP_PROGRAM, pending_program);
         }
     }
+    // a call with no images or buffers to hold, into the recording too while one is made
+    template <class T> void put(OpKind kind, const T &args) {
+        if (on()) {
+            rec().add(kind, args);
+        }
+        out().add(kind, args);
+    }
     static bool on() {
-        return recording_ops.on;
+        return recording_ops->on;
     }
     static Recording &rec() {
-        return recording_ops;
+        return *recording_ops;
     }
 };
 Cmd cmd_layer;
@@ -1327,238 +1495,9 @@ void finish_recording(Recording &r) {
     r.buffers.push_back(buffer);
 }
 
-// The recorded calls made again: the targets' images they name as the targets have them now
+// A picture between's recorded calls made again name the targets' images as the targets have them now (those that
+// differ: interp_cannot_replay; the back end's replay_ops)
 std::vector<std::pair<const Image *, const Image *>> replay_images;
-
-const Image &now_image(const Image *image) {
-    for (const auto &p : replay_images) {
-        if (p.first == image) {
-            return *p.second;
-        }
-    }
-    return *image;
-}
-
-const ImageView &now_view(const ImageView *view) {
-    const Image &image = view->get_image();
-    const Image &now = now_image(&image);
-    return &now == &image ? *view : now.get_view();
-}
-
-// The recorded calls made again into the command buffer
-void replay_ops(const Recording &r) {
-    CommandBuffer &c = cmd().raw();
-    // What the calls made again have bound (set, binding: buffer and offset), as Granite has it: a binding the same as
-    // the one there is not made again (Granite writes the set's descriptors again for any buffer bound, the same or
-    // not). Granite forgets its bindings at a render pass's beginning and end; the kicks' pass binds its own.
-    struct Bound {
-        uint64_t cookie;
-        VkDeviceSize offset;
-    };
-    Bound bound[3][8] = {};
-    auto forget = [&] { memset(bound, 0, sizeof(bound)); };
-    auto same = [&](uint32_t set, uint32_t binding, const Buffer *buffer, VkDeviceSize offset) {
-        if (set >= 3 || binding >= 8) {
-            return false;
-        }
-        Bound &b = bound[set][binding];
-        if (b.cookie == buffer->get_cookie() && b.offset == offset) {
-            return true;
-        }
-        b = {buffer->get_cookie(), offset};
-        return false;
-    };
-    cmd().forget_bindings(); // (bound here past Cmd)
-    for (const Recording::Op &op : r.ops) {
-        switch (op.kind) {
-        case OP_BARRIER: {
-            const ArgBarrier &a = r.args<ArgBarrier>(op);
-            c.barrier(a.src_stage, a.src_access, a.dst_stage, a.dst_access);
-            break;
-        }
-        case OP_BEGIN_PASS: {
-            ArgPass a = r.args<ArgPass>(op);
-            if (a.info.num_subpasses) {
-                a.info.subpasses = a.subpasses;
-            }
-            for (unsigned i = 0; i < a.info.num_color_attachments; i++) {
-                a.info.color_attachments[i] = &now_view(a.info.color_attachments[i]);
-            }
-            if (a.info.depth_stencil) {
-                a.info.depth_stencil = &now_view(a.info.depth_stencil);
-            }
-            c.begin_render_pass(a.info);
-            forget();
-            break;
-        }
-        case OP_END_PASS:
-            c.end_render_pass();
-            forget();
-            break;
-        case OP_OPAQUE:
-            c.set_opaque_state();
-            break;
-        case OP_PROGRAM:
-            c.set_program(r.args<Program *>(op));
-            break;
-        case OP_TOPOLOGY:
-            c.set_primitive_topology(VkPrimitiveTopology(r.args<ArgValues>(op).v[0]));
-            break;
-        case OP_CULL:
-            c.set_cull_mode(VkCullModeFlags(r.args<ArgValues>(op).v[0]));
-            break;
-        case OP_DEPTH_TEST:
-            c.set_depth_test(r.args<ArgValues>(op).v[0] != 0, r.args<ArgValues>(op).v[1] != 0);
-            break;
-        case OP_DEPTH_COMPARE:
-            c.set_depth_compare(VkCompareOp(r.args<ArgValues>(op).v[0]));
-            break;
-        case OP_DEPTH_BOUNDS:
-            Cmd::depth_bounds_raw(c, r.args<ArgValues>(op).v[0] != 0, r.args<ArgValues>(op).f[0], r.args<ArgValues>(op).f[1]);
-            break;
-        case OP_STENCIL:
-            Cmd::stencil_raw(c, r.args<ArgValues>(op).v[0] != 0, VkCompareOp(r.args<ArgValues>(op).v[1]),
-                             VkStencilOp(r.args<ArgValues>(op).v[2]), r.args<ArgValues>(op).v[3]);
-            break;
-        case OP_VIEWPORT:
-            c.set_viewport(r.args<VkViewport>(op));
-            break;
-        case OP_SCISSOR:
-            c.set_scissor(r.args<VkRect2D>(op));
-            break;
-        case OP_TEXTURE: {
-            const ArgTexture &a = r.args<ArgTexture>(op);
-            c.set_texture(a.set, a.binding, now_view(a.view), a.sampler);
-            break;
-        }
-        case OP_CONSTANT: {
-            const ArgPlaced &a = r.args<ArgPlaced>(op);
-            if (!same(a.a, a.b, a.buffer, a.offset)) {
-                c.set_uniform_buffer(a.a, a.b, *a.buffer, a.offset, (a.size + 15) & ~15u);
-            }
-            break;
-        }
-        case OP_BLEND_ENABLE:
-            c.set_blend_enable(r.args<ArgValues>(op).v[0] != 0);
-            break;
-        case OP_BLEND_CONSTANTS:
-            c.set_blend_constants(r.args<ArgValues>(op).f);
-            break;
-        case OP_BLEND_FACTORS: {
-            const ArgValues &a = r.args<ArgValues>(op);
-            c.set_blend_factors(VkBlendFactor(a.v[0]), VkBlendFactor(a.v[1]), VkBlendFactor(a.v[2]), VkBlendFactor(a.v[3]));
-            break;
-        }
-        case OP_BLEND_OP:
-            c.set_blend_op(VkBlendOp(r.args<ArgValues>(op).v[0]), VkBlendOp(r.args<ArgValues>(op).v[1]));
-            break;
-        case OP_VERTEX_DATA: {
-            const ArgPlaced &a = r.args<ArgPlaced>(op);
-            c.set_vertex_binding(a.a, *a.buffer, a.offset, a.b);
-            break;
-        }
-        case OP_VERTEX_BINDING: {
-            const ArgBinding &a = r.args<ArgBinding>(op);
-            c.set_vertex_binding(a.binding, *a.buffer, a.offset, a.stride, a.rate);
-            break;
-        }
-        case OP_VERTEX_ATTRIB: {
-            const ArgAttrib &a = r.args<ArgAttrib>(op);
-            c.set_vertex_attrib(a.attrib, a.binding, a.format, a.offset);
-            break;
-        }
-        case OP_WRITE_MASK:
-            c.set_color_write_mask(r.args<ArgValues>(op).v[0]);
-            break;
-        case OP_PUSH: {
-            const ArgData &a = r.args<ArgData>(op);
-            c.push_constants(r.arena.data() + op.at + sizeof(ArgData), a.a, a.size);
-            break;
-        }
-        case OP_DRAW: {
-            const ArgDraw &a = r.args<ArgDraw>(op);
-            if (gpu_time >= 2) {
-                gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
-                gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += a.count / 3;
-            }
-            c.draw(a.count, a.instances, a.first, a.first_instance);
-            break;
-        }
-        case OP_COPY_IMAGE: {
-            const ArgCopy &a = r.args<ArgCopy>(op);
-            c.copy_image(now_image(a.dst), now_image(a.src), a.dst_offset, a.src_offset, a.extent, a.dst_sub, a.src_sub);
-            break;
-        }
-        case OP_UPDATE_IMAGE: {
-            const ArgUpdate &a = r.args<ArgUpdate>(op);
-            if (a.from) {
-                // (a target's pixels from VRAM: the bytes recorded, already on the GPU)
-                c.copy_buffer_to_image(now_image(a.image), *a.from, a.from_offset, a.offset, a.extent, a.row_length,
-                                       a.image_height, a.sub);
-            }
-            // (else a texture decoded: its image is written once, and keeps it)
-            break;
-        }
-        case OP_RESOLVE: {
-            const ArgResolve &a = r.args<ArgResolve>(op);
-            Cmd::resolve_raw(c, now_image(a.dst), now_image(a.src), a.region);
-            break;
-        }
-        case OP_CLEAR_IMAGE: {
-            const ArgClear &a = r.args<ArgClear>(op);
-            c.clear_image(now_image(a.image), a.value);
-            break;
-        }
-        case OP_INTERP_KICKS:
-            interp_kicks_pass(c);
-            forget();
-            break;
-        case OP_MEMORY_BARRIER: {
-            struct A {
-                VkMemoryBarrier2 b;
-                VkDependencyFlags flags;
-            };
-            const A &a = r.args<A>(op);
-            Cmd::memory_barrier_raw(c, a.b, a.flags);
-            break;
-        }
-        case OP_INPUT_ATTACHMENTS:
-            c.set_input_attachments(r.args<ArgValues>(op).v[0], r.args<ArgValues>(op).v[1]);
-            break;
-        case OP_STORAGE: {
-            const ArgBinding &a = r.args<ArgBinding>(op);
-            if (!same(a.binding & 0xFF, a.binding >> 8, a.buffer, 0)) {
-                c.set_storage_buffer(a.binding & 0xFF, a.binding >> 8, *a.buffer);
-            }
-            break;
-        }
-        case OP_STORAGE_DATA: {
-            const ArgPlaced &a = r.args<ArgPlaced>(op);
-            if (!same(a.a, a.b, a.buffer, a.offset)) {
-                c.set_storage_buffer(a.a, a.b, *a.buffer, a.offset, a.size);
-            }
-            break;
-        }
-        case OP_CONSERVATIVE:
-            c.set_conservative_rasterization(r.args<ArgValues>(op).v[0] != 0);
-            break;
-        case OP_GPU_MARK: {
-            const ArgValues &a = r.args<ArgValues>(op);
-            bool was = recording_ops.on;
-            recording_ops.on = false;
-            if (a.v[1]) {
-                gpu_enter(int(a.v[0]));
-            } else {
-                gpu_mark(int(a.v[0]));
-            }
-            recording_ops.on = was;
-            break;
-        }
-        }
-    }
-    cmd().forget_bindings();
-
-}
 
 // Everything recorded so far (its writes) before everything after it: one barrier between two pieces
 // of work, however many of the steps between ask for one (the end of a render pass, a copy's before
@@ -1572,45 +1511,34 @@ void full_barrier() {
     barrier_fresh = true;
 }
 
+// (the GS's thread: the kind each interval ends with is worked out here, the timestamps written by the back end: OP_TIMESTAMP)
 void gpu_mark(int kind) {
     if (gpu_time < 0) {
         gpu_time = getenv("KF4_GSN_GPU_TIME") ? std::max(atoi(getenv("KF4_GSN_GPU_TIME")), 0) : 0;
     }
-    if (!gpu_time || !gs->cmd) {
+    if (!gpu_time || !cmd().begun()) {
         return;
     }
-    if (gpu_time >= 2 && recording_ops.on) {
-        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 0}, {}});
+    if (gpu_time >= 2 && recording_ops->on) {
+        recording_ops->add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 0}, {}});
     }
     if (gpu_time >= 2 && gpu_cur >= 0) {
         kind = gpu_cur;
         gpu_cur = -1;
     }
-    QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
-        gs->device->register_time_interval("gsn", gpu_last, ts, std::string("gsn ") + gpu_kinds[kind]);
-        gpu_marks[kind]++;
-    }
-    gpu_last = ts;
-    gpu_last_serial = gpu_cmd_serial;
+    backend_stream().add(OP_TIMESTAMP, ArgValues{{uint32_t(kind)}, {}});
 }
 
 // (KF4_GSN_GPU_TIME=2) the GPU's time from here to the next mark is `kind`'s; the time before it, what was entered last
 void gpu_enter(int kind) {
-    if (gpu_time < 2 || !gs->cmd) {
+    if (gpu_time < 2 || !cmd().begun()) {
         return;
     }
-    if (recording_ops.on) {
-        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 1}, {}});
+    if (recording_ops->on) {
+        recording_ops->add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 1}, {}});
     }
     int before = gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED;
-    QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
-        gs->device->register_time_interval("gsn", gpu_last, ts, std::string("gsn ") + gpu_kinds[before]);
-        gpu_marks[before]++;
-    }
-    gpu_last = ts;
-    gpu_last_serial = gpu_cmd_serial;
+    backend_stream().add(OP_TIMESTAMP, ArgValues{{uint32_t(before)}, {}});
     gpu_cur = kind;
 }
 
@@ -1637,7 +1565,7 @@ DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBuf
     if (!ch.buffer || at + size > ch.size) {
         data_flush(ch);
         BufferCreateInfo info = {};
-        info.domain = BufferDomain::LinkedDeviceHost;
+        info.domain = ch.domain;
         info.size = std::max(chunk_size, size);
         info.usage = usage;
         ch.buffer = gs->device->create_buffer(info, nullptr);
@@ -1651,7 +1579,7 @@ DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBuf
 
 // What the CPU wrote into the chunk since the last time, made the GPU's (before a submit)
 void data_flush(DataChunk &ch) {
-    recording_ops.settle(); // (a recording's constant data is copied in at its next call: before the flush)
+    recording_ops->settle(); // (a recording's constant data is copied in at its next call: before the flush)
     if (ch.buffer && ch.used > ch.flushed) {
         gs->device->unmap_host_buffer(*ch.buffer, MEMORY_ACCESS_WRITE_BIT, ch.flushed, ch.used - ch.flushed);
         ch.flushed = ch.used;
@@ -1674,14 +1602,14 @@ VkDeviceSize ssbo_align() {
     return align;
 }
 
-// Everything recorded so far, sent; with wait, finished too
+// Everything recorded so far, sent; with wait, finished too (the back end's thread submits it: OP_SUBMIT)
 void submit(bool wait) {
     {
         Why why(GSN_WHY_SUBMIT);
         end_pass();
     }
-    recording_ops.settle();
-    if (!gs->cmd) {
+    recording_ops->settle();
+    if (!cmd().begun()) {
         return;
     }
     // A submit in the middle of a picture between drawn on the GPU (a write-back or read-back while it
@@ -1692,7 +1620,7 @@ void submit(bool wait) {
     // already recorded ran with the corners' count of the picture before and the kicks not yet
     // written: pictures between with the HUD gone, the floor out of place, textures in wrong places
     // (a coin on the ground, map 000's HUD, October 2026).
-    bool mid_picture = interp.active && recording_ops.on && interp.kick_map && interp.corner_map;
+    bool mid_picture = interp.active && recording_ops->on && interp.kick_map && interp.corner_map;
     if (mid_picture) {
         uint32_t count[4] = {interp.corner, 0, 0, 0};
         memcpy(interp.corner_map[0], count, sizeof(count));
@@ -1701,14 +1629,14 @@ void submit(bool wait) {
     }
     data_flush(vertex_chunk);
     data_flush(constant_chunk);
+    data_flush(upload_chunk);
+    SubmitWait done;
+    backend_stream().add(OP_SUBMIT, ArgSubmit{wait ? &done : nullptr});
+    cmd().submitted();
+    backend_send();
     if (wait) {
-        Fence fence;
-        gs->device->submit(gs->cmd, &fence);
-        fence->wait();
-    } else {
-        gs->device->submit(gs->cmd);
+        backend_wait(done);
     }
-    gs->cmd.reset();
     if (mid_picture) {
         interp.kick_map = static_cast<InterpKick *>(gs->device->map_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT));
         interp.corner_map =
@@ -2242,9 +2170,8 @@ void write_back(Target &t) {
         }
         end_pass();
         transfer_barrier();
-        cmd().raw().blit_image(*small, *t.image, {0, 0, 0}, {int32_t(t.width), int32_t(rows), 1},
-                               {0, int32_t(row0 * sy), 0}, {int32_t(pw), int32_t(rows * sy), 1}, 0, 0, 0, 0, 1,
-                               VK_FILTER_NEAREST);
+        cmd().blit_image(*small, *t.image, {0, 0, 0}, {int32_t(t.width), int32_t(rows), 1}, {0, int32_t(row0 * sy), 0},
+                         {int32_t(pw), int32_t(rows * sy), 1}, VK_FILTER_NEAREST);
         pixels = read_image(*small, 0, 0, t.width, rows);
         sx = sy = 1;
         pw = t.width;
@@ -2313,8 +2240,17 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
         shadow_resolve(tlo, tcount);
     }
     Why why(GSN_WHY_UPLOAD);
-    msaa_settle(t); // (the rest of the image stays)
-    end_pass();
+    // (a target that is not the render pass's, nor read by its draws so far: loaded before the pass began, which
+    // goes on; Cmd::before_pass)
+    bool before = gs->in_pass && &t != gs->pass_color && &t != gs->pass_depth && !t.ms_newer &&
+                  cmd().before_pass_can(t.image.get(), t.ms.get());
+    if (before) {
+        cmd().before_pass_begin();
+        gsn_stats.loads_before_pass++;
+    } else {
+        msaa_settle(t); // (the rest of the image stays)
+        end_pass();
+    }
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     uint32_t sx = t.sx, sy = t.sy, pw = w * sx, ph = h * sy;
@@ -2346,6 +2282,9 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
         }
     }
     transfer_barrier();
+    if (before) {
+        cmd().before_pass_end();
+    }
     msaa_image_written(t);
     // the pages wholly inside the rectangle hold what VRAM does now
     if (t.dirty && regular(t)) {
@@ -6504,8 +6443,9 @@ struct ScanoutImage {
     std::mutex lock; // (the presenter takes the image on the game's thread)
     ScanoutSlot slots[SCANOUT_SLOTS];
     std::vector<ImageHandle> retired; // images replaced while the presenter had one: dropped once it lets go
-    int newest = -1;  // the slot published last
-    int writing = -1; // the slot being written (the GS's thread)
+    int newest = -1;  // the slot published last (by the back end's thread, once the picture's calls are submitted)
+    int writing = -1; // the slot written for the picture under way, not yet published (the GS's thread)
+    int written = -1; // the slot written last (the GS's thread: published, or to be, in that order)
     int taken = -1;   // the slot the presenter holds
     uint64_t serial = 0;
 };
@@ -6871,17 +6811,19 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     // while it releases the image (gsn_queue_lock, then gsn_scanout_release), comes before it)
     {
         std::lock_guard<std::mutex> hold(so.lock);
-        slot = (so.newest + 1) % SCANOUT_SLOTS;
+        // (after the slot written last, not the one published last: the back end may not have published it yet)
+        slot = (so.written + 1) % SCANOUT_SLOTS;
         if (slot == so.taken) {
             slot = (slot + 1) % SCANOUT_SLOTS;
         }
         so.writing = slot;
         so.slots[slot].serial = 0; // (not to be taken while it is written)
         fresh = !so.slots[slot].image || so.slots[slot].width != iw || so.slots[slot].height != ih;
-        if (so.newest >= 0 && so.slots[so.newest].image && so.slots[so.newest].width == iw &&
-            so.slots[so.newest].height == ih) {
-            before = so.slots[so.newest].image;
+        if (so.written >= 0 && so.slots[so.written].image && so.slots[so.written].width == iw &&
+            so.slots[so.written].height == ih) {
+            before = so.slots[so.written].image;
         }
+        so.written = slot;
     }
     ImageHandle made = fresh ? make_image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, 1, true) : ImageHandle();
     std::vector<ImageHandle> let_go;
@@ -6957,17 +6899,27 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     return ok;
 }
 
-// After the picture's commands went to the queue: the presenter may show it
-void scanout_published(uint64_t tag) {
+// After the picture's commands went to the queue: the presenter may show it (the back end's thread: OP_PUBLISH)
+void scanout_published(int slot, uint64_t tag) {
     ScanoutImage &so = scanout_image;
     std::lock_guard<std::mutex> hold(so.lock);
-    if (so.writing < 0) {
-        return;
+    so.slots[slot].serial = ++so.serial;
+    so.slots[slot].tag = tag;
+    so.newest = slot;
+}
+
+// The picture written under way, to be published once its calls are submitted (the GS's thread)
+void scanout_publish(uint64_t tag) {
+    ScanoutImage &so = scanout_image;
+    int slot;
+    {
+        std::lock_guard<std::mutex> hold(so.lock);
+        slot = so.writing;
+        so.writing = -1;
     }
-    so.slots[so.writing].serial = ++so.serial;
-    so.slots[so.writing].tag = tag;
-    so.newest = so.writing;
-    so.writing = -1;
+    if (slot >= 0) {
+        backend_stream().add(OP_PUBLISH, ArgPublish{slot, tag});
+    }
 }
 
 // ---- Pictures between on the GPU ----------------------------------------------------------------
@@ -7006,6 +6958,15 @@ struct InterpPictureMessage {
     InterpPictureHeader header;
 };
 
+// The recording emptied for the next, or a new one while the back end may still make the last one's calls again
+void recording_fresh() {
+    if (recording_ops.use_count() > 1) {
+        recording_ops = std::make_shared<Recording>();
+    } else {
+        recording_ops->clear();
+    }
+}
+
 void interp_free_frame() {
     if (interp.frame) {
         free(interp.frame->moves);
@@ -7025,37 +6986,57 @@ void interp_forget() {
     interp.vertices.reset();
     interp.picture.reset();
     interp.recorded = interp.tried = false;
-    recording_ops.clear();
+    recording_fresh();
 }
 
-void bind_replay_buffers(CommandBuffer &c) {
-    if (interp.picture && interp.kicks && interp.moves && interp.resolved && interp.corners && interp.vertices) {
-        c.set_storage_buffer(1, 0, *interp.picture);
-        c.set_storage_buffer(1, 1, *interp.kicks);
-        c.set_storage_buffer(1, 2, *interp.moves);
-        c.set_storage_buffer(1, 3, *interp.resolved);
-        c.set_storage_buffer(1, 4, *interp.corners);
-        c.set_storage_buffer(1, 5, *interp.vertices);
-    }
-}
-
-// The frame's kicks at the picture's time (gs_replay.comp), for its draws after
-void interp_kicks_pass(CommandBuffer &c) {
+// The buffers the kicks' pass reads for the picture under way (none when the frame has no kicks), held by the stream
+ArgKicks interp_kicks_now(Recording &s) {
+    ArgKicks a = {};
     if (!interp.frame || !interp.frame->kicks) {
+        return a;
+    }
+    a.count = interp.frame->kicks;
+    if (interp.picture && interp.kicks && interp.moves && interp.resolved && interp.corners && interp.vertices) {
+        for (const BufferHandle *h : {&interp.picture, &interp.kicks, &interp.moves, &interp.resolved, &interp.corners,
+                                      &interp.vertices}) {
+            s.hold(**h);
+        }
+        a.picture = interp.picture.get();
+        a.kicks = interp.kicks.get();
+        a.moves = interp.moves.get();
+        a.resolved = interp.resolved.get();
+        a.corners = interp.corners.get();
+        a.vertices = interp.vertices.get();
+    }
+    return a;
+}
+
+// The frame's kicks at the picture's time (gs_replay.comp), for its draws after (the back end's thread)
+void interp_kicks_pass(CommandBuffer &c, const ArgKicks &a) {
+    if (!a.count) {
         return;
     }
-    cmd().forget_bindings(); // (set 1 bound here past Cmd)
+    auto bind = [&] {
+        if (a.picture) {
+            c.set_storage_buffer(1, 0, *a.picture);
+            c.set_storage_buffer(1, 1, *a.kicks);
+            c.set_storage_buffer(1, 2, *a.moves);
+            c.set_storage_buffer(1, 3, *a.resolved);
+            c.set_storage_buffer(1, 4, *a.corners);
+            c.set_storage_buffer(1, 5, *a.vertices);
+        }
+    };
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     c.set_program(gs->program_replay_kicks);
-    bind_replay_buffers(c);
-    c.dispatch((interp.frame->kicks + 63) / 64, 1, 1);
+    bind();
+    c.dispatch((a.count + 63) / 64, 1, 1);
     c.barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     // (as many corners as the frame's kicks can make: the shader stops at the count the recording wrote)
     c.set_program(gs->program_replay_corners);
-    bind_replay_buffers(c);
-    c.dispatch((interp.frame->kicks * 3 + 5 + 63) / 64, 1, 1);
+    bind();
+    c.dispatch((a.count * 3 + 5 + 63) / 64, 1, 1);
     c.barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
 }
@@ -7198,9 +7179,9 @@ void interp_record() {
     end_pass(); // (the recording starts outside a render pass: its kicks moved first)
     interp.recorded_still = interp.still;
     interp_capture(interp.start);
-    recording_ops.clear();
-    recording_ops.on = true;
-    uint64_t binds0 = pipeline_binds();
+    recording_fresh();
+    recording_ops->on = true;
+    backend_stream().add(OP_RECORDING_BINDS, ArgValues{{0}, {}}); // (--stats: the pipelines its calls bind)
     cmd().forget_bindings();
     cmd().interp_kicks();
     interp.active = true;
@@ -7218,12 +7199,12 @@ void interp_record() {
         at += 8 + head[1];
     }
     flush_batch(); // (the last batch is the picture's)
-    gsn_stats.interp_record_binds += pipeline_binds() - binds0;
-    recording_ops.settle();
-    recording_ops.on = false;
+    backend_stream().add(OP_RECORDING_BINDS, ArgValues{{1}, {}});
+    recording_ops->settle();
+    recording_ops->on = false;
     cmd().forget_bindings();
     interp.active = false;
-    finish_recording(recording_ops);
+    finish_recording(*recording_ops);
     uint32_t count[4] = {interp.corner, 0, 0, 0}; // (the corners' count, before them)
     memcpy(interp.corner_map[0], count, sizeof(count));
     gs->device->unmap_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT);
@@ -7240,11 +7221,11 @@ void interp_record() {
     }
     interp_capture(interp.end);
     interp.end_regs.assign(gs->reg, gs->reg + 256);
-    interp.recorded = !interp.broken && recording_ops.ok && gs->field_scan_vblanks == field_scan;
+    interp.recorded = !interp.broken && recording_ops->ok && gs->field_scan_vblanks == field_scan;
     interp.tried = true;
     gsn_stats.interp_records++;
     GSN_LOG(2, "interp: %llu recorded, %llu batches moving drawn in runs, %zu calls\n",
-            (unsigned long long)gsn_stats.interp_records, (unsigned long long)interp.risky_runs, recording_ops.ops.size());
+            (unsigned long long)gsn_stats.interp_records, (unsigned long long)interp.risky_runs, recording_ops->ops.size());
 }
 
 // Why the recording cannot be made again for this picture (GsnStats' interp_rerecord): 0 it can; 1 the GS's targets are
@@ -7301,7 +7282,7 @@ int interp_cannot_replay() {
     // the targets' images the recording names, as those targets have them now
     replay_images.clear();
     bool own = false;
-    for (const Recording::TargetImage &ti : recording_ops.target_images) {
+    for (const Recording::TargetImage &ti : recording_ops->target_images) {
         Target *t = find_target(ti.bp, ti.bw, ti.psm);
         if (!t) {
             // A target the recording made and dropped (a scrolling texture's, made, grown up a page row
@@ -7352,12 +7333,24 @@ void interp_picture_now(const uint8_t *data, size_t size) {
     int why = interp_cannot_replay();
     if (why == 0) {
         Timer timer(gsn_stats.ns_interp_replay);
-        uint64_t binds0 = pipeline_binds();
-        replay_ops(recording_ops);
-        gsn_stats.interp_replay_binds += pipeline_binds() - binds0;
-        gsn_stats.interp_replay_draws += recording_ops.draws;
+        ReplayJob job;
+        job.recording = recording_ops;
+        job.picture = interp.picture;
+        job.kicks = interp.kicks;
+        job.moves = interp.moves;
+        job.resolved = interp.resolved;
+        job.corners = interp.corners;
+        job.vertices = interp.vertices;
+        job.kick_count = interp.frame->kicks;
+        for (const auto &p : replay_images) {
+            Image &now = const_cast<Image &>(*p.second);
+            now.add_reference();
+            job.images.push_back({p.first, ImageHandle(&now)});
+        }
+        cmd().replay(std::move(job));
+        gsn_stats.interp_replay_draws += recording_ops->draws;
         interp_restore(interp.end);
-        gsn_stats.draws += recording_ops.draws;
+        gsn_stats.draws += recording_ops->draws;
         gsn_stats.interp_replays++;
         return;
     }
@@ -7428,6 +7421,15 @@ void ring_work(const RingRecord &r, const uint8_t *data) {
     }
 }
 
+// The thread's name, for profilers and debuggers (Linux; elsewhere none)
+void name_thread(const char *name) {
+#ifdef __linux__
+    pthread_setname_np(pthread_self(), name);
+#else
+    (void)name;
+#endif
+}
+
 // ---- KF4_HITCH_MS=N (measure): a vblank whose work on this thread took over N ms, and what it was ----
 std::atomic<uint64_t> hitch_compiles{0}, hitch_compile_ns{0}; // (pipelines made by draws that waited: gsn_pipeline_warm.inc)
 struct Hitch {
@@ -7482,6 +7484,7 @@ void hitch_end(uint32_t type, bool vblank) {
 
 void ring_thread() {
     Util::register_thread_index(0); // (Granite's command pools: the sender's when it does the work)
+    name_thread("kf4-gs");
     Ring &q = *ring;
     for (;;) {
         if (q.stop.load()) {
@@ -7556,11 +7559,12 @@ void ring_wait(size_t room) {
     sender_wait([&] { return head - q.tail.load() <= ring_bytes - room || q.stopped.load(); });
 }
 
-// The sender: all that was sent, done
+// The sender: all that was sent, done (and the calls made by the back end: gsn_backend.inc)
 void ring_idle() {
     if (ring) {
         ring_wait(ring_bytes);
     }
+    backend_drain();
 }
 
 void ring_put(uint32_t type, int32_t arg, const void *data, size_t size, uint32_t want_pixels = 0) {
@@ -7607,6 +7611,7 @@ void ring_stop() {
     while (!q.stopped.load() && std::chrono::steady_clock::now() < until) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    backend_stop(); // (then the back end's: what the GS's thread sent last is made)
 }
 
 void ring_start() {
@@ -7691,7 +7696,7 @@ extern "C" int gsn_open(void *shared_context) {
             present_extensions(instance_ext, device_ext);
         }
         gs->context = new Context;
-        gs->context->set_num_thread_indices(1);
+        gs->context->set_num_thread_indices(2); // (the GS's thread's and the back end's)
         if (!gs->context->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()), device_ext.data(),
                                                    uint32_t(device_ext.size()), 0)) {
             delete gs->context;
@@ -7699,7 +7704,7 @@ extern "C" int gsn_open(void *shared_context) {
             if (!instance_ext.empty()) {
                 fprintf(stderr, "[gsn] no Vulkan device with a swapchain: the window is shown without one\n");
                 gs->context = new Context;
-                gs->context->set_num_thread_indices(1);
+                gs->context->set_num_thread_indices(2); // (the GS's thread's and the back end's)
                 if (!gs->context->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
                     delete gs->context;
                     gs->context = nullptr;
@@ -7732,6 +7737,7 @@ extern "C" int gsn_open(void *shared_context) {
     cmd().clear_image(*gs->dummy_rgba, {});
     transfer_barrier();
     submit(true);
+    backend_start();
     fprintf(stderr, "[gsn] the native GS on %s\n", gs->device->get_gpu_properties().deviceName);
     // --native-msaa's sample counts: colour and depth attachments' both, and depth read in a shader
     const VkPhysicalDeviceLimits &limits = gs->device->get_gpu_properties().limits;
@@ -7903,6 +7909,12 @@ void (*presenter)(const PortGsFrame *frame, uint64_t tag);
 void (*presenter_image)(uint64_t tag);
 PortGsFrame presented;
 
+// The window's picture (an image) handed over by the back end, once it has published it (OP_PRESENT)
+void present_image(uint64_t tag) {
+    backend_stream().add(OP_PRESENT, ArgPublish{-1, tag});
+    backend_send();
+}
+
 // A vblank's picture, or with GSN_EXTRA one more picture between two vblanks (gsn_picture): the same
 // scanout, without what belongs to the vblank (the field-at-a-time countdown, the deinterlace's history,
 // a new scale or MSAA, the pipeline cache); a picture that would be read a field at a time is not made.
@@ -8053,16 +8065,17 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     }
     gpu_mark(GPU_SCANOUT);
     submit(false);
-    gs->device->next_frame_context();
+    backend_stream().add(OP_NEXT_FRAME, ArgValues{});
     if (ok & GSN_WANT_IMAGE) {
-        scanout_published(tag);
+        scanout_publish(tag);
     }
+    backend_send();
     if (extra) {
         if (ok && (want_pixels & GSN_PRESENT)) {
             if (scaled_pixels && (ok & GSN_WANT_PIXELS) && presenter) {
                 presenter(frame, tag);
             } else if ((ok & GSN_WANT_IMAGE) && presenter_image && !scaled_pixels) {
-                presenter_image(tag);
+                present_image(tag);
             } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
                 presenter(frame, tag);
             }
@@ -8105,17 +8118,19 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     }
     if (ok && (want_pixels & GSN_PRESENT)) {
         // the window's picture, handed over now that it is there (an image: once its commands are on
-        // the queue, scanout_published above)
+        // the queue and it is published, by the back end: present_image)
         if (scaled_pixels && (ok & GSN_WANT_PIXELS) && presenter) {
             presenter(frame, tag);
         } else if ((ok & GSN_WANT_IMAGE) && presenter_image && !scaled_pixels) {
-            presenter_image(tag);
+            present_image(tag);
         } else if (!(want_pixels & GSN_WANT_IMAGE) && presenter) {
             presenter(frame, tag);
         }
     }
     return ok;
 }
+
+#include "gsn_backend.inc" // (the calls into Vulkan, made on a thread of their own)
 } // namespace
 
 extern "C" void gsn_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag), void (*image)(uint64_t tag)) {
