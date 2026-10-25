@@ -54,6 +54,13 @@ extern int map_spawn_counts[2];
 extern ItemNode *lying_items;
 extern GameDefinition item_name_defs[];
 extern u8 item_counts[];
+extern MapItemDef *map_item_defs[2];
+extern s32 map_fixed_item_counts[2];
+extern u8 map_item_pickup_counts[0x80][0x40];
+void *MapItem_FindModelSource(int slot, int key);
+int MapItem_UniqueNotCarried(int item);
+int MapItem_UniqueNotInTradeStock(int item);
+int MapItem_UniqueNotDropped(int item);
 extern GameStatus game_status;
 
 sptr Message_GetText(int message_id);
@@ -161,6 +168,29 @@ static void item_name(int item, char *out, size_t size) {
     if (out[0] == 0) {
         snprintf(out, size, "item %d", item);
     }
+}
+
+/* What MapItem_PutOutForObject does with the item a map object holds (MapObjectUnk08.kind_param_0) in this
+   map slot: 1 puts it out to be taken; 0 puts nothing out (not an item, or the map has no model for it:
+   MapItem_FindModelSource); below 0, not now, for an item of a kind the player may have only one of: -1 he
+   has it, -2 a shop has it in stock, -3 one lies dropped in a map (MapItem_UniqueNot*). */
+static int item_put_out(int slot, int item) {
+    if (item <= 0 || item >= ITEM_COUNT) {
+        return 0;
+    }
+    if (MapItem_FindModelSource(slot, item_name_defs[item].model_file_number) == NULL) {
+        return 0;
+    }
+    if (!MapItem_UniqueNotCarried(item)) {
+        return -1;
+    }
+    if (!MapItem_UniqueNotInTradeStock(item)) {
+        return -2;
+    }
+    if (!MapItem_UniqueNotDropped(item)) {
+        return -3;
+    }
+    return 1;
 }
 
 /* the person's name: the last line of their page of the Recollection screen (record 100 + p, messages
@@ -503,6 +533,8 @@ static void mark_far(void) {
 static void apply_stored(void);
 static void find_exits(int slot_index);
 static void scan_script(int slot_index);
+static int script_gift(int label, int depth);
+static int script_message(int label);
 
 static void build(int slot_index) {
     MapSlot *slot = &map_slots[slot_index];
@@ -941,15 +973,32 @@ static void lock_line(char *text, size_t size, int key) {
     add_line(text, size, line);
 }
 
-static void holds_line(char *text, size_t size, int item, int gold, int done) {
+/* the item of the map's fixed item with this id (MapItemDef.slot_id), or 0; *taken: it has been picked up as
+   often as it may be (MapItem_PlaceFixed: map_item_pickup_counts against MapItemDef.required_flag) */
+static int fixed_item(int slot, int id, int *taken) {
+    int k;
+
+    *taken = 0;
+    for (k = 0; id != 0 && map_item_defs[slot] != NULL && k < map_fixed_item_counts[slot] && k < 0x40; k++) {
+        const MapItemDef *def = &map_item_defs[slot][k];
+
+        if (def->slot_id == id) {
+            *taken = def->required_flag != 0 && map_item_pickup_counts[map_slots[slot].tag & 0x7F][k] >= def->required_flag;
+            return def->item;
+        }
+    }
+    return 0;
+}
+
+/* the contents line: the item (put_out from item_put_out: below 0, it stays where it is for now), else the gold,
+   else "Empty" */
+static void holds_line(char *text, size_t size, int item, int gold, int put_out) {
+    static const char *const stays[] = {"", " (stays: you have one)", " (stays: a shop has one)", " (stays: one lies dropped)"};
     char name[64], line[128];
 
-    if (done) {
-        return;
-    }
     if (item > 0) {
         item_name(item, name, sizeof(name));
-        snprintf(line, sizeof(line), "Holds: %s", name);
+        snprintf(line, sizeof(line), "Holds: %s%s", name, put_out < 0 && put_out >= -3 ? stays[-put_out] : "");
     } else if (gold > 0) {
         snprintf(line, sizeof(line), "Holds: %d gold", gold);
     } else {
@@ -995,6 +1044,53 @@ static int door_leaf(ModelInstance *model, float *x0, float *z0, float *x1, floa
     return best > 100.0f * 100.0f && best < 3000.0f * 3000.0f;
 }
 
+/* The contents of a chest, bones, a grave or a container, and the ring: `item` the item it puts out
+   (put_out from item_put_out; 0: none, or nothing the game would put out), else `gold`; and what its use
+   script hands over, a fixed item (command 101: the gravestone of the Icon of Healing on map 097, whose
+   kind_param_0, 1026, is the message that script shows, not an item), and (`say`) the message that script shows.
+   A use script (MapObjectUnk08.use_script) takes the player's press before the object's own update sees it
+   (Interact_FindTarget runs before MapObject_UpdateAll). Returns whether it holds something to take now. */
+static int contents(PortAutomapMarker *m, int slot, const MapObject *o, const char *name, int item, int put_out, int gold,
+                    int emptied, int say) {
+    int gift_taken, gift = fixed_item(slot, script_gift(o->source->use_script, 0), &gift_taken), gift_left = 0, said_id, holds;
+    char text[160], line[176];
+
+    said_id = script_message(o->source->use_script);
+    message_text(said_id, text, sizeof(text));
+    if (say && text[0] && strcmp(text, name) != 0) {
+        snprintf(line, sizeof(line), "\"%s\"", text);
+        add_line(m->text, sizeof(m->text), line);
+    }
+    holds = !emptied && (item != 0 ? put_out > 0 : gold > 0);
+    if (gift > 0) {
+        /* taken: the player has his one of it (or it is in a shop's stock or lies dropped somewhere). No ring:
+           the script gives it only when the story's flags say so (the smith's work in the Earth Folk's chests
+           of maps 017-019 once it is made; the Icon of Healing once, and it also lies on the grave) */
+        gift_left = !gift_taken && item_put_out(slot, gift) > 0;
+    }
+    m->flags |= holds ? PORT_AUTOMAP_MARK_HOLDS : 0;
+    if (!port_automap.items) {
+        return holds;
+    }
+    if (item != 0) {
+        holds_line(m->text, sizeof(m->text), item, 0, emptied ? 1 : put_out);
+        if (emptied) {
+            add_line(m->text, sizeof(m->text), "(taken)");
+        }
+    } else if (gold > 0 && !emptied) {
+        holds_line(m->text, sizeof(m->text), 0, gold, 0);
+    }
+    if (gift > 0) {
+        item_name(gift, text, sizeof(text));
+        snprintf(line, sizeof(line), "Gives (by its script): %s%s", text, gift_left ? "" : " (taken)");
+        add_line(m->text, sizeof(m->text), line);
+    }
+    if (item == 0 && (gold <= 0 || emptied) && gift <= 0 && !emptied) {
+        add_line(m->text, sizeof(m->text), "Empty");
+    }
+    return holds;
+}
+
 static void object_markers(int slot) {
     int count = map_object_counts[slot], i;
 
@@ -1004,7 +1100,7 @@ static void object_markers(int slot) {
         MapObjectUnk08 *src = o->source;
         const MapObjectUnk08Words *words;
         PortAutomapMarker *m;
-        int kind, mark, cheat = 0, done, emptied, name_id;
+        int kind, mark, cheat = 0, done, emptied, name_id, put_out;
         char name[64];
         const char *hint;
         float x, y, z;
@@ -1079,12 +1175,10 @@ static void object_markers(int slot) {
                 m->flags |= PORT_AUTOMAP_MARK_DONE;
                 add_line(m->text, sizeof(m->text), "(opened)");
             }
-            if (!emptied && (src->kind_param_0 != 0 || words->kind_param_2 > 0)) {
-                m->flags |= PORT_AUTOMAP_MARK_HOLDS;
-            }
-            if (port_automap.items) {
-                holds_line(m->text, sizeof(m->text), src->kind_param_0, words->kind_param_2, emptied);
-            }
+            /* MapObject_UpdateClosedChest: its item when it names one, else its gold */
+            put_out = src->kind_param_0 != 0 ? item_put_out(slot, src->kind_param_0) : 0;
+            contents(m, slot, o, name, put_out != 0 ? src->kind_param_0 : 0, put_out, src->kind_param_0 != 0 ? 0 : words->kind_param_2,
+                     emptied, 0);
             if (!done && words->kind_param_1 != 0 && port_automap.hints) {
                 lock_line(m->text, sizeof(m->text), words->kind_param_1);
             }
@@ -1092,16 +1186,14 @@ static void object_markers(int slot) {
         case PORT_AUTOMAP_MARK_REMAINS:
         case PORT_AUTOMAP_MARK_CONTAINER:
             add_line(m->text, sizeof(m->text), name[0] ? name : mark == PORT_AUTOMAP_MARK_CONTAINER ? "Container" : "Remains");
-            if (emptied || src->kind_param_0 == 0) {
+            /* The item it holds comes out when the player uses it (bones and graves, MapObject_UpdateItemHolder,
+               when no use script takes the press; a container only shows its name) or breaks it (definition flag
+               0x800, MapObject_UpdateBreakingItemHolder: the containers; no bones or grave can be broken). */
+            put_out = (mark == PORT_AUTOMAP_MARK_REMAINS && src->use_script == 0) || (MAP_OBJECT_DEF_WORD(o) & 0x800)
+                          ? item_put_out(slot, src->kind_param_0)
+                          : 0;
+            if (!contents(m, slot, o, name, put_out != 0 ? src->kind_param_0 : 0, put_out, 0, emptied, 1)) {
                 m->flags |= PORT_AUTOMAP_MARK_DONE;
-            } else {
-                m->flags |= PORT_AUTOMAP_MARK_HOLDS;
-            }
-            if (port_automap.items) {
-                holds_line(m->text, sizeof(m->text), src->kind_param_0, 0, 0);
-                if (emptied && src->kind_param_0 != 0) {
-                    add_line(m->text, sizeof(m->text), "(taken)");
-                }
             }
             break;
         case PORT_AUTOMAP_MARK_SAVE:
@@ -1302,13 +1394,14 @@ typedef struct {
 
 static ScriptLink script_runs[MAX_SCRIPT_RUNS];
 static ScriptLink script_gifts[MAX_SCRIPT_GIFTS];
-static int script_run_count, script_gift_count;
+static ScriptLink script_messages[MAX_SCRIPT_RUNS]; /* target: the first message a script puts up (command 233) */
+static int script_run_count, script_gift_count, script_message_count;
 
 static void scan_script(int slot_index) {
     const u32 *cursor = (const u32 *)map_slots[slot_index].script;
     int label = -1, words;
 
-    script_run_count = script_gift_count = 0;
+    script_run_count = script_gift_count = script_message_count = 0;
     if (cursor == NULL) {
         return;
     }
@@ -1342,6 +1435,10 @@ static void scan_script(int slot_index) {
                 } else if ((word >> 16) == 101 && script_gift_count < MAX_SCRIPT_GIFTS) {
                     script_gifts[script_gift_count].label = (u16)label;
                     script_gifts[script_gift_count++].target = (u16)cursor[1];
+                } else if ((word >> 16) == 233 && script_message_count < MAX_SCRIPT_RUNS &&
+                           (script_message_count == 0 || script_messages[script_message_count - 1].label != label)) {
+                    script_messages[script_message_count].label = (u16)label;
+                    script_messages[script_message_count++].target = (u16)cursor[1];
                 }
             }
             cursor += operand * 2;
@@ -1394,6 +1491,40 @@ static int script_gives(int label, int id, int depth) {
     for (k = 0; k < script_run_count; k++) {
         if (script_runs[k].label == label && script_runs[k].target != label && script_gives(script_runs[k].target, id, depth + 1)) {
             return 1;
+        }
+    }
+    return 0;
+}
+
+/* the fixed item the script `label` hands over (command 101), itself or through the scripts it runs: its id
+   (MapItemDef.slot_id), or 0 */
+static int script_gift(int label, int depth) {
+    int k, id;
+
+    if (label == 0 || depth > 6) {
+        return 0;
+    }
+    for (k = 0; k < script_gift_count; k++) {
+        if (script_gifts[k].label == label) {
+            return script_gifts[k].target;
+        }
+    }
+    for (k = 0; k < script_run_count; k++) {
+        if (script_runs[k].label == label && script_runs[k].target != label &&
+            (id = script_gift(script_runs[k].target, depth + 1)) != 0) {
+            return id;
+        }
+    }
+    return 0;
+}
+
+/* the first message the script `label` itself puts up (command 233, ScriptCmd_ShowNotice), or 0 */
+static int script_message(int label) {
+    int k;
+
+    for (k = 0; label != 0 && k < script_message_count; k++) {
+        if (script_messages[k].label == label) {
+            return script_messages[k].target;
         }
     }
     return 0;
@@ -1627,6 +1758,75 @@ static void build_markers(int slot) {
     entity_markers(slot);
 }
 
+/* the words of the script `label` of the current map's script, for the dump: each command with its first
+   argument (a constant) */
+static void dump_script(FILE *f, int label) {
+    const u32 *cursor = (const u32 *)map_slots[current_map_slot & 1].script;
+    int in = 0, words;
+
+    if (cursor == NULL || label == 0) {
+        return;
+    }
+    fprintf(f, "  script %d:", label);
+    for (words = 0; words < 0x40000; words++) {
+        u32 word = *cursor;
+        int operand = word & 0xFFFF;
+
+        cursor++;
+        switch (word >> 16) {
+        case SCRIPT_WORD_LABEL:
+            if (in || operand == SCRIPT_LABEL_END) {
+                fprintf(f, "\n");
+                return;
+            }
+            in = operand == label;
+            break;
+        case SCRIPT_WORD_END: if (in) fprintf(f, " end"); break;
+        case SCRIPT_WORD_BEGIN_NO_WAIT:
+        case SCRIPT_WORD_END_NO_WAIT:
+        case SCRIPT_WORD_JUMP: break;
+        case SCRIPT_WORD_IF:
+            if (in) {
+                int k;
+
+                fprintf(f, " if(");
+                for (k = 0; k < (operand >> 8) * 5 + 1; k++) {
+                    fprintf(f, "%s%x", k ? " " : "", cursor[k]);
+                }
+                fprintf(f, ")");
+            }
+            cursor += (operand >> 8) * 5 + 1;
+            break;
+        case SCRIPT_WORD_SET:
+            if (in) {
+                int k;
+
+                fprintf(f, " set(");
+                for (k = 0; k < operand; k++) {
+                    fprintf(f, "%s%x", k ? " " : "", cursor[k]);
+                }
+                fprintf(f, ")");
+            }
+            cursor += operand;
+            break;
+        case SCRIPT_WORD_HALT: cursor += operand + 1; break;
+        default:
+            if (in) {
+                int k;
+
+                fprintf(f, " cmd%d(", word >> 16);
+                for (k = 0; k < operand; k++) {
+                    fprintf(f, "%s%x:%d", k ? " " : "", cursor[2 * k] & 0xFF, (int)cursor[2 * k + 1]);
+                }
+                fprintf(f, ")");
+            }
+            cursor += operand * 2;
+            break;
+        }
+    }
+    fprintf(f, "\n");
+}
+
 /* KF4_AUTOMAP_DUMP=DIR: a while after each map is built, its markers' labels into DIR/automap_NNN.txt (for
    checking the names and the hints without a window) */
 static void dump_markers(int slot) {
@@ -1667,6 +1867,22 @@ static void dump_markers(int slot) {
                 e->spawn_info->type_id, e->params->entity_type, e->spawn_info->talk_script_id, (u32)e->flags,
                 entity_live(e), spawn_can_appear(slot, i, e), Game_GetSpawnDeathCount(map_slots[slot].tag, i),
                 (int)e->spawn_info->spawn_x, (int)e->spawn_info->spawn_y, (int)e->spawn_info->spawn_z);
+    }
+    /* and every map object in use, with its scripts and parameters */
+    for (i = 0; i < map_object_counts[slot]; i++) {
+        const MapObject *o = &map_slot_objects[slot][i];
+        const MapObjectUnk08Words *w;
+
+        if (o->definition == NULL || o->source == NULL || !(o->state_flags & MAP_OBJECT_IN_USE)) {
+            continue;
+        }
+        w = (const MapObjectUnk08Words *)o->source;
+        fprintf(f, "object %d kind %d state %08x def %08x name %d use_script %d item_use_script %d break_script %d params %d %d %d %d put_out %d\n",
+                i, o->definition->kind, (u32)o->state_flags, MAP_OBJECT_DEF_WORD(o), (s16)(o->definition->definition_flags & 0xFFFF),
+                o->source->use_script, o->source->item_use_script, o->source->break_script, w->kind_param_0, w->kind_param_1,
+                w->kind_param_2, w->kind_param_3, item_put_out(slot, w->kind_param_0));
+        dump_script(f, o->source->use_script);
+        dump_script(f, o->source->item_use_script);
     }
     for (i = 0; i < script_gift_count; i++) {
         fprintf(f, "script %d gives item id %d\n", script_gifts[i].label, script_gifts[i].target);

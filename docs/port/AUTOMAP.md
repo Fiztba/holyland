@@ -108,6 +108,19 @@ loads: its cells count as seen at every height.
   ladders (15), switches (7, 8, 30), save points (20, with the area's name), and with the secrets cheat
   shooters and pitfalls (16, 18) and fading objects (31). Names are the game's own (the definition's
   message, `Message_GetText`; items from `item_name_defs`).
+- **What they hold** (the items cheat), only what the game will hand over: the item comes out of bones and
+  graves when used (`MapObject_UpdateItemHolder`), of containers when broken (definition flag 0x800), of
+  chests when opened, through `MapItem_PutOutForObject`, which puts out nothing for a number that is not an
+  item or one the map has no model for, and nothing for now for an item of a kind the player may have only
+  one of while he has it, a shop has it in stock or one lies dropped ("stays: ..."). An object with a use
+  script (`MapObjectUnk08.use_script`) runs it instead when used (`Interact_FindTarget` takes the press
+  before the objects' updates), so its `kind_param_0` can be anything: the gravestone on map 097 holds
+  1026, the message its script shows. What such a script gives (command 101, a fixed item) is shown as
+  "Gives (by its script)", taken once picked up as often as it may be (`map_item_pickup_counts`), without
+  the ring (the story's flags decide when): the Icon of Healing on that grave (it also lies on it, its own
+  item marker), the smith's work in the Earth Folk's chests of maps 017-019. Bones' and containers'
+  scripts' first message is shown in quotes. `KF4_AUTOMAP_DUMP` lists every object in use with its
+  scripts' words.
 - **People** (entity type 15, and 81 the dog, with a talk script): the name is the last line of their page
   of the Recollection screen (message 3000 + 50 × (record − 100) + 49). A map's spawn records hold every
   place a person stands at any time in the story (Sharyl Genne has two on map 004, Lynn Genne a third by
