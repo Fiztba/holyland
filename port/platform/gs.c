@@ -1322,8 +1322,9 @@ void port_gs_run_vsync(void) {
                not a cliff to 60. Up to half a second to catch up after a cut; one more picture after interp_rest
                vblanks without one, and when that falls behind again within half a second, after twice as long
                (up to 2 s). A quick load or teleport ends any cut, and falling behind is not judged for 2 s after
-               one, nor while the overlay is on screen (its pictures are shown from the game's thread) and half a
-               second after. Seen in --stats and on the F3 counter ("CUT"). */
+               one, nor while the F1 overlay is open (its pictures are shown from the game's thread) and half a
+               second after. Only F1: the minimap and the stats mod's lines keep the overlay on screen through
+               play, and judging nothing then would leave no cut at all. Seen in --stats and on the F3 counter ("CUT"). */
             int between = 0, i;
 
             for (i = 0; i < interp_count; i++) {
@@ -1335,7 +1336,7 @@ void port_gs_run_vsync(void) {
                 interp_raised_at = 0;
                 interp_judge_from = request->vblank + INTERP_LOAD_GRACE;
             }
-            if (port_overlay_visible() && interp_judge_from < request->vblank + 30) {
+            if (port_overlay_open() && interp_judge_from < request->vblank + 30) {
                 interp_judge_from = request->vblank + 30;
             }
             if (interp_behind_run == 0) {
