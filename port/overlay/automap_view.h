@@ -13,6 +13,10 @@ bool automap_view_event(const SDL_Event *event);
 void automap_view_draw(int x, int y, int width, int height);
 // the Mods page's "Map" section
 void automap_view_mods_section();
+// the minimap's square (ImGui's coordinates, x0 y0 x1 y1) for the picture at x, y, width, height (the
+// window's pixels), its corner (0 top right, 1 bottom right, 2 top left, 3 bottom left) and opacity (0-1),
+// from the settings whether it is drawn or not (the mod off too); true when it is drawn now
+bool automap_view_minimap_place(int x, int y, int width, int height, float box[4], int *corner, float *opacity);
 // KF4_OVERLAY_SHOT's "map": the full map opened for a test picture
 void automap_view_open_for_shot(bool open);
 
