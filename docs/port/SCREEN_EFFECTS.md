@@ -183,6 +183,21 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
   (`Wobble_ApplyWaveUvs`, the flesh cavern 039/040/042) move texture coordinates only.
 - Debug only: `ScreenDump_*` (local-to-host transfers of a buffer), `debug.c`'s fills.
 
+### 15. Not a screen effect: the icy corridor's creatures (map 017)
+
+- **The owner's report** (October 2026, `bugs1025/quick_icy`): an icy stone corridor, the picture washed grey,
+  `56 FPS / 11 GAME`. The grey is the map's own fog and fill: no screen effect is on there (no copy, no wobble, no
+  haze: bit 44 stays off, as above), and the white tint was on in the areas before without a slowdown.
+- **What costs:** the creatures in the corridor. They are skinned models (VU1 program 0x280) whose every part is
+  two passes: the first (ALPHA 0x44, As 0x80 everywhere: opaque, Z written) and the sphere-mapped shine (ALPHA 0x9,
+  Cs + Cd As, with As up to 146). An As above 0x80 is more than Vulkan's blending can do, so the shine is blended in
+  the shader, in runs of triangles that do not overlap (each run a copy of the pixels it blends over, two barriers,
+  its draws): about 700 parts and 2,400 runs a picture, 5,700 Vulkan draws and as many pipeline binds a picture
+  between. Nothing is read back or decoded.
+- **PC:** the shine's Z-first draws are left out (perf/icy, NATIVE_DRAW_P8.md "The icy corridor"); the runs stay.
+  Hosted (`--native-draw on`) is slower there: each run is a render pass and an MSAA resolve.
+- **Test:** the `icy` case (standing still from `quick_icy`).
+
 ## Tests
 
 `tools/screen_fx_test.py` runs each effect as a case (`--cases list`): the forced ones from a quick save in play
@@ -190,7 +205,7 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
 put back after, so the game goes on as without it), some after a `--teleport` (035 for the poisoned water, 029 for
 the King's Map) or with pad presses (START: the pause; CIRCLE: the menu; TRIANGLE every 120 vblanks with
 `KF4_FX=spell=N` and `--cheats spells,magic`), and the real scenes from quick saves in `--spots`
-(`quick_underwater`, `quick_deathwater`, `quick_palace`, `quick_wand`). Each at the owner's settings (240, 3x, native
+(`quick_underwater`, `quick_deathwater`, `quick_palace`, `quick_wand`, `quick_icy`). Each at the owner's settings (240, 3x, native
 widescreen, MSAA 2, aniso 2, cut-out AA ssaa, `--renderer modern`), always `--no-audio` and headless:
 
 - `--perf`: real time (`KF4_PRESENT_SIM=240`, `KF4_GSN_GPU_TIME=2`, `KF4_HITCH_MS=50`): pictures and game frames a
