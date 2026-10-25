@@ -131,7 +131,11 @@ loads: its cells count as seen at every height.
   deaths under the spawn's limit). With the secrets cheat, the others are a faint ring, "not here now".
   Markers are made again every game frame, so someone who walks off or leaves after a talk moves or goes.
 - **Enemies** (the enemies cheat): live entities, their HP, and with the items cheat what they may drop
-  (`EntityParams.drop_item`, `drop_chance`).
+  (`EntityParams.drop_item`, `drop_chance`). Not the bodies lying as set dressing: spawns whose type's
+  set-up gives them only a pose to hold, no on_hit and no death handler, and flags them out of targeting
+  (`ENTITY_FLAG_NOT_TARGETABLE`): the dead Expedition Soldiers (chr 93, spawn variant 1 and 2,
+  `ExpeditionSoldier_ThinkHoldAnim18Or19`) on maps 012, 015 and 101, which a "Corpse" map object marks
+  already. Statues and guardians that hold a pose until woken keep their on_hit handler and stay enemies.
 - **Items** (the items cheat): `lying_items` of the current map, not inside a container. Some of a map's
   fixed items lie out of sight until a script gives them: script command 101 (`MapItem_StartPickupById`)
   takes a fixed item by its id (`MapItemDef.slot_id`) and flies it to the player's eyes. The map's script

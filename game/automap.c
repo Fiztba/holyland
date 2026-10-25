@@ -1289,6 +1289,14 @@ static int entity_live(const Entity *e) {
            e->model != NULL;
 }
 
+/* a body lying as set dressing, not a creature to fight: a spawn whose type's set-up gives it only a pose to
+   hold (the Expedition Soldiers of variant 1 and 2 lying dead on map 012, ExpeditionSoldier_ThinkHoldAnim18Or19:
+   no on_hit, no death handler, and every frame flagged out of targeting and collision). The statues and
+   guardians that hold a pose until woken keep their on_hit handler, and stay enemies. */
+static int entity_prop(const Entity *e) {
+    return (e->flags & ENTITY_FLAG_NOT_TARGETABLE) && e->ai_state.on_hit == NULL && e->ai_state.death == NULL;
+}
+
 static void entity_markers(int slot) {
     int count = map_spawn_counts[slot], i;
 
@@ -1347,7 +1355,7 @@ static void entity_markers(int slot) {
         } else {
             const char *creature;
 
-            if (!live || e->hit_points == 0 || type == 15 || type == 81) {
+            if (!live || e->hit_points == 0 || type == 15 || type == 81 || entity_prop(e)) {
                 continue;
             }
             if (!port_automap.enemies && !(hint != NULL && port_automap.hints && seen_near(x, y, z))) {
@@ -2105,9 +2113,10 @@ static void dump_markers(int slot) {
         if (e->spawn_info == NULL || e->params == NULL) {
             continue;
         }
-        fprintf(f, "spawn %d chr %d type %d talk %d flags %08x live %d can_appear %d deaths %d at %d %d %d\n", i,
+        fprintf(f, "spawn %d chr %d type %d talk %d flags %08x live %d prop %d hp %d variant %d can_appear %d deaths %d at %d %d %d\n", i,
                 e->spawn_info->type_id, e->params->entity_type, e->spawn_info->talk_script_id, (u32)e->flags,
-                entity_live(e), spawn_can_appear(slot, i, e), Game_GetSpawnDeathCount(map_slots[slot].tag, i),
+                entity_live(e), entity_prop(e), e->hit_points, e->spawn_info->variant, spawn_can_appear(slot, i, e),
+                Game_GetSpawnDeathCount(map_slots[slot].tag, i),
                 (int)e->spawn_info->spawn_x, (int)e->spawn_info->spawn_y, (int)e->spawn_info->spawn_z);
     }
     /* and every map object in use, with its scripts and parameters */
@@ -2208,7 +2217,7 @@ void Automap_Poll(void) {
         }
     }
     build_markers(slot);
-    if (++polls_since_build == 30) {
+    if (++polls_since_build == 30 || polls_since_build == 240) { /* again once the creatures near have come in */
         dump_markers(slot);
     }
     port_automap_save_live(0);
