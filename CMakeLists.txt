@@ -342,7 +342,8 @@ list(APPEND KF4_GAME_TARGETS game_data)
 target_sources(game_data PRIVATE game/stats.c)
 target_sources(kf4_port PRIVATE port/overlay/stats_mod.c)
 if(TARGET imgui)
-    target_sources(kf4_port PRIVATE port/overlay/stats_panel.cpp port/overlay/stats_menus.cpp)
+    target_sources(kf4_port PRIVATE port/overlay/stats_panel.cpp port/overlay/stats_menus.cpp
+                   port/overlay/stats_timers.cpp)
 endif()
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES

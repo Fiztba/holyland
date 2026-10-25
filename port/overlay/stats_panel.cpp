@@ -1,6 +1,7 @@
 // The extended stats mod's drawing (port/include/port/stats.h, docs/port/EXTENDED_STATS.md), with Dear
 // ImGui inside the settings overlay's frame (port/overlay/overlay.cpp calls in at four places):
 //   - its lines in the game's own menus (port/overlay/stats_menus.cpp), shown whenever the menu is up;
+//   - the ailments and timed effects running, by the minimap while playing (port/overlay/stats_timers.cpp);
 //   - the stats panel: what the game keeps about the player and never shows, with bars toward the next
 //     level, the next point of Physical and Magic Power, the weapon's and the spells' levels, and the
 //     equipment's wear; shown and hidden by its key (F6);
@@ -21,6 +22,7 @@
 #include "imgui.h"
 
 #include "stats_menus.h"
+#include "stats_timers.h"
 
 extern "C" {
 #include "port/overlay.h"
@@ -379,7 +381,8 @@ extern "C" void port_stats_overlay_update(void) {
     }
     port_stats_sample(&snap);
     stats_menus_step(snap);
-    int want = panel_shown() || stats_menus_wanted(snap);
+    stats_timers_step(snap);
+    int want = panel_shown() || stats_menus_wanted(snap) || stats_timers_wanted();
     if (!want && port_stats_options.damage && snap.valid) {
         PortStatsHit h;
         unsigned long long now = port_vblank_count();
@@ -407,6 +410,7 @@ extern "C" void port_stats_overlay_draw(int overlay_open, int x, int y, int widt
         return;
     uint32_t mxcsr = port_host_float_begin(); // the numbers are formatted in the host's rounding
     stats_menus_draw(snap, x, y, width, height);
+    stats_timers_draw(x, y, width, height);
     if (port_stats_options.damage && !snap.in_menu) {
         hit_log();
         target_bar();
@@ -439,7 +443,8 @@ extern "C" void port_stats_overlay_mods(void) {
                        "the item under the cursor does.");
     ImGui::PopStyleColor();
     ImGui::BeginDisabled(!o.on);
-    bool menus = o.menus != 0, panel = o.panel != 0, damage = o.damage != 0, durability = o.durability != 0;
+    bool menus = o.menus != 0, panel = o.panel != 0, damage = o.damage != 0, durability = o.durability != 0,
+         timers = o.timers != 0;
     if (ImGui::Checkbox("In the menus", &menus)) {
         o.menus = menus;
         port_settings_changed();
@@ -451,6 +456,13 @@ extern "C" void port_stats_overlay_mods(void) {
         port_settings_changed();
     }
     ImGui::SetItemTooltip("The percent each piece's values count at, worn down by hits (the smith mends it).");
+    if (ImGui::Checkbox("Ailment timers on screen", &timers)) {
+        o.timers = timers;
+        port_settings_changed();
+    }
+    ImGui::SetItemTooltip("While you play, the ailments running and the timed effects of spells and items (Power\n"
+                          "Seed, Widda Needle ...), each with its seconds left, beside the minimap (above it in a\n"
+                          "bottom corner, below it in a top one), or in its corner with the minimap off.");
     if (ImGui::Checkbox("Hit log and the target's health", &damage)) {
         o.damage = damage;
         port_settings_changed();

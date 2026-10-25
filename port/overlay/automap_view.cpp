@@ -974,17 +974,25 @@ void picture(int x, int y, int width, int height, ImVec2 &p0, ImVec2 &p1) {
     }
 }
 
-void draw_minimap(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
-    const PortAutomapPlan *p = current_plan(player, false);
-    if (p == nullptr)
-        return;
+// the minimap's square in the picture g0-g1, from the settings (also with it off)
+void minimap_square(ImVec2 g0, ImVec2 g1, ImVec2 &lo, ImVec2 &hi) {
     float gh = g1.y - g0.y;
     float side = gh * (float)port_automap.minimap_size / 100.0f, margin = gh * 0.025f;
     int corner = port_automap.minimap_corner;
     bool right = corner == 0 || corner == 1, bottom = corner == 1 || corner == 3;
     // top right below the compass, top left below the HP and MP gauges
     float top = corner == 0 ? g0.y + gh * 0.16f : bottom ? g1.y - side - margin : g0.y + gh * 0.22f;
-    ImVec2 lo(right ? g1.x - side - margin : g0.x + margin, top), hi(lo.x + side, lo.y + side);
+    lo = ImVec2(right ? g1.x - side - margin : g0.x + margin, top);
+    hi = ImVec2(lo.x + side, lo.y + side);
+}
+
+void draw_minimap(const PortAutomapPlayer &player, ImVec2 g0, ImVec2 g1) {
+    const PortAutomapPlan *p = current_plan(player, false);
+    if (p == nullptr)
+        return;
+    ImVec2 lo, hi;
+    minimap_square(g0, g1, lo, hi);
+    float side = hi.x - lo.x;
     ImDrawList *dl = ImGui::GetBackgroundDrawList();
     float alpha = (float)port_automap.opacity / 100.0f;
     dl->AddRectFilled(lo, hi, col(10, 9, 8, 0.75f * alpha / 0.85f), side * 0.04f);
@@ -1145,6 +1153,20 @@ bool automap_view_visible() {
     PortAutomapPlayer player;
     port_automap_player(&player);
     return port_automap.minimap && player.shown && port_automap_plan() != nullptr;
+}
+
+bool automap_view_minimap_place(int x, int y, int width, int height, float box[4], int *corner, float *opacity) {
+    ImVec2 g0, g1, lo, hi;
+    picture(x, y, width, height, g0, g1);
+    minimap_square(g0, g1, lo, hi);
+    box[0] = lo.x, box[1] = lo.y, box[2] = hi.x, box[3] = hi.y;
+    *corner = port_automap.minimap_corner;
+    *opacity = (float)port_automap.opacity / 100.0f;
+    if (!port_automap.enabled || !port_automap.minimap || port_automap_full_open())
+        return false;
+    PortAutomapPlayer player;
+    port_automap_player(&player);
+    return player.shown && port_automap_plan() != nullptr;
 }
 
 bool automap_view_event(const SDL_Event *event) {

@@ -15,6 +15,7 @@
      is worn); magic sets how fast the magic gauge fills (Player_UpdateStatus). 999 is the game's own
      cap (the crystals and fruits). */
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "common.h"
 #include "item/item.h"
@@ -99,12 +100,50 @@ static void max_magic(void) {
     player_state.mp_now = player_state.mp_max;
 }
 
+/* KF4_TEST_AILMENTS="index:frames,...": for tests, starts those ailments (PlayerState.timed_flags, 0 poison
+   ... 5 magic seal) once, the first frame in play; e.g. "3:5400" a curse of 3 minutes */
+static void test_ailments(void) {
+    static int done;
+    const char *spec;
+    char *end;
+
+    if (done) {
+        return;
+    }
+    spec = getenv("KF4_TEST_AILMENTS");
+    if (spec == NULL) {
+        done = 1;
+        return;
+    }
+    if (Quick_WhyNotInPlay() != NULL) {
+        return;
+    }
+    done = 1;
+    while (*spec != 0) {
+        long index = strtol(spec, &end, 0), frames;
+
+        if (end == spec || *end != ':') {
+            break;
+        }
+        frames = strtol(end + 1, &end, 0);
+        if (index >= 0 && index < 6) {
+            player_state.timed_flags[index] = frames;
+            port_event("cheat: ailment %ld for %ld frames (KF4_TEST_AILMENTS)", index, frames);
+        }
+        spec = *end == ',' ? end + 1 : end;
+        if (*end != ',') {
+            break;
+        }
+    }
+}
+
 void Cheat_Poll(void) {
     char text[160];
     int cheats, n;
     const char *why;
     size_t at = 0;
 
+    test_ailments();
     if (port_cheat_pending() == 0) {
         return;
     }

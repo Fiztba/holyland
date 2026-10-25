@@ -477,6 +477,10 @@ void stats_menus_fonts() {
     }
 }
 
+ImFont *stats_menus_font() {
+    return serif;
+}
+
 bool stats_menus_wanted(const PortStatsSnapshot &s) {
     return port_stats_options.menus && s.valid && s.menu.screen != PORT_STATS_MENU_NONE;
 }

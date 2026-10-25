@@ -38,6 +38,7 @@ extern LevelRecordDef worn_defs[];
 extern FxTableEntry fx_table[];
 extern Entity *active_entities_head;
 extern int recent_damage_frames;
+extern u32 frame_counter;
 extern ItemCommonDef item_common_defs[];
 /* the game's menu (ui/menu_screens.c) */
 extern void *menu_screen_handler;
@@ -117,7 +118,8 @@ static void add_effect(PortStatsSnapshot *s, int item, const char *text) {
     item_name(item, e->item, sizeof(e->item));
 }
 
-static void add_timer(PortStatsSnapshot *s, int frames, const char *text) {
+/* `brief`: the same in a few words, for the timers on screen beside the minimap */
+static void add_timer(PortStatsSnapshot *s, int frames, const char *text, const char *brief) {
     PortStatsTimer *t;
 
     if (frames <= 0 || s->timer_count >= PORT_STATS_TIMERS) {
@@ -125,6 +127,7 @@ static void add_timer(PortStatsSnapshot *s, int frames, const char *text) {
     }
     t = &s->timers[s->timer_count++];
     snprintf(t->text, sizeof(t->text), "%s", text);
+    snprintf(t->brief, sizeof(t->brief), "%s", brief);
     t->frames = frames;
 }
 
@@ -299,48 +302,53 @@ static void timers(PortStatsSnapshot *s) {
     static const char *const kinds[9] = {"Slash", "Strike", "Stab", "Fire", "Earth", "Wind", "Water", "Light", "Dark"};
     static const char *const ailments[6] = {"Poison", "Paralysis", "Darkness", "Curse", "Slow", "Magic seal"};
     const PlayerState *p = &player_state;
-    char text[64];
+    char text[64], brief[32];
     int i;
 
     for (i = 0; i < 3; i++) {
         if (p->physical_strength_bonus[i] != 0) {
             snprintf(text, sizeof(text), "%s attack %+d", kinds[i], p->physical_strength_bonus[i]);
-            add_timer(s, p->physical_strength_bonus_timer[i], text);
+            add_timer(s, p->physical_strength_bonus_timer[i], text, text);
         }
         if (p->physical_defence_bonus[i] != 0) {
             snprintf(text, sizeof(text), "%s defence %+d", kinds[i], p->physical_defence_bonus[i]);
-            add_timer(s, p->physical_defence_bonus_timer[i], text);
+            add_timer(s, p->physical_defence_bonus_timer[i], text, text);
         }
     }
     for (i = 0; i < 6; i++) {
         if (p->magic_strength_bonus[i] != 0) {
             snprintf(text, sizeof(text), "%s attack %+d", kinds[3 + i], p->magic_strength_bonus[i]);
-            add_timer(s, p->magic_strength_bonus_timer[i], text);
+            add_timer(s, p->magic_strength_bonus_timer[i], text, text);
         }
         if (p->magic_defence_bonus[i] != 0) {
             snprintf(text, sizeof(text), "%s defence %+d", kinds[3 + i], p->magic_defence_bonus[i]);
-            add_timer(s, p->magic_defence_bonus_timer[i], text);
+            add_timer(s, p->magic_defence_bonus_timer[i], text, text);
         }
         if (p->ailment_attack_bonus[i] != 0) {
             snprintf(text, sizeof(text), "%s chance of the weapon +%d%%", ailments[i], p->ailment_attack_bonus[i]);
-            add_timer(s, p->ailment_attack_bonus_timer[i], text);
+            snprintf(brief, sizeof(brief), "%s hit +%d%%", ailments[i], p->ailment_attack_bonus[i]);
+            add_timer(s, p->ailment_attack_bonus_timer[i], text, brief);
         }
         if (p->ailment_defence_bonus[i] != 0) {
             snprintf(text, sizeof(text), "%s defence +%d%%", ailments[i], p->ailment_defence_bonus[i]);
-            add_timer(s, p->ailment_defence_bonus_timer[i], text);
+            add_timer(s, p->ailment_defence_bonus_timer[i], text, text);
         }
     }
-    add_timer(s, p->power_seed_timer, "Physical Power +10%");
-    add_timer(s, p->widda_needle_timer, "Magic Power +10%");
+    add_timer(s, p->power_seed_timer, "Physical Power +10%", "Physical +10%");
+    add_timer(s, p->widda_needle_timer, "Magic Power +10%", "Magic +10%");
     if (p->rage_timer > 0) {
         snprintf(text, sizeof(text), "Physical Power +%d, Magic Power 1", p->rage_power_bonus);
-        add_timer(s, p->rage_timer, text);
+        snprintf(brief, sizeof(brief), "Rage, Physical +%d", p->rage_power_bonus);
+        add_timer(s, p->rage_timer, text, brief);
     }
-    add_timer(s, p->light_spell_timer, "Light");
-    add_timer(s, p->intimidate_timer, "Enemies attack from half as far");
+    add_timer(s, p->light_spell_timer, "Light", "Light");
+    add_timer(s, p->intimidate_timer, "Enemies attack from half as far", "Intimidation");
 }
 
 static void sample_menu(PortStatsMenu *m);
+
+static u32 play_frame;                 /* frame_counter as last seen */
+static unsigned long long play_vblank; /* the vblank it last moved */
 
 int port_stats_sample(PortStatsSnapshot *out) {
     const PlayerState *p = &player_state;
@@ -352,6 +360,13 @@ int port_stats_sample(PortStatsSnapshot *out) {
     }
     out->valid = 1;
     out->in_menu = menu_mode == 0 && menu_step != 0;
+    /* the play's loop counts frame_counter; the menus, the shops and the map viewer have loops of their
+       own, which do not (as the automap's minimap, polled from the play's loop only) */
+    if (frame_counter != play_frame) {
+        play_frame = frame_counter;
+        play_vblank = port_vblank_count();
+    }
+    out->in_play = !out->in_menu && !game_status.paused && port_vblank_count() <= play_vblank + 6;
     sample_menu(&out->menu);
 
     /* Player_AddExperience: level L is reached at player_level_steps[L].experience */
