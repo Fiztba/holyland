@@ -292,6 +292,7 @@ void gsn_interp_picture(const GsnInterpPicture *picture);
 typedef struct {
     uint64_t draws, primitives, passes, texture_decodes, texture_bytes, target_copies, writebacks,
         uploads, upload_bytes, shader_blends, texture_reuses, uploads_skipped, uploads_copied;
+    uint64_t upload_pages_held; /* pages of an upload found again not compared: as it left them, not written since */
     /* nanoseconds spent (nested: a flush inside the GIF's time counts in both) */
     uint64_t ns_gif, ns_flush, ns_upload, ns_writeback, ns_decode, ns_vsync, ns_swizzle, ns_sync;
     /* what it holds now: render targets, textures, decoded images (and their MB), uploads kept */
