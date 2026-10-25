@@ -62,13 +62,19 @@ def data_folder(keep, name):
     return folder
 
 
+def command(args, folder, map_index, frames, flags):
+    """A run's command line (args.exe, .disc, .hz, .extra; tools/sampler/profile.py's too). It dumps the last frame:
+    a --headless run that dumps none starts none of the GS's threads, and draws nothing."""
+    return [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--memcard", "none", "--clock",
+            "2026-01-01T12:00:00", "--input", PAD, "--teleport", "%d:%d:0" % (TELEPORT, map_index), "--frames",
+            str(frames), "--stats", "--dump-frames", str(frames - 1), "--dump-dir", folder, "--frame-rate",
+            str(args.hz)] + flags + OWNER + args.extra
+
+
 def run(args, name, map_index, frames, env_extra, flags):
     folder = data_folder(args.keep, name)
     env = dict(os.environ, KF4_DATA_DIR=folder, **env_extra)
-    cmd = [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--memcard", "none", "--clock",
-           "2026-01-01T12:00:00", "--input", PAD, "--teleport", "%d:%d:0" % (TELEPORT, map_index), "--frames",
-           str(frames), "--stats", "--dump-frames", str(frames - 1), "--dump-dir", folder, "--frame-rate",
-           str(args.hz)] + flags + OWNER + args.extra
+    cmd = command(args, folder, map_index, frames, flags)
     result = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     with open(os.path.join(folder, "run.log"), "w") as f:
         f.write(result.stdout)

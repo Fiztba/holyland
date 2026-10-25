@@ -445,6 +445,13 @@ if(TARGET kf4_gs)
     endif()
 endif()
 
+# kf4-sampler, the sampling profiler (tools/sampler, docs/port/RENDERER.md "Profiling"): every thread of a
+# running kf4.exe, its stacks unwound from the program's .pdata
+if(WIN32)
+    add_executable(kf4-sampler tools/sampler/sampler.c)
+    target_link_libraries(kf4-sampler PRIVATE psapi winmm)
+endif()
+
 # INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)
 add_executable(int_divide_test tests/int_divide_test.c port/platform/int_divide.c)
 target_include_directories(int_divide_test PRIVATE port/include)
