@@ -1105,14 +1105,14 @@ index b6d9f0e111e1c029c9fd11e439004f80a0b651ca..0608b56959af344f3c080373ebbee51a
      fog = &map_draw_state.current_fog_color;
      *fog = ((MapSlotUnk08 *)map_slots[0].header)->fog_color;
 diff --git a/src/game/map/map_load.c b/src/game/map/map_load.c
-index 75d13e205ec0fe6ed66f482f61f10d55071b0946..efa499b80d094eb648de5b1963a9fc72f0256e96 100644
+index 75d13e205ec0fe6ed66f482f61f10d55071b0946..db81e2a72eb71bd0c27f4274f1a0df229acec302 100644
 --- a/src/game/map/map_load.c
 +++ b/src/game/map/map_load.c
 @@ -8,10 +8,11 @@
  #include "map_object/map_object.h"
  #include "effect/effect.h"
  #include "map/map_scroll.h"
-+#include "collision/collision.h" /* PC: MapRecordBounds, for neighbour_needed_here */
++#include "collision/collision.h" /* PC: MapRecordBounds, CollisionMesh, for neighbour_trigger_here */
  
  extern void (*map_load_steps[])(void);
  void GameLoop_RunSoundLoads(void);
@@ -1129,45 +1129,142 @@ index 75d13e205ec0fe6ed66f482f61f10d55071b0946..efa499b80d094eb648de5b1963a9fc72
  void Map_ParseFile(int);
  void Map_BuildModels(int);
  void Map_OffsetRecords(int, f32 *);
-@@ -68,6 +68,32 @@ void MapLoad_Reset(void) {
+@@ -68,11 +68,113 @@ void MapLoad_Reset(void) {
      map_load_request.map = 0xFFFF;
  }
  
-+/* PC: a retail data bug. A record that needs the neighbouring map (needs_neighbour_map) is a thin floor
-+   that must become PlayerState.map_index, so it is laid a little above the floor it covers (map 104's
-+   record 17: 758 over 760): Player_CollideWithMap keeps the first floor it finds of the highest. Map 104's
-+   record 14 (the corridor west of the stairs down to map 102) lies at the corridor's own height, -280:
-+   record 9's floor is found first and wins the tie, so record 14 never becomes map_index. Coming back
-+   from Belric Psytar (records 16 then 15 ask for map 105, then for map 102), map 102 is read but never
-+   set up: the stairs and the corridor's east door lead into black, and the player falls through. So a
-+   record that needs the neighbour also counts while the player stands on its floor (inside its box, at
-+   its height). */
-+static int neighbour_needed_here(MapSlot *slot) {
++/* PC: a retail data bug. The records that ask for the neighbouring map (neighbour_origin_index) or need it
++   set up (needs_neighbour_map) are mostly thin floors of their own laid a little above the room's floor
++   (map 104's record 17: 758 over 760), so that Player_CollideWithMap, which keeps the first of the highest
++   floors it finds, makes them PlayerState.map_index. A few lie at the room floor's own height: the room's
++   record comes first and wins the tie (the trigger wins only where float rounding favours it), so the
++   neighbour is never asked for or never set up, and a door or stairs lead into a black void and a fall.
++   Map 105's stairs up to the Central Tower's door (record 25 asks for map 100 at their foot, record 24
++   needs it at their top: record 2's heights, 325 and -350), map 102's record 33 (asks for map 100 at
++   -420, record 2's height) and map 104's record 14 (needs map 102 at -280, record 9's height).
++   So where the record the player stands on does not ask for (or need) the neighbour, a flat record that
++   does (its box one height, within 1) counts too where it lost that tie: the player inside one of its
++   floor triangles at its height (within 1), and on the floor of the record that won. A record the player
++   stands on that asks keeps the game's choice (the alternatives the map scripts switch lie on one
++   another); records with floors at several heights (rooms) are left alone; and nothing changes while a
++   map object carries the player (map 099's boat at the start), as map_index is then left as it was. */
++
++/* PC: whether the point is on one of the record's floor triangles, at its height (within 1) */
++static int stands_on_record_floor(int slot, int index, f32 *point) {
++    MapRecordBounds *box = (MapRecordBounds *)map_slots[slot].records + index;
++    ModelInstance *model = (ModelInstance *)map_slot_memory[slot].record_models + index;
++    CollisionMesh *mesh;
++    CollisionStrip *strip;
++    CollisionStripPoint *strip_point;
++    Vector4 *local;
++    f32 corner[3][3];
++    f32 *m;
++    s32 strips_left;
++    s32 points_left;
++    int i, k;
++
++    if (box->collision_mesh_index == 0xFFFF || (box->record_flags & 0x40000000) || point[0] < box->lowest[0] ||
++        box->highest[0] < point[0] || point[2] < box->lowest[2] || box->highest[2] < point[2] ||
++        point[1] < box->lowest[1] - 1.0f || box->highest[1] + 1.0f < point[1]) {
++        return 0;
++    }
++    mesh = (CollisionMesh *)model->strips;
++    if (mesh == NULL) {
++        return 0;
++    }
++    /* the floor's corners placed as Collision_TransformMeshPoints places them, without its scratchpad */
++    m = (f32 *)model->collision_matrix;
++    local = EE_PTR(Vector4 *, mesh->points);
++    strips_left = mesh->floor_strip_count;
++    strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
++    while (--strips_left != -1) {
++        strip_point = strip->points;
++        points_left = strip->point_count - 2;
++        do {
++            for (i = 0; i < 3; i++) {
++                Vector4 *p = &local[EE_PTR(Vector4 *, strip_point[i].position) - COLLISION_WORLD_POINTS];
++
++                for (k = 0; k < 3; k++) {
++                    corner[i][k] = m[k] * p->x + m[4 + k] * p->y + m[8 + k] * p->z + m[12 + k] * p->w;
++                }
++            }
++            {
++                f32 bx = corner[1][0] - corner[0][0], bz = corner[1][2] - corner[0][2];
++                f32 cx = corner[2][0] - corner[0][0], cz = corner[2][2] - corner[0][2];
++                f32 px = point[0] - corner[0][0], pz = point[2] - corner[0][2];
++                f32 area = bx * cz - cx * bz;
++
++                if (area > 0.001f || area < -0.001f) {
++                    f32 s = (px * cz - cx * pz) / area;
++                    f32 t = (bx * pz - px * bz) / area;
++                    f32 y = corner[0][1] + s * (corner[1][1] - corner[0][1]) + t * (corner[2][1] - corner[0][1]);
++
++                    if (s >= 0.0f && t >= 0.0f && s + t <= 1.0f && point[1] >= y - 1.0f && point[1] <= y + 1.0f) {
++                        return 1;
++                    }
++                }
++            }
++            strip_point++;
++        } while (--points_left != 0);
++        strip = (CollisionStrip *)&strip_point[2];
++    }
++    return 0;
++}
++
++/* PC: the first flat record of the current map that asks for the neighbour (needs: that needs it) whose floor
++   the player stands on, at the height of the floor of the record he is on (PlayerState.map_index): the tie it
++   lost (above). Not while a map object carries him (Player_CollideWithMap then keeps map_index as it was). */
++static MapRecordInfo *neighbour_trigger_here(int needs) {
++    MapSlot *slot = &map_slots[current_map_slot];
 +    MapRecordInfo *record = (MapRecordInfo *)slot->records;
++    MapRecordBounds *box;
 +    f32 *point = &player_state.position.x;
 +    int i;
 +
++    if (player_state.map_index >= slot->header->record_count) {
++        return NULL;
++    }
 +    for (i = 0; i < slot->header->record_count; i++, record++) {
-+        MapRecordBounds *box = (MapRecordBounds *)record;
-+
-+        if (record->needs_neighbour_map != 0 && box->collision_mesh_index != 0xFFFF &&
-+            point[0] >= box->lowest[0] && point[0] <= box->highest[0] && point[2] >= box->lowest[2] &&
-+            point[2] <= box->highest[2] && point[1] >= box->lowest[1] - 1.0f && point[1] <= box->highest[1] + 1.0f) {
-+            return 1;
++        box = (MapRecordBounds *)record;
++        if ((needs ? record->needs_neighbour_map != 0 : record->neighbour_origin_index != 0xFF) &&
++            box->highest[1] - box->lowest[1] <= 1.0f && stands_on_record_floor(current_map_slot, i, point)) {
++            return stands_on_record_floor(current_map_slot, player_state.map_index, point) ? record : NULL;
 +        }
 +    }
-+    return 0;
++    return NULL;
 +}
 +
  /* Starts, queues and steps the background load of the map next to where the player stands. */
  void MapLoad_Update(void) {
      MapSlot *current = &map_slots[current_map_slot];
-@@ -117,7 +143,7 @@ void MapLoad_Update(void) {
+     MapSlot *other = (current_map_slot == 0) ? &map_slots[1] : &map_slots[0];
+     MapRecordInfo *record;
++    MapRecordInfo *asking; /* PC */
+     MapLoadRequest *request;
+ 
+     if (map_load_committed != 0) {
+@@ -84,8 +186,12 @@ void MapLoad_Update(void) {
+     } else {
+         record = NULL;
+     }
+-    if (record != NULL && record->neighbour_origin_index != 0xFF) {
+-        request = (MapLoadRequest *)&current->origins[record->neighbour_origin_index];
++    asking = record; /* PC: or a record that asks, under the player but losing the floor's tie (above) */
++    if (record != NULL && record->neighbour_origin_index == 0xFF) {
++        asking = neighbour_trigger_here(0);
++    }
++    if (asking != NULL && asking->neighbour_origin_index != 0xFF) { /* PC: asking, not record */
++        request = (MapLoadRequest *)&current->origins[asking->neighbour_origin_index]; /* PC: asking */
+         if (current->tag != request->map) {
+             if (other->loaded == 0 || other->tag != request->map) {
+                 if (map_load_state.request == NULL || map_load_state.request->map != request->map) {
+@@ -117,7 +223,8 @@ void MapLoad_Update(void) {
          }
      }
      if (!((s32)(map_load_state.flags.raw >> 1) & 1)) {
 -        if (record != NULL && record->needs_neighbour_map != 0) {
-+        if (record != NULL && (record->needs_neighbour_map != 0 || ((u32)(map_load_state.step - 1) < 5 && neighbour_needed_here(current)))) { /* PC: or */
++        if (record != NULL && (record->needs_neighbour_map != 0 || /* PC: or a record that needs it (above) */
++                               ((u32)(map_load_state.step - 1) < 5 && neighbour_trigger_here(1) != NULL))) {
              if ((u32)(map_load_state.step - 1) < 5) {
                  Input_StopRumble();
                  while (map_load_state.step != 5) {
