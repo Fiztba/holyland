@@ -2024,7 +2024,7 @@ void sa_forget();
 void sa_switch(bool on);
 void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 void sa_upload_begins(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool recorded);
-void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size);
+void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size, uint64_t hash);
 void sa_uploaded_from_vram(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 void sa_upload_replayed(uint32_t k);
 void sa_vblank(bool extra);
@@ -5630,10 +5630,10 @@ void write_page_image(const PageImage &image);
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
 void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
-    sa_uploaded(p.bitbltbuf, p.trxpos, p.trxreg, data, size); // (standalone: the page-ownership table)
+    uint64_t key = upload_hash(p, data, size);
+    sa_uploaded(p.bitbltbuf, p.trxpos, p.trxreg, data, size, key); // (standalone: the page-ownership table)
     bool rgb_only = false;
     std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
-    uint64_t key = upload_hash(p, data, size);
     auto found = pages.empty() ? page_images.end() : page_images.find(key);
     RecordedUpload *rec = recording >= 0 ? &uploads_now[size_t(recording)] : nullptr;
     if (found != page_images.end() && found->second->pages == pages && found->second->rgb_only == rgb_only) {
