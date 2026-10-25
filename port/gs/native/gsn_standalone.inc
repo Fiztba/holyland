@@ -3357,7 +3357,7 @@ bool sa_draw_batch(int *why) {
     static int shine_group = -1;
     if (shine_group < 0) {
         const char *v = getenv("KF4_SA_SHINE_GROUP");
-        shine_group = v && *v ? atoi(v) : 1;
+        shine_group = v && *v ? atoi(v) : 2; // (2, kept with MSAA too, by default: the owner's choice, no seam lines)
     }
     int ms_in = sa.samples > 1 ? 1 : 0;
     bool shine_kept = shine_whole && (shine_group == 2 || (shine_group == 1 && !ms_in)) && !blend_copy && run_copy_on && !per_sample && !sa.gs3d && !sa.gs_water && !ndw_batch() &&

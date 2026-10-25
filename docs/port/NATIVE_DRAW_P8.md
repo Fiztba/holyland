@@ -1722,15 +1722,15 @@ away, as the rule for the PS2's quirks has it (modern by default, a switch for t
   pixel takes one part's shine at most (the marks), the part whose first pass is the last to draw there, and the copy
   has that first pass's colour there, as the copy before that part's shine had.
 
-**Why the groups stop at MSAA (yet).** The copy is each pixel's samples' mean. Drawn part by part, a part's copy at a
+**The groups with MSAA too (the default, the owner's choice).** The copy is each pixel's samples' mean. Drawn part by part, a part's copy at a
 pixel it shares with another part (a seam: one sample each) has the part before it already shined there, and the shine
 is blended from that: the seam comes out brighter. Kept in a group, the copy has the first passes alone. So with MSAA 2
 the groups differ from part by part on about 1,165 pixels a picture at the icy spot (up to 76 levels), all along the
 parts' seams. Part by part is the artefact: single-sampled (the PS2's way) the seams have no such lines, part by part or
 kept, while with MSAA 2 part by part draws a bright dashed line along every seam of the creatures (main has them too,
-exact or whole); kept in groups, the creatures look as they do single-sampled. `KF4_SA_SHINE_GROUP=2` (a test) keeps
-them with MSAA too; making it the default is one condition (the owner's call: it changes main's MSAA pictures there).
-`KF4_SA_SHINE_GROUP=0`: never kept.
+exact or whole); kept in groups, the creatures look as they do single-sampled. So they are kept with MSAA too by default (it changes
+main's MSAA pictures there, along the seams, and removes the lines). `KF4_SA_SHINE_GROUP=1` (a test) keeps them
+single-sampled only, part by part with MSAA as before; `KF4_SA_SHINE_GROUP=0`: never kept.
 
 **Numbers** (the owner's settings: `--renderer modern`, 240, 3x, MSAA 2, aniso 2, cut-out AA ssaa, modern sky,
 widescreen; `quick_icy` standing still; real time 1,000 vblanks, counted over vblanks 400-980). The owner's game was
@@ -1829,8 +1829,8 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule), `KF4_SA_SKIN=EPS` (a skinned
   model's parts' tie in world units; 0, the default: exact), `KF4_GSN_DYNAMIC=0|1` (no dynamic state, or none for blending: "Pipeline binds"), `KF4_SA_GROUP=0` (a skinned model's parts drawn as they come,
   not kept: "A skinned model's parts drawn together"), `KF4_SA_RUN_COPY=0` (shader blending's copy over the run's box, not by its
-  triangles), `KF4_SA_SHINE_GROUP=0|2` (a shine drawn whole never kept by the skinned groups, or kept with MSAA too; 1, the default:
-  kept single-sampled: "The ice shine drawn whole"), `KF4_SA_REFLECTION_KEEP=0|2` (the frame's reflection drawn in every picture between, or always kept; 1, the
+  triangles), `KF4_SA_SHINE_GROUP=0|1` (a shine drawn whole never kept by the skinned groups, or kept single-sampled only; 2, the
+  default: kept with MSAA too: "The ice shine drawn whole"), `KF4_SA_REFLECTION_KEEP=0|2` (the frame's reflection drawn in every picture between, or always kept; 1, the
   default: kept while the camera is the frame's bit for bit: "The pond at 240"), `KF4_SA_ZFIRST=0` (no Z-first draw by depth
   alone), `KF4_GSN_GPU_TIME=2` (the GPU's time a picture by what is drawn), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
   that differ counted in `[stats] native draw 0x280 plans`),
