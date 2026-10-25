@@ -2024,7 +2024,7 @@ void sa_forget();
 void sa_switch(bool on);
 void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 void sa_upload_begins(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool recorded);
-void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size);
+void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size, uint64_t hash);
 void sa_uploaded_from_vram(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 void sa_upload_replayed(uint32_t k);
 void sa_vblank(bool extra);
@@ -5523,10 +5523,21 @@ struct PageImage {
     std::vector<uint32_t> pages;
     std::vector<uint8_t> bytes; // 8 KB a page, in pages' order
     bool rgb_only;              // a 24-bit upload: the pages' words' low three bytes only
+    uint64_t serial;            // (page_holders: which image this is, never one let go before)
 };
 std::unordered_map<uint64_t, std::shared_ptr<PageImage>> page_images;
 std::deque<uint64_t> page_image_order;
 size_t page_image_bytes;
+uint64_t page_image_serial;
+
+// Each page as write_page_image last left it: the same as the image's index-th page (its serial; 0: none), when
+// page_written had it at `written`. While nothing has written the page since, it still is, and the image asked
+// for again need not compare it.
+struct PageHolder {
+    uint64_t serial, written;
+    size_t index;
+};
+PageHolder page_holders[vram_pages];
 
 // --frame-rate's pictures between (port/platform/frame_interp.c) draw the game's frame again from its
 // packets, uploads and all: some 8 MB a frame, which went through the ring, were kept whole, hashed
@@ -5630,10 +5641,10 @@ void write_page_image(const PageImage &image);
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
 void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
-    sa_uploaded(p.bitbltbuf, p.trxpos, p.trxreg, data, size); // (standalone: the page-ownership table)
+    uint64_t key = upload_hash(p, data, size);
+    sa_uploaded(p.bitbltbuf, p.trxpos, p.trxreg, data, size, key); // (standalone: the page-ownership table)
     bool rgb_only = false;
     std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
-    uint64_t key = upload_hash(p, data, size);
     auto found = pages.empty() ? page_images.end() : page_images.find(key);
     RecordedUpload *rec = recording >= 0 ? &uploads_now[size_t(recording)] : nullptr;
     if (found != page_images.end() && found->second->pages == pages && found->second->rgb_only == rgb_only) {
@@ -5649,6 +5660,7 @@ void complete_upload(const uint8_t *data, size_t size) {
         auto image = std::make_shared<PageImage>();
         image->pages = pages;
         image->rgb_only = rgb_only;
+        image->serial = ++page_image_serial;
         image->bytes.resize(pages.size() * 8192);
         for (size_t i = 0; i < pages.size(); i++) {
             memcpy(image->bytes.data() + i * 8192, gs->vram.data() + size_t(pages[i]) * 8192, 8192);
@@ -5681,6 +5693,11 @@ void write_page_image(const PageImage &image) {
         bool rgb_only = image.rgb_only;
         bool changed = false;
         for (size_t i = 0; i < pages.size(); i++) {
+            PageHolder &holder = page_holders[pages[i]];
+            if (holder.serial == image.serial && holder.index == i && holder.written == gs->page_written[pages[i]]) {
+                gsn_stats.upload_pages_held++;
+                continue;
+            }
             uint8_t *dst = gs->vram.data() + size_t(pages[i]) * 8192;
             const uint8_t *src = image.bytes.data() + i * 8192;
             if (rgb_only) {
@@ -5703,6 +5720,7 @@ void write_page_image(const PageImage &image) {
                 pages_written(pages[i], 1);
                 changed = true;
             }
+            holder = {image.serial, gs->page_written[pages[i]], i};
         }
         gsn_stats.uploads_skipped += !changed;
         gsn_stats.uploads_copied += changed;
@@ -5757,6 +5775,7 @@ void forget_uploads() {
     page_images.clear();
     page_image_order.clear();
     page_image_bytes = 0;
+    memset(page_holders, 0, sizeof(page_holders));
 }
 
 void begin_transfer(uint32_t dir) {
@@ -7680,6 +7699,7 @@ extern "C" int gsn_open(void *shared_context) {
     gs->vram.assign(GSN_VRAM_BYTES, 0);
     memset(gs->page_written, 0, sizeof(gs->page_written));
     gs->vram_writes = 1;
+    memset(page_holders, 0, sizeof(page_holders)); // (their counts are page_written's)
     reset_gs();
 
     if (shared_context) {

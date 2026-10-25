@@ -563,8 +563,9 @@ void sa_pack_dump(const SaChunk &c) {
 }
 
 // (complete_upload, upload_done) An upload whole: its bytes kept (once: found again by their hash, an
-// upload sent every frame is the same chunk), its blocks its own
-void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size) {
+// upload sent every frame is the same chunk), its blocks its own. `hash` is upload_hash's of it (complete_upload
+// has it already)
+void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size, uint64_t hash) {
     if (!sa.on) {
         return;
     }
@@ -576,11 +577,6 @@ void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uin
                      bits(trxpos, 32, 11) + bits(trxreg, 0, 12), bits(trxpos, 48, 11) + bits(trxreg, 32, 12), &lo, &count);
         sa_copy_written(lo, count);
     }
-    PendingUpload p;
-    p.bitbltbuf = bitbltbuf;
-    p.trxpos = trxpos;
-    p.trxreg = trxreg;
-    uint64_t hash = upload_hash(p, data, size);
     uint32_t id = 0;
     auto found = sa.chunk_by_hash.find(hash);
     if (found != sa.chunk_by_hash.end()) {
@@ -639,6 +635,17 @@ void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uin
         sa.uploads_now[size_t(sa.recording)].id = id;
     }
     sa.recording = -1;
+}
+
+void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size) {
+    if (!sa.on) {
+        return;
+    }
+    PendingUpload p;
+    p.bitbltbuf = bitbltbuf;
+    p.trxpos = trxpos;
+    p.trxreg = trxreg;
+    sa_uploaded(bitbltbuf, trxpos, trxreg, data, size, upload_hash(p, data, size));
 }
 
 // (upload_done) An upload written as it came (settle_upload): its bytes read back from VRAM

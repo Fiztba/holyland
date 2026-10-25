@@ -1558,6 +1558,87 @@ restore at the map change ("1 frames drawn again" in `--stats`).
   460424273 (`--frames 1841`: with 1881, both builds give 197d355532a43933 and 482017306), pictures 1800, 1820 and 1840
   byte for byte.
 
+### Uploads: hashed once, pages known unchanged (branch `p8/uploads`, from `main` fd3956b7)
+
+The game sends about 6 MB of textures a game frame on map 000 (172 uploads in pace_test's window), and the pictures
+between ask for each again (`replay_upload`). Sampled on 000 (the owner's settings, 170 Hz real time, 173a8ffe), the
+uploads were 16.7% of the GS's thread's busy samples: `image_data` 8.7 (`sa_uploaded` 4.6, of it `sa_own` 1.9,
+`upload_hash` 1.4 and the compare with the chunk 1.1; `write_page_image` 1.5; `upload_hash` again 1.3) and
+`replay_upload` 8.0 (`flush_batch` 2.3, `write_page_image` 1.9, `sa_upload_replayed`'s `sa_own` 1.7, `sync_targets` 1.6).
+
+**What changed:**
+- **Hashed once.** `complete_upload` works out `upload_hash` first and hands it to `sa_uploaded`, which hashed the
+  same bytes again (the hook gains an argument; the table's other callers, an upload read back from VRAM and a copy
+  kept as an upload, hash through a wrapper as before). The table still compares the bytes with its chunk's.
+- **Pages known unchanged.** `write_page_image` compared each 8 KB page of an upload found again with the CPU's
+  VRAM. Each page now remembers the image it was last made the same as (`page_holders`: the image's serial, never
+  reused; the page's place in it; `page_written` then), and while nothing has written the page since it is not
+  compared again (`--stats`: "pages known unchanged"; RENDERER.md has the rule it relies on). Most found-again
+  uploads do change their pages (on 000, 123,137 of 134,472 copy at least one: the textures take turns in the same
+  VRAM), so it skips 150,934 pages a run on 000 and 474,088 on 009.
+
+**Numbers** (pace_test `--mode cost`, three rounds alternating, pinned to the P-cores; the uploads' ms a game frame
+are the hitch lines' "uploads", the native GS's upload timer, over pace_test's window; i9-13900KF, RTX 4090):
+
+| | main | hashed once | both |
+|---|---|---|---|
+| 000: uploads ms a game frame | 2.51-2.61 | 2.27-2.42 | 2.27-2.38 |
+| 000: GS thread ms a game frame | 17.5-18.1 | 17.1-18.2 | 17.3-18.5 |
+| 009: uploads ms a game frame | 6.46-6.72 | 6.09-6.16 | 5.82-6.03 |
+| 009: GS thread ms a game frame | 21.4-22.2 | 21.1-22.7 | 20.5-21.2 |
+
+About 0.25 ms a game frame on 000 and 0.6 on 009, a tenth of the uploads' time; the thread's own spread between runs
+is as large on 000. Of 009's 6 ms, 3.1 is `sync_targets` after the uploads: the pictures between's own copy at 0x2BC0
+taking each page uploaded over it from VRAM at once ("What is left" in the palace's section above), the largest piece
+left near the uploads. The table's ownership (`sa_own`, 3.6% on 000 with the uploads asked for again) is next.
+
+**Pictures:** byte for byte main's (191 pictures, the same `--log` each): every picture of vblanks 2300-2306, 2400,
+2401, 2450 and 2500 after the teleport to 000 and to 009 at 240 (`--fast`, `KF4_INTERP_DRAW_ALL=1`, 44 each), in modern
+at the owner's settings and hosted (`--renderer native`, 009 at 4x, 000 at 2x); the herb run in modern at the owner's
+settings at 240 (PATH1 hash 561c91020b2908ee, every picture of 1800, 1820, 1840). The four spots' quick saves are not
+on this PC. The off check passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 300 (seeds
+1, 7, 1234); gsn_vram_test; vu1_test 0 of 90; herb with `--native-draw off`: the same `--log`, PATH1 hash
+204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte. Rebased on main 74ecff65 (#73, #75),
+the 191 pictures again byte for byte that main's.
+
+#### A lazy CPU VRAM: cost and risk (not built)
+
+The idea: an upload found again would not write the CPU's VRAM. Its pages would be owed (the image and the page's
+place in it), written only when something reads them, and a page owed twice before a read written once. It is mostly
+for modern, where the scene's textures and CLUTs come from the table.
+
+**What it could save** is at most `write_page_image`'s compares and copies: 3.3% of the thread on 000 before this
+branch (1.5 the frame's uploads, 1.9 the pictures between's), about 0.6 ms a game frame, and still 3.6% after it
+(sampled on main's build, `upload_hash` 2.7 -> 1.2%): on 000 few of the pages it copies are ones it would not
+change. It saves neither the hash (it finds the image) nor the table's compare and ownership, and
+not `sync_targets`, which reads the very pages it would owe (on 009, 3.1 ms a game frame). Hosted decodes its
+textures from the CPU's VRAM and would write nearly every page it owed.
+
+**What reads an owed page** and would have to write it first (a reader missed reads old texels, with no error):
+- `claim_pages`, which covers the read-backs, a local copy's source, `gsn_read_rect` and `gsn_write_rect`, and the
+  CLUT load at every TEX0;
+- `claim_texture` where `shadow_covers` lets it skip `claim_pages` (it calls `claim_targets` only), then
+  `texture_hash` and the decode;
+- `load_target_rect`: a target made over the pages (`get_target_made`), `sync_targets` after an upload;
+- `shadow_resolve`, which copies the pages aside and merges them back;
+- a write of part of a page: an upload not found again or not of whole pages (`swizzle_upload`, `settle_upload`),
+  a 24-bit image (`rgb_only` keeps the words' top bytes), `write_back`'s rows, `gsn_vram_copy`'s destination,
+  `gsn_write_rect`;
+- the table's reads (`sa_uploaded_from_vram`, the copy kept as an upload in `gsn_scene_targets.inc`, `KF4_SA_VERIFY`);
+- `gsn_vram()` (captures, `--renderer both`), the save state, kf4-gsreplay.
+
+**The counts.** `page_written` feeds `texture_current`, the CLUT load's memo and the pictures between's "VRAM
+written since the recording". A page is stamped only when its bytes change; owed, whether they would change is
+not known without the compare that is being saved, so owing a page would have to stamp it (only the pages not
+already the image's, with `page_holders`). Each such stamp is a miss for the CLUT memo and for `texture_current`,
+and hosted would hash textures again more often.
+
+**So:** at most about 0.6 ms a game frame on 000 in modern, less what the readers write, for a dozen hooks where
+one missed is silent. 009's target
+loads after the uploads (3.1 ms) and the table's `sa_own` are larger and smaller risks. If it is built, it wants a
+check switch that writes every owed page at once after each upload and compares VRAM, run over the four spots, the
+map tour and save states taken and loaded.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'
