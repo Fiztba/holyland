@@ -43,7 +43,9 @@
      that the frame reads before it draws it is drawn again exact after the pictures
      (port_interp_end_vblank). Local-to-local transfers into anything but the frame are not started,
      but for copies of the frame the frame reads after them (the haze, the wobble: made again from the
-     picture's frame); local-to-host ones neither; FINISH, SIGNAL and LABEL are not sent. The registers
+     picture's frame), and copies it does not read over pages the pictures between upload into first (the
+     map change's last frame, faded out by the frames after: made again from the game's frame by the exact
+     restore, COPY_RESTORE); local-to-host ones neither; FINISH, SIGNAL and LABEL are not sent. The registers
      the replay changed (FRAME, TEX0, BITBLTBUF) are written back with what the game last wrote (TEX0
      without a CLUT load). So the game's own frames are the same pixels with the switch on or off, at
      every rate (checked: --dump-frames of the even vblanks). (Dropping the draws into the other
@@ -743,18 +745,24 @@ typedef struct {
     size_t nverts, verts_room;
     uint32_t draw_fbp, shown_fbp; /* the frame's buffers */
     int restore;                   /* a paired item draws into a buffer read before it is drawn in the frame */
-    /* by copy of the frame (Uploads): made again in the pictures between, from their own frame. Only a
-       copy the frame itself reads after it, and not before: then the next frame makes its own before it
-       reads it (the haze, the wobble). One it does not read (the map change keeps its last frame there,
-       for the frames after to fade out) is left as the game's frame made it. */
+    /* by copy of the frame (Uploads): COPY_BETWEEN, made again in the pictures between, from their own
+       frame: a copy the frame itself reads after it, and not before (the haze, the wobble). COPY_RESTORE,
+       made again from the game's frame by the exact restore after them (port_interp_end_vblank): a copy the
+       frame does not read, over pages it uploaded or drew into before the copy. The pictures between send
+       those uploads again and not the copy, so they would leave the textures where the game's frame left
+       its picture: the map change copies its last frame to 0x2BC0 (MapChange_CaptureFrame) for the frames
+       after to fade out, and at 60-240 they faded out the textures uploaded there (the wand's passage,
+       October 2026). 0: neither (nothing written there before it, or the frame drawn into after it). */
     uint8_t *copy_ok;
     size_t ncopies, copy_room;
+    int restore_copy; /* a copy is COPY_RESTORE */
 } Flat;
 
 static void flat_reset(Flat *f) {
     f->nitems = 0;
     f->nverts = 0;
     f->restore = 0;
+    f->restore_copy = 0;
 }
 
 static Item *flat_add_item(Flat *f, uint32_t prim, uint64_t tex0, uint32_t fbp) {
@@ -901,8 +909,11 @@ static int read_first(const Uploads *u, uint32_t fbp) {
     return 0;
 }
 
-/* Which copies of the frame the pictures between make again (Flat's copy_ok) */
+enum { COPY_BETWEEN = 1, COPY_RESTORE = 2 };
+
+/* Which copies of the frame the pictures between make again, and which the exact restore (Flat's copy_ok) */
 static void flat_copies(Flat *f, const Uploads *u) {
+    uint32_t frame_first, frame_last;
     size_t c, e;
 
     if (f->copy_room < u->ncopies) {
@@ -913,9 +924,10 @@ static void flat_copies(Flat *f, const Uploads *u) {
         }
     }
     f->ncopies = u->ncopies;
+    pages_of(f->draw_fbp * 32, 1, 0, 1, &frame_first, &frame_last);
     for (c = 0; c < u->ncopies; c++) {
         const Event *copy = &u->ev[u->copies[c]];
-        int read_after = 0, read_before = 0;
+        int read_after = 0, read_before = 0, written_before = 0, frame_after = 0;
         /* (pages of the copy's that the frame has uploaded or drawn into so far: a read of those before
            the copy reads what the frame put there, not the copy of the frame before. The water's wobble
            copies the frame over VRAM the frame's textures came through earlier in it, read as textures
@@ -928,6 +940,9 @@ static void flat_copies(Flat *f, const Uploads *u) {
             const Event *ev = &u->ev[e];
             uint32_t p, lo, hi;
 
+            if (e > u->copies[c] && ev->kind == EV_WRITE && ev->first == frame_first) {
+                frame_after = 1; /* (the frame drawn into after the copy: its end is not what was copied) */
+            }
             if (ev->first > copy->last || ev->last < copy->first) {
                 continue;
             }
@@ -940,12 +955,15 @@ static void flat_copies(Flat *f, const Uploads *u) {
             for (p = lo; p <= hi; p++) {
                 if (ev->kind != EV_READ) {
                     written[p % 512] = 1;
+                    written_before = 1;
                 } else if (!written[p % 512]) {
                     read_before = 1;
                 }
             }
         }
-        f->copy_ok[c] = (uint8_t)(read_after && !read_before);
+        f->copy_ok[c] = read_after && !read_before ? COPY_BETWEEN
+                        : !read_after && written_before && !frame_after ? COPY_RESTORE : 0;
+        f->restore_copy |= f->copy_ok[c] == COPY_RESTORE;
     }
 }
 
@@ -1890,7 +1908,9 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
         w->bitbltbuf = *value;
         w->bitbltbuf_set = 1;
         if (w->mode == REPLAY) {
-            if ((*value & 0x3FFF) == w->draw_fbp * 32) {
+            if ((*value & 0x3FFF) == w->draw_fbp * 32 && !w->exact) {
+                /* (a copy of the frame reads the picture between's; in the exact restore, the only one made is a
+                   COPY_RESTORE, from the game's frame) */
                 *value = (*value & ~(uint64_t)0x3FFF) | (w->shown_fbp * 32);
             }
             if (((*value >> 32) & 0x3FFF) == w->draw_fbp * 32) {
@@ -1923,9 +1943,11 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
                 u->copies[u->ncopies++] = (uint32_t)(u->nev - 1);
             }
         }
-        if (w->mode == REPLAY && frame_copy && w->copies != NULL && w->copy < w->copies->ncopies && w->copies->copy_ok[w->copy]) {
+        if (w->mode == REPLAY && frame_copy && w->copies != NULL && w->copy < w->copies->ncopies &&
+            w->copies->copy_ok[w->copy] == (w->exact ? COPY_RESTORE : COPY_BETWEEN)) {
             /* a copy of the frame the frame reads: made from the picture between (BITBLTBUF's source is the
-               buffer shown) */
+               buffer shown); or in the exact restore, one it does not read made again from the game's frame
+               (BITBLTBUF's source left as the game's: the frame is not drawn after it) */
         } else if (w->mode == REPLAY) {
             /* (bitbltbuf is the game's: a transfer into the buffer drawn goes into the one shown) */
             if (dir == 1 || (dir == 2 && dbp != w->draw_fbp * 32)) {
@@ -2863,7 +2885,7 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
     w.prev = pending.objects_before;
     w.item = -1;
     w.flat = interp_still() || exact || pending.flat_before == NULL ? NULL : pending.flat;
-    w.copies = exact ? NULL : pending.flat;
+    w.copies = pending.flat;
     w.flat_prev = pending.flat_before;
     w.ask_uploads = port_gs_replay_uploads();
     w.gpu = gpu;
@@ -3453,7 +3475,7 @@ int port_interp_picture(double phase, void (*send)(int path, const void *data, s
     } else {
         replay_pending(&between, t, 0, send, 0);
     }
-    pending.dirty |= pending.flat != NULL && pending.flat->restore && pending.flat_before != NULL;
+    pending.dirty |= pending.flat != NULL && ((pending.flat->restore && pending.flat_before != NULL) || pending.flat->restore_copy);
     return 1;
 }
 
@@ -3461,7 +3483,8 @@ int port_interp_picture(double phase, void (*send)(int path, const void *data, s
    differently (a scrolling texture's) and that the game's next frame reads before it draws it, is
    drawn again as the game's frame left it: the frame once more, exact, into the buffer shown, which
    the next frame clears. (None of the maps seen so far needs it: they draw those buffers before they
-   read them.) */
+   read them.) Also after a frame with a COPY_RESTORE copy (the map change's last frame): the uploads go
+   again in their order, then the copy, from the game's frame. */
 void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes)) {
     if (pending.size != 0 && pending.age == 1 && pending.dirty) {
         replay_pending(&pending.scan.camera, 1.0, 1, send, 0);
