@@ -732,6 +732,10 @@ ASAN_OPTIONS=halt_on_error=0 out/asan/kf4 --disc kfiv_us.iso --fast --headless -
   --memcard none --input tests/newgame.pad --log run.log 2> run.err
 ```
 
+- gcc needs its sanitizer libraries (Fedora: `libasan`, `libubsan`, `libtsan`); without them the build stops
+  at the first link. clang's come with it: `cmake --preset linux-clang -B out/linux-clang-asan
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKF4_SANITIZE=address,undefined -DKF4_TESTS=ON` (or `thread` for TSan,
+  whose reports in the game's DMA and packet code are between fibers it does not know of).
 - The checks are recoverable: `ASAN_OPTIONS=halt_on_error=0` lists every report of a run instead of
   stopping at the first. UBSan goes on by itself.
 - The fibers tell ASan of each stack switch (`port/platform/fiber.c`, `port/include/port/sanitize.h`),

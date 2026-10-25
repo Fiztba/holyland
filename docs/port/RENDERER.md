@@ -219,6 +219,17 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   published later, in order) and the fallback that cuts pictures between sees the back end's lateness.
   `KF4_GSN_BACKEND=0`, or a Vulkan context of one thread index (paraLLEl-GS's with `--renderer both`): no thread,
   each stream made at once (the same calls in the same order). `--stats`: "native GS back end: N s playing".
+  On map 000 at the owner's settings the GS's thread went from about 56 ms a game frame to 36 (33 is the budget at
+  30 frames a second), a replay from 2.6 ms of it to about 1 us; the pictures are byte for byte the old build's on
+  maps 000 and 009, the thread on and off.
+- **Targets loaded before the render pass under way** (`load_target_rect`): an upload into a target that is not
+  the pass's, nor read by its draws so far, is made before the pass (`Cmd::before_pass`) instead of ending it.
+  The same pictures; it saves little GPU time. `--stats` counts them on the back end's line.
+- **Measuring the pace:** `tools/pace_test.py` plays `tests/newgame.pad` to a map at the owner's settings
+  headless and prints the pictures a second a window would show (`KF4_PRESENT_SIM`), the vblanks cut to fewer
+  pictures between, the GPU's time a picture, and (`--mode cost`) the GS's and the back end's threads' time a game
+  frame. `KF4_INTERP_CUT=0` turns the cut of pictures between off (what a place keeps up; the game slows where it
+  does not). A headless run draws only when it dumps a frame (`--dump-frames`): the script does.
 - **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
   of work, and `--stats` says why render passes ended and what resolves were for. Another program on
   the GPU (a second run of the game) shows up in those times: run alone. `KF4_GSN_GPU_TIME=2` also
@@ -313,6 +324,17 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   dynamic state in Granite would take out; re-submitting command buffers would take Granite's per-frame
   descriptors out of them. The first picture of each frame is still drawn from the packets (the frame's
   own draws decide for t 1 only).
+- **The pictures between's GPU cost** (measured October 2026, map 000, owner's settings, `KF4_GSN_GPU_TIME`,
+  `--fast`, every picture drawn): with the back end's thread (above) the GPU is the limit, 94-100% busy. A game
+  frame costs about 11 ms of GPU; at 60 Hz (one picture between a frame) 36 ms, at 120 Hz 54 ms. A picture between
+  has as many draws and render passes as the frame's own picture (11 passes; the runs of shader blending, ties and
+  layers are not the cause). The cost is `port_interp_end_vblank`: the frame reads its reflection before it draws
+  it (`flat_last->restore`, frame_interp.c), so after the pictures between, which drew the reflection from their
+  cameras, the whole frame is drawn again, exact, to put that buffer back: 571 of 767 frames. Without that the
+  first picture between costs 14.2 ms instead of 23.6 (60 Hz: about 25 ms a frame, which fits). The next step: the
+  native GS keeps the buffers the restore is for (a few MB of images) before the frame's pictures between and copies
+  them back after, the frame drawn again only where it cannot. Then the cut (`port_gs_run_vsync`, gs.c) counts
+  pictures between a vblank, so the least it keeps above none is two a game frame; one a game frame would fit.
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.
