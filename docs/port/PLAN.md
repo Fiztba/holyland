@@ -408,6 +408,14 @@ Still open:
   Controls page's "Run (hold)" (Left Shift, a controller's left stick press) instead of the action
   button, which then only uses things. `Player_Update` (game patch) passes the held buttons through
   `port_controls_run_held`; off, or with a pad script, they are the pad's (README, "Mods").
+- A retail data bug fixed (`map/map_load.c`, `neighbour_needed_here`): map 104's record 14, which
+  must set up map 102 for the stairs east of it, lies at the corridor floor's own height, so the
+  corridor's record 9 wins the tie in `Player_CollideWithMap` and record 14 never becomes
+  `PlayerState.map_index`. Coming back from Belric Psytar (map 105 asked for, then map 102), map 102
+  was read but never set up: the stairs and the corridor's east door led into black, and the player
+  fell through. Now a record that needs the neighbour also counts while the player stands on its
+  floor. Some other maps have trigger records at their floor's height too (a scan of the records'
+  boxes); only this one is known to break.
 - First run extracts the game from the user's ISO.
 - Builds and releases come from CI. CI builds and tests on Linux (gcc) and on Windows (llvm-mingw
   20260616 and 20261006, SDL2 2.30.9): `.github/workflows/ci.yml`. Releases do not yet.
