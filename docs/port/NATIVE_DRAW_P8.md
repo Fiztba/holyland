@@ -1666,7 +1666,8 @@ batch), only one is: 178 pixels a picture differ (at most 64 levels) at the owne
 pairs can tie does not help: 90% of the cuts are such folds (tied only on their shared edge), and the CPU's corners
 (whole Zs) are not the GPU's (a separation test needed a margin of 8 Z to keep the pictures). Fewer runs by
 reordering the triangles into levels would save 18% of them. `KF4_SA_SHINE_RUNS=0` (a test) draws such a shine
-whole: 237 pictures a second against 140, GPU 3.5 ms a picture against 5.2.
+whole: 237 pictures a second against 140, GPU 3.5 ms a picture against 5.2. (Now `--native-shine`, whole by
+default: "The ice shine drawn whole" below.)
 
 **What changed.** A shine right after its own first pass (the same corners, bit for bit, `sa.first_z`, noted by
 `sa_note_first_z` for a two-phase first pass whose alpha test passes every pixel) leaves out its Z-first draws:
@@ -1694,7 +1695,7 @@ the nearest (its frames at 30 alone cost the GS's thread 46 ms each in `--fast`)
 **What is left:** the runs. Each costs a copy, two barriers and two pipeline binds (the copy's program and the
 blend's, whose layouts differ, so the descriptor sets are bound again each time). Options: the copy's program with
 the blend's layout (no descriptor rebinds), fewer runs by levels, or the shine drawn whole (the owner's call: the
-fold-edge pixels above).
+fold-edge pixels above). The owner chose the shine drawn whole: "The ice shine drawn whole" below.
 
 **Pictures:** byte for byte a8eb108e's: the four spots and the icy spot (every picture of vblanks 200-207, 301, 399;
 under water 400-407, 600: 196 pictures), the forced water, drain, copytex, prev and haze at the pond (every picture
@@ -1703,6 +1704,77 @@ of 600-609: 200), the herb run in modern at the owner's settings (the same `--lo
 gs` and `native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off` against
 play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820, 1840 byte for
 byte.
+
+### The ice shine drawn whole (branch `perf/shine-whole`, from `main` f2ff69d4)
+
+The owner's call ("let's get what we can out of it"): the shine drawn whole by default in modern, the runs a switch
+away, as the rule for the PS2's quirks has it (modern by default, a switch for the PS2's picture).
+
+**What changed.**
+- `--native-shine whole|exact` (`settings.json` `display.native_shine`, `"whole"` by default; the overlay's Renderer
+  section, beside the native GS's other picture options: "Ice shine: exact PS2 folds (slower)", live). Whole: a second
+  pass blended in the shader right after its own first pass over the same corners (`after_first` in `sa_draw_batch`,
+  the same test as the left-out Z-first draws above) is drawn whole, not in runs. Nothing else changes: other shines,
+  other blends in the shader and the tie runs keep their runs. Exact is main's picture. `KF4_SA_SHINE_RUNS` is gone.
+- Single-sampled, such a shine is kept by the skinned groups (`shine_kept`): the group's shines blend from one copy
+  made after all its first passes, by all their triangles (the run copy's program, conservative, in the render pass),
+  instead of each part's first pass a group of one and each shine a copy between two barriers. The same picture: a
+  pixel takes one part's shine at most (the marks), the part whose first pass is the last to draw there, and the copy
+  has that first pass's colour there, as the copy before that part's shine had.
+
+**Why the groups stop at MSAA (yet).** The copy is each pixel's samples' mean. Drawn part by part, a part's copy at a
+pixel it shares with another part (a seam: one sample each) has the part before it already shined there, and the shine
+is blended from that: the seam comes out brighter. Kept in a group, the copy has the first passes alone. So with MSAA 2
+the groups differ from part by part on about 1,165 pixels a picture at the icy spot (up to 76 levels), all along the
+parts' seams. Part by part is the artefact: single-sampled (the PS2's way) the seams have no such lines, part by part or
+kept, while with MSAA 2 part by part draws a bright dashed line along every seam of the creatures (main has them too,
+exact or whole); kept in groups, the creatures look as they do single-sampled. `KF4_SA_SHINE_GROUP=2` (a test) keeps
+them with MSAA too; making it the default is one condition (the owner's call: it changes main's MSAA pictures there).
+`KF4_SA_SHINE_GROUP=0`: never kept.
+
+**Numbers** (the owner's settings: `--renderer modern`, 240, 3x, MSAA 2, aniso 2, cut-out AA ssaa, modern sky,
+widescreen; `quick_icy` standing still; real time 1,000 vblanks, counted over vblanks 400-980). The owner's game was
+running on the GPU for most of these (the GPU 20-80% busy without them), so the real-time numbers are low and noisy;
+`--fast` with every picture between drawn (700 vblanks) counts the CPU's work alone.
+
+| | main (= exact) | whole (the default) | whole, kept with MSAA (`KF4_SA_SHINE_GROUP=2`) |
+|---|---|---|---|
+| `--fast`, every picture between drawn: back end | 12.5 s | 4.9 s | 0.95 s |
+| the same: Vulkan draws, pipeline binds | 9.8 M, 8.7 M | 5.0 M, 3.4 M | 3.2 M, 0.30 M |
+| the same: GS's thread (GIF) a game frame | 23.7 ms | 15.9 ms | 13.3 ms |
+| real time, the GPU shared: pictures a second | 64-66 | 78-92 | 212-236 |
+| the same: GPU a picture (`KF4_GSN_GPU_TIME=1`) | 3.8-4.0 ms | 4.5-5.2 ms | 2.8-2.9 ms |
+| the same: GS's thread, back end a picture | 3.4-3.5, 1.8 ms | 3.0-3.7, 1.3-1.7 ms | 1.8-2.1, 0.5 ms |
+| real time, the GPU nearly idle: pictures a second, GPU a picture | (perf/icy: 138-142, 5.15 ms) | 221, 3.75 ms | 240, 1.87 ms |
+| the same: GS's thread, back end a picture | | 1.6, 1.7 ms | 1.4, 0.35 ms |
+
+Single-sampled (MSAA 1, where the groups take the shines by default), `--fast` as above: back end 12.6 s (main) against
+0.89 s, pipeline binds 8.7 M against 0.32 M. The sampler (`tools/sampler`, every picture asked for, 10 s): whole
+spends 57% of a core in the back end (78% of it in the driver: pipeline binds 20%, descriptor sets 19%, barriers 14%,
+dynamic state 12%); kept in groups 11%.
+
+**Pictures** (against main f2ff69d4, the owner's settings, `--fast`): the four spots byte for byte (every picture of
+vblanks 200-207, 301, 399; under water 400-407, 600), with MSAA 2 and with MSAA 1. The icy spot (every picture of
+200-207, 301, 399, 400-407, 600: 76) whole against main's `KF4_SA_SHINE_RUNS=0` byte for byte, with MSAA 2 (part by
+part) and with MSAA 1 (kept in groups); against main, 44 of 76 differ, 103 pixels a picture (at most 64 levels), all on
+fold edges, main's brighter (the second blend). `--native-shine exact` byte for byte main's (MSAA 2 and 1), and
+`display.native_shine` `"exact"` in `settings.json` (MSAA 2, a hidden window: `KF4_OVERLAY_SHOT` reads the settings). The forced water, drain, copytex, prev and haze at the pond (every
+picture of 600-611: 240) byte for byte; the herb run in modern (the same `--log`, PATH1 hash 561c91020b2908ee, pictures
+1800, 1820, 1840 with every phase) byte for byte. The off check passes: boot_test; frame_test `--renderer gs` and
+`native`; gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off`: the same `--log`
+as main, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820, 1840 byte for byte.
+
+**What is left.**
+- With MSAA: the groups (above), the owner's call. Without them each part is still a group of one, a copy and two
+  barriers, and the GPU's time goes mostly to those barriers.
+- Part by part, in levels: parts whose places on the screen do not meet drawn as one step (their first passes, one
+  copy, their shines) would be exact with MSAA too. By the parts' boxes a group of 9.3 parts is 4.2 levels, but in a
+  picture between the GPU moves the corners and the boxes are not known (the marks take every part there for the same
+  reason): it needs each part's box over the picture's move, a bigger change.
+- The copy's program with the blend's layout (no descriptor sets bound again at each switch: 19% of the back end, part
+  by part) changes `gs_in.frag`'s layout (both input attachments), so the shipped pipeline list's lines for it go
+  stale; with the groups the back end no longer limits.
+- Exact (`--native-shine exact`) is main's runs, untouched (fewer runs by levels: 18% fewer).
 
 ## The numbers (first round)
 
@@ -1757,7 +1829,8 @@ reports) is in the session's scratchpad, `nd5_p8/evidence/`.
   change across a GS pixel), `KF4_SA_SLACK=LAYER[,TIE]`, `KF4_SA_WORLD=EPS` (a layer's world units; 0: the Z rule), `KF4_SA_SKIN=EPS` (a skinned
   model's parts' tie in world units; 0, the default: exact), `KF4_GSN_DYNAMIC=0|1` (no dynamic state, or none for blending: "Pipeline binds"), `KF4_SA_GROUP=0` (a skinned model's parts drawn as they come,
   not kept: "A skinned model's parts drawn together"), `KF4_SA_RUN_COPY=0` (shader blending's copy over the run's box, not by its
-  triangles), `KF4_SA_REFLECTION_KEEP=0|2` (the frame's reflection drawn in every picture between, or always kept; 1, the
+  triangles), `KF4_SA_SHINE_GROUP=0|2` (a shine drawn whole never kept by the skinned groups, or kept with MSAA too; 1, the default:
+  kept single-sampled: "The ice shine drawn whole"), `KF4_SA_REFLECTION_KEEP=0|2` (the frame's reflection drawn in every picture between, or always kept; 1, the
   default: kept while the camera is the frame's bit for bit: "The pond at 240"), `KF4_SA_ZFIRST=0` (no Z-first draw by depth
   alone), `KF4_GSN_GPU_TIME=2` (the GPU's time a picture by what is drawn), `KF4_ND280_PLAN_CHECK=1` (each 0x280 plan made both ways, those
   that differ counted in `[stats] native draw 0x280 plans`),

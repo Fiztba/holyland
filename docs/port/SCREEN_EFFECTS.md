@@ -194,9 +194,16 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
   the shader, in runs of triangles that do not overlap (each run a copy of the pixels it blends over, two barriers,
   its draws): about 700 parts and 2,400 runs a picture, 5,700 Vulkan draws and as many pipeline binds a picture
   between. Nothing is read back or decoded.
-- **PC:** the shine's Z-first draws are left out (perf/icy, NATIVE_DRAW_P8.md "The icy corridor"); the runs stay.
-  Hosted (`--native-draw on`) is slower there: each run is a render pass and an MSAA resolve.
-- **Test:** the `icy` case (standing still from `quick_icy`).
+- **PC:** the shine's Z-first draws are left out (perf/icy, NATIVE_DRAW_P8.md "The icy corridor"). Modern draws the
+  shine whole by default (perf/shine-whole, NATIVE_DRAW_P8.md "The ice shine drawn whole"): where a part folds over its
+  own edge the GS blends both triangles there, drawn whole one is (about 100 pixels a 3x picture, main's brighter by up
+  to 64 levels); single-sampled the skinned groups then take the parts, one copy a group of parts. `--native-shine exact`
+  (`settings.json` `display.native_shine`, the overlay's "Ice shine: exact PS2 folds (slower)") keeps the runs: main's
+  picture. With MSAA each part is still a copy between two barriers, and draws a bright dashed line along the parts'
+  seams (each part's copy is the pixel's samples' mean, its neighbour's shine in it); the groups with MSAA
+  (`KF4_SA_SHINE_GROUP=2`) remove both, the owner's call. Hosted (`--native-draw on`) is slower there: each run is a
+  render pass and an MSAA resolve.
+- **Test:** the `icy` case (standing still from `quick_icy`, the shine whole) and `icy exact` (`--native-shine exact`).
 
 ## Tests
 
