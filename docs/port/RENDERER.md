@@ -219,7 +219,7 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   published later, in order) and the fallback that cuts pictures between sees the back end's lateness.
   `KF4_GSN_BACKEND=0`, or a Vulkan context of one thread index (paraLLEl-GS's with `--renderer both`): no thread,
   each stream made at once (the same calls in the same order). `--stats`: "native GS back end: N s playing".
-  On map 000 at the owner's settings the GS's thread went from about 56 ms a game frame to 36 (33 is the budget at
+  On map 000 at the owner's settings (measured with `--renderer native`) the GS's thread went from about 56 ms a game frame to 36 (33 is the budget at
   30 frames a second), a replay from 2.6 ms of it to about 1 us; the pictures are byte for byte the old build's on
   maps 000 and 009, the thread on and off.
 - **Targets loaded before the render pass under way** (`load_target_rect`): an upload into a target that is not
@@ -325,7 +325,8 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   descriptors out of them. The first picture of each frame is still drawn from the packets (the frame's
   own draws decide for t 1 only).
 - **The pictures between's GPU cost** (measured October 2026, map 000, owner's settings, `KF4_GSN_GPU_TIME`,
-  `--fast`, every picture drawn): with the back end's thread (above) the GPU is the limit, 94-100% busy. A game
+  `--fast`, every picture drawn; `--renderer native`, and `modern` the same within 3%: 3.07 ms a picture of the
+  frames', 22.9 ms a first picture between's): with the back end's thread (above) the GPU is the limit, 94-100% busy. A game
   frame costs about 11 ms of GPU; at 60 Hz (one picture between a frame) 36 ms, at 120 Hz 54 ms. A picture between
   has as many draws and render passes as the frame's own picture (11 passes; the runs of shader blending, ties and
   layers are not the cause). The cost is `port_interp_end_vblank`: the frame reads its reflection before it draws

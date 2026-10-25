@@ -6,7 +6,7 @@ frame costs the native GS's threads.
                        [--mode pace,cost] [-- extra program arguments]
 
 Each run plays tests/newgame.pad and teleports to the map at vblank 1900 (--teleport), headless, with the owner's
-picture settings (4x with native widescreen, anisotropic 16, cut-out AA, native draw: OWNER below) at --hz.
+picture settings (--renderer modern, 4x with native widescreen, anisotropic 16, cut-out AA, native draw: OWNER below) at --hz.
 
 pace: real time with KF4_PRESENT_SIM=HZ (the Vulkan presenter's pacing without a window): the pictures handed over
       each second of play (KF4_PRESENT_LOG), the game's vblanks shown each second (60: the game keeps its speed),
@@ -31,7 +31,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAD = os.path.join(ROOT, "tests", "newgame.pad")
 TELEPORT = 1900
-OWNER = ["--renderer", "native", "--native-draw", "on", "--native-scale", "4", "--widescreen", "--native-widescreen",
+OWNER = ["--renderer", "modern", "--native-draw", "on", "--native-scale", "4", "--widescreen", "--native-widescreen",
          "--native-msaa", "1", "--native-aniso", "16", "--native-cutout-aa", "ssaa", "--present-scaling", "best",
          "--present-sharpen", "1"]
 
