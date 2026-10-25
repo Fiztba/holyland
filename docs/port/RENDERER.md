@@ -356,6 +356,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   at those places the copy-back would not move play; a map whose frames read a buffer before drawing it would
   show its own count above 571. What limits a slower CPU is the GS's thread: 19-22 ms a game frame on a P-core
   of an i9-13900KF, 28-30 ms on an E-core, where the game then falls to 35-40 vblanks a second.
+- **Upscaling (FSR, DLSS):** the scene drawn below the window's size, jittered, with depth and motion vectors, and
+  brought up before the composite so the HUD stays the GS's. The plan, its inputs and the steps are in
+  [UPSCALING.md](UPSCALING.md). Modern renderer only, and mostly a picture-quality feature: the GPU's time a
+  picture hardly scales with its pixels here.
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.
