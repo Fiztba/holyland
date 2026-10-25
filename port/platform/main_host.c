@@ -130,6 +130,7 @@
        --extended-stats  the opt-in mod: the extended stats panel and hit log (F6; docs/port/EXTENDED_STATS.md)
        --automap         the opt-in mod: the automap, a map of where you have been (M; docs/port/AUTOMAP.md)
        --automap-cheats  the automap with all its cheats on (the whole map, items, enemies, secrets, hints)
+       --weapon-sets     the opt-in mod: a second weapon and shield, swapped in on R (docs/port/WEAPON_SETS.md)
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
@@ -180,6 +181,7 @@
 #include <string.h>
 
 #include "port/automap.h"
+#include "port/weapon_sets.h"
 #include "port/audio.h"
 #include "port/debug.h"
 #include "port/host.h"
@@ -231,7 +233,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
@@ -393,6 +395,9 @@ static void parse_options(int argc, char **argv) {
             continue;
         }
         if (port_automap_option(argc, argv, &i)) { /* the automap mod (port/platform/automap.c) */
+            continue;
+        }
+        if (port_weapon_sets_option(argc, argv, &i)) { /* the weapon sets mod (port/platform/weapon_sets.c) */
             continue;
         }
         if (strcmp(option, "--separate-run") == 0) {

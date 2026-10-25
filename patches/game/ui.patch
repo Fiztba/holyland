@@ -2311,10 +2311,10 @@ index 284ee1619580424bcc02e41a5465bc68d1012e6d..545c5b6de661d8330fc4e7e4e0ad1af9
  
  #endif
 diff --git a/src/game/ui/menu_screens.c b/src/game/ui/menu_screens.c
-index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ffd8ccb9d3 100644
+index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..097ddd9524922d47e4d7855c356f720f6efc63cd 100644
 --- a/src/game/ui/menu_screens.c
 +++ b/src/game/ui/menu_screens.c
-@@ -23,6 +23,22 @@
+@@ -23,6 +23,27 @@
  #include "gfx/screen.h"
  #include "save/save_card.h"
  #include "item/item.h"
@@ -2323,6 +2323,11 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
 +#include <stdio.h>
 +#include <time.h>
 +#include "port/libc_ps2.h" /* PC: newlib's mktime on the game's struct tm */
++/* PC: the weapon sets mod's Weapon 2 and Shield 2 on the equipment screen (game/weapon_sets.c) */
++void WeaponSets_LinkLists(void);
++s32 WeaponSets_TrackEquip(MenuItemList *list, s32 group_shown);
++int WeaponSets_ShownIsEquipped(MenuItemList *list, MenuItem *item, int equipped);
++int WeaponSets_Choose(MenuItemList *list, MenuItem *item);
 +/* PORT: as libcdvd.h and libgraph.h declare them; those headers cannot be included while core/file.h and gfx/packet.h
 +   declare SDK functions of their own */
 +int sceCdBreak(void);
@@ -2337,7 +2342,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  
  extern LevelRecord weapon_level_records[70];
  extern LevelRecord worn_item_level_records[160];
-@@ -134,28 +150,26 @@ int File_OpenUnflagged(char *name, int nowait, int pack);
+@@ -134,28 +155,26 @@ int File_OpenUnflagged(char *name, int nowait, int pack);
  int File_Read(int, void *, int);
  int File_Close(int file);
  int File_Sync(int file, int mode);
@@ -2380,7 +2385,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern LinkNode worn_model_loader;
  extern LinkNode weapon_model_load;
  extern LinkNode shield_model_load;
-@@ -167,12 +181,12 @@ extern LinkNode ring_model_load;
+@@ -167,12 +186,12 @@ extern LinkNode ring_model_load;
  extern LinkNode bracelet_model_load;
  extern LinkNode amulet_model_load;
  extern LinkNode key_item_model_loads[12];
@@ -2396,7 +2401,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern u32 main_part_count;
  extern u32 item_part_count;
  extern u32 magic_part_count;
-@@ -250,18 +264,12 @@ extern LevelRecordDef worn_defs[];
+@@ -250,18 +269,12 @@ extern LevelRecordDef worn_defs[];
  extern GsDoubleBufferDc menu_frame_buffers;
  extern LoadedTexture menu_font_texture;
  extern MenuModelMotion *equip_weapon_motions[];
@@ -2415,7 +2420,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  void Vram_Clear(int, int);
  void Sound_MuteTracked(void);
  void Sound_UnmuteTracked(void);
-@@ -273,7 +281,8 @@ void Sound_MutePositional(void);
+@@ -273,7 +286,8 @@ void Sound_MutePositional(void);
  void Input_Update(void);
  int SoundDriver_FlushCommands(void);
  s16 MenuPad_Update(void);
@@ -2425,7 +2430,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern s32 menu_run_step;
  extern s8 menu_mode;
  extern u16 menu_buttons;
-@@ -286,34 +295,29 @@ extern int pad_mode_before;
+@@ -286,34 +300,29 @@ extern int pad_mode_before;
  extern MenuScreenState card_screen_state;
  extern ColorBytes menu_draw_color;
  extern f32 menu_view_screen_matrix[16];
@@ -2467,7 +2472,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern LoadedBlockRef menu_file_blocks[];
  extern void *menu_screen_handler;
  extern float pulse_sprite_alpha;
-@@ -323,7 +327,7 @@ extern s8 system_screen_state;
+@@ -323,7 +332,7 @@ extern s8 system_screen_state;
  extern ColorBytes panel_text_color;
  extern ColorBytes model_draw_color;
  extern s32 menu_file_block_count;
@@ -2476,7 +2481,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern u8 brightness_before;
  void func_001095D0(void);
  void func_001095D8(void);
-@@ -335,7 +339,6 @@ void TextureTable_QueueAll(TextureTableHeader *);
+@@ -335,7 +344,6 @@ void TextureTable_QueueAll(TextureTableHeader *);
  void MenuTexture_Upload(TextureHeader *, LoadedBlockRef *);
  extern s8 main_menu_line;
  void Sound_LoadMgBank(int);
@@ -2484,7 +2489,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern f32 screen_part_alphas[0x100];
  extern f32 panel_part_alphas[0x100];
  extern char equip_model_shown;
-@@ -345,7 +348,7 @@ extern s8 recollection_cursor;
+@@ -345,7 +353,7 @@ extern s8 recollection_cursor;
  s32 Sound_PlayMenu(s32);
  int Menu_OwnsAnyItem(void);
  int Menu_KnowsCastableSpell(void);
@@ -2493,7 +2498,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern u8 D_00446B39;
  extern GameStatus game_status;
  extern f32 use_item_model_position[4];
-@@ -353,8 +356,6 @@ extern f32 use_item_model_angle;              /* the shown item model's turn abo
+@@ -353,8 +361,6 @@ extern f32 use_item_model_angle;              /* the shown item model's turn abo
  extern s32 use_item_frames;
  extern s32 D_00446DF4;
  extern s8 use_item_state;               /* 0: fading in, 1: open, 2 to 4: waiting for the models, 5 to 7: fading out */
@@ -2502,7 +2507,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  void MenuDraw_Bar(MenuCursorBar *);
  s32 MenuText_SetColor(ColorBytes bytes);
  s32 MenuText_DrawWrapped(u16 *, s32);
-@@ -369,16 +370,17 @@ extern s32 D_00446DF8;
+@@ -369,16 +375,17 @@ extern s32 D_00446DF8;
  extern s8 cast_spell_state;               /* 0: fading in, 1: open, 2: waiting for the models, 3: fading out */
  int MenuText_SetGlyphSize(GsPackedWord);
  s32 MenuText_DrawLine(u16 *text, s32 limit);
@@ -2524,7 +2529,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern s8 detail_panel_sound_pending;
  extern f32 equip_item_model_angle;
  extern f32 equip_weapon_model_angle;
-@@ -398,10 +400,8 @@ extern s32 D_00446E28;
+@@ -398,10 +405,8 @@ extern s32 D_00446E28;
  extern s32 D_00446E30;
  extern MenuFreeNode D_004472B8;
  extern s8 equip_state;
@@ -2537,7 +2542,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  void Player_RecomputeStats(void);
  int Menu_IsEquipSlotFilled(s32, u32);
  int Menu_IsEquipped(u32, s32, s32);
-@@ -437,7 +437,7 @@ s32 MenuDraw_SetGsRegister(int, s64);
+@@ -437,7 +442,7 @@ s32 MenuDraw_SetGsRegister(int, s64);
  #define GIF_SEND(packet, count)                                 \
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)); \
      *D2_QWC = count;                                            \
@@ -2546,7 +2551,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      *D2_CHCR = D_CHCR_STR
  #define RESET_ALPHAS(parts, count)                                                                   \
      for (i = 0; i < count; i++) {                                                                    \
-@@ -447,7 +447,7 @@ s32 MenuDraw_SetGsRegister(int, s64);
+@@ -447,7 +452,7 @@ s32 MenuDraw_SetGsRegister(int, s64);
  #define DRAW_PARTS(parts, count, variant)                                                            \
      for (i = 0; i < count; i++) {                                                                    \
          SET_BLEND(parts[i].blend_mode);                                                              \
@@ -2555,7 +2560,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          SET_BLEND(0);                                                                                \
      }
  extern s8 key_items_state;               /* 0: fading in, 1: open, 2: fading out to Menu_UpdateKeyItems, 3: fading out to leave */
-@@ -463,16 +463,15 @@ extern s32 recollection_page;              /* the page shown, 0 to 49 */
+@@ -463,16 +468,15 @@ extern s32 recollection_page;              /* the page shown, 0 to 49 */
  extern s32 recollection_page_before;              /* the page shown the frame before */
  extern s8 recollection_state;               /* 0: fading in, 1: open, 2: fading out */
  extern s8 recollection_top;               /* the counter at the top of the list */
@@ -2574,7 +2579,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      return ((s32 *)table)[number];
  }
  extern f32 visible_item_model_position[4];
-@@ -497,7 +496,7 @@ static inline s32 ScaleValue(s32 value, s32 percent, s32 divisor) {
+@@ -497,7 +501,7 @@ static inline s32 ScaleValue(s32 value, s32 percent, s32 divisor) {
  #define DRAW_PACKETS(packets, count, param)                                                          \
      for (i = 0; i < (count); i++) {                                                                  \
          Menu_SetBlendMode((packets)[i].blend_mode);                                                  \
@@ -2583,7 +2588,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          ((void (*)(u8))Menu_SetBlendMode)(0);                                                        \
      }
  extern s32 system_menu_line;
-@@ -598,8 +597,8 @@ void Sound_SetBgmVolume(s32);
+@@ -598,8 +602,8 @@ void Sound_SetBgmVolume(s32);
  void Sound_SyncBgmLevel(void);
  void SoundDriver_SetMono(void);
  void SoundDriver_SetStereo(void);
@@ -2594,7 +2599,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  extern s8 buttons_leave_steps;
  extern s32 button_line;
  extern s32 button_prompt_choice;
-@@ -696,9 +695,9 @@ static void Menu_DrawBackdropPlain(void);
+@@ -696,9 +700,9 @@ static void Menu_DrawBackdropPlain(void);
  static void Menu_DrawBackdropItemSelParts(void);
  static void Menu_DrawBackdropPreshopParts(void);
  static int Menu_RunStep(void);
@@ -2607,7 +2612,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  static void Menu_OpenMain(void);
  static void Menu_UpdateMain(HandlerContext *context);
  static void Menu_OpenChosenScreen(HandlerContext *context);
-@@ -706,7 +705,7 @@ static void Menu_StepBlink(void);
+@@ -706,7 +710,7 @@ static void Menu_StepBlink(void);
  static void Menu_MoveItemAfter(MenuItem *item, MenuItem *after);
  static f32 Menu_PulseValue(f32 value, s32 start, s32 target);
  static void Menu_UpdateUseItem(HandlerContext *context);
@@ -2616,7 +2621,15 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  static void Menu_UpdateEquip(void);
  static void Menu_UpdateStatus(void);
  static void Menu_UpdateKeyItems(void);
-@@ -1432,7 +1431,7 @@ static void Menu_StepPackageLoad(ChunkUpload *upload) {
+@@ -926,6 +930,7 @@ static void Menu_BuildItemRings(void) {
+     } else {
+         castable_spell_cursor[0] = NULL;
+     }
++    WeaponSets_LinkLists(); /* PC: the weapon sets mod's lists, linked above the weapon's while it is on */
+     equip_list_shown[0] = (MenuItemList *)equip_list_refs[equip_group_shown];
+ }
+ 
+@@ -1432,7 +1437,7 @@ static void Menu_StepPackageLoad(ChunkUpload *upload) {
  }
  
  /* Gives a load node a buffer from the free list, if one is left. Returns nothing. */
@@ -2625,7 +2638,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      ChunkPoolNode *free_node = free_load_buffers;
  
      if (free_node != NULL) {
-@@ -1940,7 +1939,7 @@ void Menu_Init(void) {
+@@ -1940,7 +1945,7 @@ void Menu_Init(void) {
  
      sceGsResetGraph(0, 1, 2, 1);
      sceGsSetDefDBuffDc(&menu_frame_buffers, 0, 0x280, 0xE0, 3, 0x30, 1);
@@ -2634,7 +2647,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      MenuHeap_Reset();
      Menu_LoadAllParts();
      menu_file = MenuHeap_Alloc(0xE0000);
-@@ -1959,139 +1958,139 @@ void Menu_Init(void) {
+@@ -1959,139 +1964,139 @@ void Menu_Init(void) {
      }
      for (i = 0; i < 150; i++) {
          shortcut_entries[i].item_number = i;
@@ -2797,7 +2810,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          spell_entries[i].group = 1;
      }
      use_item_list.group = 11;
-@@ -2159,7 +2158,7 @@ static const MenuWeekdayNames weekday_names_table = { {
+@@ -2159,7 +2164,7 @@ static const MenuWeekdayNames weekday_names_table = { {
     card_screen_state.unk16 was set. */
  int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign-extends a byte here
      ClockTime clock;
@@ -2806,7 +2819,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      MenuWeekdayNames weekday_names;
      u32 *packet;
      s32 status; // match: one variable for the card state in the loop and the menu number after it
-@@ -2174,13 +2173,13 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
+@@ -2174,13 +2179,13 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
      sceCdReadClock((struct sceCdCLOCK *)&clock);
      weekday_names = weekday_names_table; // match: never read
      // match: the clock bytes are BCD and are used as they are, the day is lowered by one, and the result is not used
@@ -2827,7 +2840,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      menu_mode = mode;
      pad_mode = pad_mode_before = Pad_GetMode(0, 0);
      while (SoundDriver_FlushCommands(), menu_run_steps[menu_run_step]() != 0) {
-@@ -2249,7 +2248,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
+@@ -2249,7 +2254,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
          packet[0] = 0x800A;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 11;
@@ -2836,7 +2849,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          *D2_CHCR = D_CHCR_STR;
          context2_buffer_half = context1_buffer_half = 1;
      }
-@@ -2300,11 +2299,12 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
+@@ -2300,11 +2305,12 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
          }
          return 0;
      }
@@ -2851,7 +2864,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      Menu_Start,
      Menu_RunHandler,
      Menu_CutModelChain,
-@@ -2390,10 +2390,10 @@ static void Menu_SendUnusedFlatSprite(void) {
+@@ -2390,10 +2396,10 @@ static void Menu_SendUnusedFlatSprite(void) {
      (cursor++)->as_int = 0xF2000E;
      (cursor++)->as_int = 0x41;
      (cursor++)->as_int = 0;
@@ -2865,7 +2878,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -2464,10 +2464,10 @@ static void Menu_SendUnusedSpriteFirst(void) {
+@@ -2464,10 +2470,10 @@ static void Menu_SendUnusedSpriteFirst(void) {
      (cursor++)->as_int = 0x80;
      (cursor++)->as_int = 0x42;
      (cursor++)->as_int = 0;
@@ -2879,7 +2892,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -2538,16 +2538,16 @@ static void Menu_SendUnusedSpriteSecond(void) {
+@@ -2538,16 +2544,16 @@ static void Menu_SendUnusedSpriteSecond(void) {
      (cursor++)->as_int = 0x80;
      (cursor++)->as_int = 0x42;
      (cursor++)->as_int = 0;
@@ -2900,7 +2913,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      u32 *packet;
  
      packet = MenuDraw_NextPacket();
-@@ -2565,7 +2565,7 @@ int Menu_DrawItemModel(f32 *matrix) { // match: callers declare an int result; n
+@@ -2565,7 +2571,7 @@ int Menu_DrawItemModel(f32 *matrix) { // match: callers declare an int result; n
      packet[11] = 0;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 3;
@@ -2909,7 +2922,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      *D2_CHCR = D_CHCR_STR;
      DRAW_NODE_MODEL(&model_load_shown, matrix, menu_draw_color);
      sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 1.0f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
-@@ -2587,7 +2587,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2587,7 +2593,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[1] = 0x100B4000; // match: the tag word packet[0] is written last
          packet[2] = 0xE;
          packet[3] = 0;
@@ -2918,7 +2931,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          packet[6] = 0x4C;
          packet[7] = 0;
          packet[8] = 0;
-@@ -2602,7 +2602,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2602,7 +2608,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[17] = 0xE00000;
          packet[18] = 0x40;
          packet[19] = 0;
@@ -2927,7 +2940,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          packet[22] = 0x6;
          packet[23] = 0;
          packet[24] = 0x80808080;
-@@ -2651,7 +2651,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2651,7 +2657,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[69] = 0;
          packet[70] = 0x5;
          packet[71] = 0;
@@ -2936,7 +2949,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          packet[74] = 0x4C;
          packet[75] = 0;
          packet[76] = 0;
-@@ -2685,7 +2685,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2685,7 +2691,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[0] = 0x8019;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 26;
@@ -2945,7 +2958,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          *D2_CHCR = D_CHCR_STR;
      }
      sceGsSyncPath(0, 0);
-@@ -2714,7 +2714,7 @@ s32 Menu_EndFrame(s32 run_handler) {
+@@ -2714,7 +2720,7 @@ s32 Menu_EndFrame(s32 run_handler) {
          D_00447208++;
      }
      D_00447208 %= 3;
@@ -2954,7 +2967,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      sceGsSetHalfOffset2(context1_buffer_half != 0 ? menu_second_draw_env2 : menu_first_draw_env2, 0x800, 0x800, even_field);
      FlushCache(0);
      sceGsSyncPath(0, 0);
-@@ -2755,7 +2755,7 @@ static void Menu_DrawBackdropPlain(void) {
+@@ -2755,7 +2761,7 @@ static void Menu_DrawBackdropPlain(void) {
          packet[17] = 1;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 5;
@@ -2963,7 +2976,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          *D2_CHCR = D_CHCR_STR;
          sceGsSyncPath(0, 0);
          packet = MenuDraw_NextPacket();
-@@ -2773,7 +2773,7 @@ static void Menu_DrawBackdropPlain(void) {
+@@ -2773,7 +2779,7 @@ static void Menu_DrawBackdropPlain(void) {
          packet[11] = 2;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 3;
@@ -2972,7 +2985,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          *D2_CHCR = D_CHCR_STR;
      }
  }
-@@ -2786,7 +2786,7 @@ static void Menu_DrawBackdropItemSelParts(void) {
+@@ -2786,7 +2792,7 @@ static void Menu_DrawBackdropItemSelParts(void) {
      for (i = 0; i < item_sel_part_count; i++) {
          if (item_sel_parts[i].handler_index == 2) {
              Menu_SetBlendMode(item_sel_parts[i].blend_mode);
@@ -2981,7 +2994,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              Menu_SetBlendMode(0);
          }
      }
-@@ -2799,7 +2799,7 @@ static void Menu_DrawBackdropPreshopParts(void) {
+@@ -2799,7 +2805,7 @@ static void Menu_DrawBackdropPreshopParts(void) {
      for (i = 0; i < preshop_part_count; i++) {
          if (preshop_parts[i].handler_index == 2) {
              Menu_SetBlendMode(preshop_parts[i].blend_mode);
@@ -2990,7 +3003,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              Menu_SetBlendMode(0);
          }
      }
-@@ -2811,7 +2811,7 @@ static int Menu_RunStep(void) {
+@@ -2811,7 +2817,7 @@ static int Menu_RunStep(void) {
      int (*step)(char *);
  
      Menu_StepModelLoads(0);
@@ -2999,7 +3012,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      if (step != NULL) {
          return step(D_005CE0E0);
      }
-@@ -2819,7 +2819,7 @@ static int Menu_RunStep(void) {
+@@ -2819,7 +2825,7 @@ static int Menu_RunStep(void) {
  }
  
  /* Start-up step of a menu screen: loads its textures and blocks, then picks the handler for the screen menu_mode names. */
@@ -3008,7 +3021,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      s32 i = 0;
      u32 *packet;
      LoadedBlockRef *block;
-@@ -2847,7 +2847,7 @@ static s32 Menu_Start(void) {
+@@ -2847,7 +2853,7 @@ static s32 Menu_Start(void) {
      packet[7] = 0;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 2;
@@ -3017,7 +3030,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      *D2_CHCR = D_CHCR_STR;
      if (menu_mode == 0) {
          equip_group_shown = 0;
-@@ -2896,15 +2896,16 @@ static s32 Menu_Start(void) {
+@@ -2896,15 +2902,16 @@ static s32 Menu_Start(void) {
      return TRUE;
  }
  
@@ -3038,7 +3051,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      LinkNode *node;
  
      switch (menu_mode) {
-@@ -2940,7 +2941,7 @@ static s32 Menu_CutModelChain(void) {
+@@ -2940,7 +2947,7 @@ static s32 Menu_CutModelChain(void) {
          menu_step = 0;
          return FALSE;
      }
@@ -3047,7 +3060,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  }
  
  /* Makes the main menu the current screen, with its parts faded out. */
-@@ -2997,9 +2998,9 @@ static void Menu_UpdateMain(HandlerContext *context) {
+@@ -2997,9 +3004,9 @@ static void Menu_UpdateMain(HandlerContext *context) {
          kind = main_parts[i].handler_index;
          Menu_SetBlendMode(main_parts[i].blend_mode);
          if (main_menu_state != 1) {
@@ -3059,7 +3072,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          }
          Menu_SetBlendMode(0);
      }
-@@ -3131,10 +3132,10 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3131,10 +3138,10 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
      MenuItem *bar_item;
      u32 i;
      s32 row;
@@ -3072,7 +3085,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      u8 kind;
      u32 full_alpha;
  
-@@ -3156,9 +3157,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3156,9 +3163,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
          kind = item_parts[i].handler_index;
          ((void (*)(u8))Menu_SetBlendMode)(item_parts[i].blend_mode); // match: called as if it returned nothing
          if (item_list_cursor[0] != NULL) {
@@ -3084,7 +3097,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
      }
-@@ -3197,9 +3198,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3197,9 +3204,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
          item = item_list_top[0];
          MenuText_SetColor(menu_draw_color);
          for (row = 0; row < 7; row++, item = item->prev) {
@@ -3096,7 +3109,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              word.f.mid16 += 0xB0;
              word.f.lo16 = 0x7080;
              if (item_list_page_mark[0]->prev == item) {
-@@ -3320,7 +3321,7 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3320,7 +3327,7 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
  
  /* The Cast a Spell screen (main menu line 1): its parts, the list of seven spells and the cursor bar, the spell's
     text and model; fades in and out. */
@@ -3105,7 +3118,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      f32 view[16];
      f32 local[16];
      MenuCursorBar bar;
-@@ -3334,7 +3335,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3334,7 +3341,7 @@ static void Menu_UpdateCastSpell(s32 context) {
      s32 row;
      s32 page;
      s32 number;
@@ -3114,7 +3127,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      s32 entry;
      s32 slot;
      u8 kind;
-@@ -3348,7 +3349,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3348,7 +3355,7 @@ static void Menu_UpdateCastSpell(s32 context) {
          return;
      }
      if (cast_spell_state < 2) {
@@ -3123,7 +3136,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      }
      item = castable_spell_top[0];
      word.raw = 0x0C0AAE607C307080;
-@@ -3364,7 +3365,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3364,7 +3371,7 @@ static void Menu_UpdateCastSpell(s32 context) {
      for (; i < magic_part_count; i++) {
          kind = magic_parts[i].handler_index;
          Menu_SetBlendMode(magic_parts[i].blend_mode);
@@ -3132,7 +3145,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
      }
      for (row = 0; row < 7; row++, item = item->prev) {
-@@ -3422,7 +3423,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3422,7 +3429,7 @@ static void Menu_UpdateCastSpell(s32 context) {
      packet[11] = 0;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 3;
@@ -3141,11 +3154,22 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      *D2_CHCR = D_CHCR_STR;
      DRAW_NODE_MODEL(&model_load_shown, local, menu_draw_color);
      if ((menu_buttons & PAD_CROSS) && menu_input_enabled != 0) {
-@@ -3602,9 +3603,9 @@ static void Menu_UpdateEquip(void) {
+@@ -3592,6 +3599,7 @@ static void Menu_UpdateEquip(void) {
+     } else if (equip_group_shown < 0) {
+         equip_group_shown = 10;
+     }
++    equip_group_shown = WeaponSets_TrackEquip(equip_list_shown[0], equip_group_shown); /* PC: the weapon sets mod */
+     index = CURRENT_ITEM->item_number - bases.first_item[CURRENT_ITEM->group];
+     if (CURRENT_ITEM->group == 0) {
+         D_00446E30 = weapon_level_records[index].level_index + 1;
+@@ -3601,10 +3609,11 @@ static void Menu_UpdateEquip(void) {
+     for (i = 0; i < equip_part_count; i++) {
          kind = equip_parts[i].handler_index;
          SET_BLEND(equip_parts[i].blend_mode);
-         if (Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->item_number)) {
+-        if (Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->item_number)) {
 -            MenuSprite_Draw((int)&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
++        if (WeaponSets_ShownIsEquipped(equip_list_shown[0], CURRENT_ITEM, /* PC: the weapon sets mod */
++                                       Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->item_number))) {
 +            MenuSprite_Draw((sptr)&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
          } else {
 -            MenuSprite_Draw((int)&equip_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
@@ -3153,7 +3177,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          }
          SET_BLEND(0);
      }
-@@ -3827,7 +3828,7 @@ static void Menu_UpdateEquip(void) {
+@@ -3827,7 +3836,7 @@ static void Menu_UpdateEquip(void) {
                  detail_panel_sound_pending = 0;
                  for (i = 0; i < equip_s_part_count; i++) {
                      SET_BLEND(equip_s_parts[i].blend_mode);
@@ -3162,7 +3186,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
                      SET_BLEND(0);
                  }
                  MenuText_SetColor(panel_text_color);
-@@ -3967,7 +3968,7 @@ static void Menu_UpdateEquip(void) {
+@@ -3967,7 +3976,7 @@ static void Menu_UpdateEquip(void) {
          word.raw = 0x000A87507AF07D00;
          for (i = 0; i < equip_s_part_count; i++) {
              SET_BLEND(equip_s_parts[i].blend_mode);
@@ -3171,7 +3195,18 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              SET_BLEND(0);
          }
          switch (equip_panel_state) {
-@@ -4162,7 +4163,7 @@ static void Menu_UpdateStatus(void) {
+@@ -4028,7 +4037,9 @@ static void Menu_UpdateEquip(void) {
+         EquipGroupBytes unused_bytes = D_0043FDD0;
+         f32 unused_pair[32];
+ 
+-        if (*equipped_item_refs[EQUIP_LIST->group] != *equip_list_refs[EQUIP_LIST->group]) {
++        if (WeaponSets_Choose(equip_list_shown[0], CURRENT_ITEM)) {
++            /* PC: Weapon 2 or Shield 2 of the weapon sets mod: kept by the mod for the swap, not worn */
++        } else if (*equipped_item_refs[EQUIP_LIST->group] != *equip_list_refs[EQUIP_LIST->group]) {
+             Sound_PlayMenu(0);
+             if (weapon_defs[player_state.weapon].action_handler_index == 2 && EQUIP_LIST->group == 0
+                 && weapon_defs[index].action_handler_index != 2) {
+@@ -4162,7 +4173,7 @@ static void Menu_UpdateStatus(void) {
  
      for (i = 0; i < status_part_count; i++) {
          Menu_SetBlendMode(status_parts[i].blend_mode);
@@ -3180,7 +3215,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -4331,7 +4332,7 @@ static void Menu_UpdateKeyItems(void) {
+@@ -4331,7 +4342,7 @@ static void Menu_UpdateKeyItems(void) {
      sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 0.5f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
      for (i = 0; i < keylist_part_count; i++) {
          Menu_SetBlendMode(keylist_parts[i].blend_mode);
@@ -3189,7 +3224,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
      key_items_frames++;
-@@ -4340,7 +4341,7 @@ static void Menu_UpdateKeyItems(void) {
+@@ -4340,7 +4351,7 @@ static void Menu_UpdateKeyItems(void) {
          if (slot < 0) {
              continue;
          }
@@ -3198,7 +3233,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          if (upload->done != 0) {
              file = upload->pool_node->buffer;
              texture = (TextureHeader *)((char *)file + file->texture_offset);
-@@ -4448,7 +4449,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4448,7 +4459,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
      GsPackedWord word;
      s32 i;
      s32 row_count;
@@ -3207,7 +3242,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      s32 first_text;
      s32 entry;
      u32 *packet;
-@@ -4456,7 +4457,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4456,7 +4467,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
      s32 show_picture;
      s32 row;
      u32 full_alpha;
@@ -3216,7 +3251,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      s32 counter = 0;                /* one work variable: the pages tried, then a bit number, then a row */
  
      bar_origin.raw = 0x0001869F7C307EE0;
-@@ -4546,7 +4547,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4546,7 +4557,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
  
      for (i = 0; i < image_part_count; i++) {
          Menu_SetBlendMode(image_parts[i].blend_mode);
@@ -3225,7 +3260,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -4572,7 +4573,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4572,7 +4583,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
          packet[11] = 0;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 3;
@@ -3234,7 +3269,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          *D2_CHCR = D_CHCR_STR;
          chunk = (PackageChunk *)((char *)npc_package_load.pool_node->buffer + 0x10);
          for (i = 0; i < recollection_page; i++) {
-@@ -4734,7 +4735,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
+@@ -4734,7 +4745,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
      u32 i;
      s32 page;
      s32 number;
@@ -3243,7 +3278,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      s32 entry;
      u8 kind;
  
-@@ -4742,7 +4743,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
+@@ -4742,7 +4753,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
      for (i = 0; i < image_part_count; i++) {
          kind = image_parts[i].handler_index;
          Menu_SetBlendMode(image_parts[i].blend_mode);
@@ -3252,7 +3287,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
      if (npc_package_load.done != 0) {
-@@ -4766,7 +4767,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
+@@ -4766,7 +4777,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
          packet[11] = 0;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 3;
@@ -3261,7 +3296,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          *D2_CHCR = D_CHCR_STR;
          chunk = (PackageChunk *)((char *)npc_package_load.pool_node->buffer + 0x10);
          for (i = 0; (s32)i < page; i++) {
-@@ -4836,10 +4837,10 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
+@@ -4836,10 +4847,10 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
      s32 row;
      s32 i;
      s32 kind;
@@ -3274,7 +3309,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  
      memset(view, 0, 0x40);
      view[10] = view[5] = view[0] = 0.8f;
-@@ -4908,9 +4909,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
+@@ -4908,9 +4919,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
          kind = recol_parts[i].handler_index;
          Menu_SetBlendMode(recol_parts[i].blend_mode);
          if (owned_list_current[0]->group != 12) {
@@ -3286,7 +3321,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
-@@ -4983,9 +4984,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
+@@ -4983,9 +4994,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
          if (kind != 2) {
              ((void (*)(u8))Menu_SetBlendMode)(item_sel_parts[i].blend_mode); // match: called as returning nothing
              if (visible_item_state != 1 && ((worn_mask >> item_sel_parts[i].slot) & 1)) {
@@ -3298,7 +3333,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              }
              Menu_SetBlendMode(0);
          }
-@@ -5224,12 +5225,12 @@ static void Menu_UpdateSystem(MenuScreenContext *context) {
+@@ -5224,12 +5235,12 @@ static void Menu_UpdateSystem(MenuScreenContext *context) {
          kind = system_parts[i].handler_index;
          SET_PART_MODE(system_parts[i].blend_mode);
          if (system_screen_state == 4 && kind == 2) {
@@ -3314,7 +3349,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              }
          }
          SET_PART_MODE(0);
-@@ -5616,11 +5617,11 @@ static void Menu_UpdateCardSlot(void) {
+@@ -5616,11 +5627,11 @@ static void Menu_UpdateCardSlot(void) {
          Menu_SetBlendMode(slot_parts[i].blend_mode);
          switch (kind) {
          case 2:
@@ -3328,7 +3363,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              }
              break;
          case 3:
-@@ -5629,67 +5630,67 @@ static void Menu_UpdateCardSlot(void) {
+@@ -5629,67 +5640,67 @@ static void Menu_UpdateCardSlot(void) {
              case 5:
              case 9:
              case 10:
@@ -3412,7 +3447,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              break;
          }
          SET_PART_MODE(0);
-@@ -5861,7 +5862,7 @@ static void Menu_UpdateSaveList(void) {
+@@ -5861,7 +5872,7 @@ static void Menu_UpdateSaveList(void) {
      u8 kind;
      s32 slot;
      s32 group;
@@ -3421,7 +3456,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      s32 entry;
      GsPackedWord word;
      PadReport *report;
-@@ -5968,21 +5969,21 @@ static void Menu_UpdateSaveList(void) {
+@@ -5968,21 +5979,21 @@ static void Menu_UpdateSaveList(void) {
          Menu_SetBlendMode(data_parts[i].blend_mode);
          switch (kind) {
          case 2:
@@ -3447,7 +3482,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              break;
          }
          SET_PART_MODE(0);
-@@ -6006,19 +6007,19 @@ static void Menu_UpdateSaveList(void) {
+@@ -6006,19 +6017,19 @@ static void Menu_UpdateSaveList(void) {
          if (kind == 3) {
              switch (card_screen_state.list_step) {
              case 8:
@@ -3472,7 +3507,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
                  break;
              }
          } else {
-@@ -6028,7 +6029,7 @@ static void Menu_UpdateSaveList(void) {
+@@ -6028,7 +6039,7 @@ static void Menu_UpdateSaveList(void) {
              case 8:
              case 10:
              case 23:
@@ -3481,7 +3516,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
                  break;
              }
          }
-@@ -6372,7 +6373,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
+@@ -6372,7 +6383,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
      for (i = 0; i < option_part_count; i++) {
          kind = option_parts[i].handler_index;
          Menu_SetBlendMode(option_parts[i].blend_mode);
@@ -3490,7 +3525,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -6625,14 +6626,14 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6625,14 +6636,14 @@ static void Menu_UpdateButtonConfig(void) {
          switch (kind) {
          case 2:
              if (button_prompt != 0) {
@@ -3508,7 +3543,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              }
              break;
          case 0x18:
-@@ -6656,7 +6657,7 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6656,7 +6667,7 @@ static void Menu_UpdateButtonConfig(void) {
                  D_00446DF4 = 0;
                  D_00446DF8 = 0;
              }
@@ -3517,7 +3552,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              break;
          case 0x21:
              if (D_00446E00 == 0) {
-@@ -6664,11 +6665,11 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6664,11 +6675,11 @@ static void Menu_UpdateButtonConfig(void) {
              }
              D_00446E04 = button_choices_shown[D_00446E00];
              // match: called as returning a value, which keeps $2 out of the count's increment
@@ -3531,7 +3566,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
              break;
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
-@@ -6891,16 +6892,16 @@ static void Menu_UpdateCardCheck(void) {
+@@ -6891,16 +6902,16 @@ static void Menu_UpdateCardCheck(void) {
              ((void (*)(u8))Menu_SetBlendMode)(mc_mess_parts[i].blend_mode); // match: called as returning nothing, which frees $2 for the switch
              switch (card_screen_state.dialog_id) {
              case 0x10:
@@ -3552,7 +3587,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
                  break;
              }
              Menu_SetBlendMode(0);
-@@ -7043,7 +7044,7 @@ static void Menu_UpdateBrightness(void) {
+@@ -7043,7 +7054,7 @@ static void Menu_UpdateBrightness(void) {
      for (i = 0; i < bright_part_count; i++) {
          kind = bright_parts[i].handler_index;
          Menu_SetBlendMode(bright_parts[i].blend_mode);
@@ -3561,7 +3596,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
          Menu_SetBlendMode(0);
      }
      switch (system_screen_state) {
-@@ -7097,7 +7098,7 @@ static void Menu_WaitForCancel(void) {
+@@ -7097,7 +7108,7 @@ static void Menu_WaitForCancel(void) {
     text drawer returns, nothing without a text. */
  static int Menu_DrawEquipItemText(s32 index) {
      DataNode *node;
@@ -3570,7 +3605,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
      s32 slot;
      s32 entry;
      GsPackedWord word;
-@@ -7112,6 +7113,7 @@ static int Menu_DrawEquipItemText(s32 index) {
+@@ -7112,6 +7123,7 @@ static int Menu_DrawEquipItemText(s32 index) {
          MenuDraw_SetGsRegister(GS_REG_TEST_1, 0x30000);
          return MenuText_DrawWrappedLong((u16 *)(table + entry), 0x1B);
      }
@@ -3578,7 +3613,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..ad79a5220f5a4c402afa15d82d9cc0ff
  }
  
  /* If the item list has anything: names its five models and chains the five load nodes for them. */
-@@ -7461,7 +7463,7 @@ void Menu_DrawBrightness(s32 level) {
+@@ -7461,7 +7473,7 @@ void Menu_DrawBrightness(s32 level) {
      cursor[1].as_int = 0xFFFFF;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 5;
