@@ -122,7 +122,7 @@ static int read_set(const char *name) {
     FILE *file;
     int weapon, shield, ok;
 
-    folder(dir, sizeof(dir));
+    snprintf(dir, sizeof(dir), "%s/weapon_sets", port_data_dir()); /* nothing made to read */
     snprintf(path, sizeof(path), "%s/%s", dir, name);
     file = fopen(path, "r");
     if (file == NULL) {
@@ -150,7 +150,7 @@ static void start(void) {
 }
 
 void port_weapon_sets_changed(void) {
-    start();
+    started = 1; /* set 2 as it is now is the one kept, not live.txt's */
     if (port_weapon_sets.enabled) {
         write_set("live.txt");
     }
@@ -228,7 +228,9 @@ void port_weapon_sets_quick_loading(const char *path) {
 
 /* (game/quicksave.c) the title was reached: is the next game a new one? */
 void port_weapon_sets_title(void) {
-    start();
+    if (port_weapon_sets.enabled) {
+        start();
+    }
     if (!at_title) {
         at_title = 1;
         loaded_since_title = 0;
