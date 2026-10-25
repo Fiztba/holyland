@@ -52,7 +52,28 @@ motion changes. The first version can take the last picture's position from the 
 picture's step. That is slightly wrong at the first picture of each frame, and the upscaler's reactive handling
 covers it. Exact would keep the previous pair's `Between` data for one more picture.
 
-## Prerequisite: the scene's size free of the GS's scale
+## The upscale slot (done, branch `upscale/scene-size`)
+
+`--upscaler bilinear` with `--renderer modern` and a `--scene-scale` below the GS's (both single-sampled). The
+scene is brought up to the GS's scale as `sa_give` hands it to the GS's frame target (`sa_upscale`, a recorded
+linear blit). It replaces `sa_resample_pass`'s pixel under the middle, and there is then no composite: the GS draws
+the HUD, messages and fades over the result at its own scale. Without the upscaler, a scene below the GS's scale goes
+through the composite at the scene's scale, which brings the 2D down to it too: the HUD at 2x under a 4x GS.
+- **Whole-number scales, for now.** On a 4K screen the GS is at 4x (3840 x 1792 with native widescreen), and the
+  scene at 2x or 3x. With native widescreen the ratios differ across and down at 3x (4 to 6 across, 3 to 4 down:
+  1.5 and 1.33), and are the same at 2x (2.0 both). The FSR 3.1 dispatch takes the render and output sizes
+  apart. Whether it, and DLSS, take unequal ratios is not settled from their docs yet. If not, the scene's size
+  below is needed for 3x, or the output stops at one ratio and the presenter takes the rest.
+- **The temporal upscalers go in this slot.** At `sa_give` the scene's colour (`sa.color`), depth (`sa.depth`) and
+  the GS's target to write are all to hand. Only the release (`keep` false) is a picture's last. A turn in the middle
+  of a frame gives the scene to the GS and takes it back, so a temporal upscaler should run at the release only,
+  with the turns' gives bilinear (or nearest) as now.
+- Checks: with `--upscaler off`, every picture of 6 vblanks on 000 and 009, and on 000 with `--scene-scale 2`,
+  is byte for byte the build before (72 pictures). With it on, `--scene-scale 2` under `--native-scale 4`: 3840 x
+  1792 pictures, the HUD the GS's at 4x, the world within 0.3 levels of native 4x on average. Turning with the
+  d-pad, the pictures between follow native's motion picture for picture, so the recording makes the blit again.
+
+## Later: the scene's size free of the GS's scale
 
 `--scene-scale` is a whole number, 1 to 4 (`sa.sx`, `sa.sy`, `snt.frame_sx`). An upscaler wants any size, for
 example 1707 x 960 under a 2560 x 1440 window (FSR's and DLSS's "quality" ratio, 1.5). The scene's vertex
@@ -88,9 +109,9 @@ be `--upscaler off|fsr1|fsr3|dlss` with `--upscale-quality`, and the settings an
 
 ## Steps
 
-1. **The scene at any size** (`--scene-size W,H` or a ratio), composited at the output size with a plain bilinear
-   filter. Check: map tour and four-spot pictures with the ratio at 1.0 byte for byte as today; at 1.5, the HUD
-   pixel for pixel the GS's.
+1. **The upscale slot** (done, above): whole-number scene scales below the GS's, brought up by a bilinear blit at
+   `sa_give`. The scene at any size (`--scene-size W,H` or a ratio) is for later, if the upscalers want equal
+   ratios or finer steps.
 2. **Jitter and motion vectors**, with a debug view of the motion attachment (`KF4_UPSCALE_SHOW=motion`). Check:
    standing still, the motion is zero everywhere but the effects. Turning, the static map's motion matches the
    camera's. At 240 the motion of a picture between is a quarter of the frame's.

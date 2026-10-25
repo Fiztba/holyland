@@ -8370,6 +8370,10 @@ extern "C" void gsn_set_scene(int x_scale, int y_scale, int samples) {
     sa_wanted_samples = uint32_t(std::min(std::max(samples, 0), 8));
 }
 
+extern "C" void gsn_set_upscaler(int mode) {
+    sa_upscaler = mode;
+}
+
 extern "C" void gsn_set_scene_map(int map) {
     sa_set_map(map); // (standalone: --stats per map)
 }

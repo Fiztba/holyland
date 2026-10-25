@@ -43,6 +43,10 @@ typedef struct {
        (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */
     int scene_scale;
     int scene_msaa;
+    /* --upscaler (docs/port/UPSCALING.md): with --renderer modern and a --scene-scale below the GS's, the scene
+       brought up to the GS's scale as it is given to the GS, the 2D then drawn over it at the GS's scale (0: off,
+       the composite as before; 1: bilinear) */
+    int upscaler;
     /* --native-shine: with --renderer modern, a skinned model's sphere-mapped shine blended in the shader
        (the ice creatures on map 017: Cs + Cd As, As above 0x80) drawn whole, the default (0), or in runs of
        triangles that do not overlap (1, exact): where a part folds over its own edge the GS blends both

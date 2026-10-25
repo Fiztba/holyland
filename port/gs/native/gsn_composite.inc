@@ -67,6 +67,13 @@ void sa_held_forget() {
     sa_held.clear();
 }
 
+// (sa_give with --upscaler) A frame given at the GS's own scale: no composite of that buffer from before
+void sa_held_drop(uint32_t fbp, uint32_t fbw, uint32_t fpsm) {
+    if (SaHeld *h = sa_held_of(fbp, fbw, fpsm, false)) {
+        h->valid = false;
+    }
+}
+
 // (sa_give, a frame given back for good at another scale or samples than the GS's) The scene's picture kept, and
 // the GS's frame as it was given it
 void sa_hold(Target &color) {
