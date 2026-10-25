@@ -13,6 +13,9 @@ off, the game runs exactly as without it (no patch in `patches/` belongs to it).
   (spell levels, gauges, recovery). It is rebindable on the Controls page ("Show / hide the stats panel
   (mod)", listed while the mod is on). With the overlay open (F1) it can be moved; its place is kept in
   `overlay.ini`.
+- **The timers on screen** (optional, on with the mod): while playing, beside the automap's minimap, the
+  ailments running and the timed effects of spells and items, each with its seconds left and a thin bar of
+  the time left (below).
 - **The hit log** (optional): at the bottom left, each hit the player deals and takes, with the real
   damage and the HP left, for five seconds. At the top, the health bar of the creature last hit, for six
   seconds.
@@ -24,6 +27,7 @@ off, the game runs exactly as without it (no patch in `patches/` belongs to it).
 | `extended_stats_panel` | `true` | the stats panel, on its key |
 | `extended_stats_damage` | `true` | the hit log and the target's health bar |
 | `extended_stats_durability` | `true` | the equipment's durability (the menus and the panel) |
+| `extended_stats_timers` | `true` | the ailments and timed effects running, on screen by the minimap ("Ailment timers on screen") |
 
 The parts count only while `extended_stats` is on. `extended_stats_status_screen` (the panel opening
 with the Status screen, which the menus' lines replaced) is no longer read, and is dropped from the file
@@ -135,12 +139,47 @@ crystal teaches, the weapon that shoots an arrow) are the game's own text, read 
 
 Every item the Item screen lists is covered; none was left to a guess.
 
+## The timers on screen
+
+While playing, a small list beside the automap's minimap (`port/overlay/stats_timers.cpp`): each ailment
+running (`timed_flags`, its time left taken at the speed it wears off, as in the menus) in a colour of its
+own (poison green, paralysis orange, darkness grey, curse purple, slow white, magic seal blue), then each
+timed effect of a spell or item (the panel's "Hidden effects" timers: Power Seed and Widda Needle +10%,
+the spells' attack, defence and ailment bonuses, rage, Light, intimidation) in the grey of the menus'
+text, with a short name. Each has its seconds left and a thin bar under it: the time left out of the most
+it had since it started (a timer that rises, cast or hit again, starts its bar again from there). The
+list is in the serif of the menus' lines (25 pixels at 1080 rows, 33 at 1440; smaller, to three quarters,
+before it is wider than the minimap), on the minimap's dark square with its gold frame and opacity.
+
+- **Where:** above the minimap when it is in a bottom corner, below it in a top corner, lined up with its
+  outer edge and as wide as it. With the minimap off, or the map mod off, the list takes the minimap's
+  place in its corner (`automap_view_minimap_place` gives the square from the settings either way): from
+  its top in a top corner, from its bottom in a bottom one. It is kept below the frame-rate counter (F3)
+  at the top right and below the HUD's orb at the top left (26% of the picture's height). In the bottom
+  left corner the hit log, while hits are shown, can overlap it, as it does the minimap.
+- **When:** only in play: the play's own loop counts `frame_counter` (the menus, shops and map viewer
+  have loops of their own), not `game_status.paused`, and not in the game's menu, whose lines show the
+  same; as the minimap. It fades in over a fifth of a second; when the last one ends it stays at "0 s"
+  and fades out over half a second (into a menu, at once). While it is up or fading it counts toward
+  `port_stats_overlay_wants`, so the overlay draws every vblank.
+- **Checked** (`KF4_OVERLAY_SHOT=mini@V`, 1920 x 1080 widescreen and 2560 x 1440, the minimap at the top
+  right and bottom right, off, and the map mod off with the corner top left at 1920 x 1440): the Power
+  Seed, the Widda Needle and the Poison Water used from the Item screen (`--cheats all`; from the top of
+  the list Down 18, 19 and 17 times, Cross: the menu closes as each is used), with a curse from
+  `KF4_TEST_AILMENTS=3:5400`: four rows, Poison 58 s, Curse 169 s, Physical +10% 54 s, Magic +10% 56 s;
+  none with the main menu up; paralysis and slow (`1:150,4:200`) ending one after the other and the list
+  fading out.
+
+`KF4_TEST_AILMENTS="index:frames,..."` (`game/cheats.c`, for tests) starts those ailments once, the first
+frame in play: 0 poison ... 5 magic seal.
+
 ## Where the code is
 
 | File | |
 |---|---|
 | `game/stats.c` | built with the game code: reads the game's state into a snapshot (`port_stats_sample`: with the menu screen up and what the item under its cursor does), and watches the hits and the menu once a vblank (`port_stats_track`) |
 | `port/overlay/stats_menus.cpp` | the lines in the game's menus: their places, fitting and drawing (Dear ImGui, no window) |
+| `port/overlay/stats_timers.cpp` | the timers on screen by the minimap |
 | `port/overlay/stats_panel.cpp` | draws the panel, the hit log, the health bar and the Mods page's section (Dear ImGui) |
 | `port/overlay/stats_mod.c` | the switches and their `settings.json` keys |
 | `port/include/port/stats.h` | the interface between them |
