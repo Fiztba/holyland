@@ -366,12 +366,14 @@ static void vblank_start(void) {
         if (due > now) {
             uint32_t float_mode = port_host_float_begin();
 
+            port_dmac_game_sleeps(1);
             port_video_wait(due);
             port_host_float_end(float_mode);
             now = port_wall_seconds();
             if (due > now) {
                 port_sleep(due - now);
             }
+            port_dmac_game_sleeps(0);
         }
     } else {
         port_video_vblank(vblank_count, port_wall_seconds());

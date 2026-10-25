@@ -5,7 +5,8 @@
      "extended_stats_menus": true,         its lines in the game's own menus
      "extended_stats_panel": true,         the stats panel, on its key (F6)
      "extended_stats_damage": true,        the hit log and the target's health bar
-     "extended_stats_durability": true     the equipment's wear (the menus and the panel)
+     "extended_stats_durability": true,    the equipment's wear (the menus and the panel)
+     "extended_stats_timers": true         the ailments and timed effects running, on screen by the minimap
 
    "extended_stats_status_screen" (the panel opening with the Status screen, which the menus' lines
    replaced) is no longer read, and is taken out of the file when it is written.
@@ -16,7 +17,7 @@
 #include "cJSON.h"
 #include "port/stats.h"
 
-PortStatsOptions port_stats_options = {0, 0, 1, 1, 1, 1}; /* on, forced, menus, panel, damage, durability */
+PortStatsOptions port_stats_options = {0, 0, 1, 1, 1, 1, 1}; /* on, forced, menus, panel, damage, durability, timers */
 
 static int panel_open;
 /* What the player chose (settings.json, the Mods page); --extended-stats leaves it as it was */
@@ -58,6 +59,7 @@ void port_stats_settings_read(const void *mods_json) {
     o->panel = read_bool(mods, "extended_stats_panel", o->panel);
     o->damage = read_bool(mods, "extended_stats_damage", o->damage);
     o->durability = read_bool(mods, "extended_stats_durability", o->durability);
+    o->timers = read_bool(mods, "extended_stats_timers", o->timers);
 }
 
 static void put(cJSON *mods, const char *key, int value) {
@@ -80,4 +82,5 @@ void port_stats_settings_write(void *mods_json) {
     cJSON_DeleteItemFromObjectCaseSensitive(mods, "extended_stats_status_screen");
     put(mods, "extended_stats_damage", o->damage);
     put(mods, "extended_stats_durability", o->durability);
+    put(mods, "extended_stats_timers", o->timers);
 }

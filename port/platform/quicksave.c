@@ -36,6 +36,7 @@
 
 #include "port/platform.h"
 #include "port/automap.h"
+#include "port/weapon_sets.h"
 #include "port/quicksave.h"
 #include "port/settings.h"
 
@@ -451,6 +452,7 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
         return 0;
     }
     port_automap_quick_saved(path); /* the automap mod: the explored maps kept with the save */
+    port_weapon_sets_quick_saved(path); /* the weapon sets mod: set 2 kept with the save */
     port_event("quick saved to %s: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d neighbour %02X "
                "(origin %d, %s)", name, stamped.map_tag, stamped.position[0], stamped.position[1], stamped.position[2],
                stamped.rotation[1], stamped.rotation[0], stamped.hp, stamped.mp, stamped.neighbour_map & 0xFFFF,
@@ -475,6 +477,7 @@ uint8_t *port_quick_read(size_t *size, PortQuickInfo *info) {
     }
     expected = *info;
     port_automap_quick_loading(path); /* the automap mod: the save's explored maps brought back */
+    port_weapon_sets_quick_loading(path); /* the weapon sets mod: the save's set 2 brought back */
     return image;
 }
 
@@ -519,6 +522,7 @@ void port_quick_placed(const PortQuickInfo *now) {
     port_event("quick loaded: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d%s", now->map_tag,
                now->position[0], now->position[1], now->position[2], now->rotation[1], now->rotation[0], now->hp,
                now->mp, exact ? " (as saved)" : near ? " (a step from where it was saved)" : " (not where it was saved)");
+    port_gs_interp_cut_reset();
     if (near) {
         set_message("loaded: map %02X, level %d, HP %d/%d", now->map_tag, now->level, now->hp, now->hp_max);
     } else {

@@ -65,6 +65,9 @@ static inline void port_overlay_vblank(void) {
 static inline int port_overlay_open(void) {
     return 0;
 }
+static inline int port_overlay_visible(void) {
+    return 0;
+}
 static inline int port_overlay_paused(void) {
     return 0;
 }

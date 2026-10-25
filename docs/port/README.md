@@ -166,6 +166,7 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
 | `--extended-stats` | the opt-in mod (also on the overlay's Mods page; off by default): what the game keeps and never shows, in its own menus, and the hit log (see "Mods", [EXTENDED_STATS.md](EXTENDED_STATS.md)) |
 | `--automap`, `--automap-cheats` | the opt-in automap mod (also on the overlay's Mods page; off by default): a map of where you have been, M opens it; `--automap-cheats` with all its cheats on (see "Mods", [AUTOMAP.md](AUTOMAP.md)) |
+| `--weapon-sets` | the opt-in mod (also on the overlay's Mods page; off by default): a second weapon and shield, swapped with the ones in hand on R (see "Mods", [WEAPON_SETS.md](WEAPON_SETS.md)) |
 | `--show-fps` | the frame-rate counter on for this run (F3, or the overlay's Interface page; off by default; see "The frame-rate counter (F3)") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
 | `--flash-recorder off\|on\|SECONDS[,HEIGHT]` | the flash recorder (F8; on by default: the last 2 seconds of pictures shown, at 540 rows; also on the overlay's Debug page, not saved; see "Debugging") |
@@ -334,6 +335,11 @@ it does without it.
   label); a minimap shows in a corner while playing. Its cheats, off by default, stand in for a guide:
   the whole map, items and what containers hold, live enemies, secrets and traps, and what each lock needs
   with hand-written hints (`game/automap_guide.c`). Only reads the game; with it off nothing of it runs.
+- **Weapon sets** (`--weapon-sets`, the Mods page; [WEAPON_SETS.md](WEAPON_SETS.md)). A second weapon and shield,
+  swapped with the ones in hand on one key (R, a controller's right stick press; rebindable: "Swap weapon sets"),
+  through the game's own equipping (the stats, the held weapon's model, the gauge). Chosen on the equipment screen:
+  Up from Weapon reaches Shield 2 and Weapon 2, where Cross keeps the item for set 2. Ignored mid-swing and
+  wherever the game would not open its menu. Set 2 is kept with each save, as the automap's maps are.
 
 ## Widescreen
 

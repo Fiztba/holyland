@@ -13,7 +13,8 @@ Each case is a run of the game (always --no-audio, --headless, a fresh data fold
 - some go somewhere first (--teleport), or press buttons (the pause, the menu, casting a spell);
 - the real scenes need quick saves from --spots: quick_underwater.kf4quick (walking forward into the water),
   quick_deathwater.kf4quick (falling into deadly water), quick_palace.kf4quick (the Queen's Palace, the MP
-  drain). Cases whose save is missing are left out.
+  drain), quick_wand.kf4quick (standing on a Symbol of Passage: the Item screen, Up x4 to the Green Wand, used:
+  the map change's fade of its last frame, 0x2BC0). Cases whose save is missing are left out.
 
 --perf (real time, KF4_PRESENT_SIM=240, KF4_GSN_GPU_TIME=2, KF4_HITCH_MS=50, --stats): over the case's window of
 vblanks, the pictures handed over a second and the game's frames a second (KF4_PRESENT_LOG), and from --stats
@@ -22,7 +23,9 @@ pictures between drawn from the packets (a re-recording) and the fallback's cuts
 as the renderer fell behind), and the hitches over 50 ms.
 --pictures (--fast): every picture (all phases) of 12 vblanks in the window dumped and compared with
 tools/flash_find.py --frames: a picture between that is not between its game frames is flagged (the
-under-water and death-water bugs were of this kind). The pictures are deleted after (--keep keeps them).
+under-water and death-water bugs were of this kind). A case with same30 (the wand) also runs at 30 and its game
+frames there must be the 240 run's byte for byte: the map change's fade is a loop of its own, every vblank a game
+frame, so flash_find has no picture between to judge. The pictures are deleted after (--keep keeps them).
 
 Neither given: both. The verdict: corrupt if a picture is flagged; slow if fewer pictures a second than 90%
 of the base case's at the same place (or the game below 29 frames a second); else OK. Run at most two games at a
@@ -50,9 +53,10 @@ def cases():
     """name -> dict(fx, teleport, pad, args, save, spot, base)"""
     c = {}
 
-    def add(name, fx="", teleport=None, pad=None, args=(), spot=None, base="base", window=None, dump=None):
+    def add(name, fx="", teleport=None, pad=None, args=(), spot=None, base="base", window=None, dump=None,
+            same30=None):
         c[name] = dict(fx=fx, teleport=teleport, pad=pad or [], args=list(args), spot=spot, base=base,
-                       window=window, dump=dump)
+                       window=window, dump=dump, same30=same30)
 
     add("base", base=None)
     for fx in ["water", "drain", "drainramp", "prev", "aim", "haze", "depth", "down", "updown", "fill", "fade",
@@ -75,6 +79,12 @@ def cases():
     add("deathwater", spot="quick_deathwater", pad=[(250, "UP", 300)], base=None, window=(350, 480),
         dump=(440, 451))
     add("palace", spot="quick_palace", pad=[(200, "UP", 150)], base=None, window=(300, 980), dump=(400, 411))
+    # the Green Wand on a Symbol of Passage: MapChange_CaptureFrame copies the last frame to 0x2BC0 and the map
+    # change's loop fades it out (vblanks 740-749), then the new map. Its pictures between used to leave the
+    # textures they uploaded there (NATIVE_DRAW_P8.md, "The wand's passage")
+    add("wand", spot="quick_wand", pad=[(500, "CIRCLE", 4), (560, "CROSS", 4), (620, "UP", 4), (640, "UP", 4),
+                                        (660, "UP", 4), (680, "UP", 4), (720, "CROSS", 4)],
+        base=None, window=(700, 800), dump=(738, 749), same30=(740, 749))
     return c
 
 
@@ -181,6 +191,33 @@ def run_case(a, name, case, mode, out):
         r["pics"], r["same"], r["flagged"] = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, -1)
         worst = re.findall(r"off\s+([\d.]+)%", ff.stdout)
         r["worst"] = max(float(x) for x in worst) if worst else 0.0
+        if case["same30"]:
+            # the same run at 30: its game frames must be the 240 run's
+            from PIL import Image
+            lo, hi = case["same30"][0] + offset, case["same30"][1] + offset
+            d30 = os.path.join(d, "at30")
+            os.makedirs(os.path.join(d30, "data"))
+            cmd30 = [x for x in cmd]
+            cmd30[cmd30.index("--frame-rate") + 1] = "30"
+            cmd30[cmd30.index("--dump-frames") + 1] = ",".join(str(v) for v in range(lo, hi + 1))
+            cmd30[cmd30.index("--dump-dir") + 1] = d30
+            with open(os.path.join(d30, "out.txt"), "w") as f:
+                subprocess.call(cmd30, env=dict(env, KF4_DATA_DIR=os.path.join(d30, "data")), stdout=f,
+                                stderr=subprocess.STDOUT)
+            shutil.rmtree(os.path.join(d30, "data"), ignore_errors=True)
+            differ = 0
+            for v in range(lo, hi + 1):
+                name = "frame_%06d.png" % v
+                p240, p30 = os.path.join(d, name), os.path.join(d30, name)
+                if not (os.path.isfile(p240) and os.path.isfile(p30)):
+                    differ += 1
+                    continue
+                with Image.open(p240) as x, Image.open(p30) as y:
+                    differ += x.size != y.size or x.convert("RGB").tobytes() != y.convert("RGB").tobytes()
+            r["same30"] = "%d of %d differ" % (differ, hi - lo + 1)
+            r["flagged"] += differ
+            if not a.keep:
+                shutil.rmtree(d30, ignore_errors=True)
         if not a.keep:
             for f in os.listdir(d):
                 if f.endswith(".png") and f != "flagged.png":

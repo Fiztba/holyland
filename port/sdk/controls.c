@@ -49,6 +49,7 @@
 #include "port/quicksave.h"
 #include "port/settings.h"
 #include "port/stats.h"
+#include "port/weapon_sets.h"
 
 #ifdef KF4_HAVE_SDL
 #include <SDL.h>
@@ -130,6 +131,7 @@ static const struct {
     [ACTION_SHOW_FPS] = {"show_fps", "Show / hide the frame rate", 0},
     [ACTION_STATS_PANEL] = {"stats_panel", "Show / hide the stats panel (mod)", 0},
     [ACTION_MAP] = {"map", "Map (the automap mod)", 0},
+    [ACTION_WEAPON_SWAP] = {"weapon_swap", "Swap weapon sets (mod)", 0},
 };
 
 const char *port_controls_action_label(int action) {
@@ -152,6 +154,9 @@ int port_controls_action_used(int layout, int action) {
     }
     if (action == ACTION_MAP) {
         return port_automap.enabled;
+    }
+    if (action == ACTION_WEAPON_SWAP) {
+        return port_weapon_sets.enabled;
     }
     return action >= 0 && action < ACTION_COUNT;
 }
@@ -207,6 +212,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_SHOW_FPS] = {KEY(F3)},
         [ACTION_STATS_PANEL] = {KEY(F6)},
         [ACTION_MAP] = {KEY(M)},
+        [ACTION_WEAPON_SWAP] = {KEY(R), 0, PAD(RIGHTSTICK)},
     },
     [CONTROLS_VERDITE] = {
         [ACTION_UP] = {KEY(W), KEY(UP), PAD(DPAD_UP)},
@@ -238,6 +244,7 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_SHOW_FPS] = {KEY(F3)},
         [ACTION_STATS_PANEL] = {KEY(F6)},
         [ACTION_MAP] = {KEY(M)},
+        [ACTION_WEAPON_SWAP] = {KEY(R), 0, PAD(RIGHTSTICK)},
     },
 };
 /* Verdite's mouse outside play: left cross, right circle, middle cross */
@@ -929,6 +936,9 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     }
     if (edges >> ACTION_STATS_PANEL & 1u) {
         port_stats_toggle_panel();
+    }
+    if (edges >> ACTION_WEAPON_SWAP & 1u) {
+        port_weapon_sets_key(); /* the weapon sets mod: taken in play by game/weapon_sets.c */
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
         set_captured(!pc.captured);

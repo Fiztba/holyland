@@ -348,6 +348,14 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   native GS keeps the buffers the restore is for (a few MB of images) before the frame's pictures between and copies
   them back after, the frame drawn again only where it cannot. Then the cut (`port_gs_run_vsync`, gs.c) counts
   pictures between a vblank, so the least it keeps above none is two a game frame; one a game frame would fit.
+  **Checked again (branch `p8/dmac-nap`):** in pace_test's run all 571 restores come before the teleport (vblanks
+  600-1900: the opening and the first map's start, for the 2D's scrolling textures, `flat_pair`, not the
+  reflection); in play on maps 000, 008, 009, 014 and 041 there are none (`frames drawn again for buffers they
+  changed` counts the whole run, and every map's run prints the same 571). Real time at the owner's settings
+  (`pace_test.py`, RTX 4090, 170 Hz) map 000 keeps 165-170 pictures a second at 3.5-3.9 ms of GPU a picture. So
+  at those places the copy-back would not move play; a map whose frames read a buffer before drawing it would
+  show its own count above 571. What limits a slower CPU is the GS's thread: 19-22 ms a game frame on a P-core
+  of an i9-13900KF, 28-30 ms on an E-core, where the game then falls to 35-40 vblanks a second.
 - **Upscaling (FSR, DLSS):** the scene drawn below the window's size, jittered, with depth and motion vectors, and
   brought up before the composite so the HUD stays the GS's. The plan, its inputs and the steps are in
   [UPSCALING.md](UPSCALING.md). Modern renderer only, and mostly a picture-quality feature: the GPU's time a

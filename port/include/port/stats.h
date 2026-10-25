@@ -8,7 +8,8 @@
      watches the hits (port_stats_track, once a vblank, on the game's thread);
    - port/overlay/stats_mod.c keeps the switches and their settings.json keys;
    - port/overlay/stats_panel.cpp draws the lines it adds to the game's own menus, the panel, the hit
-     log and the target's health bar with Dear ImGui, and the section of the Mods page. */
+     log and the target's health bar with Dear ImGui, and the section of the Mods page;
+     port/overlay/stats_timers.cpp the ailments and timed effects running, by the minimap. */
 #ifndef PORT_STATS_H
 #define PORT_STATS_H
 
@@ -24,6 +25,8 @@ typedef struct {
     int panel;         /* the stats panel, on its key ("extended_stats_panel") */
     int damage;        /* the hit log and the target's health bar ("extended_stats_damage") */
     int durability;    /* the equipment's wear in the panel ("extended_stats_durability") */
+    int timers;        /* the ailments and timed effects running, on screen by the minimap
+                          ("extended_stats_timers") */
 } PortStatsOptions;
 extern PortStatsOptions port_stats_options;
 
@@ -78,6 +81,7 @@ typedef struct {
 
 typedef struct {
     char text[64];
+    char brief[32];            /* the same, short (the timers on screen) */
     int frames;                /* game frames left */
 } PortStatsTimer;
 
@@ -106,6 +110,8 @@ typedef struct {
 typedef struct {
     int valid;                 /* a game is being played */
     int in_menu;               /* the game's own menu is up */
+    int in_play;               /* the play's own loop ran a moment ago, not paused, no menu (the minimap's
+                                  test): the timers on screen show */
     PortStatsMenu menu;        /* which screen of it, and the item under the cursor */
     /* level */
     int level, experience, level_from, level_to; /* level_to 0: the last level */

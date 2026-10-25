@@ -290,6 +290,9 @@ void port_dmac_start(void);
 void port_dmac_wake(void);
 /* Waits until a channel's STR is clear. */
 void port_dmac_wait(int channel);
+/* (the kernel) The game's thread sleeps until a vblank is due (1), or runs again (0): the controller naps
+   while it sleeps, as nothing can start a channel then. */
+void port_dmac_game_sleeps(int sleeps);
 /* (the kernel) The channels among `wanted` started since the last call, once their transfers are done:
    their end interrupts are due. */
 uint32_t port_dmac_ends(uint32_t wanted);
@@ -371,6 +374,8 @@ typedef struct {
 } PortRendererDiff;
 extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
+/* --frame-rate: a quick load or teleport ends any cut of the pictures between (any thread) */
+void port_gs_interp_cut_reset(void);
 /* The native GS's scale (port_options.native_scale: 1 to 4, or 0 for auto), from the next vblank */
 void port_gs_set_native_scale(int scale);
 /* The scale the native GS draws at: port_options.native_scale, or for auto (0) the multiple of 448 lines

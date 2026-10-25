@@ -12,7 +12,8 @@ it runs.
   fits the map again; PgUp and PgDn (or Shift with the wheel) show the levels above and below the
   player's, Home his own; M or Escape closes it.
 - **Minimap**: a corner of the picture while playing (hidden in menus): corner, size, reach and opacity
-  on the Mods page.
+  on the Mods page. The extended stats mod's timers (ailments and timed effects) sit above it in a bottom
+  corner and below it in a top one (EXTENDED_STATS.md, "The timers on screen").
 - **Cheats** (off by default, they stand in for an online guide): reveal the whole map; items (on the
   ground, what chests, containers and bones hold, what enemies may drop); live enemies with their HP;
   secrets and traps (shooters, pitfalls, walls that appear or fade); locks and hints (what each lock needs,

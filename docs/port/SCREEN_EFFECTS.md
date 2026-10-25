@@ -161,10 +161,19 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
 
 ### 13. The map change
 
-- `MapChange_CaptureFrame` (a door into another map): one frame drawn and `GsDraw_CopyFrame(0x2BC0)`; then
-  `MapChange_FadeOutCapture` draws 0x2BC0 (TEX0 0x26802ABC0) darker each frame while the map loads (its own
-  loop). frame_interp leaves this copy as the game made it (`flat_copies`: the frame does not read it after).
-  Not in the tests: no headless way through a door yet (pad scripts reach none from the saves at hand).
+- `MapChange_CaptureFrame` (`MapChange_RunToEnd`: a door into another map, script command 174, and a wand used
+  on a Symbol of Passage, `MapChange_StartPassage`): one frame drawn and `GsDraw_CopyFrame(0x2BC0)`; then
+  `MapChange_FadeOutCapture` draws 0x2BC0 (TEX0 0x26802ABC0) in ten strips each frame while the map loads (its
+  own loop, no pictures between), then black, then the new map's fade in.
+- **frame_interp:** the frame does not read the copy after it, so the pictures between do not make it again;
+  but they send the frame's uploads again, and those went into 0x2BC0-0x3D3F before the copy. **At 60-240 the
+  fade showed those textures for about a second** (every renderer, paraLLEl-GS too; never at 30: the owner's
+  Green Wand, October 2026). Such a copy is now `COPY_RESTORE` (`flat_copies`: not read after, over pages
+  written before it, the frame not drawn into after it): the exact restore after the vblank's pictures
+  (`port_interp_end_vblank`) sends the uploads again and then the copy, from the game's frame. The fade's
+  frames are those at 30 byte for byte (NATIVE_DRAW_P8.md, "The wand's passage").
+- **Test:** the `wand` case (`bugs1025/quick_wand`, standing on a Symbol of Passage: the menu, Item, Up x4 to
+  the Green Wand, Cross).
 
 ### 14. Other copies and targets
 
@@ -181,7 +190,7 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
 put back after, so the game goes on as without it), some after a `--teleport` (035 for the poisoned water, 029 for
 the King's Map) or with pad presses (START: the pause; CIRCLE: the menu; TRIANGLE every 120 vblanks with
 `KF4_FX=spell=N` and `--cheats spells,magic`), and the real scenes from quick saves in `--spots`
-(`quick_underwater`, `quick_deathwater`, `quick_palace`). Each at the owner's settings (240, 3x, native
+(`quick_underwater`, `quick_deathwater`, `quick_palace`, `quick_wand`). Each at the owner's settings (240, 3x, native
 widescreen, MSAA 2, aniso 2, cut-out AA ssaa, `--renderer modern`), always `--no-audio` and headless:
 
 - `--perf`: real time (`KF4_PRESENT_SIM=240`, `KF4_GSN_GPU_TIME=2`, `KF4_HITCH_MS=50`): pictures and game frames a
@@ -192,7 +201,9 @@ widescreen, MSAA 2, aniso 2, cut-out AA ssaa, `--renderer modern`), always `--no
   only, so it holds up with the GPU shared (the owner playing).
 - `--pictures`: every picture of 12 vblanks dumped (`--fast`) and checked with `flash_find.py --frames` (a
   picture between not between its game frames is flagged: the death-water and under-water bugs were of this
-  kind).
+  kind). The `wand` case also runs at 30 and wants its game frames there (vblanks 740-749, the map change's fade:
+  a loop of its own, every vblank a game frame, nothing for flash_find to judge) byte for byte the 240 run's
+  (`same30`; before the fix 8 of 10 differed).
 
 `KF4_FX` names: water, drain, drainramp, prev, aim, haze, depth, down, updown, shift (with `--no-whole-frame`),
 fill, fade, tint, dim, bright40, brightff, copytex (the Dark Succubus' screen copy, drawn after the world),
@@ -265,6 +276,6 @@ passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 3
 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1
 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
-**Left:** the map change (no headless way through a door yet); the haze's cost (unreachable); the Dark Succubus
+**Left:** a door's map change (the wand's passage is the same capture and fade, tested: `wand`); the haze's cost (unreachable); the Dark Succubus
 in its real fight (no save that far: `copytex` stands in); real-time numbers after the fixes on an idle PC
 (`python tools/screen_fx_test.py --perf --save .../quick_pond.kf4quick --spots ...`).
