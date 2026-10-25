@@ -7699,6 +7699,7 @@ extern "C" int gsn_open(void *shared_context) {
     gs->vram.assign(GSN_VRAM_BYTES, 0);
     memset(gs->page_written, 0, sizeof(gs->page_written));
     gs->vram_writes = 1;
+    memset(page_holders, 0, sizeof(page_holders)); // (their counts are page_written's)
     reset_gs();
 
     if (shared_context) {
