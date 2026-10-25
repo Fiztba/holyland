@@ -14,6 +14,7 @@ draws instead when the native GS cannot start.
 | Path | What |
 |---|---|
 | `port/gs/native/gsn.cpp` | the native GS: the GIF front end, registers, primitives, render targets on the GPU, textures, blending, the scanout, save states, and its own thread (a ring of packets and vblanks) |
+| `port/gs/native/gsn_backend.inc` | the back end: every call the native GS makes into Vulkan, written into a stream by its thread (`Cmd`) and made through Granite on a thread of its own, which submits and hands the pictures to the presenter (below, "The back end") |
 | `port/gs/native/gsn_vram.c` | VRAM on the CPU in the GS's layout, every format's swizzle |
 | `port/gs/native/shaders/` | GLSL; `python tools/build_shaders.py --glslang PATH` writes the committed `gsn_shaders.h` (only needed when a shader changes) |
 | `port/gs/gs_parallel.cpp` | paraLLEl-GS behind the same C interface |
@@ -201,6 +202,23 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 - **Barriers are merged** (`full_barrier`): a full barrier right after another is left out, which
   `cmd()` tracks. Anything that records into the native GS's command buffer must go through `cmd()`,
   or a barrier it needs can be left out.
+- **The back end** (`gsn_backend.inc`, branch `p8/perf`). The GS's thread does not call Granite's command buffer:
+  every `Cmd` call is written into a stream (a `Recording` of every call, holding the images and buffers it names),
+  and the back end's thread makes the streams' calls in the order sent, submits (`OP_SUBMIT`), begins the next frame
+  context (`OP_NEXT_FRAME`), publishes the scanout (`OP_PUBLISH`) and hands it to the presenter (`OP_PRESENT`). A
+  picture between from the recording is one call (`OP_REPLAY`: the recording, shared, and the picture's buffers).
+  Granite's recording and the driver's work under it had been about half of the GS's thread (a replay nearly all of
+  it); at the owner's 170 Hz the thread could not keep up and the pictures between were cut to none (60 a second
+  shown). So: nothing on the GS's thread may call Granite's `CommandBuffer` (there is none: `Cmd::out()`); bytes
+  the GPU reads (vertex, constant and storage data, an image's update) go into the data chunks, the update's into
+  `upload_chunk` (Granite's staging was its command buffer's); a read-back is `submit(true)`, which waits for the
+  back end to submit it, then for the fence; anything that wants all the GPU's work (`ring_idle`) drains the back
+  end too. The back end has Granite's thread index 1 (its command pools, descriptor sets); the GS's thread keeps 0
+  for Granite's own staging. A stream is sent at each submit and every 4,096 calls; the GS's thread waits when six
+  are sent and not made, so that it is never pictures ahead of what is shown (the scanout slots it picks are
+  published later, in order) and the fallback that cuts pictures between sees the back end's lateness.
+  `KF4_GSN_BACKEND=0`, or a Vulkan context of one thread index (paraLLEl-GS's with `--renderer both`): no thread,
+  each stream made at once (the same calls in the same order). `--stats`: "native GS back end: N s playing".
 - **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
   of work, and `--stats` says why render passes ended and what resolves were for. Another program on
   the GPU (a second run of the game) shows up in those times: run alone. `KF4_GSN_GPU_TIME=2` also

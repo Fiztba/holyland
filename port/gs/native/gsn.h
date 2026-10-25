@@ -330,6 +330,9 @@ typedef struct {
     /* (native draw) pictures between: model parts drawn between their two places (P2-5), strips (the
        trail) drawn between their two frames' */
     uint64_t nd_moved_models, nd_moved_strips;
+    /* the back end (gsn_backend.inc): its thread's time making the calls into Vulkan */
+    uint64_t ns_backend;
+    uint64_t loads_before_pass; /* targets loaded from VRAM before the render pass under way, not ending it */
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,
