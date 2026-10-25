@@ -277,6 +277,26 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   meshes put on the GPU), and each vblank the game's thread reached over N ms after the one before (`[hitch] game
   vblank`: disc reads, meshes parsed and hashed). With `KF4_PRESENT_SIM` and `KF4_PRESENT_LOG` for the gaps in what
   would be shown.
+- **Profiling** (Windows, `tools/sampler/`): `python tools/sampler/profile.py --map 0` plays to the map as pace_test's
+  pace run does (its settings and command, with `KF4_INTERP_CUT=0`), and once the teleport's load is done samples
+  every thread of the program for `--seconds` (15) with `kf4-sampler` (built with the game: each thread suspended
+  every 500 us, its stack read and unwound). It prints each thread's CPU time, busy share and what it runs, then the
+  native GS's thread's functions (`--thread ring_thread`) by inclusive and self share of its busy samples (those not
+  waiting in ntdll or win32u; inlined functions count as their own, so the inclusive shares overlap). The thread
+  list is how the DMA controller's thread was found spinning at 97% of a core. `tools/sampler/stacks.py` reads the
+  kept `samples.txt` again: another `--thread` (a function, `backend_thread` for the back end's, or an id),
+  `--callers FUNC`, `--callees FUNC`, `--exports` (a DLL's frames by the export before them, `[ucrtbase.dll!memcmp]`).
+  On map 000 (branch `p8/dmac-nap`) the GS's thread had 6.2 s of CPU in the 15: of its busy samples, `gif` 89%,
+  `nd_register` 47%, `interp_record` 34%, `complete_upload` 11%, and ucrtbase's own (memcmp, memmove...) 25%. It
+  wants the disc (`--disc`, or `KF4_DISC`), a RelWithDebInfo build (the windows-clang preset: `llvm-symbolizer` names
+  the frames from its DWARF, with llvm-mingw's bin on PATH), and the machine otherwise idle. Two things that cost
+  time:
+  - Windows clang's frame pointers do not chain: the frame register points into the frame (the Windows x64
+    convention), not at the caller's saved RBP, even with `-fno-omit-frame-pointer`, so a walk by RBP does not find
+    the callers. The sampler unwinds from `.pdata` instead (each function's unwind codes, read from the program's
+    file and the DLLs' a stack goes through: ucrtbase, the Vulkan driver), and needs no special build.
+  - `--headless` starts the GS's threads only with `--dump-frames` (or a GS capture): a headless run that dumps
+    nothing draws nothing, and has no GS thread to profile. pace_test's command dumps the last frame.
 - **A uniform buffer read at an index each pixel works out is slow.** The pixels a GPU shades together
   read a uniform buffer one distinct index after another; the CLUT (each texel's own entry, four a
   bilinear read, more with mipmaps and anisotropy) cost about 1.4 ms of 5 a picture at the owner's
