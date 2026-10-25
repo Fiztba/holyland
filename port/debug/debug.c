@@ -14,8 +14,14 @@
 
 #include "port/audio.h"
 #include "port/debug.h"
+#include "port/overlay.h"
 #include "port/platform.h"
+#include "port/quicksave.h"
+#include "port/savestate.h"
 #include "port/settings.h"
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+#include "port/present_vk.h"
+#endif
 
 int port_gs_capture_init(const char *list); /* how many captures it asks for */
 
@@ -76,7 +82,7 @@ const char *port_debug_capture_path(const char *stem, uint64_t vblank, const cha
     return out;
 }
 
-/* KF4_DEBUG_AT=state@VBLANK,audio@VBLANK,gs@VBLANK,...: press F10, F12 or F9 at those vblanks, for
+/* KF4_DEBUG_AT=state@VBLANK,audio@VBLANK,gs@VBLANK,flash@VBLANK,...: press F10, F12, F9 or F8 at those vblanks, for
    checking the tools without anyone at the keyboard (in vblank order). Run on the game's thread at the
    vblank, from the GS capture's per-vblank note (port/platform/gs.c): a --headless run draws for it. */
 #define DEBUG_AT 16
@@ -97,6 +103,8 @@ void port_debug_at_vblank(uint64_t vblank) {
 
         if (what == 's') {
             port_debug_write_state_dump();
+        } else if (what == 'f') {
+            port_debug_flash_record();
         } else if (what == 'a') {
             port_debug_write_audio_tail();
         } else {
@@ -112,8 +120,8 @@ void port_debug_init(const char *gs_capture_at) {
     while (p != NULL && *p && debug_at_count < DEBUG_AT) {
         const char *at = strchr(p, '@');
 
-        if (at == NULL || (*p != 's' && *p != 'a' && *p != 'g')) {
-            fprintf(stderr, "KF4_DEBUG_AT wants state@VBLANK, audio@VBLANK or gs@VBLANK joined by commas\n");
+        if (at == NULL || (*p != 's' && *p != 'a' && *p != 'g' && *p != 'f')) {
+            fprintf(stderr, "KF4_DEBUG_AT wants state@VBLANK, audio@VBLANK, gs@VBLANK or flash@VBLANK joined by commas\n");
             exit(2);
         }
         debug_at[debug_at_count].what = *p;
@@ -263,4 +271,44 @@ void port_debug_write_audio_tail(void) {
         fclose(file);
     }
     free(copy);
+}
+
+/* ---- F8: the flash recorder ---------------------------------------------------------------------
+   For a picture that was wrong for a moment (a flash a screenshot misses): the presenter keeps the last
+   pictures it showed (port_vk_flash_write), and the key writes them into a folder of their own with what
+   it takes to look again: a GS capture of the next vblanks (kf4-gsreplay), a quick save (any build) and a
+   save state (this build). tools/flash_find.py then finds the pictures that differ from both neighbours. */
+void port_debug_flash_record(void) {
+    static char folder[1100];
+    char path[1200];
+    char why[256] = "the flash recorder needs the Vulkan presenter";
+    time_t now = time(NULL);
+    struct tm *local = localtime(&now);
+    char when[32] = "0";
+    int pictures = 0;
+
+    if (local != NULL) {
+        strftime(when, sizeof(when), "%Y%m%d-%H%M%S", local);
+    }
+    make_folder(port_data_dir());
+    make_folder(port_debug_folder());
+    snprintf(folder, sizeof(folder), "%s/flash_%06llu_%s", port_debug_folder(), (unsigned long long)port_vblank_count(),
+             when);
+    make_folder(folder);
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+    pictures = port_vk_flash_write(folder, why, sizeof(why));
+#endif
+    if (port_gs_enabled()) {
+        port_debug_request_gs_capture_into(folder);
+    }
+    snprintf(path, sizeof(path), "%s/quick.kf4quick", folder);
+    port_quick_request_save_file(path);
+    snprintf(path, sizeof(path), "%s/state.kf4state", folder);
+    port_state_request_save_file(path);
+    if (pictures > 0) {
+        port_debug_set_message("flash recorder: writing %d pictures to %s", pictures, folder);
+    } else {
+        port_debug_set_message("flash recorder: no pictures (%s); the GS capture and saves go to %s", why, folder);
+    }
+    port_overlay_notify_debug();
 }

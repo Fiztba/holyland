@@ -1,5 +1,5 @@
 diff --git a/src/game/map/map.c b/src/game/map/map.c
-index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc702c2005 100644
+index 965bb47ba25a27f088dbea3d51766e4139b20161..c459aca4a8e722cc4cd2c0e620d7bca58aff9d01 100644
 --- a/src/game/map/map.c
 +++ b/src/game/map/map.c
 @@ -17,6 +17,7 @@
@@ -19,13 +19,14 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -48,16 +51,17 @@ void Wobble_DrawRippledModel(ModelInstance *, int, int, int, int);
+@@ -48,16 +51,18 @@ void Wobble_DrawRippledModel(ModelInstance *, int, int, int, int);
  void Map_SetOffscreenTarget(void);
  void Map_QueueSlotPacket(int, int);
  int Map_ClassifyRecordOnScreen(MapDrawRecord *, ModelInstance *);
 -void *memset(void *, int, u32);
  void Map_InsertRecordBySize(AreaNode *);
 +void *DrawDistance_SkyFog(void *, void *);
++int NativeDraw_MapRecord(ModelInstance *, const MapDrawRecord *); /* PC: --native-draw (game/native_draw/) */
 +void FrameInterp_MarkSky(int); /* PC: --frame-rate (game/frame_interp.c) */
  void Model_SetUpPosed(ModelInstance *, char **, char **);
 -void Model_SetUpSkinned(ModelInstance *, int *, int *);
@@ -40,7 +41,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  void Vector_Copy(void *, void *);
  char *Collision_RelocateMesh(char *, ModelInstance *, int);
  void Player_MoveByOffset(f32 *);
-@@ -66,7 +70,7 @@ void Map_OffsetRecords(int, f32 *);
+@@ -66,7 +71,7 @@ void Map_OffsetRecords(int, f32 *);
  void Map_OffsetRecord(MapRecordBounds *, f32 *);
  void Map_PlaceRecordModels(int);
  void MapItem_MoveMap(int, f32 *);
@@ -49,7 +50,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  int Script_Start(int, int);
  void Player_StopFootstepSound(void);
  void Sound_StopAll(int);
-@@ -100,7 +104,7 @@ void GsDraw_QueueTexturedSprite(void *);
+@@ -100,7 +105,7 @@ void GsDraw_QueueTexturedSprite(void *);
  void TextureTable_QueueAll(TextureTableHeader *);
  void Model_DrawPosed(ModelInstance *);
  void GsDraw_SetDrawTarget(s64, s64, s64);
@@ -58,7 +59,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  u32 *Packet_Alloc(int);
  void Packet_AppendToChain(u32 *, u32 *);
  void Vu0_LoadMatrix(void *);
-@@ -109,15 +113,17 @@ int Map_TestFlagBlockBit(int, int, int, int);
+@@ -109,15 +114,17 @@ int Map_TestFlagBlockBit(int, int, int, int);
  void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
  extern MapSlot map_slots[];
  extern MapDrawState map_draw_state;
@@ -79,7 +80,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  extern EntitySpawnInfo *map_spawn_infos[2];
  extern MapItemDef *map_item_defs[2];
  extern s16 *map_item_model_kinds[2];
-@@ -138,7 +144,7 @@ extern u16 pad_state[];
+@@ -138,7 +145,7 @@ extern u16 pad_state[];
  extern PlayerState player_state;
  extern MapLightBlock map_object_default_lights;
  extern TextureTableHeader *D_00446790;
@@ -88,7 +89,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  
  /* Draws the map records of both map slots whose flag bit 0 is clear (the list func_00112BD0 builds each
     frame), then each slot's map objects. mode 0 draws every record, the others only some; below 2 the
-@@ -184,7 +190,7 @@ void Map_DrawRecords(int mode) {
+@@ -184,7 +191,7 @@ void Map_DrawRecords(int mode) {
              Packet_AddGsRegister(8, 0);
              Packet_EndGsRegisters();
              GsDraw_QueueFlush();
@@ -97,7 +98,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
                  flags = record->flags;
                  if ((flags & 2) && mode != 0) {
                      continue;
-@@ -199,22 +205,27 @@ void Map_DrawRecords(int mode) {
+@@ -199,22 +206,29 @@ void Map_DrawRecords(int mode) {
                      continue;
                  }
                  if (flags & 0x10) {
@@ -121,12 +122,14 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
 -                    Wobble_DrawRippledModel(record->model, header->screen_tint_red, header->screen_tint_green, header->screen_tint_blue, header->screen_tint_alpha);
 +                    header = (MapSlotUnk08 *)slot->header;
 +                    Wobble_DrawRippledModel(MAP_RECORD_MODEL(record), header->screen_tint_red, header->screen_tint_green, header->screen_tint_blue, header->screen_tint_alpha);
++                }
++                FrameInterp_MarkSky(record->flags < 0); /* PC: --frame-rate: the sky goes with the player (game/frame_interp.c) */
++                if (!port_native_draw(PORT_ND_MAP | PORT_ND_SKY) || !NativeDraw_MapRecord(MAP_RECORD_MODEL(record), record)) { /* PC: --native-draw (game/native_draw/) */
++                    MAP_RECORD_MODEL(record)->draw_parts(MAP_RECORD_MODEL(record));
                  }
 -                record->model->draw_parts(record->model);
 -                if (Map_ClassifyRecordOnScreen(record, record->model) == 0) {
 -                    ModelScreen_CutClippedTriangles(record->model);
-+                FrameInterp_MarkSky(record->flags < 0); /* PC: --frame-rate: the sky goes with the player (game/frame_interp.c) */
-+                MAP_RECORD_MODEL(record)->draw_parts(MAP_RECORD_MODEL(record));
 +                if (Map_ClassifyRecordOnScreen(record, MAP_RECORD_MODEL(record)) == 0) {
 +                    ModelScreen_CutClippedTriangles(MAP_RECORD_MODEL(record));
                  }
@@ -135,7 +138,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
              }
              MapObject_DrawAll(mode, 1, map);
          }
-@@ -259,9 +270,9 @@ void Map_DrawLateRecords(int mode) {
+@@ -259,9 +273,9 @@ void Map_DrawLateRecords(int mode) {
              Packet_BeginGsRegisters();
              z_mask = 1;
              Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
@@ -147,7 +150,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
                  flags = record->flags;
                  if ((flags & 2) && mode != 0) {
                      continue;
-@@ -283,22 +294,27 @@ void Map_DrawLateRecords(int mode) {
+@@ -283,22 +297,29 @@ void Map_DrawLateRecords(int mode) {
                      Packet_EndGsRegisters();
                  }
                  if (record->flags & 0x10) {
@@ -171,12 +174,14 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
 -                    Wobble_DrawRippledModel(record->model, header->screen_tint_red, header->screen_tint_green, header->screen_tint_blue, header->screen_tint_alpha);
 +                    header = (MapSlotUnk08 *)slot->header;
 +                    Wobble_DrawRippledModel(MAP_RECORD_MODEL(record), header->screen_tint_red, header->screen_tint_green, header->screen_tint_blue, header->screen_tint_alpha);
++                }
++                FrameInterp_MarkSky(record->flags < 0); /* PC: --frame-rate: the sky goes with the player (game/frame_interp.c) */
++                if (!port_native_draw(PORT_ND_MAP | PORT_ND_SKY) || !NativeDraw_MapRecord(MAP_RECORD_MODEL(record), record)) { /* PC: --native-draw (game/native_draw/) */
++                    MAP_RECORD_MODEL(record)->draw_parts(MAP_RECORD_MODEL(record));
                  }
 -                record->model->draw_parts(record->model);
 -                if (Map_ClassifyRecordOnScreen(record, record->model) == 0) {
 -                    ModelScreen_CutClippedTriangles(record->model);
-+                FrameInterp_MarkSky(record->flags < 0); /* PC: --frame-rate: the sky goes with the player (game/frame_interp.c) */
-+                MAP_RECORD_MODEL(record)->draw_parts(MAP_RECORD_MODEL(record));
 +                if (Map_ClassifyRecordOnScreen(record, MAP_RECORD_MODEL(record)) == 0) {
 +                    ModelScreen_CutClippedTriangles(MAP_RECORD_MODEL(record));
                  }
@@ -185,7 +190,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
              }
          }
      }
-@@ -308,9 +324,9 @@ void Map_DrawLateRecords(int mode) {
+@@ -308,9 +329,9 @@ void Map_DrawLateRecords(int mode) {
  }
  
  /* the address rounded up to a multiple of 16 */
@@ -198,7 +203,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  
      if (remainder != 0) {
          aligned = remainder - 0x10;
-@@ -333,7 +349,7 @@ void Map_ParseFile(int map) {
+@@ -333,7 +354,7 @@ void Map_ParseFile(int map) {
      int i;
      int offset;
      int size;
@@ -207,7 +212,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  
      slot = &map_slots[map];
      memset(map_slot_objects[map], 0, sizeof(map_slot_objects[map]));
-@@ -344,15 +360,17 @@ void Map_ParseFile(int map) {
+@@ -344,15 +365,17 @@ void Map_ParseFile(int map) {
      /* the working memory: the models, then the two tables of the slot */
      // match: stored as a model pointer (it is room for models); as a char * it is scheduled earlier
      *(ModelInstance **)&memory->record_models = (ModelInstance *)work;
@@ -230,7 +235,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      slot->record_model_spare_bytes = work;
      work += header->record_model_count;
      // match: stored as a u8 *; as a char * the read of header->unk4C below comes one instruction late
-@@ -376,7 +394,7 @@ void Map_ParseFile(int map) {
+@@ -376,7 +399,7 @@ void Map_ParseFile(int map) {
      cursor += header->flag_block_count * 0x40;
      slot->origins = (Vector4 *)cursor;
      cursor += 0x200;
@@ -239,7 +244,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      cursor += header->object_count * 0x80;
      map_spawn_infos[map] = (EntitySpawnInfo *)cursor;
      cursor += header->spawn_count * 0x60;
-@@ -389,7 +407,7 @@ void Map_ParseFile(int map) {
+@@ -389,7 +412,7 @@ void Map_ParseFile(int map) {
      /* the parts the header gives offsets for */
      cursor = (char *)header;
      cursor += header->script_offset;
@@ -248,7 +253,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      offset = header->sound_bank_offset;
      cursor = (char *)header;
      cursor += header->packet_table_offset;
-@@ -403,19 +421,19 @@ void Map_ParseFile(int map) {
+@@ -403,19 +426,19 @@ void Map_ParseFile(int map) {
      }
      cursor = (char *)header;
      cursor += offset;
@@ -275,7 +280,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  
      if (remainder != 0) {
          remainder -= 0x10;
-@@ -427,9 +445,9 @@ static inline u32 round_up_16(u32 address) {
+@@ -427,9 +450,9 @@ static inline u32 round_up_16(u32 address) {
  /* Builds the models of a map that was just read: one per record, then one per map object, with
     their collision meshes and motions. */
  void Map_BuildModels(int map) {
@@ -287,7 +292,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      MapSlotMemory *memory = &map_slot_memory[map];
      MapSlot *slot = &map_slots[map];
      MapSlotUnk08 *header = (MapSlotUnk08 *)memory->file_base;
-@@ -449,13 +467,13 @@ void Map_BuildModels(int map) {
+@@ -449,13 +472,13 @@ void Map_BuildModels(int map) {
      record = (MapRecordBounds *)slot->records;
      model = (ModelInstance *)memory->record_models;
      work = memory->work_cursor;
@@ -304,7 +309,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
              k = record->model_index;
              while (k-- > 0) {
                  cursor += *(int *)cursor;
-@@ -464,7 +482,7 @@ void Map_BuildModels(int map) {
+@@ -464,7 +487,7 @@ void Map_BuildModels(int map) {
              if (record->record_flags & 0x100) {
                  Vector_Copy(&model->position, record);
                  model->position.w = 1.0f;
@@ -313,7 +318,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
              }
              if (((ModelInstance **)slot->record_model_table)[record->model_index] == NULL) {
                  ((ModelInstance **)slot->record_model_table)[record->model_index] = model;
-@@ -483,12 +501,12 @@ void Map_BuildModels(int map) {
+@@ -483,12 +506,12 @@ void Map_BuildModels(int map) {
                  }
              }
              if (j >= i) {
@@ -329,7 +334,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
              } else {
                  model->strips = ((ModelInstance *)memory->record_models)[j].strips;
              }
-@@ -517,10 +535,10 @@ void Map_BuildModels(int map) {
+@@ -517,10 +540,10 @@ void Map_BuildModels(int map) {
          object->model = model;
          object->source = info;
          object->definition = (MapObjectUnk04 *)&map_object_defs[info->def_index * 0x80];
@@ -342,7 +347,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      for (i = 0; i < header->plain_object_model_count; i++) {
          object = map_slot_objects[map];
          for (j = 0; j < header->object_count; j++, object++) {
-@@ -536,23 +554,23 @@ void Map_BuildModels(int map) {
+@@ -536,23 +559,23 @@ void Map_BuildModels(int map) {
          }
          cursor = next; // match: retail bug, next is stale (or never set) when no object uses this model
      }
@@ -371,7 +376,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      for (i = 0; i < header->object_collision_count; i++) {
          next = cursor;
          object = map_slot_objects[map];
-@@ -560,7 +578,7 @@ void Map_BuildModels(int map) {
+@@ -560,7 +583,7 @@ void Map_BuildModels(int map) {
          for (j = 0; j < header->object_count; j++, object++) {
              if (object->definition->collision_mesh_index != 0xFFFF && object->source->collision_mesh_index == i) {
                  if (first == NULL) {
@@ -380,7 +385,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
                      first = object->model;
                  } else {
                      object->model->strips = first->strips;
-@@ -568,12 +586,12 @@ void Map_BuildModels(int map) {
+@@ -568,12 +591,12 @@ void Map_BuildModels(int map) {
              }
          }
      }
@@ -395,7 +400,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
              }
          }
          cursor = next; // match: retail bug, as above: next is only set when an object uses this motion
-@@ -654,7 +672,7 @@ void Map_OffsetRecords(int map, f32 *offset) {
+@@ -654,7 +677,7 @@ void Map_OffsetRecords(int map, f32 *offset) {
  /* Moves a map record and its model by an offset. */
  void Map_OffsetRecord(MapRecordBounds *record, f32 *offset) {
      if (record != NULL) {
@@ -404,7 +409,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          Vector_Add(record, record, offset);
          Vector_Add(record->box_lowest, record->box_lowest, offset);
          Vector_Add(record->box_highest, record->box_highest, offset);
-@@ -676,7 +694,7 @@ void Map_PlaceRecordModels(int map) {
+@@ -676,7 +699,7 @@ void Map_PlaceRecordModels(int map) {
      record = (MapRecordBounds *)slot->records;
      if (record != NULL) {
          count = ((MapSlotUnk08 *)slot->header)->record_count;
@@ -413,7 +418,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          for (i = 0; i < count; i++, record++, model++) {
              Vector_Copy(&model->position, record->position);
              model->position.w = 1.0f;
-@@ -719,14 +737,14 @@ void Map_InsertRecordBySize(AreaNode *node) {
+@@ -719,14 +742,14 @@ void Map_InsertRecordBySize(AreaNode *node) {
          cur = *head;
          while (cur != NULL && !(area < (cur->right - cur->left) * (cur->bottom - cur->top))) {
              prev = cur;
@@ -431,7 +436,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      }
  }
  
-@@ -740,14 +758,14 @@ void Map_UnlinkSlotRecords(int map) {
+@@ -740,14 +763,14 @@ void Map_UnlinkSlotRecords(int map) {
      while (node != NULL) {
          if (((u8)(AREA_NODE_WORD(node) >> 27) & 1) == map) {
              if (prev != NULL) {
@@ -449,7 +454,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      }
      if (prev == NULL) {
          record_boxes = NULL;
-@@ -758,14 +776,14 @@ void Map_UnlinkSlotRecords(int map) {
+@@ -758,14 +781,14 @@ void Map_UnlinkSlotRecords(int map) {
      while (node != NULL) {
          if (((u8)(AREA_NODE_WORD(node) >> 27) & 1) == map) {
              if (prev != NULL) {
@@ -467,7 +472,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      }
      if (prev == NULL) {
          backdrop_record_boxes = NULL;
-@@ -782,14 +800,14 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
+@@ -782,14 +805,14 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
      f32 best_distance;
      f32 distance;
  
@@ -484,7 +489,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          if (USABLE(node) && IN_X(node) && IN_Z(node)) {
              DISTANCE(node->lowest_y, node->highest_y, point[1]);
          }
-@@ -797,7 +815,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
+@@ -797,7 +820,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
      if (best != NULL) {
          return best;
      }
@@ -493,7 +498,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          if (USABLE(node) && IN_X(node) && IN_Y(node)) {
              DISTANCE(node->top, node->bottom, point[2]);
          }
-@@ -805,7 +823,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
+@@ -805,7 +828,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
      if (best != NULL) {
          return best;
      }
@@ -502,7 +507,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          if (USABLE(node) && IN_Y(node) && IN_Z(node)) {
              DISTANCE(node->left, node->right, point[0]);
          }
-@@ -822,14 +840,14 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
+@@ -822,14 +845,14 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
      f32 best_distance;
      f32 distance;
  
@@ -519,7 +524,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          if (USABLE_IN_MAP(node) && IN_X(node) && IN_Z(node)) {
              DISTANCE(node->lowest_y, node->highest_y, point[1]);
          }
-@@ -837,7 +855,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
+@@ -837,7 +860,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
      if (best != NULL) {
          return (MapRecordInfo *)best;
      }
@@ -528,7 +533,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          if (USABLE_IN_MAP(node) && IN_X(node) && IN_Y(node)) {
              DISTANCE(node->top, node->bottom, point[2]);
          }
-@@ -845,7 +863,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
+@@ -845,7 +868,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
      if (best != NULL) {
          return (MapRecordInfo *)best;
      }
@@ -537,7 +542,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          if (USABLE_IN_MAP(node) && IN_Y(node) && IN_Z(node)) {
              DISTANCE(node->left, node->right, point[0]);
          }
-@@ -1001,9 +1019,9 @@ void Map_DrawFreeCameraView(void) {
+@@ -1001,9 +1024,9 @@ void Map_DrawFreeCameraView(void) {
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(0x1A, 0);
      Packet_AddGsRegister(0x1B, 0x248);
@@ -549,7 +554,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      Packet_EndGsRegisters();
      GsDraw_QueueFlush();
      for (map = 0; map < 2; map++) {
-@@ -1013,17 +1031,17 @@ void Map_DrawFreeCameraView(void) {
+@@ -1013,17 +1036,17 @@ void Map_DrawFreeCameraView(void) {
              for (i = 0; i < ((MapSlotUnk08 *)slot->header)->record_count; i++, record++) {
                  if (!(record->flags & 0x80000000)) {
                      if (record->flags & 0x10) {
@@ -575,7 +580,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
                  }
              }
          }
-@@ -1038,7 +1056,7 @@ void Map_DrawFreeCameraView(void) {
+@@ -1038,7 +1061,7 @@ void Map_DrawFreeCameraView(void) {
      Packet_EndGsRegisters();
      GsDraw_QueueFlush();
      memset(&quad, 0, sizeof(quad));
@@ -584,7 +589,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      quad.unk08 = 0x60;
      quad.prim = 0x156;
      quad.red = 0x80;
-@@ -1080,7 +1098,7 @@ void Map_DrawFreeCameraView(void) {
+@@ -1080,7 +1103,7 @@ void Map_DrawFreeCameraView(void) {
  /* Points both drawing contexts at the 256-pixel-wide 16-bit buffer at GS block 0x2BC0 with a 256x256
     scissor: draw mode 2 draws its second view there (GameLoop_DrawFrame). */
  void Map_SetOffscreenTarget(void) {
@@ -593,7 +598,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
  }
  
  /* Stretches 320x224 texels of the 16-bit buffer at GS block 0x2BC0 over the whole 640x448 screen, z
-@@ -1090,10 +1108,10 @@ void Map_StretchOffscreenToScreen(void) {
+@@ -1090,10 +1113,10 @@ void Map_StretchOffscreenToScreen(void) {
  
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -606,7 +611,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      quad.unk08 = 0x60;
      quad.prim = 0x116;
      quad.red = 0x80;
-@@ -1136,7 +1154,7 @@ void Map_QueueSlotPacket(int slot, int index) {
+@@ -1136,7 +1159,7 @@ void Map_QueueSlotPacket(int slot, int index) {
  
      packet_start = packet = Packet_Alloc(3);
      *packet++ = *map_slot->packets.items[index] | 0x30000000;
@@ -615,7 +620,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
      *packet++ = 0;
      *packet++ = 0;
      Packet_AppendToChain(packet_start, packet);
-@@ -1150,7 +1168,7 @@ void Map_QueuePacket(int *packet) {
+@@ -1150,7 +1173,7 @@ void Map_QueuePacket(int *packet) {
      if (packet != 0) {
          packet_start = cursor = Packet_Alloc(2);
          *cursor++ = *packet | 0x30000000;
@@ -624,7 +629,7 @@ index 965bb47ba25a27f088dbea3d51766e4139b20161..c2625605fbfc5356e358d3fbbc6dccbc
          *cursor++ = 0;
          *cursor++ = 0;
          Packet_AppendToChain(packet_start, cursor);
-@@ -1172,7 +1190,7 @@ u32 *Map_GetSlotPacket(int slot, int index) {
+@@ -1172,7 +1195,7 @@ u32 *Map_GetSlotPacket(int slot, int index) {
     it among the block's 16 pairs of that map's tag and flag instead. Returns 1 when set. */
  int Map_TestFlagBlockBit(int slot, int index, int other_slot, int bit) {
      MapFlagBlock *block = map_slots[slot].flag_blocks + index;

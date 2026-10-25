@@ -30,17 +30,23 @@
 #endif
 #include "imgui.h"
 
+#include "automap_view.h" // the automap mod
+
 extern "C" {
 #include "port/audio.h"
+#include "port/automap.h"
 #include "port/cheats.h"
 #include "port/controls.h"
 #include "port/debug.h"
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
+#include "port/host.h"
 #include "port/quicksave.h"
+#include "port/render.h"
 #include "port/savestate.h"
 #include "port/settings.h"
+#include "port/stats.h"
 #include "port/teleport.h"
 }
 
@@ -904,6 +910,24 @@ void renderer_section() {
                 "whole-number depth makes a sawtooth. Tolerant keeps depth's fraction and lets a layer pass\n"
                 "within a hair of the surface under it: clean layers and straight seams. PS2's is the PS2's\n"
                 "picture. (--native-layer-z)");
+        // (--native-draw on / off, saved; the kinds one by one are the Debug page's: docs/port/NATIVE_DRAW.md)
+        bool native_draw = (port_options.native_draw & PORT_ND_ACCEPTED) == PORT_ND_ACCEPTED;
+        if (ImGui::Checkbox("Native draw (experimental)", &native_draw)) {
+            port_gs_set_native_draw(native_draw ? PORT_ND_ACCEPTED : 0, port_options.native_draw_compare);
+            port_settings.native_draw = native_draw ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("The game's 3D (the map, the sky, items, objects, entities, the arm, gold, effects, shadows and\n"
+                "the water) drawn at the game's level: the renderer core and vertex shaders doing VU1's maths,\n"
+                "instead of VU1 and its packets. The picture is the PS2 path's (at a larger resolution the\n"
+                "enemies' highlights are not snapped to pixel edges); between the game's frames at a higher\n"
+                "frame rate, moving models move smoothly. The way to the native renderer's own targets (P8).\n"
+                "Off is the PS2 path. Applies at once. (--native-draw on|off; the kinds one by one on the\n"
+                "Debug page)");
+        if (port_options.native_draw != 0 && port_options.native_draw != PORT_ND_ACCEPTED) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(this run: a choice of kinds, the Debug page)");
+        }
     }
     static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
     int presenter = port_video_presenter();
@@ -976,6 +1000,34 @@ void debug_tools() {
     tooltip("The sound as the game made it (before the volume), as a WAV.");
     ImGui::SameLine();
     ImGui::TextDisabled("%s", keys[2]);
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+    // the flash recorder (port/include/port/present_vk.h): the last pictures shown, kept on the GPU
+    {
+        char key[64];
+        port_controls_binding_label(port_controls_binding(port_controls_layout(), ACTION_FLASH_RECORD, 0), key, sizeof(key));
+        bool on = port_options.flash_seconds > 0;
+        if (ImGui::Checkbox("Flash recorder", &on))
+            port_options.flash_seconds = on ? 2.0f : 0.0f;
+        tooltip("Keeps the last 2 seconds of pictures shown (each scaled to 540 rows) on the GPU. Its key\n"
+                "writes them as numbered PNGs into a folder of their own in the captures folder, with a GS\n"
+                "capture of the next vblanks, a quick save and a save state: press it right after seeing a\n"
+                "picture flash wrong. tools/flash_find.py finds the pictures that differ from both\n"
+                "neighbours. Costs one small copy a picture (--flash-recorder SECONDS,HEIGHT). Not saved.");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!on);
+        if (ImGui::Button("Write the last pictures"))
+            port_debug_flash_record();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", key);
+        int pictures, width, height;
+        double megabytes;
+        bool writing = port_vk_flash_info(&pictures, &width, &height, &megabytes) != 0;
+        if (on && width > 0)
+            ImGui::TextDisabled("%s%d pictures of %d x %d kept (%.0f MB of GPU memory)", writing ? "writing; " : "", pictures,
+                                width, height, megabytes);
+    }
+#endif
     ImGui::TextWrapped("Folder: %s", port_debug_folder());
     ImGui::TextWrapped("%s", port_debug_message());
 }
@@ -1085,6 +1137,8 @@ void mods_page() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(on for this run: command line)");
     }
+    port_stats_overlay_mods(); // the extended stats mod (port/overlay/stats_panel.cpp)
+    automap_view_mods_section(); // the automap mod (port/overlay/automap_view.cpp)
 }
 
 void debug_page() {
@@ -1108,6 +1162,77 @@ void debug_page() {
         ImGui::Text("GIF hand-off: %.1f ms a second    Scanout: %.1f ms a second", gif_ms, vsync_ms);
         ImGui::TextDisabled("VU1 cycles %llu, PATH1 hash %016llx", (unsigned long long)port_stats.vu1_cycles,
                             (unsigned long long)port_stats.path1_hash);
+    }
+
+    ImGui::SeparatorText("Native draw (experimental)");
+    {
+        // (--native-draw, --native-draw-compare: docs/port/NATIVE_DRAW.md)
+        static const struct {
+            const char *name;
+            int bits;
+            const char *what;
+        } kinds[] = {{"Items", PORT_ND_ITEMS, "The items lying in the maps (MapItem_DrawAll)."},
+                     {"Map records", PORT_ND_MAP, "The map's own geometry (Map_DrawRecords, Map_DrawLateRecords) but the sky."},
+                     {"Sky", PORT_ND_SKY, "The sky's dome (the map record with flag bit 31), drawn as the setting below says."},
+                     {"Entities", PORT_ND_SKINNED, "Enemies and NPCs (Entity_DrawAll, the draw list)."},
+                     {"Arm", PORT_ND_ARM, "The arm, the held weapon and its trail (Player_DrawArm)."},
+                     {"Map objects", PORT_ND_OBJECTS, "Doors, chests, levers ... (Model_DrawPosedWithAlpha, MapObject_DrawAll)."},
+                     {"Picked item", PORT_ND_PICKED, "The item being picked up, after its depth clear."},
+                     {"Gold", PORT_ND_GOLD, "The gold lying in the maps (Gold_Draw, the draw list)."},
+                     {"Effects", PORT_ND_EFFECTS, "Fire, glows, magic (the draw list's effects, VU1 program 0x700)."},
+                     {"Shadows", PORT_ND_SHADOWS, "The entities' shadows (Entity_DrawPoolModels, VU1 program 0x5A0)."},
+                     {"Water", PORT_ND_WATER, "The reflection's rippled water on maps 008, 009 and 014 (Wobble_DrawRippledModel)."},
+                     {"Screen passes", PORT_ND_PASSES,
+                      "The brightness, tints, fills and fades, the flicker filter, the frame before, haze, the wobble."}};
+        int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
+        for (const auto &k : kinds) {
+            bool on = (kinds_on & k.bits) != 0;
+            if (ImGui::Checkbox(k.name, &on))
+                kinds_on = on ? kinds_on | k.bits : kinds_on & ~k.bits;
+            std::string tip = std::string(k.what) + " Drawn at the game's level: the renderer core and a vertex\n"
+                              "shader doing VU1's maths, instead of VU1 and its packets (--native-draw). Off is the PS2 path.";
+            tooltip(tip.c_str());
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+        if (ImGui::Button("Accepted kinds (on)"))
+            kinds_on = PORT_ND_ACCEPTED;
+        tooltip("Every kind that has passed its checks, as --native-draw on and the Renderer section's\n"
+                "switch below. Saved only from that switch.");
+        ImGui::SameLine();
+        if (ImGui::Button("None (off)"))
+            kinds_on = 0;
+        {
+            // (--sky, settings.json display.native_sky: game/native_draw/nd_sky.c)
+            static const char *const skies[] = {"PS2 (at the feet, its real distance)", "Modern (around the eye, behind everything)"};
+            int sky = port_options.native_sky == PORT_SKY_PS2 ? 0 : 1;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 20.0f);
+            if (ImGui::Combo("Native sky", &sky, skies, 2)) {
+                port_options.native_sky = sky == 0 ? PORT_SKY_PS2 : PORT_SKY_MODERN;
+                port_settings.native_sky = port_options.native_sky;
+                changed();
+            }
+            tooltip("With the sky drawn natively (Sky above): how.\nModern: the dome is centred on the eye and drawn "
+                    "behind everything, as a modern\ngame's sky: what lies beyond it shows (the tops of far hills on "
+                    "a few maps).\nWhere the game draws other things before the sky (maps 000 and 004) it stays "
+                    "the PS2's.\nPS2: the dome at the feet with its real distance, as the PS2 draws it: it hides\n"
+                    "what lies beyond it. Applies at once. (--sky modern|ps2)");
+            if (port_options.native_sky != port_settings.native_sky) {
+                ImGui::SameLine();
+                ImGui::TextColored(colour_note, "(for this run: command line)");
+            }
+        }
+        const char *compares[] = {"Off", "Both queued, native drawn", "Both queued, PS2 path drawn"};
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
+        ImGui::Combo("Compare", &compare, compares, 3);
+        tooltip("--native-draw-compare: the PS2 path's packets are queued as well (VU1 runs them), and the\n"
+                "native GS draws one of the two: switch to see the difference in the same frame.");
+        if (kinds_on != port_options.native_draw || compare != port_options.native_draw_compare)
+            port_gs_set_native_draw(kinds_on, compare);
+        if (port_options.native_draw)
+            ImGui::TextDisabled("%llu draws queued, %llu lost, %llu meshes held, %llu parsed",
+                                (unsigned long long)rd_stats.draws, (unsigned long long)rd_stats.lost,
+                                (unsigned long long)rd_stats.meshes_held, (unsigned long long)rd_stats.meshes_parsed);
     }
 
     ImGui::SeparatorText("Game");
@@ -1289,6 +1414,30 @@ void draw_toast() {
     draw->AddText(font, size, at, IM_COL32(255, 235, 170, (int)(255 * alpha)), text);
 }
 
+// "Building shaders": the native GS's pipelines not in the pipeline cache, made at the start (port_gs_shaders_building)
+bool building_shown() {
+    int done, total;
+    return port_gs_shaders_building(&done, &total) != 0 && total > 0;
+}
+
+void draw_building() {
+    int done, total;
+    if (!port_gs_shaders_building(&done, &total) || total <= 0)
+        return;
+    char text[64];
+    std::snprintf(text, sizeof(text), "Building shaders... %d/%d", done, total);
+    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImFont *font = ImGui::GetFont();
+    float size = viewport->Size.y / 40.0f > 16.0f ? viewport->Size.y / 40.0f : 16.0f;
+    ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+    ImVec2 at(viewport->Size.x - extent.x - size * 1.2f, viewport->Size.y - extent.y - size * 1.0f);
+    ImDrawList *draw = ImGui::GetForegroundDrawList();
+    draw->AddRectFilled(ImVec2(at.x - size * 0.5f, at.y - size * 0.25f),
+                        ImVec2(at.x + extent.x + size * 0.5f, at.y + extent.y + size * 0.25f), IM_COL32(0, 0, 0, 150),
+                        size * 0.3f);
+    draw->AddText(font, size, at, IM_COL32(255, 235, 170, 255), text);
+}
+
 // ---- KF4_OVERLAY_SHOT ----------------------------------------------------------------------------
 void parse_shots(const char *text) {
     std::string spec = text;
@@ -1308,9 +1457,15 @@ void parse_shots(const char *text) {
                 shot.page = i;
         if (name == "closed")
             shot.page = PAGE_COUNT;
+        if (name == "map") // the automap mod's full map, the overlay closed
+            shot.page = PAGE_COUNT + 1;
+        if (name == "mini") // the automap mod's minimap: the overlay closed, one picture a vblank
+            shot.page = PAGE_COUNT + 2;
+        if (name == "menu") // the game's menu with the extended stats mod's lines: the overlay closed, one a vblank
+            shot.page = PAGE_COUNT + 3;
         if (shot.page < 0) {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no page called %s (display, audio, controls, "
-                                 "savestates, mods, debug, interface, closed)\n",
+                                 "savestates, mods, debug, interface, closed, map, mini)\n",
                          name.c_str());
             continue;
         }
@@ -1328,7 +1483,8 @@ void shot_open() {
     const Shot &shot = shots[shot_next];
     if (port_vblank_count() < shot.vblank)
         return;
-    if (shot.page == PAGE_COUNT) {
+    automap_view_open_for_shot(shot.page == PAGE_COUNT + 1);
+    if (shot.page >= PAGE_COUNT) {
         overlay_open = false;
     } else {
         overlay_open = true;
@@ -1348,6 +1504,12 @@ void shot_write(const uint32_t *pixels, int width, int height) {
         char path[4096];
         std::snprintf(path, sizeof(path), "%s/overlay_%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
                       shot.page == PAGE_COUNT ? "closed" : page_ids[shot.page]);
+        if (shot.page > PAGE_COUNT) // the automap's and the menu's: one a vblank
+            std::snprintf(path, sizeof(path), "%s/overlay_%s_%llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
+                          shot.page == PAGE_COUNT + 1   ? "map"
+                          : shot.page == PAGE_COUNT + 2 ? "mini"
+                                                        : "menu",
+                          (unsigned long long)shot.vblank);
         if (port_png_write(path, pixels, (uint32_t)width, (uint32_t)height))
             std::fprintf(stderr, "[overlay] vblank %llu: %dx%d, %s\n", (unsigned long long)port_vblank_count(), width,
                          height, path);
@@ -1424,6 +1586,7 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
     io.IniFilename = shot_mode ? nullptr : ini_path.c_str();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     load_font();
+    port_stats_overlay_fonts(); // the extended stats mod's font for its lines in the menus
     apply_style();
     bool started;
     if (renderer != nullptr) {
@@ -1464,6 +1627,13 @@ extern "C" int port_overlay_event(const void *sdl_event) {
     if (event->type == SDL_KEYUP &&
         (event->key.keysym.scancode == SDL_SCANCODE_F1 || event->key.keysym.scancode == SDL_SCANCODE_F11))
         return 1;
+    // the automap mod's full map: its key closes it, and it has the mouse while it is open
+    if (!overlay_open && automap_view_event(event))
+        return 1;
+    if (!overlay_open && port_automap_full_open()) {
+        ImGui_ImplSDL2_ProcessEvent(event);
+        return is_input_event(event->type);
+    }
     // closed, it takes nothing more (and ImGui's queue is only emptied by a frame drawn)
     if (!overlay_open)
         return 0;
@@ -1472,9 +1642,9 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 }
 
 extern "C" int port_overlay_visible(void) {
-    return ready && (overlay_open || shot_pending() ||
-                     (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) ||
-                     (renderer == nullptr && port_controls_indicator_shown()));
+    return ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
+                     (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
+                     (renderer == nullptr && port_controls_indicator_shown()) || automap_view_visible());
 }
 
 extern "C" void *port_overlay_draw_data(void) {
@@ -1495,7 +1665,7 @@ extern "C" int port_overlay_open(void) {
 }
 
 extern "C" int port_overlay_paused(void) {
-    return ready && overlay_open && port_settings.pause_when_open && !shot_mode;
+    return ready && !shot_mode && ((overlay_open && port_settings.pause_when_open) || port_automap_holds_game());
 }
 
 extern "C" void port_overlay_notify_state(void) {
@@ -1506,6 +1676,17 @@ extern "C" void port_overlay_notify_state(void) {
 extern "C" void port_overlay_notify_quick(void) {
     toast_text = port_quick_message;
     toast_until = SDL_GetTicks() + 3000;
+}
+
+extern "C" void port_overlay_notify_debug(void) {
+    toast_text = port_debug_message;
+    toast_until = SDL_GetTicks() + 4000;
+}
+
+extern "C" void port_overlay_vblank(void) {
+    if (!ready)
+        return;
+    port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
 }
 
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {
@@ -1547,7 +1728,10 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
             held |= ImGui::IsKeyDown((ImGuiKey)key);
         pad_quiet = held;
     }
+    automap_view_draw(x, y, width, height); // the automap mod, under the overlay's windows
     draw_toast();
+    draw_building();
+    port_stats_overlay_draw(overlay_open, x, y, width, height); // the extended stats mod (port/overlay/stats_panel.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)

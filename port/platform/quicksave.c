@@ -35,6 +35,7 @@
 #endif
 
 #include "port/platform.h"
+#include "port/automap.h"
 #include "port/quicksave.h"
 #include "port/settings.h"
 
@@ -348,6 +349,13 @@ void port_quick_request_load(int slot) {
     ask(PORT_QUICK_LOAD, slot, NULL, 0);
 }
 
+void port_quick_request_save_file(const char *path) {
+    static char kept[1100];
+
+    snprintf(kept, sizeof(kept), "%s", path);
+    ask(PORT_QUICK_SAVE, -1, kept, 0);
+}
+
 void port_quick_request_teleport(int map, const float position[3], float heading, const char *label, int patient) {
     request.map = map;
     memcpy(request.position, position, sizeof(request.position));
@@ -442,6 +450,7 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
         set_message("cannot write %s", path);
         return 0;
     }
+    port_automap_quick_saved(path); /* the automap mod: the explored maps kept with the save */
     port_event("quick saved to %s: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d neighbour %02X "
                "(origin %d, %s)", name, stamped.map_tag, stamped.position[0], stamped.position[1], stamped.position[2],
                stamped.rotation[1], stamped.rotation[0], stamped.hp, stamped.mp, stamped.neighbour_map & 0xFFFF,
@@ -465,6 +474,7 @@ uint8_t *port_quick_read(size_t *size, PortQuickInfo *info) {
         return NULL;
     }
     expected = *info;
+    port_automap_quick_loading(path); /* the automap mod: the save's explored maps brought back */
     return image;
 }
 

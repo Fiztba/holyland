@@ -48,6 +48,8 @@ typedef struct {
    request that the game has not taken within a second is dropped, with a message saying why. */
 void port_quick_request_save(int slot);
 void port_quick_request_load(int slot);
+/* A quick save to a file (the flash recorder's folder: port/debug/debug.c); path is copied */
+void port_quick_request_save_file(const char *path);
 /* A teleport (port/include/port/teleport.h): the game's image as it is now, with the map and the
    player's place changed, loaded as a made-up file is. patient: the command line's, which waits. */
 void port_quick_request_teleport(int map, const float position[3], float heading, const char *label, int patient);

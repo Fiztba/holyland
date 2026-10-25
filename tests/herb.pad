@@ -1,0 +1,22 @@
+# New Game, then walk up to the herb lying near the start of the first map (099.map) and look down at it:
+# an item drawn large, the camera moving (docs/port/NATIVE_DRAW_TASKS.md, the proof). Played with
+# --frames 1881; the herb fills the middle of the picture from about vblank 1815 to 1840.
+# <vblank> <buttons or axes> [vblanks held, default 6]; axes 0..255, 128 centred, ly=0 is forward, ry=0 looks down
+100 CROSS 4     # the memory card notice ("no card")
+300 START 4     # skip the logos
+400 START 4     # Press Start
+500 CROSS 4     # New Game (the cursor starts on it)
+740 START 4     # skip the opening movie (from its eleventh picture on, as on the PS2)
+# the opening's messages
+700 CROSS 4
+800 CROSS 4
+900 CROSS 4
+1000 CROSS 4
+1100 CROSS 4
+1200 CROSS 4
+1300 CROSS 4
+1400 CROSS 4
+1600 ly=0 150           # walk toward the herb
+1750 ly=0 ry=0 50       # on, looking down
+1800 ly=0 40            # on, up to it
+1840 ry=0 20            # stop; look down a little more

@@ -31,8 +31,15 @@ layout(location = 3) GSN_IN float v_z;
 
 layout(set = 0, binding = 0) uniform usampler2D u_raw;
 layout(set = 0, binding = 1) uniform sampler2D u_target;
-layout(set = 0, binding = 2, std140) uniform Clut {
+// (a storage buffer, not a uniform one: a texel's CLUT entry is read at an index of its own, and a uniform
+// buffer read at indices that differ across the pixels shaded together is read once for each, one after
+// another: about 1.4 ms of the GPU's 5 a picture at the owner's settings, gsn_standalone.inc's "The CLUT")
+layout(set = 0, binding = 2, std430) readonly buffer Clut {
     uvec4 entries[64];
+    // GSN_M_RECT_2D (--native-2d smooth): after the CLUT, each triangle's texels (gsn.cpp, texel_rect_2d),
+    // two a uvec4, the first and last across and down (bits 0-15 and 16-31), the triangle's number in
+    // v_fog (gs.vert); only as many as the draw has are bound (the 64 KiB of a uniform buffer at most)
+    uvec4 rects[];
 } u_clut;
 // The destination, for the draws that blend here: a copy of the target taken before the draw (binding
 // 3), or (GSN_DEST_INPUT, the gs_*_in*.frag shaders) the copy kept in the render pass, an input
@@ -211,24 +218,42 @@ vec4 sample_level(vec2 tc, int level, bool linear) {
         // scale, the texels' steps smooth and their edges still sharp. Nearest, the GS's texel k covers
         // the GS pixel whose integer point (the middle of its pixels of the target) is at k: half a GS
         // pixel on from where a filter puts its middle, so the place is moved by that, the letters
-        // where the PS2 has them. The taps stay inside the texture (no wrap to its far side).
+        // where the PS2 has them. The taps stay inside the texture (no wrap to its far side), and inside
+        // the texels the game gave the triangle (GSN_M_RECT_2D, gsn.cpp's texel_rect_2d): a letter's
+        // sprite covers its own cell of a sheet of letters, and taps past it read the letters beside and
+        // below it (faint ticks, dots and specks at the letters' edges); at its edges the sprite has its
+        // edge texels, as on the PS2. The result is kept within the four texels around the place (no
+        // ring: no colour or alpha the texels there do not have, as Catmull-Rom's overshoot made).
         vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
         vec2 scale = vec2(float(max(field(pc.misc, GSN_M_SCALE_X_SHIFT, 3u), 1u)), float(max(field(pc.misc, GSN_M_SCALE_SHIFT, 3u), 1u)));
-        vec2 q = clamp(tc + 0.5 * (tc_dx * scale.x + tc_dy * scale.y), vec2(0.5), size - 0.5) - 0.5;
+        ivec2 first = ivec2(0), last = ivec2(size) - 1;
+        if ((pc.misc & GSN_M_RECT_2D) != 0u) {
+            uint t = uint(round(v_fog));
+            uvec4 pair = u_clut.rects[t >> 1];
+            uvec2 r = (t & 1u) != 0u ? pair.zw : pair.xy;
+            first = ivec2(r & 0xFFFFu);
+            last = ivec2(r >> 16);
+        }
+        vec2 q = clamp(tc + 0.5 * (tc_dx * scale.x + tc_dy * scale.y), vec2(first) + 0.5, vec2(last) + 0.5) - 0.5;
         vec2 i = floor(q);
         vec2 f = q - i;
         vec4 wx = vec4(f.x * (-0.5 + f.x * (1.0 - 0.5 * f.x)), 1.0 + f.x * f.x * (-2.5 + 1.5 * f.x),
                        f.x * (0.5 + f.x * (2.0 - 1.5 * f.x)), f.x * f.x * (-0.5 + 0.5 * f.x));
         vec4 wy = vec4(f.y * (-0.5 + f.y * (1.0 - 0.5 * f.y)), 1.0 + f.y * f.y * (-2.5 + 1.5 * f.y),
                        f.y * (0.5 + f.y * (2.0 - 1.5 * f.y)), f.y * f.y * (-0.5 + 0.5 * f.y));
-        vec4 sum = vec4(0.0);
-        ivec2 last = ivec2(size) - 1;
+        vec4 sum = vec4(0.0), lo = vec4(255.0), hi = vec4(0.0);
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
-                sum += texel_f(clamp(ivec2(i) + ivec2(x - 1, y - 1), ivec2(0), last), 0) * (wx[x] * wy[y]);
+                vec4 c = texel_f(clamp(ivec2(i) + ivec2(x - 1, y - 1), first, last), 0);
+                sum += c * (wx[x] * wy[y]);
+                if ((x == 1 || x == 2) && (y == 1 || y == 2)) {
+                    lo = min(lo, c);
+                    hi = max(hi, c);
+                }
             }
         }
-        return high ? clamp(sum, 0.0, 255.0) : clamp(floor(sum + 0.5), 0.0, 255.0);
+        sum = clamp(sum, lo, hi);
+        return high ? sum : floor(sum + 0.5);
     }
     ivec2 p = ivec2(floor(at * 16.0 + 1.0 / 64.0));
     if (!linear && scaled) {

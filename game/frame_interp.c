@@ -37,7 +37,11 @@ static void add_float(int index, f32 value) {
     add_field(index, bits);
 }
 
+void NativeDraw_BeginFrame(void); /* (game/native_draw/native_draw.c) */
+void NativeDraw_MarkCamera(int projection, int mode);
+
 void FrameInterp_BeginFrame(void) {
+    NativeDraw_BeginFrame(); /* (native draw's side buffer: a frame's, as the marks here are) */
     marking = port_frame_interp();
     sky = 0;
 }
@@ -61,6 +65,7 @@ void FrameInterp_MarkSky(int on) {
    mode 2 (models at a fixed place before the eye) the header only. Two lists: Packet_EndGsRegisters'
    GIF tag is right for up to 15 registers only. */
 void FrameInterp_MarkCamera(int projection, int mode) {
+    NativeDraw_MarkCamera(projection, mode); /* native draw: the draws' camera (game/native_draw/) */
     /* world to view: its rotation and translation, the columns' x, y and z (w is 0, 0, 0, 1); view to
        screen: what sceVu0ViewScreenMatrix sets (x and y scales, the centre, z = cz + az / w) */
     static const u8 view_fields[12] = {0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14};

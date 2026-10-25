@@ -1274,7 +1274,7 @@ index 7e713c82bf342d08c684c940eee9f846d35a9fce..c273360f77d9fd746c04ece28dbc0f63
  
  #endif
 diff --git a/src/game/gfx/packet_buffer.c b/src/game/gfx/packet_buffer.c
-index dcf2a52beaaf10c4a77004b85984e517627efa29..b9736c39e823080615ae07151b8c086a2400a766 100644
+index dcf2a52beaaf10c4a77004b85984e517627efa29..cff45121d8a471d9c3afc263a42d7b3fce6cb593 100644
 --- a/src/game/gfx/packet_buffer.c
 +++ b/src/game/gfx/packet_buffer.c
 @@ -3,26 +3,26 @@
@@ -1344,16 +1344,23 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..b9736c39e823080615ae07151b8c086a
              Packet_EndGsRegisters();
              end_tag = packet_chain_tail[packet_fill_index];
              end_tag->id_and_qwc = 0x70000000;
-@@ -136,7 +136,7 @@ void Packet_SendChain(void) {
+@@ -136,8 +136,14 @@ void Packet_SendChain(void) {
              FlushCache(0);
              *D1_QWC = 0;
              *D1_MADR = 0;
 -            *D1_TADR = (u32)*chain_head;
 +            *D1_TADR = (int)EE_WORD(*chain_head);
              *D1_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
++            /* PC: --test-dma-wait (tests only): the chain read before the game goes on to change the blocks it
++               REFs (the next frame's wave UVs and fades), so the PS2 path draws them as the game drew them */
++            if (port_test_dma_wait()) {
++                do {
++                } while (*D1_CHCR & D_CHCR_STR);
++            }
          }
      }
-@@ -157,7 +157,7 @@ void Packet_WaitForSend(void) {
+ }
+@@ -157,7 +163,7 @@ void Packet_WaitForSend(void) {
  /* Lays out the packet buffers in the packet area for the given size (0 = largest). */
  void Packet_LayOutBuffers(int size_index) {
      u32 size;
@@ -1362,7 +1369,7 @@ index dcf2a52beaaf10c4a77004b85984e517627efa29..b9736c39e823080615ae07151b8c086a
      int half;
  
      packet_fill_index = 0;
-@@ -218,8 +218,8 @@ u32 *Packet_Alloc(int quadwords) {
+@@ -218,8 +224,8 @@ u32 *Packet_Alloc(int quadwords) {
  }
  
  /* Returns the spare area's address and size. */
@@ -1707,10 +1714,10 @@ index d8869c0a8b27e662dcaee7efda81a6440c416385..3ca29ea2032057cebc3d03030ec16ff8
      return cursor;
  }
 diff --git a/src/game/gfx/wobble.c b/src/game/gfx/wobble.c
-index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e07dbfb2ab 100644
+index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..18b3448672f1d61a3c5abcf0f6c5e82b27fb7555 100644
 --- a/src/game/gfx/wobble.c
 +++ b/src/game/gfx/wobble.c
-@@ -2,16 +2,11 @@
+@@ -2,18 +2,15 @@
  #include "model/model.h"
  #include "gfx/packet.h"
  #include "gfx/screen.h"
@@ -1728,8 +1735,12 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
 -float sinf(float);
  int rand(void);
  void srand(u32);
++int NativeDraw_RippledModel(ModelInstance *model, u32 *packet_start, u32 *packet_end, const f32 *sines); /* PC */
++void NativeDraw_WaveUvsApplied(const ModelInstance *model, const WaveOscillator *oscillators); /* PC */
  
-@@ -36,7 +31,7 @@ void Wobble_AdvanceSines(void) {
+ extern const float wobble_phase_step;       /* 2 pi / 30: a full turn of the base phase takes 30 steps */
+ extern const float wobble_phase_period;     /* 2 pi */
+@@ -36,7 +33,7 @@ void Wobble_AdvanceSines(void) {
      }
      x = wobble_base_phase;
      for (i = 0; i < 32; i++) {
@@ -1738,7 +1749,7 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
          x += wobble_sine_spacing;
          if (x > wobble_phase_period) {
              x -= wobble_phase_period;
-@@ -128,7 +123,7 @@ void Wobble_DrawRippledModel(ModelInstance *model, int unk1, int unk2, int unk3,
+@@ -128,7 +125,7 @@ void Wobble_DrawRippledModel(ModelInstance *model, int unk1, int unk2, int unk3,
              Matrix_Multiply(matrix, world_screen_matrix, matrix);
              Vu0_LoadMatrix(matrix);
              data_count = part->data_count;
@@ -1747,7 +1758,19 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
              for (j = 0; j < data_count; j++) {
                  flags = 0;
                  length = next->length;
-@@ -266,7 +261,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
+@@ -220,7 +217,10 @@ void Wobble_DrawRippledModel(ModelInstance *model, int unk1, int unk2, int unk3,
+         ((u64 *)packet)[1] = 8;
+         ((u64 *)packet)[0] = 0;
+         packet = Packet_Alloc(1);
+-        Packet_AppendToChain(packet_start, packet);
++        /* PC: --native-draw water (game/native_draw/nd_water.c) */
++        if (!port_native_draw(PORT_ND_WATER) || !NativeDraw_RippledModel(model, packet_start, packet, wobble_sines)) {
++            Packet_AppendToChain(packet_start, packet);
++        }
+     }
+ }
+ 
+@@ -266,7 +266,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
      part = model->parts;
      for (i = 0; i < part_count; i++, part++) {
          count = part->data_count;
@@ -1756,7 +1779,7 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
          for (j = 0; j < count; j++) {
              texture = data->tex0 & 0x3FFF;
              length = data->length;
-@@ -276,6 +271,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
+@@ -276,6 +276,7 @@ int Wobble_ModelUsesTextures(ModelInstance *model, int first, int last) {
              data = (ModelPartData *)((char *)data + (length + 1) * 0x10);
          }
      }
@@ -1764,7 +1787,7 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
  }
  
  /* Resets the 16 screen wobble oscillators, spreading their phases over one turn. */
-@@ -311,9 +307,9 @@ void Wobble_StepOscillators(void) {
+@@ -311,9 +312,9 @@ void Wobble_StepOscillators(void) {
  }
  
  /* the address rounded up to a multiple of 16 */
@@ -1777,7 +1800,7 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
  
      if (remainder != 0) {
          aligned = remainder - 0x10;
-@@ -324,7 +320,7 @@ static inline u32 align_16(u32 address) {
+@@ -324,7 +325,7 @@ static inline u32 align_16(u32 address) {
  
  /* Builds the model's table of wave texture coordinates at *alloc (16-byte aligned) and moves *alloc
     past it. Each vertex keeps its own coordinates and gets a wave picked from where it is. */
@@ -1786,7 +1809,7 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
      ModelPart *part;
      ModelPartData *next_data;
      ModelPartData *data;
-@@ -337,17 +333,17 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
+@@ -337,17 +338,17 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
      int part_count;
      int vertex_count;
      u16 length;
@@ -1808,7 +1831,7 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
          for (j = 0; j < count; j++) {
              data = next_data;
              next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices
-@@ -366,13 +362,13 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
+@@ -366,13 +367,13 @@ void Wobble_BuildWaveUvs(ModelInstance *model, u32 *alloc) {
              next_data = (ModelPartData *)((char *)data + (length + 1) * 0x10);
          }
      }
@@ -1824,7 +1847,16 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
  }
  
  /* Moves every vertex's texture coordinates by its wave. */
-@@ -395,7 +391,7 @@ void Wobble_ApplyWaveUvs(ModelInstance *model) {
+@@ -390,12 +391,16 @@ void Wobble_ApplyWaveUvs(ModelInstance *model) {
+     int vertex_count;
+     u16 length;
+ 
++    /* PC: --native-draw map, the wave UVs on the GPU (game/native_draw/nd_water.c) */
++    if (port_native_draw(PORT_ND_MAP)) {
++        NativeDraw_WaveUvsApplied(model, wobble_oscillators);
++    }
+     part = model->parts;
+     part_count = model->part_count;
      wave_uv = model->wave_uvs;
      for (i = 0; i < part_count; i++, part++) {
          count = part->data_count;
@@ -1833,7 +1865,7 @@ index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..4e1b9be95583366266d60c38bc4974e0
          for (j = 0; j < count; j++) {
              data = next_data;
              next_data = (ModelPartData *)next_data->vertices; // match: the cursor steps on to the vertices
-@@ -443,7 +439,7 @@ void Wobble_SetUvsFromJitteredScreen(ModelInstance *model) {
+@@ -443,7 +448,7 @@ void Wobble_SetUvsFromJitteredScreen(ModelInstance *model) {
      for (i = 0; i < part_count; i++, part++) {
          Vu0_LoadMatrix(scratch->matrices[i]);
          count = part->data_count;

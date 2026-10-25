@@ -13,7 +13,10 @@
 
    What it can write (tools/README.md has examples):
      --info             the capture's metadata and what is in it
-     --frames           each scanout's picture, frame_NNNNNN.png, as --dump-frames writes it
+     --frames           each scanout's picture, frame_NNNNNN.png, as --dump-frames writes it (with the
+                        native GS alone, also end_NNNNNN.png and end-other_NNNNNN.png: the displayed
+                        buffer at the end and the other one in play, which holds the frame drawn during
+                        the capture: no scanout of the capture shows it)
      --out DIR          where the pictures go (the current directory by default)
      --list             every draw: a run of vertices with no GS state written between them, in one
                         packet. Its path, the VU1 program and XGKICK that made it, PRIM, the vertex count,
@@ -34,8 +37,11 @@
                         packets, registers, flags and clock)
      --diff N           with --mode vif: show up to N differing vertices of each differing packet (8)
      --renderer NAME    who draws: gs (paraLLEl-GS, the default), native (step 3's native GS,
-                        port/gs/native/) or both. With both, --draws writes draw_NNNNN_native.png
-                        beside each draw_NNNNN.png, and --frames frame_NNNNNN_native.png
+                        port/gs/native/), modern (the native GS with the scene in its own targets, P8:
+                        docs/port/NATIVE_DRAW_P8.md; a capture taken modern carries the page-ownership
+                        table, so the scene's textures come from their uploads from the start) or
+                        both. With both, --draws writes draw_NNNNN_native.png beside each
+                        draw_NNNNN.png, and --frames frame_NNNNNN_native.png
      --compare-renderers
                         both renderers, and after every draw (or each of --draws) the pixels of its box
                         compared: the draws after which they differ, and by how much (up to --limit).
@@ -50,6 +56,18 @@
                         every sample (--native-cutout-aa)
      --colour MODE      the native GS's colour precision: exact (the default) or high (--native-colour)
      --layer-z MODE     the native GS's Z: ps2 (the default) or tolerant (--native-layer-z)
+     --nd-oracle        native draw's vertex oracle (nd_oracle.c): every run of VU1 program 0x000 also
+                        through nd_000.vert on the GPU and the CPU's plan, compared lane by lane with
+                        what VU1 kicked (implies --mode vif; --vu1 hle unless given); and every run of
+                        0x280 through nd_280.vert, both passes, and the parser on its blocks
+                        (nd_oracle_280.c); and of 0x700 (the effects) through nd_700.vert, its kicks
+                        and TEX0 swap, and the parser on its blocks (nd_oracle_700.c)
+     --native-draw MODE a capture of a run with native draws (--native-draw, docs/port/NATIVE_DRAW.md)
+                        holds the draws (records ND_MESH, ND_DRAWS), fed back to the renderer core
+                        before the frame's writes that name them. The native GS draws them (native, the
+                        default) or, of a capture taken with --native-draw-compare, the PS2 path's
+                        packets queued beside them (ps2: --native-draw-compare ps2). paraLLEl-GS always
+                        draws the PS2 path's
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -63,6 +81,7 @@
 #include "port/host.h"
 #include "port/lz4_block.h"
 #include "port/platform.h"
+#include "port/render.h"
 
 int port_gs_backend_open(void);
 void *port_gs_backend_context(void);
@@ -70,6 +89,7 @@ void port_gs_backend_gif(int path, const void *data, size_t bytes);
 void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 #include "gsn.h"
+#include "nd_oracle.h"
 
 /* ---- What vif1.c, vu1.c, video.c and gs_parallel.cpp need of the program --------------------- */
 PortOptions port_options;
@@ -148,6 +168,9 @@ void port_gs_capture_vu1_run(uint32_t address, uint32_t top, uint32_t itop) {
         current_program = address;
     }
     current_kick = 0;
+    if (nd_oracle_on()) {
+        nd_oracle_vu1_run(current_program, address != KF4GS_MSCNT, top);
+    }
 }
 
 static void die(const char *fmt, ...) {
@@ -964,6 +987,22 @@ static void compare_display(Run *r, const uint64_t *priv, const char *when, uint
     }
 }
 
+/* --frames with the native GS alone: the buffer the display shows, as it has it now (end_N.png: the
+   capture's last frame, drawn after its last vblank, which no scanout of the capture shows) */
+static void dump_display(Run *r, const uint64_t *priv, const char *when, uint64_t vblank) {
+    GsnRect rect;
+
+    if (gsn_display_rect(priv, &rect)) {
+        uint32_t *b = malloc((size_t)rect.w * rect.h * 4);
+        char name[64];
+
+        gsn_read_rect(&rect, b);
+        snprintf(name, sizeof(name), "%s_%06llu.png", when, (unsigned long long)vblank);
+        write_png(r, name, b, rect.w, rect.h);
+        free(b);
+    }
+}
+
 /* --compare-renderers: the pictures of a vblank (the scanouts: each renderer's read of the display,
    field by field or whole, deinterlaced) */
 static void compare_scanouts(Run *r, const PortGsFrame *a, const PortGsFrame *b, uint64_t vblank) {
@@ -1113,6 +1152,9 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     int matched = 0;
     uint64_t start = port_ticks(); /* the time here is not VU1's (vu1.c leaves it out) */
 
+    if (nd_oracle_on()) {
+        nd_oracle_gif(path, data, bytes);
+    }
     /* what was recorded before this packet: PATH3, read-backs (VU1_RUN is this run's own) */
     while (r->cursor < r->capture->count) {
         const Record *rec = &recs[r->cursor];
@@ -1161,6 +1203,10 @@ static void handle(Run *r, size_t index) {
         break;
     case KF4GS_VIFDATA:
         if (r->mode == MODE_VIF) {
+            if (nd_oracle_on()) {
+                nd280_oracle_vifdata((const uint32_t *)rec->data, rec->size / 4, current_program);
+                nd700_oracle_vifdata((const uint32_t *)rec->data, rec->size / 4, current_program);
+            }
             port_vif1_feed((const uint32_t *)rec->data, rec->size / 4);
         }
         break;
@@ -1177,6 +1223,12 @@ static void handle(Run *r, size_t index) {
         break;
     case KF4GS_VSYNC:
         vsync(r, rec);
+        break;
+    case KF4GS_ND_MESH:
+    case KF4GS_ND_DRAWS:
+        if (rd_replay_record(rec->type, rec->data, rec->size) < 0) {
+            fprintf(stderr, "record %zu (native draw, type %u) is short: left out\n", index, rec->type);
+        }
         break;
     }
 }
@@ -1200,6 +1252,12 @@ static size_t start_state(Run *r) {
             }
             if ((r->render & RENDER_NATIVE) && !gsn_restore(rec->type, rec->data, rec->size)) {
                 die("the capture's GS state (record %u) does not fit the native GS", rec->type);
+            }
+            break;
+        case KF4GS_SA_TABLE:
+            /* (--renderer modern) the scene's page-ownership table; the others draw from VRAM */
+            if ((r->render & RENDER_NATIVE) && !gsn_restore(rec->type, rec->data, rec->size)) {
+                fprintf(stderr, "the capture's page-ownership table does not read: the scene's textures are the GS's\n");
             }
             break;
         case KF4GS_VU1: {
@@ -1227,6 +1285,8 @@ static size_t start_state(Run *r) {
         case KF4GS_VU1_RUN:
         case KF4GS_READ_FIFO:
         case KF4GS_VSYNC:
+        case KF4GS_ND_MESH:
+        case KF4GS_ND_DRAWS:
             return i;
         }
     }
@@ -1238,6 +1298,7 @@ static void run_capture(Run *r) {
     Kf4GsVu1Regs vu_start;
 
     port_vu1_debug_regs(&vu_start, 0); /* VU1's clock as the capture starts */
+    rd_replay_reset();
     port_options.stats = r->mode == MODE_VIF; /* vu1.c counts its runs */
     memset(&port_stats, 0, sizeof(port_stats));
     port_stats.vu1_cycles = vu_start.cycle;
@@ -1255,6 +1316,30 @@ static void run_capture(Run *r) {
         handle(r, index);
     }
     port_gs_capture_recording = 0;
+    if (rd_replay_stats.meshes || rd_replay_stats.draws || rd_replay_stats.draws_dropped) {
+        printf("native draw: %llu draws and %llu meshes fed back (%llu meshes refused, %llu draws left out)",
+               (unsigned long long)rd_replay_stats.draws, (unsigned long long)rd_replay_stats.meshes,
+               (unsigned long long)rd_replay_stats.meshes_refused, (unsigned long long)rd_replay_stats.draws_dropped);
+        if (r->render & RENDER_NATIVE) {
+            printf("; the native GS drew %llu (%llu batches), lost %llu, skipped %llu PS2-path writes",
+                   (unsigned long long)gsn_stats.nd_draws, (unsigned long long)gsn_stats.nd_batches,
+                   (unsigned long long)gsn_stats.nd_lost, (unsigned long long)gsn_stats.nd_skipped);
+        }
+        printf("\n");
+    }
+    if (r->frames && r->render == RENDER_NATIVE && r->seen_vsync) {
+        uint64_t other[0xF0 / 8];
+        uint64_t fbp;
+
+        dump_display(r, r->last_priv, "end", r->last_vblank);
+        /* and the other frame buffer in play (0 and 0x8C), as --compare-renderers' end-other */
+        memcpy(other, r->last_priv, sizeof(other));
+        fbp = other[9 * 2] & 0x1FF;
+        if (fbp == 0 || fbp == 0x8C) {
+            other[9 * 2] = (other[9 * 2] & ~(uint64_t)0x1FF) | (fbp == 0 ? 0x8C : 0);
+            dump_display(r, other, "end-other", r->last_vblank);
+        }
+    }
     if (r->compare_renderers && r->seen_vsync) {
         /* a capture's last frame is drawn after its last vblank: compared once all of it is */
         compare_display(r, r->last_priv, "end", r->last_vblank);
@@ -1404,8 +1489,9 @@ static void info(const Capture *c) {
     size_t i, counts[32] = {0};
     uint64_t bytes[32] = {0};
     static const char *names[32] = {[0] = "END", [1] = "META", [2] = "VRAM", [3] = "GS_REGS", [4] = "GS_PRIV",
-                                    [5] = "GS_HISTORY", [6] = "VU1", [7] = "VIF1", [16] = "GIF", [17] = "VIFDATA",
-                                    [18] = "VU1_RUN", [19] = "READ_FIFO", [20] = "VSYNC"};
+                                    [5] = "GS_HISTORY", [6] = "VU1", [7] = "VIF1", [8] = "SA_TABLE", [16] = "GIF", [17] = "VIFDATA",
+                                    [18] = "VU1_RUN", [19] = "READ_FIFO", [20] = "VSYNC",
+                                    [21] = "ND_MESH", [22] = "ND_DRAWS"};
 
     printf("%s", c->meta);
     for (i = 0; i < c->count; i++) {
@@ -1428,8 +1514,10 @@ static void usage(void) {
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N]\n"
-            "                    [--renderer gs|native|both] [--compare-renderers] [--msaa N]\n"
+            "                    [--renderer gs|native|modern|both] [--compare-renderers] [--msaa N]\n"
             "                    [--scale X[,Y]] [--lod scale|ps2|full] [--cutout-aa off|ssaa] [--layer-z ps2|tolerant]\n"
+            "                    [--nd-oracle]\n"
+            "                    [--native-draw native|ps2]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1443,6 +1531,9 @@ int main(int argc, char **argv) {
     int renderer = RENDER_GS;
     int exact = 0, msaa = 1, scale_x = 1, scale_y = 1, lod = 1, cutout_aa = GSN_CUTOUT_AA_OFF, colour = GSN_COLOUR_EXACT;
     int layer_z = GSN_LAYER_Z_PS2;
+    int nd_oracle = 0, vu1_given = 0;
+    int native_draw = GSN_NATIVE_DRAW_NATIVE;
+    int modern = 0;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset(&run, 0, sizeof(run));
@@ -1465,11 +1556,14 @@ int main(int argc, char **argv) {
             exact = 1;
         } else if (strcmp(a, "--no-resync") == 0) {
             run.resync = -1;
+        } else if (strcmp(a, "--nd-oracle") == 0) {
+            nd_oracle = 1;
         } else if (strcmp(a, "--compare-renderers") == 0) {
             run.compare_renderers = 1;
             renderer = RENDER_GS | RENDER_NATIVE;
         } else if (strcmp(a, "--renderer") == 0 && v != NULL) {
-            renderer = strcmp(v, "gs") == 0 ? RENDER_GS : strcmp(v, "native") == 0 ? RENDER_NATIVE
+            modern = strcmp(v, "modern") == 0;
+            renderer = strcmp(v, "gs") == 0 ? RENDER_GS : strcmp(v, "native") == 0 || modern ? RENDER_NATIVE
                        : strcmp(v, "both") == 0 ? RENDER_GS | RENDER_NATIVE : 0;
             if (renderer == 0) {
                 usage();
@@ -1488,6 +1582,14 @@ int main(int argc, char **argv) {
             i++;
         } else if (strcmp(a, "--layer-z") == 0) {
             layer_z = strcmp(v, "tolerant") == 0 ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
+            i++;
+        } else if (strcmp(a, "--native-draw") == 0) {
+            native_draw = strcmp(v, "ps2") == 0      ? GSN_NATIVE_DRAW_PS2
+                          : strcmp(v, "native") == 0 ? GSN_NATIVE_DRAW_NATIVE
+                                                     : -1;
+            if (native_draw < 0) {
+                usage();
+            }
             i++;
         } else if (strcmp(a, "--colour") == 0) {
             colour = strcmp(v, "high") == 0 ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
@@ -1543,6 +1645,7 @@ int main(int argc, char **argv) {
             }
             i++;
         } else if (strcmp(a, "--vu1") == 0) {
+            vu1_given = 1;
             if (strcmp(v, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;
             } else if (strcmp(v, "hle") == 0) {
@@ -1602,14 +1705,31 @@ int main(int argc, char **argv) {
             gsn_set_cutout_aa(cutout_aa);
             gsn_set_colour(colour);
             gsn_set_layer_z(layer_z);
+            gsn_set_native_draw(native_draw);
+            gsn_set_standalone(modern); /* (--renderer modern: from the capture's start, gsn_restore) */
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
         run.native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+    }
+    if (nd_oracle) {
+        run.mode = MODE_VIF;
+        if (!vu1_given) {
+            port_options.vu1 = PORT_VU1_HLE;
+        }
+        if (!(run.render & RENDER_NATIVE) && !gsn_open(NULL)) {
+            die("--nd-oracle: no native GS: it needs a Vulkan GPU");
+        }
+        nd_oracle_begin(vu1_data_memory, limit);
     }
     if (show_info && !list && !run.render && vertices < 0 && compare_file == NULL && run.mode == MODE_GIF) {
         return 0;
     }
     run_capture(&run);
+    nd_oracle_end();
+    if (modern && run.render) {
+        fflush(stdout);
+        gsn_print_standalone_stats(); /* (the [stats] standalone line: where the scene's textures came from) */
+    }
     printf("%zu draws, %zu vertices\n", run.gif.count, run.gif.vertex_count);
     if (run.compare_renderers) {
         printf("renderers: %llu draws compared, %llu differ\n", (unsigned long long)run.compared,

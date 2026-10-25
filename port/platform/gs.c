@@ -21,7 +21,9 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
+#include "port/render.h"
 #include "port/savestate.h"
+#include "port/overlay.h"
 #include "port/settings.h"
 
 #ifdef KF4_HAVE_PARALLEL_GS
@@ -53,6 +55,18 @@ static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
 static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
 static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
+/* --frame-rate: the pictures between cut to fewer a vblank while the native GS's thread is behind
+   (port_gs_run_vsync): interp_allow of them a vblank (INTERP_ALL: no cut), one fewer each time it falls
+   behind, one more after interp_rest vblanks; vblanks drawn with fewer and with none; the cuts */
+#define INTERP_ALL 16
+static uint64_t interp_vblanks_left_out, interp_vblanks_fewer, interp_cuts, interp_rest = 30;
+static uint64_t interp_settle_until, interp_next_raise, interp_raised_at, interp_last_cut;
+static int interp_behind_run, interp_allow = INTERP_ALL;
+static volatile int interp_cut_now; /* (the counter: pictures between a vblank left out by the cut, now) */
+
+int port_interp_cut(void) {
+    return __atomic_load_n(&interp_cut_now, __ATOMIC_RELAXED);
+}
 
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
@@ -106,6 +120,15 @@ static void open_backend(void *unused) {
             gsn_set_2d(port_options.native_2d);
             gsn_set_colour(port_options.native_colour);
             gsn_set_layer_z(port_options.native_layer_z);
+            gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
+                                                                                        : GSN_NATIVE_DRAW_NATIVE);
+            gsn_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
+            if (port_options.scene_scale || port_options.scene_msaa) {
+                /* --scene-scale, --scene-msaa (P8 T2): across as port_gs_native_scale_x has it */
+                int s = port_options.scene_scale;
+                int sx = s && port_options.native_widescreen && port_options.widescreen ? (4 * s + 2) / 3 : s;
+                gsn_set_scene(sx, s, port_options.scene_msaa);
+            }
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
@@ -117,6 +140,11 @@ static void open_backend(void *unused) {
         if (have_gs) {
             fprintf(stderr, "[gs] the native GS did not start: paraLLEl-GS draws instead\n");
         }
+    }
+    if (port_options.native_draw && !have_native) {
+        /* (the native draws are the native GS's: without it, nothing would draw them) */
+        fprintf(stderr, "[gs] --native-draw needs the native GS: off\n");
+        port_options.native_draw = 0;
     }
     /* what did start, for the window (the Vulkan presenter needs the native GS), the overlay and --stats */
     if (have_gs || have_native) {
@@ -867,6 +895,14 @@ void port_gs_post_vsync(void) {
     memcpy(request->privileged, ee_hw_ptr(0x12000000), sizeof(request->privileged));
     request->vblank = port_vblank_count();
     request->field = (int)((*(volatile uint64_t *)ee_hw_ptr(0x12001000) >> 13) & 1);
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native && port_options.renderer_modern) {
+        PortGameReadout game; /* --renderer modern's --stats a map (P8) */
+
+        kf4_game_readout(&game);
+        gsn_set_scene_map(game.map_loaded ? game.map_tag : -1);
+    }
+#endif
     if (port_gs_capture_armed) {
         port_gs_capture_note_vblank(request->vblank);
     }
@@ -954,6 +990,17 @@ void port_gs_set_native_colour(int mode) {
 #endif
 }
 
+void port_gs_set_native_draw(int kinds, int compare) {
+    port_options.native_draw = 0; /* (the native draws are the native GS's) */
+    port_options.native_draw_compare = compare;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        port_options.native_draw = kinds;
+        gsn_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
+    }
+#endif
+}
+
 void port_gs_set_native_layer_z(int mode) {
     port_options.native_layer_z = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
@@ -1011,21 +1058,34 @@ void port_gs_print_stats(void) {
                 s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
-        if (interp_behind) {
-            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu\n",
-                    (unsigned long long)interp_behind);
+        if (interp_behind || interp_vblanks_fewer) {
+            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
+                    "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
+                    (unsigned long long)interp_cuts, (unsigned long long)interp_vblanks_fewer,
+                    (unsigned long long)interp_vblanks_left_out);
         }
         if (s->interp_records || s->interp_replays || s->interp_misses) {
             fprintf(stderr,
                     "[stats] native GS pictures between on the GPU: %llu drawn from the packets (%.3f s, %.1f us each), "
                     "%llu from the recording (%.3f s, %.1f us each), %llu of no frame; drawn from the packets again as "
-                    "the GS was not as recorded: %llu (targets), %llu (registers); %llu submits while recording\n",
+                    "the GS was not as recorded: %llu (targets), %llu (registers), %llu (VRAM or the CLUT written), %llu (the "
+                    "recording could not be made again); %llu submits while recording; replays with a target the recording "
+                    "made: %llu kept, %llu its own\n",
                     (unsigned long long)s->interp_records, s->ns_interp_record / 1e9,
                     s->interp_records ? s->ns_interp_record / 1e3 / (double)s->interp_records : 0.0,
                     (unsigned long long)s->interp_replays, s->ns_interp_replay / 1e9,
                     s->interp_replays ? s->ns_interp_replay / 1e3 / (double)s->interp_replays : 0.0,
                     (unsigned long long)s->interp_misses, (unsigned long long)s->interp_rerecord[1],
-                    (unsigned long long)s->interp_rerecord[2], (unsigned long long)s->interp_mid_submits);
+                    (unsigned long long)s->interp_rerecord[2], (unsigned long long)s->interp_rerecord[5],
+                    (unsigned long long)s->interp_rerecord[4], (unsigned long long)s->interp_mid_submits,
+                    (unsigned long long)s->interp_kept_targets, (unsigned long long)s->interp_own_targets);
+        }
+        if (s->pipeline_binds) {
+            fprintf(stderr, "[stats] native GS pipelines bound: %llu for %llu draws; pictures between: %.1f a recording, "
+                    "%.1f a replay (for %.1f draws)\n", (unsigned long long)s->pipeline_binds, (unsigned long long)s->draws,
+                    s->interp_records ? s->interp_record_binds / (double)s->interp_records : 0.0,
+                    s->interp_replays ? s->interp_replay_binds / (double)s->interp_replays : 0.0,
+                    s->interp_replays ? s->interp_replay_draws / (double)s->interp_replays : 0.0);
         }
         if (s->replay_uploads || s->replay_misses) {
             fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",
@@ -1038,10 +1098,43 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
                     (unsigned long long)s->cutout_draws);
         }
+        if (s->shadows) {
+            fprintf(stderr, "[stats] native GS: %llu write-backs put off: %llu never owed, %llu pages' made later; %llu textures read "
+                            "over pages owed without them (all they read written since)\n",
+                    (unsigned long long)s->shadows, (unsigned long long)s->shadows_gone, (unsigned long long)s->shadows_resolved,
+                    (unsigned long long)s->shadow_reads_covered);
+        }
+        if (s->writebacks_overwritten) {
+            fprintf(stderr, "[stats] native GS: %llu write-backs not made: the targets under a copy of the frame\n",
+                    (unsigned long long)s->writebacks_overwritten);
+        }
+        if (s->silhouettes_whole) {
+            fprintf(stderr, "[stats] native GS: %llu silhouettes drawn whole\n", (unsigned long long)s->silhouettes_whole);
+        }
         if (s->layer_draws) {
             fprintf(stderr, "[stats] native GS: %llu batches with layers (--native-layer-z tolerant)\n",
                     (unsigned long long)s->layer_draws);
         }
+        if (port_options.native_draw) {
+            fprintf(stderr,
+                    "[stats] native draw: %llu draws queued (%llu screen passes), %llu drawn (%llu batches), %llu lost, %llu not drawn yet; "
+                    "%llu meshes parsed (%llu refused), %llu found again, %.1f MB hashed; %llu meshes put on the GPU; "
+                    "%llu PS2-path writes left out; %llu models declined (drawn the PS2 way); the plan %.3f s, "
+                    "%llu vertices (%llu found planned); pictures between: %llu model parts and %llu strips moved "
+                    "between their frames\n",
+                    (unsigned long long)rd_stats.draws, (unsigned long long)rd_stats.passes, (unsigned long long)s->nd_draws,
+                    (unsigned long long)s->nd_batches, (unsigned long long)s->nd_lost,
+                    (unsigned long long)s->nd_unsupported, (unsigned long long)rd_stats.meshes_parsed,
+                    (unsigned long long)rd_stats.mesh_unsupported, (unsigned long long)rd_stats.mesh_hits,
+                    rd_stats.hash_bytes / 1048576.0, (unsigned long long)s->nd_mesh_uploads,
+                    (unsigned long long)s->nd_skipped, (unsigned long long)rd_stats.declined, s->ns_nd_plan / 1e9,
+                    (unsigned long long)s->nd_plan_vertices, (unsigned long long)s->nd_plan_reused,
+                    (unsigned long long)s->nd_moved_models, (unsigned long long)s->nd_moved_strips);
+        }
+        if (port_options.renderer_modern || port_options.native_draw) {
+            gsn_print_standalone_stats(); /* (P8; and native draw's for the pictures between) */
+        }
+        gsn_print_pipeline_stats();
         {
             int w;
             double pictures = s->pictures ? (double)s->pictures : 1.0;
@@ -1120,6 +1213,24 @@ void port_gs_interp_picture(const void *picture) {
 #endif
 }
 
+int port_gs_shaders_building(int *done, int *total) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native) {
+        return gsn_pipelines_building(done, total);
+    }
+#endif
+    *done = *total = 0;
+    return 0;
+}
+
+int port_gs_shaders_running(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    return have_native && gsn_pipelines_running();
+#else
+    return 0;
+#endif
+}
+
 int port_gs_vsync_pending(void) {
     return __atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) != __atomic_load_n(&queue_tail, __ATOMIC_RELAXED);
 }
@@ -1138,7 +1249,7 @@ void port_gs_run_vsync(void) {
     /* --frame-rate: the times in this vblank of the pictures shown (port_interp_schedule), whether a game
        frame is being drawn between (interp_live), and whether the vblank's own picture is one */
     double interp_phases[16];
-    int interp_count = 0, interp_live = 0, own_shown = 1;
+    int interp_count = 0, interp_live = 0, own_shown = 1, interp_allow_now = INTERP_ALL, interp_between = 0;
 
     while (dump_next < dump_count && dump_at[dump_next] < request->vblank) {
         dump_next++;
@@ -1179,15 +1290,67 @@ void port_gs_run_vsync(void) {
         }
         port_interp_reset(idle);
         interp_live = idle && port_interp_active();
+        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_native && gsn_backlog() > 1
+                                ? interp_behind_run + 1
+                                : 0;
+        {
+            /* The native GS's thread a vblank behind as this vblank and the one before began: one picture
+               between fewer a vblank (down to none: the game's own pictures, as at 30), so that a place whose
+               pictures between cost more than the thread has keeps the game's rate and as many pictures as fit,
+               not a cliff to 60. Up to half a second to catch up after a cut; one more picture after interp_rest
+               vblanks without one, and when that falls behind again within half a second, after twice as long
+               (up to 8 s). Seen in --stats and on the F3 counter ("CUT"). */
+            int between = 0, i;
+
+            for (i = 0; i < interp_count; i++) {
+                between += interp_phases[i] > 0;
+            }
+            if (interp_behind_run == 0) {
+                interp_settle_until = 0; /* (caught up since the last cut: the next fall behind is judged at once) */
+            }
+            if (interp_behind_run >= 2 && request->vblank >= interp_settle_until && interp_allow > 0) {
+                interp_allow = (interp_allow < between ? interp_allow : between) - 1;
+                if (interp_allow < 0) {
+                    interp_allow = 0;
+                }
+                if (interp_raised_at && request->vblank < interp_raised_at + 30 && interp_rest < 480) {
+                    interp_rest *= 2;
+                }
+                interp_settle_until = request->vblank + 30; /* (to catch up before judging again: at most half a second) */
+                interp_next_raise = request->vblank + interp_rest;
+                interp_last_cut = request->vblank;
+                interp_cuts++;
+            } else if (interp_allow < INTERP_ALL && request->vblank >= interp_next_raise && interp_behind_run == 0) {
+                if (interp_last_cut < interp_raised_at) {
+                    interp_rest = 30; /* (the raise before held) */
+                }
+                interp_allow = interp_allow + 1 >= between ? INTERP_ALL : interp_allow + 1;
+                interp_raised_at = request->vblank;
+                interp_next_raise = request->vblank + interp_rest;
+            }
+            interp_allow_now = interp_allow < between ? interp_allow : between;
+            __atomic_store_n(&interp_cut_now, interp_live ? between - interp_allow_now : 0, __ATOMIC_RELAXED);
+            if (interp_live && !dump && interp_allow_now < between) {
+                interp_vblanks_fewer++;
+            }
+            if (interp_live && !dump && interp_allow_now == 0 && between > 0) {
+                interp_live = 0;
+                interp_vblanks_left_out++;
+            }
+            interp_between = between;
+        }
         /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
         own_shown = interp_phases[0] == 0 || !interp_live;
         if (interp_live && (own_shown || dump)) {
             port_interp_picture(0, replay_gif);
         }
         interp_on = 1;
-    } else if (interp_on) {
-        port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
-        interp_on = 0;
+    } else {
+        __atomic_store_n(&interp_cut_now, 0, __ATOMIC_RELAXED);
+        if (interp_on) {
+            port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
+            interp_on = 0;
+        }
     }
     if (port_whole_frame()) {
         /* a screen drawn as fields (the menus): the picture just drawn drawn again into the buffer shown,
@@ -1226,11 +1389,23 @@ void port_gs_run_vsync(void) {
     if (interp_live && interp_count > 0) {
         /* the pictures between this vblank and the next: for the window, only while this thread and the
            native GS's keep up with the game (a picture between left out rather than the game held up) */
-        int i, more = shown || draw_all();
+        int i, j = 0, more = shown || draw_all();
 
         for (i = 0; i < interp_count; i++) {
             if (interp_phases[i] <= 0 || !(more || dump)) {
                 continue;
+            }
+            if (!dump && interp_allow_now < interp_between) {
+                /* the cut: interp_allow_now of the vblank's pictures between, spread over it (the k-th at
+                   (k + 0.5) / allowed of the way) */
+                int k = j++, keep = 0, a;
+
+                for (a = 0; a < interp_allow_now; a++) {
+                    keep |= (int)((a + 0.5) * interp_between / interp_allow_now) == k;
+                }
+                if (!keep) {
+                    continue;
+                }
             }
             if (!dump && !port_options.fast && shown &&
                 (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1)) {
@@ -1298,6 +1473,10 @@ static void take_other_vram(PortStateIo *io, uint64_t bytes, int into_native) {
 void port_gs_state(PortStateIo *io) {
     uint64_t backend_bytes = 0;
     uint64_t native_bytes = 0;
+    uint64_t table_bytes = 0;
+    int native_loaded = 0;
+
+    (void)native_loaded;
 
     if (io->loading) {
         port_interp_forget(); /* (--frame-rate 60) the packets kept are not this state's */
@@ -1339,12 +1518,31 @@ void port_gs_state(PortStateIo *io) {
 #ifdef KF4_HAVE_PARALLEL_GS
         if (have_native && native_bytes == gsn_state_size()) {
             gsn_state(io);
+            native_loaded = 1;
         } else if (have_gs && io->loading && !backend_bytes) {
             take_other_vram(io, native_bytes, 0);
         } else
 #endif
         {
             port_state_bytes(io, NULL, (size_t)native_bytes);
+        }
+    }
+    /* (--renderer modern) the native GS's page-ownership table, when the scene was on: kept when it is
+       on again, so that its textures come from their uploads at once */
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native && !io->loading) {
+        table_bytes = gsn_table_state_size();
+    }
+#endif
+    PORT_STATE(io, table_bytes);
+    if (table_bytes != 0) {
+#ifdef KF4_HAVE_PARALLEL_GS
+        if (have_native && (!io->loading || native_loaded)) {
+            gsn_table_state(io, (size_t)table_bytes);
+        } else
+#endif
+        {
+            port_state_bytes(io, NULL, (size_t)table_bytes);
         }
     }
 }

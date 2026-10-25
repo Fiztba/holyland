@@ -1042,7 +1042,7 @@ static void shared_rect(uint32_t *x0, uint32_t *y0, uint32_t *x1, uint32_t *y1) 
 }
 
 static int test_shared_memory(int rounds, uint32_t seed) {
-    static const char *names[] = {"draw", "upload", "pages", "read", "copy"};
+    static const char *names[] = {"draw", "upload", "pages", "read", "copy", "part"};
     int bad = 0;
     uint32_t sx0, sy0, sx1, sy1;
     int only = getenv("GSN_ROUND") ? atoi(getenv("GSN_ROUND")) : -1;
@@ -1072,7 +1072,7 @@ static int test_shared_memory(int rounds, uint32_t seed) {
         upload(CLUT_PAGE * 32, 1, GSN_PSMCT32, 0, 0, 16, 16, data_buf);
         int nops = 2 + (int)rnd(14);
         for (int o = 0; o < nops; o++) {
-            uint32_t op = rnd(5), row = rnd(5); /* the buffer: this many page rows into the memory */
+            uint32_t op = rnd(6), row = rnd(5); /* the buffer: this many page rows into the memory */
             discard = 0;
             if (skip) {
                 char tag[16];
@@ -1127,6 +1127,15 @@ static int test_shared_memory(int rounds, uint32_t seed) {
                 shared_rect(&sx0, &sy0, &sx1, &sy1);
                 shared_sprite(sx0, sy0, sx1, sy1, rnd(128), rnd(t8 ? 64 : 128));
                 shared_end();
+                break;
+            }
+            case 5: { /* part of a page or two in another format (T8 or T4), from any block: what is under it
+                         stays the buffer's (the native GS's write-backs put off, shadows) */
+                uint32_t t4 = rnd(2);
+                uint32_t w = t4 ? 32 * (1 + rnd(2)) : 16 * (1 + rnd(4)), h = 1 + rnd(48);
+                uint32_t bp = SHARED_PAGE * 32 + rnd((SHARED_PAGES - 4) * 32);
+                fill_random(data_buf, 128 * 128);
+                upload(bp, 2, t4 ? GSN_PSMT4 : GSN_PSMT8, rnd(128 - w + 1), rnd(16), w, h, data_buf);
                 break;
             }
             default: { /* a local-to-local copy from another buffer of the memory */

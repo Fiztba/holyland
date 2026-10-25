@@ -164,8 +164,11 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--draw-distance-sky ps2\|push` | with `--draw-distance`, the sky keeps the PS2's fog (the default) or has it pushed out too |
 | `--myus-necklace` | the opt-in mod (also on the overlay's Mods page; off by default): the effect of Myu's Necklace always, worn or not (see "Mods") |
 | `--separate-run` | the opt-in mod (also on the overlay's Mods page; off by default): run on a key of its own, not the action button (see "Mods") |
+| `--extended-stats` | the opt-in mod (also on the overlay's Mods page; off by default): what the game keeps and never shows, in its own menus, and the hit log (see "Mods", [EXTENDED_STATS.md](EXTENDED_STATS.md)) |
+| `--automap`, `--automap-cheats` | the opt-in automap mod (also on the overlay's Mods page; off by default): a map of where you have been, M opens it; `--automap-cheats` with all its cheats on (see "Mods", [AUTOMAP.md](AUTOMAP.md)) |
 | `--show-fps` | the frame-rate counter on for this run (F3, or the overlay's Interface page; off by default; see "The frame-rate counter (F3)") |
 | `--gs-capture-at VBLANK[:N],...` | write a GS frame capture of N vblanks (2 when left out) from each of these vblanks, as F9 does (see "Debugging") |
+| `--flash-recorder off\|on\|SECONDS[,HEIGHT]` | the flash recorder (F8; on by default: the last 2 seconds of pictures shown, at 540 rows; also on the overlay's Debug page, not saved; see "Debugging") |
 | `--fpu-round zero\|nearest` | how the game's float maths rounds: as the EE's FPU (`zero`, the default: toward zero, denormals flushed; RULES.md, "PS2 numbers") or as the PC's IEEE floats (`nearest`), for comparing |
 
 The window shows the game at 4:3 (16:9 with widescreen). A game controller is the pad; so is the keyboard (the PS2 layout,
@@ -189,8 +192,8 @@ King's Map); "A / D move left / right in menus" on the Controls page (`controls.
 it off. It follows the bindings (the keys of L1 / R1 and of d-pad left / right) and leaves the
 controller alone. In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
-loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F9, F10 and
-F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
+loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F8, F9, F10
+and F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
 rebound.
 
 ### The settings overlay (F1)
@@ -206,7 +209,7 @@ F1 or Escape closes it. What is held as it closes does nothing in the game until
 | Audio | volume and mute (of what you hear: the game's sound and `--audio-dump` are unchanged) |
 | Controls | the layout (PS2 or Verdite), every action's two keys or mouse buttons and its controller button (click a slot and press; Delete or a right click clears it), Verdite's mouse sensitivity, invert Y, the mouse buttons in menus and A / D in menus, and Defaults |
 | Save states | Quick saves (for playing): the ten slots, which one F2 and F4 use, what each holds (map, level, HP, when), save, load and what the last request did (`port/include/port/quicksave.h`). Save states (for debugging): the ten slots (0 is the quick slot of F5 and F7), save, load, and what the last request did (`port/include/port/savestate.h`) |
-| Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it (see "Mods") |
+| Mods | the opt-in changes to the game, live: Myu's Necklace effect without wearing it, and the automap's "Map" section (see "Mods") |
 | Debug | pictures shown (the window's presents of a new picture, by either thread), vblanks and game frames a second; with `--stats`' counting switched on, the DMA controller's time a second; the map, position, heading, HP, MP, level and gold; a button that copies them for a bug report; the cheats for testing (Invincible, and buttons that learn every spell, add every piece of equipment and the carried items but the keys, and put MP and Magic Power at 999: `--cheats`, `port/include/port/cheats.h`); Teleport (see "Teleport"); and the debugging tools: a button for each, the captures folder and the last file written (see "Debugging") |
 | Interface | pause while open, the frame-rate counter (F3), the overlay's size, and where `settings.json` is |
 
@@ -259,7 +262,9 @@ without SDL there is no overlay at all.
 the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
 window's whole picture a few vblanks later as `overlay_<page>.png` in `--dump-dir`. The pages are
 `display`, `audio`, `controls`, `savestates`, `mods`, `debug` and `interface`, and `closed` is the game alone;
-list them in vblank order. Use it with `KF4_DATA_DIR`, as it reads and, after the last picture,
+`map@V` and `mini@V` (the automap mod) and `menu@V` (the game alone, for the extended stats mod's lines in
+its menus) are named by their vblank, `overlay_menu_V.png`, so several can be taken in one run. List them
+in vblank order. Use it with `KF4_DATA_DIR`, as it reads and, after the last picture,
 writes back settings.json:
 
 ```sh
@@ -306,6 +311,29 @@ it does without it.
   shown there only with the mod on), so the action button only uses things. Pressed buttons are
   untouched, and everything that stops running (weight, item use, death) still does. A pad script
   (`--input`, `--record-input`) keeps the pad as it is.
+- **Extended stats** (`--extended-stats`, `port_stats_options`; [EXTENDED_STATS.md](EXTENDED_STATS.md)).
+  What the game keeps and never shows, written into the empty places of its own menus whenever they
+  are up; it only reads the game, so on or off the game runs the same. The main menu and Status: the
+  experience to the next level, the weapon hits and spells to the next Physical and Magical point
+  (every 100th that deals damage), the hits to the weapon's next level (180 and 480), and the ailments'
+  time left. Equipment: the weapon's level, the ailments and the defences against them, each piece's
+  durability (the percent its values count at, 100 down to 50), and the hidden effects of what is worn.
+  Item and Arrange: what the item under the cursor does (the HP and MP it restores, the ailments it
+  cures, the spell a crystal teaches, ...), read from the game's item tables. The free-floating panel
+  (F6, rebindable: "Show / hide the stats panel (mod)") has all of it and more (spell levels, gauges);
+  the hit log (bottom left) lists each hit dealt and taken with the HP left, and the creature last hit
+  gets a health bar (top). Its parts are switches of their own on the Mods page (`settings.json`
+  `"mods"`: `extended_stats`, `extended_stats_menus`, `extended_stats_panel`, `extended_stats_damage`,
+  `extended_stats_durability`).
+- **Automap** (`--automap`, the Mods page's "Map" section; [AUTOMAP.md](AUTOMAP.md)). A map of the map you
+  are in, made from its collision meshes, that fills in as you explore and is kept with each save (quick
+  saves and memory card saves; a new game starts blank), in the look of the KF3 port's automap: floors
+  shaded by height, walls, water, lava, poison and deadly drops, the ways into other maps, doors (locked or
+  not), chests (opened or not), barrels and bones, save points and people, named from the game's own text.
+  M (the Controls page's Map) opens the full map, which holds the game (wheel: zoom, drag: move, hover: a
+  label); a minimap shows in a corner while playing. Its cheats, off by default, stand in for a guide:
+  the whole map, items and what containers hold, live enemies, secrets and traps, and what each lock needs
+  with hand-written hints (`game/automap_guide.c`). Only reads the game; with it off nothing of it runs.
 
 ## Widescreen
 
@@ -421,6 +449,14 @@ it is at that picture's time, t of the way from the frame shown to the one drawn
   draws the pictures between with the frame's own camera (a check of the replay);
   `KF4_INTERP_DRAW_ALL=1` draws every picture between headless (for speed tests); `KF4_PRESENT_SIM=HZ`
   runs the window's pacing headless with nothing drawn (`KF4_PRESENT_LOG=FILE` writes each present).
+  `KF4_INTERP_OUTSIDE=1` logs each run of the PS2 path's world (frame_interp.c's runs; not native
+  draws) whose place on the screen in a picture between leaves the union of its places at t 0 and t 1
+  (the vblank, phase, run, pair and the three boxes; `=2` also every shadow run, program 0x5A0;
+  `KF4_INTERP_OUTSIDE_LOG=FILE` for a file). `KF4_GSN_SLOW_US=N` holds the native GS's thread N us at
+  each vblank, so that a window falls behind as on a busy GPU (only the vblanks' own pictures shown).
+  `KF4_FX=water,drain,prev,...` forces the game's full-screen effects on for the draw only
+  (`game/screen_fx.c`; the list and what each is in docs/port/SCREEN_EFFECTS.md), for
+  `tools/screen_fx_test.py`.
 - `--gs-capture-at` and F9 record the GS's packets as the game sent them, without the pictures
   between.
 
@@ -611,6 +647,31 @@ build that saved it, these do not.
 | F9 | `gs_<vblank>_<time>.kf4gs`: a GS frame capture, for `kf4-gsreplay` (below) |
 | F10 | `state_<vblank>_<time>.json`: the game's state for a bug report: the map, the player (position, heading, HP, MP, stats, equipment, ailments and their timers, status bits), the game's status, the live entities (type, spawn, position, HP, AI state, flags), the map objects within 6000 units (kind, state, position), the story's flags that are set (story, visited maps, map script flags, recollections) and the port's last 32 events (files read, the memory card) |
 | F12 | `audio_<vblank>_<time>.wav`: the last 20 seconds of the sound, as the game made it (before the volume) |
+| F8 | `flash_<vblank>_<time>/`: the flash recorder's folder: the last 2 seconds of pictures shown (below), a GS capture of the next two vblanks, a quick save and a save state |
+
+**The flash recorder (F8)** is for a picture that is wrong for a moment, a flash that a screenshot or
+F9 misses because it is gone by the time the key is pressed. The Vulkan presenter keeps every picture it
+shows, scaled to 540 rows (960 x 540 in 16:9), in a ring on the GPU: the last 2 seconds, 480 pictures at
+240 (about 1.1 GB of GPU memory at 240; 60 pictures a second at least). Press F8 right after seeing the
+flash: the folder `captures/flash_<vblank>_<time>` gets the ring's pictures, oldest first, as
+`0000.png`, `0001.png` ... (`pictures.txt` says each one's vblank, its phase, 0 for the vblank's own
+picture and above for a picture between, and how long before the last it was shown), with
+`gs_<vblank>.kf4gs` (the next two vblanks, as F9), `quick.kf4quick` (load it with F4's slot or
+`--quick-load`, any build) and `state.kf4state` (`--state-load`, this build). The pictures are written on a
+thread of their own in a few seconds (about 700 MB at 540 rows: uncompressed PNGs); the ring takes no
+pictures meanwhile, and the toast says "recorded N pictures" when they are all there. Then
+
+```sh
+python tools/flash_find.py captures/flash_001500_20261023-210057
+```
+
+lists the pictures that differ from both their neighbours (a flash, also one that lasts all the pictures
+between of a game frame) and writes `flashes.png`, a contact sheet of each with the pictures before and
+after it and where it differs (it reads `--dump-frames` folders too: `frame_000436_250.png`...). The cost
+while playing is one small copy a picture: 5.4 us of GPU time at 240 at 4x (0.13% of the GPU), the
+same pictures a second as without it. `--flash-recorder 1,360` keeps 1 second at 360 rows, `off` none;
+the Debug page turns it on and off for the run. Only the Vulkan presenter has it (the default with the
+native GS); with SDL_Renderer the key writes the GS capture and the saves alone.
 
 **A GS frame capture** holds, at the start of a frame, the GS (its 4 MB of VRAM, its registers and
 the scanout's last fields), VU1 (micro and data memory, registers and flags) and VIF1, then
@@ -640,7 +701,12 @@ kf4-gsreplay a.kf4gs --compare b.kf4gs           # two captures, draw by draw
 ```
 
 With `--renderer native` it draws with the native GS instead, and with `--renderer both` with both
-(`--draws` and `--frames` then write `_native` pictures beside paraLLEl-GS's).
+(`--draws` and `--frames` then write `_native` pictures beside paraLLEl-GS's). `--renderer modern` is
+the native GS with the scene in its own targets (P8, [NATIVE_DRAW_P8.md](NATIVE_DRAW_P8.md)), from
+the capture's start; a capture taken with the game's `--renderer modern` carries the page-ownership
+table (record `SA_TABLE`), so the scene's textures come from their uploads from the first draw, and
+the `[stats] standalone` line at the end says where each came from. A save state taken in modern
+carries the table too.
 `--compare-renderers` runs both and, after each draw, compares the pixels of its box: it lists the
 draws whose box differs by more than 1 in a channel, then puts the native GS back in step with
 paraLLEl-GS's pixels so that the next draw listed made its own difference (`--no-resync`: not). At
@@ -665,7 +731,7 @@ draws compare against (TEX0's CLD 4 or 5) is loaded again from VRAM; with `--wid
 `--mode vif` makes the packets as the game sent them, before the GS front end squeezed the 2D, so
 those differ from the recorded ones.
 
-`KF4_DEBUG_AT=state@2290,audio@2290,gs@2295` presses F10, F12 and F9 at those vblanks, for checking the
+`KF4_DEBUG_AT=state@2290,audio@2290,gs@2295,flash@2300` presses F10, F12, F9 and F8 at those vblanks, for checking the
 tools without anyone at the keyboard (in a run that draws; with `KF4_DATA_DIR`, as they write into its
 `captures` folder).
 
@@ -738,7 +804,7 @@ STEP3.md's "What could come next" and PLAN.md.
 | `port/gs/` | the GS backends behind one small C interface: `native/`, our own GS on Vulkan (the default; RENDERER.md), and `gs_parallel.cpp`, paraLLEl-GS |
 | `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libgraph, libpad (with `controls.c`, the keyboard, mouse and controller bindings), libmc, libsdr, libmpeg on the port's MPEG-2 decoder (`mpeg2.c`), and the PS2's math library (`libm_ps2.c`: newlib's, from the decomp's sources) |
 | `port/overlay/` | the settings overlay (`overlay.cpp`, F1) and `settings.json` (`settings.c`) |
-| `port/debug/` | the debugging tools: the GS frame capture (`gs_capture.c`, F9), the game's state as JSON (`game_dump.c`, F10), the sound's last 20 seconds and the captures folder (`debug.c`, F12) |
+| `port/debug/` | the debugging tools: the GS frame capture (`gs_capture.c`, F9), the game's state as JSON (`game_dump.c`, F10), the sound's last 20 seconds, the flash recorder's folder and the captures folder (`debug.c`, F12, F8; the flash recorder's ring is `port/platform/present_vk.cpp`'s) |
 | `port/math/` | libvu0 in C, computing what the SDK's VU0 code does, bit for bit (VU arithmetic from `port/include/port/vu_float.h`) |
 | `third_party/parallel-gs/` | submodule: [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (LGPL-3.0+), the GS in Vulkan compute |
 | `third_party/imgui/`, `third_party/cjson/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b with its SDL2 backends and [cJSON](https://github.com/DaveGamble/cJSON) 1.7.18 (both MIT), copied unchanged: see their `UPSTREAM.md` |

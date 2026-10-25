@@ -28,12 +28,14 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <array>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -50,11 +52,20 @@
 
 extern "C" {
 #include "port/gs_capture_format.h"
+#include "port/vu_float.h" // (native draw: gsn_native_draw.inc)
 #include "port/platform.h"
+#include "port/host.h" // (native draw: the frame-rate marks, gsn_native_draw.inc)
 #include "gsn.h"
 #include "gsn_vram.h"
 }
+namespace Vulkan {
+extern std::atomic<uint64_t> holyland_pipeline_binds; // (Granite's pipelines bound: cmake/granite_dynamic_state.inc)
+extern void (*holyland_on_compile)(Device *device, const DeferredPipelineCompile &compile, bool compute, int64_t ns, bool sync,
+                                   bool ok); // (cmake/granite_pipeline_warm.inc)
+extern void (*holyland_on_render_pass)(Util::Hash hash, const RenderPassInfo &info);
+}
 #include "gsn_shaders.h"
+#include "../../render/render_internal.hpp" // (native draw: gsn_native_draw.inc)
 
 using namespace Vulkan;
 
@@ -188,7 +199,7 @@ enum : uint32_t {
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
     M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000, M_ZFINE = 0x40000,
-    M_SMOOTH_2D = 0x80000,
+    M_SMOOTH_2D = 0x80000, M_RECT_2D = 0x100000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -209,6 +220,9 @@ struct Target {
     // of the two has pixels the other does not (msaa_settle, msaa_ready)
     ImageHandle ms;
     bool ms_newer, image_newer;
+    // made, and drawn into since, only by a picture between (replaying): what it has is the picture's,
+    // not the game's, and need not go back to VRAM when dropped (prepare_write)
+    bool replay_only = false;
 };
 
 // --frame-rate's pictures between (frame_interp.c): between their marks, and the frame shown before them
@@ -310,6 +324,7 @@ struct Gs {
 
     // ---- the batch being gathered: triangles since the last register write
     std::vector<Vtx> verts;
+    std::vector<uint32_t> rects_2d; // (--native-2d smooth: each triangle's texels, flush_batch)
     uint32_t batch_prim = 0; // PRIM's attributes (PRMODE's when PRMODECONT says)
     bool batch_sprites = false; // the batch is sprites
 
@@ -390,11 +405,25 @@ struct Interp {
     std::vector<std::array<uint32_t, 4>> vsrc;   // each of gs->verts as a corner
     // the recording, and the GS as it was before and after it
     bool recorded = false;
+    bool tried = false; // (a recording of this frame was made: not recorded then, it could not be made again)
+    bool still = false;          // the picture's camera is the frame's (GsnInterpFrame's still: gsn_scene_targets.inc's sat_kept)
+    bool recorded_still = false; // (the recording's)
     InterpState start, end;
     std::vector<uint64_t> end_regs;
     uint64_t risky_runs = 0; // (stats: moving batches drawn in runs that do not overlap, cut where they are at t 1)
 };
 Interp interp;
+
+// KF4_SA_REFLECTION_KEEP (gsn_scene_targets.inc, sat_kept): 0 the reflection drawn in every picture between, 1 (the
+// default) kept from the frame while the camera is the frame's bit for bit, 2 always
+int reflection_keep() {
+    static int keep = -1;
+    if (keep < 0) {
+        const char *v = getenv("KF4_SA_REFLECTION_KEEP");
+        keep = v && *v ? atoi(v) : 1;
+    }
+    return keep;
+}
 
 // --native-scale: the render targets' size, in pixels a GS pixel across (sx) and down (sy); 1 and 1
 // are the PS2's. sx is larger than sy for --native-widescreen. Changed at a vblank (gsn_set_scale),
@@ -497,10 +526,25 @@ struct Why {
 int gpu_time = -1;
 QueryPoolHandle gpu_last;
 uint64_t gpu_cmd_serial, gpu_last_serial;
-const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa load/depth", "copy", "scanout"};
-enum { GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_KINDS };
+// KF4_GSN_GPU_TIME=2 also splits the render passes' time by what is drawn in them (gpu_enter: the time from there to the
+// next mark is that kind's), in the pictures between's replays too (OP_GPU_MARK). Each mark waits for the GPU's work
+// before it, so the times add up to more than without them: read them as shares.
+const char *const gpu_kinds[] = {"other", "pass", "pass msaa", "resolve", "msaa load/depth", "copy", "scanout",
+                                 "pass: untagged", "pass: end", "scene draws", "scene cut-outs per sample",
+                                 "scene blend copies", "scene blend draws", "scene shadows", "scene skinned groups",
+                                 "refl draws", "refl cut-outs per sample", "refl blend copies", "refl blend draws",
+                                 "refl shadows", "refl skinned groups", "GS batches", "scene ops", "refl Z-first", "scene Z-first", "scene blend copies between", "refl blend copies between", "scene Z-first atest", "refl Z-first atest"};
+enum {
+    GPU_OTHER, GPU_PASS, GPU_PASS_MS, GPU_RESOLVE, GPU_MS_COPY, GPU_COPY, GPU_SCANOUT, GPU_UNTAGGED, GPU_PASS_END,
+    GPU_SA_DRAW, GPU_SA_SAMPLE, GPU_SA_BLEND_COPY, GPU_SA_BLEND_DRAW, GPU_SA_SHADOW, GPU_SA_GROUP,
+    GPU_SA_REFL, // (the same six into a named target: + GPU_SA_REFL - GPU_SA_DRAW)
+    GPU_GS_BATCH = GPU_SA_REFL + 6, GPU_SA_OP, GPU_REFL_ZFIRST, GPU_SA_ZFIRST, GPU_SA_COPY_BETWEEN, GPU_REFL_COPY_BETWEEN, GPU_SA_ZFIRST_ATEST, GPU_REFL_ZFIRST_ATEST, GPU_KINDS
+};
 uint64_t gpu_marks[GPU_KINDS];
+uint64_t gpu_draws[GPU_KINDS], gpu_tris[GPU_KINDS]; // (KF4_GSN_GPU_TIME=2: the draws made in each kind's time, and their triangles)
+int gpu_cur = -1; // (KF4_GSN_GPU_TIME=2: what is being drawn since the last mark)
 void gpu_mark(int kind);
+void gpu_enter(int kind);
 
 // ---- Vulkan helpers ----------------------------------------------------------------------------
 // The command buffer: Granite's, through Cmd, which hands each call on and, while a picture between is
@@ -512,7 +556,7 @@ enum OpKind : uint32_t {
     OP_DEPTH_COMPARE, OP_VIEWPORT, OP_SCISSOR, OP_TEXTURE, OP_CONSTANT, OP_BLEND_ENABLE, OP_BLEND_CONSTANTS,
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
-    OP_INPUT_ATTACHMENTS,
+    OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
 };
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
@@ -546,6 +590,7 @@ struct Recording {
         bool ms;
     };
     std::vector<TargetImage> target_images;
+    const Buffer *held_chunk[2] = {}; // (the data chunks held last: hold_chunk)
 
     void clear() {
         ops.clear();
@@ -554,6 +599,7 @@ struct Recording {
         buffers.clear();
         later.clear();
         target_images.clear();
+        held_chunk[0] = held_chunk[1] = nullptr;
         ok = true;
         draws = 0;
     }
@@ -588,6 +634,14 @@ struct Recording {
             }
         }
     }
+    // (a data chunk the calls name: held once, not for every call)
+    void hold_chunk(const Buffer &buffer) {
+        if (held_chunk[0] != &buffer && held_chunk[1] != &buffer) {
+            held_chunk[1] = held_chunk[0];
+            held_chunk[0] = &buffer;
+            hold(buffer);
+        }
+    }
     void hold(const Buffer &buffer) {
         Buffer &b = const_cast<Buffer &>(buffer);
         b.add_reference();
@@ -614,9 +668,17 @@ struct ArgTexture {
     const ImageView *view;
     StockSampler sampler;
 };
-struct ArgData { // constant data (set, binding), vertex data (binding, stride, rate), push constants (offset)
+struct ArgData { // push constants (offset)
     uint32_t a, b, c;
     uint32_t size;
+};
+// Constant data (set, binding; its bytes follow, kept to find the same again: finish_recording) and vertex data
+// (binding, stride), where they are on the GPU (DataChunk)
+struct ArgPlaced {
+    uint32_t a, b;
+    uint32_t size;
+    const Buffer *buffer;
+    VkDeviceSize offset;
 };
 struct ArgBinding {
     uint32_t binding;
@@ -682,6 +744,72 @@ uint32_t texel_bytes(VkFormat format) {
 // order nothing more. Anything recorded goes through cmd(), which clears it: whatever records into
 // gs->cmd some other way must clear it too.
 bool barrier_fresh = false;
+uint64_t pass_serial = 0; // (render passes begun: a draw's bindings last no longer than its pass, gsn_standalone.inc)
+
+// The vertex and constant data the draws read, written by the CPU into buffers of our own, one after another
+// and never written over (a full one let go: Granite keeps it until the GPU is done with it). Granite's own
+// (allocate_vertex_data) has 4 KB blocks: a batch's vertices of more were a buffer made for them alone, a
+// Vulkan buffer and its memory each batch. And a recording (--frame-rate's pictures between) keeps the chunks
+// it wrote into, so its calls made again bind the data where it is, not copied anew for each picture.
+struct DataChunk {
+    BufferHandle buffer;
+    uint8_t *map = nullptr;
+    VkDeviceSize used = 0, flushed = 0, size = 0;
+};
+DataChunk vertex_chunk, constant_chunk;
+struct DataPlace {
+    const Buffer *buffer;
+    VkDeviceSize offset;
+    uint8_t *host;
+};
+DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBufferUsageFlags usage, VkDeviceSize chunk_size);
+void data_flush(DataChunk &ch);
+VkDeviceSize ubo_align();
+VkDeviceSize ssbo_align();
+
+// The CLUTs bound as storage data (Cmd::set_storage_data): those in the constant chunk now, by what they hold, so that
+// a batch with the same CLUT as one before binds it where that one is (Granite makes a descriptor set for each
+// storage buffer place: the same place, a set it has already)
+struct StorageSeen {
+    const Buffer *buffer = nullptr;
+    struct Entry {
+        uint64_t hash;
+        VkDeviceSize offset;
+        std::vector<uint8_t> bytes;
+    };
+    std::vector<Entry> entries; // (the latest last)
+};
+StorageSeen storage_seen;
+std::vector<uint32_t> clut_scratch; // (flush_batch's CLUT and rectangles, before they are bound)
+
+// Vulkan's dynamic state for the draws (cmake/granite_dynamic_state.cmake): depth, stencil, culling, topology and
+// blend constants where the device has Vulkan 1.3; blending and the colour write mask too where it has
+// VK_EXT_extended_dynamic_state3's. Draws that differ only there (the tie rule's Z-first and colour draws, a skinned
+// group's marks and shines) then share a pipeline instead of each binding one of its own. The recording needs no
+// calls of its own for it: its calls (OP_DEPTH_TEST, OP_WRITE_MASK ...) set Granite's state as before, and Granite
+// sets Vulkan's before each draw it makes again. KF4_GSN_DYNAMIC=0: none (the pipelines as before, to compare);
+// 1: not the blending and the write mask (as on a device without extended dynamic state 3).
+struct DynamicState {
+    bool ds = false, blend = false;
+};
+DynamicState dynamic_state_choice() {
+    static DynamicState d;
+    static bool chosen;
+    if (!chosen) {
+        chosen = true;
+        const char *v = getenv("KF4_GSN_DYNAMIC");
+        int want = v ? atoi(v) : 2;
+        const auto &f = gs->device->get_device_features();
+        d.ds = want >= 1 && f.device_api_core_version >= VK_API_VERSION_1_3;
+        d.blend = d.ds && want >= 2 && f.eds3_features.extendedDynamicState3ColorBlendEnable &&
+                  f.eds3_features.extendedDynamicState3ColorBlendEquation && f.eds3_features.extendedDynamicState3ColorWriteMask;
+        GSN_LOG(1, "dynamic state: depth and stencil %s, blending %s\n", d.ds ? "on" : "off", d.blend ? "on" : "off");
+    }
+    return d;
+}
+uint64_t pipeline_binds() {
+    return Vulkan::holyland_pipeline_binds.load(std::memory_order_relaxed);
+}
 
 class Cmd {
 public:
@@ -689,10 +817,21 @@ public:
         if (!gs->cmd) {
             gs->cmd = gs->device->request_command_buffer();
             gpu_cmd_serial++;
+            forget_bindings();
+            DynamicState d = dynamic_state_choice();
+            gs->cmd->set_dynamic_state(d.ds, d.blend); // (kept through set_opaque_state: the command buffer's own)
             gpu_mark(GPU_OTHER);
         }
         barrier_fresh = false;
         return *gs->cmd;
+    }
+    // The storage buffers Granite has bound (their cookies), so that the same bound again is not: Granite writes the
+    // set's descriptors again for any buffer bound, the same or not (native draw's arena and records, bound for each
+    // batch). Forgotten where Granite forgets them (a render pass's beginning and end, a new command buffer), where
+    // they are bound past Cmd (the kicks' pass, replay_ops), and where a recording begins and ends (its calls must
+    // bind what they draw with themselves).
+    void forget_bindings() {
+        memset(storage_bound, 0, sizeof(storage_bound));
     }
     // (a barrier of its own: one memory barrier)
     void memory_barrier(const VkMemoryBarrier2 &b, VkDependencyFlags flags) {
@@ -713,6 +852,20 @@ public:
         dep.pMemoryBarriers = &b;
         gs->device->get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
     }
+    // (native draw's mesh, and its pictures between's Picture: gsn_native_draw.inc)
+    void set_storage_buffer(unsigned set, unsigned binding, const Buffer &buffer) {
+        if (set < 3 && binding < 8) {
+            if (storage_bound[set][binding] == buffer.get_cookie()) {
+                return;
+            }
+            storage_bound[set][binding] = buffer.get_cookie();
+        }
+        if (on()) {
+            rec().hold(buffer);
+            rec().add(OP_STORAGE, ArgBinding{set | binding << 8, &buffer, 0, 0, VK_VERTEX_INPUT_RATE_VERTEX});
+        }
+        raw().set_storage_buffer(set, binding, buffer);
+    }
     void set_input_attachments(unsigned set, unsigned first) {
         if (on()) {
             rec().add(OP_INPUT_ATTACHMENTS, ArgValues{{set, first}, {}});
@@ -729,6 +882,7 @@ public:
         raw().barrier(ss, sa, ds, da);
     }
     void begin_render_pass(const RenderPassInfo &info) {
+        pass_serial++;
         if (on()) {
             ArgPass a;
             a.info = info;
@@ -746,12 +900,16 @@ public:
             }
             rec().add(OP_BEGIN_PASS, a);
         }
+        program_pending = false;
+        forget_bindings();
         raw().begin_render_pass(info);
     }
     void end_render_pass() {
         if (on()) {
             rec().add(OP_END_PASS, ArgValues{});
         }
+        program_pending = false;
+        forget_bindings();
         raw().end_render_pass();
     }
     void set_opaque_state() {
@@ -760,11 +918,14 @@ public:
         }
         raw().set_opaque_state();
     }
+    // A program is set when a draw first needs it: one set and set over again before any draw (each batch of the
+    // scene's sets the map's program, then its kind's: sa_draw_range) never reaches Granite, which makes a program
+    // set anew bind its pipeline again at the next draw, the same pipeline or not (a vkCmdBindPipeline a batch more
+    // in the frame, the recording and each replay). A render pass's beginning and end forget the program (Granite's
+    // too).
     void set_program(Program *program) {
-        if (on()) {
-            rec().add(OP_PROGRAM, program);
-        }
-        raw().set_program(program);
+        pending_program = program;
+        program_pending = true;
     }
     void set_primitive_topology(VkPrimitiveTopology topology) {
         if (on()) {
@@ -783,6 +944,43 @@ public:
             rec().add(OP_DEPTH_TEST, ArgValues{{test, write}, {}});
         }
         raw().set_depth_test(test, write);
+    }
+    // the depth bounds test (Granite as cmake/granite_depth_bounds.cmake makes it): on with its bounds, or off
+    void set_depth_bounds(bool on_, float lo, float hi) {
+        if (on()) {
+            rec().add(OP_DEPTH_BOUNDS, ArgValues{{uint32_t(on_)}, {lo, hi}});
+        }
+        depth_bounds_raw(raw(), on_, lo, hi);
+    }
+    static void depth_bounds_raw(CommandBuffer &c, bool on_, float lo, float hi) {
+        c.set_depth_bounds_test(on_);
+        if (on_) {
+            gs->device->get_device_table().vkCmdSetDepthBounds(c.get_command_buffer(), lo, hi);
+        }
+    }
+    // the stencil test (standalone's shadows, gsn_standalone.inc): on with its compare, the op where it passes
+    // (KEEP where it or the depth test fails), the reference and the write mask; or off
+    void set_stencil(bool on_, VkCompareOp op, VkStencilOp pass, uint32_t ref, uint32_t write_mask) {
+        if (on()) {
+            rec().add(OP_STENCIL, ArgValues{{uint32_t(on_), uint32_t(op), uint32_t(pass), ref | write_mask << 8}, {}});
+        }
+        stencil_raw(raw(), on_, op, pass, ref | write_mask << 8);
+    }
+    static void stencil_raw(CommandBuffer &c, bool on_, VkCompareOp op, VkStencilOp pass, uint32_t ref_mask) {
+        c.set_stencil_test(on_);
+        if (on_) {
+            c.set_stencil_front_ops(op, pass, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+            c.set_stencil_back_ops(op, pass, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+            c.set_stencil_reference(0xFF, uint8_t(ref_mask >> 8), uint8_t(ref_mask));
+        }
+    }
+    // conservative rasterization (overestimated: every pixel a triangle touches, all its samples covered); pipeline
+    // state, cleared by set_opaque_state
+    void set_conservative(bool on_) {
+        if (on()) {
+            rec().add(OP_CONSERVATIVE, ArgValues{{uint32_t(on_)}, {}});
+        }
+        raw().set_conservative_rasterization(on_);
     }
     void set_depth_compare(VkCompareOp op) {
         if (on()) {
@@ -813,13 +1011,64 @@ public:
         return static_cast<T *>(allocate_constant_data(set, binding, count * sizeof(T)));
     }
     void *allocate_constant_data(unsigned set, unsigned binding, VkDeviceSize size) {
-        void *p = raw().allocate_constant_data(set, binding, size);
+        VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+        DataPlace d = data_place(constant_chunk, range, ubo_align(),
+                                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 2u << 20);
+        raw().set_uniform_buffer(set, binding, *d.buffer, d.offset, range);
         if (on()) {
-            uint32_t at = rec().add(OP_CONSTANT, ArgData{set, binding, 0, uint32_t(size)}, size_t(size));
-            rec().later.push_back({at, p, uint32_t(size)});
+            rec().hold_chunk(*d.buffer);
+            uint32_t at = rec().add(OP_CONSTANT, ArgPlaced{set, binding, uint32_t(size), d.buffer, d.offset}, size_t(size));
+            rec().later.push_back({at, d.host, uint32_t(size)});
             return rec().arena.data() + at;
         }
-        return p;
+        return d.host;
+    }
+    // Storage data (the CLUT, gs_frag.h's Clut): written now, into the constant chunk, and bound there; the same bytes
+    // as a recent one in the chunk bound where they are. The chunk keeps them (a recording holds it): the calls made
+    // again bind the same place.
+    void set_storage_data(unsigned set, unsigned binding, const void *data, VkDeviceSize size) {
+        uint64_t h = size;
+        const uint8_t *bytes = static_cast<const uint8_t *>(data);
+        for (VkDeviceSize k = 0; k + 8 <= size; k += 8) {
+            uint64_t w;
+            memcpy(&w, bytes + k, 8);
+            h = (h ^ w) * 0x100000001B3ull;
+            h ^= h >> 29;
+        }
+        const Buffer *buffer = nullptr;
+        VkDeviceSize offset = 0;
+        if (storage_seen.buffer == constant_chunk.buffer.get() && constant_chunk.buffer) {
+            for (size_t i = storage_seen.entries.size(); i-- > 0;) {
+                const StorageSeen::Entry &e = storage_seen.entries[i];
+                if (e.hash == h && e.bytes.size() == size && memcmp(e.bytes.data(), bytes, size_t(size)) == 0) {
+                    buffer = storage_seen.buffer;
+                    offset = e.offset;
+                    break;
+                }
+            }
+        }
+        if (!buffer) {
+            VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+            DataPlace d = data_place(constant_chunk, range, std::max(ubo_align(), ssbo_align()),
+                                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 2u << 20);
+            memcpy(d.host, bytes, size_t(size));
+            buffer = d.buffer;
+            offset = d.offset;
+            if (storage_seen.buffer != d.buffer) {
+                storage_seen.buffer = d.buffer;
+                storage_seen.entries.clear();
+            }
+            if (storage_seen.entries.size() >= 64) {
+                storage_seen.entries.erase(storage_seen.entries.begin());
+            }
+            storage_seen.entries.push_back({h, offset, std::vector<uint8_t>(bytes, bytes + size)});
+        }
+        VkDeviceSize range = (size + 15) & ~VkDeviceSize(15);
+        if (on()) {
+            rec().hold_chunk(*buffer);
+            rec().add(OP_STORAGE_DATA, ArgPlaced{set, binding, uint32_t(range), buffer, offset});
+        }
+        raw().set_storage_buffer(set, binding, *buffer, offset, range);
     }
     void set_blend_enable(bool enable) {
         if (on()) {
@@ -846,13 +1095,13 @@ public:
         raw().set_blend_op(colour, alpha);
     }
     void *allocate_vertex_data(unsigned binding, VkDeviceSize size, VkDeviceSize stride) {
-        void *p = raw().allocate_vertex_data(binding, size, stride);
+        DataPlace d = data_place(vertex_chunk, size, 16, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 8u << 20);
+        raw().set_vertex_binding(binding, *d.buffer, d.offset, stride);
         if (on()) {
-            uint32_t at = rec().add(OP_VERTEX_DATA, ArgData{binding, uint32_t(stride), 0, uint32_t(size)}, size_t(size));
-            rec().later.push_back({at, p, uint32_t(size)});
-            return rec().arena.data() + at;
+            rec().hold_chunk(*d.buffer);
+            rec().add(OP_VERTEX_DATA, ArgPlaced{binding, uint32_t(stride), uint32_t(size), d.buffer, d.offset});
         }
-        return p;
+        return d.host;
     }
     void set_vertex_binding(uint32_t binding, const Buffer &buffer, VkDeviceSize offset, VkDeviceSize stride) {
         if (on()) {
@@ -881,9 +1130,14 @@ public:
         raw().push_constants(data, offset, range);
     }
     void draw(uint32_t count, uint32_t first = 0) {
+        apply_program();
         if (on()) {
             rec().add(OP_DRAW, ArgDraw{count, 1, first, 0});
             rec().draws++;
+        }
+        if (gpu_time >= 2) {
+            gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
+            gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += count / 3;
         }
         raw().draw(count, 1, first, 0);
     }
@@ -948,6 +1202,18 @@ public:
     }
 
 private:
+    uint64_t storage_bound[3][8] = {};
+    Program *pending_program = nullptr;
+    bool program_pending = false;
+    void apply_program() {
+        if (program_pending) {
+            program_pending = false;
+            if (on()) {
+                rec().add(OP_PROGRAM, pending_program);
+            }
+            raw().set_program(pending_program);
+        }
+    }
     static bool on() {
         return recording_ops.on;
     }
@@ -959,6 +1225,42 @@ Cmd cmd_layer;
 
 Cmd &cmd() {
     return cmd_layer;
+}
+
+// The recording's constant data (the CLUTs: most batches' the same as another's, or none: zeros): each the same as
+// one before it bound where that one is, so that the calls made again find it bound already (replay_ops) and do not
+// bind it again (Granite writes the set's descriptors again for any buffer bound, the same or not)
+void same_constants(Recording &r) {
+    std::unordered_map<uint64_t, std::vector<uint32_t>> seen; // (a content hash: the calls whose bytes those are)
+    for (size_t i = 0; i < r.ops.size(); i++) {
+        const Recording::Op &op = r.ops[i];
+        if (op.kind != OP_CONSTANT) {
+            continue;
+        }
+        ArgPlaced &a = *reinterpret_cast<ArgPlaced *>(r.arena.data() + op.at);
+        const uint8_t *data = r.arena.data() + op.at + sizeof(ArgPlaced);
+        uint64_t h = a.size;
+        for (uint32_t k = 0; k + 8 <= a.size; k += 8) {
+            uint64_t w;
+            memcpy(&w, data + k, 8);
+            h = (h ^ w) * 0x100000001B3ull;
+            h ^= h >> 29;
+        }
+        std::vector<uint32_t> &same = seen[h];
+        bool found = false;
+        for (uint32_t j : same) {
+            const ArgPlaced &b = r.args<ArgPlaced>(r.ops[j]);
+            if (b.size == a.size && memcmp(r.arena.data() + r.ops[j].at + sizeof(ArgPlaced), data, a.size) == 0) {
+                a.buffer = b.buffer;
+                a.offset = b.offset;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            same.push_back(uint32_t(i));
+        }
+    }
 }
 
 // A recording made ready to be made again: barriers one after another made one (each is of all
@@ -981,6 +1283,7 @@ void finish_recording(Recording &r) {
         ops.push_back(op);
     }
     r.ops.swap(ops);
+    same_constants(r);
     VkDeviceSize bytes = 0;
     for (const Recording::Op &op : r.ops) {
         if (op.kind == OP_UPDATE_IMAGE) {
@@ -1045,6 +1348,27 @@ const ImageView &now_view(const ImageView *view) {
 // The recorded calls made again into the command buffer
 void replay_ops(const Recording &r) {
     CommandBuffer &c = cmd().raw();
+    // What the calls made again have bound (set, binding: buffer and offset), as Granite has it: a binding the same as
+    // the one there is not made again (Granite writes the set's descriptors again for any buffer bound, the same or
+    // not). Granite forgets its bindings at a render pass's beginning and end; the kicks' pass binds its own.
+    struct Bound {
+        uint64_t cookie;
+        VkDeviceSize offset;
+    };
+    Bound bound[3][8] = {};
+    auto forget = [&] { memset(bound, 0, sizeof(bound)); };
+    auto same = [&](uint32_t set, uint32_t binding, const Buffer *buffer, VkDeviceSize offset) {
+        if (set >= 3 || binding >= 8) {
+            return false;
+        }
+        Bound &b = bound[set][binding];
+        if (b.cookie == buffer->get_cookie() && b.offset == offset) {
+            return true;
+        }
+        b = {buffer->get_cookie(), offset};
+        return false;
+    };
+    cmd().forget_bindings(); // (bound here past Cmd)
     for (const Recording::Op &op : r.ops) {
         switch (op.kind) {
         case OP_BARRIER: {
@@ -1064,10 +1388,12 @@ void replay_ops(const Recording &r) {
                 a.info.depth_stencil = &now_view(a.info.depth_stencil);
             }
             c.begin_render_pass(a.info);
+            forget();
             break;
         }
         case OP_END_PASS:
             c.end_render_pass();
+            forget();
             break;
         case OP_OPAQUE:
             c.set_opaque_state();
@@ -1087,6 +1413,13 @@ void replay_ops(const Recording &r) {
         case OP_DEPTH_COMPARE:
             c.set_depth_compare(VkCompareOp(r.args<ArgValues>(op).v[0]));
             break;
+        case OP_DEPTH_BOUNDS:
+            Cmd::depth_bounds_raw(c, r.args<ArgValues>(op).v[0] != 0, r.args<ArgValues>(op).f[0], r.args<ArgValues>(op).f[1]);
+            break;
+        case OP_STENCIL:
+            Cmd::stencil_raw(c, r.args<ArgValues>(op).v[0] != 0, VkCompareOp(r.args<ArgValues>(op).v[1]),
+                             VkStencilOp(r.args<ArgValues>(op).v[2]), r.args<ArgValues>(op).v[3]);
+            break;
         case OP_VIEWPORT:
             c.set_viewport(r.args<VkViewport>(op));
             break;
@@ -1099,8 +1432,10 @@ void replay_ops(const Recording &r) {
             break;
         }
         case OP_CONSTANT: {
-            const ArgData &a = r.args<ArgData>(op);
-            memcpy(c.allocate_constant_data(a.a, a.b, a.size), r.arena.data() + op.at + sizeof(ArgData), a.size);
+            const ArgPlaced &a = r.args<ArgPlaced>(op);
+            if (!same(a.a, a.b, a.buffer, a.offset)) {
+                c.set_uniform_buffer(a.a, a.b, *a.buffer, a.offset, (a.size + 15) & ~15u);
+            }
             break;
         }
         case OP_BLEND_ENABLE:
@@ -1118,8 +1453,8 @@ void replay_ops(const Recording &r) {
             c.set_blend_op(VkBlendOp(r.args<ArgValues>(op).v[0]), VkBlendOp(r.args<ArgValues>(op).v[1]));
             break;
         case OP_VERTEX_DATA: {
-            const ArgData &a = r.args<ArgData>(op);
-            memcpy(c.allocate_vertex_data(a.a, a.size, a.b), r.arena.data() + op.at + sizeof(ArgData), a.size);
+            const ArgPlaced &a = r.args<ArgPlaced>(op);
+            c.set_vertex_binding(a.a, *a.buffer, a.offset, a.b);
             break;
         }
         case OP_VERTEX_BINDING: {
@@ -1142,6 +1477,10 @@ void replay_ops(const Recording &r) {
         }
         case OP_DRAW: {
             const ArgDraw &a = r.args<ArgDraw>(op);
+            if (gpu_time >= 2) {
+                gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
+                gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += a.count / 3;
+            }
             c.draw(a.count, a.instances, a.first, a.first_instance);
             break;
         }
@@ -1172,6 +1511,7 @@ void replay_ops(const Recording &r) {
         }
         case OP_INTERP_KICKS:
             interp_kicks_pass(c);
+            forget();
             break;
         case OP_MEMORY_BARRIER: {
             struct A {
@@ -1185,8 +1525,38 @@ void replay_ops(const Recording &r) {
         case OP_INPUT_ATTACHMENTS:
             c.set_input_attachments(r.args<ArgValues>(op).v[0], r.args<ArgValues>(op).v[1]);
             break;
+        case OP_STORAGE: {
+            const ArgBinding &a = r.args<ArgBinding>(op);
+            if (!same(a.binding & 0xFF, a.binding >> 8, a.buffer, 0)) {
+                c.set_storage_buffer(a.binding & 0xFF, a.binding >> 8, *a.buffer);
+            }
+            break;
+        }
+        case OP_STORAGE_DATA: {
+            const ArgPlaced &a = r.args<ArgPlaced>(op);
+            if (!same(a.a, a.b, a.buffer, a.offset)) {
+                c.set_storage_buffer(a.a, a.b, *a.buffer, a.offset, a.size);
+            }
+            break;
+        }
+        case OP_CONSERVATIVE:
+            c.set_conservative_rasterization(r.args<ArgValues>(op).v[0] != 0);
+            break;
+        case OP_GPU_MARK: {
+            const ArgValues &a = r.args<ArgValues>(op);
+            bool was = recording_ops.on;
+            recording_ops.on = false;
+            if (a.v[1]) {
+                gpu_enter(int(a.v[0]));
+            } else {
+                gpu_mark(int(a.v[0]));
+            }
+            recording_ops.on = was;
+            break;
+        }
         }
     }
+    cmd().forget_bindings();
 
 }
 
@@ -1204,10 +1574,17 @@ void full_barrier() {
 
 void gpu_mark(int kind) {
     if (gpu_time < 0) {
-        gpu_time = getenv("KF4_GSN_GPU_TIME") && atoi(getenv("KF4_GSN_GPU_TIME")) > 0;
+        gpu_time = getenv("KF4_GSN_GPU_TIME") ? std::max(atoi(getenv("KF4_GSN_GPU_TIME")), 0) : 0;
     }
     if (!gpu_time || !gs->cmd) {
         return;
+    }
+    if (gpu_time >= 2 && recording_ops.on) {
+        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 0}, {}});
+    }
+    if (gpu_time >= 2 && gpu_cur >= 0) {
+        kind = gpu_cur;
+        gpu_cur = -1;
     }
     QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
@@ -1218,9 +1595,29 @@ void gpu_mark(int kind) {
     gpu_last_serial = gpu_cmd_serial;
 }
 
+// (KF4_GSN_GPU_TIME=2) the GPU's time from here to the next mark is `kind`'s; the time before it, what was entered last
+void gpu_enter(int kind) {
+    if (gpu_time < 2 || !gs->cmd) {
+        return;
+    }
+    if (recording_ops.on) {
+        recording_ops.add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 1}, {}});
+    }
+    int before = gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED;
+    QueryPoolHandle ts = gs->cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (gpu_last && gpu_last_serial == gpu_cmd_serial) {
+        gs->device->register_time_interval("gsn", gpu_last, ts, std::string("gsn ") + gpu_kinds[before]);
+        gpu_marks[before]++;
+    }
+    gpu_last = ts;
+    gpu_last_serial = gpu_cmd_serial;
+    gpu_cur = kind;
+}
+
 void end_pass() {
     if (gs->in_pass) {
         gsn_stats.pass_ends[why_now]++;
+        gpu_enter(GPU_PASS_END); // (KF4_GSN_GPU_TIME=2: the stores)
         cmd().end_render_pass();
         gpu_mark(gs->pass_ms ? GPU_PASS_MS : GPU_PASS);
         gs->in_pass = false;
@@ -1232,6 +1629,49 @@ void end_pass() {
         barrier_fresh = false;
         full_barrier();
     }
+}
+
+// Room for size bytes of vertex or constant data in the chunk, a new chunk when it is full
+DataPlace data_place(DataChunk &ch, VkDeviceSize size, VkDeviceSize align, VkBufferUsageFlags usage, VkDeviceSize chunk_size) {
+    VkDeviceSize at = (ch.used + align - 1) & ~(align - 1);
+    if (!ch.buffer || at + size > ch.size) {
+        data_flush(ch);
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::LinkedDeviceHost;
+        info.size = std::max(chunk_size, size);
+        info.usage = usage;
+        ch.buffer = gs->device->create_buffer(info, nullptr);
+        ch.map = static_cast<uint8_t *>(gs->device->map_host_buffer(*ch.buffer, MEMORY_ACCESS_WRITE_BIT));
+        ch.size = info.size;
+        ch.used = ch.flushed = at = 0;
+    }
+    ch.used = at + size;
+    return {ch.buffer.get(), at, ch.map + at};
+}
+
+// What the CPU wrote into the chunk since the last time, made the GPU's (before a submit)
+void data_flush(DataChunk &ch) {
+    recording_ops.settle(); // (a recording's constant data is copied in at its next call: before the flush)
+    if (ch.buffer && ch.used > ch.flushed) {
+        gs->device->unmap_host_buffer(*ch.buffer, MEMORY_ACCESS_WRITE_BIT, ch.flushed, ch.used - ch.flushed);
+        ch.flushed = ch.used;
+    }
+}
+
+VkDeviceSize ubo_align() {
+    static VkDeviceSize align = 0;
+    if (!align) {
+        align = std::max<VkDeviceSize>(16, gs->device->get_gpu_properties().limits.minUniformBufferOffsetAlignment);
+    }
+    return align;
+}
+
+VkDeviceSize ssbo_align() {
+    static VkDeviceSize align = 0;
+    if (!align) {
+        align = std::max<VkDeviceSize>(16, gs->device->get_gpu_properties().limits.minStorageBufferOffsetAlignment);
+    }
+    return align;
 }
 
 // Everything recorded so far, sent; with wait, finished too
@@ -1259,6 +1699,8 @@ void submit(bool wait) {
         gs->device->unmap_host_buffer(*interp.kicks, MEMORY_ACCESS_WRITE_BIT);
         gs->device->unmap_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT);
     }
+    data_flush(vertex_chunk);
+    data_flush(constant_chunk);
     if (wait) {
         Fence fence;
         gs->device->submit(gs->cmd, &fence);
@@ -1553,6 +1995,29 @@ bool flat_2d(std::vector<Vtx> &verts, bool *all = nullptr) {
     return moved;
 }
 
+// --native-2d smooth: the texels a triangle of the 2D covers as the game gave its corners (before flat_2d
+// moves them out to the edges of the GS pixels): the first and last across (out[0], bits 0-15 and 16-31)
+// and down (out[1]), within the texture. The cubic's taps are kept inside them (gs_frag.h, sample_level).
+// A letter of the font is a sprite over its own cell of a sheet of letters (10 x 20 texels, drawn 7 or 8
+// GS pixels across); taps past the cell read the letters beside it and below it, and made faint marks at
+// the letters' edges (a tick left of the I of "Idol", dots by f and S, specks under letters). (Not the
+// texels the PS2 reads: a cell's last column, which the PS2 skips, can hold the letter's edge.)
+void texel_rect_2d(const Vtx *v, bool fst, uint32_t tex_size, uint32_t out[2]) {
+    double size[2] = {double(tex_size & 0xFFFF), double(tex_size >> 16)};
+    for (int a = 0; a < 2; a++) {
+        double lo = INFINITY, hi = -INFINITY;
+        for (int k = 0; k < 3; k++) {
+            double c = a ? v[k].t : v[k].s;
+            c = fst ? c : c / v[k].q * size[a];
+            lo = std::min(lo, c), hi = std::max(hi, c);
+        }
+        // (the GS's texel coordinates have 4 bits of fraction: within a sixteenth of a whole number, on it)
+        double first = std::min(std::max(floor(lo + 1.0 / 32.0), 0.0), size[a] - 1.0);
+        double last = std::min(std::max(ceil(hi - 1.0 / 32.0) - 1.0, first), size[a] - 1.0);
+        out[a] = uint32_t(first) | uint32_t(last) << 16;
+    }
+}
+
 // ---- The CPU's VRAM ----------------------------------------------------------------------------
 void pages_written(uint32_t lo, uint32_t count) {
     gs->vram_writes++;
@@ -1619,8 +2084,31 @@ void clear_dirty(Target &t) {
     t.stale = false;
 }
 
+// (standalone, P8: gsn_standalone.inc, included at the end of this namespace)
+void sa_drawn(const Target &t, uint32_t y0, uint32_t y1);
+bool sa_flush();
+void sa_draw_begin(uint64_t value);
+void sa_draw_end();
+bool sa_waiting();
+void sa_sync();
+void sa_transfer(uint32_t dir);
+void sa_forget();
+void sa_switch(bool on);
+void sa_copied(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+void sa_upload_begins(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool recorded);
+void sa_uploaded(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, const uint8_t *data, size_t size);
+void sa_uploaded_from_vram(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
+void sa_upload_replayed(uint32_t k);
+void sa_vblank(bool extra);
+void sa_clut_load(uint64_t tex0);
+void sa_verify(uint64_t tex0, uint32_t levels, const uint32_t *mip_tbp, const uint32_t *mip_tbw, uint32_t cols,
+               uint32_t rows);
+void sa_set_map(int map);
+extern volatile int sa_mode;
+
 // Rows y0..y1-1 of the target drawn into (all of it, for one that is not regular)
 void mark_dirty(Target &t, uint32_t y0, uint32_t y1) {
+    sa_drawn(t, y0, y1); // (standalone: its pages not their uploads' any more)
     t.dirty = true;
     if (!regular(t)) {
         std::fill(t.dirty_pages.begin(), t.dirty_pages.end(), 1);
@@ -1682,10 +2170,37 @@ uint32_t depth_max(uint32_t psm) {
 }
 
 // The target's pixels into the CPU's VRAM
+// ---- Write-backs put off (shadows) -------------------------------------------------------------
+// A target an upload (or a copy) writes part of in another shape had to go back to VRAM before the
+// write: the rest of its pages are newer than VRAM. Reading it back waits for the GPU to finish all it
+// was given (12 ms a time on map 060's shop, where the sky's 128 x 128 copy is drawn and then its pages
+// take the shop's textures, a frame's uploads covering them all but one of them only in part). Now the
+// target is kept aside instead, as a shadow of its pages, and what is written over them from then on
+// is noted, bit by bit (shadow_mask: the transfer done again into it with every bit set). A page written
+// over whole needs nothing of it. When the CPU's VRAM of a page still owed is wanted (claim_pages, a
+// write-back over it, a save state), that page goes back as it would have, and then what was written
+// since goes over it again: VRAM as it would have been.
+struct Shadow {
+    std::unique_ptr<Target> t;
+    uint32_t lo, count; // its pages
+};
+std::vector<Shadow> shadows;
+std::vector<uint8_t> shadow_mask; // (GSN_VRAM_BYTES: the bits written since a shadow was made)
+bool shadow_busy;                  // (write_back for a shadow: no shadows looked at again)
+
+void write_back(Target &t);
+void shadow_resolve(uint32_t lo, uint32_t count);
+
 void write_back(Target &t) {
     Timer timer(gsn_stats.ns_writeback);
     if (!t.dirty) {
         return;
+    }
+    if (!shadow_busy && !shadows.empty()) {
+        // (a shadow over its pages is older: it goes back first)
+        uint32_t tlo, tcount;
+        target_pages(t, &tlo, &tcount);
+        shadow_resolve(tlo, tcount);
     }
     Why why(GSN_WHY_WRITEBACK);
     msaa_settle(t);
@@ -1712,7 +2227,30 @@ void write_back(Target &t) {
         row1 = std::min(t.height, (last / t.bw + 1) * ph);
     }
     uint32_t sx = t.sx, sy = t.sy, pw = t.width * sx;
-    const uint8_t *pixels = read_image(*t.image, 0, row0 * sy, pw, (row1 - row0) * sy);
+    const uint8_t *pixels;
+    if (!t.depth && (sx > 1 || sy > 1)) {
+        // A scaled colour target: the pixel in the middle of each GS pixel's, taken on the GPU (a blit,
+        // nearest: GS pixel x reads x sx + sx / 2) into an image at the PS2's size, and only that read
+        // back: at --native-scale 4 a 640 x 448 target read whole was 27 MB a write-back (the water's
+        // wobble copies the frame into VRAM that the next frame's textures go through: one a frame)
+        static ImageHandle small;
+        uint32_t rows = row1 - row0;
+        if (!small || small->get_width() < t.width || small->get_height() < rows ||
+            small->get_format() != t.image->get_format()) {
+            small = make_image(std::max(t.width, small ? small->get_width() : 0u),
+                               std::max(rows, small ? small->get_height() : 0u), t.image->get_format(), 1, false);
+        }
+        end_pass();
+        transfer_barrier();
+        cmd().raw().blit_image(*small, *t.image, {0, 0, 0}, {int32_t(t.width), int32_t(rows), 1},
+                               {0, int32_t(row0 * sy), 0}, {int32_t(pw), int32_t(rows * sy), 1}, 0, 0, 0, 0, 1,
+                               VK_FILTER_NEAREST);
+        pixels = read_image(*small, 0, 0, t.width, rows);
+        sx = sy = 1;
+        pw = t.width;
+    } else {
+        pixels = read_image(*t.image, 0, row0 * sy, pw, (row1 - row0) * sy);
+    }
     // (a CT24 target's alpha is VRAM's (CT24 draws do not write it) unless a CT32 draw into the same
     // buffer wrote it: the whole word goes back either way)
     uint32_t psm = t.depth ? t.psm : psm_layout(t.psm);
@@ -1767,6 +2305,12 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     h = std::min(h, t.height - y0);
     if (w == 0 || h == 0) {
         return;
+    }
+    if (!shadows.empty()) {
+        // (VRAM as it should be under the rectangle: a shadow's pages owed there first)
+        uint32_t tlo, tcount;
+        target_pages(t, &tlo, &tcount);
+        shadow_resolve(tlo, tcount);
     }
     Why why(GSN_WHY_UPLOAD);
     msaa_settle(t); // (the rest of the image stays)
@@ -1832,20 +2376,277 @@ void drop_target(Target *t) {
     }
 }
 
+// KF4_GSN_SHADOWS=0: write-backs not put off (as before)
+bool shadows_on() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_SHADOWS");
+        on = !(v && atoi(v) == 0);
+    }
+    return on != 0;
+}
+
+// The target, gone from the targets, kept as a shadow (above) of the pages it has newer than VRAM
+void shadow_make(Target *t) {
+    if (gs->pass_color == t || gs->pass_depth == t) {
+        end_pass();
+    }
+    msaa_settle(*t); // (its image as drawn)
+    for (size_t i = 0; i < gs->targets.size(); i++) {
+        if (gs->targets[i].get() == t) {
+            Shadow sh;
+            sh.t = std::move(gs->targets[i]);
+            gs->targets.erase(gs->targets.begin() + long(i));
+            target_pages(*sh.t, &sh.lo, &sh.count);
+            if (shadow_mask.empty()) {
+                shadow_mask.assign(GSN_VRAM_BYTES, 0);
+            }
+            for (uint32_t k = 0; k < sh.count; k++) {
+                memset(shadow_mask.data() + size_t((sh.lo + k) % vram_pages) * 8192, 0, 8192);
+            }
+            GSN_LOG(1, "shadow of target bp %#x bw %u psm %#x %ux%u\n", t->bp, t->bw, t->psm, t->width, t->height);
+            gsn_stats.shadows++;
+            shadows.push_back(std::move(sh));
+            return;
+        }
+    }
+}
+
+// A transfer is about to write its rectangle (DBP, DBW, DPSM; DSAX, DSAY; RRW, RRH): over a shadow, the
+// bits it writes noted, and its pages written over whole let go. (An upload of whole pages sets theirs whole,
+// and only the pages written are looked at: a shadow left over a frame's copy under the MP drain's wobble saw
+// every upload of the pictures between swizzled again into the mask, 27 us each, about 4 ms a game frame.)
+std::vector<uint32_t> whole_pages(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, bool *rgb_only);
+void shadow_written(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
+    if (shadows.empty()) {
+        return;
+    }
+    GsnUpload u;
+    gsn_upload_begin(&u, bitbltbuf, trxpos, trxreg);
+    uint32_t lo, count;
+    buffer_pages(u.bp, u.bw, u.psm, u.x0 + u.w, u.y0 + u.h, &lo, &count);
+    bool any = false;
+    for (const Shadow &sh : shadows) {
+        any = any || pages_overlap(lo, count, sh.lo, sh.count);
+    }
+    if (!any) {
+        return;
+    }
+    // the transfer again, every bit of every pixel set, into the mask
+    std::vector<uint32_t> whole = whole_pages(bitbltbuf, trxpos, trxreg, nullptr);
+    if (!whole.empty()) {
+        for (uint32_t page : whole) {
+            memset(shadow_mask.data() + size_t(page) * 8192, 0xFF, 8192);
+        }
+    } else {
+        size_t bytes = (size_t(u.w) * u.h * size_t(gsn_psm_bits(u.psm)) + 7) / 8;
+        std::vector<uint8_t> ones(bytes + 16, 0xFF);
+        gsn_upload_data(&u, shadow_mask.data(), ones.data(), ones.size(), nullptr, nullptr);
+    }
+    for (size_t i = 0; i < shadows.size();) {
+        Shadow &sh = shadows[i];
+        Target &t = *sh.t;
+        bool left = false;
+        for (uint32_t k = 0; k < sh.count && k < t.dirty_pages.size(); k++) {
+            if (!t.dirty_pages[k]) {
+                continue;
+            }
+            if (!pages_overlap(lo, count, (sh.lo + k) % vram_pages, 1)) {
+                left = true; // (not written now: as it was)
+                continue;
+            }
+            const uint8_t *m = shadow_mask.data() + size_t((sh.lo + k) % vram_pages) * 8192;
+            bool whole = true;
+            for (size_t b = 0; b < 8192 && whole; b += 8) {
+                uint64_t v;
+                memcpy(&v, m + b, 8);
+                whole = v == ~uint64_t(0);
+            }
+            if (whole) {
+                t.dirty_pages[k] = 0; // (written over: nothing of the shadow's is owed there)
+            } else {
+                left = true;
+            }
+        }
+        if (!left) {
+            gsn_stats.shadows_gone++;
+            shadows.erase(shadows.begin() + long(i));
+            continue;
+        }
+        i++;
+    }
+}
+
+// The pages lo..count of the CPU's VRAM as they would be had the shadows over them gone back to VRAM
+// when they were made
+void shadow_resolve(uint32_t lo, uint32_t count) {
+    if (shadow_busy) {
+        return;
+    }
+    for (size_t i = 0; i < shadows.size();) {
+        Shadow &sh = shadows[i];
+        Target &t = *sh.t;
+        if (!pages_overlap(lo, count, sh.lo, sh.count)) {
+            i++;
+            continue;
+        }
+        // its pages owed among these: written back alone, then what was written since put back over them
+        std::vector<uint8_t> keep = t.dirty_pages, now(t.dirty_pages.size(), 0);
+        std::vector<uint32_t> pages;
+        for (uint32_t k = 0; k < sh.count && k < t.dirty_pages.size(); k++) {
+            uint32_t page = (sh.lo + k) % vram_pages;
+            if (t.dirty_pages[k] && pages_overlap(lo, count, page, 1)) {
+                now[k] = 1;
+                keep[k] = 0;
+                pages.push_back(page);
+            }
+        }
+        if (pages.empty()) {
+            i++;
+            continue;
+        }
+        std::vector<uint8_t> since(pages.size() * 8192);
+        for (size_t p = 0; p < pages.size(); p++) {
+            memcpy(since.data() + p * 8192, gs->vram.data() + size_t(pages[p]) * 8192, 8192);
+        }
+        t.dirty_pages = now;
+        t.dirty = true;
+        shadow_busy = true;
+        write_back(t);
+        shadow_busy = false;
+        gsn_stats.shadows_resolved++;
+        GSN_LOG(1, "shadow of target bp %#x: %zu pages written back\n", t.bp, pages.size());
+        for (size_t p = 0; p < pages.size(); p++) {
+            uint8_t *v = gs->vram.data() + size_t(pages[p]) * 8192;
+            const uint8_t *m = shadow_mask.data() + size_t(pages[p]) * 8192, *w = since.data() + p * 8192;
+            for (size_t b = 0; b < 8192; b++) {
+                v[b] = uint8_t((v[b] & ~m[b]) | (w[b] & m[b]));
+            }
+        }
+        t.dirty_pages = keep;
+        t.dirty = std::find(keep.begin(), keep.end(), 1) != keep.end();
+        if (!t.dirty) {
+            shadows.erase(shadows.begin() + long(i));
+            continue;
+        }
+        i++;
+    }
+}
+
+void shadows_resolve_all() {
+    shadow_resolve(0, vram_pages);
+}
+
 // Everything on the GPU that is newer than these pages of the CPU's VRAM, written back; and the
 // targets over them that are not `keep`, gone (they are about to be written in another shape)
 bool shares_pages(const Target &a, const Target &b);
 
 // (sharer: targets that share pages with it (shares_pages) are left alone: take_pages moves pages
 // between them)
+// Pages a GPU copy of the frame is about to write whole (begin_transfer: every bit of each, from a target): a
+// target lying wholly in them is dropped without going back to VRAM first, and a target made over them is not
+// loaded from VRAM (the copy covers it). count 0: none.
+uint32_t overwrite_lo = 0, overwrite_count = 0;
+
+bool pages_within(uint32_t lo, uint32_t count, uint32_t outer_lo, uint32_t outer_count) {
+    for (uint32_t k = 0; k < count; k++) {
+        if (((lo + k - outer_lo) % vram_pages) >= outer_count) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void claim_targets(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer);
 void claim_pages(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer = nullptr) {
+    shadow_resolve(lo, count);
+    claim_targets(lo, count, keep, drop, sharer);
+}
+
+// (shadow_covers' marks, GSN_VRAM_BYTES: kept clear between calls)
+std::vector<uint8_t> shadow_read_marks;
+
+// A texture's level decoded from VRAM (bp, bw, psm: the w x h texels from 0, 0 its decode reads), its pages lo..count
+// claimed: true when every bit of it on those pages that a shadow still owes was written since the shadow was made
+// (shadow_mask). VRAM then holds those bits as they would be had the shadow gone back, and it need not go back. The MP
+// drain's and the water's wobble copy the frame to 0x2BC0; the effects' textures go up over that copy after
+// the wobble (Effect_UploadTextures), covering a page only in part, and one of them (a 64 x 64 PSMT8 at 0x3780,
+// half a page) is read by a draw every frame: its page was written back for it, a read-back waiting for the
+// GPU every frame (3-4 ms at 3x). KF4_GSN_SHADOW_READS=0: such a read takes the pages owed, as before.
+bool shadow_covers(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, uint32_t lo, uint32_t count) {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_SHADOW_READS");
+        on = !(v && atoi(v) == 0);
+    }
+    if (!on || shadows.empty() || shadow_mask.empty() || !gsn_psm_valid(psm)) {
+        return false;
+    }
+    // the pages owed here
+    std::vector<uint32_t> owed;
+    for (const Shadow &sh : shadows) {
+        for (uint32_t k = 0; k < sh.count && k < sh.t->dirty_pages.size(); k++) {
+            uint32_t page = (sh.lo + k) % vram_pages;
+            if (sh.t->dirty_pages[k] && pages_overlap(lo, count, page, 1)) {
+                owed.push_back(page);
+            }
+        }
+    }
+    if (owed.empty()) {
+        return true; // (nothing owed on these pages: shadow_resolve would do nothing)
+    }
+    if (shadow_read_marks.empty()) {
+        shadow_read_marks.assign(GSN_VRAM_BYTES, 0);
+    }
+    // the texels marked as an upload of the rectangle would write them, every bit set
+    GsnUpload u;
+    uint64_t bitbltbuf = uint64_t(bp) << 32 | uint64_t(bw) << 48 | uint64_t(psm) << 56;
+    uint64_t trxreg = uint64_t(w) | uint64_t(h) << 32;
+    gsn_upload_begin(&u, bitbltbuf, 0, trxreg);
+    size_t bytes = (size_t(w) * h * size_t(gsn_psm_bits(psm)) + 7) / 8;
+    std::vector<uint8_t> ones(bytes + 16, 0xFF);
+    uint32_t mlo = 1, mhi = 0;
+    gsn_upload_data(&u, shadow_read_marks.data(), ones.data(), ones.size(), &mlo, &mhi);
+    bool covered = true;
+    for (uint32_t page : owed) {
+        const uint8_t *r = shadow_read_marks.data() + size_t(page) * 8192, *m = shadow_mask.data() + size_t(page) * 8192;
+        for (size_t b = 0; b < 8192 && covered; b += 8) {
+            uint64_t rv, mv;
+            memcpy(&rv, r + b, 8);
+            memcpy(&mv, m + b, 8);
+            covered = (rv & ~mv) == 0;
+        }
+    }
+    if (mlo <= mhi) {
+        memset(shadow_read_marks.data() + size_t(mlo) * 8192, 0, size_t(mhi - mlo + 1) * 8192);
+    }
+    return covered;
+}
+
+// (a texture's level read from VRAM) claim_pages, the shadows left owed where the read needs nothing of them
+void claim_texture(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, uint32_t lo, uint32_t count) {
+    if (shadow_covers(bp, bw, psm, w, h, lo, count)) {
+        gsn_stats.shadow_reads_covered++;
+        claim_targets(lo, count, nullptr, false, nullptr);
+        return;
+    }
+    claim_pages(lo, count, nullptr, false);
+}
+
+void claim_targets(uint32_t lo, uint32_t count, const Target *keep, bool drop, const Target *sharer) {
     for (size_t i = 0; i < gs->targets.size();) {
         Target *t = gs->targets[i].get();
         uint32_t tlo, tcount;
         target_pages(*t, &tlo, &tcount);
         if (t != keep && pages_overlap(lo, count, tlo, tcount) && !(sharer && shares_pages(*sharer, *t))) {
             if (drop) {
-                write_back(*t);
+                // (a picture between's own: VRAM keeps the game's, prepare_write; one under a copy's whole pages:
+                // all of it written over)
+                if (!t->replay_only && !(overwrite_count && !t->depth && pages_within(tlo, tcount, overwrite_lo, overwrite_count))) {
+                    write_back(*t);
+                } else if (!t->replay_only) {
+                    gsn_stats.writebacks_overwritten++;
+                }
                 drop_target(t);
                 continue;
             }
@@ -1987,7 +2788,19 @@ void take_pages(Target &t, bool only_stale) {
 }
 
 // The target that is the buffer at bp, at least width x height, made (from the CPU's VRAM) or grown
+Target *get_target_made(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height);
+
 Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
+    bool existed = find_target(bp, bw, psm) != nullptr;
+    Target *t = get_target_made(bp, bw, psm, width, height);
+    if (t) {
+        // (a picture between's own target, until the game's frame draws into it)
+        t->replay_only = replaying && (!existed || t->replay_only);
+    }
+    return t;
+}
+
+Target *get_target_made(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint32_t height) {
     Target *t = find_target(bp, bw, psm);
     width = std::max(width, std::max(bw, 1u) * 64);
     if (t && t->stale) {
@@ -2086,7 +2899,9 @@ Target *get_target(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t width, uint3
     // whatever else was drawn over these pages goes back to VRAM first, and stops being a target
     // (but for a Z buffer sharing its pages, which hands them over)
     claim_pages(lo, count, nullptr, true, made.get());
-    load_target_rect(*made, 0, 0, width, height);
+    if (!(overwrite_count && !made->depth && pages_within(lo, count, overwrite_lo, overwrite_count))) {
+        load_target_rect(*made, 0, 0, width, height);
+    }
     gs->targets.push_back(std::move(made));
     take_pages(*gs->targets.back(), false);
     return gs->targets.back().get();
@@ -2292,6 +3107,28 @@ Texture *get_texture(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint
 
 // ---- The CLUT ----------------------------------------------------------------------------------
 // TEX0's CLD: whether the CLUT buffer is loaded now, and from where
+// The entries a CLUT load reads from a VRAM, as its format has them (CSM1: the 16 x 16 or 8 x 2 rectangle,
+// entries 8-15 and 16-23 of each 32 swapped; CSM2: a line of TEXCLUT's buffer): read a row at a time
+void clut_read_entries(const uint8_t *vram, uint64_t tex0, uint64_t texclut, uint32_t *values) {
+    uint32_t psm = bits(tex0, 20, 6), cbp = bits(tex0, 37, 14), cpsm = bits(tex0, 51, 4), csm = bits(tex0, 55, 1);
+    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
+    uint32_t entries = eight ? 256 : 16;
+    uint32_t gpsm = cpsm == 0 ? GSN_PSMCT32 : cpsm == 2 ? GSN_PSMCT16 : GSN_PSMCT16S;
+    if (csm != 0) {
+        gsn_vram_read_row(vram, gpsm, cbp, bits(texclut, 0, 6), bits(texclut, 6, 6) * 16, bits(texclut, 12, 10), entries,
+                          values);
+        return;
+    }
+    uint32_t rect[256];
+    uint32_t w = eight ? 16 : 8, h = eight ? 16 : 2;
+    for (uint32_t y = 0; y < h; y++) {
+        gsn_vram_read_row(vram, gpsm, cbp, 1, 0, y, w, rect + y * w);
+    }
+    for (uint32_t i = 0; i < entries; i++) {
+        values[i] = rect[eight ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i];
+    }
+}
+
 void clut_load(uint64_t tex0) {
     uint32_t psm = bits(tex0, 20, 6);
     uint32_t cbp = bits(tex0, 37, 14);
@@ -2334,33 +3171,64 @@ void clut_load(uint64_t tex0) {
     uint32_t lo, count;
     buffer_pages(cbp, 1, cpsm == 0 ? GSN_PSMCT32 : GSN_PSMCT16, 16, 16, &lo, &count);
     claim_pages(lo, count, nullptr, false);
+    // The same load as the last, its pages not written since and the buffer as it left it, loads the same
+    // (a model's batches each write the TEX0 they share)
+    struct ClutMemo {
+        const void *owner = nullptr;
+        uint64_t key = 0, texclut = 0, stamp = 0;
+        uint16_t clut[512];
+    };
+    static ClutMemo memo;
+    const uint64_t key_bits = (uint64_t(0x3F) << 20) | (~uint64_t(0) << 37 & ~(uint64_t(7) << 61));
+    uint64_t key = tex0 & key_bits, texclut = csm ? gs->reg[R_TEXCLUT] : 0;
+    uint64_t newest = 0;
+    for (uint32_t k = 0; k < count && k < vram_pages; k++) {
+        newest = std::max(newest, gs->page_written[(lo + k) % vram_pages]);
+    }
+    if (memo.owner == gs && memo.key == key && memo.texclut == texclut && newest <= memo.stamp &&
+        memcmp(memo.clut, gs->clut, sizeof(memo.clut)) == 0) {
+        return;
+    }
+    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
+    // An 8-bit CLUT of 32-bit colours loads the whole buffer, whatever it held: the last few such loads, their pages
+    // not written since, load the same (a skinned model's parts load two in turn: the first pass's, the shine's)
+    struct Whole {
+        const void *owner = nullptr;
+        uint64_t key = 0, texclut = 0, stamp = 0;
+        uint16_t clut[512];
+    };
+    static Whole whole[4];
+    static uint32_t whole_next = 0;
+    bool full = eight && cpsm == 0;
+    if (full) {
+        for (Whole &m : whole) {
+            if (m.owner == gs && m.key == key && m.texclut == texclut && newest <= m.stamp) {
+                if (memcmp(m.clut, gs->clut, sizeof(m.clut)) != 0) {
+                    memcpy(gs->clut, m.clut, sizeof(m.clut));
+                    gs->clut_version++;
+                }
+                memo.owner = gs;
+                memo.key = key;
+                memo.texclut = texclut;
+                memo.stamp = m.stamp;
+                memcpy(memo.clut, gs->clut, sizeof(memo.clut));
+                return;
+            }
+        }
+    }
 
     uint16_t loaded[512];
     memcpy(loaded, gs->clut, sizeof(loaded));
-    bool eight = psm == GSN_PSMT8 || psm == GSN_PSMT8H;
     uint32_t entries = eight ? 256 : 16;
-    const uint8_t *vram = gs->vram.data();
+    uint32_t values[256];
+    clut_read_entries(gs->vram.data(), tex0, gs->reg[R_TEXCLUT], values);
     for (uint32_t i = 0; i < entries; i++) {
-        uint32_t x, y;
-        if (csm == 0) {
-            // CSM1: the entries as a 16 x 16 (or 8 x 2) rectangle, entries 8-15 and 16-23 of each 32 swapped
-            uint32_t e = eight ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
-            x = eight ? e % 16 : e % 8;
-            y = eight ? e / 16 : e / 8;
-        } else {
-            // CSM2: a line of TEXCLUT's buffer
-            uint64_t texclut = gs->reg[R_TEXCLUT];
-            x = bits(texclut, 6, 6) * 16 + i;
-            y = bits(texclut, 12, 10);
-        }
+        uint32_t v = values[i];
         if (cpsm == 0) { // PSMCT32
-            uint32_t v = gsn_vram_read(vram, GSN_PSMCT32, cbp, csm == 0 ? 1 : bits(gs->reg[R_TEXCLUT], 0, 6), x, y);
             uint32_t at = eight ? i : (csa * 16 + i) & 0xFF;
             loaded[at] = uint16_t(v);
             loaded[256 + at] = uint16_t(v >> 16);
         } else { // PSMCT16, PSMCT16S
-            uint32_t v = gsn_vram_read(vram, cpsm == 2 ? GSN_PSMCT16 : GSN_PSMCT16S, cbp,
-                                       csm == 0 ? 1 : bits(gs->reg[R_TEXCLUT], 0, 6), x, y);
             uint32_t at = eight ? i : (csa * 16 + i) & 0x1FF;
             loaded[at] = uint16_t(v);
         }
@@ -2368,6 +3236,19 @@ void clut_load(uint64_t tex0) {
     if (memcmp(loaded, gs->clut, sizeof(loaded)) != 0) {
         memcpy(gs->clut, loaded, sizeof(loaded));
         gs->clut_version++;
+    }
+    memo.owner = gs;
+    memo.key = key;
+    memo.texclut = texclut;
+    memo.stamp = gs->vram_writes;
+    memcpy(memo.clut, gs->clut, sizeof(memo.clut));
+    if (full) {
+        Whole &m = whole[whole_next++ % 4];
+        m.owner = gs;
+        m.key = key;
+        m.texclut = texclut;
+        m.stamp = gs->vram_writes;
+        memcpy(m.clut, gs->clut, sizeof(m.clut));
     }
 }
 
@@ -2508,6 +3389,57 @@ bool blend_copy_forced() {
         forced = v && atoi(v) > 0;
     }
     return forced != 0;
+}
+
+// KF4_GSN_SILHOUETTE_RUNS=1: the silhouettes drawn in runs as before (flush_batch, "A silhouette"):
+// with MSAA a pixel half covered by one run's triangle and half by the next's came out a little darker
+// where the next read the first's resolve; drawn whole, it is darkened once, as the GS's pixel is.
+int silhouette_runs_mode() {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *v = getenv("KF4_GSN_SILHOUETTE_RUNS");
+        mode = v && atoi(v) > 0;
+    }
+    return mode;
+}
+
+// The depth bounds test (flush_batch, "The first phase"): the GPU has it (Granite turns it on) and
+// KF4_GSN_DEPTH_BOUNDS is not 0
+bool depth_bounds_ok() {
+    static int ok = -1;
+    if (ok < 0) {
+        const char *v = getenv("KF4_GSN_DEPTH_BOUNDS");
+        ok = gs->device->get_device_features().enabled_features.depthBounds && !(v && atoi(v) == 0);
+    }
+    return ok != 0;
+}
+
+// The Z a triangle's pixels can have: its corners', and a GS pixel's change of Z more each way (a pixel
+// shaded once, at its middle, outside the triangle where only some of its samples are inside)
+void z_reach(const Vtx *v, double *lo, double *hi) {
+    double z0 = v[0].z, z1 = v[1].z, z2 = v[2].z;
+    double ax = double(v[1].x) - v[0].x, ay = double(v[1].y) - v[0].y;
+    double bx = double(v[2].x) - v[0].x, by = double(v[2].y) - v[0].y;
+    double area = ax * by - ay * bx;
+    double slope = 0.0;
+    if (area != 0.0) {
+        double dzdx = ((z1 - z0) * by - (z2 - z0) * ay) / area;
+        double dzdy = ((z2 - z0) * ax - (z1 - z0) * bx) / area;
+        slope = fabs(dzdx) + fabs(dzdy);
+    }
+    *lo = std::min({z0, z1, z2}) - slope;
+    *hi = std::max({z0, z1, z2}) + slope;
+}
+
+// KF4_GSN_BLEND16_BY_PASS=1: a multisampled 16-bit target's copies resolved by the passes, as before
+// (flush_batch, "a 16-bit target's samples"), for comparisons
+bool blend_copy_16_by_pass() {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *v = getenv("KF4_GSN_BLEND16_BY_PASS");
+        mode = v && atoi(v) > 0;
+    }
+    return mode != 0;
 }
 
 // KF4_GSN_MSAA_BLEND=fast: a multisampled target's copies made in the render pass too, its samples'
@@ -2677,6 +3609,8 @@ void blend_copy_in_pass(Target &t, bool ms, const int32_t *box) {
 }
 
 void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box);
+bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box); // (native draw: gsn_native_draw.inc)
+int nd_z_at_0(double *lo, double *hi);                          // (native draw: gsn_native_draw.inc)
 
 // A run's rectangle: the GS pixels its primitives can cover, a pixel more each way (x0 y0 x1 y1)
 void run_box(uint32_t first, uint32_t count, int32_t *box) {
@@ -2690,7 +3624,10 @@ void run_box(uint32_t first, uint32_t count, int32_t *box) {
         box[3] = std::max(box[3], int32_t(ceilf(v.y)) + 2);
     }
     if (interp.active) {
-        interp_box_at_0(first, count, box); // (a picture between's moving vertices: where they are at t 0 too)
+        // (a picture between's moving vertices: where they are at t 0 too; native draw's, gsn_native_draw.inc)
+        if (!nd_box_at_0(first, count, box)) {
+            interp_box_at_0(first, count, box);
+        }
     }
 }
 
@@ -2916,7 +3853,8 @@ bool interp_t_at_0(const std::array<uint32_t, 4> &c, bool fst, float rows, float
 // A kick's place at t 0 (gs_replay.comp's moved at the frame's t 0 cameras, frame->move0 and mid0), in GS
 // pixels less its XYOFFSET: with its model and with the camera when it may be either. Adds to box (x0 y0 x1
 // y1); how far it is from where it is at t 1 (x, y) to most.
-void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most) {
+void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most, float z1 = 0.0f, float *zlo = nullptr,
+                       float *zhi = nullptr) {
     if (k >= interp.frame->kicks) {
         return;
     }
@@ -2959,6 +3897,12 @@ void interp_place_at_0(uint32_t k, float x, float y, int32_t *box, float *most) 
             }
             if (!(v[2] > 0.0f)) {
                 continue;
+            }
+            if (zlo) {
+                // (gs_replay.comp's Z: the kick's less (Z - cz) dm.z / m.z)
+                float nz = z1 - f(14) * (v[2] - p[2]) / v[2];
+                *zlo = std::min(*zlo, nz);
+                *zhi = std::max(*zhi, nz);
             }
             float nx = screen[0] * v[0] / v[2] + screen[2], ny = screen[1] * v[1] / v[2] + screen[3];
             if (!(fabsf(nx - 2048.0f) <= 2047.0f && fabsf(ny - 2048.0f) <= 2047.0f)) {
@@ -3007,6 +3951,28 @@ void interp_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
     box[3] += margin;
 }
 
+// A batch's Z at t 0 too (a picture between's moving vertices), as interp_box_at_0 its places: lo and hi
+// widened to take them in, and a quarter of the furthest a Z went more each way (the camera's path is not a
+// line between its ends)
+void interp_z_at_0(double *lo, double *hi) {
+    float zl = INFINITY, zh = -INFINITY;
+    int32_t box[4] = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+    float most = 0.0f;
+    for (size_t i = 0; i < interp.vsrc.size() && i < gs->verts.size(); i++) {
+        const auto &c = interp.vsrc[i];
+        const Vtx &v = gs->verts[i];
+        if (!(c[3] & IC_SPRITE)) {
+            interp_place_at_0(c[c[3] & 3], v.x, v.y, box, &most, float(v.z), &zl, &zh);
+        }
+    }
+    if (zl > zh) {
+        return;
+    }
+    double far = std::max({0.0, *lo - double(zl), double(zh) - *hi});
+    *lo = std::min(*lo, double(zl)) - far * 0.25;
+    *hi = std::max(*hi, double(zh)) + far * 0.25;
+}
+
 // The batch, drawn
 // The batch is textured in perspective (ST, a Q not 1 at some vertex): the 3D, never a 2D rectangle,
 // whatever its Z and colour. flat_2d takes a triangle of one Z and colour whose corners are those of
@@ -3027,12 +3993,15 @@ bool perspective_batch(const std::vector<Vtx> &verts) {
     return false;
 }
 
+#include "gsn_native_draw.inc"
+
 void flush_batch() {
     Timer timer(gsn_stats.ns_flush);
     settle_upload();
     if (gs->verts.empty()) {
         return;
     }
+    NdFlush nd_flush; // (native draw: whether the batch is native corners, gsn_native_draw.inc)
     // (a picture between drawn from the frame's packets: interp.vsrc is gs->verts as corners)
     struct ForgetCorners {
         ~ForgetCorners() {
@@ -3047,6 +4016,13 @@ void flush_batch() {
         }
         moving = interp_batch();
     }
+    if (nd.active && interp.active && !nd.pass_active) {
+        moving.moves = moving.moves_3d = true; // (native draw: moved with the camera by nd_000.vert)
+    }
+    if (sa_flush()) {
+        return; // (standalone: the scene's batch, drawn into the scene's targets: gsn_standalone.inc)
+    }
+    gpu_enter(GPU_GS_BATCH);
     gs->tick++;
     // what the decisions below need of the vertices, in one pass over them: their Z's range, the
     // largest alpha, the rows they reach
@@ -3106,6 +4082,13 @@ void flush_batch() {
         fbmsk = (fbmsk & 0x80F8F8F8u) | 0x7F070707u;
     }
 
+    // A batch wholly outside its scissor draws nothing: no target is made for it (the reflection's map strips
+    // the scene does not take, below the 256 x 256 view: made from VRAM after the MP drain's or the water's copy
+    // of the frame over 0x2BC0, that copy went back from the GPU first, a 640 x 448 read-back a frame)
+    if (!moving.moves && (vy1 < float(sy0) - 1.0f || vy0 > float(sy1) + 1.0f)) {
+        gs->verts.clear();
+        return;
+    }
     // ZTST NEVER draws nothing; ALWAYS without writing needs no Z buffer
     if (ztst == 0) {
         gs->verts.clear();
@@ -3252,7 +4235,10 @@ void flush_batch() {
                     vmax = std::max(vmax, tv);
                 }
             }
-            if (vmin >= 0.0f && vmax < float(rows)) {
+            // (a V less than a row above the top reads no row above its first: a pass over the frame moved up
+            // half a line for the other field, as under water. Taken as reading above, the frame and its Z
+            // buffer went back to VRAM and the pass read the frame decoded at 1x, every field picture)
+            if (vmin > -1.0f && vmax < float(rows)) {
                 rows = std::max(1u, uint32_t(ceilf(vmax)));
             }
             return rows;
@@ -3352,9 +4338,11 @@ void flush_batch() {
                 uint32_t lo, count;
                 buffer_pages(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, cols >> l), std::max(1u, rows >> l), &lo,
                              &count);
-                claim_pages(lo, count, nullptr, false);
+                claim_texture(mip_tbp[l], mip_tbw[l], tpsm, std::max(1u, (1u << tw) >> l), std::max(1u, (1u << th) >> l), lo,
+                              count);
             }
             Texture *tex = get_texture(tbp, tbw, tpsm, tw, th, levels, mip_tbp, mip_tbw, cols, rows);
+            sa_verify(tex0, levels, mip_tbp, mip_tbw, cols, rows); // (standalone: KF4_SA_VERIFY)
             raw_view = &tex->image->get_view();
             uint32_t src = psm_is_palette(tpsm)  ? SRC_CLUT
                            : tpsm == GSN_PSMCT24 ? SRC_CT24
@@ -3471,7 +4459,25 @@ void flush_batch() {
                             : tex_alpha_max;
     }
     bool as_over = bc == 0 && !blend.premul && as_max > 0x80;
-    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || dst16 ||
+    // (Cs - Cd) As + Cd with As 0x80 at every pixel (or FIX 0x80) is Cs: no blending at all, the GS's
+    // ((Cs - Cd) 0x80 >> 7) + Cd being Cs whatever Cd. Into a 16-bit target it is drawn unblended
+    // rather than by the shader, which drew the batch in runs of triangles that do not overlap, each
+    // its own render pass and MSAA resolve: the reflections' walls and models (map 009's poison pond,
+    // 1,600 render passes a picture). The colour, its alpha (FBA, the alpha bit) and the masks come
+    // out the same either way (gs_frag.h). (--native-colour high blends in floats: as before.)
+    bool blend_is_cs = false;
+    if (abe && ba == 0 && bb == 1 && bd == 1 && (bc == 0 || bc == 2) && !blend.premul) {
+        uint32_t c_lo = as_min, c_hi = as_max;
+        if (bc == 2) {
+            c_lo = c_hi = fix;
+        } else if (tme && bits(tex0, 34, 1)) {
+            uint32_t tfx = bits(tex0, 35, 2);
+            c_lo = tfx == 0 ? (as_min * tex_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + tex_lo) : tex_lo;
+            c_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
+        }
+        blend_is_cs = c_lo == 0x80 && c_hi == 0x80 && dst16 && !wide(*color->image);
+    }
+    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || (dst16 && !blend_is_cs) ||
                                          (push.misc & (M_PABE)) || !(push.misc & M_COLCLAMP) ||
                                          (bc == 0 && (push.misc & M_FBA)) || as_over || !fixed))) {
         shader_blend = true;
@@ -3482,6 +4488,7 @@ void flush_batch() {
             push.alpha = (2 << 0) | (2 << 2) | (2 << 4) | (0 << 6); // (0 - 0) * FIX + Cs: no blending
         }
         gsn_stats.shader_blends++;
+    } else if (blend_is_cs) {
     } else if (abe && blend.premul) {
         push.flags |= blend.premul;
     } else if (abe && bc == 0 && !(ba == bb)) {
@@ -3498,8 +4505,9 @@ void flush_batch() {
     }
     // Triangles wholly outside the scissor draw nothing: left out, before the runs below are cut (a
     // reflection drawn into its 256 x 256 target from the whole scene had most of its triangles off it,
-    // each a run of its own). (A pixel's margin each way.)
-    {
+    // each a run of its own). (A pixel's margin each way.) (A native draw's in a picture between: where
+    // they are then is the GPU's, at t 0 nd_box_at_0's; not a screen pass's.)
+    if (!(nd.pass_active && interp.active)) {
         float cx0 = float(sx0) - 1.0f, cy0 = float(sy0) - 1.0f, cx1 = float(x1) + 1.0f, cy1 = float(y1) + 1.0f;
         size_t kept = 0, n = gs->verts.size();
         Vtx *v = gs->verts.data();
@@ -3514,7 +4522,9 @@ void flush_batch() {
                 // a picture between's moving vertices: left out only when outside at t 0 too, by a margin
                 int32_t box[4] = {int32_t(floorf(tx0)) - 1, int32_t(floorf(ty0)) - 1, int32_t(ceilf(tx1)) + 2,
                                   int32_t(ceilf(ty1)) + 2};
-                interp_box_at_0(uint32_t(i), 3, box);
+                if (!nd_box_at_0(uint32_t(i), 3, box)) { // (native draw's corners: gsn_native_draw.inc)
+                    interp_box_at_0(uint32_t(i), 3, box);
+                }
                 if (!(float(box[2]) < cx0 || float(box[0]) > cx1 || float(box[3]) < cy0 || float(box[1]) > cy1)) {
                     goto keep;
                 }
@@ -3676,6 +4686,14 @@ void flush_batch() {
         a_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
     }
     bool same_twice = !abe || (ba == 0 && bb == 1 && bd == 1 && (bc == 0 ? a_lo == 0x80 && a_hi == 0x80 : bc == 2 && fix == 0x80));
+    // (the same for a layer batch's other triangles, whose corners' alphas are all 0x80: the As they make)
+    uint32_t o_lo = 0x80, o_hi = 0x80;
+    if (tme && bits(tex0, 34, 1)) {
+        uint32_t tfx = bits(tex0, 35, 2);
+        o_lo = tfx == 0 ? (0x80 * tex_lo) >> 7 : tfx == 2 ? std::min(255u, 0x80 + tex_lo) : tex_lo;
+        o_hi = tfx == 0 ? std::min(255u, (0x80 * tex_hi) >> 7) : tfx == 2 ? std::min(255u, 0x80 + tex_hi) : tex_hi;
+    }
+    bool others_same_twice = o_lo == 0x80 && o_hi == 0x80;
     // the alpha test passes every pixel the batch can make: its Z pass needs no texture (gs_zonly.frag)
     uint32_t aref = bits(test, 4, 8);
     bool atest_always = !ate || atst == 1 ||
@@ -3701,7 +4719,74 @@ void flush_batch() {
         gs->tie_tick = gs->tick;
         gs->tie_verts.assign(gs->verts.begin(), gs->verts.end());
     }
-    if (tie) {
+    Pass layer_passes[4];
+    int nlayer_passes = 0;
+    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
+        !reads_own_target) {
+        for (int i = 0; i < npasses; i++) {
+            if (passes[i].mask) {
+                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
+            }
+            if (passes[i].zwrite) {
+                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
+            }
+        }
+    }
+    // A layer batch's other triangles (every corner's alpha 0x80: the wall's overlay where it does not
+    // fade, the brick over the end wall of a corridor on map 1D) are ties too when their colour comes out
+    // the same drawn twice: they lie on their surface as the layer does, and with no slack they lost to
+    // it where its Z came out a hair nearer, the surface's own texture showing through the overlay in
+    // flat patches that came and went as the camera moved.
+    // A tie drawn in one pass (no alpha test's second pass, no layers) whose colour comes out the same
+    // drawn twice: its colour within half a Z of what was there before the batch, no Z written, then the
+    // batch again as the GS draws it, Z tested and written exactly (with the fraction). So it wins over
+    // what was there within half a Z, and among its own triangles the nearer wins, as it should: with its
+    // Z first and then its colour within half a Z of that, a batch's later triangles won over its earlier
+    // ones within half a Z of them, and on map 3's rope bridge, far off, the planks' faces (a log of
+    // strips a Z apart, one batch) came out as light and dark blocks that moved with the distance where
+    // the GS hatches them. (Its second pass, repeat, keeps the Z first: drawn twice it would blend twice.)
+    // (the passes the batch needs whatever the ties: a tie's passes need no runs, below)
+    int own_passes = npasses;
+    bool two_phase = tie && same_twice && npasses == 1 && !nlayer_passes;
+    // The first phase matters only where what was there lies behind a triangle's Z by half a Z or less
+    // (where it is not behind, the second phase draws over it): a pixel whose Z is outside the batch's Zs
+    // and half a Z more has nothing of it, and the depth bounds test turns it away, before the shading
+    // where the GPU can (the first phase is a second colour pass: the tower on map 000 24% more GPU time a
+    // picture without it). The batch's Zs: its corners', a GS pixel's change of Z more (a pixel shaded at
+    // its middle outside the triangle), and in a picture between its Zs at t 0 too (interp_z_at_0).
+    // KF4_GSN_DEPTH_BOUNDS=0: without it.
+    bool two_phase_bounds = false;
+    float bounds_lo = 0.0f, bounds_hi = 1.0f;
+    // (A native batch's in a picture between: nd_000.vert moves its corners on the GPU; nd_z_at_0 works out
+    // where their Zs are at t 0, or that it cannot: no bounds.)
+    if (two_phase && depth_bounds_ok()) {
+        double lo = INFINITY, hi = -INFINITY;
+        for (size_t t = 0; t + 2 < gs->verts.size(); t += 3) {
+            double a, b;
+            z_reach(&gs->verts[t], &a, &b);
+            lo = std::min(lo, a);
+            hi = std::max(hi, b);
+        }
+        int nd_z = interp.active && moving.moves_3d ? nd_z_at_0(&lo, &hi) : 0; // (native draw: gsn_native_draw.inc)
+        if (interp.active && moving.moves_3d && nd_z == 0) {
+            interp_z_at_0(&lo, &hi);
+        }
+        double scale = depth_scale(zpsm);
+        lo = (std::max(lo, 0.0) - 2.0 * zstep) * scale;
+        hi = (std::min(hi, double(depth_max(zpsm))) + 2.5 * zstep) * scale;
+        if ((lo > 0.0 || hi < 1.0) && nd_z >= 0) {
+            two_phase_bounds = true;
+            bounds_lo = float(std::max(lo * (1.0 - 1e-6), 0.0));
+            bounds_hi = float(std::min(hi * (1.0 + 1e-6), 1.0));
+        }
+    }
+    if (two_phase) {
+        Pass p0 = passes[0];
+        passes[0] = {p0.select, p0.mask, false, 0.5f * zstep, 0.0f};
+        passes[1] = p0;
+        npasses = 2;
+    } else if (tie || (nlayer_passes && others_same_twice && fine_z && any_zwrite_pass && ztst == 2 &&
+                       !reads_own_target && !(push.flags & F_DATE))) {
         Pass z_first[4];
         int n = 0;
         for (int i = 0; i < npasses; i++) {
@@ -3717,19 +4802,6 @@ void flush_batch() {
         npasses = n;
         for (int i = 0; i < n; i++) {
             passes[i] = z_first[i];
-        }
-    }
-    Pass layer_passes[4];
-    int nlayer_passes = 0;
-    if (fine_z && any_zwrite_pass && ztst == 2 && abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && as_min < 0x80 &&
-        !reads_own_target) {
-        for (int i = 0; i < npasses; i++) {
-            if (passes[i].mask) {
-                layer_passes[nlayer_passes++] = {passes[i].select, passes[i].mask, false, 1.0f * zstep, 0.5f};
-            }
-            if (passes[i].zwrite) {
-                layer_passes[nlayer_passes++] = {passes[i].select, 0, true, 0.0f, 0.0f};
-            }
         }
     }
     auto is_layer = [&](uint32_t t) {
@@ -3748,6 +4820,16 @@ void flush_batch() {
     bool ms = target_samples > 1 && (depth || (color->ms_newer && !reads_own_target));
     bool perspective = perspective_batch(gs->verts);
     bool all_flat = false; // (every triangle of the batch the 2D: flat_2d)
+    // --native-2d smooth: each triangle's own texels (texel_rect_2d), of its corners as the game gave them,
+    // before flat_2d moves them; after the CLUT for the shaders (below: gs_frag.h's Clut), gs.vert putting
+    // the triangle's number in v_fog (so not with fog, nor with the native draw's vertex shaders)
+    bool rect_2d = tme && !reads_target && smooth_2d_mode && !fge && !nd.active && !perspective && (scale_x > 1 || scale_y > 1);
+    if (rect_2d) {
+        gs->rects_2d.resize(gs->verts.size() / 3 * 2);
+        for (size_t t = 0; t < gs->verts.size() / 3; t++) {
+            texel_rect_2d(&gs->verts[t * 3], fst, push.tex_size, &gs->rects_2d[t * 2]);
+        }
+    }
     if (ms) {
         msaa_ready(*color);
         if (depth) {
@@ -3759,19 +4841,20 @@ void flush_batch() {
             depth->ms_newer = true;
         }
         // (the 2D, rectangles of one colour and Z, is shaded once a pixel: --native-cutout-aa)
-        if (!perspective && flat_2d(gs->verts, &all_flat)) {
+        if (!perspective && !nd_batch_3d() && flat_2d(gs->verts, &all_flat)) { // (native draw: nd_batch_3d)
             cutout = false;
         }
     } else {
         Why why(GSN_WHY_MSAA);
         msaa_settle(*color);
-        if ((scale_x > 1 || scale_y > 1) && !perspective) {
+        if ((scale_x > 1 || scale_y > 1) && !perspective && !nd_batch_3d()) { // (native draw: nd_batch_3d)
             flat_2d(gs->verts, &all_flat);
         }
     }
     if (all_flat && tme && !reads_target && smooth_2d_mode) {
         push.misc |= M_SMOOTH_2D; // (--native-2d smooth: gs_frag.h, sample_level)
     }
+    rect_2d = rect_2d && (push.misc & M_SMOOTH_2D);
 
     // (Z and layers: within a run its other triangles are drawn first, then its layer's, layers_at
     // where they begin. So a run is cut where a triangle overlaps a layer's before it in the run. A
@@ -3779,8 +4862,39 @@ void flush_batch() {
     // order, as do the others among themselves, with their Z.)
     std::vector<uint32_t> runs(1, 0);
     std::vector<uint32_t> layers_at;
-    if (!reads_own_target && (shader_blend || npasses > 1 || nlayer_passes)) {
-        bool all = shader_blend || npasses > 1;
+    // A tie's passes need no runs when its colour comes out the same drawn twice. Drawn in two phases
+    // (above), each pass is the whole batch's in order. Its Z first, then its colour within half a Z (a
+    // layer batch's other triangles): drawn whole, a pixel's colour is the last of the batch's triangles within half a
+    // Z of the nearest of them all; in runs, the last within half a Z of the nearest of those before it
+    // and itself. A triangle the batch leaves out that runs keep has a nearer one after it, which both
+    // keep: the same last. (A repeat's colour is blended: in runs, as before.) Cut into runs, a tie's
+    // triangle strips were drawn a few triangles a draw: ten times the draws, the native GS's thread the
+    // limit at 240 where many models are in view.
+    bool tie_runs = tie && !same_twice;
+    // A silhouette (the shadows of VU1 program 0x5A0: DATE with DATM 0 and FBA, so the first triangle over
+    // a pixel sets the alpha bit the test then turns the others away with) of one colour, untextured,
+    // unfogged, writing no Z, makes the same pixel whichever of its triangles draws it: drawn whole, each
+    // reads the target as it was before the batch, which is what the first over the pixel reads in runs,
+    // and writes what it would. No runs (a zombie's or a statue's shadow: 1,000 runs a frame on map 009's
+    // poison pond, each a render pass and an MSAA resolve).
+    bool silhouette = shader_blend && date && !bits(test, 15, 1) && (push.misc & M_FBA) && !(push.misc & M_DST24) &&
+                      !(fbmsk & 0x80000000u) && !tme && !fge && !any_zwrite_pass && own_passes == 1 &&
+                      !reads_own_target && !gs->verts.empty() && silhouette_runs_mode() == 0;
+    // (one colour: a native corner's RGB is its encoding, not its colour; nd_corner_colour gives the colour
+    // its shader makes where the CPU knows it, the shadows' native corners' (0x5A0: RGB 0) among them, so
+    // that native shadows are drawn whole exactly when the PS2 path's are)
+    uint32_t colour0 = 0;
+    silhouette = silhouette && nd_corner_colour(gs->verts[0], &colour0);
+    for (size_t i = 1; silhouette && i < gs->verts.size(); i++) {
+        uint32_t colour;
+        silhouette = nd_corner_colour(gs->verts[i], &colour) && colour == colour0;
+    }
+    bool blend_runs = shader_blend && !silhouette;
+    if (silhouette) {
+        gsn_stats.silhouettes_whole++;
+    }
+    if (!reads_own_target && (blend_runs || own_passes > 1 || tie_runs || nlayer_passes)) {
+        bool all = blend_runs || own_passes > 1 || tie_runs;
         uint32_t triangles = uint32_t(gs->verts.size() / 3), start = 0;
         std::vector<uint8_t> layer(triangles);
         for (uint32_t t = 0; t < triangles; t++) {
@@ -3827,6 +4941,7 @@ void flush_batch() {
             }
             runs.pop_back();
             gs->verts.swap(verts);
+            rect_2d = false; // (--native-2d smooth: rects_2d in the order before; layers are the 3D's)
             if (interp.active) {
                 interp.vsrc.swap(vsrc);
             }
@@ -3838,7 +4953,7 @@ void flush_batch() {
     runs.push_back(uint32_t(gs->verts.size()));
     // a picture between drawn from the frame's packets: the batch's corners, for gs_replay.vert
     uint32_t corners_at = 0;
-    if (interp.active) {
+    if (interp.active && !nd.active) {
         interp.risky_runs += moving.moves && runs.size() > 2;
         corners_at = interp.corner;
         if (size_t(corners_at) + interp.vsrc.size() > size_t(interp.frame->kicks) * 3 + 5) {
@@ -3861,7 +4976,12 @@ void flush_batch() {
     if (reads_own_target) {
         how = COPY_OUTSIDE;
     } else if (shader_blend) {
-        how = blend_copy_forced() ? COPY_OUTSIDE : !ms || msaa_blend_in_pass() ? COPY_IN_PASS : COPY_BY_PASS;
+        // (a 16-bit target's samples are whole multiples of 8, its alpha 0 or 0x80: the mean of 2, 4 or 8
+        // of them is a whole number, which pass_resolve.frag makes as the resolve does, with no half to
+        // round either way. Its runs are copies in one pass, not a pass and a resolve each: map 009's
+        // poison pond reflected, hundreds of runs a frame.)
+        bool exact_mean = ms && dst16 && !wide(*color->image) && !blend_copy_16_by_pass();
+        how = blend_copy_forced() ? COPY_OUTSIDE : !ms || msaa_blend_in_pass() || exact_mean ? COPY_IN_PASS : COPY_BY_PASS;
         if (how == COPY_BY_PASS && wide(*color->image)) {
             how = COPY_OUTSIDE; // (--native-colour high: a pass's resolve of 16-bit samples is not always vkCmdResolveImage's)
         }
@@ -3946,12 +5066,19 @@ void flush_batch() {
         c.set_texture(0, 0, *raw_view, StockSampler::NearestClamp);
         c.set_texture(0, 1, *target_view, StockSampler::NearestClamp);
         c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-        uint32_t *clut_data = c.allocate_typed_constant_data<uint32_t>(0, 2, 256);
+        // (--native-2d smooth: the run's triangles' texels after the CLUT, two a uvec4, as many as fit in
+        // the 64 KiB of a uniform buffer: gs_frag.h's Clut)
+        uint32_t tris = count / 3;
+        bool rects = rect_2d && tris <= (VULKAN_MAX_UBO_SIZE - 1024) / 8;
+        std::vector<uint32_t> &clut_data = clut_scratch; // (kept from batch to batch: its room)
+        clut_data.assign(rects ? 256 + 4 * ((tris + 1) / 2) : 256, 0u);
         if (want_clut) {
-            memcpy(clut_data, clut, sizeof(clut));
-        } else {
-            memset(clut_data, 0, 1024);
+            memcpy(clut_data.data(), clut, sizeof(clut));
         }
+        if (rects) {
+            memcpy(clut_data.data() + 256, &gs->rects_2d[first / 3 * 2], tris * 8);
+        }
+        c.set_storage_data(0, 2, clut_data.data(), clut_data.size() * sizeof(uint32_t));
 
         // depth
         if (depth) {
@@ -3962,7 +5089,7 @@ void flush_batch() {
             c.set_depth_test(false, false);
         }
         // blending
-        if (abe && !shader_blend) {
+        if (abe && !shader_blend && !blend_is_cs) {
             float constants[4] = {float(fix) / 128.0f, float(fix) / 128.0f, float(fix) / 128.0f, 128.0f / 255.0f};
             c.set_blend_enable(true);
             c.set_blend_constants(constants);
@@ -3975,7 +5102,7 @@ void flush_batch() {
         }
 
         // the vertices
-        if (interp.active) {
+        if (interp.active && !nd.active) {
             // (a picture between's: made of its kicks at its time by gs_replay_corners.comp)
             c.set_vertex_binding(0, *interp.vertices, VkDeviceSize(corners_at + first) * sizeof(Vtx), sizeof(Vtx));
         } else {
@@ -3988,6 +5115,9 @@ void flush_batch() {
         c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vtx, rgba));
         c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vtx, s));
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
+        if (nd.active) {
+            nd_bind(c); // (native draw: the mesh and the draw's constants)
+        }
 
         // (Z and layers: the run's other triangles with the passes, then its layer's with theirs: the
         // colour within the tolerance, no Z written, then the Z where the test passes, from
@@ -3999,20 +5129,29 @@ void flush_batch() {
             uint32_t from = l ? others : 0, n = l ? count - others : others;
             for (int i = 0; i < nrp && n; i++) {
                 Push p = push;
+                p.misc |= rects ? M_RECT_2D : 0;
                 p.flags |= rp[i].select << F_PASS_SHIFT;
                 p.zbias = rp[i].zbias;
                 p.zslope = rp[i].zslope;
                 bool zonly = fine_z && !rp[i].mask && rp[i].zwrite && rp[i].select == 0 && !(push.flags & F_DATE) &&
                              (per_sample ? gs->program_zonly_sample != nullptr : true);
+                Program *base = zonly ? (per_sample ? gs->program_zonly_sample : gs->program_zonly) : program;
                 if (zonly) {
-                    c.set_program(per_sample ? gs->program_zonly_sample : gs->program_zonly);
+                    c.set_program(base);
                 }
                 c.set_color_write_mask(rp[i].mask);
                 if (depth) {
                     c.set_depth_test(true, rp[i].zwrite);
                 }
                 c.push_constants(&p, 0, sizeof(p));
-                c.draw(n, from);
+                bool bounded = two_phase_bounds && l == 0 && i == 0;
+                if (bounded) {
+                    c.set_depth_bounds(true, bounds_lo, bounds_hi);
+                }
+                nd_draw_range(c, base, n, from, first); // (native draw: c.draw, a call a kind of corner)
+                if (bounded) {
+                    c.set_depth_bounds(false, 0.0f, 1.0f);
+                }
                 gsn_stats.draws++;
                 if (zonly) {
                     c.set_program(program);
@@ -4201,6 +5340,7 @@ uint32_t interp_kick(const QVertex &v, uint32_t prim) {
 }
 
 void vertex_kick(uint32_t address, uint64_t value) {
+    nd_kick(); // (native draw: native corners pending are drawn first)
     bool fog = address == R_XYZF2 || address == R_XYZF3;
     bool draw = address == R_XYZF2 || address == R_XYZ2;
     QVertex v;
@@ -4221,7 +5361,8 @@ void vertex_kick(uint32_t address, uint64_t value) {
         gs->batch_sprites = false;
     }
     // (a picture between drawn from the frame's packets: the kick recorded, its number kept with the queue's)
-    uint32_t kick_no = interp.active ? interp_kick(v, prim) : 0;
+    // (native draw: a screen pass's kicks are not the frame's, gsn_nd_pass.inc)
+    uint32_t kick_no = interp.active ? (nd.pass_kicking ? GSN_IM_NONE : interp_kick(v, prim)) : 0;
     uint32_t *qk = interp.qkick;
     uint32_t type = prim & 7;
     QVertex *q = gs->queue;
@@ -4323,6 +5464,17 @@ void sync_targets(const TransferRect &r) {
             uint32_t tlo, tcount;
             target_pages(*t, &tlo, &tcount);
             uint32_t ph = page_height(t->psm);
+            if (t->replay_only && !t->depth) {
+                // (prepare_write kept it: all its pages under the transfer as VRAM has them now)
+                uint32_t lo, count;
+                rect_pages(r, &lo, &count);
+                for (uint32_t k = 0; k < tcount; k++) {
+                    if (pages_overlap(lo, count, (tlo + k) % vram_pages, 1)) {
+                        load_target_rect(*t, (k % t->bw) * 64, (k / t->bw) * ph, 64, ph);
+                    }
+                }
+                continue;
+            }
             for (uint32_t page : whole) {
                 uint32_t k = (page + vram_pages - tlo) % vram_pages;
                 if (k < tcount) {
@@ -4385,7 +5537,24 @@ void prepare_write(const TransferRect &r) {
                 i++;
                 continue;
             }
-            if (!covered) {
+            if (t->replay_only && replaying && regular(*t) && !t->depth) {
+                // A picture between's own target (the water's wobble: its copy of the picture's frame)
+                // stays, and takes the pages under the transfer from VRAM after it (sync_targets): what
+                // the game's frame left there, the transfer's bytes added. Dropped, the picture's draws
+                // after it that read the copy read it from VRAM at 1x, decoded again every picture. (Only
+                // while a picture between is drawn: in the game's frame such a target is nobody's, and was
+                // kept over every upload, each of its pages under it loaded again: about 540 pages a frame
+                // under water at the pond, the MP drain's and the water's copy of the frame left there.)
+                i++;
+                continue;
+            }
+            // (a picture between's own target goes without: the game's frame left VRAM there as it
+            // should stay)
+            if (!covered && !t->replay_only) {
+                if (t->dirty && regular(*t) && t->dirty_pages.size() && shadows_on()) {
+                    shadow_make(t); // (its write-back put off: above)
+                    continue;
+                }
                 write_back(*t);
             }
             drop_target(t);
@@ -4504,6 +5673,9 @@ void swizzle_upload(const uint8_t *data, size_t bytes) {
 }
 
 void upload_done() {
+    if (pending_upload.active && pending_upload.incremental) {
+        sa_uploaded_from_vram(pending_upload.bitbltbuf, pending_upload.trxpos, pending_upload.trxreg); // (standalone)
+    }
     {
         Timer sync(gsn_stats.ns_sync);
         sync_targets(destination_rect());
@@ -4519,6 +5691,7 @@ void write_page_image(const PageImage &image);
 // The whole upload: its pages copied in if it was seen before, else swizzled (and kept)
 void complete_upload(const uint8_t *data, size_t size) {
     PendingUpload &p = pending_upload;
+    sa_uploaded(p.bitbltbuf, p.trxpos, p.trxreg, data, size); // (standalone: the page-ownership table)
     bool rgb_only = false;
     std::vector<uint32_t> pages = whole_pages(p.bitbltbuf, p.trxpos, p.trxreg, &rgb_only);
     uint64_t key = upload_hash(p, data, size);
@@ -4634,6 +5807,7 @@ void interp_forget();
 
 void forget_uploads() {
     interp_forget();
+    nd_prep_forget(); // (rc/own: the frames' draws kept for their pictures between)
     pending_upload.active = false;
     pending_upload.data.clear();
     uploads_now.clear();
@@ -4647,12 +5821,14 @@ void forget_uploads() {
 }
 
 void begin_transfer(uint32_t dir) {
+    sa_transfer(dir); // (standalone: the scene's turn ends if the transfer touches its targets)
     settle_upload();
     uint64_t bitbltbuf = gs->reg[R_BITBLTBUF], trxpos = gs->reg[R_TRXPOS], trxreg = gs->reg[R_TRXREG];
     gs->transfer_dir = dir;
     if (dir == 0) {
         TransferRect r = destination_rect();
         prepare_write(r);
+        shadow_written(bitbltbuf, trxpos, trxreg);
         gsn_upload_begin(&gs->upload, bitbltbuf, trxpos, trxreg);
         gsn_stats.uploads++;
         recording = -1;
@@ -4660,6 +5836,7 @@ void begin_transfer(uint32_t dir) {
             uploads_now.push_back({bitbltbuf, trxpos, trxreg, nullptr, {}});
             recording = int(uploads_now.size() - 1);
         }
+        sa_upload_begins(bitbltbuf, trxpos, trxreg, !replaying); // (standalone)
         PendingUpload &u = pending_upload;
         u.active = gs->upload.active != 0;
         u.incremental = false;
@@ -4692,12 +5869,25 @@ void begin_transfer(uint32_t dir) {
             sy + h <= src->height && d.x == sx && d.y == sy && d.bw == sbw) {
             uint32_t lo, count;
             rect_pages(d, &lo, &count);
+            // Whole pages of a 32-bit buffer from its start, which the source's pages do not share: every bit
+            // of them is the copy's, so what was there need not go back to VRAM, nor come from it (under
+            // water and in the MP drain, the wobble's copy of the frame each picture: three write-backs a
+            // picture before)
+            uint32_t slo, scount;
+            target_pages(*src, &slo, &scount);
+            if (d.psm == GSN_PSMCT32 && d.x == 0 && d.y == 0 && d.bp % 32 == 0 && d.bw > 0 && w == d.bw * 64 &&
+                h % page_height(d.psm) == 0 && !pages_overlap(lo, count, slo, scount)) {
+                shadow_written(bitbltbuf, trxpos, trxreg); // (the shadows' pages under it let go)
+                overwrite_lo = lo;
+                overwrite_count = count;
+            }
             Target *dst = find_target(d.bp, d.bw, d.psm);
             if (!dst || dst->width < src->width || dst->height < d.y + h) {
                 // the destination becomes a target of its own, its pixels from VRAM first
                 dst = get_target(d.bp, d.bw, d.psm, src->width, std::max(d.y + h, dst ? dst->height : 0u));
             }
             claim_pages(lo, count, dst, true);
+            overwrite_count = 0;
             // claim_pages may have dropped and re-made nothing of src: find it again
             src = find_target(sbp, sbw, spsm);
             dst = find_target(d.bp, d.bw, d.psm);
@@ -4719,10 +5909,12 @@ void begin_transfer(uint32_t dir) {
                 return;
             }
         }
+        sa_copied(bitbltbuf, trxpos, trxreg); // (standalone: not its uploads' any more)
         uint32_t lo, count;
         buffer_pages(sbp, sbw, spsm, sx + w, sy + h, &lo, &count);
         claim_pages(lo, count, nullptr, false);
         prepare_write(d);
+        shadow_written(bitbltbuf, trxpos, trxreg);
         if (gsn_vram_copy(gs->vram.data(), bitbltbuf, trxpos, trxreg)) {
             uint32_t dlo, dcount;
             rect_pages(d, &dlo, &dcount);
@@ -4767,6 +5959,7 @@ void image_data(const uint8_t *data, size_t bytes) {
 // blended in, Game_BlendPreviousFrame): the buffer itself is the one they are drawn into.
 void take_snapshot(uint32_t fbp) {
     flush_batch();
+    sa_sync();
     snapshot.image.reset();
     for (auto &t : gs->targets) {
         if (t->depth || t->bp != fbp * 32 || !t->image) {
@@ -4804,6 +5997,7 @@ void replay_upload(uint64_t value) {
     if (image) {
         Timer timer(gsn_stats.ns_upload);
         write_page_image(*image);
+        sa_upload_replayed(k); // (standalone)
         upload_done();
     } else if (!uploads_frame[k].bytes.empty()) {
         image_data(uploads_frame[k].bytes.data(), uploads_frame[k].bytes.size());
@@ -4838,6 +6032,10 @@ void mip_addresses(uint32_t ctxt) {
 }
 
 void gs_write(uint32_t address, uint64_t value) {
+    if (nd.skipping && address != 0x7B) {
+        nd_skip(address); // (--native-draw-compare: the PS2 path's packets left out)
+        return;
+    }
     switch (address) {
     case R_XYZF2:
     case R_XYZ2:
@@ -4892,6 +6090,7 @@ void gs_write(uint32_t address, uint64_t value) {
             flush_batch();
             memcpy(gs->clut, now, sizeof(now));
         }
+        sa_clut_load(value); // (standalone: the table's CLUT)
         gs->reg[address] = value;
         mip_addresses(address - R_TEX0_1);
         return;
@@ -4907,6 +6106,9 @@ void gs_write(uint32_t address, uint64_t value) {
     case R_TEXFLUSH:
     case 0x0F: // NOP
     case 0x7D: // the port's frame-rate mark (frame_interp.c): a picture between begins or ends
+        if (address == 0x7D) {
+            nd_mark(value); // (native draw: where the draws after it are, gsn_native_draw.inc)
+        }
         if (bits(value, 32, 8) == 0xF0) {
             replaying = true;
             recording = -1;
@@ -4923,6 +6125,9 @@ void gs_write(uint32_t address, uint64_t value) {
         replay_upload(value);
         return;
     case 0x7E: // the port's widescreen mark (gs.c)
+        return;
+    case 0x7B: // the port's native draw (PORT_GS_REG_NATIVE_DRAW: gsn_native_draw.inc)
+        nd_register(value);
         return;
     case R_SIGNAL:
     case R_FINISH:
@@ -5142,7 +6347,7 @@ void make_program() {
     frag.output_mask = 1;
     frag.push_constant_size = sizeof(Push);
     frag.sets[0].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3);
-    frag.sets[0].uniform_buffer_mask = 1u << 2;
+    frag.sets[0].storage_buffer_mask = 1u << 2; // (the CLUT: gs_frag.h)
     frag.sets[0].fp_mask = (1u << 1) | (1u << 3);
     for (int b : {0, 1, 2, 3}) {
         frag.sets[0].meta[b].array_size = 1;
@@ -5450,28 +6655,35 @@ void copy_lines(const Image &dst, const Shown &s, uint32_t first, uint32_t step,
     transfer_barrier();
 }
 
-// The weave of a field at a scale (whole frames: the two fields are the same moment, drawn half a line
-// apart, port/platform/field_frames.c). Field p's row r of pixels (of h * sy) is at the woven picture's
-// line 2 r / sy + p, so its rows go to the picture's rows 2 r + p sy: with sy odd the two fields'
-// rows take turns, every row of the picture its own (at 1x, the weave of lines). Woven a line (sy rows)
-// at a time instead, each band of sy rows held a line drawn over twice the height, the other field's
-// band half a line off: at 3x the menus' text in stripes of three rows, its edges broken. With sy even
-// the two fields' rows fall on the same rows of the picture: the field fills all of them, each of its
-// rows twice (the other field's rows are the same picture). The top rows field 1 has none for are its
-// first row's. Only from a target in the picture's format; else 0 (the weave a line at a time).
+// The picture of a field-mode screen at a scale (whole frames: the two fields are the same moment,
+// port/platform/field_frames.c): field 0's rows, each twice (its rows are 2 sy a line of the picture),
+// whichever field the vblank is (a field 1 vblank reads the other buffer, which has field 0 of the same
+// moment). Woven a line (sy rows) at a time, each band of sy rows held a line drawn over twice the
+// height, the other field's band half a line off: at 3x the menus' text in stripes of three rows. Woven
+// a row at a time (field p's row r at the picture's row 2 r + p sy), whatever the game draws alike in
+// both fields, not moved by the half line (Menu_DrawItemModel's models: field_frames.c), was combed half
+// a line apart; and the vblank's own field alone made it jump half a line every vblank at 4x (the shop's
+// goods, the Journal's pictures, October 2026). Only from a target in the picture's format; else 0 (a
+// line at a time).
+Shown field0_buffer; // the buffer the last field 0 was read from (whole frames: this vblank's, in the
+bool field0_set;     // other buffer when the vblank is field 1)
+
 int weave_fine(const Image &dst, const Shown &s, uint32_t p) {
     if (!s.t || s.sy < 2) {
         return 0;
     }
-    uint32_t rows = s.h * s.sy, out = rows * 2, off = p * s.sy;
-    uint32_t count = std::min(rows, (out - off + 1) / 2);
-    narrow_pass(dst, s, 0, 1, count, off, 2, 1);
-    if (s.sy % 2 == 0) {
-        narrow_pass(dst, s, 0, 1, std::min(rows, (out - off) / 2), off + 1, 2, 1);
+    Shown f = s;
+    if (p == 1 && field0_set) {
+        // (as it is now: the same buffer, still a target of this size)
+        f = shown_buffer(field0_buffer.fbp, field0_buffer.fbw, field0_buffer.psm, field0_buffer.dbx, field0_buffer.dby,
+                         field0_buffer.w, field0_buffer.h);
+        if (!f.t || f.sx != s.sx || f.sy != s.sy) {
+            f = s;
+        }
     }
-    if (off) {
-        narrow_pass(dst, s, 0, 0, s.sy % 2 ? (off - 1) / 2 : off, s.sy % 2 ? 1 : 0, s.sy % 2 ? 2 : 1, 1);
-    }
+    uint32_t rows = s.h * s.sy;
+    narrow_pass(dst, f, 0, 1, rows, 0, 2, 1);
+    narrow_pass(dst, f, 0, 1, rows, 1, 2, 1);
     return 1;
 }
 
@@ -5640,6 +6852,9 @@ void present_scale(ScanoutSlot &sl, const Image &picture) {
     }
 }
 
+bool sa_composite_size(const Shown &s, uint32_t *iw, uint32_t *ih); // (standalone T2: gsn_composite.inc)
+void sa_composite(const Image &dst, const Shown &s);
+
 // The displayed buffer into scanout_image as `mode` says (parity: the lines of this vblank's field; in
 // field mode the buffer is the field's picture, and parity the lines of the woven picture it goes
 // into); with frame, read back into it too. Returns GSN_WANT_IMAGE, and GSN_WANT_PIXELS when frame has
@@ -5648,6 +6863,7 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     ScanoutImage &so = scanout_image;
     uint32_t lines = mode == SCAN_WEAVE ? s.h * 2 : mode == SCAN_FIELD ? s.h / 2 : s.h;
     uint32_t iw = s.w * s.sx, ih = lines * s.sy;
+    bool composite = mode == SCAN_WHOLE && sa_composite_size(s, &iw, &ih); // (standalone T2: the scene's own scale)
     bool fresh = false;
     int slot = 0;
     ImageHandle before; // (the weave: the picture published last, whose other field's lines are kept)
@@ -5688,7 +6904,11 @@ int scanout_to_image(const Shown &s, ScanMode mode, int parity, PortGsFrame *fra
     const Image &dst = *so.slots[slot].image;
     switch (mode) {
     case SCAN_WHOLE:
-        copy_lines(dst, s, 0, 1, s.h, 0, 1);
+        if (composite) {
+            sa_composite(dst, s); // (standalone T2)
+        } else {
+            copy_lines(dst, s, 0, 1, s.h, 0, 1);
+        }
         break;
     case SCAN_WEAVE:
         // the field into its own lines, the other field's from the picture before; into both when there
@@ -5804,7 +7024,7 @@ void interp_forget() {
     interp.resolved.reset();
     interp.vertices.reset();
     interp.picture.reset();
-    interp.recorded = false;
+    interp.recorded = interp.tried = false;
     recording_ops.clear();
 }
 
@@ -5824,6 +7044,7 @@ void interp_kicks_pass(CommandBuffer &c) {
     if (!interp.frame || !interp.frame->kicks) {
         return;
     }
+    cmd().forget_bindings(); // (set 1 bound here past Cmd)
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     c.set_program(gs->program_replay_kicks);
@@ -5975,9 +7196,12 @@ void interp_record() {
     interp.kick_list.resize(f->kicks);
     interp.corner_map = static_cast<uint32_t(*)[4]>(gs->device->map_host_buffer(*interp.corners, MEMORY_ACCESS_WRITE_BIT));
     end_pass(); // (the recording starts outside a render pass: its kicks moved first)
+    interp.recorded_still = interp.still;
     interp_capture(interp.start);
     recording_ops.clear();
     recording_ops.on = true;
+    uint64_t binds0 = pipeline_binds();
+    cmd().forget_bindings();
     cmd().interp_kicks();
     interp.active = true;
     interp.broken = false;
@@ -5994,8 +7218,10 @@ void interp_record() {
         at += 8 + head[1];
     }
     flush_batch(); // (the last batch is the picture's)
+    gsn_stats.interp_record_binds += pipeline_binds() - binds0;
     recording_ops.settle();
     recording_ops.on = false;
+    cmd().forget_bindings();
     interp.active = false;
     finish_recording(recording_ops);
     uint32_t count[4] = {interp.corner, 0, 0, 0}; // (the corners' count, before them)
@@ -6015,16 +7241,22 @@ void interp_record() {
     interp_capture(interp.end);
     interp.end_regs.assign(gs->reg, gs->reg + 256);
     interp.recorded = !interp.broken && recording_ops.ok && gs->field_scan_vblanks == field_scan;
+    interp.tried = true;
     gsn_stats.interp_records++;
     GSN_LOG(2, "interp: %llu recorded, %llu batches moving drawn in runs, %zu calls\n",
             (unsigned long long)gsn_stats.interp_records, (unsigned long long)interp.risky_runs, recording_ops.ops.size());
 }
 
-// Why the recording cannot be made again for this picture: 0 it can; 1 the GS is not as it was before it
-// (targets, their state, the render pass, VRAM, the CLUT); 2 its registers differ; 3 nothing recorded
+// Why the recording cannot be made again for this picture (GsnStats' interp_rerecord): 0 it can; 1 the GS's targets are
+// not as they were before it (their state, the render pass); 2 its registers differ; 3 nothing recorded yet (the frame's
+// first picture between); 4 what was recorded cannot be made again (a read-back in it, its kicks miscounted, the field
+// scan changed); 5 VRAM or the CLUT written since
 int interp_cannot_replay() {
     if (!interp.recorded) {
-        return 3;
+        return interp.tried ? 4 : 3;
+    }
+    if (reflection_keep() == 1 && interp.recorded_still != interp.still) {
+        return 6; // (the recording left the reflection out, or drew it: sat_kept)
     }
     flush_batch();
     // (the targets as before the recording; VRAM and the CLUT as after it: its uploads and CLUT loads leave
@@ -6033,10 +7265,33 @@ int interp_cannot_replay() {
     interp_capture(now);
     if (now.vram_writes != interp.end.vram_writes || now.clut_version != interp.end.clut_version) {
         GSN_LOG(1, "interp: VRAM or the CLUT written since the recording\n");
-        return 1;
+        return 5;
     }
     now.vram_writes = interp.start.vram_writes;
     now.clut_version = interp.start.clut_version;
+    // A target the recording made that is still there (the frame drawn by the game had none at that
+    // buffer, the picture's own is kept: the sky's scrolling copy on map 063, since targets made only by
+    // pictures between are dropped at the frame's end): its calls make it again, from VRAM, over the
+    // same image. Without it the frame's second picture was drawn from the packets again each frame.
+    auto key_of = [](const InterpTargetState &x) { return std::make_tuple(x.bp, x.bw, x.psm, x.depth); };
+    auto shape_same = [](const InterpTargetState &x, const InterpTargetState &y) {
+        return x.has_ms == y.has_ms && x.width == y.width && x.height == y.height && x.sx == y.sx && x.sy == y.sy;
+    };
+    size_t had = now.targets.size();
+    now.targets.erase(std::remove_if(now.targets.begin(), now.targets.end(), [&](const InterpTargetState &x) {
+        for (const InterpTargetState &s : interp.start.targets) {
+            if (key_of(s) == key_of(x)) {
+                return false;
+            }
+        }
+        for (const InterpTargetState &e : interp.end.targets) {
+            if (key_of(e) == key_of(x) && shape_same(e, x)) {
+                return true;
+            }
+        }
+        return false;
+    }), now.targets.end());
+    bool kept = now.targets.size() != had;
     if (!interp_same(now, interp.start)) {
         return 1;
     }
@@ -6045,9 +7300,18 @@ int interp_cannot_replay() {
     }
     // the targets' images the recording names, as those targets have them now
     replay_images.clear();
+    bool own = false;
     for (const Recording::TargetImage &ti : recording_ops.target_images) {
         Target *t = find_target(ti.bp, ti.bw, ti.psm);
-        const Image *now = !t ? nullptr : ti.ms ? t->ms.get() : t->image.get();
+        if (!t) {
+            // A target the recording made and dropped (a scrolling texture's, made, grown up a page row
+            // and dropped each picture: map 063's sky). The GS has the targets it had before the recording
+            // (above), so none was this buffer then: the image is the recording's own, made and filled by
+            // its calls, and they are made again on it.
+            own = true;
+            continue;
+        }
+        const Image *now = ti.ms ? t->ms.get() : t->image.get();
         if (!now || now->get_width() != ti.image->get_width() || now->get_height() != ti.image->get_height() ||
             now->get_format() != ti.image->get_format()) {
             GSN_LOG(1, "interp: target bp %#x%s is not as recorded\n", ti.bp, ti.ms ? " (multisampled)" : "");
@@ -6057,6 +7321,8 @@ int interp_cannot_replay() {
             replay_images.push_back({ti.image, now});
         }
     }
+    gsn_stats.interp_kept_targets += kept;
+    gsn_stats.interp_own_targets += own;
     return 0;
 }
 
@@ -6079,13 +7345,17 @@ void interp_picture_now(const uint8_t *data, size_t size) {
         h->zt[i] = interp.frame->screen[i][4];
     }
     h->kicks = interp.frame->kicks;
+    interp.still = interp.frame->still != 0; // (the camera of the frame shown is the frame's, bit for bit)
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();
     end_pass(); // (a picture between starts outside a render pass: its kicks moved first)
     int why = interp_cannot_replay();
     if (why == 0) {
         Timer timer(gsn_stats.ns_interp_replay);
+        uint64_t binds0 = pipeline_binds();
         replay_ops(recording_ops);
+        gsn_stats.interp_replay_binds += pipeline_binds() - binds0;
+        gsn_stats.interp_replay_draws += recording_ops.draws;
         interp_restore(interp.end);
         gsn_stats.draws += recording_ops.draws;
         gsn_stats.interp_replays++;
@@ -6139,6 +7409,12 @@ void ring_work(const RingRecord &r, const uint8_t *data) {
         Timer timer(gsn_stats.ns_gif);
         gif(r.arg, data, r.size);
     } else if (r.type == RING_VSYNC) {
+        // (KF4_GSN_SLOW_US=N, debug: this thread N us late at each vblank, so that a window falls behind the game as a
+        // busy GPU makes it: only the vblanks' own pictures shown, the way the lamp wall's patch was first caught)
+        static int slow_us = getenv("KF4_GSN_SLOW_US") ? atoi(getenv("KF4_GSN_SLOW_US")) : 0;
+        if (slow_us > 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(slow_us));
+        }
         uint64_t privileged[vsync_bytes / 8], tag;
         memcpy(privileged, data, vsync_bytes);
         memcpy(&tag, data + vsync_bytes, 8);
@@ -6150,6 +7426,58 @@ void ring_work(const RingRecord &r, const uint8_t *data) {
     } else if (r.type == RING_INTERP_PICTURE) {
         interp_picture_now(data, r.size);
     }
+}
+
+// ---- KF4_HITCH_MS=N (measure): a vblank whose work on this thread took over N ms, and what it was ----
+std::atomic<uint64_t> hitch_compiles{0}, hitch_compile_ns{0}; // (pipelines made by draws that waited: gsn_pipeline_warm.inc)
+struct Hitch {
+    int ms = -1;
+    std::chrono::steady_clock::time_point t0;
+    double type_ms[8] = {};
+    uint64_t compile_ns0 = 0, compiles0 = 0;
+    GsnStats s0 = {};
+    uint64_t vblank = 0;
+} hitch;
+void hitch_begin() {
+    if (hitch.ms < 0) {
+        const char *e = getenv("KF4_HITCH_MS");
+        hitch.ms = e ? atoi(e) : 0;
+    }
+    if (hitch.ms) {
+        hitch.t0 = std::chrono::steady_clock::now();
+    }
+}
+void hitch_end(uint32_t type, bool vblank) {
+    if (!hitch.ms) {
+        return;
+    }
+    hitch.type_ms[type & 7] +=
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - hitch.t0).count();
+    if (!vblank) {
+        return;
+    }
+    hitch.vblank++;
+    double total = 0;
+    for (double v : hitch.type_ms) {
+        total += v;
+    }
+    if (total > hitch.ms) {
+        const GsnStats &s = gsn_stats, &o = hitch.s0;
+        fprintf(stderr,
+                "[hitch] gs vblank %llu: %.1f ms (gif %.1f vsync %.1f interp %.1f+%.1f) compiles %u %.1f ms; decodes %llu "
+                "%.1f ms, uploads %llu %.1f ms, nd meshes %llu arenas %llu, targets %llu, flush %.1f ms, sync %.1f ms\n",
+                (unsigned long long)hitch.vblank, total, hitch.type_ms[RING_GIF], hitch.type_ms[RING_VSYNC],
+                hitch.type_ms[RING_INTERP_FRAME], hitch.type_ms[RING_INTERP_PICTURE], (unsigned)(hitch_compiles - hitch.compiles0),
+                double(hitch_compile_ns - hitch.compile_ns0) / 1e6, (unsigned long long)(s.texture_decodes - o.texture_decodes),
+                (s.ns_decode - o.ns_decode) / 1e6, (unsigned long long)(s.uploads - o.uploads),
+                (s.ns_upload - o.ns_upload) / 1e6, (unsigned long long)(s.nd_mesh_uploads - o.nd_mesh_uploads),
+                (unsigned long long)(s.nd_arenas - o.nd_arenas), (unsigned long long)s.targets,
+                (s.ns_flush - o.ns_flush) / 1e6, (s.ns_sync - o.ns_sync) / 1e6);
+    }
+    memset(hitch.type_ms, 0, sizeof(hitch.type_ms));
+    hitch.compile_ns0 = hitch_compile_ns;
+    hitch.compiles0 = hitch_compiles;
+    hitch.s0 = gsn_stats;
 }
 
 void ring_thread() {
@@ -6187,7 +7515,9 @@ void ring_thread() {
         const uint8_t *at = q.bytes.data() + (tail & (ring_bytes - 1));
         RingRecord r;
         memcpy(&r, at, sizeof(r));
+        hitch_begin();
         ring_work(r, at + sizeof(r));
+        hitch_end(r.type, r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA));
         if (r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA)) {
             q.vsyncs_done.fetch_add(1);
         }
@@ -6331,10 +7661,16 @@ void save_pipeline_cache() {
     }
 }
 
+#include "gsn_standalone.inc" // (P8: the scene drawn into its own targets)
+#include "gsn_composite.inc"  // (P8 T2: the scene at a scale of its own, and the composite)
+#include "gsn_pipeline_warm.inc" // (pipelines made ahead: the lists, and the start's work)
+
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
 extern "C" int gsn_open(void *shared_context) {
+    holyland_on_compile = pw_on_compile; // (gsn_pipeline_warm.inc: every pipeline Granite makes, written down)
+    holyland_on_render_pass = pw_on_render_pass;
     gs = new Gs();
     gs->vram.assign(GSN_VRAM_BYTES, 0);
     memset(gs->page_written, 0, sizeof(gs->page_written));
@@ -6479,6 +7815,34 @@ extern "C" void gsn_pipeline_cache(const char *path) {
     gs->device->init_pipeline_cache(data.empty() ? nullptr : data.data(), data.size());
     cache_path = path;
     cache_saved_size = gs->device->get_pipeline_cache_size();
+    // the pipelines of the lists made ahead, on threads of their own (gsn_pipeline_warm.inc); the data folder's list
+    // and the cache written at the end too (not only while it runs: what the last seconds made is kept)
+    std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\") + 1);
+    pw_start(folder + "native_gs_pipeline_list.txt");
+    atexit([] {
+        pw.stop = true;
+        save_pipeline_cache();
+        pw_save();
+    });
+}
+
+extern "C" int gsn_pipelines_building(int *done, int *total) {
+    *done = pw.done.load();
+    *total = pw.total.load();
+    return pw.building.load();
+}
+
+extern "C" int gsn_pipelines_running(void) {
+    return pw.running.load();
+}
+
+extern "C" void gsn_print_pipeline_stats(void) {
+    fprintf(stderr,
+            "[stats] pipelines made ahead: %zu on the lists (%zu not shipped), %d ready from the cache in %.2f s, %d built in "
+            "%.1f s, %d stale; made by draws that waited: %llu (%.1f ms), %llu not on a list\n",
+            pw.entries.size(), pw.unshipped, pw.ready.load(), pw.seconds_check, pw.done.load(), pw.seconds_build,
+            pw.stale.load(), (unsigned long long)pw.play_made.load(), double(pw.play_ns.load()) / 1e6,
+            (unsigned long long)pw.play_new.load());
 }
 
 extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
@@ -6521,6 +7885,15 @@ extern "C" void gsn_print_gpu_times(void) {
         fprintf(stderr, " %s %.3f", k.first.c_str(), k.second / pictures);
     }
     fprintf(stderr, "\n");
+    if (gpu_time >= 2) {
+        fprintf(stderr, "[stats] native GS draws a picture by kind (draws/triangles):");
+        for (int k = 0; k < GPU_KINDS; k++) {
+            if (gpu_draws[k]) {
+                fprintf(stderr, " %s %.0f/%.0f", gpu_kinds[k], double(gpu_draws[k]) / pictures, double(gpu_tris[k]) / pictures);
+            }
+        }
+        fprintf(stderr, "\n");
+    }
 }
 
 namespace {
@@ -6553,7 +7926,11 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         frame = &presented;
     }
     flush_batch();
+    sa_sync(); // (standalone: the picture is the GS's)
+    sa_switch(sa_mode != 0);
+    sa_vblank(extra);
     gsn_stats.pictures++;
+    gsn_stats.pipeline_binds = pipeline_binds();
     Why why_scanout(GSN_WHY_SCANOUT);
     end_pass();
     gpu_mark(GPU_OTHER);
@@ -6606,6 +7983,10 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         if (w > 0 && h > 0 && w <= 1024 && h <= 1024 &&
             size_t(w) * h * sx * sy * (mode == SCAN_WEAVE ? 2 : 1) <= PORT_GS_FRAME_PIXELS) {
             Shown shown = shown_buffer(fbp, fbw, psm, dbx, dby, w, h);
+            if (mode == SCAN_WEAVE && parity == 0) {
+                field0_buffer = shown; // (weave_fine: field 1's picture is field 0's, of this vblank)
+                field0_set = true;
+            }
             if (mode == SCAN_DEINTERLACE) {
                 record_history(shown, parity);
                 history_kept = true;
@@ -6641,9 +8022,9 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     for (uint32_t y = 0; y < h * 2 * sy; y++) {
                         uint32_t l = y / sy, row = (l / 2) * sy + y % sy, from = l & 1;
                         if (scanout_fine_weave && sy >= 2) {
-                            // (as weave_fine: a row of pixels at a time; with sy even, this field's rows)
-                            from = sy % 2 ? y & 1 : uint32_t(f);
-                            row = y >= from * sy ? (y - from * sy) / 2 : 0;
+                            // (as weave_fine: field 0's rows, each twice)
+                            from = 0;
+                            row = y / 2;
                         }
                         memcpy(frame->rgba + size_t(y) * w * sx, gs->fields[from].data() + size_t(row) * w * sx,
                                w * sx * 4);
@@ -6652,7 +8033,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
                     frame->height = h * 2 * sy;
                     ok = 1;
                 }
-            } else if (mode != SCAN_WHOLE || (shown.t && wide(*shown.t->image))) {
+            } else if (mode != SCAN_WHOLE || (shown.t && wide(*shown.t->image)) || sa_composite_size(shown, nullptr, nullptr)) {
                 // (on the GPU, as for the presenter, and read back; --native-colour high's picture so
                 // too, dithered as the window has it)
                 if (want_pixels) {
@@ -6688,9 +8069,12 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         }
         return ok;
     }
-    // the pipeline cache, written when it has grown (looked at every ten seconds)
-    if (!cache_path.empty() && ++cache_vsyncs % 600 == 0) {
+    // the pipeline cache and the data folder's pipeline list, written when pipelines have been made (looked at
+    // every two seconds)
+    if (!cache_path.empty() && ++cache_vsyncs % 120 == 0 && pw.made.load() != pw.made_saved) {
+        pw.made_saved = pw.made.load();
         save_pipeline_cache();
+        pw_save();
     }
     gsn_stats.targets = gs->targets.size();
     gsn_stats.textures = gs->textures.size();
@@ -6701,6 +8085,8 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     if ((wanted & 0xFF) != target_sx || (wanted >> 8) != target_sy || wanted_samples != target_samples ||
         wanted_colour != target_colour) {
         // every target back to VRAM; they come again at the new size as they are drawn into
+        shadows_resolve_all();
+        shadows.clear();
         for (auto &t : gs->targets) {
             write_back(*t);
         }
@@ -6810,6 +8196,29 @@ extern "C" void gsn_set_layer_z(int mode) {
     layer_z_mode = mode == GSN_LAYER_Z_TOLERANT ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2;
 }
 
+extern "C" void gsn_set_native_draw(int mode) {
+    nd_mode = mode == GSN_NATIVE_DRAW_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE;
+}
+
+extern "C" void gsn_set_standalone(int on) {
+    sa_mode = on; // (taken at the next vblank: gsn_standalone.inc)
+}
+
+extern "C" void gsn_set_scene(int x_scale, int y_scale, int samples) {
+    // (taken when the scene next takes a frame: gsn_standalone.inc, sa_shape)
+    sa_wanted_scale = uint32_t(std::min(std::max(x_scale, 0), GSN_MAX_SCALE_X)) | uint32_t(std::min(std::max(y_scale, 0), 4)) << 8;
+    sa_wanted_samples = uint32_t(std::min(std::max(samples, 0), 8));
+}
+
+extern "C" void gsn_set_scene_map(int map) {
+    sa_set_map(map); // (standalone: --stats per map)
+}
+
+extern "C" void gsn_print_standalone_stats(void) {
+    nd_prep_print_stats(); // (rc/own: native draw's work kept for the pictures between, hosted or modern)
+    sa_print_stats();
+}
+
 extern "C" void gsn_set_colour(int mode) {
     wanted_colour = mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
 }
@@ -6836,6 +8245,7 @@ extern "C" int gsn_display_rect(const uint64_t *privileged, GsnRect *rect) {
 extern "C" void gsn_read_rect(const GsnRect *r, uint32_t *rgba) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone: the scene's turn ends)
     read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba);
     submit(false);
 }
@@ -6843,6 +8253,7 @@ extern "C" void gsn_read_rect(const GsnRect *r, uint32_t *rgba) {
 extern "C" void gsn_read_rect_scaled(const GsnRect *r, uint32_t *rgba, uint32_t *scale) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone)
     read_buffer(r->bp, r->bw, r->psm, r->x, r->y, r->w, r->h, rgba, true, scale);
     submit(false);
 }
@@ -6859,6 +8270,7 @@ extern "C" void gsn_decode_rect(const uint8_t *vram, const GsnRect *r, uint32_t 
 extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone)
     Target *t = find_target(r->bp, r->bw, r->psm);
     if (t && t->sx == 1 && t->sy == 1 && r->x + r->w <= t->width && r->y + r->h <= t->height) {
         msaa_settle(*t);
@@ -6886,6 +8298,8 @@ extern "C" void gsn_write_rect(const GsnRect *r, const uint32_t *rgba) {
 extern "C" const void *gsn_vram(void) {
     ring_idle();
     flush_batch();
+    sa_sync(); // (standalone: captures, save states)
+    shadows_resolve_all();
     for (auto &t : gs->targets) {
         write_back(*t);
     }
@@ -6938,6 +8352,7 @@ extern "C" void gsn_capture(void (*emit)(uint32_t type, const void *data, size_t
         }
     }
     emit(KF4GS_GS_HISTORY, history.data(), history.size());
+    sa_capture(emit); // (standalone: the page-ownership table, when the scene is on)
 }
 
 extern "C" size_t gsn_state_size(void) {
@@ -6951,8 +8366,10 @@ extern "C" void gsn_state(PortStateIo *io) {
         port_state_bytes(io, const_cast<void *>(gsn_vram()), GSN_VRAM_BYTES);
     } else {
         flush_batch();
+        sa_forget();
         end_pass();
         gs->targets.clear();
+        shadows.clear();
         gs->textures.clear();
         texture_index.clear();
         forget_uploads();
@@ -6987,8 +8404,10 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
             return 0;
         }
         flush_batch();
+        sa_forget();
         end_pass();
         gs->targets.clear();
+        shadows.clear();
         gs->textures.clear();
         texture_index.clear();
         forget_uploads();
@@ -7063,8 +8482,20 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         }
         return 1;
     }
+    case KF4GS_SA_TABLE:
+        return sa_table_load(static_cast<const uint8_t *>(data), size) ? 1 : 0; // (standalone)
     }
     return 0;
+}
+
+// (port/platform/gs.c) a save state's page-ownership table, after gsn_state (standalone: gsn_standalone.inc)
+extern "C" size_t gsn_table_state_size(void) {
+    ring_idle();
+    return sa_state_size();
+}
+extern "C" void gsn_table_state(PortStateIo *io, size_t size) {
+    ring_idle();
+    sa_state(io, size);
 }
 
 // ---- The presenter's side (port/platform/present_vk.cpp) ------------------------------------------

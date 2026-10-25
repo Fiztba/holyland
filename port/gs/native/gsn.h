@@ -27,6 +27,11 @@ void gsn_wait(void);
 /* The Vulkan pipeline cache kept in this file: read now (if it is there and this driver's), and
    written again from time to time when pipelines have been made */
 void gsn_pipeline_cache(const char *path);
+/* Pipelines made ahead (gsn_pipeline_warm.inc): begun by gsn_pipeline_cache, on threads of their own. Running: 1 until
+   all are made; building: 1 while those the pipeline cache did not have are made, with how many of how many */
+int gsn_pipelines_running(void);
+int gsn_pipelines_building(int *done, int *total);
+void gsn_print_pipeline_stats(void);
 void gsn_read_fifo(void *dst, uint32_t qwords);
 /* The vblank: the display registers (PMODE..BGCOLOR, a register every 16 bytes), and the picture
    into frame when want_pixels (1 if there is one). With GSN_WANT_IMAGE in want_pixels the picture
@@ -119,6 +124,24 @@ void gsn_set_colour(int mode);
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1
 void gsn_set_layer_z(int mode);
+/* --native-draw-compare (docs/port/NATIVE_DRAW.md, gsn_native_draw.inc): which of the two the frame has
+   for the draws the game makes natively it draws: the native draws (GSN_NATIVE_DRAW_NATIVE, the
+   default; the PS2 path's packets queued for comparison between their marks are left out) or the PS2
+   path's packets (GSN_NATIVE_DRAW_PS2; the native draws left out). From the next draw. */
+#define GSN_NATIVE_DRAW_NATIVE 0
+#define GSN_NATIVE_DRAW_PS2 1
+void gsn_set_native_draw(int mode);
+/* --renderer modern (P8, docs/port/NATIVE_DRAW_P8.md; gsn_standalone.inc): the native draws of the scene's
+   kinds drawn into the scene's own targets (D32F depth, its own colour image, MSAA), their textures from the
+   uploads that own them; the GS draws the rest over it. From the next vblank. gsn_print_standalone_stats:
+   its --stats line. */
+void gsn_set_standalone(int on);
+void gsn_print_standalone_stats(void);
+/* --scene-scale and --scene-msaa (P8 T2, gsn_composite.inc): the scene's own scale, across and down, and samples,
+   apart from the GS's; 0: the GS's. From when the scene next takes a frame. */
+void gsn_set_scene(int x_scale, int y_scale, int samples);
+/* (modern) The map the game is in (MapSlot.tag; -1 none), for --stats' counts a map: at each vblank */
+void gsn_set_scene_map(int map);
 
 /* A rectangle of a GS buffer: base (256-byte blocks), width (64-pixel units), format, place, size */
 typedef struct {
@@ -151,6 +174,10 @@ int gsn_restore(uint32_t type, const void *data, size_t size);
    buffer. Taken between GIF packets. */
 size_t gsn_state_size(void);
 void gsn_state(PortStateIo *io);
+/* (--renderer modern) the page-ownership table (gsn_standalone.inc), after gsn_state: saving, its size
+   (0 with the scene off) and then its bytes; loading, a state's `size` bytes (kept when the scene is on) */
+size_t gsn_table_state_size(void);
+void gsn_table_state(PortStateIo *io, size_t size);
 
 /* A presenter on the native GS's own Vulkan device (port/platform/present_vk.cpp): the window's
    swapchain takes the picture straight from the GPU, with no read-back.
@@ -225,6 +252,8 @@ void gsn_scanout_release(void);
 #define GSN_IM_REFLECT 0x40u /* by the reflection's projection */
 #define GSN_IM_SCALE_ST 0x80u /* its own ST (Q 1/w): S and T scaled, Q made 1/w again */
 #define GSN_IM_XYZF 0x100u   /* 24-bit Z */
+#define GSN_IM_SCREEN_ST 0x200u /* its S and T made from the screen, with the place (frame_interp.c, StPlane):
+                                   H's h0..h5 in w[8..13], h6 in w[15], h7 in w[1] (floats) */
 /* FLAT */
 #define GSN_IM_XY 0x4u
 #define GSN_IM_RGBA 0x8u
@@ -241,6 +270,8 @@ typedef struct {
     float move0[12], mid0[12]; /* GsnInterpPicture's move and mid at t 0 (the camera of the frame shown) */
     uint32_t kicks;        /* the vertex kicks in the stream: moves has one for each */
     uint32_t runs;         /* the runs (model parts) the moves name */
+    uint32_t still;        /* 1: the camera of the frame shown is this frame's, bit for bit (every picture between is
+                              then seen from the frame's camera: gsn_scene_targets.inc's sat_kept) */
     GsnInterpMove *moves;  /* (malloc'd) */
     uint8_t *stream;       /* (malloc'd) GIF packets: a uint32_t path, a uint32_t size, then the bytes */
     size_t stream_bytes;
@@ -269,17 +300,37 @@ typedef struct {
     uint64_t ns_draw_setup, ns_draw_record; /* a draw's state worked out; its Vulkan commands */
     uint64_t ms_resolves, ms_loads; /* --native-msaa: multisampled images resolved, and loaded from their image */
     uint64_t cutout_draws;          /* --native-cutout-aa: draws shaded at every sample */
+    uint64_t shadows, shadows_gone, shadows_resolved; /* write-backs put off, never owed, made later (gsn.cpp, shadows) */
+    uint64_t shadow_reads_covered;  /* textures read over pages owed, all of what they read written since (shadow_covers) */
+    uint64_t writebacks_overwritten; /* write-backs not made: the target under a GPU copy's whole pages (begin_transfer) */
+    uint64_t silhouettes_whole;     /* silhouettes drawn whole, not in runs (flush_batch, "A silhouette") */
     uint64_t layer_draws;           /* --native-layer-z tolerant: batches with layers (flush_batch, "Z and layers") */
     /* --frame-rate's pictures between on the GPU (gsn_interp_picture): drawn from the packets (the first
        of a frame, or again: interp_records), from the recording (interp_replays), and the time each took */
     uint64_t interp_records, interp_replays, interp_misses, ns_interp_record, ns_interp_replay;
     uint64_t interp_mid_submits; /* submits while a picture between is recorded (write-backs in it) */
-    uint64_t interp_rerecord[4]; /* why drawn from the packets again: the GS changed, the recording could not be */
+    /* why drawn from the packets (gsn.cpp, interp_cannot_replay): [1] the GS's targets changed, [2] its registers, [3] the
+       frame's first picture between, [4] the recording could not be made again (a read-back in it), [5] VRAM or the
+       CLUT written since; replays that named a target the recording made and kept, or made and dropped (its own) */
+    uint64_t interp_rerecord[8];
+    uint64_t interp_kept_targets, interp_own_targets;
+    /* graphics pipelines bound (Granite's vkCmdBindPipeline, all of the GS's thread's and the presenter's), and those of
+       the pictures between drawn from the packets and from the recording; the draws of those from the recording */
+    uint64_t pipeline_binds, interp_record_binds, interp_replay_binds, interp_replay_draws;
     /* Why render passes ended, and why multisampled images were resolved (GSN_WHY_*); the bytes the
        passes loaded and stored (their attachments, whole), resolves and copies moved; pictures made */
     uint64_t pass_ends[16], resolves_by[16];
     uint64_t pass_load_bytes, pass_store_bytes, resolve_bytes, copy_bytes, pictures;
     uint64_t blend_copies_in_pass; /* shader blending's copies of the target made in the render pass */
+    /* native draw (gsn_native_draw.inc): draws and batches drawn, draws whose frame was gone or whose
+       program is not drawn yet, meshes put on the GPU, register writes left out (--native-draw-compare) */
+    uint64_t nd_draws, nd_batches, nd_lost, nd_unsupported, nd_mesh_uploads, nd_skipped, nd_arenas;
+    /* (native draw) the CPU plan (nd_plan): its time, the vertices it worked out, and those it found planned
+       already (the same batch by the same matrix: a camera standing still, a picture between) */
+    uint64_t ns_nd_plan, nd_plan_vertices, nd_plan_reused;
+    /* (native draw) pictures between: model parts drawn between their two places (P2-5), strips (the
+       trail) drawn between their two frames' */
+    uint64_t nd_moved_models, nd_moved_strips;
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,

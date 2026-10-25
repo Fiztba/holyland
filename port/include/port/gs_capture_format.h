@@ -9,10 +9,16 @@
    is no smaller (as save states, port/platform/savestate.c).
 
    The body: records, each a Kf4GsRecord and `size` bytes (a multiple of 4), in this order:
-   META, VRAM, GS_REGS, GS_PRIV, GS_HISTORY, VU1, VIF1 (the state at the start, right after the
+   META, VRAM, GS_REGS, GS_PRIV, GS_HISTORY, (SA_TABLE,) VU1, VIF1 (the state at the start, right after the
    scanout of the vblank in META's start_vblank), then the stream: GIF, VIFDATA, VU1_RUN, READ_FIFO
    and VSYNC records in the order they happened, and END. A reader skips record types it does not
-   know. */
+   know.
+
+   Native draw (--native-draw, port/include/port/render.h): the chain's PORT_GS_REG_NATIVE_DRAW writes
+   (GS address 0x7B) name draws in the renderer core's side buffer, which the GIF stream does not hold.
+   ND_MESH and ND_DRAWS records carry them, each before the first GIF or VIFDATA record that can name
+   what it holds: the meshes as the PS2 data blocks they were parsed from (a reader parses them again),
+   and per frame its cameras and draws. A run without native draws has none. */
 #ifndef PORT_GS_CAPTURE_FORMAT_H
 #define PORT_GS_CAPTURE_FORMAT_H
 
@@ -48,6 +54,11 @@ enum {
     /* micro memory (16 KB), data memory (16 KB), then Kf4GsVu1Regs */
     KF4GS_VU1 = 6,
     KF4GS_VIF1 = 7, /* Kf4GsVif1Regs */
+    /* (--renderer modern, P8) the native GS's page-ownership table: which uploads own VRAM's blocks, with
+       their BITBLTBUF, TRXPOS, TRXREG and bytes, so that a replay's scene samples textures from their
+       source from the start (port/gs/native/gsn_standalone.inc, "The table in save states and captures",
+       has the layout). After the GS's records; only in a capture taken with the scene on. */
+    KF4GS_SA_TABLE = 8,
 
     KF4GS_GIF = 16,       /* uint32 path (1, 2, 3), then whole qwords, as handed to the GS */
     KF4GS_VIFDATA = 17,   /* uint32 words, as DMA channel 1 (or libgraph) fed VIF1 */
@@ -56,6 +67,15 @@ enum {
     /* uint64 vblank, uint32 field, uint32 0, then the 0xF0 bytes of PMODE..BGCOLOR (the register
        page from 0x12000000, a register every 16 bytes) */
     KF4GS_VSYNC = 20,
+    /* native draw: Kf4GsNdMesh, then qwords * 16 bytes: the data block (its first qword is the VIF
+       stream's first) as it was when parsed. A mesh's id is given once per capture. */
+    KF4GS_ND_MESH = 21,
+    /* native draw: Kf4GsNdDraws, then cameras Kf4GsNdCamera (the frame's, all of them so far), then
+       count draws, each a Kf4GsNdDraw and its mesh_count mesh ids (uint32, ND_MESH's), and a draw of
+       program 0x280 then its turns (32 floats: RdDraw's turn; none before 0x280 was drawn). The draws are
+       the frame's from index first on; a reader drops any it holds from first on (first 0: the frame
+       begins again) */
+    KF4GS_ND_DRAWS = 22,
 };
 
 #define KF4GS_MSCNT 0xFFFFFFFFu
@@ -97,5 +117,36 @@ typedef struct {
     uint32_t dbf, mskpath3, mark;
     uint32_t reserved;
 } Kf4GsVif1Regs;
+
+/* ---- Native draw's records (the renderer core's, render.h: RdDraw, RdCamera; float bits as they are) */
+typedef struct {
+    uint32_t id; /* what ND_DRAWS names it by (unique in the capture) */
+    uint32_t key; /* rd_mesh_from_block's key (the block's EE address) */
+    uint32_t qwords;
+    uint32_t format; /* RdVertexFormat */
+} Kf4GsNdMesh;
+
+typedef struct {
+    uint32_t serial; /* the frame's (RD_ND_FRAME's, bits 32-55 of a draw's handle) */
+    uint32_t first;  /* the first draw's index in the frame (bits 0-31 of its handle) */
+    uint32_t count;  /* draws that follow */
+    uint32_t cameras; /* cameras that follow */
+} Kf4GsNdDraws;
+
+typedef struct {
+    float world_screen[16], view[16], screen[16];
+    uint32_t mode, projection;
+} Kf4GsNdCamera;
+
+typedef struct {
+    uint32_t kind, id[3], program, flags, camera, mesh_count;
+    float model[16], parent[16], light_dir[16], light_col[16];
+    float fog[4];
+    uint64_t fogcol;
+    int32_t point_count;
+    uint32_t reserved;
+    float point_pos[16], point_col[16];
+    float colour[12];
+} Kf4GsNdDraw;
 
 #endif

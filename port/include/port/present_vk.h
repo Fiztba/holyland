@@ -28,6 +28,14 @@ void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, in
 void port_vk_set_vsync(int on);
 /* (port/overlay/overlay.cpp) Dear ImGui's Vulkan backend on the presenter's render pass: 1 when up */
 int port_vk_imgui_init(void);
+/* The flash recorder (port_options.flash_seconds; docs/port/README.md "Debugging"): each picture presented
+   is copied, scaled to port_options.flash_height rows, into a ring of images on the GPU. Writes the ring's
+   pictures, oldest first, as folder/NNNN.png and folder/pictures.txt, on a thread of its own (the ring
+   stops taking pictures until they are written, then port_debug_set_message says so): the number of
+   pictures it will write, or 0 with why not in why. Any thread. */
+int port_vk_flash_write(const char *folder, char *why, size_t size);
+/* What the ring holds now: pictures, their size, and the GPU memory it takes (MB); 1 while writing */
+int port_vk_flash_info(int *pictures, int *width, int *height, double *megabytes);
 #endif
 
 #ifdef __cplusplus

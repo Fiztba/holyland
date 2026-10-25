@@ -68,7 +68,10 @@ typedef enum {
     ACTION_GS_CAPTURE,    /* the debugging tools (port/include/port/debug.h): F9, F10, F12 */
     ACTION_STATE_DUMP,
     ACTION_AUDIO_TAIL,
+    ACTION_FLASH_RECORD,  /* the flash recorder (port/include/port/debug.h): F8 */
     ACTION_SHOW_FPS,      /* the frame-rate counter shown or hidden (port_options.show_fps): F3 */
+    ACTION_STATS_PANEL,   /* the extended stats mod's panel shown or hidden (port/include/port/stats.h): F6 */
+    ACTION_MAP,           /* the automap mod: the full map opened or closed (port/include/port/automap.h): M */
     ACTION_COUNT
 } PortAction;
 

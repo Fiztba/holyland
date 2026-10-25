@@ -34,6 +34,15 @@ typedef struct {
     int renderer_shown;
     int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
     int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
+    /* --renderer modern (P8, docs/port/NATIVE_DRAW_P8.md): the native GS, with the scene's native draws (map
+       records and items: --native-draw map,sky,items unless it says otherwise) drawn into the scene's own
+       targets (gsn_set_standalone); never saved */
+    int renderer_modern;
+    /* --scene-scale, --scene-msaa (P8 T2): with --renderer modern, the scene's own scale (1 to 4; with
+       --native-widescreen and widescreen, 4/3 of it across) and samples (1, 2, 4, 8), apart from the GS's
+       (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */
+    int scene_scale;
+    int scene_msaa;
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
        the default, a swapchain on the native GS's own device (port/platform/present_vk.cpp), with the
        native GS's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the
@@ -140,6 +149,30 @@ typedef struct {
     int show_fps;
     int show_fps_forced;     /* --show-fps: on for this run whatever settings.json says */
     int invincible;          /* --invincible, or the Debug page: no HP lost (port_invincible()); never saved */
+    /* --flash-recorder (port/platform/present_vk.cpp, docs/port/README.md "Debugging"): the Vulkan presenter
+       keeps the last flash_seconds of presented pictures in a ring on the GPU, each flash_height rows high
+       (its width the picture's shape), for the flash recorder's key (F8); 0 seconds: off. Live from the
+       overlay's Debug page; never saved */
+    float flash_seconds;
+    int flash_height;
+    /* --native-draw (port_native_draw(), port/include/port/host.h; docs/port/NATIVE_DRAW.md): which kinds
+       of the game's draws go to the renderer core instead of VU1 and the GS's packets, PORT_ND_* bits (0,
+       off, by default: the PS2 path, the game byte for byte as without it). --native-draw-compare: the PS2
+       path's packets queued too, and which of the two the native GS draws (PORT_ND_COMPARE_*; 0 none).
+       Both live from the overlay's Debug page. Of the kinds only the switch for the whole path is saved:
+       settings.json's "native_draw", on (PORT_ND_ACCEPTED) or off, also the overlay's Renderer section. */
+    int native_draw;
+    int native_draw_forced; /* --native-draw: this run's, whatever settings.json says */
+    int native_draw_compare;
+    /* --native-wave-uvs (port_native_wave_uvs(), port/include/port/host.h): how a native map record's wave
+       UVs (flag 0x100) are drawn, PORT_WAVE_UVS_*; never saved. --test-dma-wait (port_test_dma_wait()):
+       tests only, the packet chain sent and waited for at once (no race with the next frame's update) */
+    int native_wave_uvs;
+    int test_dma_wait;
+    /* --sky (port_native_sky(), port/include/port/host.h): how the native sky is drawn, PORT_SKY_*; settings.json
+       display.native_sky, live from the overlay's Debug page */
+    int native_sky;
+    int native_sky_forced; /* --sky: this run's, whatever settings.json says */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
@@ -366,6 +399,9 @@ void port_gs_set_native_2d(int mode);
 void port_gs_set_native_colour(int mode);
 /* The native GS's Z (port_options.native_layer_z), from the next draw */
 void port_gs_set_native_layer_z(int mode);
+/* --native-draw and --native-draw-compare (port_options.native_draw, native_draw_compare), from the next
+   frame */
+void port_gs_set_native_draw(int kinds, int compare);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {
@@ -397,6 +433,10 @@ void port_gs_post_vsync(void);
 void port_gs_finish(void);
 /* The controller's side: a vblank is queued; scan it out. */
 int port_gs_vsync_pending(void);
+/* The native GS's pipelines made ahead at the start (docs/port/RENDERER.md, "Pipelines made ahead"): 1 while they
+   are made (running), and while those not in the pipeline cache are (building: how many of how many); any thread */
+int port_gs_shaders_running(void);
+int port_gs_shaders_building(int *done, int *total);
 void port_gs_run_vsync(void);
 
 /* --frame-rate (port/platform/frame_interp.c), on the controller's thread: each GIF packet sent to the
@@ -419,6 +459,9 @@ int port_interp_active(void);
    vblank's own, at 0, among them when it is shown) */
 int port_frame_rate_hz(void);
 int port_interp_schedule(uint64_t vblank, double *phases, int max);
+/* (port/platform/gs.c) The pictures between a vblank the renderer leaves out now because it fell behind
+   (0: none; the F3 counter's "CUT") */
+int port_interp_cut(void);
 void port_interp_reset(int whole);
 void port_interp_forget(void);
 void port_interp_print_stats(void);
@@ -501,6 +544,8 @@ void port_disc_open(const char *path);
 /* Finds a file by its ISO 9660 path ("\DATA\KF4.DAT;1", any case, the version optional):
    1 and its first sector and size, or 0. */
 int port_disc_find(const char *path, uint32_t *lsn, uint32_t *size);
+/* Finds a member of KF4.DAT by its name ("097.map", any case): 1 and its first sector and size, or 0. */
+int port_disc_find_member(const char *name, uint32_t *lsn, uint32_t *size);
 /* Reads sectors into buffer; 0 when they are past the end of the disc. */
 int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
 /* The name of the file a sector belongs to, for the log (NULL: none). */

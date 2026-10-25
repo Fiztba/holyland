@@ -487,7 +487,7 @@ int port_video_counter_shown(void) {
 
 #ifdef KF4_HAVE_SDL
 /* 5 x 7 glyphs, a row a byte (bit 4 the left column), for what the counter says */
-static const char counter_chars[] = "0123456789FPSGAME ";
+static const char counter_chars[] = "0123456789FPSGAMECUT ";
 static const uint8_t counter_glyphs[][7] = {
     {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
     {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}, {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E},
@@ -497,7 +497,9 @@ static const uint8_t counter_glyphs[][7] = {
     {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}, {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10},
     {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}, {0x0F, 0x10, 0x10, 0x17, 0x11, 0x11, 0x0F},
     {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11},
-    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}, {0, 0, 0, 0, 0, 0, 0},
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}, {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E},
+    {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}, {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
+    {0, 0, 0, 0, 0, 0, 0},
 };
 
 /* The counter's size in a picture `height` pixels high: a glyph's pixel, and the margin to the
@@ -537,11 +539,17 @@ static void counter_line(void (*fill)(void *, int, int, int, int, unsigned int),
 }
 
 /* The counter's lines: the pictures shown a second; and the game's own frames a second when they
-   differ (the pictures between of --frame-rate, or a vblank's picture shown twice) */
+   differ (the pictures between of --frame-rate, or a vblank's picture shown twice), with "CUT N" while
+   the renderer, behind, draws N pictures between a vblank fewer (port_gs_run_vsync's cut) */
 static int counter_text(char lines[2][24]) {
     double pictures = port_video_pictures_per_second(), frames = port_video_frames_per_second();
+    int cut = port_interp_cut();
 
     snprintf(lines[0], sizeof(lines[0]), "%.0f FPS", pictures);
+    if (cut > 0) {
+        snprintf(lines[1], sizeof(lines[1]), "%.0f GAME CUT %d", frames, cut);
+        return 2;
+    }
     if (fabs(pictures - frames) >= 1.5) {
         snprintf(lines[1], sizeof(lines[1]), "%.0f GAME", frames);
         return 2;

@@ -107,6 +107,7 @@ add_library(kf4_port STATIC
     port/platform/quicksave.c
     port/platform/teleport.c
     port/platform/cheats.c
+    port/platform/automap.c
     port/platform/lz4_block.c
     port/debug/debug.c
     port/debug/gs_capture.c
@@ -127,6 +128,13 @@ add_library(kf4_port STATIC
     port/audio/sdrdrv.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_include_directories(kf4_port PRIVATE third_party/cjson)
+# native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the native
+# GS draws them (docs/port/NATIVE_DRAW.md)
+enable_language(CXX)
+add_library(kf4_render STATIC port/render/render.cpp)
+target_include_directories(kf4_render PUBLIC port/include)
+set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
+target_link_libraries(kf4_port PUBLIC kf4_render)
 target_link_libraries(kf4_port PUBLIC ico_audio)
 target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
@@ -173,7 +181,7 @@ if(KF4_USE_SDL AND SDL2_FOUND)
     endif()
     target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
-    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp)
+    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/automap_view.cpp)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
@@ -190,11 +198,21 @@ option(KF4_USE_PARALLEL_GS "Draw with paraLLEl-GS (third_party/parallel-gs)" ON)
 if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/volk/volk.h)
     enable_language(CXX)
     set(PARALLEL_GS_STANDALONE ON CACHE BOOL "" FORCE)
+    # Granite with the depth bounds test (cmake/granite_depth_bounds.cmake: made in its checkout)
+    include(cmake/granite_depth_bounds.cmake)
+    kf4_granite_depth_bounds(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with dynamic state for the native GS's draws (cmake/granite_dynamic_state.cmake, after the above)
+    include(cmake/granite_dynamic_state.cmake)
+    kf4_granite_dynamic_state(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with the hooks of the native GS's pipeline list (cmake/granite_pipeline_warm.cmake, after the above)
+    include(cmake/granite_pipeline_warm.cmake)
+    kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # and the native GS (port/gs/native/), on the same Vulkan layer
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp port/gs/native/gsn.cpp port/gs/native/gsn_vram.c)
     target_include_directories(kf4_gs PRIVATE port/include PUBLIC port/gs/native)
     target_link_libraries(kf4_gs PRIVATE parallel-gs)
+    target_link_libraries(kf4_gs PUBLIC kf4_render)
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
@@ -317,9 +335,15 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/quicksave.c game/cheats.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/cheats.c game/automap.c game/automap_guide.c game/screen_fx.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
+# the extended stats mod (port/include/port/stats.h, docs/port/EXTENDED_STATS.md)
+target_sources(game_data PRIVATE game/stats.c)
+target_sources(kf4_port PRIVATE port/overlay/stats_mod.c)
+if(TARGET imgui)
+    target_sources(kf4_port PRIVATE port/overlay/stats_panel.cpp port/overlay/stats_menus.cpp)
+endif()
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")
@@ -380,7 +404,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # kf4-gsreplay draws a GS frame capture again (tools/gsreplay): the GIF stream, or the VIF1 stream
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
-    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c port/platform/vif1.c port/platform/vu1.c
+    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c tools/gsreplay/nd_oracle.c tools/gsreplay/nd_oracle_280.c tools/gsreplay/nd_oracle_700.c port/platform/vif1.c port/platform/vu1.c
         port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})

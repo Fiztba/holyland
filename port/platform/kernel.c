@@ -39,6 +39,7 @@
 #include "port/savestate.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
+#include "port/render.h"
 
 #define MAX_THREADS 64
 #define MAX_SEMAS 64
@@ -297,14 +298,46 @@ static int bad_cause(int cause) {
 
 /* ---- Time ------------------------------------------------------------------------------------ */
 static double pace_start_wall;
+static int play_started; /* (the first native draw has been made: vblank_start) */
 
 static void wake_vsync_waiters(void);
 static void frame_end(void);
+
+/* KF4_HITCH_MS=N (measure): a vblank that came over N ms after the one before, on the game's thread */
+extern double port_hitch_disc_ms;
+extern uint64_t port_hitch_disc_bytes;
+static void hitch_vblank(void) {
+    static int ms = -1;
+    static double last, disc0, hash0;
+    static uint64_t bytes0, parsed0;
+    double now;
+
+    if (ms < 0) {
+        const char *e = getenv("KF4_HITCH_MS");
+        ms = e ? atoi(e) : 0;
+    }
+    if (!ms) {
+        return;
+    }
+    now = port_wall_seconds();
+    if (last && (now - last) * 1e3 > ms) {
+        fprintf(stderr, "[hitch] game vblank %llu: %.1f ms; disc %.1f ms %llu KB; nd parsed %llu, hashed %.0f KB\n",
+                (unsigned long long)vblank_count, (now - last) * 1e3, port_hitch_disc_ms - disc0,
+                (unsigned long long)((port_hitch_disc_bytes - bytes0) >> 10),
+                (unsigned long long)(rd_stats.meshes_parsed - parsed0), (rd_stats.hash_bytes - hash0) / 1024.0);
+    }
+    last = now;
+    disc0 = port_hitch_disc_ms;
+    bytes0 = port_hitch_disc_bytes;
+    parsed0 = rd_stats.meshes_parsed;
+    hash0 = (double)rd_stats.hash_bytes;
+}
 
 static void vblank_start(void) {
     volatile uint64_t *csr = EE_HW(volatile uint64_t *, 0x12001000);
     uint32_t mode;
 
+    hitch_vblank();
     vblank_count++;
     /* the GS scans out the field the display registers say, alongside the game. It is the field
        CSR's FIELD names until now: the GS turns FIELD over a few lines into the vblank, after the
@@ -346,12 +379,32 @@ static void vblank_start(void) {
     /* the pad (mouse look), the window and the overlay are the host's: its float mode */
     mode = port_host_float_begin();
     port_pad_poll();
+    port_overlay_vblank();
     port_video_present();
     port_host_float_end(mode);
     port_teleport_vblank();
     port_quick_vblank();
     /* the settings overlay can hold the game while it is open: EE time stands still, and the pacing
        starts again from here. A save state asked for meanwhile is taken below, at once. */
+    /* the native GS's pipelines made ahead (docs/port/RENDERER.md, "Pipelines made ahead"): when play starts (the
+       first native draw) the game waits for the rest, "Building shaders" in the window, rather than for each as a draw
+       first needs it */
+    if (!play_started && rd_stats.draws > 0) {
+        play_started = 1;
+        if (port_gs_shaders_running()) {
+            double t0 = port_wall_seconds();
+
+            mode = port_host_float_begin();
+            while (port_gs_shaders_running() && !port_state_wanted()) {
+                port_sleep(1.0 / 60.0);
+                port_pad_poll();
+                port_video_present();
+            }
+            port_host_float_end(mode);
+            pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+            fprintf(stderr, "[gsn] play waited %.2f s for the pipelines made ahead\n", port_wall_seconds() - t0);
+        }
+    }
     if (port_overlay_paused()) {
         mode = port_host_float_begin();
         while (port_overlay_paused() && !port_state_wanted()) {

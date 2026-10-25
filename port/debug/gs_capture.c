@@ -11,7 +11,12 @@
    Cost. Unused, the hooks in port/platform/gs.c and vif1.c test a flag and nothing else. While it
    records, every GIF packet and VIF1 word is copied into memory; the file is compressed and written on
    the controller's thread when the capture ends (the game stops for that long, a fraction of a
-   second). Nothing it does changes what the game or the GS do. */
+   second). Nothing it does changes what the game or the GS do.
+
+   Native draw. The chain's writes to PORT_GS_REG_NATIVE_DRAW name draws in the renderer core's side
+   buffer (port/include/port/render.h): before each GIF or VIF1 record, what was added to it since is put
+   in records of its own (rd_capture_poll: KF4GS_ND_MESH, KF4GS_ND_DRAWS), so the file holds every draw
+   before the writes that name it. Without native draws there are none. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +26,7 @@
 #include "port/host.h"
 #include "port/lz4_block.h"
 #include "port/platform.h"
+#include "port/render.h"
 #include "port/savestate.h"
 
 #if __has_include("build_rev.h")
@@ -102,6 +108,16 @@ int port_gs_capture_init(const char *list) {
     return capture_at_count;
 }
 
+static char capture_folder[1100]; /* (port_debug_request_gs_capture_into) the next capture's folder */
+
+void port_debug_request_gs_capture_into(const char *folder) {
+    if (port_debug_gs_capture_busy()) {
+        return; /* (one is coming already: it goes where it was asked for) */
+    }
+    snprintf(capture_folder, sizeof(capture_folder), "%s", folder);
+    port_debug_request_gs_capture();
+}
+
 void port_debug_request_gs_capture(void) {
     if (!port_gs_enabled()) {
         port_debug_set_message("no GS capture: nothing is drawn in this run (no renderer)");
@@ -178,10 +194,12 @@ static void put(uint32_t type, const void *data, size_t size) {
 void port_gs_capture_gif(int path, const void *data, size_t bytes) {
     uint32_t p = (uint32_t)path;
 
+    rd_capture_poll(put2);
     put2(KF4GS_GIF, &p, 4, data, bytes);
 }
 
 void port_gs_capture_vif1(const uint32_t *words, size_t count) {
+    rd_capture_poll(put2);
     put(KF4GS_VIFDATA, words, count * 4);
 }
 
@@ -240,7 +258,7 @@ static void start(uint64_t vblank, int vblanks) {
     snprintf(meta, sizeof(meta),
              "format=kf4gs %d\nstart_vblank=%llu\nvblanks=%d\ngame_vblank=%llu\ngame=%.511s\nbuild=%s (%s %s)\n"
              "deinterlace=%d\nprogressive=%d\nanti_blur=%d\nadapt_width=%d\nwidescreen=%d\n"
-             "widescreen_hud_centred=%d\nwhole_frame=%d\n",
+             "widescreen_hud_centred=%d\nwhole_frame=%d\nflicker_filter=%d\n",
              KF4GS_VERSION, (unsigned long long)vblank, vblanks, (unsigned long long)best, game, KF4_BUILD_REV,
              __DATE__, __TIME__, port_options.deinterlace, port_options.progressive, port_options.anti_blur,
              port_options.adapt_width, port_options.widescreen, port_options.widescreen_hud_centred,
@@ -266,6 +284,7 @@ static void start(uint64_t vblank, int vblanks) {
         free(block);
     }
     put(KF4GS_VIF1, &vif, sizeof(vif));
+    rd_capture_begin();
     start_vblank = vblank;
     vsyncs_left = capture_vblanks = vblanks;
     port_gs_capture_recording = 1;
@@ -332,7 +351,12 @@ static void finish(void) {
 
     put(KF4GS_END, NULL, 0);
     port_gs_capture_recording = 0;
-    port_debug_capture_path("gs", start_vblank + 1, "kf4gs", path, sizeof(path));
+    if (capture_folder[0]) {
+        snprintf(path, sizeof(path), "%s/gs_%06llu.kf4gs", capture_folder, (unsigned long long)start_vblank + 1);
+        capture_folder[0] = 0;
+    } else {
+        port_debug_capture_path("gs", start_vblank + 1, "kf4gs", path, sizeof(path));
+    }
     if (write_file(path)) {
         port_debug_set_message("GS capture of vblanks %llu to %llu written: %s (%.1f MB in memory, %llu records)",
                                (unsigned long long)start_vblank + 1,

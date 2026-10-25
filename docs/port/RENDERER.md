@@ -22,6 +22,7 @@ draws instead when the native GS cannot start.
 | `port/platform/video.c` | the window, SDL_Renderer, frame pacing and dumps |
 | `port/platform/vu1.c`, `vu1_hle*.c` | the VU1 interpreter and the four programs in C (bit for bit the interpreter's) |
 | `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times. With the native GS alone the pictures are drawn on the GPU: the frame walked once, its draws recorded once, each picture the recorded calls again with its vertices moved by compute (`shaders/gs_replay*.comp`; STEP3.md, "On the GPU") |
+| `port/render/`, `game/native_draw/`, `port/gs/native/gsn_native_draw.inc` | native draw (`--native-draw`, in work on branch `native/draw`): the game's draws handed to a renderer core and drawn by the native GS with a vertex shader doing VU1's maths (NATIVE_DRAW.md, NATIVE_DRAW_TASKS.md) |
 | `tools/gsreplay/` | `kf4-gsreplay`: a GS capture (F9) drawn again by either renderer, compared draw by draw and picture by picture |
 
 ## The rules
@@ -95,14 +96,68 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   1024 x 512 texture, which runs on round VRAM's end into their field buffers: taken whole, every field
   sent both field buffers back to VRAM and decoded the texture again, 30 ms a vblank, the menus at 20 to 40
   vblanks a second (at every frame rate, since before the render passes).
-- **The menus' fields at a scale are woven a row at a time** (`weave_fine`, whole frames on): field p's row
-  r of h x sy is the picture's line 2 r / sy + p, so its rows go to rows 2 r + p sy. Woven a line (sy rows)
-  at a time, each band held a line drawn over twice the height, the other field's half a line off: the
-  menus' text in stripes of three rows at 3x. `--no-whole-frame` (two moments) keeps the lines.
+- **The menus' fields at a scale are field 0's rows, each twice** (`weave_fine`, whole frames on; a field 1
+  vblank reads the other buffer, field 0 of the same moment). Woven a line (sy rows) at a time, each band
+  held a line drawn over twice the height (the text in stripes of three rows at 3x); woven a row at a
+  time, what the game draws alike in both fields (the item models: `Menu_DrawItemModel`'s fixed
+  XYOFFSET_2, which field_frames.c no longer moves by the half line either) was combed half a line apart,
+  and taking the vblank's own field made it jump half a line every vblank at 4x. `--no-whole-frame` keeps
+  the lines.
+- **A copy of the frame is made again in the pictures between when the frame reads it after**, and not
+  when it reads it before: but a read before that only reads what the frame uploaded there first is not
+  one (`flat_copies`). Under water the wobble copies the frame over VRAM the frame's textures came through
+  earlier: counted as a read of the copy, the pictures between drew the wobble from those textures (noise
+  and bands of light over the screen, since the pictures between began).
+- **A picture between's own targets** (`replay_only`: made, and drawn into since, only by a picture between)
+  go without a write-back when dropped (VRAM keeps the game's), and stay over a transfer into them, the
+  pages under it taken from VRAM after it. A write-back of a target at a scale reads only the middle
+  pixel of each GS pixel back, taken on the GPU (a blit): at 4x a 640 x 448 target was 27 MB.
+- **The pictures between are cut when the native GS falls behind**: a native GS thread a vblank behind at
+  two vblanks' starts in a row takes one picture between a vblank away (at 240: 3, 2, 1, none), the ones kept
+  spread over the vblank; it gives one back after half a second without falling behind (longer, to 8 s, when it
+  falls behind again at once). So a place that costs more than the thread has keeps the game's own frames and as
+  many pictures as fit, not a cliff to 60 (gs.c; `--stats`: "cut to fewer a vblank"; the F3 counter: "CUT N").
+  Under water each picture between once cost more than a vblank (the wobble's copies and their write-backs) and
+  the game ran at 13 frames a second; that is fixed at the source (NATIVE_DRAW_P8.md, "240 at the owner's spots").
+- **The near cut's pieces are paired by nearest, both ways** (`frame_interp.c`, `objects_pair`). A map
+  record that crosses the guard band is sent again by the CPU as 16 smaller triangles a triangle
+  (`ModelScreen_CutClippedTriangles`), new batches every frame, so they are paired with the frame before's
+  by their shape and place, not their batch. Many look alike side by side; taken as the first look-alike in
+  the window, each paired with its neighbour a hundred or more units away when one came or went, and the
+  pictures between drew them flying in from the screen's edges: dark shards in the doorway to the shop on
+  map 000, a game frame's pictures between at a time, hosted and modern alike (the owner's F9 captures could
+  not show it: they hold the game's packets, not the pictures between). Now the nearest, only when it is the
+  nearest to this run in turn, and in the world within a quarter of the run's distance from the eye.
+- **What the frame did not draw, a picture between cannot show** (open). Walking backward out of the doorway
+  on 000, and turning on the stairs (`bugs_modern`'s `quick_stairs`: the owner's vanishing walls), a game
+  frame's pictures between show the clear colour in a wedge or strip at a screen edge. The PS2 path's
+  pictures between do the same, hosted too; on the stairs only with `--native-widescreen` (the wider view
+  brings the walls beside the eye into the picture). Most likely the near cut's pieces still out of the GS's
+  range, dropped by VU1 (ADC) in the frame, which the picture's camera would see (not proven piece by piece). Native draw could clip those triangles on the GPU instead of the CPU's cut (NATIVE_DRAW_TASKS.md,
+  P1-4's `--clip gpu` design, the owner's decision).
+- **Finding a picture that is wrong for a moment**: the flash recorder (F8, `--flash-recorder`; README.md,
+  "Debugging") keeps the last 2 seconds of presented pictures on the GPU (`present_vk.cpp`, `flash_take`:
+  one blit a picture into a ring of 540-row layers, 5.4 us at 240 at 4x) and writes them out with a GS
+  capture and saves; `tools/flash_find.py` flags the pictures that differ from both neighbours, up to 8
+  pictures away (a flash lasting a game frame's pictures between), counting only solid 3 x 3 areas off so
+  that the edges a turn moves do not count. Headless, the same on `--dump-frames` pictures: every vblank of a
+  range with `--frame-rate 240` writes `frame_V.png` and `frame_V_250.png`... (`--dump-present 1280x720` keeps
+  them small); `KF4_INTERP_CPU=1` takes the pictures between off the GPU (the CPU's walk, where
+  `objects_pair`'s decisions can be printed).
+- **Meshes the CPU projects itself** (PATH2 triangles with Z varying and S, T near one projective map of
+  the screen's X, Y, Q 1: the pools' reflecting surfaces) are moved with the camera as the world is, S and
+  T with their place on the screen (`item_mesh`, `StPlane`; GSN_IM_SCREEN_ST on the GPU). Paired as 2D
+  they kept the frame's Z while the basin under them moved, and failed their Z test: black wedges across
+  the pools while the camera turned.
 - **The 2D at a larger scale** (`--native-2d smooth`, the default): magnified 2D textures read with a
   cubic at the pixel's own place, moved half a GS pixel on (a filter centres a texel where nearest at the
   GS pixel's integer point has its left edge: unmoved, the letters sat half a GS pixel right). Read
   nearest at the integer point, each texel was a block and the letters differed from scale to scale.
+  The cubic's 4 x 4 taps are kept inside the texels the game gave each sprite (texel_rect_2d, before
+  flat_2d moves the corners): the font is a sheet of 10 x 20 cells, and taps past a letter's cell read the
+  letters beside and below it, faint ticks, dots and specks at the letters' edges (the owner's "Idol of
+  Sorrow"). Not the texels the PS2 reads at its integer points: a cell's last column, which the PS2 skips
+  at 1.33 texels a pixel, can hold the letter's edge.
 - **A picture between recorded on the GPU must not be submitted half drawn without its moves.** Its
   compute passes (the kicks moved, the corners made) are recorded at its start and read what the stream
   writes into mapped buffers as it goes, the corners' count last. A write-back in the middle (an upload
@@ -111,6 +166,25 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   the HUD gone, black, or textures across the screen, in main since the pictures between went to the GPU.
   `submit` now writes the count so far, flushes, and runs the passes again after (`--stats`: "submits
   while recording").
+- **A write-back is put off** when an upload or a copy writes part of a target in another shape
+  (`gsn.cpp`, "Write-backs put off"): the target becomes a shadow of its pages, the bits written over them
+  are noted (the transfer done again into `shadow_mask` with every bit set), a page written over whole is let
+  go, and a page still owed goes back only when its VRAM is wanted (`claim_pages`, `load_target_rect`, another
+  write-back, a save state), what was written since put back over it. Anything new that reads the CPU's VRAM
+  must go through `claim_pages` (or call `shadow_resolve`) first. Map 060's shop: 251 write-backs to none
+  (`--stats`: "write-backs put off"); `KF4_GSN_SHADOWS=0` brings them back. A texture decoded from VRAM over
+  a page still owed leaves it owed when every bit it reads was written since (`claim_texture`, `shadow_covers`:
+  the MP drain's effect textures over the wobble's copy, a write-back a frame; `KF4_GSN_SHADOW_READS=0` to
+  compare), and an upload of whole pages sets their mask whole without swizzling into it.
+- **The exact restore draws nothing into the frame** (`frame_interp.c`, `exact_kick`). After a vblank's pictures
+  between, a buffer the next frame reads before it draws it (the scrolling textures, the reflection) is drawn
+  again as the frame left it, by walking the frame once more (`port_interp_end_vblank`). What it would draw into
+  the frame goes into the buffer shown, which the next frame clears and no vblank shows, so its vertices into
+  the frame get ADC and native draw's draws into it are left out. The 3D was meant to be left out from the
+  start, but the bit set was the qword's 127th, not ADC (111): every restore drew the frame again, with native
+  draw the whole world, and under the MP drain's wobble (the Queen's Palace) its wobble read a copy of the frame
+  the restore does not make, from VRAM (1024 x 512 decoded, the frame written back): the game at 14 frames a
+  second at 240 (NATIVE_DRAW_P8.md, "The Queen's Palace"). `KF4_INTERP_RESTORE_FRAME=1` draws it as before.
 - **ZTE 0 means no Z at all**: no test, no write, no depth target, whatever ZBUF says. The movie's
   sprite has ZBUF pointing at the decoded picture.
 - **Texel coordinates** are snapped as `floor(tc * 16 + 1/64)`; bilinear ties round up; fog is a
@@ -120,7 +194,19 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   As above 0x80. Overlapping primitives in such a batch are drawn in runs that don't overlap, each
   with its own copy: kept in the render pass (an input attachment), or with MSAA resolved by the run's
   pass into the copy the next run reads (STEP3.md, "Render passes"). A copy outside the pass costs a
-  pass's end and beginning: the shadows' silhouettes are ~240 runs a picture.
+  pass's end and beginning. A silhouette (the shadows: DATE, FBA, one colour, no Z written) is drawn
+  whole, its triangles all making the same pixel (with MSAA its inner seams go: `KF4_GSN_SILHOUETTE_RUNS=1`
+  for the runs), and a multisampled 16-bit target's copies are made in the pass (whole-number means: the
+  pond's reflection). A tie's passes are drawn whole too (STEP3.md, "Hot spots at 240"). In modern a run of
+  the scene's own corners is copied by its own triangles (its vertex shader, rasterized conservatively:
+  `sa_copy_run.frag`), not over its box, which in a picture between is the whole scene for a skinned
+  model (NATIVE_DRAW_P8.md, "GPU cost at the owner's spots").
+- **A skinned model's parts are drawn together** in modern (`sa_group_draw`): each part's first pass and shine
+  were batches of their own; the parts whose draws are simple are kept and drawn as the model's first passes, then
+  its shines last part first, each part marking its front pixels in the stencil so no shine lands on a later part
+  at the same depth: the same pixels (NATIVE_DRAW_P8.md, "A skinned model's parts drawn together"). The 0x280 plan
+  is made with SSE rounded toward zero (VU1's arithmetic, `nd280_plan_fast`), and the two CLUTs a skinned model's
+  parts load in turn are kept.
 - **NVIDIA's MSAA resolve is not a function of the samples.** Its mean of two 8-bit samples rounds a
   half up or down depending on more than the two values, so no shader reproduces `vkCmdResolveImage`;
   a render pass's resolve attachment does (8-bit; not 16-bit). Exactness at MSAA means resolving.
@@ -129,7 +215,43 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   or a barrier it needs can be left out.
 - **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
   of work, and `--stats` says why render passes ended and what resolves were for. Another program on
-  the GPU (a second run of the game) shows up in those times: run alone.
+  the GPU (a second run of the game) shows up in those times: run alone. `KF4_GSN_GPU_TIME=2` also
+  splits the render passes by what they draw (the scene's colour and Z-first draws, shader blending's
+  copies and runs, in the frames and in the pictures between, the reflection's, the skinned groups,
+  the GS's own batches...), the replays too (the marks are recorded), with the draws and triangles a
+  picture of each; each mark waits for the work before it, so read them as shares. A fresh data
+  folder has no pipeline cache: a timing run that compiles pipelines (`Stalled compile` lines, seconds
+  each) is not a timing run (the pipelines made ahead take most of them out: below).
+- **Pipelines made ahead** (`gsn_pipeline_warm.inc`, `cmake/granite_pipeline_warm.cmake`, branch `p8/warmup`). A
+  Vulkan pipeline is made when a draw first needs it. Made from nothing, one of the GS's big fragment shaders takes
+  NVIDIA's compiler 2-4 seconds, and the GS's thread waits: that was the owner's "frozen 1-2 seconds the first time I
+  walk into an area". The driver's own disk cache (`%LOCALAPPDATA%\NVIDIA\GLCache`, kept over a reboot) cannot be
+  counted on: it is kept per program (a renamed kf4.exe starts empty) and this machine's was at its 1 GB limit,
+  evicting; ours (`native_gs_pipelines.bin`) has only what was made before. So every pipeline Granite makes is written down (a hook
+  in `build_graphics_pipeline`/`build_compute_pipeline`: its shaders by SPIR-V hash and resource layout, its
+  compatible render pass by the attachments' formats and samples, its state words), into a list shipped in the
+  program (`gsn_pipeline_list.h`, made by `tools/pipeline_list.py` from map tours: `map_tour.py --renderer modern
+  --turn --extra "..."`) and, for pipelines that list lacks, the data folder's `native_gs_pipeline_list.txt` (the
+  log says `a pipeline not on the list was made in play`). At the start (`gsn_pipeline_cache`) the lines tagged with
+  the settings in use (`pw_tag`: MSAA, cut-out AA, colour, the scene and its samples) are made again on threads of
+  their own, each checked against the hash Granite would look it up by (a line from another build that no longer
+  makes the same pipeline is skipped, `stale`): first with `FAIL_ON_PIPELINE_COMPILE_REQUIRED` (those in the
+  pipeline cache: about a millisecond each), then the rest, "Building shaders... N/M" in the window's corner. They go
+  into Granite's own table, so a draw finds them made. Play waits for the rest when it starts (the first native draw,
+  `kernel.c`), with the note shown; a draw that needs one not made yet still makes it then (as before). The
+  pipeline cache file and the list are written two seconds after pipelines are made, and at exit (before, the cache
+  only every ten seconds, never at exit). `KF4_GSN_WARM=0` makes nothing ahead, `KF4_GSN_WARM_THREADS=N`; `--stats`
+  prints `pipelines made ahead`. Make the shipped list again after a shader or Granite change (its lines then come
+  out stale, and the data folder's list fills in).
+- **Finding hitches:** `KF4_HITCH_MS=N` prints each vblank whose work on the GS's thread took over N ms (`[hitch] gs
+  vblank`: by record kind, with the pipelines made by draws that waited, texture decodes, uploads, native draw's
+  meshes put on the GPU), and each vblank the game's thread reached over N ms after the one before (`[hitch] game
+  vblank`: disc reads, meshes parsed and hashed). With `KF4_PRESENT_SIM` and `KF4_PRESENT_LOG` for the gaps in what
+  would be shown.
+- **A uniform buffer read at an index each pixel works out is slow.** The pixels a GPU shades together
+  read a uniform buffer one distinct index after another; the CLUT (each texel's own entry, four a
+  bilinear read, more with mipmaps and anisotropy) cost about 1.4 ms of 5 a picture at the owner's
+  settings. It is a storage buffer now (`gs_frag.h`'s `Clut`).
 - **A larger `--native-scale` is not just more pixels.** A GS pixel is drawn when its integer point
   is inside; a target pixel at scale N samples the middle of its own area, half of which is left of
   that point for the GS pixel's first pixels. So 2D (sprites from 0, or ending at 127.5) loses or gains
@@ -140,6 +262,29 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   textured in perspective (ST with a Q not 1: `perspective_batch`): a far billboard of program 0x700
   (a brazier's glow) is such a triangle pair once its Z rounds the same at its corners, and its halves,
   each moved out to whole GS pixels, overlapped along the diagonal: a bright line across the glow.
+- **Granite is changed at configure** (`cmake/granite_depth_bounds.cmake`, from CMakeLists.txt before
+  paraLLEl-GS is added): four lines added to its checkout, each beside one of Granite's own lines, with the
+  file's line endings, once (a checkout that has them is left alone): a pipeline state bit, `depth_bounds_test`,
+  with its setter, the depth bounds as dynamic state, and the device feature turned on where the GPU has it
+  (the bounds themselves are a raw `vkCmdSetDepthBounds`, recorded as a `Cmd` op for the replays). Granite is a
+  submodule of paraLLEl-GS's, so this is how the change survives a fresh clone and `git submodule update`; the
+  side effect is that `git status` shows `third_party/parallel-gs` as modified. If Granite moves on and an
+  anchor line is gone, configure stops and says so. Used by the ties' first phase (STEP3.md, "Hot spots at
+  240"); without the GPU feature, or with `KF4_GSN_DEPTH_BOUNDS=0`, the test is not used. Not yet tried on a
+  Linux (gcc) build.
+- **And with dynamic state** (`cmake/granite_dynamic_state.cmake`, run after the above; the code is
+  `cmake/granite_dynamic_state.inc`, included into `command_buffer.cpp`): two more state bits, `dynamic_ds` and
+  `dynamic_blend`, which the native GS's command buffers set (`Cmd::raw`) and Granite keeps through
+  `set_opaque_state`. With them a pipeline is made with depth test, write and compare, the depth bounds test,
+  stencil test and ops, culling, front face, topology (within its class) and blend constants dynamic (Vulkan 1.3),
+  and with `dynamic_blend` (VK_EXT_extended_dynamic_state3, turned on where the device has it) blend enable,
+  equation and the colour write mask too; it is looked up by a hash without that state, and before each draw
+  Granite sets what differs from what it set last (`holyland_flush_dynamic`, as `build_graphics_pipeline` would
+  have baked it: depth only with a depth attachment, a colour attachment's blending and mask only where the
+  program writes it). Such a command buffer also does not bind the graphics pipeline it has bound already (after
+  a render pass begins). Other command buffers (paraLLEl-GS, the presenters) are as before. `KF4_GSN_DYNAMIC=0`
+  turns it off, `1` leaves out blending and the mask (a device without extended dynamic state 3); `--stats`
+  counts the pipelines bound (NATIVE_DRAW_P8.md, "Pipeline binds").
 - **Granite:** `update_image` with row length 0 means the image's width; there is no SPIRV-Cross,
   so resource layouts are written by hand; its render pass cache ignores the sample count (MSAA
   passes name their subpass).
@@ -156,9 +301,12 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 - **Higher frame rates:** flipbook animations and pictures the CPU makes anew (the HUD orb) change
   once a frame; two look-alike models crossing can swap for a few pictures. The pictures between are
   drawn from recorded commands now (STEP3.md, "On the GPU"); what is left of their cost is the GPU's
-  (the shadows' runs of shader blending) and the recorded calls made again through Granite (0.2 to 0.8
-  ms a picture): re-submitting command buffers would take Granite's per-frame descriptors and staging
-  out of them.
+  (the shadows' runs of shader blending) and the recorded calls made again through Granite (0.2 to 2.4
+  ms a picture at 3x; their data is bound where the recording left it, NATIVE_DRAW_P8.md, "The recording
+  and the replays"): most of it now is a pipeline bound for nearly every draw, which Vulkan's extended
+  dynamic state in Granite would take out; re-submitting command buffers would take Granite's per-frame
+  descriptors out of them. The first picture of each frame is still drawn from the packets (the frame's
+  own draws decide for t 1 only).
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.

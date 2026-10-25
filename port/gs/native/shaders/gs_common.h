@@ -24,6 +24,30 @@ layout(push_constant, std430) uniform Push {
     float zslope;     // ... and this times the Z's change across a GS pixel, at most zbias (a layer's colour pass)
 } pc;
 
+#ifdef ND_STANDALONE
+#ifndef SA_GRAZE
+#define SA_GRAZE 1.0
+#endif
+// The scene's slack for a tie's colour pass (gsn_standalone.inc, "Ties"), in Z: pc.zbias, plus
+// - pc.zslope >= 0: that times the corner's alpha / 255 (--native-layer-z tolerant's slope term, 255 a Z), or
+// - pc.zslope < 0 (a layer, by its real depth): -pc.zslope world units across the surface, as Z there. The corner's
+//   alpha is the triangle's Z change across a GS pixel, g = 2^(a / 32) - 1. With Z = cz + az q (q = 1 / the depth),
+//   a depth change is (Z - cz) q times as much Z, and a surface whose Z changes g a GS pixel lies at tan t =
+//   g sx / (Z - cz) to the view (sx: the screen's GS pixels a unit across at depth 1). Two surfaces e apart across
+//   are e / cos t apart in depth: e q sqrt((Z - cz)^2 + (g sx)^2) in Z, the same in the world at every distance.
+//   (tan t at most SA_GRAZE: toward a silhouette e / cos t grows without end, and a layer passed over the faces in
+//   front of it there: a seam along a tower's top edge against the sky with 3; 1: at most 1.4 times e)
+float sa_slack(float zf, float q, float cz, float sx, uint a) {
+    if (pc.zslope >= 0.0) {
+        return pc.zbias + pc.zslope * float(a) / 255.0;
+    }
+    float g = exp2(float(a) / 32.0) - 1.0;
+    float r = abs(zf - cz);
+    float t = min(g * sx, SA_GRAZE * r);
+    return pc.zbias - pc.zslope * abs(q) * sqrt(r * r + t * t);
+}
+#endif
+
 #define GSN_F_TME 0x1u
 #define GSN_F_FST 0x2u
 #define GSN_F_TFX_SHIFT 2u
@@ -56,5 +80,6 @@ layout(push_constant, std430) uniform Push {
 #define GSN_M_SCALE_X_SHIFT 11u // the target's pixels a GS pixel is across (--native-scale), 3 bits
 #define GSN_M_ANISO_SHIFT 14u   // --native-aniso: log2 of the most taps along a mipmapped texture's footprint, 3 bits (0: off)
 #define GSN_M_HIGH 0x20000u
-#define GSN_M_SMOOTH_2D 0x80000u // --native-2d smooth: the 2D's textures magnified bilinear at a larger scale
+#define GSN_M_SMOOTH_2D 0x80000u // --native-2d smooth: the 2D's magnified textures read with a cubic at a larger scale
+#define GSN_M_RECT_2D 0x100000u  // ... the cubic's taps kept inside each triangle's texels (gs_frag.h's Clut; gs.vert: the triangle's number in v_fog)
 #define GSN_M_ZFINE 0x40000u    // --native-layer-z tolerant: the pixel's Z keeps its fraction (and zbias is added)     // --native-colour high: colours in floats, the target 16-bit (alpha as the GS's)

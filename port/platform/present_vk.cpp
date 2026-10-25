@@ -24,8 +24,12 @@
 #include <SDL.h>
 #include <SDL_vulkan.h>
 
+#include <atomic>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #include "backends/imgui_impl_vulkan.h"
@@ -34,6 +38,7 @@
 extern "C" {
 #include "gsn.h"
 #include "port/overlay.h"
+#include "port/debug.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
 #include "port/settings.h"
@@ -50,7 +55,8 @@ namespace {
     X(vkGetPhysicalDeviceSurfaceFormatsKHR)                                                                \
     X(vkGetPhysicalDeviceSurfacePresentModesKHR)                                                           \
     X(vkGetPhysicalDeviceFormatProperties)                                                                 \
-    X(vkGetPhysicalDeviceMemoryProperties)
+    X(vkGetPhysicalDeviceMemoryProperties)                                                                 \
+    X(vkGetPhysicalDeviceProperties)
 #define DEVICE_FUNCTIONS(X)                                                                                \
     X(vkCreateSwapchainKHR)                                                                                \
     X(vkDestroySwapchainKHR)                                                                               \
@@ -94,7 +100,13 @@ namespace {
     X(vkBindImageMemory)                                                                                   \
     X(vkGetBufferMemoryRequirements)                                                                       \
     X(vkGetImageMemoryRequirements)                                                                        \
-    X(vkMapMemory)
+    X(vkMapMemory)                                                                                         \
+    X(vkCreateQueryPool)                                                                                   \
+    X(vkDestroyQueryPool)                                                                                  \
+    X(vkCmdResetQueryPool)                                                                                 \
+    X(vkCmdWriteTimestamp)                                                                                 \
+    X(vkGetQueryPoolResults)                                                                               \
+    X(vkResetCommandPool)
 
 #define DECLARE(name) PFN_##name name = nullptr;
 struct Functions {
@@ -116,6 +128,9 @@ struct Frame {
     VkDeviceMemory staging_memory = VK_NULL_HANDLE;
     void *staging_map = nullptr;
     VkDeviceSize staging_size = 0;
+    // KF4_FLASH_TIME: the flash recorder's copy timed (two timestamps), read when the frame comes round
+    VkQueryPool timer = VK_NULL_HANDLE;
+    bool timed = false;
 };
 
 struct SwapImage {
@@ -494,8 +509,335 @@ bool make_frames() {
     return true;
 }
 
+// ---- The flash recorder (port_vk_flash_write; docs/port/README.md "Debugging") ---------------------
+// Each picture presented is blitted, scaled to port_options.flash_height rows (its width the picture's
+// shape), into the next layer of a ring: one image of seconds x pictures a second layers, on the GPU. The
+// flash recorder's key (F8) has the presenter hand the ring to a thread of its own, which reads it back a
+// few dozen layers at a time and writes them as PNGs, oldest first; the ring takes no pictures meanwhile.
+// The cost while playing is the one blit a picture (KF4_FLASH_TIME=1 prints its GPU time now and then).
+struct FlashPicture {
+    uint64_t tag;   // PORT_PICTURE_TAG: the vblank and the phase
+    double seconds; // when it was presented (port_wall_seconds)
+};
+
+struct Flash {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    uint32_t width = 0, height = 0, layers = 0;
+    bool fresh = false; // made, and not yet in its layout (GENERAL)
+    uint32_t head = 0, count = 0;
+    std::vector<FlashPicture> pictures;
+    double megabytes = 0;
+    float seconds_made = 0;
+    int height_made = 0;
+    bool failed = false; // could not be made with these options: not tried again until they change
+    // the key's request (any thread) and the writer (its thread)
+    char folder[1100] = {};
+    std::atomic<int> wanted{0};
+    std::atomic<int> writing{0};
+    SDL_Thread *thread = nullptr;
+    // the writer's copy of the ring's order
+    uint32_t first = 0, n = 0;
+    std::vector<FlashPicture> written;
+    // KF4_FLASH_TIME
+    int timing = -1;
+    double gpu_ns = 0;
+    uint64_t timed = 0;
+    float period = 1.0f;
+};
+Flash fl;
+
+void flash_free() {
+    if (fl.thread != nullptr) {
+        SDL_WaitThread(fl.thread, nullptr);
+        fl.thread = nullptr;
+    }
+    if (fl.image != VK_NULL_HANDLE) {
+        wait_queue();
+        vk.vkDestroyImage(pr.device, fl.image, nullptr);
+        vk.vkFreeMemory(pr.device, fl.memory, nullptr);
+    }
+    fl.image = VK_NULL_HANDLE;
+    fl.memory = VK_NULL_HANDLE;
+    fl.layers = fl.width = fl.height = fl.head = fl.count = 0;
+    fl.megabytes = 0;
+}
+
+// The ring for a picture of w x h (its place in the window): false when there is none (off, or not made)
+bool flash_ring(int w, int h) {
+    float seconds = port_options.flash_seconds;
+    int rows = port_options.flash_height;
+    if (seconds <= 0 || rows <= 0 || w <= 0 || h <= 0) {
+        if (fl.image != VK_NULL_HANDLE && !fl.writing.load()) {
+            flash_free();
+        }
+        fl.failed = false;
+        return false;
+    }
+    int rate = port_frame_rate_hz();
+    uint32_t layers = uint32_t(std::ceil(double(seconds) * double(rate < 60 ? 60 : rate)));
+    uint32_t height = uint32_t(rows > h ? h : rows);
+    uint32_t width = (uint32_t(std::lround(double(height) * w / h)) + 1u) & ~1u;
+    layers = layers < 2 ? 2 : layers > 2048 ? 2048 : layers;
+    if (fl.image != VK_NULL_HANDLE && fl.layers == layers && fl.width == width && fl.height == height) {
+        return true;
+    }
+    if (fl.writing.load() || (fl.failed && fl.seconds_made == seconds && fl.height_made == rows)) {
+        return false;
+    }
+    flash_free();
+    fl.seconds_made = seconds;
+    fl.height_made = rows;
+    fl.failed = true;
+    VkImageCreateInfo info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    info.extent = {width, height, 1};
+    info.mipLevels = 1;
+    info.arrayLayers = layers;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vk.vkCreateImage(pr.device, &info, nullptr, &fl.image) != VK_SUCCESS) {
+        fl.image = VK_NULL_HANDLE;
+        std::fprintf(stderr, "[present] the flash recorder's ring (%u x %u x %u) could not be made\n", width, height, layers);
+        return false;
+    }
+    VkMemoryRequirements req;
+    vk.vkGetImageMemoryRequirements(pr.device, fl.image, &req);
+    VkMemoryAllocateInfo alloc = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    alloc.allocationSize = req.size;
+    int type = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    alloc.memoryTypeIndex = uint32_t(type < 0 ? memory_type(req.memoryTypeBits, 0) : type);
+    if (vk.vkAllocateMemory(pr.device, &alloc, nullptr, &fl.memory) != VK_SUCCESS) {
+        vk.vkDestroyImage(pr.device, fl.image, nullptr);
+        fl.image = VK_NULL_HANDLE;
+        std::fprintf(stderr, "[present] no GPU memory for the flash recorder's ring (%.0f MB)\n", double(req.size) / 1048576.0);
+        return false;
+    }
+    vk.vkBindImageMemory(pr.device, fl.image, fl.memory, 0);
+    fl.failed = false;
+    fl.fresh = true;
+    fl.width = width;
+    fl.height = height;
+    fl.layers = layers;
+    fl.head = fl.count = 0;
+    fl.megabytes = double(req.size) / 1048576.0;
+    fl.pictures.assign(layers, FlashPicture());
+    std::fprintf(stderr, "[present] flash recorder: the last %u pictures kept on the GPU at %u x %u (%.0f MB)\n", layers, width,
+                 height, fl.megabytes);
+    return true;
+}
+
+// (the writer's thread) fl.n pictures of the ring from fl.first, to fl.folder
+int flash_writer(void *) {
+    const uint32_t bytes = fl.width * fl.height * 4;
+    uint32_t chunk = (64u << 20) / bytes;
+    chunk = chunk < 1 ? 1 : chunk > fl.n ? fl.n : chunk;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void *map = nullptr;
+    uint32_t done = 0;
+    double start = port_wall_seconds();
+    VkCommandPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pool_info.queueFamilyIndex = pr.family;
+    VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    bool ok = vk.vkCreateCommandPool(pr.device, &pool_info, nullptr, &pool) == VK_SUCCESS &&
+              vk.vkCreateFence(pr.device, &fence_info, nullptr, &fence) == VK_SUCCESS &&
+              make_host_buffer(VkDeviceSize(chunk) * bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &buffer, &memory, &map);
+    if (ok) {
+        VkCommandBufferAllocateInfo alloc = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        alloc.commandPool = pool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = 1;
+        ok = vk.vkAllocateCommandBuffers(pr.device, &alloc, &cmd) == VK_SUCCESS;
+    }
+    std::vector<uint32_t> rgba(size_t(fl.width) * fl.height);
+    std::vector<VkBufferImageCopy> regions(chunk);
+    for (uint32_t at = 0; ok && at < fl.n; at += chunk) {
+        uint32_t n = fl.n - at < chunk ? fl.n - at : chunk;
+        VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vk.vkBeginCommandBuffer(cmd, &begin);
+        VkMemoryBarrier before = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        before.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0,
+                                nullptr, 0, nullptr);
+        for (uint32_t k = 0; k < n; k++) {
+            VkBufferImageCopy &r = regions[k];
+            r = {};
+            r.bufferOffset = VkDeviceSize(k) * bytes;
+            r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, (fl.first + at + k) % fl.layers, 1};
+            r.imageExtent = {fl.width, fl.height, 1};
+        }
+        vk.vkCmdCopyImageToBuffer(cmd, fl.image, VK_IMAGE_LAYOUT_GENERAL, buffer, n, regions.data());
+        VkMemoryBarrier host = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host, 0, nullptr, 0,
+                                nullptr);
+        vk.vkEndCommandBuffer(cmd);
+        VkSubmitInfo submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &cmd;
+        gsn_queue_lock();
+        ok = vk.vkQueueSubmit(pr.queue, 1, &submit, fence) == VK_SUCCESS;
+        gsn_queue_unlock();
+        ok = ok && vk.vkWaitForFences(pr.device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
+        vk.vkResetFences(pr.device, 1, &fence);
+        vk.vkResetCommandPool(pr.device, pool, 0);
+        for (uint32_t k = 0; ok && k < n; k++) {
+            char path[1200];
+            std::snprintf(path, sizeof(path), "%s/%04u.png", fl.folder, at + k);
+            std::memcpy(rgba.data(), static_cast<const uint8_t *>(map) + size_t(k) * bytes, bytes);
+            if (port_png_write(path, rgba.data(), fl.width, fl.height)) {
+                done++;
+            }
+        }
+    }
+    char path[1200];
+    std::snprintf(path, sizeof(path), "%s/pictures.txt", fl.folder);
+    FILE *list = std::fopen(path, "w");
+    if (list != nullptr) {
+        std::fprintf(list, "# the flash recorder's pictures, oldest first: the file, the vblank, the phase (0: the vblank's\n"
+                           "# own picture, else a picture between), seconds before the last\n");
+        double last = fl.n ? fl.written[fl.n - 1].seconds : 0;
+        for (uint32_t k = 0; k < fl.n; k++) {
+            const FlashPicture &p = fl.written[k];
+            std::fprintf(list, "%04u.png %llu %.3f %.4f\n", k, (unsigned long long)(p.tag >> 16), double(p.tag & 0xFFFF) / 65536.0,
+                         last - p.seconds);
+        }
+        std::fclose(list);
+    }
+    free_buffer(&buffer, &memory);
+    if (fence != VK_NULL_HANDLE) {
+        vk.vkDestroyFence(pr.device, fence, nullptr);
+    }
+    if (pool != VK_NULL_HANDLE) {
+        vk.vkDestroyCommandPool(pr.device, pool, nullptr); // (and its command buffer)
+    }
+    if (done == fl.n && ok) {
+        port_debug_set_message("recorded %u pictures (the last %.1f s, %u x %u) in %s, written in %.1f s", done,
+                               fl.n ? fl.written[fl.n - 1].seconds - fl.written[0].seconds : 0.0, fl.width, fl.height, fl.folder,
+                               port_wall_seconds() - start);
+    } else {
+        port_debug_set_message("flash recorder: wrote %u of %u pictures to %s", done, fl.n, fl.folder);
+    }
+    port_overlay_notify_debug();
+    fl.writing.store(0);
+    return 0;
+}
+
+// (the presenter, before anything else of a picture) a write asked for: the ring's order kept, the writer
+// started. Every blit into the ring before it is submitted already, and none is made until it is done.
+void flash_start_writer() {
+    if (!fl.wanted.load() || fl.writing.load()) {
+        return;
+    }
+    fl.wanted.store(0);
+    if (fl.thread != nullptr) {
+        SDL_WaitThread(fl.thread, nullptr);
+        fl.thread = nullptr;
+    }
+    if (fl.image == VK_NULL_HANDLE || fl.count == 0) {
+        return;
+    }
+    fl.n = fl.count;
+    fl.first = (fl.head + fl.layers - fl.count) % fl.layers;
+    fl.written.resize(fl.n);
+    for (uint32_t k = 0; k < fl.n; k++) {
+        fl.written[k] = fl.pictures[(fl.first + k) % fl.layers];
+    }
+    fl.count = 0; // (the next pictures start a new ring)
+    fl.writing.store(1);
+    fl.thread = SDL_CreateThread(flash_writer, "flash recorder", nullptr);
+    if (fl.thread == nullptr) {
+        fl.writing.store(0);
+        port_debug_set_message("flash recorder: no thread to write with");
+    }
+}
+
+// (the presenter) the picture, source (sw x sh, GENERAL), into the ring's next layer
+void flash_take(VkCommandBuffer cmd, Frame &f, VkImage source, uint32_t sw, uint32_t sh, int w, int h) {
+    if (fl.writing.load() || source == VK_NULL_HANDLE || !flash_ring(w, h)) {
+        return;
+    }
+    if (fl.timing < 0) {
+        fl.timing = getenv("KF4_FLASH_TIME") != nullptr;
+        VkPhysicalDeviceProperties props;
+        vk.vkGetPhysicalDeviceProperties(pr.gpu, &props);
+        fl.period = props.limits.timestampPeriod;
+    }
+    if (fl.timing && f.timer == VK_NULL_HANDLE) {
+        VkQueryPoolCreateInfo q = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        q.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        q.queryCount = 2;
+        vk.vkCreateQueryPool(pr.device, &q, nullptr, &f.timer);
+    }
+    bool timing = fl.timing && f.timer != VK_NULL_HANDLE;
+    if (timing) {
+        vk.vkCmdResetQueryPool(cmd, f.timer, 0, 2);
+        vk.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, f.timer, 0);
+    }
+    uint32_t layer = fl.head;
+    VkImageMemoryBarrier b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = fl.image;
+    b.oldLayout = fl.fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, fl.fresh ? 0 : layer, fl.fresh ? VK_REMAINING_ARRAY_LAYERS : 1};
+    vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    fl.fresh = false;
+    VkImageBlit blit = {};
+    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.srcOffsets[1] = {int32_t(sw), int32_t(sh), 1};
+    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
+    blit.dstOffsets[1] = {int32_t(fl.width), int32_t(fl.height), 1};
+    vk.vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_GENERAL, fl.image, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
+    if (timing) {
+        vk.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, f.timer, 1);
+        f.timed = true;
+    }
+    fl.pictures[layer] = {pr.tag, port_wall_seconds()};
+    fl.head = (layer + 1) % fl.layers;
+    fl.count = fl.count < fl.layers ? fl.count + 1 : fl.layers;
+}
+
+// (the presenter, its frame's fence waited for) the last copy's GPU time, with KF4_FLASH_TIME
+void flash_read_timer(Frame &f) {
+    if (!f.timed) {
+        return;
+    }
+    f.timed = false;
+    uint64_t t[2];
+    if (vk.vkGetQueryPoolResults(pr.device, f.timer, 0, 2, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) ==
+        VK_SUCCESS) {
+        fl.gpu_ns += double(t[1] - t[0]) * fl.period;
+        fl.timed++;
+        if (fl.timed % 500 == 0) {
+            std::fprintf(stderr, "[present] flash recorder: %.1f us a picture on the GPU (%llu pictures)\n",
+                         fl.gpu_ns / double(fl.timed) / 1000.0, (unsigned long long)fl.timed);
+        }
+    }
+}
+
 // Everything made so far, undone (a start that failed: the window goes back to SDL_Renderer)
 void close_all() {
+    if (pr.device != VK_NULL_HANDLE && vk.vkQueueWaitIdle != nullptr) {
+        flash_free();
+        for (Frame &f : pr.frames) {
+            if (f.timer != VK_NULL_HANDLE) {
+                vk.vkDestroyQueryPool(pr.device, f.timer, nullptr);
+            }
+        }
+    }
     if (pr.device != VK_NULL_HANDLE && vk.vkQueueWaitIdle != nullptr) {
         wait_queue();
         drop_swapchain_images();
@@ -658,6 +1000,16 @@ extern "C" int port_vk_open(void *sdl_window) {
         return 0;
     }
     pr.up = true;
+    static bool waits;
+    if (!waits) {
+        waits = true;
+        std::atexit([] {
+            if (fl.thread != nullptr) {
+                SDL_WaitThread(fl.thread, nullptr); // (the flash recorder's pictures written before the device goes)
+                fl.thread = nullptr;
+            }
+        });
+    }
     std::fprintf(stderr, "[present] the window is presented with Vulkan, on the native GS's device\n");
     return 1;
 }
@@ -698,6 +1050,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     if (!pr.up) {
         return;
     }
+    flash_start_writer(); // (F8)
     bool fresh = pixels != nullptr || image;
     // with nothing new, the window is drawn again only for the overlay
     if (!fresh && (pr.source == SOURCE_NONE || !port_overlay_visible())) {
@@ -720,6 +1073,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
 
     Frame &f = pr.frames[pr.frame];
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
+    flash_read_timer(f);
     uint32_t index = 0;
     VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &index);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -852,6 +1206,9 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         vk.vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_GENERAL, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                           !scaled && port_video_scaling() != PORT_SCALING_SHARP ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     }
+    if (fresh && source != VK_NULL_HANDLE) {
+        flash_take(cmd, f, source, source_w, source_h, w, h); // (the flash recorder's ring)
+    }
     image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                   VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
@@ -934,4 +1291,35 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         read_window(f);
     }
     pr.frame = (pr.frame + 1) % FRAMES;
+}
+
+extern "C" int port_vk_flash_write(const char *folder, char *why, size_t size) {
+    if (!pr.up) {
+        std::snprintf(why, size, "the Vulkan presenter is not up");
+        return 0;
+    }
+    if (port_options.flash_seconds <= 0) {
+        std::snprintf(why, size, "the flash recorder is off: --flash-recorder on, or the overlay's Debug page");
+        return 0;
+    }
+    if (fl.writing.load() || fl.wanted.load()) {
+        std::snprintf(why, size, "still writing the last ones");
+        return 0;
+    }
+    if (fl.image == VK_NULL_HANDLE || fl.count == 0) {
+        std::snprintf(why, size, "none presented yet");
+        return 0;
+    }
+    std::snprintf(fl.folder, sizeof(fl.folder), "%s", folder);
+    int pictures = int(fl.count);
+    fl.wanted.store(1);
+    return pictures;
+}
+
+extern "C" int port_vk_flash_info(int *pictures, int *width, int *height, double *megabytes) {
+    *pictures = int(fl.count);
+    *width = int(fl.width);
+    *height = int(fl.height);
+    *megabytes = fl.megabytes;
+    return fl.writing.load() || fl.wanted.load();
 }

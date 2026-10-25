@@ -164,7 +164,7 @@ index 776b6fcf38c121adb61b5bd7f71f66cf3e2e5f53..0fc207406cb0572d27c8b6336329bc88
 -
  #endif
 diff --git a/src/game/core/game.c b/src/game/core/game.c
-index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b1837b27c726 100644
+index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..f3bf74a930e2e02359d66f10b3251e7daf57cacd 100644
 --- a/src/game/core/game.c
 +++ b/src/game/core/game.c
 @@ -1,6 +1,7 @@
@@ -211,7 +211,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
  extern sceVu0FMATRIX identity_matrix;
  extern sceVu0FMATRIX world_view_matrix;
  extern sceVu0FMATRIX world_screen_matrix;
-@@ -82,11 +84,7 @@ static int wobble_grid_previous[8][11][2];     /* 0x467C00 the points of the fra
+@@ -82,11 +84,11 @@ static int wobble_grid_previous[8][11][2];     /* 0x467C00 the points of the fra
  static float wobble_grid_forces[8][11][2];   /* 0x467EC0 the force on each point */
  static int fade_color[3];            /* 0x468180 the fade colour */
  
@@ -220,10 +220,14 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
  u32 fptoui(float);
 -void sceVu0TransMatrix(void *, void *, void *);
 -void sceVu0ViewScreenMatrix(void *, float, float, float, float, float, float, float, float, float);
++int NativeDraw_Fade(int, int, int, int); /* PC: --native-draw passes (game/native_draw/nd_passes.c) */
++int NativeDraw_ViewShift(const void *, int); /* PC: */
++int NativeDraw_WobbleGrid(int (*)[11][2], int (*)[11][2], float, int, int, int, int); /* PC: */
++void NativeDraw_PassEnd(void); /* PC: */
  void Vu0_LoadMatrix(void *);
  void Vu0_ProjectToScreen(int *, void *);
  void Vector_MultiplyComponents(float *, float *, float *);
-@@ -162,7 +160,7 @@ void Game_ResetProgress(void) {
+@@ -162,7 +164,7 @@ void Game_ResetProgress(void) {
      memset(spell_experience, 0, sizeof(spell_experience));
      memset(spell_levels, 0, sizeof(spell_levels));
      Menu_ClearKeyItems();
@@ -232,7 +236,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
  }
  
  /* marks what the player has equipped as found and tidies the spell tables */
-@@ -659,7 +657,7 @@ void Game_WriteSaveImage(void) {
+@@ -659,7 +661,7 @@ void Game_WriteSaveImage(void) {
      memcpy(save_cursor, &bit_byte, 1);
      save_cursor++;
  
@@ -241,8 +245,11 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      size = (u32)(used + 0x7F) / 128 * 128;
      table = save_cursor + (size - used);
      *(int *)(save_image + 4) = size; // match: the header word is stored straight into the buffer
-@@ -870,7 +868,7 @@ void Game_DrawFade(void) {
+@@ -868,14 +870,17 @@ void Game_DrawFade(void) {
+         return;
+     }
      if (alpha > 0) {
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_Fade(fade_color[0], fade_color[1], fade_color[2], alpha)) { /* PC: --native-draw (game/native_draw/) */
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
 -        Packet_AddGsRegister(GS_REG_ZBUF_1, 0x10A000118L);
@@ -250,7 +257,14 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
          Packet_EndGsRegisters();
          GsDraw_FillScreen(fade_color[0], fade_color[1], fade_color[2], alpha, 0x44);
          Packet_BeginGsRegisters();
-@@ -931,7 +929,7 @@ void Game_DrawHazeLayers(void) {
+         Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118);
+         Packet_EndGsRegisters();
++        }
++        NativeDraw_PassEnd(); /* PC */
+     }
+ }
+ 
+@@ -931,7 +936,7 @@ void Game_DrawHazeLayers(void) {
          return;
      }
      Packet_BeginGsRegisters();
@@ -259,7 +273,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
      Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
      Packet_EndGsRegisters();
-@@ -946,12 +944,12 @@ void Game_DrawHazeLayers(void) {
+@@ -946,12 +951,12 @@ void Game_DrawHazeLayers(void) {
          *cursor++ = 0;
          *cursor++ = 0;
          *cursor++ = 0x6C09C000;
@@ -275,7 +289,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
          *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
          cursor += 2;
          *cursor++ = 6;
-@@ -1010,14 +1008,14 @@ void Game_DrawHazeLayersShifted(void) {
+@@ -1010,14 +1015,14 @@ void Game_DrawHazeLayersShifted(void) {
          texture_base = 0;
      }
      Packet_BeginGsRegisters();
@@ -293,7 +307,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      sprite.prim = 0x156;
      sprite.rgba[0] = 0x80;
      sprite.rgba[1] = 0x80;
-@@ -1073,7 +1071,7 @@ void Game_DrawDepthTestSprite(void) {
+@@ -1073,7 +1078,7 @@ void Game_DrawDepthTestSprite(void) {
          printf(z_value_format, depth_test_sprite_z);
      }
      Packet_BeginGsRegisters();
@@ -302,7 +316,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_AddGsRegister(GS_REG_TEST_1, 0x51001);
      Packet_AddGsRegister(GS_REG_CLAMP_1, 5);
      Packet_EndGsRegisters();
-@@ -1087,12 +1085,12 @@ void Game_DrawDepthTestSprite(void) {
+@@ -1087,12 +1092,12 @@ void Game_DrawDepthTestSprite(void) {
      *cursor++ = 0;
      *cursor++ = 0;
      *cursor++ = 0x6C09C000;
@@ -318,7 +332,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
      cursor += 2;
      *cursor++ = 6;
-@@ -1150,13 +1148,13 @@ void Game_BlendScreenOffsetDown(void) {
+@@ -1150,13 +1155,13 @@ void Game_BlendScreenOffsetDown(void) {
      }
      Packet_BeginGsRegisters();
      remaining = 9;
@@ -335,7 +349,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      sprite.unk08 = 0;
      sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
      sprite.rgba[0] = 0x80;
-@@ -1174,17 +1172,25 @@ void Game_BlendScreenOffsetDown(void) {
+@@ -1174,17 +1179,25 @@ void Game_BlendScreenOffsetDown(void) {
      sprite.corner[0].z = 0xFFFFFFFF;
      sprite.corner[0].texel_x = 0x400;
      sprite.corner[0].texel_y = 0x1c00;
@@ -370,7 +384,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_EndGsRegisters();
  }
  
-@@ -1202,14 +1208,14 @@ void Game_BlendScreenOffsetUpDown(void) {
+@@ -1202,14 +1215,14 @@ void Game_BlendScreenOffsetUpDown(void) {
      }
      Packet_BeginGsRegisters();
      remaining = 9;
@@ -388,7 +402,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      sprite.unk08 = 0;
      sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
      sprite.rgba[0] = 0x80;
-@@ -1228,14 +1234,18 @@ void Game_BlendScreenOffsetUpDown(void) {
+@@ -1228,14 +1241,18 @@ void Game_BlendScreenOffsetUpDown(void) {
      sprite.corner[0].texel_x = 0x400;
      sprite.corner[0].texel_y = 0x1c00;
  
@@ -415,7 +429,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
  
      sprite.corner[1].x = 0x7000;
      remaining = 9;
-@@ -1246,17 +1256,20 @@ void Game_BlendScreenOffsetUpDown(void) {
+@@ -1246,17 +1263,20 @@ void Game_BlendScreenOffsetUpDown(void) {
      sprite.corner[1].texel_y = 0x1c00;
      sprite.corner[0].texel_x = 0;
      sprite.corner[0].texel_y = 0;
@@ -445,7 +459,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_EndGsRegisters();
  }
  
-@@ -1289,12 +1302,12 @@ void Game_BlendPreviousFrame(int alpha) {
+@@ -1289,12 +1309,12 @@ void Game_BlendPreviousFrame(int alpha) {
      *cursor++ = 0;
      *cursor++ = 0;
      *cursor++ = 0x6C09C000;
@@ -461,7 +475,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
      cursor += 2;
      *cursor++ = 6;
-@@ -1364,12 +1377,12 @@ void Game_BlendPreviousFrameZoomed(int alpha) {
+@@ -1364,12 +1384,12 @@ void Game_BlendPreviousFrameZoomed(int alpha) {
      *cursor++ = 0;
      *cursor++ = 0;
      *cursor++ = 0x6C09C000;
@@ -477,7 +491,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      *(u64 *)cursor = tex0_low | ((u64)texture_height_log2 << 30);
      cursor += 2;
      *cursor++ = 6;
-@@ -1415,7 +1428,7 @@ void Game_BlendPreviousFrameZoomed(int alpha) {
+@@ -1415,7 +1435,7 @@ void Game_BlendPreviousFrameZoomed(int alpha) {
  void Game_ShiftScreenByViewTurn(void) {
      float view_matrix[16];
      float scaled_vector[4];
@@ -486,7 +500,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      GsSpritePacket sprite_packet;
      GsSpritePacket *strip_packet;
      int texture_base;
-@@ -1427,14 +1440,14 @@ void Game_ShiftScreenByViewTurn(void) {
+@@ -1427,14 +1447,14 @@ void Game_ShiftScreenByViewTurn(void) {
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -504,7 +518,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      scaled_vector[3] = 1.0f;
      Vu0_ProjectToScreen(screen_xy, scaled_vector);
  
-@@ -1458,13 +1471,13 @@ void Game_ShiftScreenByViewTurn(void) {
+@@ -1458,13 +1478,13 @@ void Game_ShiftScreenByViewTurn(void) {
      } else if (offset_y < -0x80) {
          offset_y = -0x80;
      }
@@ -521,7 +535,20 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      sprite_packet.unk08 = 0;
      sprite_packet.rgba[0] = 0x80;
      sprite_packet.rgba[1] = 0x80;
-@@ -1520,7 +1533,7 @@ void Game_ShiftScreenByViewTurn(void) {
+@@ -1509,6 +1529,7 @@ void Game_ShiftScreenByViewTurn(void) {
+ 
+     strip_packet = &sprite_packet;
+     strip = 0x13;
++    if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_ViewShift(&sprite_packet, offset_x)) { /* PC: --native-draw (game/native_draw/) */
+     do {
+         strip--;
+         GsDraw_QueueTexturedSprite(strip_packet);
+@@ -1517,10 +1538,12 @@ void Game_ShiftScreenByViewTurn(void) {
+         sprite_packet.corner[0].texel_x += offset_x;
+         sprite_packet.corner[1].texel_x += offset_x;
+     } while (strip >= 0);
++    }
++    NativeDraw_PassEnd(); /* PC */
  
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_SCANMSK, 0);
@@ -530,7 +557,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_EndGsRegisters();
  }
  
-@@ -1541,27 +1554,27 @@ void Game_ShiftScreenByFocusTurn(void) {
+@@ -1541,27 +1564,27 @@ void Game_ShiftScreenByFocusTurn(void) {
  
      texture_base = 0x1180;
      if (context1_buffer_half != 0) texture_base = 0;
@@ -563,7 +590,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      scratch_vector[3] = 1.0f;
      Vu0_ProjectToScreen(screen_position, scratch_vector);
  
-@@ -1578,12 +1591,12 @@ void Game_ShiftScreenByFocusTurn(void) {
+@@ -1578,12 +1601,12 @@ void Game_ShiftScreenByFocusTurn(void) {
  
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -578,7 +605,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      sprite_packet.unk08 = 0;
      sprite_packet.rgba[0] = 0x80;
      sprite_packet.rgba[1] = 0x80;
-@@ -1632,7 +1645,7 @@ void Game_ShiftScreenByFocusTurn(void) {
+@@ -1632,7 +1655,7 @@ void Game_ShiftScreenByFocusTurn(void) {
  
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_SCANMSK, 0);
@@ -587,7 +614,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_EndGsRegisters();
  }
  
-@@ -1653,10 +1666,10 @@ void Game_ApplyBrightness(int brightness) {
+@@ -1653,10 +1676,10 @@ void Game_ApplyBrightness(int brightness) {
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -600,7 +627,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      texture_height_log2 = 9;
      sprite.tex0 = tex0_low | ((u64)texture_height_log2 << 30);
      sprite.prim = 0x116;
-@@ -1683,7 +1696,7 @@ void Game_ApplyBrightness(int brightness) {
+@@ -1683,7 +1706,7 @@ void Game_ApplyBrightness(int brightness) {
      } while (remaining >= 0);
  
      Packet_BeginGsRegisters();
@@ -609,7 +636,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_EndGsRegisters();
      GsDraw_QueueFlush();
      GsDraw_QueueTexFlush();
-@@ -1703,10 +1716,10 @@ void Game_TintScreen(int red, int green, int blue) {
+@@ -1703,10 +1726,10 @@ void Game_TintScreen(int red, int green, int blue) {
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_ALPHA_1, 10);
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -622,7 +649,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      sprite_packet.unk08 = 0;
      sprite_packet.prim = 0x116;
      sprite_packet.rgba[0] = red;
-@@ -1738,7 +1751,7 @@ void Game_TintScreen(int red, int green, int blue) {
+@@ -1738,7 +1761,7 @@ void Game_TintScreen(int red, int green, int blue) {
      } while (remaining >= 0);
  
      Packet_BeginGsRegisters();
@@ -631,7 +658,7 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_EndGsRegisters();
      GsDraw_QueueFlush();
      GsDraw_QueueTexFlush();
-@@ -1803,8 +1816,8 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
+@@ -1803,11 +1826,13 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
      Packet_AddGsRegister(GS_REG_TEXFLUSH, 0xFFFFFFFF);
      Packet_AddGsRegister(GS_REG_ALPHA_1, 0x44);
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -642,7 +669,12 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
      Packet_AddGsRegister(GS_REG_TEX1_1, 0);
      Packet_EndGsRegisters();
  
-@@ -1818,11 +1831,11 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
++    if (!port_native_draw(PORT_ND_PASSES) || /* PC: --native-draw (game/native_draw/) */
++        !NativeDraw_WobbleGrid(wobble_grid_points, wobble_grid_origin, blend, red, green, blue, alpha)) {
+     for (i = 0; i < 7; i++) {
+         for (j = 0; j < 10; j++) {
+             packet_start = cursor = Packet_Alloc(0x11);
+@@ -1818,11 +1843,11 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
              *cursor++ = 0;
              *cursor++ = 0;
              *cursor++ = 0;
@@ -656,6 +688,15 @@ index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..fc0c9547228a2cb77edeb6748965b183
              cursor += 2;
              for (k = 0; k < 2; k++) {
                  for (corner_col = 0; corner_col < 2; corner_col++) {
+@@ -1854,6 +1879,8 @@ void Game_DrawWobblingScreen(int red, int green, int blue, int alpha, float blen
+             Packet_AppendToChain(packet_start, cursor);
+         }
+     }
++    }
++    NativeDraw_PassEnd(); /* PC */
+ 
+     wobble_grid_reset = 0;
+     Packet_BeginGsRegisters();
 diff --git a/src/game/core/game.h b/src/game/core/game.h
 index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e5502fb8a53c 100644
 --- a/src/game/core/game.h
@@ -853,7 +894,7 @@ index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e550
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de534fee2f90 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..e5a0a84331af14f047c399e32c0af8c60e70d68c 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
 @@ -20,6 +20,12 @@
@@ -869,7 +910,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
  
  void Game_ResetProgress(void);
  void Player_ResetForNewGame(void);
-@@ -63,8 +69,9 @@ void Sound_Update(void);
+@@ -63,9 +69,11 @@ void Sound_Update(void);
  void Game_StepFade(void);
  void GameLoop_UpdateCamera(void);
  void GameLoop_SetCameraMatrices(int, int);
@@ -878,9 +919,11 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
 -int GameLoop_DrawFrame(int);
 +void GameLoop_DrawFrame(int);
  void Packet_WaitForSend(void);
++int NativeDraw_TestDmaWait(void); /* PC: KF4_ND_DMA_WAIT, a test (game/native_draw/) */
  void MapItem_UpdatePickup(void);
  void Map_RunFreeCamera(void);
-@@ -74,7 +81,6 @@ void GameLoop_UpdatePause(void);
+ void GameLoop_OpenRequestedMenu(void);
+@@ -74,7 +82,6 @@ void GameLoop_UpdatePause(void);
  void Input_StopRumble(void);
  void Sound_SetBgmVolume(int);
  void Sound_SetBankVolumes(int);
@@ -888,7 +931,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
  int Sound_BgmLoadCanYield(void);
  void File_CloseAll(void);
  void Wobble_AdvanceSines(void);
-@@ -102,33 +108,21 @@ void Game_BlendScreenOffsetDown(void);
+@@ -102,33 +109,21 @@ void Game_BlendScreenOffsetDown(void);
  void Game_BlendScreenOffsetUpDown(void);
  void Game_BlendPreviousFrame(int);
  void Game_ShiftScreenByViewTurn(void);
@@ -925,7 +968,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
  int Sound_LoadBgm(int, int);
  void MapLoad_RequestHold(void);
  int MapLoad_IsHeld(void);
-@@ -145,7 +139,6 @@ void MapViewer_Run(void);
+@@ -145,7 +140,6 @@ void MapViewer_Run(void);
  void File_Lock(void);
  void MapLoad_Release(void);
  void GameLoop_ClearBothBuffers(void);
@@ -933,16 +976,25 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -153,20 +146,30 @@ void GsDraw_QueueTexturedSprite(void *);
+@@ -153,20 +147,39 @@ void GsDraw_QueueTexturedSprite(void *);
  void PlayTime_Update(void);
  void Input_PauseRumble(void);
  void Input_ResumeRumble(void);
 +void Quick_PollGame(void); /* PC: quick saves (game/quicksave.c) */
 +void Quick_RestoreNeighbour(void); /* PC: */
 +void FrameInterp_BeginFrame(void); /* PC: --frame-rate 60 (game/frame_interp.c) */
++void ScreenFx_Frame(void); /* PC: KF4_FX, debugging (game/screen_fx.c) */
++void ScreenFx_Begin(void);
++void ScreenFx_End(void);
 +void FrameInterp_MarkCamera(int, int); /* PC: */
 +void FrameInterp_EndWorld(void); /* PC: */
 +void FrameInterp_BeginArm(void); /* PC: */
++int NativeDraw_Brightness(int); /* PC: --native-draw passes (game/native_draw/nd_passes.c) */
++int NativeDraw_TintScreen(int, int, int); /* PC: */
++int NativeDraw_FillScreen(int, int, int, int, s64); /* PC: */
++int NativeDraw_FlickerFilter(int); /* PC: */
++int NativeDraw_BlendPreviousFrame(int, int); /* PC: */
++int NativeDraw_HazeLayers(void); /* PC: */
  extern PlayerState player_state;
  extern int save_loaded;          /* nonzero: a saved game was loaded */
  extern u8 game_options[0x10];
@@ -968,7 +1020,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
  extern MapDrawStateOverlays map_draw_state;
  extern int message_dim_alpha;
  extern int current_map_slot;
-@@ -237,6 +240,7 @@ void GameLoop_Run(int arg) {
+@@ -237,6 +250,7 @@ void GameLoop_Run(int arg) {
          save_loaded = 0;
          PlayTime_Resume(save_play_time[0]);
          Game_StartFadeIn(0, 0, 0, 0x1E);
@@ -976,7 +1028,17 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
      }
      map_load_state.flags.raw |= 1;
      Packet_SwapBuffers();
-@@ -302,11 +306,12 @@ void GameLoop_Run(int arg) {
+@@ -250,6 +264,9 @@ void GameLoop_Run(int arg) {
+         Timer_Restart();
+         if (!(game_status.bit12 && game_status.bit13)) {
+             Packet_SendChain();
++            if (NativeDraw_TestDmaWait()) { /* PC: KF4_ND_DMA_WAIT, a test (game/native_draw/) */
++                Packet_WaitForSend();
++            }
+             Timer_GetTicks();
+             Packet_SwapBuffers();
+             DrawList_Clear();
+@@ -302,11 +319,12 @@ void GameLoop_Run(int arg) {
          GameLoop_OpenRequestedMenu();
          MapChange_RunToEnd();
          GameLoop_UpdatePause();
@@ -993,7 +1055,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
      Input_StopRumble();
      Message_CloseBox();
      Message_ClearNotices();
-@@ -332,13 +337,14 @@ void GameLoop_Run(int arg) {
+@@ -332,13 +350,15 @@ void GameLoop_Run(int arg) {
  
  /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
     tints, the overlays MapDrawState asks for, the fades and the pause shade. */
@@ -1005,21 +1067,55 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
      int green;
      int blue;
  
++    ScreenFx_Frame(); /* PC: KF4_FX, debugging (game/screen_fx.c) */
 +    FrameInterp_BeginFrame(); /* PC: --frame-rate 60 (game/frame_interp.c) */
      Wobble_AdvanceSines();
      func_001095D0();
      GsDraw_ResetDrawTarget();
-@@ -457,6 +463,7 @@ int GameLoop_DrawFrame(int arg) {
+@@ -457,6 +477,8 @@ int GameLoop_DrawFrame(int arg) {
      }
      GameLoop_SetCameraMatrices(0, 0);
      GsDraw_QueueVu1Matrix(world_screen_matrix);
 +    FrameInterp_EndWorld(); /* PC */
++    ScreenFx_Begin(); /* PC: KF4_FX, debugging (game/screen_fx.c) */
      if ((s32)(player_state.status_bits >> 39) & 1) {
          GsDraw_CopyFrame(0x2BC0);
          tinted = TRUE;
-@@ -490,7 +497,9 @@ int GameLoop_DrawFrame(int arg) {
+@@ -473,24 +495,36 @@ int GameLoop_DrawFrame(int arg) {
+     }
+     Player_DrawScreenFade();
+     if (map_draw_state.bit44) {
+-        Game_DrawHazeLayers();
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_HazeLayers()) { /* PC: --native-draw (game/native_draw/) */
++            Game_DrawHazeLayers();
++        }
+     }
+     if (map_draw_state.bit41) {
+         Game_DrawDepthTestSprite();
+     }
+     if (map_draw_state.bit42) {
+-        Game_BlendScreenOffsetDown();
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_FlickerFilter(0)) { /* PC: --native-draw (game/native_draw/) */
++            Game_BlendScreenOffsetDown();
++        }
+     }
+     if (map_draw_state.bit43) {
+-        Game_BlendScreenOffsetUpDown();
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_FlickerFilter(1)) { /* PC: --native-draw (game/native_draw/) */
++            Game_BlendScreenOffsetUpDown();
++        }
+     }
+     if (map_draw_state.bit40) {
+-        Game_BlendPreviousFrame(map_draw_state.previous_frame_alpha);
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_BlendPreviousFrame(0, map_draw_state.previous_frame_alpha)) { /* PC: --native-draw */
++            Game_BlendPreviousFrame(map_draw_state.previous_frame_alpha);
++        }
+     }
      if (player_state.aim_speed > 0.0f) {
-         Game_BlendPreviousFrame(0x40);
+-        Game_BlendPreviousFrame(0x40);
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_BlendPreviousFrame(1, 0x40)) { /* PC: --native-draw */
++            Game_BlendPreviousFrame(0x40);
++        }
      }
 -    if (arg != 0 && map_draw_state.bit45) {
 +    /* PC: --no-whole-frame keeps it: the frame before, moved by half the turn, drawn over the even
@@ -1028,7 +1124,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
          Game_ShiftScreenByViewTurn();
      }
      GsDraw_ClearDepth();
-@@ -498,7 +507,9 @@ int GameLoop_DrawFrame(int arg) {
+@@ -498,20 +532,29 @@ int GameLoop_DrawFrame(int arg) {
          Effect_UploadTextures();
      }
      DrawList_Draw(3, 0);
@@ -1038,19 +1134,57 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
      Player_DrawScreenTints();
      if ((s32)(player_state.status_bits >> 39) & 1) {
          if (map_slots[current_map_slot].tag == 0x23 && guardians_room_water_purified[0] == 0) {
-@@ -509,9 +520,8 @@ int GameLoop_DrawFrame(int arg) {
+-            GsDraw_FillScreen(0x40, 0x80, 0x40, 0x78, 0x44);
++            if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_FillScreen(0x40, 0x80, 0x40, 0x78, 0x44)) { /* PC: --native-draw */
++                GsDraw_FillScreen(0x40, 0x80, 0x40, 0x78, 0x44);
++            }
+         } else {
+-            Game_TintScreen(0x5E, 0x87, 0x92);
++            if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_TintScreen(0x5E, 0x87, 0x92)) { /* PC: --native-draw */
++                Game_TintScreen(0x5E, 0x87, 0x92);
++            }
+         }
      }
      Hud_Draw();
      if (map_draw_state.screen_fill_alpha > 0) {
 -        // match: the last argument is passed as the 64-bit word
 -        ((void (*)(int, int, int, int, s64))GsDraw_FillScreen)(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
 -                                                             map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
-+        GsDraw_FillScreen(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
-+                          map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
++        if (!port_native_draw(PORT_ND_PASSES) || /* PC: --native-draw (game/native_draw/) */
++            !NativeDraw_FillScreen(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
++                                   map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend)) {
++            GsDraw_FillScreen(map_draw_state.screen_fill_red, map_draw_state.screen_fill_green, map_draw_state.screen_fill_blue,
++                              map_draw_state.screen_fill_alpha, map_draw_state.screen_fill_blend);
++        }
      }
      Game_DrawFade();
      Splash_Draw();
-@@ -659,11 +669,14 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -529,14 +572,21 @@ int GameLoop_DrawFrame(int arg) {
+         }
+     }
+     if (message_dim_alpha != 0) {
+-        GsDraw_FillScreen(0, 0, 0, message_dim_alpha, 0x44);
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_FillScreen(0, 0, 0, message_dim_alpha, 0x44)) { /* PC: --native-draw */
++            GsDraw_FillScreen(0, 0, 0, message_dim_alpha, 0x44);
++        }
+     }
+     Message_Update();
+     if (game_status.paused) {
+-        GsDraw_FillScreen(0, 0, 0, 0x40, 0x44);
++        if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_FillScreen(0, 0, 0, 0x40, 0x44)) { /* PC: --native-draw */
++            GsDraw_FillScreen(0, 0, 0, 0x40, 0x44);
++        }
+         Hud_DrawPaused();
+     }
+-    Game_ApplyBrightness(game_options[10]);
++    if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_Brightness(game_options[10])) { /* PC: --native-draw (game/native_draw/) */
++        Game_ApplyBrightness(game_options[10]);
++    }
++    ScreenFx_End(); /* PC: KF4_FX */
+     func_001095D8();
+ }
+ 
+@@ -659,11 +709,14 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
  
      switch (projection) {
      case 0:
@@ -1067,7 +1201,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
          break;
      }
      translation[0] = -camera_state.position[0];
-@@ -703,6 +716,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -703,6 +756,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
          sceVu0MulMatrix(world_screen_matrix, view_screen_matrix, local);
          break;
      }
@@ -1075,7 +1209,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..1606c628cd1c172d5105b8e5be05de53
  }
  
  /* Runs the queued sound loads, one at a time. */
-@@ -729,7 +743,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +783,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:

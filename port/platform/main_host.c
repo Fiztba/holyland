@@ -16,7 +16,14 @@
                          it cannot start, paraLLEl-GS), gs (paraLLEl-GS, the reference) or both
                          (side by side, their pictures compared; the window shows gs's,
                          --renderer-shown native shows the other, and --renderer-shown heatmap
-                         where they differ)
+                         where they differ); modern: native, with the scene drawn into targets of
+                         its own (P8, in work: docs/port/NATIVE_DRAW_P8.md; --native-draw
+                         on unless given)
+       --scene-scale N, --scene-msaa N
+                         with --renderer modern, the scene (the world) at a scale (1 to 4) and samples
+                         (1, 2, 4, 8) of its own, the GS's (--native-scale, --native-msaa) for the 2D, the
+                         menus and the title; the picture shown made from both (gsn_composite.inc). By
+                         default the GS's
        --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
                          the native GS's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
@@ -57,6 +64,33 @@
                          fraction kept, straight seams where surfaces meet, and the layers the game
                          blends over its surfaces Z tested within one Z: no hatching, teeth or lace)
                          or ps2 (the GS's whole numbers)
+       --native-draw off|on|KINDS
+                         draw these kinds of the game's 3D at the game's level (docs/port/NATIVE_DRAW.md):
+                         the patched draw code hands them to the renderer core, and the native GS draws
+                         them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
+                         on: the kinds that have passed their checks (map, sky, items, objects, picked,
+                         entities, arm, gold, effects, shadows, water and passes); KINDS, by name: map, models
+                         (objects and picked), skinned (or entities), arm, sky, effects, shadows,
+                         reflection, water, passes, items, objects, picked, gold. off is
+                         the game as without it, and the default unless settings.json says "native_draw":
+                         "on" (the overlay's Renderer section). The overlay's Debug page changes the kinds
+                         live
+       --native-draw-compare native|ps2
+                         with --native-draw, the PS2 path's packets are queued too, and the native GS
+                         draws the native draws (native) or the PS2 path's (ps2): two runs alike in all
+                         the game does, to compare the pictures
+       --native-wave-uvs ps2|gpu|cpu|late
+                         with --native-draw map, the wave UVs of the water records: ps2 (the default: the
+                         PS2 path's picture, late, or gpu with the test wait), gpu (the frame's offsets
+                         added in the shader), cpu (the coordinates the game wrote, the blocks parsed
+                         again each frame; gpu's picture) or late (the offsets of the frame after, as the
+                         PS2 path's DMA mostly reads them)
+       --sky modern|ps2  with --native-draw sky, how the sky is drawn: modern (the default: the dome
+                         centred on the eye and behind everything, so what lies beyond it shows) or ps2
+                         (at the feet with its real distance, as the PS2 draws it). modern keeps the
+                         PS2's where other records are drawn before the sky (maps 000 and 004)
+       --test-dma-wait   (tests) each frame's packet chain waited for as soon as it is sent: the PS2
+                         path then draws the blocks the game changes as the game drew them
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
                          packets through): hle (the default: computed directly, the interpreter's
                          results to the bit; port/platform/vu1_hle*.c), interp (the cycle-accurate
@@ -93,6 +127,9 @@
                          fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
+       --extended-stats  the opt-in mod: the extended stats panel and hit log (F6; docs/port/EXTENDED_STATS.md)
+       --automap         the opt-in mod: the automap, a map of where you have been (M; docs/port/AUTOMAP.md)
+       --automap-cheats  the automap with all its cheats on (the whole map, items, enemies, secrets, hints)
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
        --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
@@ -127,6 +164,10 @@
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
+       --flash-recorder off|on|SECONDS[,HEIGHT]
+                         the flash recorder (F8, docs/port/README.md "Debugging"): the last SECONDS of
+                         presented pictures (2 for on, the default) kept on the GPU at HEIGHT rows (540),
+                         written out as PNGs by the key; Vulkan presenter only
        --fpu-round zero|nearest
                          how the game's float maths rounds: as the EE's FPU (zero, the default:
                          toward zero, no denormals) or as the PC's IEEE floats (nearest), to compare
@@ -138,6 +179,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "port/automap.h"
 #include "port/audio.h"
 #include "port/debug.h"
 #include "port/host.h"
@@ -147,6 +189,7 @@
 #include "port/quicksave.h"
 #include "port/teleport.h"
 #include "port/cheats.h"
+#include "port/stats.h"
 
 static int parse_cheats(const char *list);
 #include "port/sanitize.h"
@@ -188,13 +231,14 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--myus-necklace] [--separate-run] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both] [--renderer-shown gs|native|heatmap]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
-            "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
+            "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2]\n"
+            "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
@@ -214,6 +258,37 @@ static void parse_clock(const char *text) {
 
 static const char *gs_capture_at; /* --gs-capture-at (port/debug/gs_capture.c) */
 
+/* --flash-recorder off|on|SECONDS[,HEIGHT] */
+static int parse_flash_recorder(const char *value) {
+    char *end;
+    double seconds;
+
+    if (strcmp(value, "off") == 0) {
+        port_options.flash_seconds = 0;
+        return 1;
+    }
+    if (strcmp(value, "on") == 0) {
+        port_options.flash_seconds = 2;
+        return 1;
+    }
+    seconds = strtod(value, &end);
+    if (end == value || !(seconds >= 0 && seconds <= 30)) {
+        return 0;
+    }
+    port_options.flash_seconds = (float)seconds;
+    if (*end == ',') {
+        long height = strtol(end + 1, &end, 10);
+
+        if (height < 90 || height > 2160) {
+            return 0;
+        }
+        port_options.flash_height = (int)height;
+    }
+    return *end == 0;
+}
+
+int port_native_draw_parse(const char *value); /* (below) */
+
 static void parse_options(int argc, char **argv) {
     int i;
 
@@ -223,6 +298,8 @@ static void parse_options(int argc, char **argv) {
     port_options.seamless_scroll = 1;
     port_options.native_scale = 0; /* auto: port_gs_native_scale() */
     port_options.frame_rate = 30;
+    port_options.flash_seconds = 2; /* the flash recorder (F8): on */
+    port_options.flash_height = 540;
     port_options.present_scaling = -1;
     port_options.present_sharpen = -1;
     port_options.native_msaa = 1;
@@ -231,6 +308,8 @@ static void parse_options(int argc, char **argv) {
     port_options.native_cutout_aa = 1; /* GSN_CUTOUT_AA_SSAA */
     port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
+    port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
+    port_options.native_sky = PORT_SKY_MODERN;
     port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
@@ -305,12 +384,23 @@ static void parse_options(int argc, char **argv) {
             port_options.invincible = 1;
             continue;
         }
+        if (strcmp(option, "--test-dma-wait") == 0) {
+            port_options.test_dma_wait = 1;
+            continue;
+        }
         if (strcmp(option, "--myus-necklace") == 0) {
             port_options.myus_necklace = port_options.myus_necklace_forced = 1;
             continue;
         }
+        if (port_automap_option(argc, argv, &i)) { /* the automap mod (port/platform/automap.c) */
+            continue;
+        }
         if (strcmp(option, "--separate-run") == 0) {
             port_options.separate_run = port_options.separate_run_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--extended-stats") == 0) { /* the extended stats mod (port/include/port/stats.h) */
+            port_stats_options.on = port_stats_options.forced = 1;
             continue;
         }
         if (strcmp(option, "--show-fps") == 0) {
@@ -333,15 +423,17 @@ static void parse_options(int argc, char **argv) {
             int which = heatmap                              ? PORT_RENDERER_NATIVE
                         : strcmp(value, "gs") == 0           ? PORT_RENDERER_GS
                         : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
+                        : both && strcmp(value, "modern") == 0 ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? " or both" : " or heatmap", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both or modern" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
                 port_options.renderer = which;
                 port_options.renderer_forced = 1;
+                port_options.renderer_modern = strcmp(value, "modern") == 0;
             } else {
                 port_options.renderer_shown = which;
                 port_options.renderer_heatmap = heatmap;
@@ -410,6 +502,19 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.draw_distance_sky_forced = 1;
+        } else if (strcmp(option, "--scene-scale") == 0) {
+            port_options.scene_scale = atoi(value);
+            if (port_options.scene_scale < 1 || port_options.scene_scale > 4) {
+                fprintf(stderr, "--scene-scale wants 1 to 4, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--scene-msaa") == 0) {
+            port_options.scene_msaa = atoi(value);
+            if (port_options.scene_msaa != 1 && port_options.scene_msaa != 2 && port_options.scene_msaa != 4 &&
+                port_options.scene_msaa != 8) {
+                fprintf(stderr, "--scene-msaa wants 1, 2, 4 or 8, not %s\n", value);
+                exit(2);
+            }
         } else if (strcmp(option, "--native-msaa") == 0) {
             port_options.native_msaa = atoi(value);
             if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
@@ -468,6 +573,50 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_colour_forced = 1;
+        } else if (strcmp(option, "--native-draw") == 0) {
+            int bits = port_native_draw_parse(value);
+
+            if (bits < 0) {
+                fprintf(stderr, "--native-draw wants off, on or a list of map, models, skinned (entities), arm, sky, effects, "
+                                "shadows, reflection, water, passes, items, objects, picked, gold; not %s\n", value);
+                exit(2);
+            }
+            port_options.native_draw = bits;
+            port_options.native_draw_forced = 1;
+        } else if (strcmp(option, "--native-draw-compare") == 0) {
+            if (strcmp(value, "native") == 0) {
+                port_options.native_draw_compare = PORT_ND_COMPARE_NATIVE;
+            } else if (strcmp(value, "ps2") == 0) {
+                port_options.native_draw_compare = PORT_ND_COMPARE_PS2;
+            } else if (strcmp(value, "off") == 0) {
+                port_options.native_draw_compare = 0;
+            } else {
+                fprintf(stderr, "--native-draw-compare wants native, ps2 or off, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--native-wave-uvs") == 0) {
+            if (strcmp(value, "ps2") == 0) {
+                port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
+            } else if (strcmp(value, "gpu") == 0) {
+                port_options.native_wave_uvs = PORT_WAVE_UVS_GPU;
+            } else if (strcmp(value, "cpu") == 0) {
+                port_options.native_wave_uvs = PORT_WAVE_UVS_CPU;
+            } else if (strcmp(value, "late") == 0) {
+                port_options.native_wave_uvs = PORT_WAVE_UVS_LATE;
+            } else {
+                fprintf(stderr, "--native-wave-uvs wants ps2, gpu, cpu or late, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--sky") == 0) {
+            if (strcmp(value, "ps2") == 0) {
+                port_options.native_sky = PORT_SKY_PS2;
+            } else if (strcmp(value, "modern") == 0) {
+                port_options.native_sky = PORT_SKY_MODERN;
+            } else {
+                fprintf(stderr, "--sky wants modern or ps2, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_sky_forced = 1;
         } else if (strcmp(option, "--native-layer-z") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_layer_z = 0;
@@ -527,6 +676,10 @@ static void parse_options(int argc, char **argv) {
             port_options.teleport = value;
         } else if (strcmp(option, "--gs-capture-at") == 0) {
             gs_capture_at = value;
+        } else if (strcmp(option, "--flash-recorder") == 0) {
+            if (!parse_flash_recorder(value)) {
+                usage(argv[0]);
+            }
         } else if (strcmp(option, "--fpu-round") == 0) {
             if (strcmp(value, "zero") != 0 && strcmp(value, "nearest") != 0) {
                 usage(argv[0]);
@@ -535,6 +688,10 @@ static void parse_options(int argc, char **argv) {
         } else {
             usage(argv[0]);
         }
+    }
+    if (port_options.renderer_modern && port_options.native_draw == 0) {
+        port_options.native_draw = PORT_ND_ACCEPTED; /* (the scene's kinds: every one, P8 T1) */
+        port_options.native_draw_forced = 1; /* (settings.json's "off" must not empty the scene) */
     }
     if (port_options.disc == NULL) {
         fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso or folder> (or KF4_DISC)\n");
@@ -619,6 +776,68 @@ static int parse_cheats(const char *list) {
 
 int port_invincible(void) {
     return port_options.invincible != 0;
+}
+
+int port_native_draw(int kind) {
+    return (port_options.native_draw & kind) != 0;
+}
+
+int port_native_draw_compare(void) {
+    return port_options.native_draw ? port_options.native_draw_compare : 0;
+}
+
+int port_native_wave_uvs(void) {
+    return port_options.native_wave_uvs;
+}
+
+int port_native_sky(void) {
+    return port_options.native_sky;
+}
+
+int port_test_dma_wait(void) {
+    return port_options.test_dma_wait;
+}
+
+/* --native-draw's value: off, on, or a comma-separated list of kinds; -1 if it is none of those */
+int port_native_draw_parse(const char *value) {
+    static const struct {
+        const char *name;
+        int bits;
+    } kinds[] = {{"map", PORT_ND_MAP}, {"models", PORT_ND_MODELS}, {"skinned", PORT_ND_SKINNED}, {"entities", PORT_ND_SKINNED}, {"arm", PORT_ND_ARM},
+                 {"sky", PORT_ND_SKY}, {"effects", PORT_ND_EFFECTS}, {"shadows", PORT_ND_SHADOWS},
+                 {"reflection", PORT_ND_REFLECTION}, {"water", PORT_ND_WATER}, {"passes", PORT_ND_PASSES},
+                 {"items", PORT_ND_ITEMS},
+                 {"objects", PORT_ND_OBJECTS}, {"picked", PORT_ND_PICKED}, {"gold", PORT_ND_GOLD},
+                 {"on", PORT_ND_ACCEPTED}}; /* ("on,passes": the accepted kinds and more) */
+    const char *at = value;
+    int bits = 0;
+
+    if (strcmp(value, "off") == 0) {
+        return 0;
+    }
+    if (strcmp(value, "on") == 0) {
+        return PORT_ND_ACCEPTED;
+    }
+    while (*at) {
+        size_t length = strcspn(at, ",");
+        size_t i;
+        int found = 0;
+
+        for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+            if (strlen(kinds[i].name) == length && strncmp(at, kinds[i].name, length) == 0) {
+                bits |= kinds[i].bits;
+                found = 1;
+            }
+        }
+        if (!found) {
+            return -1;
+        }
+        at += length;
+        if (*at == ',') {
+            at++;
+        }
+    }
+    return bits;
 }
 
 /* ---- The log ---------------------------------------------------------------------------------- */

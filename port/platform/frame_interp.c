@@ -60,9 +60,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/render.h"
 #include "../gs/native/gsn.h"
 
 #define INTERP_MAX_TURN 0.8   /* radians between two frames: more is a cut */
@@ -146,6 +148,7 @@ typedef struct {
 } Record;
 #define RECORD_3D 0x100
 #define RECORD_EFFECTS 1
+#define RECORD_SHADOW 2 /* sent by VU1 program 0x5A0 (the shadows: Entity_DrawPoolModels) */
 
 static uint8_t *kept;
 static size_t kept_size, kept_room;
@@ -180,6 +183,7 @@ void port_interp_keep(int path, const void *data, size_t bytes) {
     r.bytes = (uint32_t)bytes;
     r.serial = port_vif1_run_serial;
     r.program = path == 1 && port_vu1_run_pc >= 0x700 && port_vu1_run_pc < 0x7D2 ? RECORD_EFFECTS : 0;
+    r.program |= path == 1 && port_vu1_run_pc >= 0x5A0 && port_vu1_run_pc < 0x642 ? RECORD_SHADOW : 0;
     r.key = port_vif1_run_key;
     memcpy(kept + kept_size, &r, sizeof(r));
     memcpy(kept + kept_size + sizeof(r), data, bytes);
@@ -362,6 +366,19 @@ enum { SECTION_NONE, SECTION_WORLD, SECTION_OTHER, SECTION_EYE, SECTION_ARM, SEC
      of program 0x280 (Q 1.0) goes over the first pass's points, and takes their depth (the arm's Z is
      pulled near, so its Z gives the wrong depth).
    - Vertices with ADC may have been clipped in one of the frames (object_between). */
+/* Texture coordinates made from the screen: Q 1, and S, T near one projective map H of X, Y over the
+   vertices without ADC, S = (h0 x + h1 y + h2) / (h6 x + h7 y + 1), T = (h3 x + h4 y + h5) / (the
+   same) (least squares of the linear form; the residue within a 20th of their spread: a pool's surface,
+   its reflection's target read where the pool is on the screen, with the ripple's small offsets). Such
+   S and T go with the vertex's place on the screen, not with the surface: in a picture between
+   S + H(x', y') - H(x, y). state 0 collecting, 1 a map, -1 not, 2 an item without a texture. */
+typedef struct {
+    int state, n;
+    double ata[8][8], atb[8], btb; /* the normal equations of the linear form */
+    double sum[4];                  /* s, s s, t, t t */
+    double h[8];
+} StPlane;
+
 typedef struct {
     uint64_t key;
     uint32_t first;    /* its first vertex in pos */
@@ -373,6 +390,8 @@ typedef struct {
     uint64_t tex;      /* and TEX0's texture and CLUT */
     int32_t pair;      /* the run of the frame before that is this one (objects_pair), -1: none */
     int sky;           /* of the sky (PORT_FRAME_INTERP_SKY: a map record that follows the player) */
+    int native;        /* the PS2 path's packets of a native draw, which the GS leaves out (Walk's alt) */
+    int shadow;        /* sent by program 0x5A0 (RECORD_SHADOW) */
 } Run;
 
 #define VERTEX_SURE 1  /* a vertex without ADC: never one the VU1 program clipped */
@@ -398,7 +417,7 @@ static void objects_reset(Objects *o) {
     o->sky_ok = 0;
 }
 
-static void objects_add_run(Objects *o, uint64_t key, int section, int sky) {
+static void objects_add_run(Objects *o, uint64_t key, int section, int sky, int native) {
     Run *r;
 
     if (o->nruns == o->runs_room) {
@@ -414,10 +433,114 @@ static void objects_add_run(Objects *o, uint64_t key, int section, int sky) {
     r->count = 0;
     r->section = section;
     r->sky = sky && section == SECTION_WORLD;
+    r->native = native;
+    r->shadow = 0;
     r->prim = 0;
     r->tex = 0;
     r->pair = -1;
 }
+
+/* H at x, y (StPlane) */
+static void st_map(const StPlane *r, double x, double y, double *s, double *t) {
+    const double *h = r->h;
+    double d = h[6] * x + h[7] * y + 1.0;
+
+    *s = (h[0] * x + h[1] * y + h[2]) / d;
+    *t = (h[3] * x + h[4] * y + h[5]) / d;
+}
+
+/* A vertex for a StPlane (SCAN): x, y in pixels, its S, T, Q */
+static void st_plane_vertex(StPlane *r, double x, double y, const float stq[3]) {
+    double u = stq[0], v = stq[1];
+    double rows[2][8] = {{x, y, 1, 0, 0, 0, -u * x, -u * y}, {0, 0, 0, x, y, 1, -v * x, -v * y}};
+    double b[2] = {u, v};
+    int k, i, j;
+
+    if (r->state != 0) {
+        return;
+    }
+    if (stq[2] != 1.0f || !isfinite(u) || !isfinite(v)) {
+        r->state = -1;
+        return;
+    }
+    r->n++;
+    for (k = 0; k < 2; k++) {
+        for (i = 0; i < 8; i++) {
+            for (j = 0; j < 8; j++) {
+                r->ata[i][j] += rows[k][i] * rows[k][j];
+            }
+            r->atb[i] += rows[k][i] * b[k];
+        }
+        r->btb += b[k] * b[k];
+    }
+    r->sum[0] += u;
+    r->sum[1] += u * u;
+    r->sum[2] += v;
+    r->sum[3] += v * v;
+}
+
+/* The fit, once (the 8 x 8 normal equations by Gaussian elimination): state 1 when it holds */
+static void st_finish(StPlane *r) {
+    double a[8][9], fitted = 0, spread;
+    int i, j, k;
+
+    if (r->state != 0) {
+        return;
+    }
+    r->state = -1;
+    if (r->n < 8) {
+        return;
+    }
+    for (i = 0; i < 8; i++) {
+        memcpy(a[i], r->ata[i], sizeof(r->ata[i]));
+        a[i][8] = r->atb[i];
+    }
+    for (i = 0; i < 8; i++) {
+        int best = i;
+
+        for (j = i + 1; j < 8; j++) {
+            if (fabs(a[j][i]) > fabs(a[best][i])) {
+                best = j;
+            }
+        }
+        if (!(fabs(a[best][i]) > 1e-12)) {
+            return;
+        }
+        if (best != i) {
+            for (k = 0; k < 9; k++) {
+                double tmp = a[i][k];
+
+                a[i][k] = a[best][k];
+                a[best][k] = tmp;
+            }
+        }
+        for (j = 0; j < 8; j++) {
+            if (j != i) {
+                double f = a[j][i] / a[i][i];
+
+                for (k = i; k < 9; k++) {
+                    a[j][k] -= f * a[i][k];
+                }
+            }
+        }
+    }
+    for (i = 0; i < 8; i++) {
+        r->h[i] = a[i][8] / a[i][i];
+        fitted += r->h[i] * r->atb[i];
+    }
+    /* the residue's sum of squares (b.b - h . A^T b), against the values' spread about their means */
+    spread = (r->sum[1] - r->sum[0] * r->sum[0] / r->n) + (r->sum[3] - r->sum[2] * r->sum[2] / r->n);
+    if (!(spread > 1e-12) || r->btb - fitted > spread * 0.0025 + 1e-12) {
+        return;
+    }
+    r->state = 1;
+}
+
+static int st_screen(StPlane *r) {
+    st_finish(r);
+    return r->state == 1;
+}
+
 
 static void objects_add_vertex(Objects *o, const double place[3], int valid) {
     if (o->npos == o->pos_room) {
@@ -503,7 +626,7 @@ static const Run *objects_find(const Objects *o, const Run *cur) {
         double d2 = 0;
         int k;
 
-        if (r->count != cur->count || !r->placed || r->section != cur->section) {
+        if (r->count != cur->count || !r->placed || r->section != cur->section || r->native) {
             continue;
         }
         for (k = 0; k < 3; k++) {
@@ -596,6 +719,14 @@ typedef struct {
     uint32_t count;
     int32_t pair;      /* the item of the frame before (-1: none, or nothing to do) */
     float wrap_s, wrap_t; /* added to the frame before's texture coordinates (a scroll past the wrap) */
+    /* A mesh of the world the CPU projected itself (item_mesh): triangles whose Z is not one, their
+       texture coordinates made from the screen (st). Such an item is moved with the camera as
+       the world is, not t of the way from the frame before's: the pools' reflecting surfaces (PATH2,
+       Q 1, S and T from the reflection's view) are drawn over their basin with a Z test, and paired
+       2D-wise their Z stayed the frame's while the basin's moved: the surface hidden, the basin's dark
+       floor showing, while the camera turned (October 2026). */
+    uint32_t zlo, zhi;
+    StPlane st;
 } Item;
 
 typedef struct {
@@ -645,6 +776,10 @@ static Item *flat_add_item(Flat *f, uint32_t prim, uint64_t tex0, uint32_t fbp) 
     it->count = 0;
     it->pair = -1;
     it->wrap_s = it->wrap_t = 0;
+    it->zlo = 0xFFFFFFFFu;
+    it->zhi = 0;
+    memset(&it->st, 0, sizeof(it->st));
+    it->st.state = (prim & 0x10) ? 0 : 2; /* (2: no texture) */
     return it;
 }
 
@@ -781,15 +916,32 @@ static void flat_copies(Flat *f, const Uploads *u) {
     for (c = 0; c < u->ncopies; c++) {
         const Event *copy = &u->ev[u->copies[c]];
         int read_after = 0, read_before = 0;
+        /* (pages of the copy's that the frame has uploaded or drawn into so far: a read of those before
+           the copy reads what the frame put there, not the copy of the frame before. The water's wobble
+           copies the frame over VRAM the frame's textures came through earlier in it, read as textures
+           there: counted as reads of the copy, the copy was not made again, and the pictures between
+           drew the wobble's strips from those textures: noise and bands of light over the screen.) */
+        uint8_t written[512];
 
+        memset(written, 0, sizeof(written));
         for (e = 0; e < u->nev; e++) {
             const Event *ev = &u->ev[e];
+            uint32_t p, lo, hi;
 
-            if (ev->kind == EV_READ && ev->first <= copy->last && ev->last >= copy->first) {
-                if (e < u->copies[c]) {
+            if (ev->first > copy->last || ev->last < copy->first) {
+                continue;
+            }
+            lo = ev->first > copy->first ? ev->first : copy->first;
+            hi = ev->last < copy->last ? ev->last : copy->last;
+            if (e >= u->copies[c]) {
+                read_after |= ev->kind == EV_READ;
+                continue;
+            }
+            for (p = lo; p <= hi; p++) {
+                if (ev->kind != EV_READ) {
+                    written[p % 512] = 1;
+                } else if (!written[p % 512]) {
                     read_before = 1;
-                } else {
-                    read_after = 1;
                 }
             }
         }
@@ -912,7 +1064,23 @@ static void objects_sky_move(Objects *o, const Objects *prev) {
                 INTERP_MAX_MOVE * INTERP_MAX_MOVE;
 }
 
-static void objects_pair(Objects *o, const Objects *prev) {
+/* (objects_pair's second way) a run of the frame before that may be r: drawn alike, in the same section */
+static int run_alike(const Run *a, const Run *r) {
+    return a->placed && !a->native && !r->native && a->section == r->section && a->count == r->count && a->prim == r->prim &&
+           a->tex == r->tex;
+}
+
+static double middle_d2(const Run *a, const Run *r) {
+    double d2 = 0;
+    int c;
+
+    for (c = 0; c < 3; c++) {
+        d2 += (a->middle[c] - r->middle[c]) * (a->middle[c] - r->middle[c]);
+    }
+    return d2;
+}
+
+static void objects_pair(Objects *o, const Objects *prev, const double eye[3]) {
     size_t i, at = 0, k;
     uint8_t *taken;
 
@@ -928,8 +1096,12 @@ static void objects_pair(Objects *o, const Objects *prev) {
     }
     for (i = 0; i < o->nruns; i++) {
         Run *r = &o->runs[i];
-        const Run *a = objects_find(prev, r);
+        const Run *a;
 
+        if (r->native) {
+            continue; /* (native draw pairs its draws by their identity: gsn_native_draw.inc) */
+        }
+        a = objects_find(prev, r);
         stat_runs += r->placed;
         if (a != NULL && objects_find(o, a) == r) {
             r->pair = (int32_t)(a - prev->runs);
@@ -940,28 +1112,69 @@ static void objects_pair(Objects *o, const Objects *prev) {
     for (i = 0; i < o->nruns; i++) {
         Run *r = &o->runs[i];
 
-        if (r->pair >= 0 || !r->placed || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
+        if (r->pair >= 0 || !r->placed || r->native || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
             continue;
         }
-        for (k = at; k < prev->nruns && k < at + 32; k++) {
-            const Run *a = &prev->runs[k];
-            double d2 = 0;
-            int c;
+        /* the nearest look-alike within the window, and this run the nearest to it in turn among this
+           frame's look-alikes around it, paired or not. The near cut's pieces of a map record
+           (ModelScreen_CutClippedTriangles: 16 smaller triangles for each with a corner out of the GS's
+           range, made anew each frame, so their batches are new and they pair here; many alike side by
+           side) were each taken for the first look-alike, its neighbour a hundred or more units away
+           when one of them came or went, and the pictures between drew them flying in from the screen's
+           edges: the dark shards in the doorway to the shop on map 000, hosted and modern alike (2026-10) */
+        {
+            size_t best = SIZE_MAX, first = SIZE_MAX, j;
+            double best_d2 = INTERP_MAX_MOVE * INTERP_MAX_MOVE;
 
-            if (taken[k] || !a->placed || a->section != r->section || a->count != r->count || a->prim != r->prim ||
-                a->tex != r->tex) {
+            for (k = at; k < prev->nruns && k < at + 32; k++) {
+                const Run *a = &prev->runs[k];
+                double d2;
+
+                if (taken[k] || !run_alike(a, r)) {
+                    continue;
+                }
+                if (first == SIZE_MAX) {
+                    first = k;
+                }
+                d2 = middle_d2(a, r);
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best = k;
+                }
+            }
+            if (best == SIZE_MAX) {
                 continue;
             }
-            for (c = 0; c < 3; c++) {
-                d2 += (a->middle[c] - r->middle[c]) * (a->middle[c] - r->middle[c]);
+            if (r->section == SECTION_WORLD) {
+                /* in the world, not more than a quarter of its distance from the eye: the cut's pieces are a
+                   hundred or more apart at two hundred from the eye, and a pair that far is a neighbour whose
+                   own pair is gone (no look-alike nearer to it is left to tell) */
+                double e2 = 0;
+                int c;
+
+                for (c = 0; c < 3; c++) {
+                    e2 += (r->middle[c] - eye[c]) * (r->middle[c] - eye[c]);
+                }
+                if (best_d2 > e2 / 16) {
+                    continue;
+                }
             }
-            if (d2 < INTERP_MAX_MOVE * INTERP_MAX_MOVE) {
-                r->pair = (int32_t)k;
-                taken[k] = 1;
-                at = k + 1;
-                stat_runs_order++;
+            for (j = i > 32 ? i - 32 : 0; j < o->nruns && j < i + 33; j++) {
+                const Run *s = &o->runs[j];
+
+                if (j != i && s->placed && run_alike(&prev->runs[best], s) && middle_d2(&prev->runs[best], s) < best_d2) {
+                    break;
+                }
             }
-            break;
+            if (j < o->nruns && j < i + 33) {
+                continue; /* (another run of this frame is nearer to it, paired or not: it is that one's) */
+            }
+            r->pair = (int32_t)best;
+            taken[best] = 1;
+            if (best == first) {
+                at = best + 1;
+            }
+            stat_runs_order++;
         }
     }
     free(taken);
@@ -989,6 +1202,8 @@ typedef struct {
     int section;
     int world_seen;   /* a world mark has been seen */
     int sky;          /* the runs from here are the sky's (PORT_FRAME_INTERP_SKY) */
+    int alt;          /* the runs from here are the PS2 path's packets of native draws, which the GS leaves out
+                         (--native-draw-compare native: between RD_ND_ALT_BEGIN and _END); not paired */
     Camera camera;    /* SCAN: the first world mark's camera */
     Screen screen;
     Screen screen_reflect; /* the reflection's projection (SECTION_REFLECT) */
@@ -1036,6 +1251,7 @@ typedef struct {
     int exact;          /* the frame as it was, for the buffers other than the frame (port_interp_end_vblank) */
     int prev_frame_kept; /* the native GS keeps the frame shown before the pictures between (take_snapshot) */
     int record_reads_prev; /* REPLAY: this record reads the frame shown as a texture (the native GS: read the copy) */
+    int native_reads_shown; /* SCAN: a native draw's screen pass reads the frame shown (RD_ND_READS_SHOWN) */
     Move move;          /* the frame's view to the camera between */
     Camera mid;         /* the camera between */
     uint64_t moved, dropped, objects_moved[SECTIONS]; /* vertices moved, dropped (ADC), moved as their model moved (by section) */
@@ -1056,6 +1272,38 @@ static int draws_into(const Walk *w, uint32_t prim, uint32_t fbp) {
 
 static int draws_frame(const Walk *w, uint32_t prim) {
     return draws_into(w, prim, w->draw_fbp);
+}
+
+/* The exact restore (port_interp_end_vblank) is for the buffers other than the frame: what it would draw
+   into the frame goes into the buffer shown, which the next frame clears, and is never shown (the vblanks
+   until the next frame show its own buffer, untouched). So nothing is drawn into the frame: a vertex kick
+   of a primitive into it becomes ADC (no drawing kick), 3D and 2D alike, and a native draw into it is left
+   out (exact_frame). Its 3D was meant to be left out before, but the bit set was the qword's 127th, not
+   ADC (bit 111, 47 of the upper half): every restore drew the whole frame again for two 128 x 128 scrolling
+   textures, with native draw the world too (its draws are not VU1's vertices), and the MP drain's and the
+   water's wobble read the copy of the frame the restore does not make, from VRAM (1024 x 512 decoded, the
+   frame written back): 15-60 ms a game frame at 240 (the Queen's Palace with its purple wobble on: the game
+   at 14 frames a second). KF4_INTERP_RESTORE_FRAME=1: the restore draws into the frame as before. */
+static int exact_frame_drawn(void) {
+    static int drawn = -1;
+
+    if (drawn < 0) {
+        const char *v = getenv("KF4_INTERP_RESTORE_FRAME");
+        drawn = v != NULL && atoi(v) == 1;
+    }
+    return drawn;
+}
+
+static void exact_kick(const Walk *w, const GifWalk *p, uint8_t *q) {
+    if (!exact_frame_drawn() && draws_frame(w, p->prim)) {
+        q[13] |= 0x80; /* (ADC: the qword's bit 111) */
+    }
+}
+
+/* (the exact restore) A native draw goes into the frame: the game sets both contexts' FRAME alike
+   (GsDraw_SetDrawTarget), the reflection's view too */
+static int exact_frame(const Walk *w) {
+    return !exact_frame_drawn() && w->frame_set[0] && (w->frame[0] & 0x1FF) == w->draw_fbp && (!w->frame_set[1] || (w->frame[1] & 0x1FF) == w->draw_fbp);
 }
 
 static void mark(Walk *w, uint64_t value) {
@@ -1545,12 +1793,36 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
             w->record_reads_prev = 1;
         }
         if (w->mode == SCAN && w->uploads != NULL) {
-            /* the texture (twice its first level: its mipmaps after it) and the CLUT are read */
-            uint32_t first, last;
+            /* the texture and the CLUT are read: the first level, and with mipmaps the levels after it (TEX1's
+               MTBA: levels 1 to 3 packed after level 0, each a quarter of the one before, as the GS makes
+               MIPTBP1; otherwise twice the first level). Not more: a read of pages the frame has not
+               written before a copy of the frame over them says the frame reads the copy of the frame
+               before (flat_copies). The twice took the death screen under water's 256 x 256 PSMT8 (10
+               pages with its mipmap) for 16, past the textures uploaded there into the wobble's copy left
+               from the frame before, so the copy was not made again and the pictures between drew the
+               wobble's strips from the textures uploaded over it: noise and bands of light. */
+            uint32_t first, last, levels = (uint32_t)((w->tex1[n] >> 2) & 7);
             uint64_t v = *value;
+            uint32_t tbp = (uint32_t)(v & 0x3FFF), psm = (uint32_t)((v >> 20) & 0x3F);
+            uint32_t tw = 1u << ((v >> 26) & 0xF), th = 1u << ((v >> 30) & 0xF);
 
-            pages_of((uint32_t)(v & 0x3FFF), (uint32_t)((v >> 14) & 0x3F), (uint32_t)((v >> 20) & 0x3F),
-                     (((w->tex1[n] >> 2) & 7) ? 2u : 1u) << ((v >> 30) & 0xF), &first, &last);
+            if (levels > 0 && levels <= 3 && ((w->tex1[n] >> 9) & 1)) {
+                /* (a block of the format, in pixels: gsn.cpp's mip_addresses) */
+                uint32_t bw = psm == 0x14 ? 32 : psm == 0x13 || psm == 0x02 || psm == 0x0A ? 16 : 8;
+                uint32_t bh = psm == 0x13 || psm == 0x14 ? 16 : 8;
+                uint32_t blocks = (tw / bw) * (th / bh), end = tbp + blocks, l;
+
+                pages_of(tbp, (uint32_t)((v >> 14) & 0x3F), psm, th, &first, &last);
+                for (l = 0; l < levels; l++) {
+                    blocks /= 4;
+                    end += blocks;
+                }
+                if (end > tbp + (tw / bw) * (th / bh) && (end - 1) / 32 > last) {
+                    last = (end - 1) / 32;
+                }
+            } else {
+                pages_of(tbp, (uint32_t)((v >> 14) & 0x3F), psm, (levels ? 2u : 1u) * th, &first, &last);
+            }
             uploads_event(w->uploads, EV_READ, first, last);
             pages_of((uint32_t)((v >> 37) & 0x3FFF), 1, 0, 16, &first, &last);
             uploads_event(w->uploads, EV_READ, first, last);
@@ -1689,11 +1961,29 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
 
 /* SCAN: a 2D vertex kept for the pairs (its place, and its colour and texture coordinates when they are
    in this tag's qwords, where a picture between can change them) */
-static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q) {
+static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf) {
     FlatVertex *v = flat_add_vertex(w->flat);
-    uint64_t lo;
+    Item *it = &w->flat->items[w->flat->nitems - 1];
+    uint64_t lo, hi;
 
     memcpy(&lo, q, 8);
+    memcpy(&hi, q + 8, 8);
+    if (!((hi >> 47) & 1)) {
+        uint32_t z = xyzf ? (uint32_t)((hi >> 4) & 0xFFFFFF) : (uint32_t)hi;
+
+        it->zlo = z < it->zlo ? z : it->zlo;
+        it->zhi = z > it->zhi ? z : it->zhi;
+        if (it->st.state >= 0 && it->st.state != 2) {
+            if ((p->prim & 0x100) || p->st == NULL) {
+                it->st.state = -1;
+            } else {
+                float stq[3];
+
+                memcpy(stq, p->st, 12);
+                st_plane_vertex(&it->st, (double)(lo & 0xFFFF) / 16.0, (double)((lo >> 32) & 0xFFFF) / 16.0, stq);
+            }
+        }
+    }
     v->x = (int32_t)(lo & 0xFFFF);
     v->y = (int32_t)((lo >> 32) & 0xFFFF);
     v->has_rgba = p->rgbaq != NULL;
@@ -1722,6 +2012,73 @@ static void keep_flat_vertex(Walk *w, GifWalk *p, const uint8_t *q) {
         v->coords = 2;
         v->s = (float)(uv[0] & 0x3FFF) / 16.0f;
         v->t = (float)(uv[1] & 0x3FFF) / 16.0f;
+    }
+}
+
+/* A mesh of the world the CPU projected (Item's zlo, zhi, st): triangles, Z varying, S and T made from
+   the screen; while the world has a camera */
+static int item_mesh(const Walk *w, const Item *b) {
+    int tri = (b->prim & 7) >= 3 && (b->prim & 7) <= 5;
+
+    return tri && b->zhi > b->zlo + 1 && b->zlo != 0xFFFFFFFFu && st_screen((StPlane *)&b->st) &&
+           w->screen.sx != 0 && w->screen.sy != 0 && b->fbp == w->draw_fbp;
+}
+
+/* REPLAY, a vertex of an item_mesh: moved with the camera as the world is (move_vertex_in's way), S and T
+   with its place on the screen */
+static void move_mesh_vertex(Walk *w, GifWalk *p, uint8_t *q, int xyzf, const Item *b) {
+    const Screen *s = &w->screen;
+    double z, depth = 0, v[3], m[3], nx, ny, nz;
+    uint64_t lo, hi;
+    int i;
+
+    memcpy(&lo, q, 8);
+    memcpy(&hi, q + 8, 8);
+    if (!vertex_view(w, p, q, xyzf, v, &depth, &z)) {
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        m[i] = w->move.r[i][0] * v[0] + w->move.r[i][1] * v[1] + w->move.r[i][2] * v[2] + w->move.t[i];
+    }
+    if (!(m[2] > 0)) {
+        p->adc_left = 3;
+        return;
+    }
+    nx = s->sx * m[0] / m[2] + s->cx;
+    ny = s->sy * m[1] / m[2] + s->cy;
+    nz = s->cz + (z - s->cz) * depth / m[2];
+    if (!(fabs(nx - 2048.0) <= 2047.0 && fabs(ny - 2048.0) <= 2047.0 && nz >= 0)) {
+        p->adc_left = 3;
+        return;
+    }
+    {
+        int64_t ix = (int64_t)floor(nx * 16.0 + 0.5), iy = (int64_t)floor(ny * 16.0 + 0.5);
+
+        if (b->st.state == 1 && p->st != NULL) {
+            float st[2];
+            double s0, t0, s1, t1;
+
+            st_map(&b->st, (double)(lo & 0xFFFF) / 16.0, (double)((lo >> 32) & 0xFFFF) / 16.0, &s0, &t0);
+            st_map(&b->st, (double)ix / 16.0, (double)iy / 16.0, &s1, &t1);
+            memcpy(st, p->st, 8);
+            st[0] = (float)(st[0] + (s1 - s0));
+            st[1] = (float)(st[1] + (t1 - t0));
+            memcpy(p->st, st, 8);
+        }
+        nz = floor(nz + 0.5);
+        lo = (lo & ~(uint64_t)0xFFFF & ~((uint64_t)0xFFFF << 32)) | (uint64_t)ix | ((uint64_t)iy << 32);
+        if (xyzf) {
+            uint64_t zz = nz > 16777215.0 ? 16777215u : (uint64_t)nz;
+
+            hi = (hi & ~((uint64_t)0xFFFFFF << 4)) | (zz << 4);
+        } else {
+            uint64_t zz = nz > 4294967295.0 ? 4294967295u : (uint64_t)nz;
+
+            hi = (hi & ~(uint64_t)0xFFFFFFFF) | zz;
+        }
+        memcpy(q, &lo, 8);
+        memcpy(q + 8, &hi, 8);
+        w->moved++;
     }
 }
 
@@ -1937,6 +2294,17 @@ static int gpu_zm_ok(const Objects *o, const Objects *before, const Run *cur, co
     return 1;
 }
 
+/* GSN_IM_SCREEN_ST's map in a GsnInterpMove: h0..h5 in w[8..13], h6 in w[15], h7 in w[1] */
+static void gpu_st_map(GsnInterpMove *e, const StPlane *st) {
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        e->w[8 + i] = float_bits(st->h[i]);
+    }
+    e->w[15] = float_bits(st->h[6]);
+    e->w[1] = float_bits(st->h[7]);
+}
+
 /* A vertex of the world (move_vertex's) as a GsnInterpMove: its place in the frame's view, depth and Z,
    and when its run is paired its model's two places (object_between's) */
 static void gpu_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf, int section) {
@@ -2067,6 +2435,32 @@ static void gpu_flat_vertex(Walk *w, GifWalk *p) {
     }
 }
 
+/* An item_mesh's vertex as a GsnInterpMove: a vertex of the world, with the camera (gpu_vertex's), S and T
+   made from the screen with its place */
+static void gpu_mesh_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf, const Item *b) {
+    GsnInterpMove *e = gpu_move(w);
+    double v[3], depth, z;
+
+    if (!vertex_view(w, p, q, xyzf, v, &depth, &z)) {
+        return;
+    }
+    e->w[0] = GSN_IM_3D | GSN_IM_VIEW | GSN_IM_WORLD | (xyzf ? GSN_IM_XYZF : 0) |
+              (b->st.state == 1 ? GSN_IM_SCREEN_ST : 0);
+    e->w[1] = GSN_IM_NONE;
+    e->w[4] = float_bits(v[0]);
+    e->w[5] = float_bits(v[1]);
+    e->w[6] = float_bits(v[2]);
+    e->w[7] = float_bits(depth);
+    e->w[14] = float_bits(z - w->screen.cz);
+    if (b->st.state == 1) {
+        gpu_st_map(e, &b->st);
+    }
+    e->w[2] = p->win[0];
+    e->w[3] = p->win[1];
+    p->win[1] = p->win[0];
+    p->win[0] = w->kick;
+}
+
 /* One record: in REPLAY, data is the copy to send, and is changed (uploads left out are taken out of
    it). Returns the bytes left. */
 static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
@@ -2086,7 +2480,8 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
         w->run_vertex = 0;
         w->nseen = 0;
         if (w->mode == SCAN && w->objects != NULL) {
-            objects_add_run(w->objects, r->key, w->section, w->sky);
+            objects_add_run(w->objects, r->key, w->section, w->sky, w->alt);
+            w->objects->runs[w->objects->nruns - 1].shadow = (r->program & RECORD_SHADOW) != 0;
         } else if (w->mode == REPLAY) {
             const Objects *o = w->objects;
 
@@ -2189,11 +2584,9 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                             objects_add_vertex(w->objects, none, 0);
                         }
                     } else if (w->mode == REPLAY && w->exact) {
-                        /* (drawing the frame again for the other buffers: its 3D into the frame is not
-                           drawn, every vertex with ADC) */
-                        if ((p->prim & 7) >= 3 && (p->prim & 7) <= 5 && draws_frame(w, p->prim)) {
-                            q[15] |= 0x80;
-                        }
+                        /* (drawing the frame again for the other buffers: nothing into the frame is drawn,
+                           every vertex with ADC: exact_kick) */
+                        exact_kick(w, p, q);
                     } else if (w->mode == REPLAY && moves && w->gpu) {
                         gpu_vertex(w, p, q, d == 0x4, section);
                     } else if (w->mode == REPLAY && moves) {
@@ -2216,7 +2609,14 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                         }
                     }
                     if (w->mode == SCAN) {
-                        keep_flat_vertex(w, p, q);
+                        keep_flat_vertex(w, p, q, d == 0x4);
+                    } else if ((size_t)w->item < w->flat->nitems && w->item_vertex < w->flat->items[w->item].count &&
+                               item_mesh(w, &w->flat->items[w->item])) {
+                        if (w->gpu) {
+                            gpu_mesh_vertex(w, p, q, d == 0x4, &w->flat->items[w->item]);
+                        } else {
+                            move_mesh_vertex(w, p, q, d == 0x4, &w->flat->items[w->item]);
+                        }
                     } else if ((size_t)w->item < w->flat->nitems && w->gpu) {
                         gpu_flat_vertex(w, p);
                     } else if ((size_t)w->item < w->flat->nitems) {
@@ -2225,6 +2625,8 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                         gpu_move(w);
                     }
                     w->item_vertex++;
+                } else if (w->mode == REPLAY && w->exact) {
+                    exact_kick(w, p, q); /* (the 2D into the frame: not drawn either) */
                 } else if (w->gpu) {
                     gpu_move(w);
                 }
@@ -2255,6 +2657,30 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
             case 0xE: {
                 uint32_t reg = (uint32_t)(v[1] & 0xFF);
 
+                if (reg == PORT_GS_REG_NATIVE_DRAW) {
+                    /* native draw's marks: the PS2 path's packets of the native draws before them follow, for
+                       the native GS to leave out when it draws the native ones (gsn_set_native_draw). Their
+                       runs are not paired: the native draws are, by their identity (gsn_native_draw.inc) */
+                    uint32_t command = RD_ND_COMMAND(v[0]);
+
+                    if (command == RD_ND_ALT_BEGIN) {
+                        w->alt = port_options.renderer == PORT_RENDERER_NATIVE &&
+                                 port_options.native_draw_compare != PORT_ND_COMPARE_PS2;
+                    } else if (command == RD_ND_ALT_END) {
+                        w->alt = 0;
+                    } else if (command == RD_ND_READS_SHOWN) {
+                        w->native_reads_shown = 1; /* (native draw's screen pass, gsn_nd_pass.inc: no packet says so) */
+                    } else if (command == RD_ND_DRAW && w->mode == REPLAY && w->exact && exact_frame(w)) {
+                        /* (the exact restore: a native draw into the frame is left out, as the PS2 path's
+                           vertices are: exact_kick) */
+                        reg = PORT_GS_REG_FRAME_INTERP;
+                        v[0] = (uint64_t)0xFF << 32;
+                    }
+                }
+
+                if ((reg == 0x4 || reg == 0x5) && w->mode == REPLAY && w->exact && draws_frame(w, p->prim) && !exact_frame_drawn()) {
+                    reg += 8; /* (XYZF3, XYZ3: exact_kick) */
+                }
                 if (reg == 0x4 || reg == 0x5 || reg == 0xC || reg == 0xD) {
                     if (w->gpu) {
                         gpu_move(w);
@@ -2621,7 +3047,7 @@ void port_interp_vsync(const uint64_t *privileged) {
         pending.flat = flat_last;
         pending.flat_before = objects_before_set ? flat_before : NULL;
         pending.dirty = 0;
-        objects_pair(objects_last, pending.objects_before ? objects_before : NULL);
+        objects_pair(objects_last, pending.objects_before ? objects_before : NULL, w.camera.eye);
         pending.reads_prev = 0;
         pending.snapshot_sent = 0;
         pending.gpu = 0;
@@ -2633,6 +3059,7 @@ void port_interp_vsync(const uint64_t *privileged) {
 
                 pending.reads_prev |= (it->prim & 0x10) && it->fbp == w.draw_fbp && (uint32_t)(it->tex & 0x3FFF) == shown * 32;
             }
+            pending.reads_prev |= w.native_reads_shown; /* (native draw) */
         }
         flat_pair(flat_last, pending.flat_before, uploads_new);
         flat_copies(flat_last, uploads_new);
@@ -2753,6 +3180,9 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
     }
     f->kicks = gpu_kicks;
     f->runs = o != NULL ? (uint32_t)o->nruns : 0;
+    /* (the camera did not move: the same fields the game wrote, so every camera between is this one) */
+    f->still = memcmp(pending.before.r, pending.scan.camera.r, sizeof(pending.before.r)) == 0 &&
+               memcmp(pending.before.t, pending.scan.camera.t, sizeof(pending.before.t)) == 0;
     /* (the native GS frees what it is handed: these start again) */
     f->moves = gpu_moves;
     f->stream = gpu_stream;
@@ -2823,6 +3253,183 @@ static void gpu_picture(const Camera *between, double t) {
     }
 }
 
+/* ---- A check: pictures between moved outside their frames (KF4_INTERP_OUTSIDE) -------------------
+   For each run of the world placed in the pending frame, where its vertices are on the screen at the
+   picture's time t (moved as the replay moves them: with their model, paired and moving, else with the
+   camera), against where they were at t 0 (the frame shown: the pair's own places from the camera
+   before, or this frame's places from it when not paired) and at t 1 (the frame drawn). A run whose box
+   at t is outside both, by more than a margin, is logged (vblank, phase, the run, its pair, the boxes):
+   a picture between drew something where neither frame had it. KF4_INTERP_OUTSIDE=2 also logs every
+   shadow run (program 0x5A0). The log goes to stderr, or to the file KF4_INTERP_OUTSIDE_LOG names. */
+typedef struct {
+    double x0, y0, x1, y1;
+    int n;
+} OutBox;
+
+static void outbox_add(OutBox *b, const Screen *s, const Camera *c, const double p[3]) {
+    double v[3], x, y;
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        v[i] = c->r[i][0] * p[0] + c->r[i][1] * p[1] + c->r[i][2] * p[2] + c->t[i];
+    }
+    if (!(v[2] > 1e-6)) {
+        return;
+    }
+    x = (s->sx * v[0] / v[2] + s->cx) - 2048.0;
+    y = (s->sy * v[1] / v[2] + s->cy) - 2048.0;
+    if (!(fabs(x) <= 2047.0 && fabs(y) <= 2047.0)) {
+        return;
+    }
+    if (b->n == 0) {
+        b->x0 = b->x1 = x;
+        b->y0 = b->y1 = y;
+    } else {
+        b->x0 = x < b->x0 ? x : b->x0;
+        b->x1 = x > b->x1 ? x : b->x1;
+        b->y0 = y < b->y0 ? y : b->y0;
+        b->y1 = y > b->y1 ? y : b->y1;
+    }
+    b->n++;
+}
+
+/* the screen seen, about the centre (X and Y less 2048, GS pixels), and a little more */
+#define VIS_X 360.0
+#define VIS_Y 260.0
+static void outbox_clip(OutBox *b) {
+    b->x0 = b->x0 < -VIS_X ? -VIS_X : b->x0 > VIS_X ? VIS_X : b->x0;
+    b->x1 = b->x1 < -VIS_X ? -VIS_X : b->x1 > VIS_X ? VIS_X : b->x1;
+    b->y0 = b->y0 < -VIS_Y ? -VIS_Y : b->y0 > VIS_Y ? VIS_Y : b->y0;
+    b->y1 = b->y1 < -VIS_Y ? -VIS_Y : b->y1 > VIS_Y ? VIS_Y : b->y1;
+}
+
+static void outside_check(const Camera *between, double t, double phase, int gpu) {
+    static int mode = -1;
+    static FILE *log;
+    static Walk w; /* (run_motion's, gpu_run_static's) */
+    const Objects *o = pending.objects, *before = pending.objects_before;
+    const Screen *s = &pending.scan.screen;
+    size_t r;
+
+    if (mode < 0) {
+        const char *e = getenv("KF4_INTERP_OUTSIDE"), *f = getenv("KF4_INTERP_OUTSIDE_LOG");
+
+        mode = e != NULL ? atoi(e) : 0;
+        log = f != NULL ? fopen(f, "w") : NULL;
+        if (log == NULL) {
+            log = stderr;
+        }
+    }
+    if (mode <= 0 || o == NULL) {
+        return;
+    }
+    memset(&w, 0, sizeof(w));
+    w.objects = (Objects *)o;
+    w.prev = before;
+    w.camera = pending.scan.camera;
+    w.mid = *between;
+    w.t = t;
+    {
+        int i;
+
+        for (i = 0; i < 3; i++) {
+            w.eye_move[i] = pending.scan.camera.eye[i] - pending.before.eye[i];
+        }
+    }
+    for (r = 0; r < o->nruns; r++) {
+        const Run *cur = &o->runs[r], *prev;
+        OutBox b0 = {0}, b1 = {0}, bt = {0};
+        double m = 4.0, d = 0;
+        int moving, flag, i;
+        uint32_t k;
+
+        if (cur->section != SECTION_WORLD || !cur->placed || cur->native) {
+            continue;
+        }
+        w.run = (int)r;
+        w.run_prev = before != NULL && cur->pair >= 0 ? &before->runs[cur->pair] : NULL;
+        if (gpu) {
+            moving = gpu_run_static(&w) && ((cur->sky && o->sky_ok) ||
+                                            (w.run_prev != NULL && gpu_zm_ok(o, before, cur, &w.camera, between, t)));
+        } else {
+            run_motion(&w);
+            moving = w.run_moving && (w.run_prev != NULL || run_is_sky(&w));
+        }
+        prev = w.run_prev;
+        for (k = 0; k < cur->count; k++) {
+            const double *b = o->pos[cur->first + k];
+            double p[3];
+
+            if (!o->valid[cur->first + k]) {
+                continue;
+            }
+            outbox_add(&b1, s, &pending.scan.camera, b);
+            if (prev != NULL && before->valid[prev->first + k]) {
+                outbox_add(&b0, s, &pending.before, before->pos[prev->first + k]);
+            } else if (prev == NULL) {
+                outbox_add(&b0, s, &pending.before, b);
+            }
+            if (moving && cur->sky && o->sky_ok) {
+                for (i = 0; i < 3; i++) {
+                    p[i] = b[i] - o->sky_move[i] * (1.0 - t);
+                }
+            } else if (moving && prev != NULL) {
+                const double *a = before->pos[prev->first + k];
+                int straight = before->valid[prev->first + k] == VERTEX_SURE && o->valid[cur->first + k] == VERTEX_SURE;
+
+                if (!straight) {
+                    double ra = distance(a, prev->middle), rb = distance(b, cur->middle);
+                    double most = ra > rb ? ra : rb;
+
+                    straight = before->valid[prev->first + k] && fabs(ra - rb) <= most * 0.25 + 2.0;
+                }
+                for (i = 0; i < 3; i++) {
+                    p[i] = straight ? a[i] + (b[i] - a[i]) * t : b[i] + (prev->middle[i] - cur->middle[i]) * (1.0 - t);
+                }
+            } else {
+                memcpy(p, b, sizeof(p));
+            }
+            outbox_add(&bt, s, between, p);
+        }
+        if (bt.n == 0 || bt.x1 < -VIS_X || bt.x0 > VIS_X || bt.y1 < -VIS_Y || bt.y0 > VIS_Y) {
+            continue; /* (not on the screen) */
+        }
+        outbox_clip(&bt);
+        outbox_clip(&b0);
+        outbox_clip(&b1);
+        flag = 0;
+        if (b0.n == 0 && b1.n == 0) {
+            flag = 1;
+        } else {
+            double x0 = b1.n ? b1.x0 : b0.x0, x1 = b1.n ? b1.x1 : b0.x1, y0 = b1.n ? b1.y0 : b0.y0, y1 = b1.n ? b1.y1 : b0.y1;
+
+            if (b0.n) {
+                x0 = b0.x0 < x0 ? b0.x0 : x0;
+                x1 = b0.x1 > x1 ? b0.x1 : x1;
+                y0 = b0.y0 < y0 ? b0.y0 : y0;
+                y1 = b0.y1 > y1 ? b0.y1 : y1;
+            }
+            flag = bt.x0 < x0 - m || bt.x1 > x1 + m || bt.y0 < y0 - m || bt.y1 > y1 + m;
+        }
+        if (prev != NULL) {
+            for (i = 0; i < 3; i++) {
+                d += (prev->middle[i] - cur->middle[i]) * (prev->middle[i] - cur->middle[i]);
+            }
+            d = sqrt(d);
+        }
+        if (flag || (mode >= 2 && cur->shadow)) {
+            fprintf(log,
+                    "[outside] %s vblank %llu phase %.3f t %.3f run %zu key %016llx n %u%s%s pair %d (%.1f apart) %s "
+                    "t: %.0f %.0f %.0f %.0f | t0: %.0f %.0f %.0f %.0f | t1: %.0f %.0f %.0f %.0f\n",
+                    flag ? "OUT" : "ok", (unsigned long long)port_vblank_count(), phase, t, r, (unsigned long long)cur->key,
+                    cur->count, cur->shadow ? " shadow" : "", cur->sky ? " sky" : "", cur->pair, d,
+                    moving ? "moving" : "with-camera", bt.x0, bt.y0, bt.x1, bt.y1, b0.x0, b0.y0, b0.x1, b0.y1, b1.x0, b1.y0,
+                    b1.x1, b1.y1);
+        }
+    }
+    fflush(log);
+}
+
 int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes)) {
     Camera between;
     double t;
@@ -2840,6 +3447,7 @@ int port_interp_picture(double phase, void (*send)(int path, const void *data, s
     if (pending.gpu == 0) {
         pending.gpu = gpu_wanted() && gpu_frame(&between, t, send) ? 1 : -1;
     }
+    outside_check(&between, t, phase, pending.gpu > 0);
     if (pending.gpu > 0) {
         gpu_picture(&between, t);
     } else {

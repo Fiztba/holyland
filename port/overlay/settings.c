@@ -9,7 +9,7 @@
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa", "native_2d": "smooth",
-                    "native_colour": "exact", "native_layer_z": "tolerant",
+                    "native_colour": "exact", "native_layer_z": "tolerant", "native_draw": "off", "native_sky": "modern",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -48,10 +48,12 @@
 
 #include "cJSON.h"
 #include "port/audio.h"
+#include "port/automap.h"
 #include "port/controls.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
+#include "port/stats.h"
 
 PortSettings port_settings = {
     .window_height = 896,
@@ -77,6 +79,7 @@ PortSettings port_settings = {
     .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
     .native_2d = 1, /* GSN_2D_SMOOTH */
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
+    .native_sky = PORT_SKY_MODERN,
 };
 
 static int active;
@@ -410,6 +413,21 @@ void port_settings_load(void) {
         }
     }
     {
+        /* "on": every kind native draw has accepted (PORT_ND_ACCEPTED), "off" the PS2 path */
+        const char *native_draw = read_string(display, "native_draw");
+
+        if (native_draw != NULL) {
+            s->native_draw = strcmp(native_draw, "on") == 0;
+        }
+    }
+    {
+        const char *sky = read_string(display, "native_sky");
+
+        if (sky != NULL) {
+            s->native_sky = strcmp(sky, "ps2") == 0 ? PORT_SKY_PS2 : PORT_SKY_MODERN;
+        }
+    }
+    {
         const char *presenter = read_string(display, "presenter");
 
         if (presenter != NULL && version < 2 && strcmp(presenter, "sdl") == 0) {
@@ -424,6 +442,8 @@ void port_settings_load(void) {
     read_controls(cJSON_GetObjectItemCaseSensitive(document, "controls"));
     s->myus_necklace = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "myus_necklace", s->myus_necklace);
     s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
+    port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
+    port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     overlay = cJSON_GetObjectItemCaseSensitive(document, "overlay");
     s->pause_when_open = read_bool(overlay, "pause_when_open", s->pause_when_open);
     s->show_fps = read_bool(overlay, "show_fps", s->show_fps);
@@ -505,8 +525,14 @@ void port_settings_load(void) {
     if (!port_options.native_layer_z_forced) {
         port_options.native_layer_z = s->native_layer_z;
     }
+    if (!port_options.native_sky_forced) {
+        port_options.native_sky = s->native_sky;
+    }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
+    }
+    if (!port_options.native_draw_forced) {
+        port_options.native_draw = s->native_draw ? PORT_ND_ACCEPTED : 0;
     }
     if (port_options.controls == NULL) {
         port_options.controls = s->layout;
@@ -641,6 +667,8 @@ void port_settings_save(void) {
     put(display, "native_2d", cJSON_CreateString(s->native_2d == 0 ? "ps2" : "smooth"));
     put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
+    put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
+    put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"
                                                                                      : "gs"));
@@ -651,6 +679,8 @@ void port_settings_save(void) {
     write_controls(section("controls"));
     put(section("mods"), "myus_necklace", cJSON_CreateBool(s->myus_necklace));
     put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
+    port_stats_settings_write(section("mods")); /* the extended stats mod */
+    port_automap_settings_write(section("mods")); /* the automap mod */
     overlay = section("overlay");
     put(overlay, "pause_when_open", cJSON_CreateBool(s->pause_when_open));
     put(overlay, "show_fps", cJSON_CreateBool(s->show_fps));
