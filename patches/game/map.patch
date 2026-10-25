@@ -1105,10 +1105,14 @@ index b6d9f0e111e1c029c9fd11e439004f80a0b651ca..0608b56959af344f3c080373ebbee51a
      fog = &map_draw_state.current_fog_color;
      *fog = ((MapSlotUnk08 *)map_slots[0].header)->fog_color;
 diff --git a/src/game/map/map_load.c b/src/game/map/map_load.c
-index 75d13e205ec0fe6ed66f482f61f10d55071b0946..f741e489255ed0b0e0b46329efcae5f20e6a8a9c 100644
+index 75d13e205ec0fe6ed66f482f61f10d55071b0946..efa499b80d094eb648de5b1963a9fc72f0256e96 100644
 --- a/src/game/map/map_load.c
 +++ b/src/game/map/map_load.c
-@@ -11,7 +11,7 @@
+@@ -8,10 +8,11 @@
+ #include "map_object/map_object.h"
+ #include "effect/effect.h"
+ #include "map/map_scroll.h"
++#include "collision/collision.h" /* PC: MapRecordBounds, for neighbour_needed_here */
  
  extern void (*map_load_steps[])(void);
  void GameLoop_RunSoundLoads(void);
@@ -1117,7 +1121,7 @@ index 75d13e205ec0fe6ed66f482f61f10d55071b0946..f741e489255ed0b0e0b46329efcae5f2
  int File_IsLocked(void);
  void File_Unlock(void);
  void Packet_SwapBuffers(void);
-@@ -29,7 +29,6 @@ void func_001A15F8(void);
+@@ -29,7 +30,6 @@ void func_001A15F8(void);
  void MapItem_UnloadMap(int);
  void File_Lock(void);
  int File_GetSize(int);
@@ -1125,6 +1129,48 @@ index 75d13e205ec0fe6ed66f482f61f10d55071b0946..f741e489255ed0b0e0b46329efcae5f2
  void Map_ParseFile(int);
  void Map_BuildModels(int);
  void Map_OffsetRecords(int, f32 *);
+@@ -68,6 +68,32 @@ void MapLoad_Reset(void) {
+     map_load_request.map = 0xFFFF;
+ }
+ 
++/* PC: a retail data bug. A record that needs the neighbouring map (needs_neighbour_map) is a thin floor
++   that must become PlayerState.map_index, so it is laid a little above the floor it covers (map 104's
++   record 17: 758 over 760): Player_CollideWithMap keeps the first floor it finds of the highest. Map 104's
++   record 14 (the corridor west of the stairs down to map 102) lies at the corridor's own height, -280:
++   record 9's floor is found first and wins the tie, so record 14 never becomes map_index. Coming back
++   from Belric Psytar (records 16 then 15 ask for map 105, then for map 102), map 102 is read but never
++   set up: the stairs and the corridor's east door lead into black, and the player falls through. So a
++   record that needs the neighbour also counts while the player stands on its floor (inside its box, at
++   its height). */
++static int neighbour_needed_here(MapSlot *slot) {
++    MapRecordInfo *record = (MapRecordInfo *)slot->records;
++    f32 *point = &player_state.position.x;
++    int i;
++
++    for (i = 0; i < slot->header->record_count; i++, record++) {
++        MapRecordBounds *box = (MapRecordBounds *)record;
++
++        if (record->needs_neighbour_map != 0 && box->collision_mesh_index != 0xFFFF &&
++            point[0] >= box->lowest[0] && point[0] <= box->highest[0] && point[2] >= box->lowest[2] &&
++            point[2] <= box->highest[2] && point[1] >= box->lowest[1] - 1.0f && point[1] <= box->highest[1] + 1.0f) {
++            return 1;
++        }
++    }
++    return 0;
++}
++
+ /* Starts, queues and steps the background load of the map next to where the player stands. */
+ void MapLoad_Update(void) {
+     MapSlot *current = &map_slots[current_map_slot];
+@@ -117,7 +143,7 @@ void MapLoad_Update(void) {
+         }
+     }
+     if (!((s32)(map_load_state.flags.raw >> 1) & 1)) {
+-        if (record != NULL && record->needs_neighbour_map != 0) {
++        if (record != NULL && (record->needs_neighbour_map != 0 || ((u32)(map_load_state.step - 1) < 5 && neighbour_needed_here(current)))) { /* PC: or */
+             if ((u32)(map_load_state.step - 1) < 5) {
+                 Input_StopRumble();
+                 while (map_load_state.step != 5) {
 diff --git a/src/game/map/map_scroll.c b/src/game/map/map_scroll.c
 index eb723d385b7af778ae5ea3ccbe0c9da67d9c59fa..aea0d1135e035716616b0a3449608778b5de42d6 100644
 --- a/src/game/map/map_scroll.c
