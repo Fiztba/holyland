@@ -10,6 +10,7 @@
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa", "native_2d": "smooth",
                     "native_colour": "exact", "native_layer_z": "tolerant", "native_draw": "off", "native_sky": "modern",
+                    "native_shine": "whole",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -414,6 +415,13 @@ void port_settings_load(void) {
         }
     }
     {
+        const char *shine = read_string(display, "native_shine");
+
+        if (shine != NULL) {
+            s->native_shine_exact = strcmp(shine, "exact") == 0;
+        }
+    }
+    {
         /* "on": every kind native draw has accepted (PORT_ND_ACCEPTED), "off" the PS2 path */
         const char *native_draw = read_string(display, "native_draw");
 
@@ -526,6 +534,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_layer_z_forced) {
         port_options.native_layer_z = s->native_layer_z;
+    }
+    if (!port_options.native_shine_exact_forced) {
+        port_options.native_shine_exact = s->native_shine_exact;
     }
     if (!port_options.native_sky_forced) {
         port_options.native_sky = s->native_sky;
@@ -670,6 +681,7 @@ void port_settings_save(void) {
     put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
+    put(display, "native_shine", cJSON_CreateString(s->native_shine_exact ? "exact" : "whole"));
     put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
     put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
                                                 : s->renderer == PORT_RENDERER_BOTH  ? "both"

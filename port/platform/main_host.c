@@ -24,6 +24,11 @@
                          (1, 2, 4, 8) of its own, the GS's (--native-scale, --native-msaa) for the 2D, the
                          menus and the title; the picture shown made from both (gsn_composite.inc). By
                          default the GS's
+       --native-shine whole|exact
+                         with --renderer modern, a skinned model's sphere-mapped shine that is blended
+                         in the shader (the ice creatures on map 017): drawn whole (the default, much
+                         faster) or exact, in runs of triangles that do not overlap, as the GS blends
+                         it where a part folds over its own edge (a few pixels along those edges)
        --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
                          the native GS's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
@@ -239,7 +244,7 @@ static void usage(const char *program) {
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
-            "          [--native-layer-z tolerant|ps2]\n"
+            "          [--native-layer-z tolerant|ps2] [--native-shine whole|exact]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
@@ -632,6 +637,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_layer_z_forced = 1;
+        } else if (strcmp(option, "--native-shine") == 0) {
+            if (strcmp(value, "whole") == 0) {
+                port_options.native_shine_exact = 0;
+            } else if (strcmp(value, "exact") == 0) {
+                port_options.native_shine_exact = 1;
+            } else {
+                fprintf(stderr, "--native-shine wants whole or exact, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_shine_exact_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;

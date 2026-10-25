@@ -43,6 +43,12 @@ typedef struct {
        (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */
     int scene_scale;
     int scene_msaa;
+    /* --native-shine: with --renderer modern, a skinned model's sphere-mapped shine blended in the shader
+       (the ice creatures on map 017: Cs + Cd As, As above 0x80) drawn whole, the default (0), or in runs of
+       triangles that do not overlap (1, exact): where a part folds over its own edge the GS blends both
+       triangles there, drawn whole one is (docs/port/NATIVE_DRAW_P8.md, "The icy corridor"). Live. */
+    int native_shine_exact;
+    int native_shine_exact_forced;
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
        the default, a swapchain on the native GS's own device (port/platform/present_vk.cpp), with the
        native GS's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the
@@ -404,6 +410,9 @@ void port_gs_set_native_2d(int mode);
 void port_gs_set_native_colour(int mode);
 /* The native GS's Z (port_options.native_layer_z), from the next draw */
 void port_gs_set_native_layer_z(int mode);
+/* --renderer modern's shines blended in the shader: whole (0) or exact, in runs (1)
+   (port_options.native_shine_exact), from the next draw */
+void port_gs_set_native_shine_exact(int exact);
 /* --native-draw and --native-draw-compare (port_options.native_draw, native_draw_compare), from the next
    frame */
 void port_gs_set_native_draw(int kinds, int compare);

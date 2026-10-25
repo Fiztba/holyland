@@ -3123,17 +3123,14 @@ bool sa_draw_batch(int *why) {
                     !sa_passing_same_twice(st, tex0, test, alpha, abe, as_min, as_max, passes[0].select, npasses);
     std::vector<uint32_t> &runs = sa.runs; // (kept from batch to batch: their room)
     runs.assign(1, 0);
-    // (perf/icy) KF4_SA_SHINE_RUNS=0 (a test, not the default): a second pass blended in the shader drawn whole, not
-    // in runs. Where two of its triangles that overlap meet at exactly the same depth (a part folded over its own
+    // (perf/shine-whole) A second pass blended in the shader is drawn whole, not in runs, unless --native-shine exact
+    // (shine_exact). Where two of its triangles that overlap meet at exactly the same depth (a part folded over its own
     // edge) the GS blends both there; drawn whole, only one is. About 180 pixels of a 3x picture at the icy corridor
-    // differ, and the creatures' runs (about 2,400 a picture, each a copy and two barriers) are most of its cost:
-    // 140 pictures a second against 237 (NATIVE_DRAW_P8.md, "The icy corridor").
-    static int shine_runs = -1;
-    if (shine_runs < 0) {
-        const char *v = getenv("KF4_SA_SHINE_RUNS");
-        shine_runs = v && *v ? atoi(v) : 1;
-    }
-    bool split = (npasses > 1 || shader_blend || tie_runs) && !shadow && !(second_pass && !shine_runs);
+    // differ (at most 64 levels), and the creatures' runs (about 2,400 a picture, each a copy and two barriers) were
+    // most of its cost: 140 pictures a second against 237 (NATIVE_DRAW_P8.md, "The icy corridor"). Modern by default,
+    // the PS2's picture with the switch (the owner's call).
+    bool shine_whole = second_pass && shader_blend && !shine_exact;
+    bool split = (npasses > 1 || shader_blend || tie_runs) && !shadow && !shine_whole;
     if (split && memo && memo->split && !memo_check) {
         // (rc/own) where the frame's batch's triangles overlap
         const uint32_t *cuts = memo_frame->sa_u32.data() + memo->runs_at;

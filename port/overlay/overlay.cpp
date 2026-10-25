@@ -911,6 +911,19 @@ void renderer_section() {
                 "whole-number depth makes a sawtooth. Tolerant keeps depth's fraction and lets a layer pass\n"
                 "within a hair of the surface under it: clean layers and straight seams. PS2's is the PS2's\n"
                 "picture. (--native-layer-z)");
+        if (port_options.renderer_modern) {
+            bool shine_exact = port_options.native_shine_exact != 0;
+            if (ImGui::Checkbox("Ice shine: exact PS2 folds (slower)", &shine_exact)) {
+                port_gs_set_native_shine_exact(shine_exact ? 1 : 0);
+                port_settings.native_shine_exact = shine_exact ? 1 : 0;
+                port_settings_changed();
+            }
+            tooltip("The ice creatures' shine (map 017) is blended in a shader. Where a part of a creature\n"
+                    "folds over its own edge, the PS2 blends the shine twice along that edge. Off (the default):\n"
+                    "the shine is drawn whole, once, and much faster (a few pixels along those edges are a little\n"
+                    "darker). On: drawn in many small pieces, the PS2's picture exactly. Applies at once.\n"
+                    "(--native-shine exact|whole)");
+        }
         // (--native-draw on / off, saved; the kinds one by one are the Debug page's: docs/port/NATIVE_DRAW.md)
         bool native_draw = (port_options.native_draw & PORT_ND_ACCEPTED) == PORT_ND_ACCEPTED;
         if (ImGui::Checkbox("Native draw (experimental)", &native_draw)) {
