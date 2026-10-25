@@ -61,6 +61,11 @@ void *MapItem_FindModelSource(int slot, int key);
 int MapItem_UniqueNotCarried(int item);
 int MapItem_UniqueNotInTradeStock(int item);
 int MapItem_UniqueNotDropped(int item);
+void sceVu0UnitMatrix(void *m);
+void sceVu0RotMatrixX(void *dst, void *src, float angle);
+void sceVu0RotMatrixY(void *dst, void *src, float angle);
+void sceVu0RotMatrixZ(void *dst, void *src, float angle);
+void sceVu0TransMatrix(void *dst, void *src, void *translation);
 extern GameStatus game_status;
 
 sptr Message_GetText(int message_id);
@@ -1629,95 +1634,332 @@ static void item_markers(int slot) {
     }
 }
 
-/* The ways into the neighbouring maps. The records at a join (MapRecordInfo.needs_neighbour_map) have the
-   neighbouring map set up. Which map: once the player has been near, the game has it loaded in its other
-   slot, moved to where it joins (MapLoad_SetUpMap), and its records overlap the join (confirmed); until then
-   (the reveal cheat), the map of the origin named by the nearest record that names one, the one the game
-   loads while the player walks up to it (MapLoad_Update). Worked out as a map is built, confirmed each poll. */
+/* The ways into the neighbouring maps. KF4's maps join without a load screen: a record of the map
+   (MapRecordInfo.neighbour_origin_index) names one of the map's origins (MapSlot.origins, a MapLoadRequest:
+   the neighbour's number and where it lies), and while the player stands on it the game loads that neighbour
+   into its other slot, moved by minus the origin's position (MapLoad_Update, MapLoad_SetUpMap); a record with
+   needs_neighbour_map waits for that load to end. Those records are where the loading starts (often whole
+   rooms), not the way across. The player crosses when the floor under him is the other map's
+   (Player_FindFloor: Map_MakeCurrent of the slot whose floor he stands on). So a way is where this map's floor
+   meets the neighbour's floor, placed as the game places it: read from the neighbour's file on the disc (its
+   records' floor, hazard and water strips, placed by each record's matrix as Map_PlaceRecordModels builds
+   it), the cells of this map's floor with the neighbour's floor in them or beside them within a step (150).
+   Each connected stretch of those cells is one way, marked over that stretch only. Worked out as a map is
+   built. (Doors and wands that change the map by a script, MapChange_StartToMap, are not marked.) */
 #define MAX_EXITS 64
+#define EXIT_STEP 150
 
 typedef struct {
     float x0, z0, x1, z1, y;
     int map;
-    int confirmed;
 } Exit;
 
 static Exit exits[MAX_EXITS];
 static int exit_count;
 
-static void find_exits(int slot_index) {
-    MapSlot *slot = &map_slots[slot_index];
-    int count = ((MapSlotUnk08 *)slot->header)->record_count, i, k;
+/* the neighbour's floor heights per cell (up to LAYERS), for one neighbour at a time, and the cells of the
+   records that load it (MapRecordInfo.neighbour_origin_index) */
+static int16_t *neighbour_y;
+static uint8_t *loads_neighbour;
 
-    exit_count = 0;
-    for (i = 0; i < count && exit_count < MAX_EXITS; i++) {
-        MapRecordBounds *r = (MapRecordBounds *)(slot->records + i * 0x80);
-        MapRecordInfo *info = (MapRecordInfo *)r;
-        float cx, cz, best = 1e30f;
-        int origin = -1;
-        Exit *e;
+static void neighbour_cell(int i, int j, float yf, void *context) {
+    int16_t *l = &neighbour_y[((size_t)j * plan.width + i) * LAYERS];
+    int y = (int)yf, n;
 
-        if (!info->needs_neighbour_map || r->highest[0] <= r->lowest[0] || r->highest[2] <= r->lowest[2]) {
-            continue;
+    (void)context;
+    if (y <= -32000 || y >= 32000) {
+        return;
+    }
+    for (n = 0; n < LAYERS && l[n] != NO_Y; n++) {
+        if (abs(l[n] - y) < MERGE) {
+            return;
         }
-        cx = (r->lowest[0] + r->highest[0]) * 0.5f;
-        cz = (r->lowest[2] + r->highest[2]) * 0.5f;
-        for (k = 0; k < count; k++) {
-            MapRecordBounds *o = (MapRecordBounds *)(slot->records + k * 0x80);
-            MapRecordInfo *oi = (MapRecordInfo *)o;
-            float dx, dz, d;
-
-            if (oi->neighbour_origin_index >= 32 || o->highest[0] <= o->lowest[0]) {
-                continue;
-            }
-            dx = fmaxf(0.0f, fmaxf(o->lowest[0] - cx, cx - o->highest[0]));
-            dz = fmaxf(0.0f, fmaxf(o->lowest[2] - cz, cz - o->highest[2]));
-            d = dx * dx + dz * dz;
-            if (d < best) {
-                best = d;
-                origin = oi->neighbour_origin_index;
-            }
-        }
-        e = &exits[exit_count++];
-        e->x0 = r->lowest[0];
-        e->z0 = r->lowest[2];
-        e->x1 = r->highest[0];
-        e->z1 = r->highest[2];
-        e->y = r->highest[1];
-        e->map = origin >= 0 ? ((MapLoadRequest *)&slot->origins[origin])->map : -1;
-        e->confirmed = 0;
+    }
+    if (n < LAYERS) {
+        l[n] = (int16_t)y;
     }
 }
 
-/* the other slot's map, where it is loaded and set up, lies over the joins it is beyond */
-static void confirm_exits(int slot_index) {
-    MapSlot *other = &map_slots[slot_index ^ 1];
-    int count, i, k;
+static float file_f32(const uint8_t *p) {
+    float f;
 
-    if (!other->loaded || other->header == NULL || other->records == NULL || other->tag == plan.map) {
-        return;
+    memcpy(&f, p, 4);
+    return f;
+}
+
+static uint32_t file_u32(const uint8_t *p) {
+    uint32_t v;
+
+    memcpy(&v, p, 4);
+    return v;
+}
+
+/* a map's file from the disc (KF4.DAT's member NNN.map), malloc'd, or NULL */
+static uint8_t *read_map_file(int map, uint32_t *size) {
+    char name[16];
+    uint32_t lsn;
+    uint8_t *data;
+
+    snprintf(name, sizeof(name), "%03d.map", map);
+    if (!port_disc_find_member(name, &lsn, size) || *size < 0x17C0 || *size > 0x1000000) {
+        return NULL;
     }
-    count = ((MapSlotUnk08 *)other->header)->record_count;
-    for (k = 0; k < exit_count; k++) {
-        Exit *e = &exits[k];
+    data = malloc(((size_t)*size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE * DISC_SECTOR_SIZE);
+    if (data != NULL && !port_disc_read(lsn, (*size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE, data)) {
+        free(data);
+        data = NULL;
+    }
+    return data;
+}
 
-        if (e->confirmed && e->map == other->tag) {
+/* the floor, hazard and water triangles of a map file's records (as Map_ParseFile, Map_BuildModels and
+   Collision_RelocateMesh read it: the records from 0x17C0, 0x80 bytes each; the collision meshes back to back
+   from the word at 0x08, each giving its size at 0x14; a mesh's strip lists are offsets from it, a strip
+   point names a point by number), moved by `offset`, rastered into neighbour_y */
+static void file_floors(const uint8_t *data, uint32_t size, const float offset[3]) {
+    static const int lists[3] = {1, 4, 5};
+    int records = data[0x3C] | data[0x3D] << 8, r, mesh_count = 0;
+    uint32_t mesh_at[1024];
+
+    for (r = 0; r < records && 0x17C0 + (r + 1) * 0x80 <= (int)size; r++) {
+        const uint8_t *rec = data + 0x17C0 + r * 0x80;
+        int mesh = rec[0x32] | rec[0x33] << 8, li, k;
+        uint32_t at, strip_count, point_count, points, cursor;
+        float m[16], position[4], turn[3], scale[3];
+
+        if (mesh == 0xFFFF || mesh >= 1024 || (file_u32(rec + 0x3C) & 0x40000000)) {
             continue;
         }
-        for (i = 0; i < count; i++) {
-            MapRecordBounds *r = (MapRecordBounds *)(other->records + i * 0x80);
+        while (mesh_count <= mesh) { /* the meshes are back to back */
+            uint32_t next = mesh_count == 0 ? file_u32(data + 0x08)
+                                            : mesh_at[mesh_count - 1] + file_u32(data + mesh_at[mesh_count - 1] + 0x14);
 
-            if ((r->record_flags & 0x82000000u) || MAP_RECORD_MODEL(r) == NULL || MAP_RECORD_MODEL(r)->strips == NULL ||
-                r->highest[0] <= r->lowest[0] || r->highest[2] <= r->lowest[2]) {
-                continue;
+            if (next + 0x50 > size) {
+                return;
             }
-            if (r->lowest[0] < e->x1 && r->highest[0] > e->x0 && r->lowest[2] < e->z1 && r->highest[2] > e->z0) {
-                e->map = other->tag;
-                e->confirmed = 1;
-                break;
+            mesh_at[mesh_count++] = next;
+        }
+        at = mesh_at[mesh];
+        strip_count = file_u32(data + at);
+        point_count = file_u32(data + at + 0x0C);
+        cursor = at + 0x50;
+        for (k = 0; k < (int)strip_count && cursor + 0x20 <= size; k++) {
+            cursor += 0x20 + (uint32_t)(data[cursor] | data[cursor + 1] << 8) * 16;
+        }
+        points = cursor;
+        if ((uint64_t)points + (uint64_t)point_count * 16 > size || point_count == 0) {
+            continue;
+        }
+        /* the record's matrix, as Map_PlaceRecordModels builds collision_matrix */
+        for (k = 0; k < 3; k++) {
+            position[k] = file_f32(rec + 0x00 + 4 * k);
+            turn[k] = file_f32(rec + 0x10 + 4 * k);
+            scale[k] = file_f32(rec + 0x20 + 4 * k);
+        }
+        position[3] = 1.0f;
+        sceVu0UnitMatrix(m);
+        m[0] *= scale[0];
+        m[5] *= scale[1];
+        m[10] *= scale[2];
+        sceVu0RotMatrixX(m, m, turn[0]);
+        sceVu0RotMatrixY(m, m, turn[1]);
+        sceVu0RotMatrixZ(m, m, turn[2]);
+        sceVu0TransMatrix(m, m, position);
+        for (li = 0; li < 3; li++) {
+            int list = lists[li], count = data[at + 0x38 + 2 * list] | data[at + 0x39 + 2 * list] << 8, s;
+
+            cursor = at + file_u32(data + at + 0x18 + 4 * list);
+            for (s = 0; s < count && cursor + 0x20 <= size; s++) {
+                int n = data[cursor] | data[cursor + 1] << 8;
+                float p[3][3];
+
+                if (cursor + 0x20 + (uint32_t)n * 16 > size) {
+                    break;
+                }
+                for (k = 0; k < n; k++) {
+                    uint32_t index = file_u32(data + cursor + 0x20 + 16 * k);
+                    const uint8_t *v = data + points + 16 * (index < point_count ? index : 0);
+                    float x = file_f32(v), y = file_f32(v + 4), z = file_f32(v + 8), *w = p[k % 3];
+
+                    w[0] = x * m[0] + y * m[4] + z * m[8] + m[12] + offset[0];
+                    w[1] = x * m[1] + y * m[5] + z * m[9] + m[13] + offset[1];
+                    w[2] = x * m[2] + y * m[6] + z * m[10] + m[14] + offset[2];
+                    if (k >= 2) {
+                        raster(p[(k - 2) % 3], p[(k - 1) % 3], p[k % 3], neighbour_cell, NULL);
+                    }
+                }
+                cursor += 0x20 + (uint32_t)n * 16;
             }
         }
     }
+}
+
+/* the layer of cell c that has the neighbour's floor in its cell or one beside it, within a step: its
+   height, or NO_Y */
+static int meets_neighbour(int c) {
+    const PortAutomapLayer *l = &layers[(size_t)c * LAYERS];
+    int i = c % plan.width, j = c / plan.width, n, d, k;
+    static const int di[5] = {0, 1, -1, 0, 0}, dj[5] = {0, 0, 0, 1, -1};
+
+    for (n = 0; n < LAYERS && l[n].y != NO_Y; n++) {
+        if (l[n].kind == PORT_AUTOMAP_DEATH) {
+            continue;
+        }
+        for (d = 0; d < 5; d++) {
+            const int16_t *o;
+
+            if (i + di[d] < 0 || j + dj[d] < 0 || i + di[d] >= plan.width || j + dj[d] >= plan.height) {
+                continue;
+            }
+            o = &neighbour_y[((size_t)(j + dj[d]) * plan.width + i + di[d]) * LAYERS];
+            for (k = 0; k < LAYERS && o[k] != NO_Y; k++) {
+                if (abs(o[k] - l[n].y) <= EXIT_STEP) {
+                    return l[n].y;
+                }
+            }
+        }
+    }
+    /* a gap in this map's floor (no floor, or only the void) with the neighbour's floor in it, at or below the
+       floor beside it, where a record that loads the neighbour lies: the player drops in */
+    if ((n == 0 || (n == 1 && l[0].kind == PORT_AUTOMAP_DEATH)) && loads_neighbour[c]) {
+        const int16_t *o = &neighbour_y[(size_t)c * LAYERS];
+
+        for (d = 1; d < 5 && o[0] != NO_Y; d++) {
+            const PortAutomapLayer *b;
+
+            if (i + di[d] < 0 || j + dj[d] < 0 || i + di[d] >= plan.width || j + dj[d] >= plan.height) {
+                continue;
+            }
+            b = &layers[((size_t)(j + dj[d]) * plan.width + i + di[d]) * LAYERS];
+            for (n = 0; n < LAYERS && b[n].y != NO_Y; n++) {
+                for (k = 0; b[n].kind != PORT_AUTOMAP_DEATH && k < LAYERS && o[k] != NO_Y; k++) {
+                    if (o[k] > b[n].y - EXIT_STEP) {
+                        return b[n].y;
+                    }
+                }
+            }
+        }
+    }
+    return NO_Y;
+}
+
+static void find_exits(int slot_index) {
+    MapSlot *slot = &map_slots[slot_index];
+    int count = ((MapSlotUnk08 *)slot->header)->record_count, i, k, o;
+    size_t cells = (size_t)plan.width * plan.height;
+    uint8_t used[32] = {0}, *way;
+    int *stack;
+
+    exit_count = 0;
+    for (i = 0; i < count; i++) {
+        const MapRecordInfo *info = (const MapRecordInfo *)(slot->records + i * 0x80);
+
+        if (info->neighbour_origin_index < 32) {
+            used[info->neighbour_origin_index] = 1;
+        }
+    }
+    neighbour_y = malloc(cells * LAYERS * sizeof(*neighbour_y));
+    loads_neighbour = malloc(cells);
+    way = malloc(cells);
+    stack = malloc(cells * sizeof(*stack));
+    for (o = 0; o < 32 && neighbour_y != NULL && loads_neighbour != NULL && way != NULL && stack != NULL; o++) {
+        const MapLoadRequest *request = (const MapLoadRequest *)&slot->origins[o];
+        int map = request->map & 0xFF, again = 0;
+        float offset[3];
+        uint32_t size;
+        uint8_t *data;
+
+        if (!used[o] || map == plan.map) {
+            continue;
+        }
+        for (k = 0; k < o; k++) { /* the same neighbour in the same place through another origin */
+            const MapLoadRequest *before = (const MapLoadRequest *)&slot->origins[k];
+
+            again |= used[k] && (before->map & 0xFF) == map && before->x == request->x && before->y == request->y &&
+                     before->z == request->z;
+        }
+        if (again || (data = read_map_file(map, &size)) == NULL) {
+            continue;
+        }
+        for (k = 0; k < (int)(cells * LAYERS); k++) {
+            neighbour_y[k] = NO_Y;
+        }
+        offset[0] = -request->x;
+        offset[1] = -request->y;
+        offset[2] = -request->z;
+        file_floors(data, size, offset);
+        free(data);
+        memset(loads_neighbour, 0, cells);
+        for (i = 0; i < count; i++) {
+            const MapRecordBounds *r = (const MapRecordBounds *)(slot->records + i * 0x80);
+            const MapRecordInfo *info = (const MapRecordInfo *)r;
+            const MapLoadRequest *to;
+            int i0, i1, j0, j1, ci, cj;
+
+            if (info->neighbour_origin_index >= 32) {
+                continue;
+            }
+            to = (const MapLoadRequest *)&slot->origins[info->neighbour_origin_index];
+            if ((to->map & 0xFF) != map) {
+                continue;
+            }
+            i0 = (int)floorf((r->lowest[0] - plan.x0) / CELL);
+            i1 = (int)ceilf((r->highest[0] - plan.x0) / CELL);
+            j0 = (int)floorf((r->lowest[2] - plan.z0) / CELL);
+            j1 = (int)ceilf((r->highest[2] - plan.z0) / CELL);
+            for (cj = j0 < 0 ? 0 : j0; cj < j1 && cj < plan.height; cj++) {
+                for (ci = i0 < 0 ? 0 : i0; ci < i1 && ci < plan.width; ci++) {
+                    loads_neighbour[(size_t)cj * plan.width + ci] = 1;
+                }
+            }
+        }
+        for (k = 0; k < (int)cells; k++) {
+            way[k] = meets_neighbour(k) != NO_Y;
+        }
+        /* each connected stretch of them, one way */
+        for (k = 0; k < (int)cells && exit_count < MAX_EXITS; k++) {
+            int top = 0, n = 0;
+            float sum_y = 0.0f;
+            Exit *e;
+
+            if (!way[k]) {
+                continue;
+            }
+            e = &exits[exit_count++];
+            e->x0 = e->z0 = 1e30f;
+            e->x1 = e->z1 = -1e30f;
+            e->map = map;
+            way[k] = 0;
+            stack[top++] = k;
+            while (top > 0) {
+                int c = stack[--top], ci = c % plan.width, cj = c / plan.width, di, dj;
+
+                sum_y += meets_neighbour(c);
+                n++;
+                e->x0 = fminf(e->x0, plan.x0 + ci * CELL);
+                e->z0 = fminf(e->z0, plan.z0 + cj * CELL);
+                e->x1 = fmaxf(e->x1, plan.x0 + (ci + 1) * CELL);
+                e->z1 = fmaxf(e->z1, plan.z0 + (cj + 1) * CELL);
+                for (dj = -1; dj <= 1; dj++) {
+                    for (di = -1; di <= 1; di++) {
+                        int ni = ci + di, nj = cj + dj;
+
+                        if (ni >= 0 && nj >= 0 && ni < plan.width && nj < plan.height && way[nj * plan.width + ni]) {
+                            way[nj * plan.width + ni] = 0;
+                            stack[top++] = nj * plan.width + ni;
+                        }
+                    }
+                }
+            }
+            e->y = sum_y / n;
+        }
+    }
+    free(neighbour_y);
+    neighbour_y = NULL;
+    free(loads_neighbour);
+    loads_neighbour = NULL;
+    free(way);
+    free(stack);
 }
 
 static void exit_markers(void) {
@@ -1965,7 +2207,6 @@ void Automap_Poll(void) {
             last_reveal_heading = player.heading;
         }
     }
-    confirm_exits(slot);
     build_markers(slot);
     if (++polls_since_build == 30) {
         dump_markers(slot);

@@ -354,6 +354,33 @@ int port_disc_find(const char *path, uint32_t *lsn, uint32_t *size) {
     return 0;
 }
 
+int port_disc_find_member(const char *name, uint32_t *lsn, uint32_t *size) {
+    int i;
+
+    for (i = 0; i < file_count; i++) {
+        const char *listed = files[i].is_member ? strchr(files[i].path, ':') : NULL;
+        const char *a = name, *b = listed ? listed + 1 : NULL;
+
+        if (b == NULL) {
+            continue;
+        }
+        while (*a && *b && toupper((unsigned char)*a) == toupper((unsigned char)*b)) {
+            a++;
+            b++;
+        }
+        if (*a == 0 && *b == 0) {
+            if (lsn) {
+                *lsn = files[i].lsn;
+            }
+            if (size) {
+                *size = files[i].size;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* The listed file (not a member) holding a sector, for an extracted disc. */
 static const DiscFile *host_file_at(uint32_t lsn) {
     int i;

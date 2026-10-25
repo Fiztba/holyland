@@ -544,6 +544,8 @@ void port_disc_open(const char *path);
 /* Finds a file by its ISO 9660 path ("\DATA\KF4.DAT;1", any case, the version optional):
    1 and its first sector and size, or 0. */
 int port_disc_find(const char *path, uint32_t *lsn, uint32_t *size);
+/* Finds a member of KF4.DAT by its name ("097.map", any case): 1 and its first sector and size, or 0. */
+int port_disc_find_member(const char *name, uint32_t *lsn, uint32_t *size);
 /* Reads sectors into buffer; 0 when they are past the end of the disc. */
 int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
 /* The name of the file a sector belongs to, for the log (NULL: none). */

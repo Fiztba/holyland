@@ -143,11 +143,19 @@ loads: its cells count as seen at every height.
   through command 2, else "given by an event": the Fire Crystal on map 004 is Lynn Genne's, after her mother
   is healed; the Craftsman's Key on map 020 Harmurah Forgefist's; the Icon of Fire on map 026 Joshua
   Griffin's; the smith's work on maps 017-019 lies 10,000 below the world.
-- **Ways into other maps**: the records at a join (`MapRecordInfo.needs_neighbour_map`) have the
-  neighbouring map set up. Until the player has been near, the way is labelled with the map of the origin
-  named by the nearest record that names one (the map the game loads while he walks up to it,
-  `MapLoad_Update`); once the game has loaded the neighbour into its other slot, a join its records lie
-  over is that neighbour's (confirmed). Names from the Teleport table (`port_teleport_map_name`).
+- **Ways into other maps**: the maps join without a load screen. A record that names one of the map's
+  origins (`MapRecordInfo.neighbour_origin_index`, `MapSlot.origins`: the neighbour's number and where it
+  lies) has the game load that neighbour into its other slot while the player stands on it, moved by minus
+  the origin's position (`MapLoad_Update`, `MapLoad_SetUpMap`); those records are where the loading starts,
+  often whole rooms, not the way across. The player crosses when the floor under him is the other map's
+  (`Player_FindFloor`, `Map_MakeCurrent`). So a way is drawn where this map's floor meets the neighbour's:
+  the neighbour's file is read from the disc as the map is built (`KF4.DAT`'s `NNN.map`, its records'
+  floor, hazard and water strips placed by each record's matrix as `Map_PlaceRecordModels` builds it, then
+  moved as the game moves it: checked cell for cell against the neighbour the game itself loads, on maps
+  000, 005 and 022), and the cells of this map's floor with the neighbour's floor in them or beside them
+  within a step (150) are the way; also a gap in this map's floor over the neighbour's floor, beside a floor
+  of a record that loads it (a drop). Each connected stretch is one way: its cells hatched, a small white
+  diamond in its middle and, on the full map, its name (the Teleport table's, `port_teleport_map_name`).
 
 ## Adding area names, labels and hints
 
@@ -196,4 +204,5 @@ With the mod off the game is the same: the poll returns at once, nothing is draw
   and a map object's own collision (a lift, a door's frame) is not part of the floor.
 - Hazard effect 4 is the same in the game whether lava or the sea; which one a map has is the hand-written
   list.
-- Ways into other maps that are not records at a join (doors that change the map, wands) are not marked.
+- Ways into other maps made by a script (doors that change the map, `MapChange_StartToMap`; wands) are not
+  marked, only the joins of the floors.

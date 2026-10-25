@@ -538,7 +538,8 @@ std::string first_line(const char *s) {
     return nl ? std::string(s, nl) : std::string(s);
 }
 
-// a way into another map: the floor of the record at the join, hatched white, and its name on the full map
+// a way into another map: the cells where this map's floor meets the other's, hatched white, a small marker
+// in their middle, and its name on the full map
 void draw_exit(ImDrawList *dl, const PortAutomapPlan *p, const View &v, const PortAutomapMarker &m, ImVec2 c0, ImVec2 c1,
                bool full, float ts) {
     ImVec2 a = v.at(m.x, m.z), b = v.at(m.x + m.length, m.z + m.depth);
@@ -575,6 +576,15 @@ void draw_exit(ImDrawList *dl, const PortAutomapPlan *p, const View &v, const Po
         }
     if (!any)
         return;
+    // a small marker in the middle of the way: an arrow-like diamond, white
+    {
+        ImVec2 mid((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+        float d = full ? 6.0f : 3.5f;
+        dl->AddQuadFilled(ImVec2(mid.x, mid.y - d), ImVec2(mid.x + d, mid.y), ImVec2(mid.x, mid.y + d), ImVec2(mid.x - d, mid.y),
+                          palette.exit);
+        dl->AddQuad(ImVec2(mid.x, mid.y - d), ImVec2(mid.x + d, mid.y), ImVec2(mid.x, mid.y + d), ImVec2(mid.x - d, mid.y),
+                    palette.outline, 1.0f);
+    }
     if (full) {
         std::string label = first_line(m.text);
         ImVec2 ext = ImGui::GetFont()->CalcTextSizeA(ts, FLT_MAX, 0.0f, label.c_str());
