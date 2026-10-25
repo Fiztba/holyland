@@ -548,6 +548,14 @@ the disc: the map's start (where a map change without a link puts the player), t
 that lie on a floor, then the middles of the biggest floors. A map the story has not reached yet may
 not behave as it does in a real playthrough (its doors, events and enemies follow the world's flags).
 
+**Map objects.** The maps being left (both slots) file their objects' flags (doors, chests, switches,
+levers) under their own numbers first, as leaving a map does, and the map teleported to starts from
+its own saved flags, as after a map change. Before 2026-10-25 the map being left's flags were filed
+under the new map's number: the new map started with the old one's states (in a save, the new map's
+flags are then the old one's), and the old one lost what changed since it was entered (a map visited
+for the first time and left by teleport, with no save between, kept blank flags, which it started from
+when entered again). Such flags look like real ones, so a save cannot be checked or mended for it.
+
 **Dead ends.** 19 maps never ask for a neighbouring map themselves (their records name none of their
 links: 009, 011, 014, 021, 025, 030, 034, 036, 038, 040, 041, 042, 043, 044, 097, 106, 110, 114, 116).
 The game enters each from the one map whose link leads to it, and that map stays loaded in the other

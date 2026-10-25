@@ -21,6 +21,7 @@
 #include "common.h"
 #include "core/game.h"
 #include "map/map.h"
+#include "map_object/map_object.h"
 #include "player/player.h"
 #include "gfx/screen.h"
 #include "ui/message.h"
@@ -412,10 +413,21 @@ static void leave_for_image(void) {
 
 /* A teleport (port/include/port/teleport.h): the game written into save_image as a quick save writes it,
    but with the map and the player's place asked for, then taken as a made-up quick save is loaded:
-   the game restarts the session on that map, and the player is put on the floor under the place */
+   the game restarts the session on that map, and the player is put on the floor under the place.
+
+   The image names the map by the current slot's tag, so the slot is given the new map's number while
+   it is written. Its objects' flags (doors, chests, switches, levers) must not be: Game_WriteSaveImage
+   first files every loaded map's live object flags under its slot's tag (MapObject_SaveAllFlags),
+   which would put the map being left's under the new map's number, so that the new map started with
+   the old one's states and the old one lost its own. So, as leaving a map does (MapObject_UnloadMap),
+   the loaded maps' flags are first filed under their own numbers, by the game's MapObject_SaveAllFlags,
+   and the image is then written with the slots marked not loaded, so that the write's own
+   MapObject_SaveAllFlags files nothing again. The new map then starts from its own saved flags
+   (MapObject_StartMap), as after a map change. */
 static void teleport(void) {
     PortQuickInfo info;
     MapSlot *slot = &map_slots[current_map_slot];
+    u8 kept_loaded[2] = {map_slots[0].loaded, map_slots[1].loaded};
     f32 kept_position[3] = {player_state.position.x, player_state.position.y, player_state.position.z};
     f32 kept_rotation[3] = {player_state.rotation.x, player_state.rotation.y, player_state.rotation.z};
     u8 kept_tag = slot->tag;
@@ -434,11 +446,16 @@ static void teleport(void) {
     player_state.rotation.x = 0.0f;
     player_state.rotation.y = heading;
     player_state.rotation.z = 0.0f;
+    MapObject_SaveAllFlags();
+    map_slots[0].loaded = 0;
+    map_slots[1].loaded = 0;
     slot->tag = (u8)map;
     PlayTime_Update();
     Game_WriteSaveImage();
     fill_info(&info);
     slot->tag = kept_tag;
+    map_slots[0].loaded = kept_loaded[0];
+    map_slots[1].loaded = kept_loaded[1];
     player_state.position.x = kept_position[0];
     player_state.position.y = kept_position[1];
     player_state.position.z = kept_position[2];
