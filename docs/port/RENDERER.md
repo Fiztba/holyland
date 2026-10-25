@@ -348,6 +348,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   native GS keeps the buffers the restore is for (a few MB of images) before the frame's pictures between and copies
   them back after, the frame drawn again only where it cannot. Then the cut (`port_gs_run_vsync`, gs.c) counts
   pictures between a vblank, so the least it keeps above none is two a game frame; one a game frame would fit.
+- **Upscaling (FSR, DLSS):** the scene drawn below the window's size, jittered, with depth and motion vectors, and
+  brought up before the composite so the HUD stays the GS's. The plan, its inputs and the steps are in
+  [UPSCALING.md](UPSCALING.md). Modern renderer only, and mostly a picture-quality feature: the GPU's time a
+  picture hardly scales with its pixels here.
 - **MSAA:** draws without Z are not smoothed. The cut-outs are (`--native-cutout-aa`, shaded at every
   sample), but only as many samples as MSAA has: far fences and grass still shimmer some at 2x;
   mipmaps made for cut-out textures would be the next step.
