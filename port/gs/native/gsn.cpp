@@ -68,6 +68,7 @@ extern void (*holyland_on_compile)(Device *device, const DeferredPipelineCompile
 extern void (*holyland_on_render_pass)(Util::Hash hash, const RenderPassInfo &info);
 }
 #include "gsn_shaders.h"
+#include "upscale_ffx.h" // (--upscaler fsr3: gsn_upscale.inc)
 #include "../../render/render_internal.hpp" // (native draw: gsn_native_draw.inc)
 
 using namespace Vulkan;
@@ -567,7 +568,7 @@ enum OpKind : uint32_t {
     OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
     // (the back end's only, gsn_backend.inc: a stream's calls that are not a recording's)
     OP_NEW_CMD, OP_SUBMIT, OP_NEXT_FRAME, OP_PUBLISH, OP_PRESENT, OP_BLIT, OP_COPY_TO_BUFFER, OP_TIMESTAMP, OP_KICKS,
-    OP_REPLAY, OP_RECORDING_BINDS,
+    OP_REPLAY, OP_RECORDING_BINDS, OP_UPSCALE,
 };
 
 struct Recording;
@@ -794,6 +795,13 @@ struct ArgBlit {
     const Image *dst, *src;
     VkOffset3D dst_offset, dst_extent, src_offset, src_extent;
     VkFilter filter;
+};
+// (--upscaler fsr3: gsn_upscale.inc) A picture upscaled, its inputs and output, with what upscale_ffx.h says of each
+struct ArgUpscale {
+    const Image *color, *depth, *motion, *out;
+    float jitter[2];
+    float frame_ms, near_plane, fov_y;
+    uint32_t reset;
 };
 struct ArgCopyToBuffer {
     const Buffer *dst;
@@ -1345,6 +1353,15 @@ public:
         s.keep(dst);
         s.keep(src);
         s.add(OP_BLIT, ArgBlit{&dst, &src, dst_offset, dst_extent, src_offset, src_extent, filter});
+    }
+    // (--upscaler fsr3, at the composite: never in a recording) A picture upscaled on the back end's thread
+    void upscale(const ArgUpscale &a) {
+        Recording &s = out();
+        s.keep(*a.color);
+        s.keep(*a.depth);
+        s.keep(*a.motion);
+        s.keep(*a.out);
+        s.add(OP_UPSCALE, a);
     }
     // The same, recorded too (load_target_rect's scaling: a picture between's recording makes it again, into the
     // target's image as it is then, as it does its updates of targets)
@@ -8277,6 +8294,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     return ok;
 }
 
+#include "gsn_upscale.inc" // (--upscaler fsr3: the temporal upscaler's calls, on the back end's thread)
 #include "gsn_backend.inc" // (the calls into Vulkan, made on a thread of their own)
 } // namespace
 

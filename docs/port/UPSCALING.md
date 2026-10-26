@@ -86,12 +86,13 @@ back.
 
 ## Jitter (done, branch `upscale/scene-size`)
 
-Each picture shown takes the next step of the Halton (2, 3) sequence (eight steps): an offset within half a scene
+Each picture shown takes the next step of the Halton (2, 3) sequence: an offset within half a scene
 pixel each way, added in NDC to the positions of the scene's draws into its frame (`sa_000`, `sa_280`, `sa_700`,
 `sa_water`: `Picture.jitter`, where `GSN_M_JITTER` is set). A picture between has its own in its Picture
 (`InterpPictureHeader::jitter`, `sa_jitter_picture`), so the recording's replays each draw at their own. The frame's
 own picture binds a Picture of its own (`sa_jitter_frame`, at the scene's clear) instead of the buffer of zeros. On
-with a temporal upscaler, or `KF4_UPSCALE_JITTER=1` to look at it.
+with a temporal upscaler, or `KF4_UPSCALE_JITTER=1` to look at it. The sequence begins again after FSR's count of
+steps: 8 times the square of the scale's ratio across, 8 at least (32 for the scene at 2x under a 4x GS).
 - Not jittered: draws into a named target (the reflection, the scrolling textures: textures the frame reads), the
   trail strip, and the GS's own 3D the scene draws (`gs.vert`, a few in a hundred of the scene's batches). They stay
   still under the upscaler's jitter.
@@ -129,6 +130,55 @@ pixel's surface was in the last picture, less where it is).
   output pixels (4 scene pixels, to a pixel) from one to the next. The world_screen's translation falls smoothly
   across both kinds of picture in the order shown. Off, every picture is byte for byte the build before.
 
+## FSR 3.1 (done, branch `upscale/scene-size`)
+
+`--upscaler fsr3`: AMD's FSR 3.1 upscaler through the FidelityFX API, in `sa_upscale_held` in place of the blit.
+- **The library.** The API's headers are vendored (`third_party/ffx-api`, MIT). The upscaler itself is AMD's signed
+  `amd_fidelityfx_vk.dll` (the SDK's `PrebuiltSignedDLL`, 9 MB), not kept in the repository: CMake's `KF4_FFX_DLL`
+  names one to copy beside kf4.exe, and `KF4_FFX_DLL` in the environment names one to load instead. It is loaded at
+  run time by its whole path (`upscale_ffx.cpp`, which keeps `windows.h` and the FFX headers out of gsn.cpp).
+  Without it, or where FSR cannot be had (16-bit colours, `--native-colour high`: FFX has no 16-bit UNORM), the
+  upscaler says so once and is bilinear from then on, unjittered.
+- **On the back end's thread.** The composite sends each picture to upscale as one call in the stream
+  (`OP_UPSCALE`, `Cmd::upscale`), with full barriers either side. The back end makes it into its command buffer
+  (`gsn_upscale.inc`): FSR records its own compute work there past Granite. The composite's render pass begins right
+  after, and Granite forgets what it had bound at a render pass's beginning, so nothing it keeps is wrong after. FSR
+  is told every image is in `GENERAL` (its `UNORDERED_ACCESS` state), as all the native GS's are.
+- **One context** for the stream of pictures in the order shown (both of the game's buffers), made at the first
+  picture and again when a size changes. The one before is freed eight of Granite's frames later, when the GPU is done
+  with it. FSR's history begins again (reset) at a new context, or after more than 4 pictures without an upscale (a
+  menu's), and the motion with it.
+- **Inputs.** Colour: the held picture (the PS2's perceptual colours: `NON_LINEAR_COLORSPACE`, sRGB). Motion: the
+  motion pass's (scene pixels, so the scale is 1, 1; no jitter in it). Jitter: the picture's, in scene pixels. Depth:
+  the scene's is D32S8 (the shadows' stencil), which FFX's views cannot take, so the motion pass writes a second
+  target, R32F, of `near / the view's depth` from the screen matrix's Z and w rows. 1 at the nearest Z the scene
+  holds, 0 far away and at the clear: `DEPTH_INVERTED | DEPTH_INFINITE`, the near plane given as `cameraFar` and
+  `cameraNear` FLT_MAX as FSR's debug checks want. The field of view is the scene's rows over the screen matrix's
+  focal length.
+- **The device.** FFX's build asks for `vkGetBufferMemoryRequirements2KHR` by its KHR name. Granite's device has it
+  as Vulkan 1.1's own without the extension, so the name gave null and FFX jumped to it. FFX is given a
+  `vkGetDeviceProcAddr` that tries the core name where a KHR name is not there.
+- **The jitter's sign** is FSR's as given (the offset the scene was drawn at, in pixels, down positive). Of the four
+  signs, it is the one closest to native standing still (42.6 dB against 39.4-41.0 for the others).
+- **Checks.** `--upscaler off` is byte for byte the build before (000 and 009, 6 vblanks, at `--scene-scale 2` and
+  at the GS's scale). On an RTX 4090, the scene at 2x under a 4x GS (1920 x 896 to 3840 x 1792), standing still on
+  000 against native 4x: PSNR 42.6 dB (bilinear 42.2), gradient energy 1.81 (bilinear 1.62, native 2.47). Turning:
+  47.2 dB (bilinear 46.7), with no ghosting or smearing seen. KF4's textures are coarse, so most of the gain is on
+  edges. With `KF4_FFX_DEBUG=1` FSR checks its inputs, and says nothing more.
+- **Cost** (`pace_test.py` at 240, real time, `KF4_GSN_GPU_TIME`):
+
+  | | 000 pictures a second | 000 GPU ms a picture | 009 pictures a second | 009 GPU ms a picture |
+  |---|---|---|---|---|
+  | native 4x | 220.1 (lowest 204) | 4.07 | 238.9 | 3.82 |
+  | 2x, FSR | 239.5 (lowest 236) | 3.23 | 239.5 | 3.23 |
+  | 2x, bilinear | 239.6 | 2.69 | 239.8 | 2.63 |
+
+  FSR and the motion pass cost about 0.55 ms a picture at 3840 x 1792, once a picture, pictures between too. 000,
+  which native 4x cannot keep at 240, holds it.
+- **Not yet.** Models' own motion (they move with the camera: ghosting behind a walking enemy shows most), the
+  reactive mask for effects and water, sharpening (`enableSharpening`, off), a reset at a cut (teleport, map load:
+  today the gap of pictures between catches most), and the scene at 3x under 4x (unequal ratios: 1.5 across, 1.33 down).
+
 ## Later: the scene's size free of the GS's scale
 
 `--scene-scale` is a whole number, 1 to 4 (`sa.sx`, `sa.sy`, `snt.frame_sx`). An upscaler wants any size, for
@@ -145,10 +195,8 @@ Named targets (the reflection, scrolling textures) stay at the GS's scale. They 
 
 ## Libraries
 
-- **FSR 3.1 upscaler** (AMD FidelityFX SDK, MIT). It has a Vulkan backend and can be vendored in `third_party/` and
-  built with the port on Windows and Linux, on any GPU. It is called with raw Vulkan handles, which Granite exposes
-  (`Device::get_device()`, `CommandBuffer::get_command_buffer()`, `Image::get_image()`). Layout transitions around
-  the call go through Granite's barriers, so its layout tracking stays right. This should be the first backend.
+- **FSR 3.1 upscaler** (AMD FidelityFX SDK, MIT): done, above, through the API's signed DLL on Windows. On Linux
+  the SDK's Vulkan backend would have to be built from source (the DLL is Windows' only).
 - **FSR 1** (EASU + RCAS, MIT, two GLSL headers): spatial only, with no jitter or motion. It can sit beside
   `present_scale.frag` and `present_sharpen.frag` (whose sharpening is already CAS-like) as a cheap stopgap,
   though it upscales the HUD with everything else.
@@ -166,12 +214,12 @@ be `--upscaler off|fsr1|fsr3|dlss` with `--upscale-quality`, and the settings an
 ## Steps
 
 1. **The upscale slot** (done, above): whole-number scene scales below the GS's, brought up by a bilinear blit at
-   `sa_give`. The scene at any size (`--scene-size W,H` or a ratio) is for later, if the upscalers want equal
+   the composite. The scene at any size (`--scene-size W,H` or a ratio) is for later, if the upscalers want equal
    ratios or finer steps.
-2. **Jitter and motion vectors**, with a debug view of the motion attachment (`KF4_UPSCALE_SHOW=motion`). Check:
+2. **Jitter and motion vectors** (done), with a debug view of the motion attachment (`KF4_UPSCALE_SHOW=motion`). Check:
    standing still, the motion is zero everywhere but the effects. Turning, the static map's motion matches the
    camera's. At 240 the motion of a picture between is a quarter of the frame's.
-3. **FSR 3.1** behind the interface. Check: the owner's spots (pond, fortress, canyon, under water) at 240 for
+3. **FSR 3.1** (done, above) behind the interface. Still to check: the owner's spots (pond, fortress, canyon, under water) at 240 for
    ghosting behind the zombies and bats, the water and the effects. Then pictures a second and GPU time against
    today's 4x (`pace_test.py`, `KF4_GSN_GPU_TIME=2`).
 4. **DLSS**, the same interface, built only with the SDK.

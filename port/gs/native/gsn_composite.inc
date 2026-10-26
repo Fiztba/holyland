@@ -41,11 +41,16 @@ struct SaHeld {
     // replays too), and a game frame's own camera, jitter (scene pixels) and XYOFFSET. A picture between's camera and
     // jitter are the GS thread's at its composite (sa_cam.picture): its recording holds once for all its replays.
     ImageHandle depth, motion, shown;
+    ImageHandle fdepth; // (--upscaler fsr3) the depth as FSR takes it (sa_motion_pass)
     bool between = false;
     double world_screen[16] = {};
     float jitter[2] = {0, 0}, origin[2] = {0, 0};
     double zinf = 0;
     float zscale = 0;
+    // (FSR's depth) the screen matrix's Z and w rows' z and 1 columns, the view's depth at the nearest Z, and the
+    // view's height as an angle (radians)
+    double zview[4] = {};
+    float near_plane = 0, fov_y = 0;
     uint32_t ops[8][4] = {};
     int count = 0;
     uint64_t vblank = 0;
@@ -58,6 +63,14 @@ struct SaMotionLast {
     bool valid = false;
     double world_screen[16] = {};
 } sa_motion_last;
+// (--upscaler fsr3) The last picture upscaled: the picture's number (gsn_stats.pictures) and time
+struct SaUpscaleLast {
+    bool valid = false;
+    uint64_t picture = 0;
+    std::chrono::steady_clock::time_point at;
+} sa_upscale_last;
+// (set by the back end where FSR could not be had, gsn_upscale.inc: the composite goes back to bilinear)
+std::atomic<bool> upscale_failed{false};
 
 // --upscaler (docs/port/UPSCALING.md): a scene kept below the GS's scale is brought up to it at the composite, and the
 // picture shown is at the GS's scale: the 2D the GS's, at its own scale, the world the upscaler's. Without it the
@@ -158,6 +171,17 @@ void sa_hold(Target &color) {
         // (Z as the view's depth goes to infinity: the far plane, where the scene's depth is 0)
         h->zinf = sa_cam.screen[3 * 4 + 2] != 0.0 ? sa_cam.screen[2 * 4 + 2] / sa_cam.screen[3 * 4 + 2] : 0.0;
         h->zscale = float(depth_scale(sa.zpsm));
+        // (FSR's depth: near / the view's depth, near the view's depth at the nearest Z the scene holds, 1 / zscale;
+        // Z = (zview[0] vz + zview[1]) / (zview[2] vz + zview[3]))
+        const double *sm = sa_cam.screen;
+        double zv[4] = {sm[2 * 4 + 2], sm[2 * 4 + 3], sm[3 * 4 + 2], sm[3 * 4 + 3]};
+        memcpy(h->zview, zv, sizeof(zv));
+        double z1 = h->zscale > 0 ? 1.0 / h->zscale : 0.0, below = zv[2] * z1 - zv[0];
+        double near_plane = below != 0.0 ? (zv[1] - zv[3] * z1) / below : 0.0;
+        h->near_plane = near_plane > 0.0 ? float(near_plane) : 1.0f;
+        // (the view's height: the scene's rows in the GS's pixels over the screen matrix's focal length down)
+        double focal = zv[2] != 0.0 ? std::fabs(sm[1 * 4 + 1] / zv[2]) : 0.0;
+        h->fov_y = focal > 0.0 ? float(2.0 * std::atan(0.5 * double(H) / double(sa.sy) / focal)) : 1.0f;
     } else {
         h->depth.reset();
     }
@@ -166,13 +190,14 @@ void sa_hold(Target &color) {
 // (sa_upscale_held, upscaling) The held picture's motion from the last picture composited, a scene pixel at a time
 // (shaders/sa_motion.frag), into h.motion (RG16F, the scene's pixels); or a picture of it to look at into h.shown
 // (KF4_UPSCALE_SHOW=motion). The camera's motion only: the depth taken back through this picture's world_screen and
-// forward through the last one's, one matrix made of the two here in doubles. Models move with the camera here.
+// forward through the last one's, one matrix made of the two here in doubles. Models move with the camera here. And
+// the depth as FSR takes it, into h.fdepth (R32F).
 void sa_motion_pass(SaHeld &h) {
     if (!sa_program_motion) {
         ResourceLayout vert = {};
         ResourceLayout frag = {};
-        frag.output_mask = 1;
-        frag.push_constant_size = 100;
+        frag.output_mask = 3;
+        frag.push_constant_size = 128;
         frag.sets[0].sampled_image_mask = 1;
         frag.sets[0].fp_mask = 1;
         frag.sets[0].meta[0].array_size = 1;
@@ -195,12 +220,17 @@ void sa_motion_pass(SaHeld &h) {
     if (!out || out->get_width() != W || out->get_height() != H || out->get_format() != format) {
         out = sa_image(W, H, format, 1);
     }
+    if (!h.fdepth || h.fdepth->get_width() != W || h.fdepth->get_height() != H) {
+        h.fdepth = sa_image(W, H, VK_FORMAT_R32_SFLOAT, 1);
+    }
     struct {
         float m[16];        // column-major, as GLSL's mat4
         float inv_scale[2]; // GS pixels a scene pixel is
         float origin[2];
         float jitter[2];
         float zscale, zinf, show;
+        float near_plane, pad[2];
+        float zview[4];
     } push = {};
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
@@ -216,12 +246,17 @@ void sa_motion_pass(SaHeld &h) {
     push.zscale = h.zscale;
     push.zinf = float(h.zinf);
     push.show = show ? 1.0f : 0.0f;
-    static_assert(sizeof(push) == 100, "sa_motion.frag's Push");
+    push.near_plane = h.near_plane;
+    for (int i = 0; i < 4; i++) {
+        push.zview[i] = float(h.zview[i]);
+    }
+    static_assert(sizeof(push) == 128, "sa_motion.frag's Push");
     end_pass();
     RenderPassInfo rp;
-    rp.num_color_attachments = 1;
+    rp.num_color_attachments = 2;
     rp.color_attachments[0] = &out->get_view();
-    rp.store_attachments = 1;
+    rp.color_attachments[1] = &h.fdepth->get_view();
+    rp.store_attachments = 3;
     Cmd &c = cmd();
     c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
               VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -389,24 +424,82 @@ bool sa_composite_size(const Shown &s, uint32_t *iw, uint32_t *ih) {
     return true;
 }
 
-// (sa_composite, --upscaler) The held scene brought up to the GS's scale: 1, bilinear (a blit). The temporal upscalers
-// take this place, with the picture's depth, motion and jitter
+// (sa_upscale_held, --upscaler fsr3) Whether FSR takes the held picture: its depth kept, not in a recording (the
+// composite never is). Where it cannot be had at all, bilinear from then on (--upscaler bilinear: the scene no longer
+// jittered): its colours 16-bit (--native-colour high: FFX has no 16-bit UNORM), an output a shader cannot write, the
+// DLL not there (said by upscale_ffx.cpp), or its calls failing (by gsn_upscale.inc)
+bool sa_fsr_takes(const SaHeld &h) {
+    if (sa_upscaler != 2 || !h.depth || recording_ops->on) {
+        return false;
+    }
+    static int storage = -1;
+    if (storage < 0) {
+        storage = gs->device->image_format_is_supported(VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT);
+    }
+    const char *why = nullptr;
+    if (h.hi->get_format() != VK_FORMAT_R8G8B8A8_UNORM) {
+        why = "the scene's colours are 16-bit (--native-colour high), which FSR does not take";
+    } else if (storage <= 0) {
+        why = "the GPU cannot write the picture from a shader";
+    } else if (upscale_failed.load(std::memory_order_relaxed) || !ffx_upscale_load()) {
+        why = "";
+    }
+    if (why) {
+        if (*why) {
+            fprintf(stderr, "[gsn] --upscaler fsr3: %s: bilinear instead\n", why);
+        }
+        sa_upscaler = 1;
+        return false;
+    }
+    return true;
+}
+
+// (sa_composite, --upscaler) The held scene brought up to the GS's scale: 1, bilinear (a blit); 2, FSR 3.1, temporal,
+// with the picture's depth, motion and jitter, on the back end's thread (OP_UPSCALE, gsn_upscale.inc). FSR's history is
+// of the pictures upscaled in the order shown: after a while without (a menu's pictures, say: more than 4 pictures), it
+// begins again (reset), and the motion is from nothing
 const Image &sa_upscale_held(SaHeld &h) {
     uint32_t W = h.hi->get_width(), H = h.hi->get_height();
     uint32_t uw = W / h.sx * h.gsx, uh = H / h.sy * h.gsy;
-    if (!h.up || h.up->get_width() != uw || h.up->get_height() != uh || h.up->get_format() != h.hi->get_format()) {
-        h.up = sa_image(uw, uh, h.hi->get_format(), 1);
+    bool fsr = sa_fsr_takes(h);
+    if (!h.up || h.up->get_width() != uw || h.up->get_height() != uh || h.up->get_format() != h.hi->get_format() ||
+        (fsr && !(h.up->get_create_info().usage & VK_IMAGE_USAGE_STORAGE_BIT))) {
+        h.up = sa_image(uw, uh, h.hi->get_format(), 1, fsr ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
     }
+    SaUpscaleLast &last = sa_upscale_last;
+    auto now = std::chrono::steady_clock::now();
+    bool reset = !last.valid || gsn_stats.pictures - last.picture > 4;
+    if (reset) {
+        sa_motion_last.valid = false;
+    }
+    float frame_ms = reset ? 0.0f : float(std::chrono::duration<double, std::milli>(now - last.at).count());
+    last.valid = true;
+    last.picture = gsn_stats.pictures;
+    last.at = now;
     bool show = false;
     if (sa_motion_wanted() && h.depth) {
+        reset = reset || !sa_motion_last.valid;
         sa_motion_pass(h); // (the picture's motion from the last one shown: the temporal upscalers', or to look at)
         show = sa_motion_show();
     }
     end_pass();
-    transfer_barrier();
-    cmd().blit_image(*h.up, show ? *h.shown : *h.hi, {0, 0, 0}, {int32_t(uw), int32_t(uh), 1}, {0, 0, 0},
-                     {int32_t(W), int32_t(H), 1}, VK_FILTER_LINEAR);
-    transfer_barrier();
+    if (fsr && !show) {
+        const float *jitter = h.between ? sa_cam.picture_jitter : h.jitter;
+        ArgUpscale a = {h.hi.get(), h.fdepth.get(), h.motion.get(), h.up.get(), {jitter[0], jitter[1]},
+                        std::min(std::max(frame_ms, 1.0f), 100.0f), h.near_plane, h.fov_y, reset};
+        Cmd &c = cmd();
+        c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                  VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        c.upscale(a);
+        c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                  VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        sa_stats.upscales_fsr++;
+    } else {
+        transfer_barrier();
+        cmd().blit_image(*h.up, show ? *h.shown : *h.hi, {0, 0, 0}, {int32_t(uw), int32_t(uh), 1}, {0, 0, 0},
+                         {int32_t(W), int32_t(H), 1}, VK_FILTER_LINEAR);
+        transfer_barrier();
+    }
     sa_stats.upscales++;
     return *h.up;
 }
