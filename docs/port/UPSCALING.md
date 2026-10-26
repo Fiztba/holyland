@@ -104,6 +104,31 @@ with a temporal upscaler, or `KF4_UPSCALE_JITTER=1` to look at it.
 - The pipelines' shaders changed, so the shipped list (`gsn_pipeline_list.h`) has stale lines for them until it is
   made again from a map tour. The data folder's list fills in meanwhile, with "Building shaders" at the first start.
 
+## Motion vectors (done, branch `upscale/scene-size`)
+
+At the composite, in the order pictures are shown, a held picture's motion from the last picture composited is
+worked out a scene pixel at a time (`sa_motion_pass`, `shaders/sa_motion.frag`, RG16F in scene pixels: where the
+pixel's surface was in the last picture, less where it is).
+- **From depth and cameras, one matrix.** The pixel's place in the GS's coordinates (its middle, the picture's jitter
+  taken out) and its Z (the scene's depth over its Z scale) go back through this picture's world_screen and forward
+  through the last one's: `M = last * this^-1`, made in doubles on the CPU, one multiply and a divide by w a pixel.
+  A depth of 0 (the far plane: the sky, the clear) takes the Z the view's depth goes to at infinity, so in
+  homogeneous form it moves as a direction.
+- **The cameras.** A game frame's own: the world's camera (mode 0, projection 0) as native draw's records give it
+  during the frame's draws (`sa_camera_seen`), kept with its hold. A picture between's: the frame's view moved by the
+  picture's move, then the frame's view to screen (`sa_camera_picture`, at `interp_picture_now`), the GS thread's at
+  that picture's composite. The depth is copied with the colour at `sa_hold`, so a picture between's replays copy their own.
+- **The camera's motion only.** A model that moved by itself (an enemy walking, the arm) is given the camera's.
+  Upscalers ghost behind those until their own motion is written by the vertex shaders, which would mean a second
+  colour target in every scene pipeline. Their reactive masks are the help meanwhile.
+- `KF4_UPSCALE_SHOW=motion` draws a picture of the motion in the scene's place: grey where nothing moved, red and
+  green the motion across and down. It goes through the game's brightness like the scene, so read it by eye.
+- **Checks.** Standing still the field is even (no motion). Turning with the d-pad in real time at 240, the motion at
+  the picture's middle is +1.396 GS pixels a picture (4.19 scene pixels at `--scene-scale 2` with native widescreen,
+  3 across a GS pixel), for the frames' own pictures and the pictures between alike. The pictures themselves move 8
+  output pixels (4 scene pixels, to a pixel) from one to the next. The world_screen's translation falls smoothly
+  across both kinds of picture in the order shown. Off, every picture is byte for byte the build before.
+
 ## Later: the scene's size free of the GS's scale
 
 `--scene-scale` is a whole number, 1 to 4 (`sa.sx`, `sa.sy`, `snt.frame_sx`). An upscaler wants any size, for

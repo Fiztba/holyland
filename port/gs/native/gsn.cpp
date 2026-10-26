@@ -7449,6 +7449,7 @@ int interp_cannot_replay() {
 }
 
 void sa_jitter_picture(float *jitter);
+void sa_camera_picture(const float *move, const float *jitter_px);
 
 void interp_picture_now(const uint8_t *data, size_t size) {
     InterpPictureMessage m;
@@ -7470,6 +7471,7 @@ void interp_picture_now(const uint8_t *data, size_t size) {
     }
     h->kicks = interp.frame->kicks;
     sa_jitter_picture(h->jitter); // (upscaling: this picture's own sub-pixel jitter, gsn_standalone.inc)
+    sa_camera_picture(h->move, h->jitter + 2); // (upscaling: its camera, for the composite's motion)
     interp.still = interp.frame->still != 0; // (the camera of the frame shown is the frame's, bit for bit)
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();

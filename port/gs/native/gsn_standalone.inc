@@ -126,6 +126,124 @@ const Buffer *sa_jitter_frame_picture() {
 // (sa_draw_batch) Whether this batch takes the picture's jitter: the scene's frame's, not a named target's
 bool sa_jitter_draw();
 
+// (upscaling) The world's camera, for the composite's motion (docs/port/UPSCALING.md): as a game frame's own draws
+// have it (sa_camera_seen: native draw's records, the camera of mode 0, projection 0), and each picture between's,
+// made of it by the picture's move (sa_camera_picture). Matrices row-major, [row * 4 + col]; the game's are VU layout
+// (m[i] the i-th column). world_screen takes a world place to the GS's X, Y and Z times w (X = c.x / c.w ...).
+struct SaCamera {
+    bool valid = false;
+    double world_screen[16] = {}, view[16] = {}, screen[16] = {};
+    float origin[2] = {0, 0};                 // XYOFFSET, in GS pixels
+    double picture[16] = {};                  // the last picture between's world_screen
+    float picture_jitter[2] = {0, 0};         // ... and its jitter, in the scene's pixels
+} sa_cam;
+
+void sa_mat_mul(double *r, const double *a, const double *b) {
+    double t[16];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            double s = 0;
+            for (int k = 0; k < 4; k++) {
+                s += a[i * 4 + k] * b[k * 4 + j];
+            }
+            t[i * 4 + j] = s;
+        }
+    }
+    memcpy(r, t, sizeof(t));
+}
+
+// The inverse of a 4 x 4 (false: none)
+bool sa_mat_inverse(double *r, const double *m) {
+    double a[4][8];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            a[i][j] = m[i * 4 + j];
+            a[i][j + 4] = i == j;
+        }
+    }
+    for (int c = 0; c < 4; c++) {
+        int p = c;
+        for (int i = c + 1; i < 4; i++) {
+            if (fabs(a[i][c]) > fabs(a[p][c])) {
+                p = i;
+            }
+        }
+        if (fabs(a[p][c]) < 1e-300) {
+            return false;
+        }
+        for (int j = 0; j < 8; j++) {
+            std::swap(a[c][j], a[p][j]);
+        }
+        double d = a[c][c];
+        for (int j = 0; j < 8; j++) {
+            a[c][j] /= d;
+        }
+        for (int i = 0; i < 4; i++) {
+            if (i != c) {
+                double f = a[i][c];
+                for (int j = 0; j < 8; j++) {
+                    a[i][j] -= f * a[c][j];
+                }
+            }
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            r[i * 4 + j] = a[i][j + 4];
+        }
+    }
+    return true;
+}
+
+// (nd_draw, a game frame's own draws) The world's camera, as its draws have it
+void sa_camera_seen(const RdCamera &cam, int32_t ofx, int32_t ofy) {
+    if (!sa_mode || cam.mode != 0 || cam.projection != 0) {
+        return;
+    }
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            sa_cam.world_screen[r * 4 + c] = cam.world_screen[c][r];
+            sa_cam.view[r * 4 + c] = cam.view[c][r];
+            sa_cam.screen[r * 4 + c] = cam.screen[c][r];
+        }
+    }
+    sa_cam.origin[0] = float(ofx) / 16.0f;
+    sa_cam.origin[1] = float(ofy) / 16.0f;
+    sa_cam.valid = true;
+}
+
+// (interp_picture_now) A picture between's camera: the frame's view moved by the picture's move (rows of the rotation
+// less the identity, each with its translation: the frame's view to the picture's), then the frame's view to screen
+void sa_camera_picture(const float *move, const float *jitter_px) {
+    double m[16] = {};
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++) {
+            m[r * 4 + c] = double(move[r * 4 + c]) + (r == c ? 1.0 : 0.0);
+        }
+        m[r * 4 + 3] = move[r * 4 + 3];
+    }
+    m[15] = 1.0;
+    double mv[16];
+    sa_mat_mul(mv, m, sa_cam.view);
+    sa_mat_mul(sa_cam.picture, sa_cam.screen, mv);
+    sa_cam.picture_jitter[0] = jitter_px[0];
+    sa_cam.picture_jitter[1] = jitter_px[1];
+}
+
+// Whether the composite works out the scene's motion: with a temporal upscaler, or to look at it
+// (KF4_UPSCALE_SHOW=motion)
+int sa_motion_show() {
+    static int show = -1;
+    if (show < 0) {
+        const char *v = getenv("KF4_UPSCALE_SHOW");
+        show = v && strcmp(v, "motion") == 0;
+    }
+    return show;
+}
+bool sa_motion_wanted() {
+    return sa_upscaler >= 2 || sa_motion_show();
+}
+
 enum {
     SA_WHY_FRAME,    // another target than a frame of 512 pixels or more across, 32 or 24-bit
     SA_WHY_TARGET,   // the frame and Z buffer could not be had together
@@ -153,7 +271,7 @@ struct SaStats {
     uint64_t depth_clears, alpha_sets, shadow_batches, own_layers; // (the scene's ops, and the shadows by the stencil)
     // (T2) frames taken from the GS's clear (no copy), the GS's batches drawn into the scene (its 3D, the screen
     // passes, fills), its frame given to the GS and kept (a copy that reads it), pictures made by the composite
-    uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops, upscales;
+    uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops, upscales, motions;
     uint64_t frame_copies, frame_copy_reads; // (the scene's copies of its frame elsewhere, and textures read from them)
     uint64_t declined[SA_WHY_COUNT];
     uint64_t textures[SA_TEX_COUNT];
@@ -4542,12 +4660,12 @@ void sa_print_stats() {
     fprintf(stderr,
             " (T2: %llu taken from the GS's clear, %llu resampled copies; the GS's drawn by the scene: %llu 3D, %llu screen "
             "passes, %llu fills, %llu water; %llu times given while kept; %llu copies of the frame kept, %llu textures read from them; "
-            "%llu pictures composited, %llu ops over the screen in them; %llu upscaled)",
+            "%llu pictures composited, %llu ops over the screen in them; %llu upscaled, %llu motions)",
             (unsigned long long)s.cleared, (unsigned long long)s.resampled, (unsigned long long)s.gs_3d,
             (unsigned long long)s.gs_passes, (unsigned long long)s.gs_fills, (unsigned long long)s.gs_water,
             (unsigned long long)s.published,
             (unsigned long long)s.frame_copies, (unsigned long long)s.frame_copy_reads, (unsigned long long)s.composites,
-            (unsigned long long)s.composite_ops, (unsigned long long)s.upscales);
+            (unsigned long long)s.composite_ops, (unsigned long long)s.upscales, (unsigned long long)s.motions);
     fprintf(stderr, "; %llu decoded, %llu found again; uploads %llu (%.1f MB, %llu new), %llu asked for again; declined: ",
             (unsigned long long)s.decodes, (unsigned long long)s.decode_hits, (unsigned long long)s.uploads,
             s.upload_bytes / 1048576.0, (unsigned long long)s.chunks_new, (unsigned long long)s.replayed_uploads);

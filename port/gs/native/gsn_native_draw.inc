@@ -293,6 +293,7 @@ Program *nd_program(Program *p) {
 // (flush_batch, a native batch's draw: the arena; the draws' records are bound a stretch at a time, a
 // kind's own: nd_draw_range)
 const Buffer *sa_jitter_frame_picture();
+void sa_camera_seen(const RdCamera &cam, int32_t ofx, int32_t ofy);
 
 void nd_bind(Cmd &c) {
     if (nd.batch_arena) {
@@ -950,6 +951,9 @@ void nd_draw(uint64_t value) {
     uint64_t offset = gs->reg[R_XYOFFSET_1 + ((effective_prim() >> 9) & 1)];
     k.info[1] = int32_t(bits(offset, 0, 16));
     k.info[2] = int32_t(bits(offset, 32, 16));
+    if (!interp.active) {
+        sa_camera_seen(cam, k.info[1], k.info[2]); // (upscaling: the frame's camera, for the composite's motion)
+    }
     // pictures between: the world and the reflection move with the picture's camera; a part of the world
     // that moved since the frame before (the sky) also with its model, as frame_interp.c's object_between
     NdKey key = nd_key(d);

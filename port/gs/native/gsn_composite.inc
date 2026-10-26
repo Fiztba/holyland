@@ -37,12 +37,27 @@ struct SaHeld {
     uint32_t rows = 0;         // the frame's rows the world was drawn in (GS pixels: the scissor's)
     ImageHandle hi, lo;
     ImageHandle up; // (--upscaler) hi brought up to the GS's scale, at the composite (sa_upscale_held)
+    // (upscaling) what the picture's motion is worked out from: its depth, copied as hi is (by a picture between's
+    // replays too), and a game frame's own camera, jitter (scene pixels) and XYOFFSET. A picture between's camera and
+    // jitter are the GS thread's at its composite (sa_cam.picture): its recording holds once for all its replays.
+    ImageHandle depth, motion, shown;
+    bool between = false;
+    double world_screen[16] = {};
+    float jitter[2] = {0, 0}, origin[2] = {0, 0};
+    double zinf = 0;
+    float zscale = 0;
     uint32_t ops[8][4] = {};
     int count = 0;
     uint64_t vblank = 0;
 };
 std::vector<SaHeld> sa_held;
 Program *sa_program_composite = nullptr;
+Program *sa_program_motion = nullptr;
+// (upscaling) the last picture composited's world_screen: the motion is from it to the picture composited now
+struct SaMotionLast {
+    bool valid = false;
+    double world_screen[16] = {};
+} sa_motion_last;
 
 // --upscaler (docs/port/UPSCALING.md): a scene kept below the GS's scale is brought up to it at the composite, and the
 // picture shown is at the GS's scale: the 2D the GS's, at its own scale, the world the upscaler's. Without it the
@@ -123,6 +138,106 @@ void sa_hold(Target &color) {
     h->count = 0;
     h->valid = true;
     h->vblank = sa_vblanks;
+    if (sa_motion_wanted() && sa.samples == 1) {
+        // (upscaling) the depth, for the picture's motion at its composite; and a game frame's own camera and jitter
+        if (!h->depth || h->depth->get_width() != W || h->depth->get_height() != H ||
+            h->depth->get_format() != sa.depth->get_format()) {
+            h->depth = sa_image(W, H, sa.depth->get_format(), 1);
+        }
+        transfer_barrier();
+        cmd().copy_image(*h->depth, *sa.depth, {0, 0, 0}, {0, 0, 0}, {W, H, 1}, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                         {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1});
+        transfer_barrier();
+        h->between = interp.active;
+        if (!interp.active) {
+            memcpy(h->world_screen, sa_cam.world_screen, sizeof(h->world_screen));
+            h->jitter[0] = sa_jitter_on() ? sa_jit.px[0] : 0.0f;
+            h->jitter[1] = sa_jitter_on() ? sa_jit.px[1] : 0.0f;
+        }
+        memcpy(h->origin, sa_cam.origin, sizeof(h->origin));
+        // (Z as the view's depth goes to infinity: the far plane, where the scene's depth is 0)
+        h->zinf = sa_cam.screen[3 * 4 + 2] != 0.0 ? sa_cam.screen[2 * 4 + 2] / sa_cam.screen[3 * 4 + 2] : 0.0;
+        h->zscale = float(depth_scale(sa.zpsm));
+    } else {
+        h->depth.reset();
+    }
+}
+
+// (sa_upscale_held, upscaling) The held picture's motion from the last picture composited, a scene pixel at a time
+// (shaders/sa_motion.frag), into h.motion (RG16F, the scene's pixels); or a picture of it to look at into h.shown
+// (KF4_UPSCALE_SHOW=motion). The camera's motion only: the depth taken back through this picture's world_screen and
+// forward through the last one's, one matrix made of the two here in doubles. Models move with the camera here.
+void sa_motion_pass(SaHeld &h) {
+    if (!sa_program_motion) {
+        ResourceLayout vert = {};
+        ResourceLayout frag = {};
+        frag.output_mask = 1;
+        frag.push_constant_size = 100;
+        frag.sets[0].sampled_image_mask = 1;
+        frag.sets[0].fp_mask = 1;
+        frag.sets[0].meta[0].array_size = 1;
+        sa_program_motion = gs->device->request_program(
+            gs->device->request_shader(gsn_spv_msaa_vert, sizeof(gsn_spv_msaa_vert), &vert),
+            gs->device->request_shader(gsn_spv_sa_motion_frag, sizeof(gsn_spv_sa_motion_frag), &frag));
+    }
+    const double *cur = h.between ? sa_cam.picture : h.world_screen;
+    const float *jitter = h.between ? sa_cam.picture_jitter : h.jitter;
+    double m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, inv[16];
+    if (sa_motion_last.valid && sa_mat_inverse(inv, cur)) {
+        sa_mat_mul(m, sa_motion_last.world_screen, inv);
+    }
+    memcpy(sa_motion_last.world_screen, cur, sizeof(sa_motion_last.world_screen));
+    sa_motion_last.valid = sa_cam.valid;
+    uint32_t W = h.depth->get_width(), H = h.depth->get_height();
+    bool show = sa_motion_show();
+    ImageHandle &out = show ? h.shown : h.motion;
+    VkFormat format = show ? h.hi->get_format() : VK_FORMAT_R16G16_SFLOAT;
+    if (!out || out->get_width() != W || out->get_height() != H || out->get_format() != format) {
+        out = sa_image(W, H, format, 1);
+    }
+    struct {
+        float m[16];        // column-major, as GLSL's mat4
+        float inv_scale[2]; // GS pixels a scene pixel is
+        float origin[2];
+        float jitter[2];
+        float zscale, zinf, show;
+    } push = {};
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            push.m[c * 4 + r] = float(m[r * 4 + c]);
+        }
+    }
+    push.inv_scale[0] = 1.0f / float(h.sx);
+    push.inv_scale[1] = 1.0f / float(h.sy);
+    push.origin[0] = h.origin[0];
+    push.origin[1] = h.origin[1];
+    push.jitter[0] = jitter[0];
+    push.jitter[1] = jitter[1];
+    push.zscale = h.zscale;
+    push.zinf = float(h.zinf);
+    push.show = show ? 1.0f : 0.0f;
+    static_assert(sizeof(push) == 100, "sa_motion.frag's Push");
+    end_pass();
+    RenderPassInfo rp;
+    rp.num_color_attachments = 1;
+    rp.color_attachments[0] = &out->get_view();
+    rp.store_attachments = 1;
+    Cmd &c = cmd();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    c.begin_render_pass(rp);
+    c.set_opaque_state();
+    c.set_program(sa_program_motion);
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_test(false, false);
+    c.set_texture(0, 0, h.depth->get_view(), StockSampler::NearestClamp); // (Granite samples its depth view)
+    c.push_constants(&push, 0, sizeof(push));
+    c.draw(3);
+    c.end_render_pass();
+    c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    sa_stats.motions++;
 }
 
 // (sa_flush, a batch the GS draws) The GS's clear of a frame (libgraph's, at the swap: untextured sprites of one
@@ -282,10 +397,15 @@ const Image &sa_upscale_held(SaHeld &h) {
     if (!h.up || h.up->get_width() != uw || h.up->get_height() != uh || h.up->get_format() != h.hi->get_format()) {
         h.up = sa_image(uw, uh, h.hi->get_format(), 1);
     }
+    bool show = false;
+    if (sa_motion_wanted() && h.depth) {
+        sa_motion_pass(h); // (the picture's motion from the last one shown: the temporal upscalers', or to look at)
+        show = sa_motion_show();
+    }
     end_pass();
     transfer_barrier();
-    cmd().blit_image(*h.up, *h.hi, {0, 0, 0}, {int32_t(uw), int32_t(uh), 1}, {0, 0, 0}, {int32_t(W), int32_t(H), 1},
-                     VK_FILTER_LINEAR);
+    cmd().blit_image(*h.up, show ? *h.shown : *h.hi, {0, 0, 0}, {int32_t(uw), int32_t(uh), 1}, {0, 0, 0},
+                     {int32_t(W), int32_t(H), 1}, VK_FILTER_LINEAR);
     transfer_barrier();
     sa_stats.upscales++;
     return *h.up;
