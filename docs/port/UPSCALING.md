@@ -1,8 +1,8 @@
-# Upscaling: FSR and DLSS (plan)
+# Upscaling: FSR and DLSS
 
-What it would take to draw the world below the window's resolution and bring it up with AMD's FSR or NVIDIA's DLSS.
-Nothing here is built yet. It follows RENDERER.md's rules: the PS2's picture stays the default, and this is one
-more opt-in switch.
+Drawing the world below the window's resolution and bringing it up with AMD's FSR or NVIDIA's DLSS
+(`--upscaler bilinear|fsr3|dlss`, branch `upscale/scene-size`: the sections marked done below). It follows
+RENDERER.md's rules: the PS2's picture stays the default, and this is one more opt-in switch.
 
 ## What it buys, and what it does not
 
@@ -21,36 +21,36 @@ more opt-in switch.
   (`gsn_standalone.inc`) has real depth and knows where each vertex came from. The PS2 path and hosted mode draw
   through the GS's integer Z, so they have neither.
 
-## Where it goes: the scene before the composite
+## Where it goes: in the composite, before the 2D
 
 T2 already splits the picture the right way (NATIVE_DRAW_P8.md, T2; `gsn_composite.inc`). The scene, meaning the
 world, is drawn at a scale and sample count of its own. The GS draws the HUD, messages, menus and fades at its own
-scale. `sa_composite` makes the picture shown from both at the scanout. An upscaler goes between the scene's
-picture (`SaHeld::hi`) and the composite:
+scale. `sa_composite` makes the picture shown from both at the scanout, once a picture, in the order pictures are
+shown (which the temporal upscalers need: "The upscale slot" below). The upscaler goes there, between the scene's
+picture kept for the composite (`SaHeld::hi`) and the composite's own work (`sa_upscale_held`):
 
 ```
-scene (jittered, render size)  --colour, depth, motion-->  upscaler  -->  hi at output size  -->  sa_composite
-GS 2D (its own scale)  --------------------------------------------------------------------->  sa_composite
+scene (jittered, render size)  --colour, depth, motion-->  upscaler  -->  up, at the GS's scale  -->  sa_composite
+GS 2D (its own scale)  ----------------------------------------------------------------------->  sa_composite
 ```
 
 So the HUD and text are never upscaled, and the GS's 2D arithmetic is unchanged.
 
 ## The inputs, and where each comes from
 
-| input | today | work |
+| input | now | still to do |
 |---|---|---|
-| colour at the render size | the scene's frame image | the scene's size must be free of the GS's integer scale (below) |
-| depth | the scene's D32F, reversed Z, in the GS's Z units (Z / 2^24) | hand it over with the upscaler's inverted-depth flag. FSR also wants near, far and the field of view, from the game's view fields (`frame_interp.c` has the camera) |
-| sub-pixel jitter | none | an offset added to `ndc` in each scene vertex shader (`nd_000.vert`, `nd_280.vert`, `nd_700.vert`, `nd_water.vert`, the `ND_STANDALONE` blocks), and the same offset in the ties' Z-first draws. A Halton(2,3) sequence, one step a picture |
-| motion vectors | none | an RG16F attachment for the scene. Each vertex shader projects its vertex twice, at this picture's time and at the last picture's, and writes the difference. Models already have their pose at any time between two frames (`nd_between.h`, `between_move(b, p, u)`), and the camera at t 0 is `move0`/`mid0`. Static map records move with the camera only |
+| colour at the render size | the held picture (`SaHeld::hi`), at a whole-number scale below the GS's | any size: the scene's size free of the GS's integer scale (below) |
+| depth | the scene's is D32S8 (the shadows' stencil), so the motion pass writes an R32F of `near / the view's depth` (1 near, 0 far, inverted and infinite), with near and the field of view from the screen matrix ("FSR 3.1") | |
+| sub-pixel jitter | done ("Jitter"): `ndc` offset in the scene's vertex shaders, Halton(2,3), FSR's count of steps | the GS's own 3D, the trail and named targets are not jittered |
+| motion vectors | done for the camera ("Motion vectors"): at the composite, from depth and the two pictures' cameras | models' own motion: each vertex shader projecting its vertex at this picture's time and the last's (`nd_between.h`, `between_move`), a second colour target in every scene pipeline |
 | reactive / transparency mask | none | effects (program 0x700, additive), the water's surface and shader-blended runs, flagged by kind as the scene draws them. They have no reliable motion of their own, so they should not leave trails |
-| exposure | none | LDR. The GS's 8-bit colour goes in as it is, with the LDR flags |
+| exposure | LDR: the GS's 8-bit colour as it is (FSR's non-linear colour flags; DLSS not HDR) | |
 
 Motion across a frame boundary: a picture between at time t of the pair (frame N-1, frame N) is followed by
-pictures of the pair (N, N+1). Positions are continuous there (t 1 of one pair is t 0 of the next), but the
-motion changes. The first version can take the last picture's position from the current pair at t minus one
-picture's step. That is slightly wrong at the first picture of each frame, and the upscaler's reactive handling
-covers it. Exact would keep the previous pair's `Between` data for one more picture.
+pictures of the pair (N, N+1). The camera's motion is worked out from the last picture composited, whichever pair it
+was of, so it is exact there. Models' own motion, when it comes, would need the previous pair's `Between` data for
+one more picture.
 
 ## The upscale slot (done, branch `upscale/scene-size`)
 
