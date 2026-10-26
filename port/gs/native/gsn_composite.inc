@@ -69,8 +69,8 @@ struct SaUpscaleLast {
     uint64_t picture = 0;
     std::chrono::steady_clock::time_point at;
 } sa_upscale_last;
-// (set by the back end where FSR could not be had, gsn_upscale.inc: the composite goes back to bilinear)
-std::atomic<bool> upscale_failed{false};
+// (set by the back end where FSR could not be had, gsn_upscale.inc: the composite goes back to bilinear; DLSS: to FSR)
+std::atomic<bool> upscale_failed{false}, dlss_failed{false};
 
 // --upscaler (docs/port/UPSCALING.md): a scene kept below the GS's scale is brought up to it at the composite, and the
 // picture shown is at the GS's scale: the 2D the GS's, at its own scale, the world the upscaler's. Without it the
@@ -424,13 +424,18 @@ bool sa_composite_size(const Shown &s, uint32_t *iw, uint32_t *ih) {
     return true;
 }
 
-// (sa_upscale_held, --upscaler fsr3) Whether FSR takes the held picture: its depth kept, not in a recording (the
-// composite never is). Where it cannot be had at all, bilinear from then on (--upscaler bilinear: the scene no longer
-// jittered): its colours 16-bit (--native-colour high: FFX has no 16-bit UNORM), an output a shader cannot write, the
+// (sa_upscale_held, --upscaler fsr3 or dlss) Which temporal upscaler takes the held picture (sa_upscaler's 2 or 3; 0
+// none): its depth kept, not in a recording (the composite never is). Where DLSS cannot be had, FSR from then on (said
+// by upscale_dlss.cpp); where neither can, bilinear (--upscaler bilinear: the scene no longer jittered): its colours
+// 16-bit (--native-colour high: FFX has no 16-bit UNORM; one path for both), an output a shader cannot write, FSR's
 // DLL not there (said by upscale_ffx.cpp), or its calls failing (by gsn_upscale.inc)
-bool sa_fsr_takes(const SaHeld &h) {
-    if (sa_upscaler != 2 || !h.depth || recording_ops->on) {
-        return false;
+int sa_temporal_takes(const SaHeld &h) {
+    if (sa_upscaler < 2 || !h.depth || recording_ops->on) {
+        return 0;
+    }
+    if (sa_upscaler == 3 && dlss_failed.load(std::memory_order_relaxed)) {
+        fprintf(stderr, "[gsn] --upscaler dlss: FSR instead\n");
+        sa_upscaler = 2;
     }
     static int storage = -1;
     if (storage < 0) {
@@ -441,30 +446,30 @@ bool sa_fsr_takes(const SaHeld &h) {
         why = "the scene's colours are 16-bit (--native-colour high), which FSR does not take";
     } else if (storage <= 0) {
         why = "the GPU cannot write the picture from a shader";
-    } else if (upscale_failed.load(std::memory_order_relaxed) || !ffx_upscale_load()) {
+    } else if (sa_upscaler == 2 && (upscale_failed.load(std::memory_order_relaxed) || !ffx_upscale_load())) {
         why = "";
     }
     if (why) {
         if (*why) {
-            fprintf(stderr, "[gsn] --upscaler fsr3: %s: bilinear instead\n", why);
+            fprintf(stderr, "[gsn] --upscaler: %s: bilinear instead\n", why);
         }
         sa_upscaler = 1;
-        return false;
+        return 0;
     }
-    return true;
+    return sa_upscaler;
 }
 
-// (sa_composite, --upscaler) The held scene brought up to the GS's scale: 1, bilinear (a blit); 2, FSR 3.1, temporal,
-// with the picture's depth, motion and jitter, on the back end's thread (OP_UPSCALE, gsn_upscale.inc). FSR's history is
-// of the pictures upscaled in the order shown: after a while without (a menu's pictures, say: more than 4 pictures), it
-// begins again (reset), and the motion is from nothing
+// (sa_composite, --upscaler) The held scene brought up to the GS's scale: 1, bilinear (a blit); 2, FSR 3.1, or 3,
+// DLSS, temporal, with the picture's depth, motion and jitter, on the back end's thread (OP_UPSCALE, gsn_upscale.inc).
+// Their history is of the pictures upscaled in the order shown: after a while without (a menu's pictures, say: more
+// than 4 pictures), it begins again (reset), and the motion is from nothing
 const Image &sa_upscale_held(SaHeld &h) {
     uint32_t W = h.hi->get_width(), H = h.hi->get_height();
     uint32_t uw = W / h.sx * h.gsx, uh = H / h.sy * h.gsy;
-    bool fsr = sa_fsr_takes(h);
+    int temporal = sa_temporal_takes(h);
     if (!h.up || h.up->get_width() != uw || h.up->get_height() != uh || h.up->get_format() != h.hi->get_format() ||
-        (fsr && !(h.up->get_create_info().usage & VK_IMAGE_USAGE_STORAGE_BIT))) {
-        h.up = sa_image(uw, uh, h.hi->get_format(), 1, fsr ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
+        (temporal && !(h.up->get_create_info().usage & VK_IMAGE_USAGE_STORAGE_BIT))) {
+        h.up = sa_image(uw, uh, h.hi->get_format(), 1, temporal ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
     }
     SaUpscaleLast &last = sa_upscale_last;
     auto now = std::chrono::steady_clock::now();
@@ -483,17 +488,18 @@ const Image &sa_upscale_held(SaHeld &h) {
         show = sa_motion_show();
     }
     end_pass();
-    if (fsr && !show) {
+    if (temporal && !show) {
         const float *jitter = h.between ? sa_cam.picture_jitter : h.jitter;
-        ArgUpscale a = {h.hi.get(), h.fdepth.get(), h.motion.get(), h.up.get(), {jitter[0], jitter[1]},
-                        std::min(std::max(frame_ms, 1.0f), 100.0f), h.near_plane, h.fov_y, reset};
+        ArgUpscale a = {uint32_t(temporal), h.hi.get(), h.fdepth.get(), h.motion.get(), h.up.get(),
+                        {jitter[0], jitter[1]}, std::min(std::max(frame_ms, 1.0f), 100.0f), h.near_plane, h.fov_y,
+                        reset};
         Cmd &c = cmd();
         c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                   VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
         c.upscale(a);
         c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                   VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
-        sa_stats.upscales_fsr++;
+        sa_stats.upscales_temporal++;
     } else {
         transfer_barrier();
         cmd().blit_image(*h.up, show ? *h.shown : *h.hi, {0, 0, 0}, {int32_t(uw), int32_t(uh), 1}, {0, 0, 0},

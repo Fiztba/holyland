@@ -274,7 +274,7 @@ struct SaStats {
     uint64_t depth_clears, alpha_sets, shadow_batches, own_layers; // (the scene's ops, and the shadows by the stencil)
     // (T2) frames taken from the GS's clear (no copy), the GS's batches drawn into the scene (its 3D, the screen
     // passes, fills), its frame given to the GS and kept (a copy that reads it), pictures made by the composite
-    uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops, upscales, upscales_fsr, motions;
+    uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops, upscales, upscales_temporal, motions;
     uint64_t frame_copies, frame_copy_reads; // (the scene's copies of its frame elsewhere, and textures read from them)
     uint64_t declined[SA_WHY_COUNT];
     uint64_t textures[SA_TEX_COUNT];
@@ -4663,12 +4663,12 @@ void sa_print_stats() {
     fprintf(stderr,
             " (T2: %llu taken from the GS's clear, %llu resampled copies; the GS's drawn by the scene: %llu 3D, %llu screen "
             "passes, %llu fills, %llu water; %llu times given while kept; %llu copies of the frame kept, %llu textures read from them; "
-            "%llu pictures composited, %llu ops over the screen in them; %llu upscaled (%llu by FSR), %llu motions)",
+            "%llu pictures composited, %llu ops over the screen in them; %llu upscaled (%llu by FSR or DLSS), %llu motions)",
             (unsigned long long)s.cleared, (unsigned long long)s.resampled, (unsigned long long)s.gs_3d,
             (unsigned long long)s.gs_passes, (unsigned long long)s.gs_fills, (unsigned long long)s.gs_water,
             (unsigned long long)s.published,
             (unsigned long long)s.frame_copies, (unsigned long long)s.frame_copy_reads, (unsigned long long)s.composites,
-            (unsigned long long)s.composite_ops, (unsigned long long)s.upscales, (unsigned long long)s.upscales_fsr,
+            (unsigned long long)s.composite_ops, (unsigned long long)s.upscales, (unsigned long long)s.upscales_temporal,
             (unsigned long long)s.motions);
     fprintf(stderr, "; %llu decoded, %llu found again; uploads %llu (%.1f MB, %llu new), %llu asked for again; declined: ",
             (unsigned long long)s.decodes, (unsigned long long)s.decode_hits, (unsigned long long)s.uploads,

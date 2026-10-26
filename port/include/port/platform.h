@@ -45,7 +45,7 @@ typedef struct {
     int scene_msaa;
     /* --upscaler (docs/port/UPSCALING.md): with --renderer modern and a --scene-scale below the GS's, the scene
        brought up to the GS's scale at the composite, the 2D the GS's at its own scale (0: off, the composite at the
-       scene's scale; 1: bilinear; 2: FSR 3.1) */
+       scene's scale; 1: bilinear; 2: FSR 3.1; 3: DLSS) */
     int upscaler;
     /* --native-shine: with --renderer modern, a skinned model's sphere-mapped shine blended in the shader
        (the ice creatures on map 017: Cs + Cd As, As above 0x80) drawn whole, the default (0), or in runs of

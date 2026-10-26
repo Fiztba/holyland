@@ -179,6 +179,66 @@ pixel's surface was in the last picture, less where it is).
   reactive mask for effects and water, sharpening (`enableSharpening`, off), a reset at a cut (teleport, map load:
   today the gap of pictures between catches most), and the scene at 3x under 4x (unequal ratios: 1.5 across, 1.33 down).
 
+## DLSS (done, branch `upscale/scene-size`)
+
+`--upscaler dlss`: NVIDIA's DLSS super resolution through NGX, in the same place as FSR (`OP_UPSCALE`, mode 3), with
+the same inputs. Built only where CMake's `KF4_DLSS_SDK` names NVIDIA's DLSS SDK: its licence keeps the SDK (headers
+included) out of this repository. The build then copies the SDK's release `nvngx_dlss.dll` beside kf4.exe. Without
+the SDK, or where DLSS cannot be had (not an NVIDIA GPU, an old driver, the extensions missing), it says why and
+falls back to FSR, which falls back to bilinear.
+- **NGX without the SDK's library.** The SDK's way in is a static library that finds the driver's NGX core
+  (`_nvngx.dll`, in the driver store, named by `nvlddmkm`'s registry keys) and forwards to it. Its Windows build is
+  MSVC's (its C and C++ runtime), which this build (llvm-mingw) cannot link. So `upscale_dlss.cpp` loads the core and
+  calls its exports directly, as the library does. The library's Linux build (`libnvsdk_ngx.a`, ELF, readable here)
+  shows how: every function forwards its arguments unchanged, except that the core's inits take the SDK's version
+  before the feature info (`NVSDK_NGX_VULKAN_Init_ProjectID_Ext(project, engine, engine version, data path,
+  instance, GPU, device, GIPA, GDPA, version, feature info)`). Where the core has no extension query
+  (`FAIL_NotImplemented`, this driver), the library's own lists stand in. Instance:
+  `VK_KHR_get_physical_device_properties2`. Device: `VK_NVX_binary_import`, `VK_NVX_image_view_handle`,
+  `VK_KHR_buffer_device_address`, `VK_KHR_push_descriptor`.
+- **The parameters' table.** NGX's parameters are an MSVC C++ object with virtual `Set`/`Get` overloads. This
+  compiler would lay out its table in declaration order; MSVC groups each name's overloads, last declared first. So
+  they are called by slot (Set's `void *` 0, `int` 3, `unsigned` 4, `float` 6, `unsigned long long` 7; Get's 8 on).
+  Before anything is made, each kind is set and read back the same, and a name never set is not found. NGX's own
+  capability (`SuperSampling.Available`) is read the same way.
+- **Extensions at the device's making.** `--upscaler dlss` is set before `gsn_open`. There the instance is made
+  with NGX's instance extensions, then the GPU is chosen as Granite would (`GRANITE_VULKAN_DEVICE_INDEX`, or the first
+  of the most able kind), then the device with NGX's device extensions for it (`dlss_context`). Any step failing
+  makes the context as before, and FSR. Granite already turns on `bufferDeviceAddress` where the GPU has it.
+- **The feature.** Made on the back end's thread into its command buffer (`CreateFeature1`), one for the stream
+  of pictures, made again when a size changes, the old one released eight frames on. The flags: motion at the
+  scene's size (`MVLowRes`), depth inverted (the FSR depth: 1 near, 0 far; DLSS has no infinite flag). The quality
+  is the one the ratio is nearest: 2x to 4x is Performance, which this driver gives preset M (the transformer model).
+  The presets left to the driver are the SDK library's defaults. The project ID is a GUID of holyland's (an engine
+  of its own: `NVSDK_NGX_ENGINE_TYPE_CUSTOM`). NGX's logs go to the temporary folder, and to stderr with
+  `KF4_DLSS_DEBUG=1`.
+- **The jitter's sign** is the same as FSR's: of the four signs, it is the closest to native standing still (47.6 dB
+  against 39.1-43.8 for the others).
+- **Checks.** On an RTX 4090, the scene at 2x under a 4x GS (1920 x 896 to 3840 x 1792), against native 4x on 000:
+  standing still PSNR 47.6 dB (FSR 42.6, bilinear 42.2), gradient energy 2.18 (FSR 1.81, native 2.47). Turning:
+  50.2 dB (FSR 47.2, bilinear 46.7).
+- **Cost** (`pace_test.py` at 240, real time, map 000 unless said; `KF4_DLSS_PRESET` forces a preset to weigh them):
+
+  | | pictures a second | GPU ms a picture |
+  |---|---|---|
+  | 2x, DLSS preset M (the driver's for Performance) | 100.4 (009: 111.6) | 7.37 (009: 7.08) |
+  | 2x, DLSS preset L | 101.8 | 7.44 |
+  | 2x, DLSS preset J | 112.3 | 6.57 |
+  | 2x, DLSS preset K | 118.6 | 6.38 |
+  | 2x, DLSS preset E (the last CNN model, deprecated) | 130.3 | 5.74 |
+  | 2x, FSR | 239.5 | 3.23 |
+  | 2x, bilinear | 239.6 | 2.69 |
+  | native 4x | 220.1 | 4.07 |
+
+  DLSS costs 3 to 4.7 ms a picture at 3840 x 1792 on an RTX 4090, against FSR's 0.55. It runs once a picture, and
+  every picture between is one, so at 240 it holds 100 to 130 pictures a second: DLSS suits 120 Hz, or a smaller
+  output (the GS at 3x), better than 240. The pictures between are what make it costly; upscaling only a game
+  frame's own picture and moving the result would be frame generation, which is not this.
+- **A crash seen once** in eight DLSS pace runs (preset E), in `sa_memo_begin` (native draw's kept batches, the GS's
+  thread): a picture between's frame's index unreadable. Not seen again in three more preset E runs, nor in the fast
+  runs, nor in three GPU-bound runs of native (the scene at 4x with 8 samples: 22 to 100 pictures a second, pictures
+  between cut). Whether NGX or a latent bug of the GPU-bound regime is the cause is not settled.
+
 ## Later: the scene's size free of the GS's scale
 
 `--scene-scale` is a whole number, 1 to 4 (`sa.sx`, `sa.sy`, `snt.frame_sx`). An upscaler wants any size, for
@@ -200,11 +260,9 @@ Named targets (the reflection, scrolling textures) stay at the GS's scale. They 
 - **FSR 1** (EASU + RCAS, MIT, two GLSL headers): spatial only, with no jitter or motion. It can sit beside
   `present_scale.frag` and `present_sharpen.frag` (whose sharpening is already CAS-like) as a cheap stopgap,
   though it upscales the HUD with everything else.
-- **DLSS super resolution** (NVIDIA DLSS SDK, NGX). NGX names Vulkan instance and device extensions that must be
-  turned on when Granite's context is made, so it needs a hook there. `nvngx_dlss.dll` may ship beside the
-  program under the SDK's licence (with its attribution), or the user supplies it. The SDK is not open source, so
-  build it only when its path is given (`-DKF4_DLSS_SDK=...`) and keep it out of the default build.
-  Streamline is the other way in. It hooks Vulkan's creation calls, which suits Granite less well.
+- **DLSS super resolution** (NVIDIA DLSS SDK, NGX): done, above, built only with `-DKF4_DLSS_SDK=...`.
+  `nvngx_dlss.dll` may ship beside the program under the SDK's licence (with its attribution), or the user supplies
+  it. Streamline is the other way in. It hooks Vulkan's creation calls, which suits Granite less well.
 - **XeSS** has a Vulkan path too. With an interface shared by all three it is a small addition later.
 
 One interface (`gsn_upscale.inc`) would cover all of them: colour, depth, motion, mask, jitter, render and output
@@ -219,10 +277,9 @@ be `--upscaler off|fsr1|fsr3|dlss` with `--upscale-quality`, and the settings an
 2. **Jitter and motion vectors** (done), with a debug view of the motion attachment (`KF4_UPSCALE_SHOW=motion`). Check:
    standing still, the motion is zero everywhere but the effects. Turning, the static map's motion matches the
    camera's. At 240 the motion of a picture between is a quarter of the frame's.
-3. **FSR 3.1** (done, above) behind the interface. Still to check: the owner's spots (pond, fortress, canyon, under water) at 240 for
-   ghosting behind the zombies and bats, the water and the effects. Then pictures a second and GPU time against
-   today's 4x (`pace_test.py`, `KF4_GSN_GPU_TIME=2`).
-4. **DLSS**, the same interface, built only with the SDK.
+3. **FSR 3.1** (done, above) behind the interface. Still to check: the owner's spots (pond, fortress, canyon, under
+   water) at 240 for ghosting behind the zombies and bats, the water and the effects.
+4. **DLSS** (done, above), the same interface, built only with the SDK.
 5. **Masks and tuning**: reactive masks per kind, sharpening (RCAS, or our CAS), and resets at cuts.
 
 Gameplay is untouched. Every step keeps `--upscaler off` byte for byte as before (the off check, the four spots,

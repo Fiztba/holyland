@@ -68,7 +68,8 @@ extern void (*holyland_on_compile)(Device *device, const DeferredPipelineCompile
 extern void (*holyland_on_render_pass)(Util::Hash hash, const RenderPassInfo &info);
 }
 #include "gsn_shaders.h"
-#include "upscale_ffx.h" // (--upscaler fsr3: gsn_upscale.inc)
+#include "upscale_dlss.h" // (--upscaler dlss: gsn_upscale.inc, and the context's extensions)
+#include "upscale_ffx.h"  // (--upscaler fsr3: gsn_upscale.inc)
 #include "../../render/render_internal.hpp" // (native draw: gsn_native_draw.inc)
 
 using namespace Vulkan;
@@ -796,8 +797,10 @@ struct ArgBlit {
     VkOffset3D dst_offset, dst_extent, src_offset, src_extent;
     VkFilter filter;
 };
-// (--upscaler fsr3: gsn_upscale.inc) A picture upscaled, its inputs and output, with what upscale_ffx.h says of each
+// (--upscaler fsr3, dlss: gsn_upscale.inc) A picture upscaled, by which (sa_upscaler's 2 or 3), its inputs and output,
+// with what upscale.h says of each
 struct ArgUpscale {
+    uint32_t mode;
     const Image *color, *depth, *motion, *out;
     float jitter[2];
     float frame_ms, near_plane, fov_y;
@@ -7833,6 +7836,96 @@ void save_pipeline_cache() {
 #include "gsn_composite.inc"  // (P8 T2: the scene at a scale of its own, and the composite)
 #include "gsn_pipeline_warm.inc" // (pipelines made ahead: the lists, and the start's work)
 
+// (gsn_open, --upscaler dlss) A context with DLSS's Vulkan extensions besides the presenter's: the instance with those
+// NGX names (that the loader has), then the GPU Granite would choose (GRANITE_VULKAN_DEVICE_INDEX, or the first of the
+// most able kind, Granite's device_score), the device with those NGX names for it. Null where any of it cannot be had,
+// and FSR instead (sa_upscaler 2). (The names are kept: Granite holds the pointers.)
+Context *dlss_context(const std::vector<const char *> &instance_ext, const std::vector<const char *> &device_ext) {
+    static std::vector<std::string> want_instance, want_device;
+    auto fail = [](Context *c, const char *why) -> Context * {
+        if (why) {
+            fprintf(stderr, "[gsn] --upscaler dlss: %s: FSR instead\n", why);
+        }
+        delete c;
+        sa_upscaler = 2;
+        return nullptr;
+    };
+    if (!dlss_instance_extensions(want_instance)) {
+        return fail(nullptr, nullptr); // (said why)
+    }
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> have(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, have.data());
+    std::vector<const char *> ie = instance_ext;
+    for (const std::string &w : want_instance) {
+        bool there = false;
+        for (const auto &e : have) {
+            there = there || w == e.extensionName;
+        }
+        if (!there) {
+            return fail(nullptr, "the Vulkan loader has not the instance extensions NGX wants");
+        }
+        ie.push_back(w.c_str());
+    }
+    Context *c = new Context;
+    c->set_num_thread_indices(2); // (the GS's thread's and the back end's)
+    if (!c->init_instance(ie.data(), uint32_t(ie.size()), 0)) {
+        return fail(c, "no Vulkan instance with NGX's extensions");
+    }
+    VkInstance instance = c->get_instance();
+    uint32_t gpus_count = 0;
+    vkEnumeratePhysicalDevices(instance, &gpus_count, nullptr);
+    std::vector<VkPhysicalDevice> gpus(gpus_count);
+    vkEnumeratePhysicalDevices(instance, &gpus_count, gpus.data());
+    VkPhysicalDevice gpu = VK_NULL_HANDLE;
+    const char *index = getenv("GRANITE_VULKAN_DEVICE_INDEX");
+    if (index && atoi(index) >= 0 && atoi(index) < int(gpus_count)) {
+        gpu = gpus[size_t(atoi(index))];
+    }
+    unsigned best = 0;
+    bool chosen = gpu != VK_NULL_HANDLE;
+    for (size_t i = gpus_count; i && !chosen; i--) {
+        VkPhysicalDeviceProperties props = {};
+        vkGetPhysicalDeviceProperties(gpus[i - 1], &props);
+        unsigned score = props.apiVersion < VK_API_VERSION_1_1                              ? 0
+                         : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   ? 3
+                         : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2
+                         : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU            ? 1
+                                                                                      : 0;
+        if (score >= best) {
+            best = score;
+            gpu = gpus[i - 1];
+        }
+    }
+    if (gpu == VK_NULL_HANDLE || !dlss_device_extensions(instance, gpu, want_device)) {
+        return fail(c, gpu == VK_NULL_HANDLE ? "no GPU" : nullptr);
+    }
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, nullptr);
+    have.resize(count);
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, have.data());
+    std::vector<const char *> de = device_ext;
+    for (const std::string &w : want_device) {
+        bool there = false, asked = false;
+        for (const auto &e : have) {
+            there = there || w == e.extensionName;
+        }
+        for (const char *d : de) {
+            asked = asked || w == d;
+        }
+        if (!there) {
+            return fail(c, "the GPU has not the device extensions NGX wants");
+        }
+        if (!asked) {
+            de.push_back(w.c_str());
+        }
+    }
+    if (!c->init_device(gpu, VK_NULL_HANDLE, de.data(), uint32_t(de.size()), 0)) {
+        return fail(c, "no Vulkan device with NGX's extensions");
+    }
+    return c;
+}
+
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
@@ -7859,10 +7952,16 @@ extern "C" int gsn_open(void *shared_context) {
         if (present_wanted) {
             present_extensions(instance_ext, device_ext);
         }
-        gs->context = new Context;
-        gs->context->set_num_thread_indices(2); // (the GS's thread's and the back end's)
-        if (!gs->context->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()), device_ext.data(),
-                                                   uint32_t(device_ext.size()), 0)) {
+        // (--upscaler dlss: with NGX's extensions too, where they can be had)
+        gs->context = sa_upscaler == 3 ? dlss_context(instance_ext, device_ext) : nullptr;
+        bool made = gs->context != nullptr;
+        if (!made) {
+            gs->context = new Context;
+            gs->context->set_num_thread_indices(2); // (the GS's thread's and the back end's)
+            made = gs->context->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()),
+                                                         device_ext.data(), uint32_t(device_ext.size()), 0);
+        }
+        if (!made) {
             delete gs->context;
             gs->context = nullptr;
             if (!instance_ext.empty()) {

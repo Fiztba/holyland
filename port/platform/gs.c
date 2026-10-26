@@ -125,6 +125,7 @@ static void open_backend(void *unused) {
         if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
             gsn_enable_present();
         }
+        gsn_set_upscaler(port_options.upscaler); /* (before: --upscaler dlss's Vulkan extensions) */
         have_native = gsn_open(NULL);
         if (have_native) {
             char path[1100];
@@ -149,7 +150,6 @@ static void open_backend(void *unused) {
                 int sx = s && port_options.native_widescreen && port_options.widescreen ? (4 * s + 2) / 3 : s;
                 gsn_set_scene(sx, s, port_options.scene_msaa);
             }
-            gsn_set_upscaler(port_options.upscaler);
             gsn_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
             gsn_pipeline_cache(path);
