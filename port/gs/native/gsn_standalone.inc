@@ -1914,28 +1914,7 @@ bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
 // each GS pixel the mean of the scene's pixels and samples over it, and the scene's picture kept for the
 // composite: gsn_composite.inc, sa_hold.)
 void sa_hold(Target &color);
-void sa_held_drop(uint32_t fbp, uint32_t fbw, uint32_t fpsm);
 void sa_group_draw();
-
-// --upscaler (docs/port/UPSCALING.md): the scene's rows given to a GS target of a larger scale (both single-sampled)
-// brought up to it, instead of each GS pixel taking the scene's pixel under its middle (sa_resample_pass) and the
-// composite then showing the world at the scene's scale and the 2D at it too. The GS draws the 2D over the result at
-// its own scale. 1: bilinear (a blit), the plumbing the temporal upscalers will use. Recorded, so a picture between's
-// recording makes it again into the target's image as it is then.
-void sa_upscale(Target &color, uint32_t rows0, uint32_t rows1) {
-    const Image &dst = *color.image, &src = *sa.color;
-    int32_t s0 = int32_t(std::min(rows0 * sa.sy, src.get_height())), s1 = int32_t(std::min(rows1 * sa.sy, src.get_height()));
-    int32_t d0 = int32_t(std::min(rows0 * color.sy, dst.get_height())), d1 = int32_t(std::min(rows1 * color.sy, dst.get_height()));
-    if (s1 <= s0 || d1 <= d0) {
-        return;
-    }
-    transfer_barrier();
-    cmd().blit_image_recorded(dst, src, {0, d0, 0}, {int32_t(dst.get_width()), d1 - d0, 1}, {0, s0, 0},
-                              {int32_t(src.get_width()), s1 - s0, 1}, VK_FILTER_LINEAR);
-    transfer_barrier();
-    sa_stats.upscales++;
-}
-
 void sa_give(bool keep) {
     sa_group_draw(); // (pf/skin: a skinned model's parts kept are drawn before the scene's turn ends)
     if (!sa.bound || sat_release()) {
@@ -1985,8 +1964,6 @@ void sa_give(bool keep) {
     float zpush[2] = {float(depth_scale(sa.zpsm)) * (layer_z_mode == GSN_LAYER_Z_TOLERANT ? -1.0f : 1.0f),
                       float(depth_max(sa.zpsm))};
     float rx = float(sa.sx) / float(color->sx), ry = float(sa.sy) / float(color->sy);
-    // (--upscaler: a scene below the GS's scale, both single-sampled, brought up to it: sa_upscale)
-    bool up = sa_upscaler && !same && target_samples == 1 && sa.samples == 1 && sa.sx <= color->sx && sa.sy <= color->sy;
     gpu_mark(GPU_OTHER);
     if (!copy) {
     } else if (target_samples > 1) {
@@ -2018,8 +1995,6 @@ void sa_give(bool keep) {
             cmd().copy_image(*color->image, *sa.color, {0, int32_t(y0), 0}, {0, int32_t(y0), 0}, {w, y1 - y0, 1},
                              {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
             transfer_barrier();
-        } else if (up) {
-            sa_upscale(*color, sa.rows0, sa.rows1);
         } else {
             sa_resample_pass(*color->image, *sa.color, false, y0, y1, rx, ry, 0.0f, 0.0f);
         }
@@ -2043,9 +2018,7 @@ void sa_give(bool keep) {
             mark_dirty(*depth, sa.rows0, sa.rows1);
         }
     }
-    if (up) {
-        sa_held_drop(sa.fbp, sa.fbw, sa.fpsm); // (the GS's target has the world at its own scale: no composite)
-    } else if (!same && !keep) {
+    if (!same && !keep) {
         sa_hold(*color); // (the composite's: gsn_composite.inc)
     }
     if (keep) {

@@ -36,12 +36,23 @@ struct SaHeld {
     uint32_t gsx = 1, gsy = 1; // the GS target's
     uint32_t rows = 0;         // the frame's rows the world was drawn in (GS pixels: the scissor's)
     ImageHandle hi, lo;
+    ImageHandle up; // (--upscaler) hi brought up to the GS's scale, at the composite (sa_upscale_held)
     uint32_t ops[8][4] = {};
     int count = 0;
     uint64_t vblank = 0;
 };
 std::vector<SaHeld> sa_held;
 Program *sa_program_composite = nullptr;
+
+// --upscaler (docs/port/UPSCALING.md): a scene kept below the GS's scale is brought up to it at the composite, and the
+// picture shown is at the GS's scale: the 2D the GS's, at its own scale, the world the upscaler's. Without it the
+// composite shows a scene below the GS's scale at the scene's, the 2D brought down with it. The composite is also where
+// the pictures come in the order they are shown, which a temporal upscaler needs: the GS draws a game frame's own
+// picture before the pictures between that are shown before it (STEP3.md, "Higher frame rates"), but each picture is
+// composited at its own scanout.
+bool sa_held_upscaled(const SaHeld &h) {
+    return sa_upscaler && h.sx <= h.gsx && h.sy <= h.gsy && (h.sx < h.gsx || h.sy < h.gsy);
+}
 
 SaHeld *sa_held_of(uint32_t fbp, uint32_t fbw, uint32_t fpsm, bool make) {
     for (SaHeld &h : sa_held) {
@@ -65,13 +76,6 @@ SaHeld *sa_held_of(uint32_t fbp, uint32_t fbw, uint32_t fpsm, bool make) {
 
 void sa_held_forget() {
     sa_held.clear();
-}
-
-// (sa_give with --upscaler) A frame given at the GS's own scale: no composite of that buffer from before
-void sa_held_drop(uint32_t fbp, uint32_t fbw, uint32_t fpsm) {
-    if (SaHeld *h = sa_held_of(fbp, fbw, fpsm, false)) {
-        h->valid = false;
-    }
 }
 
 // (sa_give, a frame given back for good at another scale or samples than the GS's) The scene's picture kept, and
@@ -246,8 +250,12 @@ const SaHeld *sa_composite_of(const Shown &s) {
     const SaHeld *h = sa_held_of(s.fbp, s.fbw, s.psm, false);
     if (!h || !h->valid || h->t != s.t || sa_vblanks - h->vblank > 3 || !h->lo || s.t->image->get_width() != h->lo->get_width() ||
         s.t->image->get_height() != h->lo->get_height() || s.t->image->get_format() != h->lo->get_format() ||
-        (h->sx == s.sx && h->sy == s.sy) || h->gsx != s.sx || h->gsy != s.sy ||
-        size_t(s.w) * h->sx * s.h * h->sy > PORT_GS_FRAME_PIXELS || (s.dbx + s.w) * h->sx > h->hi->get_width() ||
+        (h->sx == s.sx && h->sy == s.sy) || h->gsx != s.sx || h->gsy != s.sy) {
+        return nullptr;
+    }
+    // (the picture's scale: the scene's, or with --upscaler the GS's)
+    uint32_t ox = sa_held_upscaled(*h) ? h->gsx : h->sx, oy = sa_held_upscaled(*h) ? h->gsy : h->sy;
+    if (size_t(s.w) * ox * s.h * oy > PORT_GS_FRAME_PIXELS || (s.dbx + s.w) * h->sx > h->hi->get_width() ||
         (s.dby + s.h) * h->sy > h->hi->get_height()) {
         return nullptr;
     }
@@ -259,10 +267,28 @@ bool sa_composite_size(const Shown &s, uint32_t *iw, uint32_t *ih) {
         return false;
     }
     if (iw) {
-        *iw = s.w * h->sx;
-        *ih = s.h * h->sy;
+        bool up = sa_held_upscaled(*h);
+        *iw = s.w * (up ? h->gsx : h->sx);
+        *ih = s.h * (up ? h->gsy : h->sy);
     }
     return true;
+}
+
+// (sa_composite, --upscaler) The held scene brought up to the GS's scale: 1, bilinear (a blit). The temporal upscalers
+// take this place, with the picture's depth, motion and jitter
+const Image &sa_upscale_held(SaHeld &h) {
+    uint32_t W = h.hi->get_width(), H = h.hi->get_height();
+    uint32_t uw = W / h.sx * h.gsx, uh = H / h.sy * h.gsy;
+    if (!h.up || h.up->get_width() != uw || h.up->get_height() != uh || h.up->get_format() != h.hi->get_format()) {
+        h.up = sa_image(uw, uh, h.hi->get_format(), 1);
+    }
+    end_pass();
+    transfer_barrier();
+    cmd().blit_image(*h.up, *h.hi, {0, 0, 0}, {int32_t(uw), int32_t(uh), 1}, {0, 0, 0}, {int32_t(W), int32_t(H), 1},
+                     VK_FILTER_LINEAR);
+    transfer_barrier();
+    sa_stats.upscales++;
+    return *h.up;
 }
 
 // The composite's picture into dst (as large as sa_composite_size says): shaders/sa_composite.frag
@@ -285,6 +311,10 @@ void sa_composite(const Image &dst, const Shown &s) {
     }
     msaa_settle(*s.t);
     end_pass();
+    // (--upscaler: the scene at the GS's scale, the picture too)
+    bool up = sa_held_upscaled(*h);
+    const Image &scene = up ? sa_upscale_held(*sa_held_of(s.fbp, s.fbw, s.psm, false)) : *h->hi;
+    uint32_t ox = up ? h->gsx : h->sx, oy = up ? h->gsy : h->sy;
     RenderPassInfo rp;
     rp.num_color_attachments = 1;
     rp.color_attachments[0] = &dst.get_view();
@@ -300,7 +330,7 @@ void sa_composite(const Image &dst, const Shown &s) {
     c.set_depth_test(false, false);
     c.set_texture(0, 0, s.t->image->get_view(), StockSampler::NearestClamp);
     c.set_texture(0, 1, h->lo->get_view(), StockSampler::NearestClamp);
-    c.set_texture(0, 2, h->hi->get_view(), StockSampler::NearestClamp);
+    c.set_texture(0, 2, scene.get_view(), StockSampler::NearestClamp);
     uint32_t *chain = c.allocate_typed_constant_data<uint32_t>(0, 3, 32);
     memset(chain, 0, 32 * sizeof(uint32_t));
     memcpy(chain, h->ops, sizeof(uint32_t) * 4 * size_t(h->count));
@@ -309,9 +339,9 @@ void sa_composite(const Image &dst, const Shown &s) {
         int32_t gs_origin[2], hi_origin[2];
         int32_t count;
         float tol;
-    } push = {{float(h->gsx) / float(h->sx), float(h->gsy) / float(h->sy)},
+    } push = {{float(h->gsx) / float(ox), float(h->gsy) / float(oy)},
               {int32_t(s.dbx * h->gsx), int32_t(s.dby * h->gsy)},
-              {int32_t(s.dbx * h->sx), int32_t(s.dby * h->sy)},
+              {int32_t(s.dbx * ox), int32_t(s.dby * oy)},
               h->count,
               2.0f};
     c.push_constants(&push, 0, sizeof(push));

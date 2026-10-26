@@ -54,24 +54,35 @@ covers it. Exact would keep the previous pair's `Between` data for one more pict
 
 ## The upscale slot (done, branch `upscale/scene-size`)
 
-`--upscaler bilinear` with `--renderer modern` and a `--scene-scale` below the GS's (both single-sampled). The
-scene is brought up to the GS's scale as `sa_give` hands it to the GS's frame target (`sa_upscale`, a recorded
-linear blit). It replaces `sa_resample_pass`'s pixel under the middle, and there is then no composite: the GS draws
-the HUD, messages and fades over the result at its own scale. Without the upscaler, a scene below the GS's scale goes
-through the composite at the scene's scale, which brings the 2D down to it too: the HUD at 2x under a 4x GS.
+`--upscaler bilinear` with `--renderer modern` and a `--scene-scale` below the GS's. The scene kept for the
+composite (`sa_hold`) is brought up to the GS's scale at the composite (`sa_upscale_held`, a linear blit for now), and
+the picture shown is made at the GS's scale (`sa_held_upscaled`). The GS's 2D, fades and passes stay its own, at its
+scale, and the world is the upscaler's. Without the upscaler, a scene below the GS's scale goes through the composite
+at the scene's scale, which brings the 2D down to it too: the HUD at 2x under a 4x GS.
+
+**Pictures are drawn in another order than they are shown.** The GS draws a game frame's own picture first, then the
+pictures between that are shown before it (they go from the frame before toward it: STEP3.md, "Higher frame
+rates"). At 240: the frame's own picture is drawn after vblank 2k - 1 and shown at 2k + 2, while the pictures
+between toward it are drawn and shown at 2k and 2k + 1. So anything temporal (the upscalers' history, the motion
+from the last picture) has to work in the order pictures are shown. That is the composite's order: it runs at each
+picture's scanout, once a picture (4,966 composites for 4,966 pictures in a 240 run), the frame's own picture kept
+until then (`sa_hold`, at most 3 vblanks). `sa_give`, where the scene hands its picture to the GS, runs in the order
+pictures are drawn. A temporal upscaler there would see the camera jump a frame ahead at every game frame and then
+back.
 - **Whole-number scales, for now.** On a 4K screen the GS is at 4x (3840 x 1792 with native widescreen), and the
   scene at 2x or 3x. With native widescreen the ratios differ across and down at 3x (4 to 6 across, 3 to 4 down:
   1.5 and 1.33), and are the same at 2x (2.0 both). The FSR 3.1 dispatch takes the render and output sizes
   apart. Whether it, and DLSS, take unequal ratios is not settled from their docs yet. If not, the scene's size
   below is needed for 3x, or the output stops at one ratio and the presenter takes the rest.
-- **The temporal upscalers go in this slot.** At `sa_give` the scene's colour (`sa.color`), depth (`sa.depth`) and
-  the GS's target to write are all to hand. Only the release (`keep` false) is a picture's last. A turn in the middle
-  of a frame gives the scene to the GS and takes it back, so a temporal upscaler should run at the release only,
-  with the turns' gives bilinear (or nearest) as now.
-- Checks: with `--upscaler off`, every picture of 6 vblanks on 000 and 009, and on 000 with `--scene-scale 2`,
-  is byte for byte the build before (72 pictures). With it on, `--scene-scale 2` under `--native-scale 4`: 3840 x
-  1792 pictures, the HUD the GS's at 4x, the world within 0.3 levels of native 4x on average. Turning with the
-  d-pad, the pictures between follow native's motion picture for picture, so the recording makes the blit again.
+- **The temporal upscalers go in `sa_upscale_held`.** The held picture needs, besides its colour: its depth (a copy
+  at `sa_hold`, as the colour is), its camera, and its jitter. A picture between's recording holds once, and its
+  replays make the hold's copies again but not the GS thread's work. So a picture between's camera and jitter are
+  the GS thread's at its composite (the picture just replayed), and a frame's own are kept with its hold. `sa_hold`
+  runs at the release only, not at a turn in the middle of a frame, so the upscaler runs once a picture.
+- Checks: with `--upscaler off`, every picture of 6 vblanks on 000 and 009, at the GS's scale and at `--scene-scale
+  2` (the composite), is byte for byte the build before. With it on, `--scene-scale 2` under `--native-scale 4`: 3840
+  x 1792 pictures, the HUD the GS's at 4x. The world is a bilinear 2x, and turning with the d-pad the pictures
+  between follow native's motion picture for picture.
 
 ## Jitter (done, branch `upscale/scene-size`)
 
