@@ -202,7 +202,7 @@ enum : uint32_t {
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
     M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000, M_ZFINE = 0x40000,
-    M_SMOOTH_2D = 0x80000, M_RECT_2D = 0x100000,
+    M_SMOOTH_2D = 0x80000, M_RECT_2D = 0x100000, M_JITTER = 0x200000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -7087,9 +7087,10 @@ struct InterpPictureHeader {
     float move[12], mid[12];
     float screen[2][4]; // sx sy cx cy: the world's, the reflection's
     float zt[4];        // cz (the world's, the reflection's), t, 1 - t
+    float jitter[4];    // (upscaling) the picture's sub-pixel jitter: in NDC, and in the scene's pixels (sa_jitter_picture)
     uint32_t kicks, runs, pad[2];
 };
-static_assert(sizeof(InterpPictureHeader) == 160, "InterpPictureHeader is gs_replay.vert's Picture");
+static_assert(sizeof(InterpPictureHeader) == 176, "InterpPictureHeader is gs_replay.vert's Picture");
 
 // A picture as it comes through the ring: the frame's serial, the header, then the bits
 struct InterpPictureMessage {
@@ -7447,6 +7448,8 @@ int interp_cannot_replay() {
     return 0;
 }
 
+void sa_jitter_picture(float *jitter);
+
 void interp_picture_now(const uint8_t *data, size_t size) {
     InterpPictureMessage m;
     if (size < sizeof(m)) {
@@ -7466,6 +7469,7 @@ void interp_picture_now(const uint8_t *data, size_t size) {
         h->zt[i] = interp.frame->screen[i][4];
     }
     h->kicks = interp.frame->kicks;
+    sa_jitter_picture(h->jitter); // (upscaling: this picture's own sub-pixel jitter, gsn_standalone.inc)
     interp.still = interp.frame->still != 0; // (the camera of the frame shown is the frame's, bit for bit)
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();

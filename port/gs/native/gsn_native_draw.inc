@@ -292,12 +292,19 @@ Program *nd_program(Program *p) {
 
 // (flush_batch, a native batch's draw: the arena; the draws' records are bound a stretch at a time, a
 // kind's own: nd_draw_range)
+const Buffer *sa_jitter_frame_picture();
+
 void nd_bind(Cmd &c) {
     if (nd.batch_arena) {
         c.set_storage_buffer(2, 0, *nd.batch_arena);
     }
     if (!interp.active) {
-        // (a picture between's Picture is bound by its kicks' pass, recorded; else nothing moves)
+        // (a picture between's Picture is bound by its kicks' pass, recorded; else nothing moves: zeros, or with an
+        // upscaler the frame's own sub-pixel jitter, gsn_standalone.inc's sa_jitter_frame)
+        if (const Buffer *jitter = sa_jitter_frame_picture()) {
+            c.set_storage_buffer(1, 0, *jitter);
+            return;
+        }
         if (!nd.dummy) {
             BufferCreateInfo info = {};
             info.domain = BufferDomain::Device;

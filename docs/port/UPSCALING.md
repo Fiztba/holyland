@@ -73,6 +73,26 @@ through the composite at the scene's scale, which brings the 2D down to it too: 
   1792 pictures, the HUD the GS's at 4x, the world within 0.3 levels of native 4x on average. Turning with the
   d-pad, the pictures between follow native's motion picture for picture, so the recording makes the blit again.
 
+## Jitter (done, branch `upscale/scene-size`)
+
+Each picture shown takes the next step of the Halton (2, 3) sequence (eight steps): an offset within half a scene
+pixel each way, added in NDC to the positions of the scene's draws into its frame (`sa_000`, `sa_280`, `sa_700`,
+`sa_water`: `Picture.jitter`, where `GSN_M_JITTER` is set). A picture between has its own in its Picture
+(`InterpPictureHeader::jitter`, `sa_jitter_picture`), so the recording's replays each draw at their own. The frame's
+own picture binds a Picture of its own (`sa_jitter_frame`, at the scene's clear) instead of the buffer of zeros. On
+with a temporal upscaler, or `KF4_UPSCALE_JITTER=1` to look at it.
+- Not jittered: draws into a named target (the reflection, the scrolling textures: textures the frame reads), the
+  trail strip, and the GS's own 3D the scene draws (`gs.vert`, a few in a hundred of the scene's batches). They stay
+  still under the upscaler's jitter.
+- The shaders were compiled with glslang 16.6.0. It builds 47 of the 49 committed shaders word for word; for
+  `nd_water`/`sa_water` it differs by 8 words. Only the shaders this change touches take the new SPIR-V (the
+  scene's and hosted nd_* vertex shaders, their oracles, `gs_replay*.comp`). With jitter off, every picture of 6
+  vblanks on 000 and 009 (the pond's water too), and on 000 at `--scene-scale 2`, is byte for byte the build before.
+- With it on, standing still at `--scene-scale 2 --upscaler bilinear`, each picture differs from the one before by
+  0.65-1.07 levels on average where it was 0.06-0.19, and the HUD not.
+- The pipelines' shaders changed, so the shipped list (`gsn_pipeline_list.h`) has stale lines for them until it is
+  made again from a map tour. The data folder's list fills in meanwhile, with "Building shaders" at the first start.
+
 ## Later: the scene's size free of the GS's scale
 
 `--scene-scale` is a whole number, 1 to 4 (`sa.sx`, `sa.sy`, `snt.frame_sx`). An upscaler wants any size, for

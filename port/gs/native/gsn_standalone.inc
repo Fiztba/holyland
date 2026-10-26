@@ -46,6 +46,86 @@ volatile uint32_t sa_wanted_scale = 0, sa_wanted_samples = 0;
 // --upscaler (gsn_set_upscaler, docs/port/UPSCALING.md): 0 off, 1 bilinear (sa_upscale)
 volatile int sa_upscaler = 0;
 
+// (upscaling, docs/port/UPSCALING.md) The scene's sub-pixel jitter for a temporal upscaler. Each picture shown, the
+// frame's own and each picture between, takes the next step of the Halton (2, 3) sequence: within half a scene pixel
+// each way, added to the positions of the scene's draws into its frame (the sa_* vertex shaders add Picture.jitter, in
+// NDC, where GSN_M_JITTER is set: not into a named target, the reflection). On with a temporal upscaler, or with
+// KF4_UPSCALE_JITTER=1 to look at it; off, no draw's position changes.
+struct SaJitter {
+    uint32_t index = 0;
+    uint32_t w = 0, h = 0;      // the scene's frame, in pixels
+    float px[2] = {0, 0};       // this picture's jitter, in the scene's pixels
+    float ndc[2] = {0, 0};      // ... in NDC
+    BufferHandle frame_picture; // the frame's own picture's Picture (zeros but the jitter: as nd.dummy otherwise)
+} sa_jit;
+
+bool sa_jitter_on() {
+    static int forced = -1;
+    if (forced < 0) {
+        const char *v = getenv("KF4_UPSCALE_JITTER");
+        forced = v && *v == '1';
+    }
+    return forced || sa_upscaler >= 2;
+}
+
+float sa_halton(uint32_t i, uint32_t base) {
+    float f = 1.0f, r = 0.0f;
+    while (i) {
+        f /= float(base);
+        r += f * float(i % base);
+        i /= base;
+    }
+    return r;
+}
+
+// The next picture's jitter: eight steps, then again (enough for a scene at half the GS's scale or more)
+void sa_jitter_step() {
+    const uint32_t phases = 8;
+    sa_jit.index = sa_jit.index % phases + 1;
+    sa_jit.px[0] = sa_halton(sa_jit.index, 2) - 0.5f;
+    sa_jit.px[1] = sa_halton(sa_jit.index, 3) - 0.5f;
+    sa_jit.ndc[0] = sa_jit.w ? 2.0f * sa_jit.px[0] / float(sa_jit.w) : 0.0f;
+    sa_jit.ndc[1] = sa_jit.h ? 2.0f * sa_jit.px[1] / float(sa_jit.h) : 0.0f;
+}
+
+// (sa_acquire, the scene cleared for a game frame's own picture: not in a picture between) A new picture: its jitter,
+// and the Picture its draws bind (nd_bind)
+void sa_jitter_frame(uint32_t w, uint32_t h) {
+    if (!sa_jitter_on()) {
+        return;
+    }
+    sa_jit.w = w;
+    sa_jit.h = h;
+    sa_jitter_step();
+    float data[64] = {}; // (256 bytes, as nd.dummy: the jitter after move, mid, screen and zt, gs_replay.h's order)
+    data[36] = sa_jit.ndc[0];
+    data[37] = sa_jit.ndc[1];
+    data[38] = sa_jit.px[0];
+    data[39] = sa_jit.px[1];
+    sa_jit.frame_picture = interp_buffer(sizeof(data), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data);
+}
+
+// (interp_picture_now) A picture between: its own jitter, into its Picture (in NDC, then in the scene's pixels)
+void sa_jitter_picture(float *jitter) {
+    if (!sa_jitter_on() || !sa_jit.w) {
+        jitter[0] = jitter[1] = jitter[2] = jitter[3] = 0.0f;
+        return;
+    }
+    sa_jitter_step();
+    jitter[0] = sa_jit.ndc[0];
+    jitter[1] = sa_jit.ndc[1];
+    jitter[2] = sa_jit.px[0];
+    jitter[3] = sa_jit.px[1];
+}
+
+// (nd_bind, the frame's own draws) The Picture to bind: the frame's, with its jitter, or nothing (nd.dummy)
+const Buffer *sa_jitter_frame_picture() {
+    return sa_jitter_on() && sa_jit.frame_picture ? sa_jit.frame_picture.get() : nullptr;
+}
+
+// (sa_draw_batch) Whether this batch takes the picture's jitter: the scene's frame's, not a named target's
+bool sa_jitter_draw();
+
 enum {
     SA_WHY_FRAME,    // another target than a frame of 512 pixels or more across, 32 or 24-bit
     SA_WHY_TARGET,   // the frame and Z buffer could not be had together
@@ -1761,6 +1841,9 @@ bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
         gpu_mark(GPU_COPY);
         sa.clear.valid = false;
         sa_stats.cleared++;
+        if (!interp.active) {
+            sa_jitter_frame(w, h); // (a game frame's own picture begins: its jitter, with an upscaler)
+        }
     } else if (same) {
         {
             Why why(GSN_WHY_COPY);
@@ -2427,7 +2510,9 @@ void sa_group_draw() {
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
         // (nd_bind's, for the arena the parts were made with)
         c.set_storage_buffer(2, 0, *k1.arena);
-        if (!interp.active) {
+        if (!interp.active && sa_jitter_frame_picture()) {
+            c.set_storage_buffer(1, 0, *sa_jitter_frame_picture()); // (the frame's jitter: sa_jitter_frame)
+        } else if (!interp.active) {
             if (!nd.dummy) {
                 BufferCreateInfo info = {};
                 info.domain = BufferDomain::Device;
@@ -3050,6 +3135,9 @@ bool sa_draw_batch(int *why) {
         }
     }
     push.misc |= scale_y << M_SCALE_SHIFT | scale_x << M_SCALE_X_SHIFT;
+    if (sa_jitter_draw()) {
+        push.misc |= M_JITTER; // (upscaling: the scene's frame, not a named target, takes the picture's jitter)
+    }
     uint32_t write_mask = 0;
     for (int i = 0; i < 4; i++) {
         if (shader_blend || ((fbmsk >> (i * 8)) & 0xFF) != 0xFF) {
