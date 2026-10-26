@@ -233,7 +233,9 @@ falls back to FSR, which falls back to bilinear.
   DLSS costs 3 to 4.7 ms a picture at 3840 x 1792 on an RTX 4090, against FSR's 0.55. It runs once a picture, and
   every picture between is one, so at 240 it holds 100 to 130 pictures a second: DLSS suits 120 Hz, or a smaller
   output (the GS at 3x), better than 240. The pictures between are what make it costly; upscaling only a game
-  frame's own picture and moving the result would be frame generation, which is not this.
+  frame's own picture and moving the result would be frame generation, which is not this. Preset K, a millisecond
+  cheaper, scores the same standing still (47.3 dB) but worse turning (46.3 dB, below FSR's 47.2; M 50.2), so the
+  driver's M stays the default.
 - **A crash seen once** in eight DLSS pace runs (preset E), in `sa_memo_begin` (native draw's kept batches, the GS's
   thread): a picture between's frame's index unreadable. Not seen again in three more preset E runs, nor in the fast
   runs, nor in three GPU-bound runs of native (the scene at 4x with 8 samples: 22 to 100 pictures a second, pictures
